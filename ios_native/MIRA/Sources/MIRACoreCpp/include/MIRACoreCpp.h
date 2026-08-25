@@ -49,6 +49,8 @@ void* mira_wallet_load(const char* path, const char* password, char** out_error)
 int32_t mira_aura_validate_address(const char* address);
 char* mira_aura_build_unsigned_transfer_v2_json(const char* params_json);
 char* mira_wallet_sign_transfer_v2_json(void* handle, const char* unsigned_body_hex);
+char* mira_wallet_sign_purchase_proof_v2_json(void* handle, const char* request_json);
+char* mira_wallet_authorize_feedback_v1_json(void* handle, const char* request_json);
 
 #ifdef __cplusplus
 }

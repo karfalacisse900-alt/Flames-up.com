@@ -11,15 +11,26 @@ pub const TRANSACTION_VERSION_V2: u16 = 2;
 pub const COINBASE_DISCRIMINANT_V2: u8 = 0;
 /// Canonical enum discriminant for a signed transfer transaction.
 pub const TRANSFER_DISCRIMINANT_V2: u8 = 1;
+/// Canonical enum discriminant for an owner-authorized purchase-proof transaction.
+pub const PURCHASE_PROOF_DISCRIMINANT_V2: u8 = 2;
+/// Canonical proof-claim format version.
+pub const PURCHASE_PROOF_VERSION_V2: u16 = 1;
+/// Closed proof-type value for a purchase.
+pub const PURCHASE_PROOF_TYPE_V2: u8 = 1;
+pub const VERIFICATION_LEVEL_DOCUMENT_V2: u8 = 2;
+pub const VERIFICATION_LEVEL_TRANSACTION_V2: u8 = 3;
+pub const VERIFICATION_LEVEL_MERCHANT_SIGNED_V2: u8 = 4;
 
 /// Encoded bytes in a coinbase payload, excluding its enum discriminant.
 pub const COINBASE_V2_PAYLOAD_SIZE: usize = 86;
 /// Encoded bytes in a signed-transfer payload, excluding its enum discriminant.
 pub const SIGNED_TRANSFER_V2_PAYLOAD_SIZE: usize = 214;
+/// Encoded bytes in a signed purchase-proof payload, excluding its enum discriminant.
+pub const SIGNED_PURCHASE_PROOF_V2_PAYLOAD_SIZE: usize = 480;
 /// Smallest canonical encoded v2 transaction, including its enum discriminant.
 pub const MIN_TRANSACTION_V2_SIZE: usize = 1 + COINBASE_V2_PAYLOAD_SIZE;
 /// Largest canonical encoded v2 transaction, including its enum discriminant.
-pub const MAX_TRANSACTION_V2_SIZE: usize = 1 + SIGNED_TRANSFER_V2_PAYLOAD_SIZE;
+pub const MAX_TRANSACTION_V2_SIZE: usize = 1 + SIGNED_PURCHASE_PROOF_V2_PAYLOAD_SIZE;
 
 /// Fields authorized by an Aura `PoW` Devnet v2 transfer signature.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -240,6 +251,279 @@ impl SignedTransferV2 {
     }
 }
 
+/// Privacy-safe claim attested by an authorized Devnet verifier.
+///
+/// Raw receipt bytes, merchant text, line items, exact location, and provider response data are
+/// deliberately absent. The commitments and nullifier are opaque 32-byte values constructed in
+/// the private verifier boundary.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PurchaseProofClaimV2 {
+    pub version: u16,
+    pub network: Network,
+    pub chain_id_hash: Hash256,
+    pub proof_type: u8,
+    pub owner: Address,
+    pub subject_commitment: Hash256,
+    pub business_commitment: Hash256,
+    pub product_commitment: Hash256,
+    pub location_commitment: Hash256,
+    pub receipt_nullifier: Hash256,
+    pub verification_level: u8,
+    pub provider_attestation_hash: Hash256,
+    pub timestamp_seconds: u64,
+    pub verifier_public_key: [u8; 32],
+}
+
+impl PurchaseProofClaimV2 {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        encode_value(self, "v2 purchase-proof claim")
+    }
+
+    pub fn signing_hash(&self) -> Result<Hash256> {
+        Ok(hash_tagged(
+            "proof/purchase/verifier-signing/v1",
+            &[&self.encode()?],
+        ))
+    }
+
+    pub fn proof_id(&self) -> Result<Hash256> {
+        Ok(hash_tagged("proof/purchase/id/v1", &[&self.encode()?]))
+    }
+
+    fn validate(
+        &self,
+        config: &crate::PowGenesisConfigV2,
+        candidate_timestamp_seconds: u64,
+    ) -> Result<()> {
+        if self.version != PURCHASE_PROOF_VERSION_V2 || self.proof_type != PURCHASE_PROOF_TYPE_V2 {
+            return Err(Error::InvalidPurchaseProof(
+                "unsupported proof version or proof type".into(),
+            ));
+        }
+        if self.network != config.network {
+            return Err(Error::NetworkMismatch {
+                expected: config.network,
+                actual: self.network,
+            });
+        }
+        if self.chain_id_hash != config.consensus_identity_hash()? {
+            return Err(Error::ChainIdMismatch);
+        }
+        if self.owner.network() != config.network {
+            return Err(Error::AddressNetworkMismatch {
+                expected: config.network,
+                actual: self.owner.network(),
+            });
+        }
+        if self.subject_commitment == Hash256::ZERO
+            || self.business_commitment == Hash256::ZERO
+            || self.receipt_nullifier == Hash256::ZERO
+            || self.provider_attestation_hash == Hash256::ZERO
+        {
+            return Err(Error::InvalidPurchaseProof(
+                "required proof commitments must be nonzero".into(),
+            ));
+        }
+        if self.verification_level < config.purchase_proofs.minimum_verification_level
+            || self.verification_level > VERIFICATION_LEVEL_MERCHANT_SIGNED_V2
+        {
+            return Err(Error::InvalidPurchaseProof(
+                "verification level is not accepted by this chain".into(),
+            ));
+        }
+        if self.timestamp_seconds == 0 || self.timestamp_seconds > candidate_timestamp_seconds {
+            return Err(Error::InvalidPurchaseProof(
+                "proof timestamp is zero or later than its candidate block".into(),
+            ));
+        }
+        if candidate_timestamp_seconds.saturating_sub(self.timestamp_seconds)
+            > config.purchase_proofs.maximum_age_seconds
+        {
+            return Err(Error::InvalidPurchaseProof(
+                "proof is older than the configured inclusion window".into(),
+            ));
+        }
+        if config
+            .purchase_proofs
+            .authorized_verifiers
+            .binary_search(&self.verifier_public_key)
+            .is_err()
+        {
+            return Err(Error::UnauthorizedProofVerifier);
+        }
+        Ok(())
+    }
+}
+
+/// Verifier witness over a privacy-safe purchase claim.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct AttestedPurchaseProofV2 {
+    pub claim: PurchaseProofClaimV2,
+    pub verifier_signature: [u8; 64],
+}
+
+impl AttestedPurchaseProofV2 {
+    pub fn attest(claim: PurchaseProofClaimV2, signing_key: &SigningKey) -> Result<Self> {
+        if signing_key.verifying_key().to_bytes() != claim.verifier_public_key {
+            return Err(Error::InvalidVerifierSignature);
+        }
+        let verifier_signature = signing_key
+            .sign(claim.signing_hash()?.as_bytes())
+            .to_bytes();
+        Ok(Self {
+            claim,
+            verifier_signature,
+        })
+    }
+
+    /// Strictly decodes one verifier attestation and rejects trailing bytes.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        decode_value(bytes, "v2 attested purchase proof")
+    }
+
+    fn verify(
+        &self,
+        config: &crate::PowGenesisConfigV2,
+        candidate_timestamp_seconds: u64,
+    ) -> Result<()> {
+        self.claim.validate(config, candidate_timestamp_seconds)?;
+        let key = VerifyingKey::from_bytes(&self.claim.verifier_public_key)
+            .map_err(|_| Error::InvalidVerifierSignature)?;
+        let signature = Signature::from_bytes(&self.verifier_signature);
+        key.verify_strict(self.claim.signing_hash()?.as_bytes(), &signature)
+            .map_err(|_| Error::InvalidVerifierSignature)
+    }
+}
+
+/// Fee, replay protection, and verifier envelope authorized by the proof owner's wallet.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PurchaseProofBodyV2 {
+    pub attested_proof: AttestedPurchaseProofV2,
+    pub fee: Amount,
+    pub nonce: u64,
+    pub valid_until_height: u64,
+}
+
+impl PurchaseProofBodyV2 {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        encode_value(self, "v2 purchase-proof transaction body")
+    }
+
+    pub fn signing_hash(&self) -> Result<Hash256> {
+        Ok(hash_tagged(
+            "transaction/proof/signing/v2",
+            &[&self.encode()?],
+        ))
+    }
+
+    /// Strictly decodes one owner-signing body and rejects trailing bytes.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        decode_value(bytes, "v2 purchase-proof transaction body")
+    }
+}
+
+/// A verifier-attested purchase proof authorized by the owner wallet.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedPurchaseProofV2 {
+    pub body: PurchaseProofBodyV2,
+    pub owner_public_key: [u8; 32],
+    pub owner_signature: [u8; 64],
+}
+
+impl SignedPurchaseProofV2 {
+    pub fn sign(body: PurchaseProofBodyV2, signing_key: &SigningKey) -> Result<Self> {
+        let owner_public_key = signing_key.verifying_key().to_bytes();
+        if Address::from_public_key(body.attested_proof.claim.network, &owner_public_key)
+            != body.attested_proof.claim.owner
+        {
+            return Err(Error::SenderKeyMismatch);
+        }
+        let owner_signature = signing_key.sign(body.signing_hash()?.as_bytes()).to_bytes();
+        Ok(Self {
+            body,
+            owner_public_key,
+            owner_signature,
+        })
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        encode_value(self, "v2 signed purchase proof")
+    }
+
+    pub fn proof_id(&self) -> Result<Hash256> {
+        self.body.attested_proof.claim.proof_id()
+    }
+
+    pub fn intent_id(&self) -> Result<Hash256> {
+        let mut bytes = self.body.encode()?;
+        bytes.extend_from_slice(&self.owner_public_key);
+        Ok(hash_tagged("transaction/proof/id/v2", &[&bytes]))
+    }
+
+    pub fn witness_id(&self) -> Result<Hash256> {
+        let bytes = encode_transaction_variant(PURCHASE_PROOF_DISCRIMINANT_V2, self)?;
+        Ok(hash_tagged("transaction/proof/witness/v2", &[&bytes]))
+    }
+
+    #[must_use]
+    pub const fn owner(&self) -> Address {
+        self.body.attested_proof.claim.owner
+    }
+
+    #[must_use]
+    pub fn receipt_nullifier(&self) -> Hash256 {
+        self.body.attested_proof.claim.receipt_nullifier
+    }
+
+    pub fn verify(
+        &self,
+        config: &crate::PowGenesisConfigV2,
+        candidate_height: u64,
+        candidate_timestamp_seconds: u64,
+    ) -> Result<()> {
+        if !config.purchase_proofs.enabled {
+            return Err(Error::InvalidPurchaseProof(
+                "purchase proofs are disabled".into(),
+            ));
+        }
+        self.body
+            .attested_proof
+            .verify(config, candidate_timestamp_seconds)?;
+        if self.body.fee < config.limits.minimum_fee {
+            return Err(Error::FeeTooLow {
+                minimum: config.limits.minimum_fee.atoms(),
+                actual: self.body.fee.atoms(),
+            });
+        }
+        if self.body.nonce == 0 {
+            return Err(Error::InvalidNonce {
+                expected: 1,
+                actual: 0,
+            });
+        }
+        if self.body.valid_until_height != 0 && candidate_height > self.body.valid_until_height {
+            return Err(Error::TransactionExpired {
+                expires: self.body.valid_until_height,
+                height: candidate_height,
+            });
+        }
+        let encoded_size = 1_usize
+            .checked_add(self.encode()?.len())
+            .ok_or(Error::AmountOverflow)?;
+        if encoded_size > config.limits.maximum_transaction_bytes as usize {
+            return Err(Error::TransactionTooLarge);
+        }
+        let key = VerifyingKey::from_bytes(&self.owner_public_key)
+            .map_err(|_| Error::InvalidPublicKey)?;
+        if Address::from_public_key(config.network, &self.owner_public_key) != self.owner() {
+            return Err(Error::SenderKeyMismatch);
+        }
+        let signature = Signature::from_bytes(&self.owner_signature);
+        key.verify_strict(self.body.signing_hash()?.as_bytes(), &signature)
+            .map_err(|_| Error::InvalidSignature)
+    }
+}
+
 /// The sole issuance transaction permitted at position zero of a non-genesis block.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CoinbaseV2 {
@@ -324,11 +608,16 @@ impl CoinbaseV2 {
 
 /// Explicitly discriminated Aura `PoW` Devnet v2 transaction.
 #[derive(Clone, Debug, PartialEq, Eq)]
+// Boxing this consensus value would spread allocation/fallibility through every hostile parser
+// and validation path. Its fixed bounded size is intentional and covered by canonical vectors.
+#[allow(clippy::large_enum_variant)]
 pub enum TransactionV2 {
     /// Block issuance and fee payout. Canonical discriminant `0`.
     Coinbase(CoinbaseV2),
     /// Ed25519-authorized account transfer. Canonical discriminant `1`.
     Transfer(SignedTransferV2),
+    /// Verifier-attested and owner-authorized privacy-safe purchase proof. Discriminant `2`.
+    PurchaseProof(SignedPurchaseProofV2),
 }
 
 impl TransactionV2 {
@@ -338,6 +627,7 @@ impl TransactionV2 {
         match self {
             Self::Coinbase(_) => COINBASE_DISCRIMINANT_V2,
             Self::Transfer(_) => TRANSFER_DISCRIMINANT_V2,
+            Self::PurchaseProof(_) => PURCHASE_PROOF_DISCRIMINANT_V2,
         }
     }
 
@@ -359,11 +649,12 @@ impl TransactionV2 {
         self.encode().map(|bytes| bytes.len())
     }
 
-    /// Returns the transfer intent ID, or `None` for a coinbase.
+    /// Returns the non-coinbase transaction ID, or `None` for a coinbase.
     pub fn intent_id(&self) -> Result<Option<Hash256>> {
         match self {
             Self::Coinbase(_) => Ok(None),
             Self::Transfer(transfer) => transfer.intent_id().map(Some),
+            Self::PurchaseProof(proof) => proof.intent_id().map(Some),
         }
     }
 
@@ -372,6 +663,7 @@ impl TransactionV2 {
         match self {
             Self::Coinbase(coinbase) => coinbase.witness_id(),
             Self::Transfer(transfer) => transfer.witness_id(),
+            Self::PurchaseProof(proof) => proof.witness_id(),
         }
     }
 
@@ -380,7 +672,7 @@ impl TransactionV2 {
     pub const fn as_coinbase(&self) -> Option<&CoinbaseV2> {
         match self {
             Self::Coinbase(coinbase) => Some(coinbase),
-            Self::Transfer(_) => None,
+            Self::Transfer(_) | Self::PurchaseProof(_) => None,
         }
     }
 
@@ -388,8 +680,81 @@ impl TransactionV2 {
     #[must_use]
     pub const fn as_transfer(&self) -> Option<&SignedTransferV2> {
         match self {
-            Self::Coinbase(_) => None,
             Self::Transfer(transfer) => Some(transfer),
+            Self::Coinbase(_) | Self::PurchaseProof(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_purchase_proof(&self) -> Option<&SignedPurchaseProofV2> {
+        match self {
+            Self::PurchaseProof(proof) => Some(proof),
+            Self::Coinbase(_) | Self::Transfer(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn sender(&self) -> Option<Address> {
+        match self {
+            Self::Coinbase(_) => None,
+            Self::Transfer(transfer) => Some(transfer.body.sender),
+            Self::PurchaseProof(proof) => Some(proof.owner()),
+        }
+    }
+
+    #[must_use]
+    pub const fn nonce(&self) -> Option<u64> {
+        match self {
+            Self::Coinbase(_) => None,
+            Self::Transfer(transfer) => Some(transfer.body.nonce),
+            Self::PurchaseProof(proof) => Some(proof.body.nonce),
+        }
+    }
+
+    #[must_use]
+    pub const fn fee(&self) -> Option<Amount> {
+        match self {
+            Self::Coinbase(_) => None,
+            Self::Transfer(transfer) => Some(transfer.body.fee),
+            Self::PurchaseProof(proof) => Some(proof.body.fee),
+        }
+    }
+
+    /// Total amount removed from the sender before the miner receives the fee.
+    pub fn debit(&self) -> Result<Option<Amount>> {
+        match self {
+            Self::Coinbase(_) => Ok(None),
+            Self::Transfer(transfer) => transfer
+                .body
+                .amount
+                .checked_add(transfer.body.fee)
+                .map(Some),
+            Self::PurchaseProof(proof) => Ok(Some(proof.body.fee)),
+        }
+    }
+
+    /// Performs all context-independent and candidate-context checks for a non-coinbase
+    /// transaction. Exact shared account nonce and balance checks remain state rules.
+    pub fn verify_non_coinbase(
+        &self,
+        config: &crate::PowGenesisConfigV2,
+        candidate_height: u64,
+        candidate_timestamp_seconds: u64,
+    ) -> Result<()> {
+        match self {
+            Self::Coinbase(_) => Err(Error::InvalidCoinbase(
+                "coinbase cannot enter transaction gossip or mempool".into(),
+            )),
+            Self::Transfer(transfer) => transfer.verify(
+                config.network,
+                config.consensus_identity_hash()?,
+                config.limits.minimum_fee,
+                candidate_height,
+                config.limits.maximum_transaction_bytes,
+            ),
+            Self::PurchaseProof(proof) => {
+                proof.verify(config, candidate_height, candidate_timestamp_seconds)
+            }
         }
     }
 
@@ -397,7 +762,29 @@ impl TransactionV2 {
         match self {
             Self::Coinbase(coinbase) => coinbase.validate_version(),
             Self::Transfer(transfer) => transfer.body.validate_version(),
+            Self::PurchaseProof(proof) => {
+                if proof.body.attested_proof.claim.version == PURCHASE_PROOF_VERSION_V2 {
+                    Ok(())
+                } else {
+                    Err(Error::UnsupportedProtocol {
+                        expected: PURCHASE_PROOF_VERSION_V2,
+                        actual: proof.body.attested_proof.claim.version,
+                    })
+                }
+            }
         }
+    }
+}
+
+impl From<SignedTransferV2> for TransactionV2 {
+    fn from(value: SignedTransferV2) -> Self {
+        Self::Transfer(value)
+    }
+}
+
+impl From<SignedPurchaseProofV2> for TransactionV2 {
+    fn from(value: SignedPurchaseProofV2) -> Self {
+        Self::PurchaseProof(value)
     }
 }
 
@@ -407,6 +794,7 @@ impl BorshSerialize for TransactionV2 {
         match self {
             Self::Coinbase(coinbase) => BorshSerialize::serialize(coinbase, writer),
             Self::Transfer(transfer) => BorshSerialize::serialize(transfer, writer),
+            Self::PurchaseProof(proof) => BorshSerialize::serialize(proof, writer),
         }
     }
 }
@@ -418,6 +806,9 @@ impl BorshDeserialize for TransactionV2 {
             COINBASE_DISCRIMINANT_V2 => CoinbaseV2::deserialize_reader(reader).map(Self::Coinbase),
             TRANSFER_DISCRIMINANT_V2 => {
                 SignedTransferV2::deserialize_reader(reader).map(Self::Transfer)
+            }
+            PURCHASE_PROOF_DISCRIMINANT_V2 => {
+                SignedPurchaseProofV2::deserialize_reader(reader).map(Self::PurchaseProof)
             }
             unknown => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -460,6 +851,7 @@ fn enforce_transaction_size(actual: usize, maximum: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PowGenesisConfigV2;
 
     fn transfer_fixture() -> SignedTransferV2 {
         let key = SigningKey::from_bytes(&[3; 32]);
@@ -493,6 +885,41 @@ mod tests {
         }
     }
 
+    fn purchase_proof_fixture() -> (PowGenesisConfigV2, SignedPurchaseProofV2) {
+        let config = PowGenesisConfigV2::local_regtest();
+        let owner_key = SigningKey::from_bytes(&[7; 32]);
+        let verifier_key = SigningKey::from_bytes(&[42; 32]);
+        let owner = Address::from_public_key(config.network, &owner_key.verifying_key().to_bytes());
+        let claim = PurchaseProofClaimV2 {
+            version: PURCHASE_PROOF_VERSION_V2,
+            network: config.network,
+            chain_id_hash: config.consensus_identity_hash().expect("identity"),
+            proof_type: PURCHASE_PROOF_TYPE_V2,
+            owner,
+            subject_commitment: Hash256::from_bytes([1; 32]),
+            business_commitment: Hash256::from_bytes([2; 32]),
+            product_commitment: Hash256::from_bytes([3; 32]),
+            location_commitment: Hash256::from_bytes([4; 32]),
+            receipt_nullifier: Hash256::from_bytes([5; 32]),
+            verification_level: VERIFICATION_LEVEL_DOCUMENT_V2,
+            provider_attestation_hash: Hash256::from_bytes([6; 32]),
+            timestamp_seconds: config.genesis_time_seconds.saturating_add(1),
+            verifier_public_key: verifier_key.verifying_key().to_bytes(),
+        };
+        let attested = AttestedPurchaseProofV2::attest(claim, &verifier_key).expect("attest");
+        let proof = SignedPurchaseProofV2::sign(
+            PurchaseProofBodyV2 {
+                attested_proof: attested,
+                fee: config.limits.minimum_fee,
+                nonce: 1,
+                valid_until_height: 100,
+            },
+            &owner_key,
+        )
+        .expect("owner sign");
+        (config, proof)
+    }
+
     #[test]
     fn fixed_payload_sizes_and_enum_discriminants_are_canonical() {
         let transfer = transfer_fixture();
@@ -506,10 +933,63 @@ mod tests {
         let coinbase_bytes = TransactionV2::Coinbase(coinbase)
             .encode()
             .expect("coinbase enum");
-        assert_eq!(transfer_bytes.len(), MAX_TRANSACTION_V2_SIZE);
+        assert_eq!(transfer_bytes.len(), 1 + SIGNED_TRANSFER_V2_PAYLOAD_SIZE);
         assert_eq!(coinbase_bytes.len(), MIN_TRANSACTION_V2_SIZE);
         assert_eq!(transfer_bytes[0], TRANSFER_DISCRIMINANT_V2);
         assert_eq!(coinbase_bytes[0], COINBASE_DISCRIMINANT_V2);
+
+        let (_, proof) = purchase_proof_fixture();
+        let proof_bytes = TransactionV2::PurchaseProof(proof.clone())
+            .encode()
+            .expect("proof enum");
+        assert_eq!(
+            proof.encode().expect("proof payload").len(),
+            SIGNED_PURCHASE_PROOF_V2_PAYLOAD_SIZE
+        );
+        assert_eq!(proof_bytes.len(), MAX_TRANSACTION_V2_SIZE);
+        assert_eq!(proof_bytes[0], PURCHASE_PROOF_DISCRIMINANT_V2);
+    }
+
+    #[test]
+    fn purchase_proof_signatures_chain_identity_and_canonical_round_trip_are_enforced() {
+        let (config, proof) = purchase_proof_fixture();
+        proof
+            .verify(&config, 1, config.genesis_time_seconds.saturating_add(1))
+            .expect("valid proof");
+        let transaction = TransactionV2::PurchaseProof(proof.clone());
+        let bytes = transaction.encode().expect("encode");
+        assert_eq!(
+            TransactionV2::decode(&bytes, config.limits.maximum_transaction_bytes).expect("decode"),
+            transaction
+        );
+
+        let mut invalid_verifier = proof.clone();
+        invalid_verifier.body.attested_proof.verifier_signature[0] ^= 1;
+        assert!(matches!(
+            invalid_verifier.verify(&config, 1, config.genesis_time_seconds.saturating_add(1)),
+            Err(Error::InvalidVerifierSignature)
+        ));
+
+        let owner_key = SigningKey::from_bytes(&[7; 32]);
+        let verifier_key = SigningKey::from_bytes(&[42; 32]);
+        let mut wrong_claim = proof.body.attested_proof.claim.clone();
+        wrong_claim.chain_id_hash = Hash256::from_bytes([0x99; 32]);
+        let wrong_attestation = AttestedPurchaseProofV2::attest(wrong_claim, &verifier_key)
+            .expect("attest wrong chain");
+        let wrong_chain = SignedPurchaseProofV2::sign(
+            PurchaseProofBodyV2 {
+                attested_proof: wrong_attestation,
+                fee: config.limits.minimum_fee,
+                nonce: 1,
+                valid_until_height: 100,
+            },
+            &owner_key,
+        )
+        .expect("owner sign wrong chain");
+        assert!(matches!(
+            wrong_chain.verify(&config, 1, config.genesis_time_seconds.saturating_add(1)),
+            Err(Error::ChainIdMismatch)
+        ));
     }
 
     #[test]

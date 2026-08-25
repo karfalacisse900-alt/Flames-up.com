@@ -133,6 +133,20 @@ public final class AuraWalletStore: ObservableObject {
     return try session.sign(unsignedBodyHex: unsigned.unsignedBodyHex)
   }
 
+  public func signPurchaseProof(
+    _ request: AuraPurchaseProofSignRequest
+  ) throws -> AuraSignedPurchaseProof {
+    guard let session else { throw AuraWalletNativeError.releasedSession }
+    return try session.signPurchaseProof(request)
+  }
+
+  public func authorizeFeedback(
+    _ request: AuraFeedbackAuthorizationRequest
+  ) throws -> AuraFeedbackAuthorization {
+    guard let session else { throw AuraWalletNativeError.releasedSession }
+    return try session.authorizeFeedback(request)
+  }
+
   private func writableWalletURL() throws -> URL {
     guard let walletURL else {
       throw AuraWalletNativeError.nativeFailure(

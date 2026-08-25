@@ -6,7 +6,20 @@ pub const POW_PROTOCOL_VERSION: u16 = 2;
 /// Argon2d-v0x13 consensus algorithm identifier.
 pub const ARGON2D_POW_ALGORITHM_ID: u16 = 1;
 /// Built-in `PoW` Devnet chain identity. It is deliberately distinct from Phase 1.
-pub const POW_DEVNET_CHAIN_ID: &str = "aura-devnet-pow-v2";
+pub const POW_DEVNET_CHAIN_ID: &str = "aura-devnet-pow-v2-proof1";
+/// First Devnet purchase-proof consensus revision.
+pub const PURCHASE_PROOF_CONSENSUS_VERSION: u16 = 1;
+/// Public key of the first Devnet receipt verifier. The corresponding private key is never
+/// included in source, node data, client bundles, or genesis bytes.
+pub const DEVNET_PURCHASE_VERIFIER_PUBLIC_KEY: [u8; 32] = [
+    0x6f, 0x13, 0xff, 0xdf, 0xb4, 0x7b, 0x0e, 0xf1, 0xaf, 0xfc, 0xbd, 0xc0, 0xb9, 0x15, 0x21, 0x89,
+    0xb4, 0x7b, 0x69, 0x78, 0xcd, 0x26, 0x0d, 0x79, 0x94, 0xbc, 0xf7, 0xdf, 0x36, 0xa2, 0x0d, 0xe1,
+];
+/// Deterministic test-only verifier public key derived from signing seed `[42; 32]`.
+pub const REGTEST_PURCHASE_VERIFIER_PUBLIC_KEY: [u8; 32] = [
+    0x19, 0x7f, 0x6b, 0x23, 0xe1, 0x6c, 0x85, 0x32, 0xc6, 0xab, 0xc8, 0x38, 0xfa, 0xcd, 0x5e, 0xa7,
+    0x89, 0xbe, 0x0c, 0x76, 0xb2, 0x92, 0x03, 0x34, 0x03, 0x9b, 0xfa, 0x8b, 0x3d, 0x36, 0x8d, 0x61,
+];
 /// Built-in `PoW` Devnet genesis time: 2026-08-22T00:00:00Z.
 pub const POW_DEVNET_GENESIS_TIME_SECONDS: u64 = 1_787_356_800;
 /// Operational bound for the canonical v2 genesis-configuration encoding.
@@ -55,6 +68,22 @@ pub struct PowParametersV2 {
     pub maximum_future_drift_seconds: u64,
 }
 
+/// Purchase-proof rules committed into one exact Devnet genesis identity.
+///
+/// These parameters authorize only proof attestations. They do not grant authority to mint AUR,
+/// rewrite balances, choose forks, or assign reputation.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PurchaseProofParametersV2 {
+    pub version: u16,
+    pub enabled: bool,
+    /// Minimum accepted level: 2=document verified, 3=transaction corroborated, 4=merchant signed.
+    pub minimum_verification_level: u8,
+    /// Maximum age at block inclusion; zero disables the age limit.
+    pub maximum_age_seconds: u64,
+    /// Strictly increasing raw Ed25519 public keys.
+    pub authorized_verifiers: Vec<[u8; 32]>,
+}
+
 /// A transparent genesis allocation committed to a v2 genesis hash.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct GenesisAllocationV2 {
@@ -75,6 +104,7 @@ pub struct PowGenesisConfigV2 {
     pub limits: ConsensusLimitsV2,
     pub economics: EconomicParametersV2,
     pub pow: PowParametersV2,
+    pub purchase_proofs: PurchaseProofParametersV2,
     pub allocations: Vec<GenesisAllocationV2>,
 }
 
@@ -91,7 +121,7 @@ impl PowGenesisConfigV2 {
         minimum[31] = 1;
         Self {
             protocol_version: POW_PROTOCOL_VERSION,
-            chain_name: "Aura PoW Devnet v2".into(),
+            chain_name: "Aura PoW Devnet v2 Proof-1".into(),
             chain_id: POW_DEVNET_CHAIN_ID.into(),
             network: Network::Devnet,
             genesis_time_seconds: POW_DEVNET_GENESIS_TIME_SECONDS,
@@ -121,6 +151,13 @@ impl PowGenesisConfigV2 {
                 median_time_window: 11,
                 maximum_future_drift_seconds: 120,
             },
+            purchase_proofs: PurchaseProofParametersV2 {
+                version: PURCHASE_PROOF_CONSENSUS_VERSION,
+                enabled: true,
+                minimum_verification_level: 2,
+                maximum_age_seconds: 366 * 24 * 60 * 60,
+                authorized_verifiers: vec![DEVNET_PURCHASE_VERIFIER_PUBLIC_KEY],
+            },
             allocations: Vec::new(),
         }
     }
@@ -140,6 +177,7 @@ impl PowGenesisConfigV2 {
         config.pow.asert_half_life_seconds = 60;
         config.pow.initial_target = Target256::from_be_bytes([0xff; 32]);
         config.pow.pow_limit = Target256::from_be_bytes([0xff; 32]);
+        config.purchase_proofs.authorized_verifiers = vec![REGTEST_PURCHASE_VERIFIER_PUBLIC_KEY];
         config
     }
 
@@ -158,6 +196,7 @@ impl PowGenesisConfigV2 {
         self.validate_limits()?;
         self.validate_economics()?;
         self.validate_pow()?;
+        self.validate_purchase_proofs()?;
         self.validate_allocations()?;
         Ok(())
     }
@@ -258,6 +297,31 @@ impl PowGenesisConfigV2 {
             return Err(Error::InvalidGenesis(
                 "median-time window or future-drift bound is invalid".into(),
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_purchase_proofs(&self) -> Result<()> {
+        if !self.purchase_proofs.enabled
+            || self.purchase_proofs.version != PURCHASE_PROOF_CONSENSUS_VERSION
+            || !(2..=4).contains(&self.purchase_proofs.minimum_verification_level)
+            || self.purchase_proofs.maximum_age_seconds == 0
+            || self.purchase_proofs.maximum_age_seconds > 10 * 366 * 24 * 60 * 60
+            || self.purchase_proofs.authorized_verifiers.is_empty()
+            || self.purchase_proofs.authorized_verifiers.len() > 32
+        {
+            return Err(Error::InvalidGenesis(
+                "purchase-proof parameters are outside the Devnet proof-1 bounds".into(),
+            ));
+        }
+        let mut previous: Option<[u8; 32]> = None;
+        for key in &self.purchase_proofs.authorized_verifiers {
+            if *key == [0; 32] || previous.is_some_and(|value| value >= *key) {
+                return Err(Error::InvalidGenesis(
+                    "purchase-proof verifier keys must be nonzero and strictly increasing".into(),
+                ));
+            }
+            previous = Some(*key);
         }
         Ok(())
     }
@@ -465,7 +529,7 @@ mod tests {
         let genesis = crate::BlockV2::genesis(&config, state_root).expect("genesis");
         assert_eq!(
             hex::encode(config.encode().expect("config bytes")),
-            "0200120000004175726120506f57204465766e657420763212000000617572612d6465766e65742d706f772d76320352554180e6886a00000000000020000008000010270000e80300000000000000e1f505000000000008af2f0000000000008a5d78456301000000000100000001000100000001000000200000000f00000000000000100e0000000000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000000000000000000000000000000000010b00780000000000000000000000"
+            "02001a0000004175726120506f57204465766e65742076322050726f6f662d3119000000617572612d6465766e65742d706f772d76322d70726f6f66310352554180e6886a00000000000020000008000010270000e80300000000000000e1f505000000000008af2f0000000000008a5d78456301000000000100000001000100000001000000200000000f00000000000000100e0000000000000fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000000000000000000000000000000000010b007800000000000000010001020085e20100000000010000006f13ffdfb47b0ef1affcbdc0b9152189b47b6978cd260d7994bcf7df36a20de100000000"
         );
         assert_eq!(
             state_root.to_string(),
@@ -473,18 +537,18 @@ mod tests {
         );
         assert_eq!(
             config.config_hash().expect("config hash").to_string(),
-            "12dc2d3543ba366e0914d6664b61ee05a3ab4fac863801be5ad40b769f0de352"
+            "63cf8b216a401c6251fc741e08fc6573cb6562d8276e5e1af30f512ed87c4446"
         );
         assert_eq!(
             config
                 .consensus_identity_hash()
                 .expect("identity")
                 .to_string(),
-            "cd1367f5feceec31b754d7e9044443aa5df65a834ae592ed376cd7eb511c9899"
+            "f2d47ba05f05c086e8e5507ef7be2fa764effaefacab13bd613543e4163575b9"
         );
         assert_eq!(
             genesis.id().expect("genesis ID").to_string(),
-            "292fd5d47d522ea52b405e1dd43ae1ccf5700ed49712bc9a45c73a1542a69b87"
+            "75b26958bc3414b7f32370179c077710b7f35e1c05df21d0f8038d363ecc8c24"
         );
         let bytes = config.encode().expect("bytes");
         assert_eq!(PowGenesisConfigV2::decode(&bytes).expect("decode"), config);

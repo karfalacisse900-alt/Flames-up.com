@@ -38,8 +38,8 @@ pub use block_v2::{
 };
 pub use chain::{Chain, ImportOutcome, VerificationReport};
 pub use chain_v2::{
-    prefers_candidate as prefers_pow_candidate, ChainV2, ConfirmationStatusV2, ImportOutcomeV2,
-    ValidatedCandidateV2, VerificationReportV2,
+    prefers_candidate as prefers_pow_candidate, CanonicalPurchaseProofV2, ChainV2,
+    ConfirmationStatusV2, ImportOutcomeV2, ValidatedCandidateV2, VerificationReportV2,
 };
 pub use consensus::{ConsensusVerifier, PhaseOneConsensus};
 pub use difficulty::{
@@ -51,8 +51,10 @@ pub use error::{Error, Result};
 pub use genesis::{ChainParameters, GenesisAllocation, GenesisConfig};
 pub use genesis_v2::{
     ConsensusLimitsV2, EconomicParametersV2, GenesisAllocationV2, PowGenesisConfigV2,
-    PowParametersV2, ARGON2D_POW_ALGORITHM_ID, MAX_GENESIS_CONFIG_V2_BYTES, POW_DEVNET_CHAIN_ID,
-    POW_DEVNET_GENESIS_TIME_SECONDS, POW_PROTOCOL_VERSION,
+    PowParametersV2, PurchaseProofParametersV2, ARGON2D_POW_ALGORITHM_ID,
+    DEVNET_PURCHASE_VERIFIER_PUBLIC_KEY, MAX_GENESIS_CONFIG_V2_BYTES, POW_DEVNET_CHAIN_ID,
+    POW_DEVNET_GENESIS_TIME_SECONDS, POW_PROTOCOL_VERSION, PURCHASE_PROOF_CONSENSUS_VERSION,
+    REGTEST_PURCHASE_VERIFIER_PUBLIC_KEY,
 };
 pub use hash::{hash_borsh, hash_tagged, Hash256};
 pub use mempool_v2::{
@@ -77,9 +79,14 @@ pub use store_v2::{
 };
 pub use transaction::{SignedTransaction, TransactionBody, TRANSACTION_VERSION};
 pub use transaction_v2::{
-    CoinbaseV2, SignedTransferV2, TransactionBodyV2, TransactionV2, COINBASE_DISCRIMINANT_V2,
-    COINBASE_V2_PAYLOAD_SIZE, MAX_TRANSACTION_V2_SIZE, MIN_TRANSACTION_V2_SIZE,
+    AttestedPurchaseProofV2, CoinbaseV2, PurchaseProofBodyV2, PurchaseProofClaimV2,
+    SignedPurchaseProofV2, SignedTransferV2, TransactionBodyV2, TransactionV2,
+    COINBASE_DISCRIMINANT_V2, COINBASE_V2_PAYLOAD_SIZE, MAX_TRANSACTION_V2_SIZE,
+    MIN_TRANSACTION_V2_SIZE, PURCHASE_PROOF_DISCRIMINANT_V2, PURCHASE_PROOF_TYPE_V2,
+    PURCHASE_PROOF_VERSION_V2, SIGNED_PURCHASE_PROOF_V2_PAYLOAD_SIZE,
     SIGNED_TRANSFER_V2_PAYLOAD_SIZE, TRANSACTION_VERSION_V2, TRANSFER_DISCRIMINANT_V2,
+    VERIFICATION_LEVEL_DOCUMENT_V2, VERIFICATION_LEVEL_MERCHANT_SIGNED_V2,
+    VERIFICATION_LEVEL_TRANSACTION_V2,
 };
 pub use work::{
     block_work, calculate_block_work, BlockWork256, CumulativeWork512, Target256, WorkError,

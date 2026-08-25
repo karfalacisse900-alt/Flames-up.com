@@ -25,16 +25,27 @@ public enum AuraScanDocumentKind: String, CaseIterable, Equatable, Identifiable,
 public struct AuraScanView: View {
   @Environment(\.scenePhase) private var scenePhase
   let api: MIRAAPIClient
+  @ObservedObject private var wallet: AuraWalletStore
+  @ObservedObject private var proofs: AuraProofLifecycleStore
+  @StateObject private var gateway: AuraWalletGatewayStore
   @State private var selectedDocument: AuraLocalDocument?
   @State private var pendingKind: AuraScanDocumentKind = .receipt
   @State private var showingScanner = false
   @State private var showingImporter = false
   @State private var errorMessage: String?
   @State private var verificationResult: AuraDocumentVerificationResult?
+  @State private var proofSubmission: AuraPurchaseProofSubmission?
   @State private var isVerifying = false
 
-  public init(api: MIRAAPIClient) {
+  public init(
+    api: MIRAAPIClient,
+    wallet: AuraWalletStore,
+    proofs: AuraProofLifecycleStore
+  ) {
     self.api = api
+    self.wallet = wallet
+    self.proofs = proofs
+    _gateway = StateObject(wrappedValue: AuraWalletGatewayStore(api: api))
   }
 
   public var body: some View {
@@ -90,6 +101,7 @@ public struct AuraScanView: View {
         if phase != .active {
           selectedDocument = nil
           verificationResult = nil
+          proofSubmission = nil
         }
       }
     }
@@ -129,6 +141,7 @@ public struct AuraScanView: View {
           pendingKind = kind
           selectedDocument = nil
           verificationResult = nil
+          proofSubmission = nil
           Task { await loadPhoto(item, kind: kind) }
         }
       ),
@@ -217,11 +230,18 @@ public struct AuraScanView: View {
         verify(document)
       }
       .buttonStyle(AuraPrimaryButtonStyle())
-      .disabled(isVerifying)
+      .disabled(isVerifying || (document.kind == .receipt && wallet.state != .unlocked))
+
+      if document.kind == .receipt, wallet.state != .unlocked {
+        Text("Unlock the local Aura wallet first. A Proof of Purchase must be authorized on this iPhone before it can enter the real Devnet mempool.")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+      }
 
       Button("Clear Local Selection") {
         selectedDocument = nil
         verificationResult = nil
+        proofSubmission = nil
       }
       .font(.system(size: 14, weight: .bold))
       .foregroundStyle(MIRATheme.Color.forest)
@@ -269,9 +289,41 @@ public struct AuraScanView: View {
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
 
-      Text("Not yet completed: independent purchase/payment confirmation, merchant signature verification, Aura proof issuance, reputation standing, and blockchain commitment.")
-        .font(.system(size: 12.5, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
+      if let submission = proofSubmission,
+         let record = proofs.records.first(where: { $0.proofId == submission.proofId }) {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
+          Label(proofStateLabel(record), systemImage: proofStateIcon(record))
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(record.isConfirmed ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+          documentRow(label: "Proof ID", value: record.proofId)
+          documentRow(label: "Proof transaction", value: record.proofTransactionId)
+          if let height = record.blockHeight {
+            documentRow(label: "Included in block", value: height)
+          }
+          documentRow(
+            label: "Confirmations",
+            value: "\(record.confirmations) / \(record.requiredConfirmations)"
+          )
+          Text(record.isConfirmed
+            ? "This canonical proof can now be checked for one feedback and Devnet contribution-reward action."
+            : "The proof is in the real Aura transaction lifecycle. Confirmation status is read from the validated Devnet node.")
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        .padding(MIRATheme.Space.md)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+      } else if result.submittedType == "receipt" {
+        Text(result.purchaseProof == nil
+          ? "No blockchain proof was authorized. Provider parsing alone cannot create reputation standing or AUR."
+          : "The provider authorized a privacy-safe proof, but it has not reached the Aura node.")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+      } else {
+        Text("Invoice issued is not invoice paid. No Proof of Purchase or reward is created without independent payment confirmation.")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+      }
 
       Text(result.privacy.providerAutoDeleteRequested
         ? "Aura does not retain the document; provider auto-delete was requested."
@@ -302,15 +354,59 @@ public struct AuraScanView: View {
   }
 
   private func verify(_ document: AuraLocalDocument) {
+    let identity = wallet.identity
+    if document.kind == .receipt, identity == nil {
+      errorMessage = "Unlock the local Aura wallet before verifying a receipt for blockchain submission."
+      return
+    }
     isVerifying = true
     verificationResult = nil
+    proofSubmission = nil
     Task {
       defer { isVerifying = false }
       do {
-        verificationResult = try await api.verifyAuraDocument(document)
+        let result = try await api.verifyAuraDocument(
+          document,
+          ownerPublicKeyHex: identity?.publicKeyHex ?? ""
+        )
+        verificationResult = result
+        guard document.kind == .receipt,
+              let identity,
+              let attestation = result.purchaseProof else { return }
+        let submission = try await gateway.submitPurchaseProof(
+          attestation,
+          from: wallet,
+          identity: identity
+        )
+        let submittedAt = UInt64(attestation.timestampSeconds)
+          ?? UInt64(max(0, Date().timeIntervalSince1970))
+        proofs.record(
+          submission: submission,
+          owner: identity.address,
+          submittedAtSeconds: submittedAt
+        )
+        proofSubmission = submission
+        await proofs.refreshAll()
       } catch {
         errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
       }
+    }
+  }
+
+  private func proofStateLabel(_ record: AuraPrivateProofRecord) -> String {
+    switch record.state {
+    case "confirmed": return "Confirmed on Aura Devnet"
+    case "included": return "Included in block #\(record.blockHeight ?? "Unavailable")"
+    case "pending": return "Pending in Aura mempool"
+    default: return "Aura proof status unavailable"
+    }
+  }
+
+  private func proofStateIcon(_ record: AuraPrivateProofRecord) -> String {
+    switch record.state {
+    case "confirmed": return "checkmark.seal.fill"
+    case "included": return "cube.fill"
+    default: return "clock.arrow.circlepath"
     }
   }
 
@@ -334,6 +430,7 @@ public struct AuraScanView: View {
     pendingKind = kind
     selectedDocument = nil
     verificationResult = nil
+    proofSubmission = nil
     showingScanner = true
   }
 
@@ -341,6 +438,7 @@ public struct AuraScanView: View {
     pendingKind = kind
     selectedDocument = nil
     verificationResult = nil
+    proofSubmission = nil
     showingImporter = true
   }
 

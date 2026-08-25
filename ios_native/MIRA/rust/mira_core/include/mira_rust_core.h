@@ -71,6 +71,8 @@ char* mira_aura_build_unsigned_transfer_v2_json(const char* params_json);
  * {"ok":false,"error":...} envelope (for example if the body's sender is not this wallet's
  * address). */
 char* mira_wallet_sign_transfer_v2_json(void* handle, const char* unsigned_body_hex);
+char* mira_wallet_sign_purchase_proof_v2_json(void* handle, const char* request_json);
+char* mira_wallet_authorize_feedback_v1_json(void* handle, const char* request_json);
 
 #ifdef __cplusplus
 }

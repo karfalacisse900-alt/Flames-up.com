@@ -384,6 +384,8 @@ impl BlockV2 {
         )?;
 
         let mut seen_intents = BTreeSet::new();
+        let mut seen_proof_ids = BTreeSet::new();
+        let mut seen_nullifiers = BTreeSet::new();
         let mut witness_ids = Vec::with_capacity(self.transactions.len());
         for (position, transaction) in self.transactions.iter().enumerate() {
             transaction.validate_version()?;
@@ -401,6 +403,21 @@ impl BlockV2 {
                     let intent_id = transfer.intent_id()?;
                     if !seen_intents.insert(intent_id) {
                         return Err(Error::DuplicateTransaction(intent_id));
+                    }
+                }
+                TransactionV2::PurchaseProof(proof) => {
+                    proof.verify(config, self.header.height, self.header.timestamp_seconds)?;
+                    let intent_id = proof.intent_id()?;
+                    if !seen_intents.insert(intent_id) {
+                        return Err(Error::DuplicateTransaction(intent_id));
+                    }
+                    let proof_id = proof.proof_id()?;
+                    if !seen_proof_ids.insert(proof_id) {
+                        return Err(Error::DuplicateProof(proof_id));
+                    }
+                    let nullifier = proof.receipt_nullifier();
+                    if !seen_nullifiers.insert(nullifier) {
+                        return Err(Error::DuplicateProofNullifier(nullifier));
                     }
                 }
             }

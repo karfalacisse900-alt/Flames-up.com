@@ -3,8 +3,8 @@ use crate::{
     verify_argon2d_pow, Address, Amount, BlockRecordV2, BlockV2, BlockWork256, ChainStoreV2,
     CoinbaseV2, CumulativeWork512, DifficultyError, DifficultyParameters, Error, Hash256,
     LedgerStateV2, PowError, PowGenesisConfigV2, PowParameters, PowTargetRequirement, ReorgPlanV2,
-    Result, SignedTransferV2, StoreMetadataV2, TransactionV2, ARGON2D_POW_ALGORITHM_ID_V2,
-    BLOCK_VERSION_V2, POW_PROTOCOL_VERSION, POW_STORE_SCHEMA_VERSION,
+    Result, SignedPurchaseProofV2, SignedTransferV2, StoreMetadataV2, TransactionV2,
+    ARGON2D_POW_ALGORITHM_ID_V2, BLOCK_VERSION_V2, POW_PROTOCOL_VERSION, POW_STORE_SCHEMA_VERSION,
 };
 use std::collections::BTreeSet;
 
@@ -35,6 +35,14 @@ pub struct ConfirmationStatusV2 {
     pub block_hash: Hash256,
     pub block_height: u64,
     pub confirmations: u64,
+}
+
+/// Canonical purchase proof plus its real block-derived confirmation state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CanonicalPurchaseProofV2 {
+    pub proof: SignedPurchaseProofV2,
+    pub transaction_id: Hash256,
+    pub confirmation: ConfirmationStatusV2,
 }
 
 /// Opaque authorization to run miners over one fully validated candidate.
@@ -205,6 +213,25 @@ impl<S: ChainStoreV2> ChainV2<S> {
         timestamp_seconds: u64,
         extra_nonce: u64,
     ) -> Result<ValidatedCandidateV2> {
+        self.prepare_candidate_transactions_on(
+            parent_hash,
+            miner,
+            transfers.into_iter().map(TransactionV2::Transfer).collect(),
+            timestamp_seconds,
+            extra_nonce,
+        )
+    }
+
+    /// Constructs a fully state-valid candidate containing any supported non-coinbase v2
+    /// transaction. Coinbase creation remains internal and exact.
+    pub fn prepare_candidate_transactions_on(
+        &self,
+        parent_hash: Hash256,
+        miner: Address,
+        pending: Vec<TransactionV2>,
+        timestamp_seconds: u64,
+        extra_nonce: u64,
+    ) -> Result<ValidatedCandidateV2> {
         if miner.network() != self.config.network {
             return Err(Error::AddressNetworkMismatch {
                 expected: self.config.network,
@@ -222,16 +249,21 @@ impl<S: ChainStoreV2> ChainV2<S> {
             .ok_or(Error::HeightExhausted)?;
         self.validate_median_time(parent_hash, timestamp_seconds)?;
 
-        // Validate candidate transfers in exact block order while calculating the fee component.
+        // Validate candidate transactions in exact block order while calculating miner fees.
         let mut unsettled = parent.state.clone();
         let mut fees = Amount::ZERO;
-        for transfer in &transfers {
-            let fee = unsettled.apply_transfer_for_candidate(transfer, &self.config, height)?;
+        for transaction in &pending {
+            let fee = unsettled.apply_transaction_for_candidate(
+                transaction,
+                &self.config,
+                height,
+                timestamp_seconds,
+            )?;
             fees = fees.checked_add(fee)?;
         }
         let subsidy = self.config.subsidy(parent.state.total_supply(), height)?;
         let payout = subsidy.checked_add(fees)?;
-        let mut transactions = Vec::with_capacity(transfers.len().saturating_add(1));
+        let mut transactions = Vec::with_capacity(pending.len().saturating_add(1));
         transactions.push(TransactionV2::Coinbase(CoinbaseV2 {
             version: POW_PROTOCOL_VERSION,
             network: self.config.network,
@@ -241,10 +273,15 @@ impl<S: ChainStoreV2> ChainV2<S> {
             payout,
             extra_nonce,
         }));
-        transactions.extend(transfers.into_iter().map(TransactionV2::Transfer));
+        transactions.extend(pending);
 
-        let execution =
-            LedgerStateV2::execute_block(&parent.state, &transactions, &self.config, height)?;
+        let execution = LedgerStateV2::execute_block(
+            &parent.state,
+            &transactions,
+            &self.config,
+            height,
+            timestamp_seconds,
+        )?;
         let target = self.required_target(&parent)?;
         let block = BlockV2::candidate(
             &self.config,
@@ -282,6 +319,25 @@ impl<S: ChainStoreV2> ChainV2<S> {
             metadata.tip_hash,
             miner,
             transfers,
+            timestamp_seconds,
+            extra_nonce,
+        )
+    }
+
+    /// Constructs a candidate from the current canonical tip using supported non-coinbase
+    /// transactions selected by the unified mempool.
+    pub fn prepare_candidate_transactions(
+        &self,
+        miner: Address,
+        pending: Vec<TransactionV2>,
+        timestamp_seconds: u64,
+        extra_nonce: u64,
+    ) -> Result<ValidatedCandidateV2> {
+        let metadata = self.metadata()?;
+        self.prepare_candidate_transactions_on(
+            metadata.tip_hash,
+            miner,
+            pending,
             timestamp_seconds,
             extra_nonce,
         )
@@ -483,6 +539,61 @@ impl<S: ChainStoreV2> ChainV2<S> {
         Ok(None)
     }
 
+    /// Finds a purchase proof only on the current canonical path.
+    pub fn canonical_purchase_proof(
+        &self,
+        proof_id: Hash256,
+    ) -> Result<Option<CanonicalPurchaseProofV2>> {
+        let tip = self.tip()?;
+        for height in (0..=tip.block.header.height).rev() {
+            let record = self.canonical_record(height)?.ok_or_else(|| {
+                Error::CorruptStore(format!("canonical height {height} is missing"))
+            })?;
+            for transaction in &record.block.transactions {
+                let Some(proof) = transaction.as_purchase_proof() else {
+                    continue;
+                };
+                if proof.proof_id()? != proof_id {
+                    continue;
+                }
+                return Ok(Some(CanonicalPurchaseProofV2 {
+                    proof: proof.clone(),
+                    transaction_id: proof.intent_id()?,
+                    confirmation: ConfirmationStatusV2 {
+                        block_hash: record.block.id()?,
+                        block_height: height,
+                        confirmations: tip
+                            .block
+                            .header
+                            .height
+                            .checked_sub(height)
+                            .and_then(|depth| depth.checked_add(1))
+                            .ok_or(Error::HeightExhausted)?,
+                    },
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Returns whether the canonical path already commits the private verifier's nullifier.
+    pub fn canonical_contains_purchase_nullifier(&self, nullifier: Hash256) -> Result<bool> {
+        let tip = self.tip()?;
+        for height in (0..=tip.block.header.height).rev() {
+            let record = self.canonical_record(height)?.ok_or_else(|| {
+                Error::CorruptStore(format!("canonical height {height} is missing"))
+            })?;
+            if record.block.transactions.iter().any(|transaction| {
+                transaction
+                    .as_purchase_proof()
+                    .is_some_and(|proof| proof.receipt_nullifier() == nullifier)
+            }) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     #[must_use]
     pub fn into_store(self) -> S {
         self.store
@@ -581,7 +692,58 @@ impl<S: ChainStoreV2> ChainV2<S> {
         }
         self.validate_median_time(header.parent_block_id, header.timestamp_seconds)?;
         block.verify_body(&self.config)?;
+        self.validate_purchase_proof_history(block, parent)?;
         Ok(expected_target)
+    }
+
+    fn validate_purchase_proof_history(
+        &self,
+        block: &BlockV2,
+        parent: &BlockRecordV2,
+    ) -> Result<()> {
+        let mut candidate_ids = BTreeSet::new();
+        let mut candidate_nullifiers = BTreeSet::new();
+        for transaction in &block.transactions {
+            let Some(proof) = transaction.as_purchase_proof() else {
+                continue;
+            };
+            let proof_id = proof.proof_id()?;
+            if !candidate_ids.insert(proof_id) {
+                return Err(Error::DuplicateProof(proof_id));
+            }
+            let nullifier = proof.receipt_nullifier();
+            if !candidate_nullifiers.insert(nullifier) {
+                return Err(Error::DuplicateProofNullifier(nullifier));
+            }
+        }
+        if candidate_ids.is_empty() {
+            return Ok(());
+        }
+
+        let mut ancestor = parent.clone();
+        loop {
+            for transaction in &ancestor.block.transactions {
+                let Some(proof) = transaction.as_purchase_proof() else {
+                    continue;
+                };
+                let proof_id = proof.proof_id()?;
+                if candidate_ids.contains(&proof_id) {
+                    return Err(Error::DuplicateProof(proof_id));
+                }
+                let nullifier = proof.receipt_nullifier();
+                if candidate_nullifiers.contains(&nullifier) {
+                    return Err(Error::DuplicateProofNullifier(nullifier));
+                }
+            }
+            if ancestor.block.header.height == 0 {
+                break;
+            }
+            ancestor = self.required_record(
+                ancestor.block.header.parent_block_id,
+                "purchase-proof ancestor",
+            )?;
+        }
+        Ok(())
     }
 
     fn execute_and_verify_state(
@@ -595,6 +757,7 @@ impl<S: ChainStoreV2> ChainV2<S> {
             &block.transactions,
             &self.config,
             header.height,
+            header.timestamp_seconds,
         )?;
         if execution.state.root()? != header.state_root {
             return Err(Error::StateRootMismatch);

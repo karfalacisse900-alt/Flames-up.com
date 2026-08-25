@@ -5,7 +5,7 @@ import test from 'node:test';
 const sourceURL = new URL('../src/aura.ts', import.meta.url);
 const workflowURL = new URL('../../.github/workflows/deploy-worker.yml', import.meta.url);
 
-test('Aura document verification is authenticated, bounded, non-retaining, and cannot issue proofs', async () => {
+test('Aura document verification is authenticated, bounded, non-retaining, and only authorizes privacy-safe proof bytes', async () => {
   const source = await fs.readFile(sourceURL, 'utf8');
   assert.match(source, /aura\.use\('\*', authMiddleware\)/);
   assert.match(source, /MAX_DOCUMENT_BYTES = 12 \* 1024 \* 1024/);
@@ -14,6 +14,11 @@ test('Aura document verification is authenticated, bounded, non-retaining, and c
   assert.match(source, /blockchainSubmitted: false/);
   assert.match(source, /independentPurchaseConfirmed: false/);
   assert.match(source, /veryfiSignature/);
+  assert.match(source, /purchaseProofAttestation/);
+  assert.match(source, /proof\/purchase\/verifier-signing\/v1/);
+  assert.match(source, /aura-receipt-nullifier-v1/);
+  assert.match(source, /AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64/);
+  assert.match(source, /AURA_PROOF_NULLIFIER_KEY_BASE64/);
   assert.doesNotMatch(source, /a5eef8|0FBr1|vrfsgsvt/);
 });
 
@@ -24,6 +29,8 @@ test('Aura wallet routes proxy only allowlisted operations to an authenticated R
   assert.match(source, /X-Aura-Request-Timestamp/);
   assert.match(source, /AURA_GATEWAY_UNAVAILABLE/);
   assert.match(source, /\/transactions\/broadcast/);
+  assert.match(source, /\/proofs\/broadcast/);
+  assert.match(source, /feedback-eligibility/);
   assert.match(source, /MAX_GATEWAY_ORIGINS = 3/);
   assert.match(source, /AURA_MOBILE_GATEWAY_URLS/);
   assert.match(source, /gatewayHasExpectedIdentity/);
@@ -38,5 +45,7 @@ test('deployment syncs credential names from GitHub Actions without source value
     assert.match(workflow, new RegExp(`secrets\\.${name}`));
   }
   assert.match(workflow, /secrets\.AURA_MOBILE_GATEWAY_URLS/);
+  assert.match(workflow, /secrets\.AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64/);
+  assert.match(workflow, /secrets\.AURA_PROOF_NULLIFIER_KEY_BASE64/);
   assert.doesNotMatch(workflow, /a5eef8|0FBr1|vrfsgsvt/);
 });

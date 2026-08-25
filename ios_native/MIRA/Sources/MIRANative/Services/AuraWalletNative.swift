@@ -29,6 +29,38 @@ public struct AuraSignedTransfer: Decodable, Equatable, Sendable {
   public let intentIdHex: String
 }
 
+public struct AuraPurchaseProofSignRequest: Encodable, Equatable, Sendable {
+  public let attestedProofHex: String
+  public let feeAtoms: String
+  public let nonce: String
+  public let validUntilHeight: String
+
+  public init(attestedProofHex: String, feeAtoms: UInt64, nonce: UInt64, validUntilHeight: UInt64) {
+    self.attestedProofHex = attestedProofHex
+    self.feeAtoms = String(feeAtoms)
+    self.nonce = String(nonce)
+    self.validUntilHeight = String(validUntilHeight)
+  }
+}
+
+public struct AuraSignedPurchaseProof: Decodable, Equatable, Sendable {
+  public let signedProofTransactionHex: String
+  public let proofIdHex: String
+  public let transactionIdHex: String
+  public let witnessIdHex: String
+}
+
+public struct AuraFeedbackAuthorizationRequest: Encodable, Equatable, Sendable {
+  public let chainIdHashHex: String
+  public let proofIdHex: String
+  public let feedbackCommitmentHex: String
+}
+
+public struct AuraFeedbackAuthorization: Decodable, Equatable, Sendable {
+  public let ownerPublicKeyHex: String
+  public let ownerSignatureHex: String
+}
+
 public struct AuraUnsignedTransferRequest: Encodable, Equatable, Sendable {
   public let network: UInt8
   public let chainIdHashHex: String
@@ -180,6 +212,34 @@ public final class AuraWalletSession {
         mira_wallet_sign_transfer_v2_json(handle, bodyPointer)
       }
       return try Self.decode(response, as: AuraSignedTransfer.self)
+    }
+  }
+
+  public func signPurchaseProof(_ request: AuraPurchaseProofSignRequest) throws -> AuraSignedPurchaseProof {
+    guard let data = try? JSONEncoder().encode(request),
+          let json = String(data: data, encoding: .utf8) else {
+      throw AuraWalletNativeError.encodingFailure
+    }
+    return try withHandle { handle in
+      let response = json.withCString { requestPointer in
+        mira_wallet_sign_purchase_proof_v2_json(handle, requestPointer)
+      }
+      return try Self.decode(response, as: AuraSignedPurchaseProof.self)
+    }
+  }
+
+  public func authorizeFeedback(
+    _ request: AuraFeedbackAuthorizationRequest
+  ) throws -> AuraFeedbackAuthorization {
+    guard let data = try? JSONEncoder().encode(request),
+          let json = String(data: data, encoding: .utf8) else {
+      throw AuraWalletNativeError.encodingFailure
+    }
+    return try withHandle { handle in
+      let response = json.withCString { requestPointer in
+        mira_wallet_authorize_feedback_v1_json(handle, requestPointer)
+      }
+      return try Self.decode(response, as: AuraFeedbackAuthorization.self)
     }
   }
 

@@ -25,6 +25,7 @@ serde_json = "1.0.137"
 zeroize = "1.9.0"
 
 [dev-dependencies]
+ed25519-dalek = "2.2.0"
 tempfile = "3.15.0"
 
 [profile.release]

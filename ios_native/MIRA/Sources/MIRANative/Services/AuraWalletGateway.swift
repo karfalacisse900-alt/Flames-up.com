@@ -4,9 +4,9 @@ import Foundation
 public enum AuraExpectedDevnet {
   public static let protocolVersion = "2"
   public static let network = "devnet"
-  public static let chainId = "aura-devnet-pow-v2"
-  public static let chainIdHash = "cd1367f5feceec31b754d7e9044443aa5df65a834ae592ed376cd7eb511c9899"
-  public static let genesisHash = "292fd5d47d522ea52b405e1dd43ae1ccf5700ed49712bc9a45c73a1542a69b87"
+  public static let chainId = "aura-devnet-pow-v2-proof1"
+  public static let chainIdHash = "f2d47ba05f05c086e8e5507ef7be2fa764effaefacab13bd613543e4163575b9"
+  public static let genesisHash = "75b26958bc3414b7f32370179c077710b7f35e1c05df21d0f8038d363ecc8c24"
 }
 
 public struct AuraGatewayNetwork: Decodable, Equatable, Sendable {
@@ -79,6 +79,12 @@ public struct AuraGatewayBroadcastResult: Decodable, Equatable, Sendable {
   public let intentId: String
   public let relayedPeers: String
   public let evictedIntentIds: [String]
+}
+
+public struct AuraPurchaseProofSubmission: Equatable, Sendable {
+  public let proofId: String
+  public let transactionId: String
+  public let broadcast: AuraGatewayBroadcastResult
 }
 
 private struct AuraGatewayBroadcastBody: Encodable {
@@ -332,5 +338,67 @@ public final class AuraWalletGatewayStore: ObservableObject {
     lastSubmittedIntentId = result.intentId
     await refresh(identity: identity)
     return result
+  }
+
+  public func submitPurchaseProof(
+    _ attestation: AuraPurchaseProofAttestation,
+    from wallet: AuraWalletStore,
+    identity: AuraWalletIdentity
+  ) async throws -> AuraPurchaseProofSubmission {
+    await refresh(identity: identity)
+    guard let network, let chainStatus, let balance, let nonce, let fees else {
+      throw AuraWalletGatewayError.networkUnavailable
+    }
+    guard identity.network == network.network,
+          identity.address == balance.address,
+          attestation.ownerPublicKeyHex.lowercased() == identity.publicKeyHex.lowercased() else {
+      throw AuraWalletGatewayError.walletIdentityMismatch
+    }
+    guard let fee = UInt64(fees.minimumFeeAtoms),
+          let available = UInt64(balance.availableAtoms),
+          let height = UInt64(chainStatus.canonicalHeight) else {
+      throw AuraWalletGatewayError.invalidNetworkValue
+    }
+    guard fee <= available else { throw AuraWalletGatewayError.insufficientFunds }
+    guard let nextNonceText = nonce.nextNonce,
+          let nextNonce = UInt64(nextNonceText) else {
+      throw AuraWalletGatewayError.nonceUnavailable
+    }
+    let validUntil = height.addingReportingOverflow(100)
+    guard !validUntil.overflow else { throw AuraWalletGatewayError.invalidNetworkValue }
+    let signed = try wallet.signPurchaseProof(
+      AuraPurchaseProofSignRequest(
+        attestedProofHex: attestation.attestedProofHex,
+        feeAtoms: fee,
+        nonce: nextNonce,
+        validUntilHeight: validUntil.partialValue
+      )
+    )
+    guard signed.proofIdHex == attestation.proofId else {
+      throw AuraWalletGatewayError.chainIdentityMismatch
+    }
+    let now = Date().timeIntervalSince1970
+    guard now >= 0, now <= Double(UInt64.max) else {
+      throw AuraWalletGatewayError.invalidNetworkValue
+    }
+    let result: AuraGatewayBroadcastResult = try await api.postAuraTransaction(
+      "/aura/proofs/broadcast",
+      body: AuraGatewayBroadcastBody(
+        transactionHex: signed.signedProofTransactionHex,
+        expectedChainIdHash: network.chainIdHash,
+        expectedGenesisHash: network.genesisHash
+      ),
+      idempotencyKey: "proof-\(signed.transactionIdHex)",
+      timestampSeconds: UInt64(now)
+    )
+    guard result.intentId == signed.transactionIdHex else {
+      throw AuraWalletGatewayError.chainIdentityMismatch
+    }
+    await refresh(identity: identity)
+    return AuraPurchaseProofSubmission(
+      proofId: signed.proofIdHex,
+      transactionId: signed.transactionIdHex,
+      broadcast: result
+    )
   }
 }

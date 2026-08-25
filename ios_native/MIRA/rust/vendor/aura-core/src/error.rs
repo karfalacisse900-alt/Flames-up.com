@@ -26,6 +26,16 @@ pub enum Error {
     InvalidPublicKey,
     #[error("invalid Ed25519 signature")]
     InvalidSignature,
+    #[error("purchase proof is malformed: {0}")]
+    InvalidPurchaseProof(String),
+    #[error("purchase proof verifier is not authorized by this chain")]
+    UnauthorizedProofVerifier,
+    #[error("purchase proof verifier signature is invalid")]
+    InvalidVerifierSignature,
+    #[error("purchase proof nullifier {0} already exists on this branch")]
+    DuplicateProofNullifier(Hash256),
+    #[error("purchase proof {0} already exists on this branch")]
+    DuplicateProof(Hash256),
     #[error("transaction nonce {actual} is invalid; expected {expected}")]
     InvalidNonce { expected: u64, actual: u64 },
     #[error("transaction expired at height {expires}; candidate height is {height}")]

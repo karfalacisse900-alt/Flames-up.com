@@ -1,6 +1,6 @@
 use crate::{
     hash_tagged, Account, Address, Amount, CoinbaseV2, Error, Hash256, PowGenesisConfigV2, Result,
-    SignedTransferV2, TransactionV2, POW_PROTOCOL_VERSION,
+    SignedPurchaseProofV2, SignedTransferV2, TransactionV2, POW_PROTOCOL_VERSION,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ pub struct LedgerStateV2 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockExecutionV2 {
     pub state: LedgerStateV2,
-    pub transfer_fees: Amount,
+    pub transaction_fees: Amount,
     pub subsidy: Amount,
     pub required_coinbase_payout: Amount,
 }
@@ -86,6 +86,38 @@ impl LedgerStateV2 {
         Ok(fee)
     }
 
+    /// Validates and applies one non-coinbase transaction to candidate monetary state.
+    ///
+    /// Purchase proofs debit only their fee and increment the owner's shared account nonce. The
+    /// proof/nullifier history remains separately derived from canonical block transactions.
+    pub fn apply_transaction_for_candidate(
+        &mut self,
+        transaction: &TransactionV2,
+        config: &PowGenesisConfigV2,
+        candidate_height: u64,
+        candidate_timestamp_seconds: u64,
+    ) -> Result<Amount> {
+        let mut next = self.clone();
+        let fee = match transaction {
+            TransactionV2::Coinbase(_) => {
+                return Err(Error::InvalidCoinbase(
+                    "coinbase cannot enter the non-coinbase candidate path".into(),
+                ));
+            }
+            TransactionV2::Transfer(transfer) => {
+                next.apply_transfer_unsettled(transfer, config, candidate_height)?
+            }
+            TransactionV2::PurchaseProof(proof) => next.apply_purchase_proof_unsettled(
+                proof,
+                config,
+                candidate_height,
+                candidate_timestamp_seconds,
+            )?,
+        };
+        *self = next;
+        Ok(fee)
+    }
+
     fn apply_transfer_unsettled(
         &mut self,
         transfer: &SignedTransferV2,
@@ -136,12 +168,46 @@ impl LedgerStateV2 {
         Ok(transfer.body.fee)
     }
 
+    fn apply_purchase_proof_unsettled(
+        &mut self,
+        proof: &SignedPurchaseProofV2,
+        config: &PowGenesisConfigV2,
+        candidate_height: u64,
+        candidate_timestamp_seconds: u64,
+    ) -> Result<Amount> {
+        proof.verify(config, candidate_height, candidate_timestamp_seconds)?;
+        let owner_address = proof.owner();
+        let owner = self.account(owner_address);
+        let expected_nonce = owner.nonce.checked_add(1).ok_or(Error::AmountOverflow)?;
+        if proof.body.nonce != expected_nonce {
+            return Err(Error::InvalidNonce {
+                expected: expected_nonce,
+                actual: proof.body.nonce,
+            });
+        }
+        let available = owner.available.checked_sub(proof.body.fee).map_err(|_| {
+            Error::InsufficientBalance {
+                address: owner_address,
+            }
+        })?;
+        self.accounts.insert(
+            owner_address,
+            Account {
+                available,
+                locked: owner.locked,
+                nonce: proof.body.nonce,
+            },
+        );
+        Ok(proof.body.fee)
+    }
+
     /// Executes a complete v2 block atomically and validates exact coinbase issuance and fees.
     pub fn execute_block(
         parent: &Self,
         transactions: &[TransactionV2],
         config: &PowGenesisConfigV2,
         height: u64,
+        timestamp_seconds: u64,
     ) -> Result<BlockExecutionV2> {
         parent.validate_invariants(config.economics.maximum_supply)?;
         let Some(TransactionV2::Coinbase(coinbase)) = transactions.first() else {
@@ -162,6 +228,15 @@ impl LedgerStateV2 {
                 }
                 TransactionV2::Transfer(transfer) => {
                     let fee = next.apply_transfer_unsettled(transfer, config, height)?;
+                    fees = fees.checked_add(fee)?;
+                }
+                TransactionV2::PurchaseProof(proof) => {
+                    let fee = next.apply_purchase_proof_unsettled(
+                        proof,
+                        config,
+                        height,
+                        timestamp_seconds,
+                    )?;
                     fees = fees.checked_add(fee)?;
                 }
             }
@@ -185,7 +260,7 @@ impl LedgerStateV2 {
 
         Ok(BlockExecutionV2 {
             state: next,
-            transfer_fees: fees,
+            transaction_fees: fees,
             subsidy,
             required_coinbase_payout: required_payout,
         })
@@ -273,6 +348,7 @@ mod tests {
             &[coinbase(&config, 1, sender, subsidy)],
             &config,
             1,
+            config.genesis_time_seconds.saturating_add(1),
         )
         .expect("fund sender through a consensus coinbase")
         .state;
@@ -332,11 +408,17 @@ mod tests {
             coinbase(&config, 2, recipient, payout),
             TransactionV2::Transfer(transfer),
         ];
-        let result = LedgerStateV2::execute_block(&parent, &transactions, &config, 2)
-            .expect("execute block");
+        let result = LedgerStateV2::execute_block(
+            &parent,
+            &transactions,
+            &config,
+            2,
+            config.genesis_time_seconds.saturating_add(2),
+        )
+        .expect("execute block");
 
         assert_eq!(result.subsidy, subsidy);
-        assert_eq!(result.transfer_fees, config.limits.minimum_fee);
+        assert_eq!(result.transaction_fees, config.limits.minimum_fee);
         assert_eq!(
             result.state.total_supply(),
             parent
@@ -369,7 +451,13 @@ mod tests {
         ] {
             let transactions = vec![coinbase(&config, 2, miner, wrong)];
             assert!(matches!(
-                LedgerStateV2::execute_block(&parent, &transactions, &config, 2),
+                LedgerStateV2::execute_block(
+                    &parent,
+                    &transactions,
+                    &config,
+                    2,
+                    config.genesis_time_seconds.saturating_add(2),
+                ),
                 Err(Error::CoinbasePayoutMismatch { .. })
             ));
             assert_eq!(parent.total_supply(), Amount::from_atoms(10_000));
@@ -380,12 +468,24 @@ mod tests {
             coinbase(&config, 2, miner, subsidy),
         ];
         assert!(matches!(
-            LedgerStateV2::execute_block(&parent, &duplicate, &config, 2),
+            LedgerStateV2::execute_block(
+                &parent,
+                &duplicate,
+                &config,
+                2,
+                config.genesis_time_seconds.saturating_add(2),
+            ),
             Err(Error::InvalidCoinbase(_))
         ));
 
         assert!(matches!(
-            LedgerStateV2::execute_block(&parent, &[], &config, 2),
+            LedgerStateV2::execute_block(
+                &parent,
+                &[],
+                &config,
+                2,
+                config.genesis_time_seconds.saturating_add(2),
+            ),
             Err(Error::InvalidCoinbase(_))
         ));
     }
@@ -410,7 +510,13 @@ mod tests {
             TransactionV2::Transfer(bad_signature),
         ];
         assert!(matches!(
-            LedgerStateV2::execute_block(&parent, &bad_block, &config, 2),
+            LedgerStateV2::execute_block(
+                &parent,
+                &bad_block,
+                &config,
+                2,
+                config.genesis_time_seconds.saturating_add(2),
+            ),
             Err(Error::InvalidSignature)
         ));
 
@@ -425,7 +531,13 @@ mod tests {
             TransactionV2::Transfer(overspend),
         ];
         assert!(matches!(
-            LedgerStateV2::execute_block(&parent, &over_block, &config, 2),
+            LedgerStateV2::execute_block(
+                &parent,
+                &over_block,
+                &config,
+                2,
+                config.genesis_time_seconds.saturating_add(2),
+            ),
             Err(Error::InsufficientBalance { .. })
         ));
 
@@ -456,6 +568,7 @@ mod tests {
             &[coinbase(&config, 1, miner, subsidy)],
             &config,
             1,
+            config.genesis_time_seconds.saturating_add(1),
         )
         .expect("coinbase")
         .state;

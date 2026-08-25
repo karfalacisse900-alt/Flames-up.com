@@ -19,7 +19,10 @@
 //! auditable as the wallet itself, but it does mean this phrase is Aura-specific: it will not
 //! import into a generic multi-coin BIP39/BIP32 wallet and produce the same key.
 
-use aura_core::{Address, Hash256, Network, TransactionBodyV2, TransactionV2};
+use aura_core::{
+    hash_tagged, Address, Amount, AttestedPurchaseProofV2, Hash256, Network, PurchaseProofBodyV2,
+    TransactionBodyV2, TransactionV2,
+};
 use aura_wallet::{PermissionStatus, Wallet, WalletPassword};
 use bip39::Mnemonic;
 use serde::{Deserialize, Serialize};
@@ -642,6 +645,170 @@ pub unsafe extern "C" fn mira_wallet_sign_transfer_v2_json(
     })
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PurchaseProofSignRequest {
+    attested_proof_hex: String,
+    fee_atoms: String,
+    nonce: String,
+    valid_until_height: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
+#[serde(rename_all = "camelCase")]
+struct SignedPurchaseProofResult {
+    signed_proof_transaction_hex: String,
+    proof_id_hex: String,
+    transaction_id_hex: String,
+    witness_id_hex: String,
+}
+
+/// Signs one canonical verifier attestation with the local wallet and returns a complete Aura
+/// purchase-proof transaction. The attestation contains commitments only; raw document bytes and
+/// provider fields never cross this FFI. Full nodes independently validate both signatures,
+/// chain identity, nullifier, nonce, fee, and proof freshness.
+///
+/// # Safety
+/// `handle` must be a live wallet handle and `request_json` a valid NUL-terminated UTF-8 string.
+#[no_mangle]
+pub unsafe extern "C" fn mira_wallet_sign_purchase_proof_v2_json(
+    handle: *mut c_void,
+    request_json: *const c_char,
+) -> *mut c_char {
+    catch_ffi_json(|| {
+        let Some(wallet) = wallet_ref(handle) else {
+            return json_err("wallet handle is null");
+        };
+        let Some(request_json) = read_c_str(request_json) else {
+            return json_err("purchase-proof request must be valid UTF-8 JSON");
+        };
+        let request: PurchaseProofSignRequest = match serde_json::from_str(&request_json) {
+            Ok(value) => value,
+            Err(_) => return json_err("purchase-proof request is invalid"),
+        };
+        let attested_bytes = match hex::decode(request.attested_proof_hex.trim()) {
+            Ok(value) => value,
+            Err(_) => return json_err("purchase-proof attestation is not valid hex"),
+        };
+        let attested_proof = match AttestedPurchaseProofV2::decode(&attested_bytes) {
+            Ok(value) => value,
+            Err(error) => {
+                return json_err(format!("purchase-proof attestation is invalid: {error}"))
+            }
+        };
+        let fee_atoms = match parse_u64_field("feeAtoms", &request.fee_atoms) {
+            Ok(value) => value,
+            Err(message) => return json_err(message),
+        };
+        let nonce = match parse_u64_field("nonce", &request.nonce) {
+            Ok(value) => value,
+            Err(message) => return json_err(message),
+        };
+        let valid_until_height =
+            match parse_u64_field("validUntilHeight", &request.valid_until_height) {
+                Ok(value) => value,
+                Err(message) => return json_err(message),
+            };
+        let signed = match wallet.sign_purchase_proof_body_v2(PurchaseProofBodyV2 {
+            attested_proof,
+            fee: Amount::from_atoms(fee_atoms),
+            nonce,
+            valid_until_height,
+        }) {
+            Ok(value) => value,
+            Err(error) => return json_err(format!("could not sign purchase proof: {error}")),
+        };
+        let proof_id = match signed.proof_id() {
+            Ok(value) => value,
+            Err(error) => return json_err(format!("could not compute proof ID: {error}")),
+        };
+        let transaction_id = match signed.intent_id() {
+            Ok(value) => value,
+            Err(error) => return json_err(format!("could not compute transaction ID: {error}")),
+        };
+        let witness_id = match signed.witness_id() {
+            Ok(value) => value,
+            Err(error) => return json_err(format!("could not compute witness ID: {error}")),
+        };
+        let encoded = match TransactionV2::PurchaseProof(signed).encode() {
+            Ok(value) => value,
+            Err(error) => return json_err(format!("could not encode purchase proof: {error}")),
+        };
+        json_ok(SignedPurchaseProofResult {
+            signed_proof_transaction_hex: hex::encode(encoded),
+            proof_id_hex: proof_id.to_string(),
+            transaction_id_hex: transaction_id.to_string(),
+            witness_id_hex: witness_id.to_string(),
+        })
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FeedbackAuthorizationRequest {
+    chain_id_hash_hex: String,
+    proof_id_hex: String,
+    feedback_commitment_hex: String,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
+#[serde(rename_all = "camelCase")]
+struct FeedbackAuthorizationResult {
+    owner_public_key_hex: String,
+    owner_signature_hex: String,
+}
+
+/// Authorizes exactly one privacy-safe feedback commitment for one confirmed proof. The private
+/// key remains inside the Rust wallet; Swift receives only the public key and Ed25519 signature.
+///
+/// # Safety
+/// `handle` must be a live wallet handle and `request_json` valid NUL-terminated UTF-8 JSON.
+#[no_mangle]
+pub unsafe extern "C" fn mira_wallet_authorize_feedback_v1_json(
+    handle: *mut c_void,
+    request_json: *const c_char,
+) -> *mut c_char {
+    catch_ffi_json(|| {
+        let Some(wallet) = wallet_ref(handle) else {
+            return json_err("wallet handle is null");
+        };
+        let Some(request_json) = read_c_str(request_json) else {
+            return json_err("feedback authorization must be valid UTF-8 JSON");
+        };
+        let request: FeedbackAuthorizationRequest = match serde_json::from_str(&request_json) {
+            Ok(value) => value,
+            Err(_) => return json_err("feedback authorization request is invalid"),
+        };
+        let chain_id_hash = match Hash256::from_str(request.chain_id_hash_hex.trim()) {
+            Ok(value) => value,
+            Err(_) => return json_err("chainIdHashHex is invalid"),
+        };
+        let proof_id = match Hash256::from_str(request.proof_id_hex.trim()) {
+            Ok(value) => value,
+            Err(_) => return json_err("proofIdHex is invalid"),
+        };
+        let feedback_commitment = match Hash256::from_str(request.feedback_commitment_hex.trim()) {
+            Ok(value) if value != Hash256::ZERO => value,
+            _ => return json_err("feedbackCommitmentHex is invalid"),
+        };
+        let digest = hash_tagged(
+            "contribution/feedback-authorization/v1",
+            &[
+                chain_id_hash.as_bytes(),
+                proof_id.as_bytes(),
+                feedback_commitment.as_bytes(),
+            ],
+        );
+        let identity = wallet.identity();
+        json_ok(FeedbackAuthorizationResult {
+            owner_public_key_hex: hex::encode(identity.public_key),
+            owner_signature_hex: hex::encode(wallet.sign_digest(&digest)),
+        })
+    })
+}
+
 /// Fills `seed` with operating-system randomness, using the exact same `rand_core`/`OsRng`
 /// entropy source `aura_wallet::Wallet::generate` itself relies on.
 fn getrandom_fill(seed: &mut [u8; MNEMONIC_ENTROPY_BYTES]) -> Result<(), String> {
@@ -655,6 +822,7 @@ fn getrandom_fill(seed: &mut [u8; MNEMONIC_ENTROPY_BYTES]) -> Result<(), String>
 mod tests {
     use super::*;
     use aura_core::{hash_tagged, Amount};
+    use ed25519_dalek::{Signature, VerifyingKey};
 
     const DEVNET: u8 = 2;
 
@@ -730,6 +898,11 @@ mod tests {
         read_and_free(unsafe {
             mira_wallet_sign_transfer_v2_json(handle, unsigned_body_hex.as_ptr())
         })
+    }
+
+    fn call_authorize_feedback(handle: *mut c_void, request: &CString) -> Option<String> {
+        // Safety: `handle` is live and `request` is valid NUL-terminated UTF-8 JSON.
+        read_and_free(unsafe { mira_wallet_authorize_feedback_v1_json(handle, request.as_ptr()) })
     }
 
     // Local mirrors of the private JSON envelope/identity shapes so tests can deserialize what
@@ -917,6 +1090,60 @@ mod tests {
             signed_transfer.intent_id().unwrap().to_string(),
             signed_data.intent_id_hex
         );
+    }
+
+    #[test]
+    fn feedback_authorization_is_bound_to_chain_proof_and_commitment() {
+        let (handle, _) = call_create(DEVNET);
+        let identity = call_identity(handle);
+        let chain_id_hash = hash_tagged("chain-id/v2", &[b"feedback-chain"]);
+        let proof_id = Hash256::from_bytes([0x31; 32]);
+        let commitment = Hash256::from_bytes([0x41; 32]);
+        let request = CString::new(format!(
+            "{{\"chainIdHashHex\":\"{chain_id_hash}\",\"proofIdHex\":\"{proof_id}\",\"feedbackCommitmentHex\":\"{commitment}\"}}"
+        ))
+        .expect("request");
+        let json = call_authorize_feedback(handle, &request).expect("authorization JSON");
+        call_free(handle);
+        let envelope: JsonEnvelopeOwned<FeedbackAuthorizationResult> =
+            serde_json::from_str(&json).expect("valid authorization envelope");
+        assert!(envelope.ok, "unexpected authorization failure: {json}");
+        let result = envelope.data.expect("authorization payload");
+        assert_eq!(result.owner_public_key_hex, identity.public_key_hex);
+
+        let public_key: [u8; 32] = hex::decode(result.owner_public_key_hex)
+            .expect("public key hex")
+            .try_into()
+            .expect("public key length");
+        let signature_bytes: [u8; 64] = hex::decode(result.owner_signature_hex)
+            .expect("signature hex")
+            .try_into()
+            .expect("signature length");
+        let digest = hash_tagged(
+            "contribution/feedback-authorization/v1",
+            &[
+                chain_id_hash.as_bytes(),
+                proof_id.as_bytes(),
+                commitment.as_bytes(),
+            ],
+        );
+        VerifyingKey::from_bytes(&public_key)
+            .expect("public key")
+            .verify_strict(digest.as_bytes(), &Signature::from_bytes(&signature_bytes))
+            .expect("wallet signature verifies");
+
+        let changed = hash_tagged(
+            "contribution/feedback-authorization/v1",
+            &[
+                chain_id_hash.as_bytes(),
+                proof_id.as_bytes(),
+                Hash256::from_bytes([0x42; 32]).as_bytes(),
+            ],
+        );
+        assert!(VerifyingKey::from_bytes(&public_key)
+            .expect("public key")
+            .verify_strict(changed.as_bytes(), &Signature::from_bytes(&signature_bytes))
+            .is_err());
     }
 
     #[test]

@@ -443,6 +443,7 @@ dependencies = [
  "aura-core",
  "aura-wallet",
  "bip39",
+ "ed25519-dalek",
  "hex",
  "rand_core",
  "serde",

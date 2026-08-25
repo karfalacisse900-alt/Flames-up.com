@@ -130,6 +130,25 @@ jobs:
           VERYFI_USERNAME: ${{ secrets.VERYFI_USERNAME }}
           VERYFI_API_KEY: ${{ secrets.VERYFI_API_KEY }}
 
+      - name: Sync Aura Devnet purchase-proof secrets
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64 AURA_PROOF_NULLIFIER_KEY_BASE64; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              echo "$name is required for canonical Aura Devnet purchase-proof attestations."
+              exit 1
+            fi
+            printf '%s' "$value" | npx wrangler secret put "$name" --env production
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64: ${{ secrets.AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64 }}
+          AURA_PROOF_NULLIFIER_KEY_BASE64: ${{ secrets.AURA_PROOF_NULLIFIER_KEY_BASE64 }}
+
       - name: Sync Aura mobile gateway secrets when configured
         working-directory: ./backend-cf
         shell: bash

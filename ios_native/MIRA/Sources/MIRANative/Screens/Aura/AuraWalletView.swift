@@ -7,13 +7,20 @@ import SwiftUI
 public struct AuraWalletView: View {
   @Environment(\.scenePhase) private var scenePhase
   let api: MIRAAPIClient
-  @StateObject private var wallet = AuraWalletStore()
+  @ObservedObject private var wallet: AuraWalletStore
+  @ObservedObject private var proofs: AuraProofLifecycleStore
   @StateObject private var gateway: AuraWalletGatewayStore
   @State private var presentedSheet: WalletSheet?
   @State private var unlockPassword = ""
 
-  public init(api: MIRAAPIClient) {
+  public init(
+    api: MIRAAPIClient,
+    wallet: AuraWalletStore,
+    proofs: AuraProofLifecycleStore
+  ) {
     self.api = api
+    self.wallet = wallet
+    self.proofs = proofs
     _gateway = StateObject(wrappedValue: AuraWalletGatewayStore(api: api))
   }
 
@@ -31,6 +38,7 @@ public struct AuraWalletView: View {
       .refreshable {
         if let identity = wallet.identity {
           await gateway.refresh(identity: identity)
+          await proofs.refreshAll()
         }
       }
       .sheet(item: $presentedSheet) { sheet in
@@ -69,6 +77,7 @@ public struct AuraWalletView: View {
       .task(id: wallet.identity?.address) {
         if let identity = wallet.identity {
           await gateway.refresh(identity: identity)
+          await proofs.refreshAll()
         } else {
           gateway.clear()
         }

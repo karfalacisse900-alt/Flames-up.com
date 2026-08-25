@@ -1,6 +1,6 @@
 //! Validated, bounded transaction staging for Aura `PoW` Devnet v2.
 
-use crate::{Address, Error, Hash256, LedgerStateV2, PowGenesisConfigV2, SignedTransferV2};
+use crate::{Address, Error, Hash256, LedgerStateV2, PowGenesisConfigV2, TransactionV2};
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
@@ -71,7 +71,7 @@ pub enum MempoolErrorV2 {
 /// One immutable validated entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MempoolEntryV2 {
-    transfer: SignedTransferV2,
+    transaction: TransactionV2,
     intent_id: Hash256,
     encoded_size: usize,
 }
@@ -133,8 +133,8 @@ impl MempoolV2 {
 
     /// Returns a staged transfer by its signature-independent intent ID.
     #[must_use]
-    pub fn get(&self, intent_id: Hash256) -> Option<&SignedTransferV2> {
-        self.entries.get(&intent_id).map(|entry| &entry.transfer)
+    pub fn get(&self, intent_id: Hash256) -> Option<&TransactionV2> {
+        self.entries.get(&intent_id).map(|entry| &entry.transaction)
     }
 
     /// Returns all intent IDs in stable byte order.
@@ -143,19 +143,64 @@ impl MempoolV2 {
         self.entries.keys().copied().collect()
     }
 
+    /// Finds a pending purchase proof by its proof ID.
+    #[must_use]
+    pub fn purchase_proof(
+        &self,
+        proof_id: Hash256,
+    ) -> Option<(Hash256, &crate::SignedPurchaseProofV2)> {
+        self.entries.values().find_map(|entry| {
+            let proof = entry.transaction.as_purchase_proof()?;
+            (proof.proof_id().ok()? == proof_id).then_some((entry.intent_id, proof))
+        })
+    }
+
+    /// Returns whether a pending purchase proof already uses this nullifier.
+    #[must_use]
+    pub fn contains_purchase_nullifier(&self, nullifier: Hash256) -> bool {
+        self.entries.values().any(|entry| {
+            entry
+                .transaction
+                .as_purchase_proof()
+                .is_some_and(|proof| proof.receipt_nullifier() == nullifier)
+        })
+    }
+
     /// Verifies and atomically admits a transfer against the canonical state.
     ///
     /// If the pool is full, only nonce-chain tails are eviction candidates. This guarantees that
     /// eviction cannot strand a higher-nonce descendant. Fee rate wins, then absolute fee, then
     /// lower intent ID; this is deterministic local policy and is not a consensus rule.
-    pub fn admit(
+    pub fn admit<T: Into<TransactionV2>>(
         &mut self,
-        transfer: SignedTransferV2,
+        transaction: T,
         canonical_state: &LedgerStateV2,
         candidate_height: u64,
     ) -> Result<AdmissionOutcomeV2, MempoolErrorV2> {
+        self.admit_transaction(
+            transaction.into(),
+            canonical_state,
+            candidate_height,
+            u64::MAX,
+        )
+    }
+
+    /// Verifies and atomically admits a supported non-coinbase transaction using the supplied
+    /// candidate timestamp for proof freshness checks.
+    pub fn admit_transaction(
+        &mut self,
+        transaction: TransactionV2,
+        canonical_state: &LedgerStateV2,
+        candidate_height: u64,
+        candidate_timestamp_seconds: u64,
+    ) -> Result<AdmissionOutcomeV2, MempoolErrorV2> {
         let mut next = self.clone();
-        let intent_id = next.insert_checked(transfer, canonical_state, candidate_height)?;
+        let intent_id = next.insert_checked(
+            transaction,
+            canonical_state,
+            candidate_height,
+            candidate_timestamp_seconds,
+        )?;
         let mut evicted = Vec::new();
         while next.entries.len() > next.limits.maximum_transactions
             || next.total_bytes > next.limits.maximum_bytes
@@ -178,13 +223,14 @@ impl MempoolV2 {
     /// `maximum_bytes` covers transfer encodings only; the caller must reserve the header,
     /// transaction-count prefix, and coinbase bytes from the consensus block limit.
     #[must_use]
-    pub fn select_for_block(
+    pub fn select_transactions_for_block(
         &self,
         canonical_state: &LedgerStateV2,
         candidate_height: u64,
+        candidate_timestamp_seconds: u64,
         maximum_transfers: usize,
         maximum_bytes: usize,
-    ) -> Vec<SignedTransferV2> {
+    ) -> Vec<TransactionV2> {
         if maximum_transfers == 0 || maximum_bytes == 0 {
             return Vec::new();
         }
@@ -218,19 +264,27 @@ impl MempoolV2 {
                 continue;
             }
             if state
-                .apply_transfer_for_candidate(&entry.transfer, &self.config, candidate_height)
+                .apply_transaction_for_candidate(
+                    &entry.transaction,
+                    &self.config,
+                    candidate_height,
+                    candidate_timestamp_seconds,
+                )
                 .is_err()
             {
                 continue;
             }
             selected_bytes = next_size;
-            selected.push(entry.transfer.clone());
+            selected.push(entry.transaction.clone());
 
-            if let Some(next_nonce) = entry.transfer.body.nonce.checked_add(1) {
-                if let Some(next_id) = self
-                    .sender_nonces
-                    .get(&(entry.transfer.body.sender, next_nonce))
-                {
+            if let (Some(sender), Some(next_nonce)) = (
+                entry.transaction.sender(),
+                entry
+                    .transaction
+                    .nonce()
+                    .and_then(|nonce| nonce.checked_add(1)),
+            ) {
+                if let Some(next_id) = self.sender_nonces.get(&(sender, next_nonce)) {
                     if let Some(next_entry) = self.entries.get(next_id) {
                         heap.push(PriorityItemV2::from_entry(next_entry));
                     }
@@ -238,6 +292,30 @@ impl MempoolV2 {
             }
         }
         selected
+    }
+
+    /// Legacy transfer-only selection retained for callers that have not adopted proof gossip.
+    #[must_use]
+    pub fn select_for_block(
+        &self,
+        canonical_state: &LedgerStateV2,
+        candidate_height: u64,
+        maximum_transfers: usize,
+        maximum_bytes: usize,
+    ) -> Vec<crate::SignedTransferV2> {
+        self.select_transactions_for_block(
+            canonical_state,
+            candidate_height,
+            u64::MAX,
+            maximum_transfers,
+            maximum_bytes,
+        )
+        .into_iter()
+        .filter_map(|transaction| match transaction {
+            TransactionV2::Transfer(transfer) => Some(transfer),
+            TransactionV2::Coinbase(_) | TransactionV2::PurchaseProof(_) => None,
+        })
+        .collect()
     }
 
     /// Rebuilds the pool against new canonical state and returns eligible abandoned transfers.
@@ -250,30 +328,47 @@ impl MempoolV2 {
         canonical_state: &LedgerStateV2,
         candidate_height: u64,
         confirmed: &BTreeSet<Hash256>,
-        abandoned: Vec<SignedTransferV2>,
+        abandoned: Vec<crate::SignedTransferV2>,
+    ) -> ReconcileOutcomeV2 {
+        self.reconcile_transactions_after_chain_change(
+            canonical_state,
+            candidate_height,
+            u64::MAX,
+            confirmed,
+            abandoned.into_iter().map(TransactionV2::Transfer).collect(),
+        )
+    }
+
+    /// Rebuilds the unified transfer/proof pool after a canonical extension or reorganization.
+    pub fn reconcile_transactions_after_chain_change(
+        &mut self,
+        canonical_state: &LedgerStateV2,
+        candidate_height: u64,
+        candidate_timestamp_seconds: u64,
+        confirmed: &BTreeSet<Hash256>,
+        abandoned: Vec<TransactionV2>,
     ) -> ReconcileOutcomeV2 {
         let old_ids: BTreeSet<_> = self.entries.keys().copied().collect();
         let abandoned_ids: BTreeSet<_> = abandoned
             .iter()
-            .filter_map(|transfer| transfer.intent_id().ok())
+            .filter_map(|transaction| transaction.intent_id().ok().flatten())
             .collect();
-        let mut candidates: BTreeMap<Hash256, SignedTransferV2> = self
+        let mut candidates: BTreeMap<Hash256, TransactionV2> = self
             .entries
             .values()
-            .map(|entry| (entry.intent_id, entry.transfer.clone()))
+            .map(|entry| (entry.intent_id, entry.transaction.clone()))
             .collect();
-        for transfer in abandoned {
-            if let Ok(intent_id) = transfer.intent_id() {
-                candidates.entry(intent_id).or_insert(transfer);
+        for transaction in abandoned {
+            if let Ok(Some(intent_id)) = transaction.intent_id() {
+                candidates.entry(intent_id).or_insert(transaction);
             }
         }
 
         let mut ordered: Vec<_> = candidates.into_iter().collect();
         ordered.sort_by(|(left_id, left), (right_id, right)| {
-            left.body
-                .sender
-                .cmp(&right.body.sender)
-                .then_with(|| left.body.nonce.cmp(&right.body.nonce))
+            left.sender()
+                .cmp(&right.sender())
+                .then_with(|| left.nonce().cmp(&right.nonce()))
                 .then_with(|| left_id.cmp(right_id))
         });
 
@@ -285,11 +380,16 @@ impl MempoolV2 {
             total_bytes: 0,
         };
         let mut rejected = Vec::new();
-        for (intent_id, transfer) in ordered {
+        for (intent_id, transaction) in ordered {
             if confirmed.contains(&intent_id) {
                 continue;
             }
-            if let Err(error) = rebuilt.admit(transfer, canonical_state, candidate_height) {
+            if let Err(error) = rebuilt.admit_transaction(
+                transaction,
+                canonical_state,
+                candidate_height,
+                candidate_timestamp_seconds,
+            ) {
                 rejected.push((intent_id, error.to_string()));
             }
         }
@@ -311,25 +411,48 @@ impl MempoolV2 {
         }
     }
 
+    // Admission deliberately keeps all conflict, balance, nonce, nullifier, and eviction checks
+    // in one atomic mutation boundary so no partially admitted hostile transaction can escape.
+    #[allow(clippy::too_many_lines)]
     fn insert_checked(
         &mut self,
-        transfer: SignedTransferV2,
+        transaction: TransactionV2,
         canonical_state: &LedgerStateV2,
         candidate_height: u64,
+        candidate_timestamp_seconds: u64,
     ) -> Result<Hash256, MempoolErrorV2> {
-        transfer.verify(
-            self.config.network,
-            self.config.consensus_identity_hash()?,
-            self.config.limits.minimum_fee,
+        transaction.verify_non_coinbase(
+            &self.config,
             candidate_height,
-            self.config.limits.maximum_transaction_bytes,
+            candidate_timestamp_seconds,
         )?;
-        let intent_id = transfer.intent_id()?;
+        let intent_id = transaction
+            .intent_id()?
+            .ok_or_else(|| Error::InvalidCoinbase("coinbase cannot enter the mempool".into()))?;
         if self.entries.contains_key(&intent_id) {
             return Err(MempoolErrorV2::Duplicate(intent_id));
         }
-        let sender = transfer.body.sender;
-        let nonce = transfer.body.nonce;
+        if let Some(proof) = transaction.as_purchase_proof() {
+            let proof_id = proof.proof_id()?;
+            let nullifier = proof.receipt_nullifier();
+            for pending in self.entries.values() {
+                let Some(existing) = pending.transaction.as_purchase_proof() else {
+                    continue;
+                };
+                if existing.proof_id()? == proof_id {
+                    return Err(Error::DuplicateProof(proof_id).into());
+                }
+                if existing.receipt_nullifier() == nullifier {
+                    return Err(Error::DuplicateProofNullifier(nullifier).into());
+                }
+            }
+        }
+        let sender = transaction
+            .sender()
+            .ok_or_else(|| Error::InvalidCoinbase("coinbase cannot enter the mempool".into()))?;
+        let nonce = transaction
+            .nonce()
+            .ok_or_else(|| Error::InvalidCoinbase("coinbase cannot enter the mempool".into()))?;
         if self.sender_nonces.contains_key(&(sender, nonce)) {
             return Err(MempoolErrorV2::ConflictingNonce { sender, nonce });
         }
@@ -371,23 +494,28 @@ impl MempoolV2 {
                 .get(pending_id)
                 .ok_or(MempoolErrorV2::AccountingOverflow)?;
             pending_debit = pending_debit
-                .checked_add(u128::from(entry.transfer.body.amount.atoms()))
-                .and_then(|value| value.checked_add(u128::from(entry.transfer.body.fee.atoms())))
+                .checked_add(u128::from(
+                    entry
+                        .transaction
+                        .debit()?
+                        .ok_or(MempoolErrorV2::AccountingOverflow)?
+                        .atoms(),
+                ))
                 .ok_or(MempoolErrorV2::AccountingOverflow)?;
         }
         pending_debit = pending_debit
-            .checked_add(u128::from(transfer.body.amount.atoms()))
-            .and_then(|value| value.checked_add(u128::from(transfer.body.fee.atoms())))
+            .checked_add(u128::from(
+                transaction
+                    .debit()?
+                    .ok_or(MempoolErrorV2::AccountingOverflow)?
+                    .atoms(),
+            ))
             .ok_or(MempoolErrorV2::AccountingOverflow)?;
         if pending_debit > u128::from(account.available.atoms()) {
             return Err(MempoolErrorV2::PendingOverspend(sender));
         }
 
-        let encoded_size = transfer
-            .encode()?
-            .len()
-            .checked_add(1)
-            .ok_or(MempoolErrorV2::AccountingOverflow)?;
+        let encoded_size = transaction.encode()?.len();
         self.total_bytes = self
             .total_bytes
             .checked_add(encoded_size)
@@ -396,7 +524,7 @@ impl MempoolV2 {
         self.entries.insert(
             intent_id,
             MempoolEntryV2 {
-                transfer,
+                transaction,
                 intent_id,
                 encoded_size,
             },
@@ -409,14 +537,18 @@ impl MempoolV2 {
             .values()
             .filter(|entry| {
                 entry
-                    .transfer
-                    .body
-                    .nonce
+                    .transaction
+                    .nonce()
+                    .expect("mempool excludes coinbase")
                     .checked_add(1)
                     .is_none_or(|next_nonce| {
-                        !self
-                            .sender_nonces
-                            .contains_key(&(entry.transfer.body.sender, next_nonce))
+                        !self.sender_nonces.contains_key(&(
+                            entry
+                                .transaction
+                                .sender()
+                                .expect("mempool excludes coinbase"),
+                            next_nonce,
+                        ))
                     })
             })
             .min_by(|left, right| compare_priority(left, right))
@@ -428,8 +560,16 @@ impl MempoolV2 {
             .entries
             .remove(&intent_id)
             .ok_or(MempoolErrorV2::AccountingOverflow)?;
-        self.sender_nonces
-            .remove(&(entry.transfer.body.sender, entry.transfer.body.nonce));
+        self.sender_nonces.remove(&(
+            entry
+                .transaction
+                .sender()
+                .expect("mempool excludes coinbase"),
+            entry
+                .transaction
+                .nonce()
+                .expect("mempool excludes coinbase"),
+        ));
         self.total_bytes = self
             .total_bytes
             .checked_sub(entry.encoded_size)
@@ -449,7 +589,11 @@ impl PriorityItemV2 {
     fn from_entry(entry: &MempoolEntryV2) -> Self {
         Self {
             intent_id: entry.intent_id,
-            fee_atoms: entry.transfer.body.fee.atoms(),
+            fee_atoms: entry
+                .transaction
+                .fee()
+                .expect("mempool excludes coinbase")
+                .atoms(),
             encoded_size: entry.encoded_size,
         }
     }
@@ -476,10 +620,17 @@ impl PartialOrd for PriorityItemV2 {
 
 fn compare_priority(left: &MempoolEntryV2, right: &MempoolEntryV2) -> Ordering {
     compare_fee_priority(
-        left.transfer.body.fee.atoms(),
+        left.transaction
+            .fee()
+            .expect("mempool excludes coinbase")
+            .atoms(),
         left.encoded_size,
         left.intent_id,
-        right.transfer.body.fee.atoms(),
+        right
+            .transaction
+            .fee()
+            .expect("mempool excludes coinbase")
+            .atoms(),
         right.encoded_size,
         right.intent_id,
     )
@@ -506,8 +657,10 @@ fn compare_fee_priority(
 mod tests {
     use super::*;
     use crate::{
-        Amount, CoinbaseV2, Network, TransactionBodyV2, TransactionV2, POW_PROTOCOL_VERSION,
-        TRANSACTION_VERSION_V2,
+        Amount, AttestedPurchaseProofV2, CoinbaseV2, Network, PurchaseProofBodyV2,
+        PurchaseProofClaimV2, SignedPurchaseProofV2, SignedTransferV2, TransactionBodyV2,
+        TransactionV2, POW_PROTOCOL_VERSION, PURCHASE_PROOF_TYPE_V2, PURCHASE_PROOF_VERSION_V2,
+        TRANSACTION_VERSION_V2, VERIFICATION_LEVEL_DOCUMENT_V2,
     };
     use ed25519_dalek::SigningKey;
 
@@ -545,6 +698,7 @@ mod tests {
                 })],
                 &config,
                 height,
+                config.genesis_time_seconds.saturating_add(height),
             )
             .expect("fund sender through consensus coinbase")
             .state;
@@ -585,6 +739,102 @@ mod tests {
             key,
         )
         .expect("sign")
+    }
+
+    fn purchase_proof(
+        config: &PowGenesisConfigV2,
+        owner_key: &SigningKey,
+        nonce: u64,
+        nullifier: Hash256,
+        provider_hash: Hash256,
+        timestamp_seconds: u64,
+    ) -> SignedPurchaseProofV2 {
+        let verifier = SigningKey::from_bytes(&[42; 32]);
+        let claim = PurchaseProofClaimV2 {
+            version: PURCHASE_PROOF_VERSION_V2,
+            network: config.network,
+            chain_id_hash: config.consensus_identity_hash().expect("identity"),
+            proof_type: PURCHASE_PROOF_TYPE_V2,
+            owner: Address::from_public_key(config.network, &owner_key.verifying_key().to_bytes()),
+            subject_commitment: Hash256::from_bytes([1; 32]),
+            business_commitment: Hash256::from_bytes([2; 32]),
+            product_commitment: Hash256::ZERO,
+            location_commitment: Hash256::ZERO,
+            receipt_nullifier: nullifier,
+            verification_level: VERIFICATION_LEVEL_DOCUMENT_V2,
+            provider_attestation_hash: provider_hash,
+            timestamp_seconds,
+            verifier_public_key: verifier.verifying_key().to_bytes(),
+        };
+        let attested = AttestedPurchaseProofV2::attest(claim, &verifier).expect("attest proof");
+        SignedPurchaseProofV2::sign(
+            PurchaseProofBodyV2 {
+                attested_proof: attested,
+                fee: config.limits.minimum_fee,
+                nonce,
+                valid_until_height: 100,
+            },
+            owner_key,
+        )
+        .expect("sign proof")
+    }
+
+    #[test]
+    fn verified_purchase_proof_enters_mempool_and_duplicate_nullifier_is_rejected() {
+        let fixture = fixture();
+        let mut pool =
+            MempoolV2::new(fixture.config.clone(), MempoolLimitsV2::default()).expect("pool");
+        let timestamp = fixture.config.genesis_time_seconds.saturating_add(3);
+        let nullifier = Hash256::from_bytes([0x91; 32]);
+        let proof = purchase_proof(
+            &fixture.config,
+            &fixture.sender_a,
+            1,
+            nullifier,
+            Hash256::from_bytes([0x92; 32]),
+            timestamp,
+        );
+        let proof_id = proof.proof_id().expect("proof id");
+        let transaction_id = proof.intent_id().expect("transaction id");
+        pool.admit_transaction(
+            TransactionV2::PurchaseProof(proof.clone()),
+            &fixture.state,
+            3,
+            timestamp,
+        )
+        .expect("admit proof");
+        assert_eq!(
+            pool.purchase_proof(proof_id).map(|(id, _)| id),
+            Some(transaction_id)
+        );
+        assert!(pool.contains_purchase_nullifier(nullifier));
+
+        let replay = pool.admit_transaction(
+            TransactionV2::PurchaseProof(proof),
+            &fixture.state,
+            3,
+            timestamp,
+        );
+        assert!(matches!(replay, Err(MempoolErrorV2::Duplicate(id)) if id == transaction_id));
+
+        let duplicate_receipt = purchase_proof(
+            &fixture.config,
+            &fixture.sender_a,
+            2,
+            nullifier,
+            Hash256::from_bytes([0x93; 32]),
+            timestamp,
+        );
+        assert!(matches!(
+            pool.admit_transaction(
+                TransactionV2::PurchaseProof(duplicate_receipt),
+                &fixture.state,
+                3,
+                timestamp,
+            ),
+            Err(MempoolErrorV2::Consensus(Error::DuplicateProofNullifier(value)))
+                if value == nullifier
+        ));
     }
 
     #[test]
@@ -978,6 +1228,7 @@ mod tests {
             ],
             &fixture.config,
             1,
+            fixture.config.genesis_time_seconds.saturating_add(1),
         )
         .expect("execute");
         let first_id = first.intent_id().expect("first ID");

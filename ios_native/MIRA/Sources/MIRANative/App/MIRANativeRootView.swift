@@ -124,6 +124,8 @@ public struct MIRANativeRootView: View {
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var localization: MIRALocalization
+  @StateObject private var auraWallet: AuraWalletStore
+  @StateObject private var auraProofs: AuraProofLifecycleStore
   private let api: MIRAAPIClient
 
   public init() {
@@ -132,6 +134,8 @@ public struct MIRANativeRootView: View {
     _authSession = StateObject(wrappedValue: session)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
     _localization = StateObject(wrappedValue: MIRALocalization.shared)
+    _auraWallet = StateObject(wrappedValue: AuraWalletStore())
+    _auraProofs = StateObject(wrappedValue: AuraProofLifecycleStore(api: client))
     self.api = client
     MIRAPerformanceTimeline.mark("backend_client_initialized")
     MIRAPerformanceTimeline.mark("native_root_init")
@@ -233,25 +237,25 @@ public struct MIRANativeRootView: View {
         .tabItem { Label("Home", systemImage: "house.fill") }
 
       lazyTab(.scan) {
-        AuraScanView(api: api)
+        AuraScanView(api: api, wallet: auraWallet, proofs: auraProofs)
       }
         .tag(MIRATab.scan)
         .tabItem { Label("Scan", systemImage: "viewfinder") }
 
       lazyTab(.proofs) {
-        AuraProofsView(api: api)
+        AuraProofsView(api: api, proofs: auraProofs)
       }
         .tag(MIRATab.proofs)
         .tabItem { Label("Proofs", systemImage: "checkmark.seal.fill") }
 
       lazyTab(.reputation) {
-        AuraReputationView(api: api)
+        AuraReputationView(api: api, wallet: auraWallet, proofs: auraProofs)
       }
         .tag(MIRATab.reputation)
         .tabItem { Label("Reputation", systemImage: "chart.line.uptrend.xyaxis") }
 
       lazyTab(.wallet) {
-        AuraWalletView(api: api)
+        AuraWalletView(api: api, wallet: auraWallet, proofs: auraProofs)
       }
         .tag(MIRATab.wallet)
         .tabItem { Label("Wallet", systemImage: "wallet.pass.fill") }

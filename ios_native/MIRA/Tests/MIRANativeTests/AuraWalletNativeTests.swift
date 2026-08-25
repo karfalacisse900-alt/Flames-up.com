@@ -46,4 +46,29 @@ final class AuraWalletNativeTests: XCTestCase {
       try AuraWalletSession.loadEncrypted(from: walletURL, password: "wrong-password")
     )
   }
+
+  func testFeedbackAuthorizationIsWalletLocalAndCommitmentBound() throws {
+    let created = try AuraWalletSession.create(network: .devnet)
+    let identity = try created.session.identity()
+    let base = AuraFeedbackAuthorizationRequest(
+      chainIdHashHex: AuraExpectedDevnet.chainIdHash,
+      proofIdHex: String(repeating: "31", count: 32),
+      feedbackCommitmentHex: String(repeating: "41", count: 32)
+    )
+    let first = try created.session.authorizeFeedback(base)
+    let repeated = try created.session.authorizeFeedback(base)
+    let changed = try created.session.authorizeFeedback(
+      AuraFeedbackAuthorizationRequest(
+        chainIdHashHex: AuraExpectedDevnet.chainIdHash,
+        proofIdHex: String(repeating: "31", count: 32),
+        feedbackCommitmentHex: String(repeating: "42", count: 32)
+      )
+    )
+
+    XCTAssertEqual(first.ownerPublicKeyHex, identity.publicKeyHex)
+    XCTAssertEqual(first, repeated)
+    XCTAssertEqual(first.ownerPublicKeyHex.count, 64)
+    XCTAssertEqual(first.ownerSignatureHex.count, 128)
+    XCTAssertNotEqual(first.ownerSignatureHex, changed.ownerSignatureHex)
+  }
 }

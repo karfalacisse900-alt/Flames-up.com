@@ -10,6 +10,8 @@ export interface AuraWorkerEnv {
   VERYFI_USERNAME?: string;
   VERYFI_API_KEY?: string;
   VERYFI_BASE_URL?: string;
+  AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64?: string;
+  AURA_PROOF_NULLIFIER_KEY_BASE64?: string;
 }
 
 type AuthMiddleware = (c: any, next: () => Promise<void>) => Promise<Response | void>;
@@ -26,15 +28,19 @@ const MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_GATEWAY_RESPONSE_BYTES = 1024 * 1024;
 const MAX_GATEWAY_ORIGINS = 3;
 const VERYFI_DOCUMENTS_PATH = '/api/v8/partner/documents';
-const ALLOWED_GATEWAY_PATH = /^\/(network|chain\/status|fees|address\/[a-zA-Z0-9]+\/(balance|nonce|transactions)|transactions\/broadcast|transaction\/[a-fA-F0-9]+|proof\/[a-zA-Z0-9_-]+)$/;
+const ALLOWED_GATEWAY_PATH = /^\/(network|chain\/status|fees|address\/[a-zA-Z0-9]+\/(balance|nonce|transactions)|transactions\/broadcast|proofs\/broadcast|transaction\/[a-fA-F0-9]+|proof\/[a-fA-F0-9]+(?:\/(?:feedback-eligibility|feedback))?)$/;
 const EXPECTED_AURA_NETWORK = Object.freeze({
   protocolVersion: '2',
   network: 'devnet',
-  chainId: 'aura-devnet-pow-v2',
-  chainIdHash: 'cd1367f5feceec31b754d7e9044443aa5df65a834ae592ed376cd7eb511c9899',
-  genesisHash: '292fd5d47d522ea52b405e1dd43ae1ccf5700ed49712bc9a45c73a1542a69b87',
+  chainId: 'aura-devnet-pow-v2-proof1',
+  chainIdHash: 'f2d47ba05f05c086e8e5507ef7be2fa764effaefacab13bd613543e4163575b9',
+  genesisHash: '75b26958bc3414b7f32370179c077710b7f35e1c05df21d0f8038d363ecc8c24',
   mainnetAvailable: false,
 });
+const AURA_DEVNET_NETWORK_ID = 0x41555203;
+const AURA_PURCHASE_PROOF_VERSION = 1;
+const AURA_PURCHASE_PROOF_TYPE = 1;
+const AURA_PURCHASE_VERIFIER_PUBLIC_KEY_HEX = '6f13ffdfb47b0ef1affcbdc0b9152189b47b6978cd260d7994bcf7df36a20de1';
 
 function boundedText(value: unknown, maximum = 1024): string | null {
   if (value === null || value === undefined) return null;
@@ -81,6 +87,150 @@ function arrayBufferToBase64(value: ArrayBuffer): string {
   return bytesToBase64(new Uint8Array(value));
 }
 
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value.trim());
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+  return base64ToBytes(padded);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function hexToBytes(value: string, expectedBytes: number): Uint8Array {
+  if (!new RegExp(`^[a-fA-F0-9]{${expectedBytes * 2}}$`).test(value)) throw new Error('INVALID_HEX');
+  return Uint8Array.from(value.match(/../g)!, (byte) => Number.parseInt(byte, 16));
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const output = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function littleEndian(value: bigint, bytes: number): Uint8Array {
+  const output = new Uint8Array(bytes);
+  let remaining = value;
+  for (let index = 0; index < bytes; index += 1) {
+    output[index] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+  }
+  if (remaining !== 0n) throw new Error('INTEGER_OVERFLOW');
+  return output;
+}
+
+async function taggedHash(tag: string, parts: Uint8Array[]): Promise<Uint8Array> {
+  const encoder = new TextEncoder();
+  const tagBytes = encoder.encode(tag);
+  const framed = [
+    encoder.encode('AURA\0'),
+    littleEndian(BigInt(tagBytes.length), 8),
+    tagBytes,
+    ...parts.flatMap((part) => [littleEndian(BigInt(part.length), 8), part]),
+  ];
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', concatBytes(...framed)));
+}
+
+async function hmacCommitment(keyBytes: Uint8Array, domain: string, fields: unknown[]): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const payload = new TextEncoder().encode(JSON.stringify([domain, ...fields]));
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, payload));
+}
+
+function normalizedCommitmentText(value: unknown): string {
+  return String(value ?? '').normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 1024);
+}
+
+async function purchaseProofAttestation(
+  env: AuraWorkerEnv,
+  userId: string,
+  ownerPublicKeyHex: string,
+  document: any,
+  normalized: any,
+): Promise<any> {
+  const privateKeyBytes = base64ToBytes(env.AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64 || '');
+  const nullifierKey = base64ToBytes(env.AURA_PROOF_NULLIFIER_KEY_BASE64 || '');
+  if (privateKeyBytes.length < 48 || nullifierKey.length < 32) throw new Error('PROOF_CONFIGURATION_INVALID');
+  const ownerPublicKey = hexToBytes(ownerPublicKeyHex, 32);
+  const ownerDigest = await taggedHash('address/ed25519/v1', [ownerPublicKey]);
+  const ownerAddress = concatBytes(littleEndian(BigInt(AURA_DEVNET_NETWORK_ID), 4), ownerDigest.slice(0, 20));
+  const lineItems = Array.isArray(normalized.lineItems)
+    ? normalized.lineItems.map((line: any) => [line.description, line.sku, line.quantity, line.unitPrice, line.total])
+    : [];
+  const merchant = normalized.merchant || {};
+  const subjectCommitment = await hmacCommitment(nullifierKey, 'aura-proof-subject-v1', [userId, ownerPublicKeyHex.toLowerCase()]);
+  const businessCommitment = await hmacCommitment(nullifierKey, 'aura-proof-business-v1', [
+    normalizedCommitmentText(merchant.name),
+    normalizedCommitmentText(merchant.storeNumber),
+    normalizedCommitmentText(merchant.address),
+  ]);
+  const productCommitment = lineItems.length > 0
+    ? await hmacCommitment(nullifierKey, 'aura-proof-products-v1', lineItems)
+    : new Uint8Array(32);
+  const locationCommitment = (merchant.address || merchant.storeNumber)
+    ? await hmacCommitment(nullifierKey, 'aura-proof-location-v1', [
+      normalizedCommitmentText(merchant.address),
+      normalizedCommitmentText(merchant.storeNumber),
+    ])
+    : new Uint8Array(32);
+  const receiptIdentity = [
+    normalizedCommitmentText(merchant.name),
+    normalizedCommitmentText(merchant.storeNumber),
+    normalizedCommitmentText(normalized.receiptNumber),
+    normalizedCommitmentText(normalized.date),
+    normalizedCommitmentText(normalized.time),
+    normalizedCommitmentText(normalized.currency),
+    normalizedCommitmentText(normalized.total),
+    normalizedCommitmentText(first(document, ['id', 'document_id'])),
+  ];
+  if (!normalized.receiptNumber) receiptIdentity.push(normalized.rawResponseSha256);
+  const receiptNullifier = await hmacCommitment(nullifierKey, 'aura-receipt-nullifier-v1', receiptIdentity);
+  const timestampSeconds = BigInt(Math.floor(Date.now() / 1000));
+  const verifierPublicKey = hexToBytes(AURA_PURCHASE_VERIFIER_PUBLIC_KEY_HEX, 32);
+  const claimBytes = concatBytes(
+    littleEndian(BigInt(AURA_PURCHASE_PROOF_VERSION), 2),
+    littleEndian(BigInt(AURA_DEVNET_NETWORK_ID), 4),
+    hexToBytes(EXPECTED_AURA_NETWORK.chainIdHash, 32),
+    Uint8Array.of(AURA_PURCHASE_PROOF_TYPE),
+    ownerAddress,
+    subjectCommitment,
+    businessCommitment,
+    productCommitment,
+    locationCommitment,
+    receiptNullifier,
+    Uint8Array.of(normalized.verificationLevel),
+    hexToBytes(normalized.rawResponseSha256, 32),
+    littleEndian(timestampSeconds, 8),
+    verifierPublicKey,
+  );
+  const privateKey = await crypto.subtle.importKey('pkcs8', privateKeyBytes, { name: 'Ed25519' }, true, ['sign']);
+  const jwk = await crypto.subtle.exportKey('jwk', privateKey) as JsonWebKey;
+  if (!jwk.x || bytesToHex(base64UrlToBytes(jwk.x)) !== AURA_PURCHASE_VERIFIER_PUBLIC_KEY_HEX) {
+    throw new Error('PROOF_VERIFIER_KEY_MISMATCH');
+  }
+  const signingHash = await taggedHash('proof/purchase/verifier-signing/v1', [claimBytes]);
+  const signature = new Uint8Array(await crypto.subtle.sign('Ed25519', privateKey, signingHash));
+  const proofId = await taggedHash('proof/purchase/id/v1', [claimBytes]);
+  return {
+    version: AURA_PURCHASE_PROOF_VERSION,
+    proofType: 'PURCHASE',
+    proofId: bytesToHex(proofId),
+    receiptNullifier: bytesToHex(receiptNullifier),
+    verificationLevel: normalized.verificationLevel,
+    ownerPublicKeyHex: ownerPublicKeyHex.toLowerCase(),
+    attestedProofHex: bytesToHex(concatBytes(claimBytes, signature)),
+    timestampSeconds: timestampSeconds.toString(),
+  };
+}
+
 function detectedDocumentType(bytes: Uint8Array): string | null {
   if (bytes.length >= 5 && String.fromCharCode(...bytes.subarray(0, 5)) === '%PDF-') return 'application/pdf';
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
@@ -100,6 +250,13 @@ function safeFilename(name: unknown, mimeType: string): string {
 
 function configuredVeryfi(env: AuraWorkerEnv): boolean {
   return Boolean(env.VERYFI_CLIENT_ID?.trim() && env.VERYFI_API_KEY?.trim());
+}
+
+function configuredPurchaseProof(env: AuraWorkerEnv): boolean {
+  return Boolean(
+    env.AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64?.trim()
+    && env.AURA_PROOF_NULLIFIER_KEY_BASE64?.trim(),
+  );
 }
 
 function veryfiEndpoint(env: AuraWorkerEnv): URL {
@@ -181,7 +338,7 @@ function normalizeBarcodes(document: any): any[] {
   }));
 }
 
-async function normalizeVeryfi(document: any, submittedType: string, rawBytes: Uint8Array) {
+async function normalizeVeryfi(document: any, submittedType: string, rawBytes: Uint8Array): Promise<any> {
   const fraud = fraudSignals(document);
   const duplicate = firstBool(document, ['is_duplicate', 'duplicate.is_duplicate', 'meta.is_duplicate', 'meta.duplicate']);
   const isDocument = firstBool(document, ['is_document', 'document.is_document']);
@@ -382,6 +539,13 @@ export function createAuraRoutes(
       const form = await c.req.raw.formData();
       const file = form.get('file') as File | null;
       if (!file || typeof file.arrayBuffer !== 'function') return c.json({ detail: 'No document was provided.' }, 400);
+      const ownerPublicKeyHex = String(form.get('ownerPublicKeyHex') || '').trim();
+      if (submittedType === 'receipt' && !/^[a-fA-F0-9]{64}$/.test(ownerPublicKeyHex)) {
+        return c.json({ detail: 'Unlock a local Aura wallet before verifying a receipt.', code: 'AURA_WALLET_REQUIRED' }, 409);
+      }
+      if (submittedType === 'receipt' && !configuredPurchaseProof(c.env)) {
+        return c.json({ detail: 'Aura purchase-proof authorization is unavailable.', code: 'AURA_PROOF_UNAVAILABLE' }, 503);
+      }
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (bytes.byteLength < 250 || bytes.byteLength > MAX_DOCUMENT_BYTES) {
         return c.json({ detail: 'Document must be between 250 bytes and 12 MiB.' }, 400);
@@ -428,7 +592,21 @@ export function createAuraRoutes(
         return c.json({ detail: 'Document provider could not process this file.', code: 'VERYFI_REJECTED' }, 502);
       }
       const document = JSON.parse(new TextDecoder().decode(responseBytes));
-      return c.json(await normalizeVeryfi(document, submittedType, responseBytes));
+      const normalized = await normalizeVeryfi(document, submittedType, responseBytes);
+      if (submittedType === 'receipt' && normalized.documentVerified && normalized.duplicate !== true) {
+        normalized.purchaseProof = await purchaseProofAttestation(
+          c.env,
+          userId,
+          ownerPublicKeyHex,
+          document,
+          normalized,
+        );
+        normalized.proofAuthorized = true;
+      } else {
+        normalized.purchaseProof = null;
+        normalized.proofAuthorized = false;
+      }
+      return c.json(normalized);
     } catch (error: any) {
       const code = String(error?.message || 'VERYFI_UNAVAILABLE');
       if (code === 'RESPONSE_TOO_LARGE') return c.json({ detail: 'Document provider response exceeded the safe limit.' }, 502);
@@ -451,7 +629,10 @@ export function createAuraRoutes(
   aura.get('/address/:address/transactions', proxy);
   aura.get('/fees', proxy);
   aura.post('/transactions/broadcast', proxy);
+  aura.post('/proofs/broadcast', proxy);
   aura.get('/transaction/:transactionId', proxy);
   aura.get('/proof/:proofId', proxy);
+  aura.get('/proof/:proofId/feedback-eligibility', proxy);
+  aura.post('/proof/:proofId/feedback', proxy);
   return aura;
 }

@@ -1,7 +1,7 @@
 use crate::{envelope, Error, KdfParams, Result};
 use aura_core::{
-    Address, Hash256, Network, SignedTransaction, SignedTransferV2, TransactionBody,
-    TransactionBodyV2,
+    Address, Hash256, Network, PurchaseProofBodyV2, SignedPurchaseProofV2, SignedTransaction,
+    SignedTransferV2, TransactionBody, TransactionBodyV2,
 };
 use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;
@@ -99,13 +99,8 @@ impl Wallet {
 
     /// Constructs a wallet directly from a caller-supplied 32-byte Ed25519 seed.
     ///
-    /// This does not add any new cryptography: `ed25519_dalek::SigningKey` already accepts any
-    /// 32-byte value as a valid secret key, and [`Wallet::load`] already reconstructs a wallet
-    /// this way from a decrypted envelope. This constructor exists so a caller that generates or
-    /// derives the seed itself (for example, from a BIP39 mnemonic's raw entropy) can hand it to
-    /// the same wallet type used everywhere else, instead of that caller re-deriving the address
-    /// and signing logic independently. The caller remains responsible for zeroizing its own
-    /// copy of `seed` once this returns.
+    /// This mobile-only constructor lets the BIP39 bridge hand seed entropy to the same wallet
+    /// implementation used by Aura without exporting a private key back across FFI.
     #[must_use]
     pub fn from_seed_bytes(network: Network, seed: [u8; 32]) -> Self {
         Self {
@@ -158,6 +153,26 @@ impl Wallet {
             return Err(Error::TransactionSenderMismatch);
         }
         Ok(SignedTransferV2::sign(body, &self.signing_key())?)
+    }
+
+    /// Signs a verifier-attested purchase-proof body with the local wallet key.
+    ///
+    /// The verifier attestation is not trusted by the wallet as consensus truth: full nodes still
+    /// validate its authorized verifier, signature, commitments, nullifier, freshness, owner,
+    /// nonce, fee, and chain identity before admission or block inclusion.
+    pub fn sign_purchase_proof_body_v2(
+        &self,
+        body: PurchaseProofBodyV2,
+    ) -> Result<SignedPurchaseProofV2> {
+        let identity = self.identity();
+        let claim = &body.attested_proof.claim;
+        if claim.network != identity.network {
+            return Err(Error::TransactionNetworkMismatch);
+        }
+        if claim.owner != identity.address {
+            return Err(Error::TransactionSenderMismatch);
+        }
+        Ok(SignedPurchaseProofV2::sign(body, &self.signing_key())?)
     }
 
     /// Encrypts and atomically saves the wallet using default Argon2id parameters.

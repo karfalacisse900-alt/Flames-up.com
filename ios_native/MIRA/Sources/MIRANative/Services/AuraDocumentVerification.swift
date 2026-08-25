@@ -35,6 +35,17 @@ public struct AuraDocumentPrivacy: Decodable, Equatable, Sendable {
   public let providerAutoDeleteRequested: Bool
 }
 
+public struct AuraPurchaseProofAttestation: Decodable, Equatable, Sendable {
+  public let version: Int
+  public let proofType: String
+  public let proofId: String
+  public let receiptNullifier: String
+  public let verificationLevel: Int
+  public let ownerPublicKeyHex: String
+  public let attestedProofHex: String
+  public let timestampSeconds: String
+}
+
 public struct AuraDocumentVerificationResult: Decodable, Equatable, Sendable {
   public let provider: String
   public let providerDocumentId: String?
@@ -49,6 +60,8 @@ public struct AuraDocumentVerificationResult: Decodable, Equatable, Sendable {
   public let proofIssued: Bool
   public let blockchainSubmitted: Bool
   public let independentPurchaseConfirmed: Bool
+  public let proofAuthorized: Bool?
+  public let purchaseProof: AuraPurchaseProofAttestation?
   public let merchant: AuraVerifiedMerchant
   public let date: String?
   public let time: String?
@@ -68,13 +81,17 @@ public struct AuraDocumentVerificationResult: Decodable, Equatable, Sendable {
 }
 
 extension MIRAAPIClient {
-  func verifyAuraDocument(_ document: AuraLocalDocument) async throws -> AuraDocumentVerificationResult {
+  func verifyAuraDocument(
+    _ document: AuraLocalDocument,
+    ownerPublicKeyHex: String
+  ) async throws -> AuraDocumentVerificationResult {
     let upload = try document.verificationUpload()
     return try await uploadMultipart(
       "/aura/documents/verify?type=\(document.kind.rawValue)",
       fileName: upload.filename,
       mimeType: upload.mediaType,
-      data: upload.data
+      data: upload.data,
+      fields: ["ownerPublicKeyHex": ownerPublicKeyHex]
     )
   }
 }
