@@ -28,7 +28,8 @@ const MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_GATEWAY_RESPONSE_BYTES = 1024 * 1024;
 const MAX_GATEWAY_ORIGINS = 3;
 const VERYFI_DOCUMENTS_PATH = '/api/v8/partner/documents';
-const ALLOWED_GATEWAY_PATH = /^\/(network|chain\/status|fees|address\/[a-zA-Z0-9]+\/(balance|nonce|transactions)|transactions\/broadcast|proofs\/broadcast|transaction\/[a-fA-F0-9]+|proof\/[a-fA-F0-9]+(?:\/(?:feedback-eligibility|feedback))?)$/;
+const ALLOWED_GATEWAY_PATH = /^\/(network|chain\/status|fees|address\/[a-zA-Z0-9]+\/(balance|nonce|transactions|events)|transactions\/broadcast|proofs\/broadcast|transaction\/[a-fA-F0-9]+|proof\/[a-fA-F0-9]+(?:\/(?:feedback-eligibility|feedback))?)$/;
+const ALLOWED_GATEWAY_EVENT_PATH = /^\/address\/[a-zA-Z0-9]+\/events$/;
 const EXPECTED_AURA_NETWORK = Object.freeze({
   protocolVersion: '2',
   network: 'devnet',
@@ -510,6 +511,49 @@ async function proxyGateway(c: any, gatewayPath: string): Promise<Response> {
   return c.json({ detail: 'Aura Devnet gateway is unavailable.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
 }
 
+async function proxyGatewayEvents(c: any, gatewayPath: string): Promise<Response> {
+  if (!ALLOWED_GATEWAY_EVENT_PATH.test(gatewayPath)) {
+    return c.json({ detail: 'Unsupported Aura gateway event stream.' }, 404);
+  }
+  const token = c.env.AURA_MOBILE_GATEWAY_TOKEN?.trim();
+  if (!token || token.length < 32 || (!c.env.AURA_MOBILE_GATEWAY_URLS?.trim() && !c.env.AURA_MOBILE_GATEWAY_URL?.trim())) {
+    return c.json({ detail: 'Aura Devnet gateway is not configured.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
+  }
+  let bases: URL[];
+  try {
+    bases = gatewayBaseURLs(c.env);
+  } catch {
+    return c.json({ detail: 'Aura Devnet gateway is not configured.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
+  }
+  const requestId = c.get('requestId') || crypto.randomUUID();
+  for (const base of bases) {
+    try {
+      if (!await gatewayHasExpectedIdentity(base, token, requestId)) continue;
+      const upstream = new URL(`/v1${gatewayPath}`, base);
+      const response = await fetch(upstream, {
+        headers: {
+          accept: 'text/event-stream',
+          authorization: `Bearer ${token}`,
+          'cache-control': 'no-cache',
+          'x-request-id': requestId,
+        },
+      });
+      if (!response.ok || !response.body) continue;
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store, no-transform',
+          'x-accel-buffering': 'no',
+        },
+      });
+    } catch {
+      // Try another independently configured validating gateway.
+    }
+  }
+  return c.json({ detail: 'Aura Devnet gateway event stream is unavailable.', code: 'AURA_GATEWAY_UNAVAILABLE' }, 503);
+}
+
 export function createAuraRoutes(
   authMiddleware: AuthMiddleware,
   getUserId: (c: any) => string,
@@ -627,6 +671,14 @@ export function createAuraRoutes(
   aura.get('/address/:address/balance', proxy);
   aura.get('/address/:address/nonce', proxy);
   aura.get('/address/:address/transactions', proxy);
+  aura.get('/address/:address/events', async (c) => {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'aura_gateway_events', userId, 30, 60);
+    if (limited) return limited;
+    const url = new URL(c.req.url);
+    const prefix = '/api/aura';
+    return proxyGatewayEvents(c, url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : url.pathname);
+  });
   aura.get('/fees', proxy);
   aura.post('/transactions/broadcast', proxy);
   aura.post('/proofs/broadcast', proxy);

@@ -37,6 +37,10 @@ test('Aura wallet routes proxy only allowlisted operations to an authenticated R
   assert.match(source, /matchesExpectedAuraNetwork/);
   assert.match(source, /for \(const base of bases\)/);
   assert.match(source, /if \(response\.status >= 500\) continue/);
+  assert.match(source, /ALLOWED_GATEWAY_EVENT_PATH/);
+  assert.match(source, /text\/event-stream/);
+  assert.match(source, /aura_gateway_events/);
+  assert.match(source, /new Response\(response\.body/);
 });
 
 test('deployment syncs credential names from GitHub Actions without source values', async () => {

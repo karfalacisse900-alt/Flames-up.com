@@ -40,6 +40,12 @@ public final class StaticSessionProvider: MIRASessionProviding {
   }
 }
 
+public struct MIRAEventStreamFrame: Equatable, Sendable {
+  public let id: String?
+  public let event: String
+  public let data: Data
+}
+
 public enum MIRAAPIError: Error, LocalizedError {
   case badURL
   case insecureURL
@@ -188,6 +194,68 @@ public final class MIRAAPIClient {
 
   public func get<T: Decodable>(_ path: String) async throws -> T {
     try await request(path, method: "GET", body: Optional<Data>.none)
+  }
+
+  /// Opens one authenticated server-sent-event stream. Values are transport notifications only;
+  /// wallet callers must re-read validated gateway snapshots instead of applying amount deltas.
+  public func eventStream(_ path: String) -> AsyncThrowingStream<MIRAEventStreamFrame, Error> {
+    AsyncThrowingStream { continuation in
+      let task = Task {
+        do {
+          let url = try makeURL(path)
+          var request = URLRequest(url: url)
+          request.httpMethod = "GET"
+          request.timeoutInterval = 0
+          try MIRANetworkSecurityPolicy.validateAPIURL(url)
+          request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+          request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+          request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
+          request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+          if let token = await sessionProvider?.accessToken(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+          }
+          let trustHeaders = await MIRADeviceTrustService.shared.headers(for: "GET", path: url.path)
+          trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+
+          let (bytes, response) = try await session.bytes(for: request)
+          let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+          guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+
+          var eventID: String?
+          var eventName = "message"
+          var dataLines: [String] = []
+          for try await line in bytes.lines {
+            try Task.checkCancellation()
+            if line.isEmpty {
+              if !dataLines.isEmpty {
+                continuation.yield(
+                  MIRAEventStreamFrame(
+                    id: eventID,
+                    event: eventName,
+                    data: Data(dataLines.joined(separator: "\n").utf8)
+                  )
+                )
+              }
+              eventID = nil
+              eventName = "message"
+              dataLines.removeAll(keepingCapacity: true)
+            } else if line.hasPrefix("id:") {
+              eventID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("event:") {
+              eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("data:") {
+              dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+            }
+          }
+          continuation.finish()
+        } catch is CancellationError {
+          continuation.finish()
+        } catch {
+          continuation.finish(throwing: error)
+        }
+      }
+      continuation.onTermination = { _ in task.cancel() }
+    }
   }
 
   public func post<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {

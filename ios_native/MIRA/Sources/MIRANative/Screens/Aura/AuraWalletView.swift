@@ -76,7 +76,7 @@ public struct AuraWalletView: View {
       }
       .task(id: wallet.identity?.address) {
         if let identity = wallet.identity {
-          await gateway.refresh(identity: identity)
+          gateway.start(identity: identity)
           await proofs.refreshAll()
         } else {
           gateway.clear()
@@ -106,7 +106,7 @@ public struct AuraWalletView: View {
 
   private var balanceCard: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
-      Text("AUR Balance")
+      Text("Spendable AUR")
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(.white.opacity(0.8))
       Text(gateway.availableAUR.map { "\($0) AUR" } ?? "Unavailable")
@@ -115,6 +115,25 @@ public struct AuraWalletView: View {
       Text(balanceSubtitle)
         .font(.system(size: 12.5, weight: .medium))
         .foregroundStyle(.white.opacity(0.75))
+      if let balance = gateway.balance {
+        Divider().overlay(.white.opacity(0.2))
+        HStack(spacing: MIRATheme.Space.sm) {
+          balanceMetric(
+            "Confirmed",
+            AuraAmountCodec.aur(fromAtoms: balance.confirmedAtoms) ?? "Unavailable"
+          )
+          balanceMetric(
+            "Pending in",
+            AuraAmountCodec.aur(fromAtoms: balance.pendingIncomingAtoms).map { "+\($0)" }
+              ?? "Unavailable"
+          )
+          balanceMetric(
+            "Pending out",
+            AuraAmountCodec.aur(fromAtoms: balance.pendingOutgoingAtoms).map { "−\($0)" }
+              ?? "Unavailable"
+          )
+        }
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(MIRATheme.Space.lg)
@@ -128,12 +147,27 @@ public struct AuraWalletView: View {
     .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
   }
 
+  private func balanceMetric(_ label: String, _ value: String) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(label)
+        .font(.system(size: 9.5, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.65))
+      Text(value)
+        .font(.system(size: 12.5, weight: .bold, design: .rounded))
+        .foregroundStyle(.white)
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
   private var balanceSubtitle: String {
     switch wallet.state {
     case .unlocked:
       if gateway.isLoading { return "Wallet unlocked · Reading validated Devnet state" }
       if let status = gateway.chainStatus {
-        return "Wallet unlocked · Block \(status.canonicalHeight) · \(status.connectedPeers) peers"
+        let live = gateway.isEventStreamConnected ? "Live updates" : "Connecting updates"
+        return "Wallet unlocked · Block \(status.canonicalHeight) · \(live)"
       }
       return "Wallet unlocked · Aura Mobile Gateway not connected"
     case .locked: return "Encrypted wallet locked"
@@ -289,6 +323,25 @@ public struct AuraWalletView: View {
           )
           AuraWalletMetric(label: "Mempool", value: status.mempoolTransactions)
           AuraWalletMetric(label: "Sync", value: status.syncStatus.replacingOccurrences(of: "_", with: " ").capitalized)
+        }
+        if let balance = gateway.balance {
+          HStack {
+            AuraWalletMetric(
+              label: "Spendable",
+              value: AuraAmountCodec.aur(fromAtoms: balance.spendableAtoms).map { "\($0) AUR" }
+                ?? "Unavailable"
+            )
+            AuraWalletMetric(
+              label: "Pending in",
+              value: AuraAmountCodec.aur(fromAtoms: balance.pendingIncomingAtoms).map { "+\($0) AUR" }
+                ?? "Unavailable"
+            )
+            AuraWalletMetric(
+              label: "Pending out",
+              value: AuraAmountCodec.aur(fromAtoms: balance.pendingOutgoingAtoms).map { "−\($0) AUR" }
+                ?? "Unavailable"
+            )
+          }
         }
         Text(status.syncStatus == "no_peers" ? "No peers" : "Connected peers · independently validating")
           .font(.system(size: 12.5, weight: .medium))
@@ -687,11 +740,12 @@ private struct AuraWalletTransactionRow: View {
 
   private var status: String {
     if transaction.state == "confirmed" {
+      let block = transaction.blockHeight.map { " · Block #\($0)" } ?? ""
       return transaction.confirmations == "1"
-        ? "1 confirmation"
-        : "\(transaction.confirmations) confirmations"
+        ? "Confirmed · 1 confirmation\(block)"
+        : "Confirmed · \(transaction.confirmations) confirmations\(block)"
     }
-    return "Unconfirmed"
+    return "Pending · Validated mempool"
   }
 }
 

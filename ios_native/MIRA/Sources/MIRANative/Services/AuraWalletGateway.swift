@@ -35,7 +35,13 @@ public struct AuraGatewayChainStatus: Decodable, Equatable, Sendable {
 public struct AuraGatewayBalance: Decodable, Equatable, Sendable {
   public let address: String
   public let availableAtoms: String
+  public let confirmedAtoms: String
   public let lockedAtoms: String
+  public let pendingIncomingAtoms: String
+  public let pendingOutgoingAtoms: String
+  public let pendingFeeAtoms: String
+  public let spendableAtoms: String
+  public let totalVisibleAtoms: String
 }
 
 public struct AuraGatewayNonce: Decodable, Equatable, Sendable {
@@ -79,6 +85,22 @@ public struct AuraGatewayBroadcastResult: Decodable, Equatable, Sendable {
   public let intentId: String
   public let relayedPeers: String
   public let evictedIntentIds: [String]
+}
+
+public struct AuraGatewayLifecycleEvent: Decodable, Equatable, Sendable {
+  public let type: String
+  public let sequence: String?
+  public let transactionId: String?
+  public let sender: String?
+  public let recipient: String?
+  public let amountAtoms: String?
+  public let feeAtoms: String?
+  public let blockId: String?
+  public let blockHeight: String?
+  public let confirmations: String?
+  public let tipHash: String?
+  public let tipHeight: String?
+  public let reason: String?
 }
 
 public struct AuraPurchaseProofSubmission: Equatable, Sendable {
@@ -178,8 +200,11 @@ public final class AuraWalletGatewayStore: ObservableObject {
   @Published public private(set) var isLoading = false
   @Published public private(set) var errorMessage: String?
   @Published public private(set) var lastSubmittedIntentId: String?
+  @Published public private(set) var isEventStreamConnected = false
+  @Published public private(set) var lastLifecycleEvent: AuraGatewayLifecycleEvent?
 
   private let api: MIRAAPIClient
+  private var eventTask: Task<Void, Never>?
 
   public init(api: MIRAAPIClient) {
     self.api = api
@@ -190,10 +215,24 @@ public final class AuraWalletGatewayStore: ObservableObject {
   }
 
   public var availableAUR: String? {
-    balance.flatMap { AuraAmountCodec.aur(fromAtoms: $0.availableAtoms) }
+    balance.flatMap { AuraAmountCodec.aur(fromAtoms: $0.spendableAtoms) }
+  }
+
+  public var confirmedAUR: String? {
+    balance.flatMap { AuraAmountCodec.aur(fromAtoms: $0.confirmedAtoms) }
+  }
+
+  public var pendingIncomingAUR: String? {
+    balance.flatMap { AuraAmountCodec.aur(fromAtoms: $0.pendingIncomingAtoms) }
+  }
+
+  public var pendingOutgoingAUR: String? {
+    balance.flatMap { AuraAmountCodec.aur(fromAtoms: $0.pendingOutgoingAtoms) }
   }
 
   public func clear() {
+    eventTask?.cancel()
+    eventTask = nil
     network = nil
     chainStatus = nil
     balance = nil
@@ -203,11 +242,51 @@ public final class AuraWalletGatewayStore: ObservableObject {
     latencyMilliseconds = nil
     errorMessage = nil
     lastSubmittedIntentId = nil
+    isEventStreamConnected = false
+    lastLifecycleEvent = nil
     isLoading = false
   }
 
-  public func refresh(identity: AuraWalletIdentity) async {
-    isLoading = true
+  public func start(identity: AuraWalletIdentity) {
+    eventTask?.cancel()
+    eventTask = Task { [weak self] in
+      guard let self else { return }
+      await self.refresh(identity: identity)
+      while !Task.isCancelled {
+        do {
+          for try await frame in self.api.eventStream(
+            "/aura/address/\(identity.address)/events"
+          ) {
+            try Task.checkCancellation()
+            let decoder = JSONDecoder()
+            guard let event = try? decoder.decode(
+              AuraGatewayLifecycleEvent.self,
+              from: frame.data
+            ) else { continue }
+            self.isEventStreamConnected = true
+            self.lastLifecycleEvent = event
+            // Events never mutate local balances. Replacing the full validated snapshot makes
+            // duplicate delivery idempotent and makes reorg rollback use canonical node state.
+            await self.refresh(identity: identity, displayLoading: false)
+          }
+        } catch is CancellationError {
+          return
+        } catch {
+          self.isEventStreamConnected = false
+          self.errorMessage = (error as? LocalizedError)?.errorDescription
+            ?? error.localizedDescription
+        }
+        do {
+          try await Task.sleep(for: .seconds(1))
+        } catch {
+          return
+        }
+      }
+    }
+  }
+
+  public func refresh(identity: AuraWalletIdentity, displayLoading: Bool = true) async {
+    if displayLoading { isLoading = true }
     errorMessage = nil
     let startedAt = Date()
     do {
@@ -252,7 +331,13 @@ public final class AuraWalletGatewayStore: ObservableObject {
       guard UInt64(remoteStatus.canonicalHeight) != nil,
             UInt64(remoteStatus.connectedPeers) != nil,
             UInt64(remoteBalance.availableAtoms) != nil,
+            UInt64(remoteBalance.confirmedAtoms) != nil,
             UInt64(remoteBalance.lockedAtoms) != nil,
+            UInt64(remoteBalance.pendingIncomingAtoms) != nil,
+            UInt64(remoteBalance.pendingOutgoingAtoms) != nil,
+            UInt64(remoteBalance.pendingFeeAtoms) != nil,
+            UInt64(remoteBalance.spendableAtoms) != nil,
+            UInt64(remoteBalance.totalVisibleAtoms) != nil,
             UInt64(remoteFees.minimumFeeAtoms) != nil else {
         throw AuraWalletGatewayError.invalidNetworkValue
       }
@@ -275,7 +360,7 @@ public final class AuraWalletGatewayStore: ObservableObject {
       latencyMilliseconds = nil
       errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
-    isLoading = false
+    if displayLoading { isLoading = false }
   }
 
   public func send(
@@ -294,7 +379,7 @@ public final class AuraWalletGatewayStore: ObservableObject {
       throw AuraWalletNativeError.nativeFailure("The recipient Aura address is invalid.")
     }
     let amount = try AuraAmountCodec.atoms(fromAUR: amountAUR)
-    guard let available = UInt64(balance.availableAtoms),
+    guard let available = UInt64(balance.spendableAtoms),
           let fee = UInt64(fees.minimumFeeAtoms) else {
       throw AuraWalletGatewayError.invalidNetworkValue
     }
