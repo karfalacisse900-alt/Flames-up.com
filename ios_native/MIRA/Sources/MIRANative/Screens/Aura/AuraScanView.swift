@@ -280,7 +280,7 @@ public struct AuraScanView: View {
 
         if !result.documentVerified, let selectedDocument {
           Button("Try Again") { verify(selectedDocument) }
-            .buttonStyle(AuraSecondaryButtonStyle())
+            .buttonStyle(AuraPrimaryButtonStyle())
             .disabled(isVerifying)
         }
       }
