@@ -12,7 +12,7 @@ final class AuraDocumentVerificationTests: XCTestCase {
       "providerDocumentType":"receipt",
       "isDocument":true,
       "verificationLevel":2,
-      "verificationLabel":"Document Verified",
+      "verificationLabel":"Receipt Verified",
       "documentVerified":true,
       "transactionCorroborated":false,
       "merchantSigned":false,
@@ -42,6 +42,7 @@ final class AuraDocumentVerificationTests: XCTestCase {
       from: Data(json.utf8)
     )
     XCTAssertTrue(result.documentVerified)
+    XCTAssertEqual(result.verificationLabel, "Receipt Verified")
     XCTAssertFalse(result.transactionCorroborated)
     XCTAssertFalse(result.merchantSigned)
     XCTAssertFalse(result.proofIssued)

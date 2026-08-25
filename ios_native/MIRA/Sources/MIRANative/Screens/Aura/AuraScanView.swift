@@ -98,7 +98,9 @@ public struct AuraScanView: View {
         Text(errorMessage ?? "Aura could not inspect that document.")
       }
       .onChange(of: scenePhase) { _, phase in
-        if phase != .active {
+        // System camera/photo pickers may briefly move the app through `.inactive`. Keep the
+        // in-memory selection for that transition, but clear it once Aura is truly backgrounded.
+        if phase == .background {
           selectedDocument = nil
           verificationResult = nil
           proofSubmission = nil
@@ -211,13 +213,11 @@ public struct AuraScanView: View {
 
       VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
         Label(
-          verificationResult?.verificationLabel ?? "Ready for provider verification",
+          selectedDocumentStatus,
           systemImage: verificationResult?.documentVerified == true ? "checkmark.shield.fill" : "shield.lefthalf.filled"
         )
           .font(.system(size: 14, weight: .bold))
-        Text(verificationResult == nil
-          ? "The format was accepted locally. Tap Verify to send this document through Aura's authenticated service to Veryfi."
-          : "Provider analysis finished. This does not by itself confirm payment, issue an Aura proof, change reputation, or submit anything to the blockchain.")
+        Text(selectedDocumentStatusMessage(for: document))
           .font(.system(size: 12.5, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textSecondary)
       }
@@ -254,40 +254,36 @@ public struct AuraScanView: View {
   private func verificationResultCard(_ result: AuraDocumentVerificationResult) -> some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
       HStack {
-        Label(result.verificationLabel, systemImage: result.documentVerified ? "checkmark.shield.fill" : "doc.text.magnifyingglass")
+        Label(
+          result.submittedType == "receipt"
+            ? (result.documentVerified ? "RECEIPT VERIFIED" : "RECEIPT COULD NOT BE VERIFIED")
+            : result.verificationLabel,
+          systemImage: result.documentVerified ? "checkmark.shield.fill" : "xmark.shield.fill"
+        )
           .font(.system(size: 18, weight: .bold))
-          .foregroundStyle(result.documentVerified ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
+          .foregroundStyle(result.documentVerified ? MIRATheme.Color.forest : .red)
         Spacer()
-        Text("Level \(result.verificationLevel)")
-          .font(.system(size: 12, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.forest)
       }
 
-      documentRow(label: "Provider", value: result.provider)
       if let merchant = result.merchant.name { documentRow(label: "Merchant / issuer", value: merchant) }
+      if let date = result.date { documentRow(label: "Date", value: date) }
       if let total = result.total {
         documentRow(label: "Total", value: [result.currency, total].compactMap { $0 }.joined(separator: " "))
       }
-      if let date = result.date { documentRow(label: "Date", value: date) }
-      if let number = result.invoiceNumber ?? result.receiptNumber {
-        documentRow(label: result.submittedType == "invoice" ? "Invoice number" : "Receipt number", value: number)
-      }
-      if let store = result.merchant.storeNumber { documentRow(label: "Store number", value: store) }
 
-      VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-        verificationSignal("Document recognized", value: result.isDocument)
-        verificationSignal("Duplicate detected", value: result.duplicate, positiveWhenTrue: false)
-        verificationSignal("Digital tampering detected", value: result.fraud.digitalTampering, positiveWhenTrue: false)
-        verificationSignal("AI-generated document detected", value: result.fraud.aiGenerated, positiveWhenTrue: false)
-        verificationSignal("Screenshot detected", value: result.fraud.screenshot, positiveWhenTrue: false)
-        verificationSignal("Vendor layout mismatch", value: result.fraud.vendorLayoutMismatch, positiveWhenTrue: false)
-        if let decision = result.fraud.decision {
-          documentRow(label: "Provider fraud decision", value: decision.uppercased())
+      if result.submittedType == "receipt" {
+        Text(result.documentVerified
+          ? "Aura's document-verification checks passed. This does not claim merchant or payment confirmation."
+          : "We couldn't verify this receipt.")
+          .font(.system(size: 12.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+
+        if !result.documentVerified, let selectedDocument {
+          Button("Try Again") { verify(selectedDocument) }
+            .buttonStyle(AuraSecondaryButtonStyle())
+            .disabled(isVerifying)
         }
       }
-      .padding(MIRATheme.Space.md)
-      .background(MIRATheme.Color.surfaceSoft)
-      .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
 
       if let submission = proofSubmission,
          let record = proofs.records.first(where: { $0.proofId == submission.proofId }) {
@@ -333,24 +329,6 @@ public struct AuraScanView: View {
     }
     .padding(MIRATheme.Space.lg)
     .miraCardSurface()
-  }
-
-  private func verificationSignal(
-    _ label: String,
-    value: Bool?,
-    positiveWhenTrue: Bool = true
-  ) -> some View {
-    let positive = value.map { positiveWhenTrue ? $0 : !$0 }
-    return HStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: positive == true ? "checkmark.circle.fill" : positive == false ? "exclamationmark.triangle.fill" : "minus.circle")
-        .foregroundStyle(positive == true ? MIRATheme.Color.forest : positive == false ? .orange : MIRATheme.Color.textMuted)
-      Text(label)
-        .font(.system(size: 12.5, weight: .semibold))
-      Spacer()
-      Text(value.map { $0 ? "Yes" : "No" } ?? "Not checked")
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-    }
   }
 
   private func verify(_ document: AuraLocalDocument) {
@@ -400,6 +378,28 @@ public struct AuraScanView: View {
     case "pending": return "Pending in Aura mempool"
     default: return "Aura proof status unavailable"
     }
+  }
+
+  private var selectedDocumentStatus: String {
+    guard let verificationResult else { return "Ready for provider verification" }
+    guard verificationResult.submittedType == "receipt" else {
+      return verificationResult.verificationLabel
+    }
+    return verificationResult.documentVerified
+      ? "RECEIPT VERIFIED"
+      : "RECEIPT COULD NOT BE VERIFIED"
+  }
+
+  private func selectedDocumentStatusMessage(for document: AuraLocalDocument) -> String {
+    guard let verificationResult else {
+      return "The format was accepted locally. Tap Verify to send this document through Aura's authenticated service to Veryfi."
+    }
+    guard document.kind == .receipt else {
+      return "Provider analysis finished. An invoice is not proof of payment."
+    }
+    return verificationResult.documentVerified
+      ? "Aura's document-verification checks passed. Proof submission continues through the real Devnet transaction lifecycle."
+      : "We couldn't verify this receipt."
   }
 
   private func proofStateIcon(_ record: AuraPrivateProofRecord) -> String {

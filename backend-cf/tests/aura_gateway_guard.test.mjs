@@ -4,6 +4,8 @@ import test from 'node:test';
 
 const sourceURL = new URL('../src/aura.ts', import.meta.url);
 const workflowURL = new URL('../../.github/workflows/deploy-worker.yml', import.meta.url);
+const scanViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/Aura/AuraScanView.swift', import.meta.url);
+const walletViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/Aura/AuraWalletView.swift', import.meta.url);
 
 test('Aura document verification is authenticated, bounded, non-retaining, and only authorizes privacy-safe proof bytes', async () => {
   const source = await fs.readFile(sourceURL, 'utf8');
@@ -17,9 +19,28 @@ test('Aura document verification is authenticated, bounded, non-retaining, and o
   assert.match(source, /purchaseProofAttestation/);
   assert.match(source, /proof\/purchase\/verifier-signing\/v1/);
   assert.match(source, /aura-receipt-nullifier-v1/);
+  assert.match(source, /const receiptHasRequiredFields = Boolean\(merchantName && documentDate && documentTotal\)/);
+  assert.match(source, /isDocument !== false/);
+  assert.match(source, /!blockingDecision/);
+  assert.match(source, /Receipt Verified/);
+  assert.match(source, /Receipt Could Not Be Verified/);
   assert.match(source, /AURA_PROOF_VERIFIER_PRIVATE_KEY_PKCS8_BASE64/);
   assert.match(source, /AURA_PROOF_NULLIFIER_KEY_BASE64/);
   assert.doesNotMatch(source, /a5eef8|0FBr1|vrfsgsvt/);
+});
+
+test('Aura Mobile keeps receipt capture alive across system pickers and presents only the simple receipt result', async () => {
+  const [scanView, walletView] = await Promise.all([
+    fs.readFile(scanViewURL, 'utf8'),
+    fs.readFile(walletViewURL, 'utf8'),
+  ]);
+  assert.match(scanView, /if phase == \.background/);
+  assert.match(walletView, /if phase == \.background, wallet\.state == \.unlocked/);
+  assert.match(scanView, /RECEIPT VERIFIED/);
+  assert.match(scanView, /RECEIPT COULD NOT BE VERIFIED/);
+  assert.equal(scanView.includes('Text("Level \\(result.verificationLevel)")'), false);
+  assert.doesNotMatch(scanView, /Provider fraud decision/);
+  assert.doesNotMatch(scanView, /AI-generated document detected/);
 });
 
 test('Aura wallet routes proxy only allowlisted operations to an authenticated Rust gateway', async () => {

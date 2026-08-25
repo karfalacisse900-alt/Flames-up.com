@@ -153,6 +153,20 @@ public final class AuraProofLifecycleStore: ObservableObject {
     }
   }
 
+  /// Continuously replaces local lifecycle metadata with canonical gateway state while Aura is
+  /// running. The view never increments confirmations itself, so duplicate delivery and reorgs
+  /// remain idempotent and are reflected by the next validated snapshot.
+  public func observeLifecycle() async {
+    while !Task.isCancelled {
+      await refreshAll()
+      do {
+        try await Task.sleep(for: .seconds(2))
+      } catch {
+        return
+      }
+    }
+  }
+
   public func eligibility(for record: AuraPrivateProofRecord) async throws -> AuraFeedbackEligibility {
     try await api.get(
       "/aura/proof/\(record.proofId)/feedback-eligibility?owner=\(record.owner)"

@@ -343,6 +343,9 @@ async function normalizeVeryfi(document: any, submittedType: string, rawBytes: U
   const fraud = fraudSignals(document);
   const duplicate = firstBool(document, ['is_duplicate', 'duplicate.is_duplicate', 'meta.is_duplicate', 'meta.duplicate']);
   const isDocument = firstBool(document, ['is_document', 'document.is_document']);
+  const merchantName = boundedText(first(document, ['vendor.name', 'merchant.name']), 512);
+  const documentDate = boundedText(first(document, ['date', 'created_date', 'invoice_date']), 128);
+  const documentTotal = exactDecimal(document?.total);
   const adverse = [
     fraud.digitalTampering,
     fraud.aiGenerated,
@@ -352,9 +355,35 @@ async function normalizeVeryfi(document: any, submittedType: string, rawBytes: U
     fraud.notADocument,
     duplicate,
   ].some((value) => value === true);
-  const acceptedDecision = ['green', 'approved', 'pass', 'passed', 'low_risk', 'low risk'].includes(String(fraud.decision || '').toLowerCase());
-  const documentVerified = isDocument === true && acceptedDecision && !adverse;
+  const decision = String(fraud.decision || '').trim().toLowerCase();
+  const acceptedDecision = ['green', 'approved', 'pass', 'passed', 'low_risk', 'low risk'].includes(decision);
+  const blockingDecision = [
+    'red',
+    'declined',
+    'deny',
+    'denied',
+    'fail',
+    'failed',
+    'high_risk',
+    'high risk',
+    'rejected',
+  ].includes(decision);
+  // A receipt is a document-verification success when Veryfi returned the minimum fields Aura
+  // needs, did not explicitly identify the input as a non-document, and did not emit a blocking
+  // duplicate/fraud decision. An absent optional fraud color must not downgrade an otherwise
+  // readable receipt to "Parsed". This is not merchant or payment corroboration.
+  const receiptHasRequiredFields = Boolean(merchantName && documentDate && documentTotal);
+  const receiptVerified = receiptHasRequiredFields
+    && isDocument !== false
+    && !blockingDecision
+    && !adverse;
+  const documentVerified = submittedType === 'receipt'
+    ? receiptVerified
+    : isDocument === true && acceptedDecision && !adverse;
   const parsed = Boolean(first(document, ['id', 'vendor.name', 'merchant.name', 'total', 'date', 'invoice_number']));
+  const verificationLabel = submittedType === 'receipt'
+    ? documentVerified ? 'Receipt Verified' : 'Receipt Could Not Be Verified'
+    : documentVerified ? 'Document Verified' : parsed ? 'Parsed' : 'Unverified';
 
   return {
     provider: 'Veryfi',
@@ -363,7 +392,7 @@ async function normalizeVeryfi(document: any, submittedType: string, rawBytes: U
     providerDocumentType: boundedText(first(document, ['document_type', 'type']), 80),
     isDocument,
     verificationLevel: documentVerified ? 2 : parsed ? 1 : 0,
-    verificationLabel: documentVerified ? 'Document Verified' : parsed ? 'Parsed' : 'Unverified',
+    verificationLabel,
     documentVerified,
     transactionCorroborated: false,
     merchantSigned: false,
@@ -371,18 +400,18 @@ async function normalizeVeryfi(document: any, submittedType: string, rawBytes: U
     blockchainSubmitted: false,
     independentPurchaseConfirmed: false,
     merchant: {
-      name: boundedText(first(document, ['vendor.name', 'merchant.name']), 512),
+      name: merchantName,
       address: boundedText(first(document, ['vendor.address', 'merchant.address']), 1024),
       phone: boundedText(first(document, ['vendor.phone_number', 'merchant.phone_number']), 128),
       storeNumber: boundedText(first(document, ['store_number', 'vendor.store_number']), 128),
     },
-    date: boundedText(first(document, ['date', 'created_date', 'invoice_date']), 128),
+    date: documentDate,
     time: boundedText(first(document, ['time']), 64),
     currency: boundedText(first(document, ['currency_code', 'currency']), 16),
     subtotal: exactDecimal(document?.subtotal),
     tax: exactDecimal(document?.tax),
     discount: exactDecimal(document?.discount),
-    total: exactDecimal(document?.total),
+    total: documentTotal,
     invoiceNumber: boundedText(document?.invoice_number, 160),
     dueDate: boundedText(document?.due_date, 128),
     receiptNumber: boundedText(first(document, ['receipt_number', 'document_reference_number']), 160),

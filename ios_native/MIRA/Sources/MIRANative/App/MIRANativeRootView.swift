@@ -264,6 +264,9 @@ public struct MIRANativeRootView: View {
     .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
+    .task {
+      await auraProofs.observeLifecycle()
+    }
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")
       loadedTabs.insert(tab)

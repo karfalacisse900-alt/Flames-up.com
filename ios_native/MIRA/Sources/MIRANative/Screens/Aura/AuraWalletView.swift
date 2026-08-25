@@ -69,7 +69,9 @@ public struct AuraWalletView: View {
         Text(wallet.errorMessage ?? "Aura wallet operation failed.")
       }
       .onChange(of: scenePhase) { _, phase in
-        if phase != .active, wallet.state == .unlocked {
+        // Camera, photo-picker, and system sheets can make an app briefly inactive. Lock when the
+        // process is actually backgrounded so receipt capture cannot invalidate its own wallet.
+        if phase == .background, wallet.state == .unlocked {
           wallet.lock()
           gateway.clear()
         }
