@@ -136,6 +136,18 @@ public struct AuraMeView: View {
   private var accountMenu: some View {
     VStack(spacing: 0) {
       NavigationLink {
+        AuraMyCommunityView(api: api, scope: "created", title: "My Posts")
+      } label: {
+        menuRow("My Posts", systemImage: "square.and.pencil")
+      }
+      Divider().padding(.leading, 52)
+      NavigationLink {
+        AuraMyCommunityView(api: api, scope: "joined", title: "Joined Meetups")
+      } label: {
+        menuRow("Joined Meetups", systemImage: "person.2")
+      }
+      Divider().padding(.leading, 52)
+      NavigationLink {
         AuraProofsView(api: api, proofs: proofs)
       } label: {
         menuRow("My Proofs", systemImage: "ticket")

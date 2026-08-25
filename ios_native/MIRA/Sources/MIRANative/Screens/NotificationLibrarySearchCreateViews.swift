@@ -857,7 +857,7 @@ private struct MIRABroadLocationSearchResult: Decodable, Identifiable, Hashable 
   }
 }
 
-private struct MIRAExactPostPlace: Identifiable, Hashable {
+struct MIRAExactPostPlace: Identifiable, Hashable {
   let provider: String
   let providerPlaceId: String?
   let name: String
@@ -3140,7 +3140,7 @@ private struct PostBroadLocationPickerSheet: View {
   }
 }
 
-private struct PostLocationPickerSheet: View {
+struct PostLocationPickerSheet: View {
   let api: MIRAAPIClient
   @Binding var selectedPlace: MIRAExactPostPlace?
   let onClose: (() -> Void)?

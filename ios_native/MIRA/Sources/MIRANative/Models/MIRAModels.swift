@@ -310,7 +310,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     if let userFullName, !userFullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return userFullName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    return "Captro"
+    return "Aura member"
   }
 
   public var viewerSaved: Bool {
@@ -1792,7 +1792,7 @@ public struct MIRAConnectionRequest: Codable, Identifiable, Hashable {
     if let fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    return "Captro"
+    return "Aura member"
   }
 }
 

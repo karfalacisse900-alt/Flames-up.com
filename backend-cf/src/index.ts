@@ -5272,6 +5272,108 @@ function feedPhotoPostsOnly(posts: any[]): any[] {
   return posts.filter((post) => postHasRenderablePhotoMedia(post) && !postContainsVideoMedia(post) && String(post?.post_type || '').toLowerCase() !== 'note');
 }
 
+const AURA_SMALL_POST_CATEGORIES = new Set(['question', 'idea', 'concern', 'recommendation', 'update']);
+const AURA_COMMUNITY_POST_TYPES = new Set(['small_post', 'meetup']);
+const AURA_MEETUP_ENTRY_TYPES = new Set(['free', 'aur']);
+const AURA_COMMUNITY_AUDIENCES = new Set(['public', 'friends', 'followers', 'private']);
+
+function isAuraCommunityPostType(value: unknown): boolean {
+  return AURA_COMMUNITY_POST_TYPES.has(cleanText(value, 40).toLowerCase());
+}
+
+function auraCommunityPostHasRenderableContent(row: any): boolean {
+  const postType = cleanText(row?.post_type, 40).toLowerCase();
+  if (!isAuraCommunityPostType(postType)) return false;
+  const title = cleanText(row?.title, 180);
+  const content = cleanMultilineText(row?.content, 4000);
+  if (postType === 'small_post') return !!(title || content || supabaseAppPostHasRenderablePhotoMedia(row));
+  return !!title && supabaseAppPostHasRenderablePhotoMedia(row);
+}
+
+function normalizeAuraAtomicAmount(value: unknown): string {
+  const amount = cleanText(value, 24);
+  if (!/^[1-9][0-9]{0,19}$/.test(amount)) return '';
+  if (amount.length < 20) return amount;
+  return amount <= '18446744073709551615' ? amount : '';
+}
+
+function auraCommunityMetadataFromBody(body: any, postType: string): { value?: any; error?: string } {
+  if (!isAuraCommunityPostType(postType)) return {};
+  const audience = cleanText(body.audience || body.visibility || 'public', 24).toLowerCase();
+  if (!AURA_COMMUNITY_AUDIENCES.has(audience)) {
+    return { error: 'Audience must be Public, Friends, Followers, or Private.' };
+  }
+  const normalizedAudience = audience;
+
+  if (postType === 'small_post') {
+    const category = cleanText(body.community_category || body.communityCategory, 40).toLowerCase();
+    if (!AURA_SMALL_POST_CATEGORIES.has(category)) {
+      return { error: 'Choose Question, Idea, Concern, Recommendation, or Update.' };
+    }
+    return {
+      value: {
+        version: 1,
+        kind: 'small_post',
+        category,
+        audience: normalizedAudience,
+        allow_replies: optionalBoolean(body.allow_replies ?? body.allowReplies) !== false,
+      },
+    };
+  }
+
+  const neighborhood = cleanText(body.meetup_neighborhood || body.meetupNeighborhood, 100);
+  const startsAt = cleanText(body.meetup_starts_at || body.meetupStartsAt, 80);
+  const endsAt = cleanText(body.meetup_ends_at || body.meetupEndsAt, 80);
+  const entryType = cleanText(body.meetup_entry_type || body.meetupEntryType || 'free', 20).toLowerCase();
+  const maxPeople = clampNumber(body.meetup_max_people ?? body.meetupMaxPeople ?? 12, 2, 500, 12);
+  if (!neighborhood) return { error: 'Meetup neighborhood is required.' };
+  if (!Number.isFinite(Date.parse(startsAt)) || !Number.isFinite(Date.parse(endsAt)) || Date.parse(endsAt) <= Date.parse(startsAt)) {
+    return { error: 'Meetup start and end time are invalid.' };
+  }
+  if (!AURA_MEETUP_ENTRY_TYPES.has(entryType)) return { error: 'Meetup entry must be Free or Paid in AUR.' };
+  const entryAmountAtoms = entryType === 'aur'
+    ? normalizeAuraAtomicAmount(body.meetup_entry_amount_atoms || body.meetupEntryAmountAtoms)
+    : '';
+  if (entryType === 'aur' && !entryAmountAtoms) return { error: 'Enter a valid positive AUR amount.' };
+
+  return {
+    value: {
+      version: 1,
+      kind: 'meetup',
+      audience: normalizedAudience,
+      neighborhood,
+      starts_at: new Date(startsAt).toISOString(),
+      ends_at: new Date(endsAt).toISOString(),
+      entry_type: entryType,
+      entry_amount_atoms: entryAmountAtoms || null,
+      max_people: maxPeople,
+    },
+  };
+}
+
+function auraCommunityMetadataFromRow(row: any): any {
+  const metadata = parseJsonObject(row?.metadata);
+  return parseJsonObject((metadata as any).community);
+}
+
+function normalizeAuraCommunityCity(value: unknown): string {
+  const normalized = cleanText(value, 100)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  if (normalized === 'nyc' || normalized === 'new york' || normalized === 'new york city') return 'new york city';
+  return normalized;
+}
+
+function auraCommunityPostCity(row: any): string {
+  const metadata = parseJsonObject(row?.metadata);
+  const raw = parseJsonObject((metadata as any).raw);
+  const place = parseJsonObject((metadata as any).place);
+  return normalizeAuraCommunityCity(
+    (place as any).city || (raw as any).display_city || (metadata as any).display_city
+  );
+}
+
 function feedPhotoPostWhere(postAlias = 'p'): string {
   const postType = `LOWER(COALESCE(${postAlias}.post_type, ''))`;
   const mediaTypes = `LOWER(COALESCE(${postAlias}.media_types, ''))`;
@@ -5583,6 +5685,9 @@ type SupabasePostReadOptions = {
   postIds?: string[];
   ownerId?: string;
   category?: DiscoverCategory | 'all';
+  socialScope?: 'friends' | 'city';
+  communityOnly?: boolean;
+  city?: string;
   search?: string;
   limit?: number;
   offset?: number;
@@ -7468,7 +7573,14 @@ function supabaseAppPostMatchesCategory(row: any, category: DiscoverCategory | '
   return terms.some((term) => haystack.includes(term));
 }
 
-function supabaseAppPostVisibleToViewer(row: any, author: any, viewerIds: Set<string>, followingIds: Set<string>, blockedIds: Set<string>): boolean {
+function supabaseAppPostVisibleToViewer(
+  row: any,
+  author: any,
+  viewerIds: Set<string>,
+  followingIds: Set<string>,
+  friendIds: Set<string>,
+  blockedIds: Set<string>,
+): boolean {
   if (!row || !author) return false;
   if (cleanText(row?.status || 'active', 40) !== 'active') return false;
   if (supabaseUserStatus(author) !== 'active') return false;
@@ -7478,8 +7590,9 @@ function supabaseAppPostVisibleToViewer(row: any, author: any, viewerIds: Set<st
   if (!isOwner && (blockedIds.has(appUserId) || (!!authUserId && blockedIds.has(authUserId)))) return false;
   const visibility = normalizeVisibility(row?.visibility);
   if (visibility === 'private') return isOwner;
-  if (visibility === 'followers' || visibility === 'friends') return isOwner || followingIds.has(appUserId);
-  if (author?.is_private && !isOwner && !followingIds.has(appUserId)) return false;
+  if (visibility === 'followers') return isOwner || followingIds.has(appUserId);
+  if (visibility === 'friends') return isOwner || friendIds.has(appUserId);
+  if (author?.is_private && !isOwner && !followingIds.has(appUserId) && !friendIds.has(appUserId)) return false;
   return true;
 }
 
@@ -7489,6 +7602,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   const raw = parseJsonObject((metadata as any).raw);
   const place = parseJsonObject((metadata as any).place);
   const audio = parseJsonObject((metadata as any).audio);
+  const community = parseJsonObject((metadata as any).community);
   const authorProfile = parseJsonObject(author?.profile);
   const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
   const { mediaUrls, mediaTypes, mediaDimensions } = supabaseAppPostMedia(row);
@@ -7536,6 +7650,17 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     display_location_source: cleanText((raw as any).display_location_source || (metadata as any).display_location_source, 40),
     display_location_visibility: cleanText((raw as any).display_location_visibility || (metadata as any).display_location_visibility || 'public', 40),
     post_type: cleanText(row?.post_type || 'general', 80),
+    community_category: cleanText((community as any).category, 40) || null,
+    community_audience: cleanText((community as any).audience || row?.visibility, 24) || 'public',
+    community_allow_replies: (community as any).allow_replies !== false,
+    meetup_neighborhood: cleanText((community as any).neighborhood, 100) || null,
+    meetup_starts_at: cleanText((community as any).starts_at, 80) || null,
+    meetup_ends_at: cleanText((community as any).ends_at, 80) || null,
+    meetup_entry_type: cleanText((community as any).entry_type, 20) || null,
+    meetup_entry_amount_atoms: normalizeAuraAtomicAmount((community as any).entry_amount_atoms) || null,
+    meetup_max_people: Number.isFinite(Number((community as any).max_people))
+      ? clampNumber((community as any).max_people, 2, 500, 12)
+      : null,
     place_id: cleanText((place as any).id, 160),
     place_name: cleanText((place as any).name, 180),
     place_provider: cleanText((place as any).provider || 'apple_mapkit', 40),
@@ -7584,6 +7709,10 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const ownerId = publicId(options.ownerId, 120);
   const search = postgrestSearchTerm(options.search || '');
 
+  if (options.socialScope || options.communityOnly) {
+    filters.post_type = postgrestInFilter(Array.from(AURA_COMMUNITY_POST_TYPES));
+  }
+
   if (postIds.length) {
     const uuidPostIds = postIds.map((value) => isUuidText(value)).filter((value): value is string => !!value);
     const orParts = [`legacy_post_id.${postgrestInFilter(postIds)}`];
@@ -7599,11 +7728,22 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     filters.or = `(content.ilike.*${search}*,title.ilike.*${search}*,category.ilike.*${search}*,location.ilike.*${search}*)`;
   }
 
+  const applyOffsetAfterFiltering = !!(
+    postIds.length
+    || postId
+    || ownerId
+    || search
+    || (options.category && options.category !== 'all')
+    || options.socialScope
+  );
+  const socialCandidateLimit = Math.min(300, Math.max(100, (limit + offset) * 5));
   const rowLimit = postIds.length
     ? postIds.length
     : postId
       ? 1
-    : Math.min(300, Math.max(limit + offset + 20, options.category && options.category !== 'all' ? (limit + offset) * 4 : limit + offset));
+      : options.socialScope
+        ? socialCandidateLimit
+        : Math.min(300, Math.max(limit + offset + 20, options.category && options.category !== 'all' ? (limit + offset) * 4 : limit + offset));
   const rows = await supabaseAdminQueryRows(c, 'app_posts', {
     select: SUPABASE_APP_POST_SELECT,
     filters,
@@ -7611,12 +7751,15 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
       ? 'likes_count.desc.nullslast,legacy_created_at.desc.nullslast,created_at.desc'
       : 'legacy_created_at.desc.nullslast,created_at.desc',
     limit: rowLimit,
-    offset: postIds.length || postId || ownerId || search || (options.category && options.category !== 'all') ? 0 : offset,
+    offset: applyOffsetAfterFiltering ? 0 : offset,
   });
 
   const isDiscoverQuery = options.category !== undefined;
   const candidateRows = rows.filter((row) => {
-    if (!supabaseAppPostHasRenderablePhotoMedia(row) || !supabaseAppPostMatchesCategory(row, options.category)) return false;
+    const hasRenderableContent = isDiscoverQuery
+      ? supabaseAppPostHasRenderablePhotoMedia(row)
+      : supabaseAppPostHasRenderablePhotoMedia(row) || auraCommunityPostHasRenderableContent(row);
+    if (!hasRenderableContent || !supabaseAppPostMatchesCategory(row, options.category)) return false;
     if (!isDiscoverQuery) return true;
     const metadata = parseJsonObject(row?.metadata);
     return !cleanText((metadata as any).discover_blocked_at, 80);
@@ -7634,8 +7777,8 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
       supabaseFollowingUserIds(c, viewerId, cleanAuthorIds),
       supabaseAdminQueryRows(c, 'app_friendships', {
         select: 'friend_id',
-        filters: { user_id: postgrestEqFilter(publicId(viewerId, 120)), friend_id: postgrestInFilter(cleanAuthorIds) },
-        limit: Math.max(1, cleanAuthorIds.length),
+        filters: { user_id: postgrestInFilter(viewerAliases), friend_id: postgrestInFilter(cleanAuthorIds) },
+        limit: Math.max(1, cleanAuthorIds.length * Math.max(1, viewerAliases.length)),
       }).catch(() => []),
       supabaseAdminQueryRows(c, 'app_friend_requests', {
         select: 'id,to_user_id',
@@ -7657,7 +7800,18 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const rowsVisibleToViewer = candidateRows
     .filter((row) => {
       const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '');
-      return supabaseAppPostVisibleToViewer(row, author, viewerSet, connectedOrFollowingIds, blockedIds);
+      if (!supabaseAppPostVisibleToViewer(row, author, viewerSet, followingIds, connectedIds, blockedIds)) return false;
+      if (!isAuraCommunityPostType(row?.post_type)) return options.socialScope ? false : true;
+      const authorId = publicId(row?.app_user_id || author?.id, 120);
+      const authAuthorId = isUuidText(row?.user_id) || '';
+      if (options.socialScope === 'friends') {
+        return viewerSet.has(authorId) || (!!authAuthorId && viewerSet.has(authAuthorId)) || connectedIds.has(authorId);
+      }
+      if (options.socialScope === 'city') {
+        const requestedCity = normalizeAuraCommunityCity(options.city || 'New York City');
+        return !!requestedCity && auraCommunityPostCity(row) === requestedCity;
+      }
+      return true;
     });
   if (ownerId) {
     rowsVisibleToViewer.sort((a, b) => {
@@ -7669,7 +7823,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     });
   }
   const visibleRows = rowsVisibleToViewer
-    .slice(postIds.length || postId || ownerId || search || (options.category && options.category !== 'all') ? offset : 0)
+    .slice(applyOffsetAfterFiltering ? offset : 0)
     .slice(0, limit);
 
   const mapped = visibleRows.map((row) => {
@@ -7688,7 +7842,101 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const ordered = postIds.length
     ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
     : mapped;
-  return overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(ordered), viewerId);
+  const engaged = await overlaySupabaseViewerEngagement(c, ordered, viewerId);
+  return augmentAuraMeetupState(c, visibleRows, engaged, viewerSet);
+}
+
+async function augmentAuraMeetupState(c: any, sourceRows: any[], posts: any[], viewerIds: Set<string>): Promise<any[]> {
+  const meetupRows = sourceRows.filter((row) => cleanText(row?.post_type, 40).toLowerCase() === 'meetup' && isUuidText(row?.id));
+  if (!meetupRows.length) return posts;
+  const meetupIds = meetupRows.map((row) => String(row.id));
+  try {
+    const joins = await supabaseAdminQueryRows(c, 'aura_meetup_joins', {
+      select: 'post_id,app_user_id,status,joined_at',
+      filters: {
+        post_id: postgrestInFilter(meetupIds),
+        status: postgrestEqFilter('confirmed'),
+      },
+      order: 'joined_at.asc',
+      limit: Math.min(5000, Math.max(50, meetupIds.length * 500)),
+    });
+    const counts = new Map<string, number>();
+    const joinedByViewer = new Set<string>();
+    for (const join of joins) {
+      const postId = String(join?.post_id || '');
+      if (!postId) continue;
+      counts.set(postId, (counts.get(postId) || 0) + 1);
+      if (viewerIds.has(publicId(join?.app_user_id, 120))) joinedByViewer.add(postId);
+    }
+    const sourceIdByPostId = new Map<string, string>();
+    for (const row of meetupRows) {
+      sourceIdByPostId.set(publicId(row?.legacy_post_id || row?.id, 120), String(row.id));
+    }
+    return posts.map((post) => {
+      const meetupId = sourceIdByPostId.get(publicId(post?.id, 120));
+      if (!meetupId) return post;
+      return {
+        ...post,
+        meetup_state_available: true,
+        meetup_joined_count: counts.get(meetupId) || 0,
+        meetup_viewer_joined: joinedByViewer.has(meetupId),
+      };
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_state_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return posts.map((post) => cleanText(post?.post_type, 40).toLowerCase() === 'meetup'
+      ? { ...post, meetup_state_available: false, meetup_joined_count: null, meetup_viewer_joined: false }
+      : post);
+  }
+}
+
+async function auraMeetupPostIdentityRow(c: any, postId: string): Promise<any | null> {
+  const cleanPostId = publicId(postId, 120);
+  if (!cleanPostId) return null;
+  const uuidPostId = isUuidText(cleanPostId);
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: 'id,legacy_post_id,app_user_id,user_id,status,post_type,metadata',
+    filters: {
+      or: uuidPostId
+        ? `(legacy_post_id.eq.${cleanPostId},id.eq.${cleanPostId})`
+        : `(legacy_post_id.eq.${cleanPostId})`,
+    },
+    limit: 1,
+  });
+  return rows[0] || null;
+}
+
+async function auraJoinFreeMeetup(c: any, postId: string, userId: string): Promise<{ status: number; body: any }> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/rpc/aura_join_free_meetup`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { ...supabaseAdminAuthHeaders(c), 'content-type': 'application/json' },
+    body: JSON.stringify({ p_post_id: postId, p_app_user_id: userId }),
+  });
+  const payload: any = await response.json().catch(async () => ({ detail: (await response.text().catch(() => '')).slice(0, 240) }));
+  if (response.ok) {
+    const row = Array.isArray(payload) ? payload[0] : payload;
+    return { status: 200, body: { joined: true, join_id: publicId(row?.join_id, 120), joined_at: cleanText(row?.joined_at, 80) } };
+  }
+  const code = getErrorCode(payload).toUpperCase();
+  const message = cleanText(payload?.message || payload?.detail, 240).toUpperCase();
+  if (code.includes('MEETUP_FULL') || message.includes('MEETUP_FULL')) {
+    return { status: 409, body: { detail: 'This meetup is full.', code: 'MEETUP_FULL' } };
+  }
+  if (code.includes('PAID_MEETUP') || message.includes('PAID_MEETUP')) {
+    return {
+      status: 409,
+      body: {
+        detail: 'Paid meetup joining is unavailable until Aura can verify the exact confirmed AUR payment.',
+        code: 'PAID_MEETUP_REQUIRES_CONFIRMED_AUR',
+      },
+    };
+  }
+  if (code.includes('MEETUP_NOT_FOUND') || message.includes('MEETUP_NOT_FOUND')) {
+    return { status: 404, body: { detail: 'Meetup not found.', code: 'MEETUP_NOT_FOUND' } };
+  }
+  console.warn(JSON.stringify({ event: 'aura_meetup_join_rpc_failed', status: response.status, code: code.slice(0, 160) }));
+  return { status: 503, body: { detail: 'Meetup joining is temporarily unavailable.', code: 'MEETUP_JOIN_UNAVAILABLE' } };
 }
 
 function postgrestInFilter(values: string[]): string {
@@ -11587,6 +11835,7 @@ function supabasePrimaryPostCreatePayload(input: any) {
       moderation_status: 'approved',
       place,
       audio,
+      community: parseJsonObject(input.community),
       raw,
     },
     likes_count: 0,
@@ -15054,12 +15303,26 @@ api.post('/posts', authMiddleware, async (c) => {
     displayLocationLabel = normalizeDisplayLocationLabel(cleanText(user?.city, 120), '', '', '');
   }
   if (!displayLocationLabel) displayLocationVisibility = 'hidden';
-  const visibility = normalizeVisibility(b.visibility);
+  let visibility = normalizeVisibility(b.visibility);
   let postTitle = cleanText(b.title || b.headline, 180);
   let postContent = cleanMultilineText(b.content || b.text, 5000);
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
   let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  const communityResult = auraCommunityMetadataFromBody(b, postType);
+  if (communityResult.error) return c.json({ detail: communityResult.error, code: 'INVALID_AURA_COMMUNITY_POST' }, 400);
+  if (isAuraCommunityPostType(postType)) {
+    visibility = normalizeVisibility(communityResult.value?.audience);
+  }
+  if (postType === 'small_post' && !postTitle && !postContent && !primaryImage) {
+    return c.json({ detail: 'Small Post needs a title, text, or photo.', code: 'EMPTY_SMALL_POST' }, 400);
+  }
+  if (postType === 'meetup' && (!postTitle || !postContent || !primaryImage || !placeName)) {
+    return c.json({
+      detail: 'Meetup needs a cover image, title, place, and description.',
+      code: 'INCOMPLETE_MEETUP',
+    }, 400);
+  }
   const requestedPostType = String(b.post_type || b.postType || b.media_type || b.mediaType || '').toLowerCase();
   const hasVideoMedia = requestedPostType.includes('video') || mediaTypes.includes('video') || imageUrls.some(isVideoMediaUrl);
   if (hasVideoMedia) {
@@ -15180,6 +15443,7 @@ api.post('/posts', authMiddleware, async (c) => {
     audioStreamUrl,
     audioStartTime,
     audioDuration,
+    community: communityResult.value,
     clientRequestId,
     createdAt,
   };
@@ -15255,6 +15519,74 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   }
 });
 
+api.get('/posts/community-feed', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_community_feed_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_community_feed_read', userId, 180, 60);
+  if (limited) return limited;
+  const scope = cleanText(c.req.query('scope') || 'city', 20).toLowerCase();
+  if (scope !== 'friends' && scope !== 'city') return c.json({ detail: 'Feed scope must be friends or city.' }, 400);
+  const city = cleanText(c.req.query('city') || 'New York City', 100);
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '30', 1, 50, 30);
+  try {
+    const rows = await supabaseReadVisiblePosts(c, userId, {
+      socialScope: scope,
+      city,
+      limit,
+      offset: skip,
+      order: 'newest',
+    });
+    const response = c.json(rows.map((post) => feedPostPayload(post, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_community_feed_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load the community feed.' }, 500);
+  }
+});
+
+api.get('/posts/community-mine', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_community_mine_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_community_mine_read', userId, 120, 60);
+  if (limited) return limited;
+  const scope = cleanText(c.req.query('scope') || 'created', 20).toLowerCase();
+  if (scope !== 'created' && scope !== 'joined') return c.json({ detail: 'List scope must be created or joined.' }, 400);
+  try {
+    let rows: any[] = [];
+    if (scope === 'created') {
+      rows = await supabaseReadVisiblePosts(c, userId, {
+        ownerId: userId,
+        communityOnly: true,
+        limit: 100,
+        order: 'newest',
+      });
+      rows = rows.filter((post) => isAuraCommunityPostType(post?.post_type));
+    } else {
+      const joins = await supabaseAdminQueryRows(c, 'aura_meetup_joins', {
+        select: 'post_id,joined_at',
+        filters: { app_user_id: postgrestEqFilter(userId), status: postgrestEqFilter('confirmed') },
+        order: 'joined_at.desc',
+        limit: 100,
+      });
+      const postIds = joins.map((join) => String(join?.post_id || '')).filter((value) => !!isUuidText(value));
+      rows = postIds.length
+        ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: Math.min(100, postIds.length), order: 'newest' })
+        : [];
+      rows = rows.filter((post) => cleanText(post?.post_type, 40).toLowerCase() === 'meetup');
+    }
+    const response = c.json(rows.map((post) => feedPostPayload(post, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_community_mine_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load your community activity.' }, 500);
+  }
+});
+
 api.get('/posts/world-board', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'world_board_read');
@@ -15289,6 +15621,88 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_nearby_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load nearby posts.' }, 500);
+  }
+});
+
+api.get('/posts/:postId/meetup/participants', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_meetup_participants_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_meetup_participants_read', viewerId, 180, 60);
+  if (limited) return limited;
+  const postId = c.req.param('postId');
+  try {
+    const [visiblePost] = await supabaseReadVisiblePosts(c, viewerId, { postId, limit: 1 });
+    if (!visiblePost || cleanText(visiblePost?.post_type, 40).toLowerCase() !== 'meetup') {
+      return c.json({ detail: 'Meetup not found.' }, 404);
+    }
+    const identity = await auraMeetupPostIdentityRow(c, postId);
+    if (!identity?.id) return c.json({ detail: 'Meetup not found.' }, 404);
+    const joins = await supabaseAdminQueryRows(c, 'aura_meetup_joins', {
+      select: 'app_user_id,joined_at',
+      filters: { post_id: postgrestEqFilter(String(identity.id)), status: postgrestEqFilter('confirmed') },
+      order: 'joined_at.asc',
+      limit: 500,
+    });
+    const participantResults = await Promise.all(joins.slice(0, 24).map((join) =>
+      supabasePublicUserPayload(c, viewerId, publicId(join?.app_user_id, 120))
+    ));
+    const participants = participantResults
+      .filter((result) => result.status === 200 && !(result.body as any)?.viewer_blocked_by)
+      .map((result) => result.body);
+    return c.json({
+      joined_count: joins.length,
+      viewer_joined: joins.some((join) => publicId(join?.app_user_id, 120) === viewerId),
+      participants,
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_participants_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load meetup participants.' }, 500);
+  }
+});
+
+api.post('/posts/:postId/meetup/join', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_meetup_join');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_meetup_join', userId, 30, 60);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'posting');
+  if (restricted) return restricted;
+  const postId = c.req.param('postId');
+  try {
+    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!visiblePost || cleanText(visiblePost?.post_type, 40).toLowerCase() !== 'meetup') {
+      return c.json({ detail: 'Meetup not found.' }, 404);
+    }
+    const result = await auraJoinFreeMeetup(c, postId, userId);
+    return c.json(result.body, result.status as any);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_join_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Meetup joining is temporarily unavailable.' }, 500);
+  }
+});
+
+api.delete('/posts/:postId/meetup/join', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_meetup_leave');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_meetup_leave', userId, 30, 60);
+  if (limited) return limited;
+  const postId = c.req.param('postId');
+  try {
+    const identity = await auraMeetupPostIdentityRow(c, postId);
+    if (!identity?.id || cleanText(identity?.post_type, 40).toLowerCase() !== 'meetup') {
+      return c.json({ detail: 'Meetup not found.' }, 404);
+    }
+    await supabaseAdminPatchRows(c, 'aura_meetup_joins', {
+      post_id: postgrestEqFilter(String(identity.id)),
+      app_user_id: postgrestEqFilter(userId),
+    }, { status: 'cancelled', updated_at: now() });
+    return c.json({ joined: false });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_leave_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not leave this meetup.' }, 500);
   }
 });
 
@@ -15464,6 +15878,11 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const clientRequestId = getClientRequestId(c, body);
     if (!content) return c.json({ detail: 'Comment cannot be empty.' }, 400);
     if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
+    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!visiblePost) return c.json({ detail: 'Post not found.' }, 404);
+    if (isAuraCommunityPostType(visiblePost?.post_type) && visiblePost?.community_allow_replies === false) {
+      return c.json({ detail: 'Replies are disabled for this post.', code: 'REPLIES_DISABLED' }, 403);
+    }
     const result = await supabaseCreatePostComment(c, { postId, userId, content, parentId, clientRequestId: clientRequestId || undefined });
     return c.json(result.body, result.status);
   } catch (error: any) {

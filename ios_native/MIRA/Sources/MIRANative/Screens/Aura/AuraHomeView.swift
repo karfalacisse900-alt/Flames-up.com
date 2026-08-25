@@ -1,213 +1,165 @@
 import SwiftUI
 
-/// Four-tab Aura home feed. It renders only locally recorded proof lifecycle data and validated
-/// gateway wallet data; missing social/network content remains an explicit empty state.
+@MainActor
+final class AuraCommunityFeedModel: ObservableObject {
+  @Published private(set) var posts: [AuraCommunityPost] = []
+  @Published private(set) var isLoading = false
+  @Published private(set) var errorMessage: String?
+
+  private let api: MIRAAPIClient
+
+  init(api: MIRAAPIClient) {
+    self.api = api
+  }
+
+  func load(scope: AuraCommunityFeedScope, city: String, refresh: Bool = false) async {
+    guard !isLoading || refresh else { return }
+    isLoading = true
+    errorMessage = nil
+    defer { isLoading = false }
+    do {
+      let encodedCity = city.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "New%20York%20City"
+      let loaded: [AuraCommunityPost] = try await api.get(
+        "/posts/community-feed?scope=\(scope.rawValue)&city=\(encodedCity)&limit=40"
+      )
+      posts = loaded.filter { $0.mode != nil }
+    } catch {
+      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "The community feed could not be loaded."
+      if !refresh { posts = [] }
+    }
+  }
+}
+
+/// Aura Home is exclusively the real social/community feed. Receipt, wallet, proof, and
+/// blockchain state stay in their dedicated tabs.
 public struct AuraHomeView: View {
   let api: MIRAAPIClient
-  @ObservedObject private var wallet: AuraWalletStore
-  @ObservedObject private var gateway: AuraWalletGatewayStore
-  @ObservedObject private var proofs: AuraProofLifecycleStore
+  let currentUser: MIRAUser
 
-  public init(
-    api: MIRAAPIClient,
-    wallet: AuraWalletStore,
-    gateway: AuraWalletGatewayStore,
-    proofs: AuraProofLifecycleStore
-  ) {
+  @StateObject private var model: AuraCommunityFeedModel
+  @State private var scope: AuraCommunityFeedScope = .city
+  @State private var isCreatingPost = false
+
+  private let cityName = "New York City"
+
+  public init(api: MIRAAPIClient, currentUser: MIRAUser) {
     self.api = api
-    self.wallet = wallet
-    self.gateway = gateway
-    self.proofs = proofs
+    self.currentUser = currentUser
+    _model = StateObject(wrappedValue: AuraCommunityFeedModel(api: api))
   }
 
   public var body: some View {
     NavigationStack {
-      ScrollView {
-        LazyVStack(spacing: 16) {
-          networkStrip
-          proofFeed
-          walletFeed
+      VStack(spacing: 0) {
+        feedHeader
+        ScrollView {
+          LazyVStack(spacing: 14) {
+            feedContent
+          }
+          .padding(.horizontal, 16)
+          .padding(.top, 14)
+          .padding(.bottom, 30)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 28)
+        .refreshable { await model.load(scope: scope, city: cityName, refresh: true) }
       }
       .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-      .navigationTitle("Aura")
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button { refresh() } label: {
-            Image(systemName: "arrow.clockwise")
-          }
-          .accessibilityLabel("Refresh Aura")
+      .navigationBarHidden(true)
+      .task(id: scope) {
+        await model.load(scope: scope, city: cityName, refresh: true)
+      }
+      .fullScreenCover(isPresented: $isCreatingPost) {
+        AuraCreateCommunityPostView(api: api, currentUser: currentUser) {
+          isCreatingPost = false
+          Task { await model.load(scope: scope, city: cityName, refresh: true) }
         }
       }
-      .refreshable { await refreshData() }
-      .task { await refreshData() }
     }
   }
 
-  private var networkStrip: some View {
-    HStack(spacing: 12) {
-      ZStack {
-        Circle().fill(gateway.isConnected ? MIRATheme.Color.forestSoft : MIRATheme.Color.surfaceSoft)
-        Image(systemName: gateway.isConnected ? "network.badge.shield.half.filled" : "network.slash")
-          .font(.headline)
-          .foregroundStyle(gateway.isConnected ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+  private var feedHeader: some View {
+    HStack(alignment: .bottom, spacing: 24) {
+      feedScopeButton(.friends, title: "Friends")
+      feedScopeButton(.city, title: cityName)
+      Spacer(minLength: 8)
+      Button {
+        isCreatingPost = true
+      } label: {
+        Image(systemName: "person.crop.circle.badge.plus")
+          .font(.title2.weight(.semibold))
       }
-      .frame(width: 42, height: 42)
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text(gateway.isConnected ? "Aura Devnet connected" : "Aura Devnet unavailable")
-          .font(.headline)
-        if let status = gateway.chainStatus {
-          Text("Block \(status.canonicalHeight) · \(status.connectedPeers) peers")
-            .font(.subheadline)
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        } else {
-          Text(gateway.errorMessage ?? "Validated chain state has not loaded.")
-            .font(.subheadline)
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-            .lineLimit(2)
-        }
-      }
-      Spacer()
+      .buttonStyle(.bordered)
+      .buttonBorderShape(.circle)
+      .tint(MIRATheme.Color.textPrimary)
+      .accessibilityLabel("Create post")
     }
-    .padding(14)
+    .padding(.horizontal, 18)
+    .padding(.top, 12)
+    .padding(.bottom, 8)
     .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.divider, lineWidth: 1)
-    }
   }
 
-  @ViewBuilder
-  private var proofFeed: some View {
-    AuraSectionHeader(title: "Verified activity")
-    if proofs.records.isEmpty {
-      MIRAEmptyState(
-        title: "No verified documents yet",
-        message: "Scan a receipt or invoice. Aura will recognize its type and show a ticket only after the real provider returns a result.",
-        systemImage: "ticket"
-      )
-      .padding(.vertical, 18)
-      .miraCardSurface(cornerRadius: 18)
-    } else {
-      ForEach(proofs.records.prefix(5)) { record in
-        AuraDocumentTicketCard(
-          merchant: record.merchantName,
-          documentType: record.documentType ?? "receipt",
-          date: record.documentDate,
-          currency: record.currency,
-          total: record.total,
-          status: proofStatus(record),
-          statusSystemImage: proofStatusIcon(record),
-          statusColor: record.isConfirmed ? MIRATheme.Color.forest : MIRATheme.Color.auraViolet,
-          detail: record.blockHeight.map { "Block #\($0)" } ?? shortIdentifier(record.proofId)
-        )
+  private func feedScopeButton(_ value: AuraCommunityFeedScope, title: String) -> some View {
+    Button {
+      withAnimation(.easeInOut(duration: 0.18)) { scope = value }
+    } label: {
+      VStack(spacing: 7) {
+        Text(title)
+          .font(.title3)
+          .fontWeight(scope == value ? .bold : .semibold)
+          .foregroundStyle(scope == value ? MIRATheme.Color.auraViolet : MIRATheme.Color.textSecondary)
+        Rectangle()
+          .fill(scope == value ? MIRATheme.Color.auraViolet : Color.clear)
+          .frame(height: 3)
       }
     }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(scope == value ? AccessibilityTraits.isSelected : [])
   }
 
   @ViewBuilder
-  private var walletFeed: some View {
-    AuraSectionHeader(title: "Wallet activity")
-    if wallet.state != .unlocked {
+  private var feedContent: some View {
+    if model.isLoading && model.posts.isEmpty {
+      ForEach(0..<5, id: \.self) { _ in
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .fill(MIRATheme.Color.surfaceSoft)
+          .frame(height: 118)
+          .physicalAuraCard()
+          .redacted(reason: .placeholder)
+      }
+    } else if let error = model.errorMessage, model.posts.isEmpty {
       MIRAEmptyState(
-        title: wallet.state == .noWallet ? "No wallet on this iPhone" : "Wallet locked",
-        message: "Open Wallet to create, restore, or unlock the local Rust wallet.",
-        systemImage: "wallet.pass"
+        title: "Community feed unavailable",
+        message: error,
+        systemImage: "person.3.sequence"
       )
-      .padding(.vertical, 18)
-      .miraCardSurface(cornerRadius: 18)
-    } else if let history = gateway.history, !history.transactions.isEmpty {
-      VStack(spacing: 0) {
-        ForEach(history.transactions.prefix(4)) { transaction in
-          transactionRow(transaction)
-          if transaction.id != history.transactions.prefix(4).last?.id { Divider() }
+      .padding(.vertical, 34)
+      .physicalAuraCard()
+    } else if model.posts.isEmpty {
+      MIRAEmptyState(
+        title: scope == .friends ? "No posts from friends yet" : "No posts in \(cityName) yet",
+        message: "Share something with your community or organize a meetup.",
+        systemImage: "bubble.left.and.bubble.right"
+      )
+      .padding(.vertical, 34)
+      .physicalAuraCard()
+    } else {
+      ForEach(model.posts) { post in
+        if post.mode == .meetup {
+          NavigationLink {
+            AuraMeetupDetailView(api: api, post: post)
+          } label: {
+            AuraMeetupFeedCard(post: post)
+          }
+          .buttonStyle(.plain)
+        } else {
+          NavigationLink {
+            AuraSmallPostDetailLoaderView(api: api, postID: post.id)
+          } label: {
+            AuraSmallPostFeedCard(post: post)
+          }
+          .buttonStyle(.plain)
         }
       }
-      .padding(.horizontal, 14)
-      .background(MIRATheme.Color.surface)
-      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
-          .stroke(MIRATheme.Color.divider, lineWidth: 1)
-      }
-    } else {
-      MIRAEmptyState(
-        title: gateway.isConnected ? "No blockchain activity" : "Wallet network unavailable",
-        message: gateway.isConnected
-          ? "Real pending and confirmed AUR transfers will appear here."
-          : "Aura cannot show balances or transactions until validated gateway state is available.",
-        systemImage: gateway.isConnected ? "clock.arrow.circlepath" : "network.slash"
-      )
-      .padding(.vertical, 18)
-      .miraCardSurface(cornerRadius: 18)
     }
-  }
-
-  private func transactionRow(_ transaction: AuraGatewayTransaction) -> some View {
-    HStack(spacing: 12) {
-      Image(systemName: transaction.direction == "incoming" ? "arrow.down" : "arrow.up")
-        .font(.headline)
-        .foregroundStyle(transaction.direction == "incoming" ? MIRATheme.Color.forest : MIRATheme.Color.auraViolet)
-        .frame(width: 36, height: 36)
-        .background(MIRATheme.Color.surfaceSoft, in: Circle())
-      VStack(alignment: .leading, spacing: 3) {
-        Text(transaction.direction == "incoming" ? "Received AUR" : "Sent AUR")
-          .font(.subheadline)
-          .fontWeight(.semibold)
-        Text(transaction.state.capitalized)
-          .font(.caption)
-          .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-      Spacer()
-      Text(transactionAmount(transaction))
-        .font(.subheadline)
-        .fontWeight(.bold)
-        .foregroundStyle(transaction.direction == "incoming" ? MIRATheme.Color.forest : MIRATheme.Color.textPrimary)
-    }
-    .padding(.vertical, 12)
-  }
-
-  private func transactionAmount(_ transaction: AuraGatewayTransaction) -> String {
-    let amount = AuraAmountCodec.aur(fromAtoms: transaction.amountAtoms) ?? "Unavailable"
-    let sign = transaction.direction == "incoming" ? "+" : "−"
-    return "\(sign)\(amount) AUR"
-  }
-
-  private func proofStatus(_ record: AuraPrivateProofRecord) -> String {
-    switch record.state {
-    case "confirmed": return "Verified · Confirmed"
-    case "included": return "Verified · Included"
-    case "pending": return "Verified · Pending"
-    default: return "Proof unavailable"
-    }
-  }
-
-  private func proofStatusIcon(_ record: AuraPrivateProofRecord) -> String {
-    switch record.state {
-    case "confirmed": return "checkmark.seal.fill"
-    case "included": return "cube.fill"
-    case "pending": return "clock.fill"
-    default: return "exclamationmark.triangle"
-    }
-  }
-
-  private func shortIdentifier(_ value: String) -> String {
-    guard value.count > 12 else { return value }
-    return "\(value.prefix(6))…\(value.suffix(4))"
-  }
-
-  private func refresh() {
-    Task { await refreshData() }
-  }
-
-  private func refreshData() async {
-    if let identity = wallet.identity {
-      await gateway.refresh(identity: identity)
-    }
-    await proofs.refreshAll()
   }
 }

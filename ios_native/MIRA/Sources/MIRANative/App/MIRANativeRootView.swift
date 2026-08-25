@@ -232,12 +232,13 @@ public struct MIRANativeRootView: View {
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
       lazyTab(.home) {
-        AuraHomeView(
-          api: api,
-          wallet: auraWallet,
-          gateway: auraGateway,
-          proofs: auraProofs
-        )
+        if let currentUser = authSession.user {
+          AuraHomeView(api: api, currentUser: currentUser)
+        } else {
+          Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MIRATheme.Color.appBackground)
+        }
       }
         .tag(MIRATab.home)
         .tabItem { Label("Home", systemImage: "house.fill") }
