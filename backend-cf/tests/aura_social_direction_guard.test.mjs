@@ -30,15 +30,18 @@ test('Aura community feed admits text-only Small Posts and only the two adopted 
   assert.match(renderability, /!!\(title \|\| content \|\| supabaseAppPostHasRenderablePhotoMedia\(row\)\)/);
   assert.doesNotMatch(renderability, /receipt|invoice|proof/i);
 
-  const readPath = section(worker, 'async function supabaseReadVisiblePosts', 'async function augmentAuraMeetupState');
+  const readPath = section(worker, 'function supabaseCandidatePostRows', 'async function augmentAuraMeetupState');
   assert.match(readPath, /supabaseAppPostHasRenderablePhotoMedia\(row\) \|\| auraCommunityPostHasRenderableContent\(row\)/);
   assert.doesNotMatch(readPath, /feedPhotoPostsOnly\(mapped\)|feedPhotoPostsOnly\(engaged\)/);
 });
 
-test('Friends and city feeds filter real persisted posts before applying a bounded page offset', async () => {
-  const worker = await read('backend-cf/src/index.ts');
-  const cityHelpers = section(worker, 'function normalizeAuraCommunityCity', 'function feedPhotoPostWhere');
-  const readPath = section(worker, 'async function supabaseReadVisiblePosts', 'async function augmentAuraMeetupState');
+test('Friends and city feeds use stable cursor pages while preserving the legacy array route', async () => {
+  const [worker, paginationModule] = await Promise.all([
+    read('backend-cf/src/index.ts'),
+    read('backend-cf/src/aura-community-pagination.js'),
+  ]);
+  const cityHelpers = `${paginationModule}\n${section(worker, 'function auraCommunityPostCity', 'function feedPhotoPostWhere')}`;
+  const readPath = section(worker, 'function supabaseCandidatePostRows', 'async function augmentAuraMeetupState');
   const route = section(worker, "api.get('/posts/community-feed'", "api.get('/posts/community-mine'");
 
   assert.match(route, /authMiddleware/);
@@ -46,22 +49,29 @@ test('Friends and city feeds filter real persisted posts before applying a bound
   assert.match(route, /socialScope: scope/);
   assert.match(route, /cache-control', 'no-store'/);
 
-  assert.match(readPath, /const socialCandidateLimit = Math\.min\(300, Math\.max\(100, \(limit \+ offset\) \* 5\)\)/);
   assert.match(readPath, /if \(options\.socialScope \|\| options\.communityOnly\) \{\s*filters\.post_type = postgrestInFilter\(Array\.from\(AURA_COMMUNITY_POST_TYPES\)\)/s);
-  assert.match(readPath, /offset: applyOffsetAfterFiltering \? 0 : offset/);
-  assert.match(readPath, /slice\(applyOffsetAfterFiltering \? offset : 0\)/);
   assert.match(readPath, /user_id: postgrestInFilter\(viewerAliases\)/);
   assert.match(readPath, /const viewerSet = new Set\(viewerAliases\)/);
+  assert.match(readPath, /collectAuraCommunityCursorPage<any, any>/);
+  assert.match(readPath, /order: 'created_at\.desc,id\.desc'/);
+  assert.match(readPath, /auraCommunityFeedCursorFilter\(position\)/);
+  assert.match(readPath, /next_cursor:/);
 
   const friendsFilter = section(readPath, "if (options.socialScope === 'friends')", "if (options.socialScope === 'city')");
   assert.match(friendsFilter, /connectedIds\.has\(authorId\)/);
   assert.match(friendsFilter, /followingIds\.has\(authorId\)/);
   assert.doesNotMatch(friendsFilter, /connectedOrFollowingIds\.has\(authorId\)/);
 
-  assert.match(cityHelpers, /normalized === 'nyc' \|\| normalized === 'new york' \|\| normalized === 'new york city'/);
+  assert.match(cityHelpers, /newYorkCityAliases/);
+  assert.match(cityHelpers, /'newyorkny'/);
+  assert.match(cityHelpers, /'brooklynny'/);
   assert.match(cityHelpers, /\(place as any\)\.city \|\| \(raw as any\)\.display_city \|\| \(metadata as any\)\.display_city/);
   assert.match(cityHelpers, /author\?\.city \|\| \(authorProfile as any\)\.city \|\| \(authorMetadata as any\)\.city/);
   assert.match(readPath, /auraCommunityPostCity\(row, author\) === requestedCity/);
+  assert.match(route, /pagination === 'cursor'/);
+  assert.match(route, /items: page\.items\.map/);
+  assert.match(route, /next_cursor: page\.next_cursor/);
+  assert.match(route, /has_more: page\.has_more/);
   assert.match(route, /event: 'aura_community_feed_read'/);
   assert.match(route, /returned_count: rows\.length/);
 

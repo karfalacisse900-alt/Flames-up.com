@@ -1,6 +1,35 @@
 import Foundation
 import SwiftUI
 
+struct AuraCommunityFeedPage: Decodable {
+  let items: [AuraCommunityPost]
+  let nextCursor: String?
+  let hasMore: Bool?
+  let usesCursorPagination: Bool
+
+  private struct CursorEnvelope: Decodable {
+    let items: [AuraCommunityPost]
+    let nextCursor: String?
+    let hasMore: Bool
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if let envelope = try? container.decode(CursorEnvelope.self) {
+      items = envelope.items
+      nextCursor = envelope.nextCursor
+      hasMore = envelope.hasMore
+      usesCursorPagination = true
+      return
+    }
+
+    items = try container.decode([AuraCommunityPost].self)
+    nextCursor = nil
+    hasMore = nil
+    usesCursorPagination = false
+  }
+}
+
 @MainActor
 final class AuraCommunityFeedModel: ObservableObject {
   @Published private(set) var posts: [AuraCommunityPost] = []
@@ -11,6 +40,13 @@ final class AuraCommunityFeedModel: ObservableObject {
 
   private let api: MIRAAPIClient
   private let pageSize: Int
+  private enum PaginationMode {
+    case cursor
+    case legacyOffset
+  }
+
+  private var paginationMode = PaginationMode.cursor
+  private var nextCursor: String?
   private var nextOffset = 0
   private var activeQuery = ""
   private var requestGeneration = 0
@@ -28,6 +64,8 @@ final class AuraCommunityFeedModel: ObservableObject {
     requestGeneration += 1
     let generation = requestGeneration
     activeQuery = query
+    paginationMode = .cursor
+    nextCursor = nil
     nextOffset = 0
     hasMore = true
     isLoading = true
@@ -36,11 +74,16 @@ final class AuraCommunityFeedModel: ObservableObject {
     if queryChanged { posts = [] }
 
     do {
-      let loaded = try await fetchPage(scope: scope, city: city, offset: 0)
+      let page = try await fetchPage(
+        scope: scope,
+        city: city,
+        mode: .cursor,
+        cursor: nil,
+        offset: 0
+      )
       guard generation == requestGeneration, query == activeQuery else { return }
-      posts = uniquePosts(loaded.filter { $0.mode != nil })
-      nextOffset = loaded.count
-      hasMore = loaded.count == pageSize
+      posts = uniquePosts(page.items.filter { $0.mode != nil })
+      applyPaginationState(page, offset: 0)
     } catch {
       guard generation == requestGeneration, query == activeQuery else { return }
       errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "The community feed could not be loaded."
@@ -55,7 +98,15 @@ final class AuraCommunityFeedModel: ObservableObject {
     guard query == activeQuery, !isLoading, !isLoadingMore, hasMore else { return }
 
     let generation = requestGeneration
+    let mode = paginationMode
+    let cursor = nextCursor
     let offset = nextOffset
+    if mode == .cursor, cursor == nil {
+      // A cursor envelope that advertises more data must also provide the continuation token.
+      // Stop safely instead of repeating page one forever if the server violates that contract.
+      hasMore = false
+      return
+    }
     isLoadingMore = true
     errorMessage = nil
     defer {
@@ -63,28 +114,64 @@ final class AuraCommunityFeedModel: ObservableObject {
     }
 
     do {
-      let loaded = try await fetchPage(scope: scope, city: city, offset: offset)
+      let page = try await fetchPage(
+        scope: scope,
+        city: city,
+        mode: mode,
+        cursor: cursor,
+        offset: offset
+      )
       guard generation == requestGeneration, query == activeQuery else { return }
-      posts = mergeUnique(existing: posts, incoming: loaded.filter { $0.mode != nil })
-      nextOffset = offset + loaded.count
-      hasMore = loaded.count == pageSize
+      posts = mergeUnique(existing: posts, incoming: page.items.filter { $0.mode != nil })
+      applyPaginationState(page, offset: offset)
     } catch {
       guard generation == requestGeneration, query == activeQuery else { return }
       errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "More community posts could not be loaded."
     }
   }
 
-  private func fetchPage(scope: AuraCommunityFeedScope, city: String, offset: Int) async throws -> [AuraCommunityPost] {
+  private func fetchPage(
+    scope: AuraCommunityFeedScope,
+    city: String,
+    mode: PaginationMode,
+    cursor: String?,
+    offset: Int
+  ) async throws -> AuraCommunityFeedPage {
     var components = URLComponents()
     components.path = "/posts/community-feed"
     components.queryItems = [
       URLQueryItem(name: "scope", value: scope.rawValue),
       URLQueryItem(name: "city", value: city),
-      URLQueryItem(name: "skip", value: String(offset)),
       URLQueryItem(name: "limit", value: String(pageSize))
     ]
+    switch mode {
+    case .cursor:
+      components.queryItems?.append(URLQueryItem(name: "pagination", value: "cursor"))
+      if let cursor {
+        components.queryItems?.append(URLQueryItem(name: "cursor", value: cursor))
+      }
+    case .legacyOffset:
+      components.queryItems?.append(URLQueryItem(name: "skip", value: String(offset)))
+    }
     guard let path = components.string else { throw MIRAAPIError.badURL }
     return try await api.get(path)
+  }
+
+  private func applyPaginationState(_ page: AuraCommunityFeedPage, offset: Int) {
+    nextOffset = offset + page.items.count
+    if page.usesCursorPagination {
+      paginationMode = .cursor
+      if let cursor = page.nextCursor?.trimmingCharacters(in: .whitespacesAndNewlines), !cursor.isEmpty {
+        nextCursor = cursor
+      } else {
+        nextCursor = nil
+      }
+      hasMore = page.hasMore ?? false
+    } else {
+      paginationMode = .legacyOffset
+      nextCursor = nil
+      hasMore = page.items.count == pageSize
+    }
   }
 
   private func uniquePosts(_ values: [AuraCommunityPost]) -> [AuraCommunityPost] {

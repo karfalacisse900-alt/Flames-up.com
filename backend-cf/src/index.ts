@@ -4,6 +4,15 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import { createAuraRoutes } from './aura';
+import {
+  auraCommunityFeedCursorFilter,
+  auraCommunityFeedRowCursor,
+  collectAuraCommunityCursorPage,
+  decodeAuraCommunityFeedCursor,
+  encodeAuraCommunityFeedCursor,
+  normalizeAuraCommunityCity,
+  type AuraCommunityFeedCursor,
+} from './aura-community-pagination.js';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -5352,15 +5361,6 @@ function auraCommunityMetadataFromRow(row: any): any {
   return parseJsonObject((metadata as any).community);
 }
 
-function normalizeAuraCommunityCity(value: unknown): string {
-  const normalized = cleanText(value, 100)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-  if (normalized === 'nyc' || normalized === 'new york' || normalized === 'new york city') return 'new york city';
-  return normalized;
-}
-
 function auraCommunityPostCity(row: any, author?: any): string {
   const metadata = parseJsonObject(row?.metadata);
   const raw = parseJsonObject((metadata as any).raw);
@@ -7707,62 +7707,9 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   };
 }
 
-async function supabaseReadVisiblePosts(c: any, viewerId: string, options: SupabasePostReadOptions = {}): Promise<any[]> {
-  const limit = clampNumber(options.limit || 20, 1, 100, 20);
-  const offset = Math.max(0, Math.round(Number(options.offset || 0)));
-  const filters: Record<string, string> = { status: postgrestEqFilter('active') };
-  const postId = publicId(options.postId, 120);
-  const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
-  const ownerId = publicId(options.ownerId, 120);
-  const search = postgrestSearchTerm(options.search || '');
-
-  if (options.socialScope || options.communityOnly) {
-    filters.post_type = postgrestInFilter(Array.from(AURA_COMMUNITY_POST_TYPES));
-  }
-
-  if (postIds.length) {
-    const uuidPostIds = postIds.map((value) => isUuidText(value)).filter((value): value is string => !!value);
-    const orParts = [`legacy_post_id.${postgrestInFilter(postIds)}`];
-    if (uuidPostIds.length) orParts.push(`id.${postgrestInFilter(uuidPostIds)}`);
-    filters.or = `(${orParts.join(',')})`;
-  } else if (postId) {
-    const uuidPostId = isUuidText(postId);
-    filters.or = uuidPostId ? `(legacy_post_id.eq.${postId},id.eq.${postId})` : `(legacy_post_id.eq.${postId})`;
-  } else if (ownerId) {
-    const ownerUuid = isUuidText(ownerId);
-    filters.or = ownerUuid ? `(app_user_id.eq.${ownerId},user_id.eq.${ownerId})` : `(app_user_id.eq.${ownerId})`;
-  } else if (search) {
-    filters.or = `(content.ilike.*${search}*,title.ilike.*${search}*,category.ilike.*${search}*,location.ilike.*${search}*)`;
-  }
-
-  const applyOffsetAfterFiltering = !!(
-    postIds.length
-    || postId
-    || ownerId
-    || search
-    || (options.category && options.category !== 'all')
-    || options.socialScope
-  );
-  const socialCandidateLimit = Math.min(300, Math.max(100, (limit + offset) * 5));
-  const rowLimit = postIds.length
-    ? postIds.length
-    : postId
-      ? 1
-      : options.socialScope
-        ? socialCandidateLimit
-        : Math.min(300, Math.max(limit + offset + 20, options.category && options.category !== 'all' ? (limit + offset) * 4 : limit + offset));
-  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
-    select: SUPABASE_APP_POST_SELECT,
-    filters,
-    order: options.order === 'trending'
-      ? 'likes_count.desc.nullslast,legacy_created_at.desc.nullslast,created_at.desc'
-      : 'legacy_created_at.desc.nullslast,created_at.desc',
-    limit: rowLimit,
-    offset: applyOffsetAfterFiltering ? 0 : offset,
-  });
-
+function supabaseCandidatePostRows(rows: any[], options: SupabasePostReadOptions): any[] {
   const isDiscoverQuery = options.category !== undefined;
-  const candidateRows = rows.filter((row) => {
+  return rows.filter((row) => {
     const hasRenderableContent = isDiscoverQuery
       ? supabaseAppPostHasRenderablePhotoMedia(row)
       : supabaseAppPostHasRenderablePhotoMedia(row) || auraCommunityPostHasRenderableContent(row);
@@ -7771,6 +7718,24 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     const metadata = parseJsonObject(row?.metadata);
     return !cleanText((metadata as any).discover_blocked_at, 80);
   });
+}
+
+type SupabaseVisiblePostProjection = {
+  sourceRows: any[];
+  posts: any[];
+};
+
+async function supabaseProjectVisiblePostRows(
+  c: any,
+  viewerId: string,
+  candidateRows: any[],
+  options: SupabasePostReadOptions,
+  visibleOffset: number,
+  visibleLimit: number,
+): Promise<SupabaseVisiblePostProjection> {
+  if (!candidateRows.length || visibleLimit <= 0) return { sourceRows: [], posts: [] };
+  const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
+  const ownerId = publicId(options.ownerId, 120);
   const authorIds = candidateRows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
   const [viewerAliases, blockedIds, authorMap, commentCounts] = await Promise.all([
     supabaseRelatedInteractionUserIds(c, viewerId),
@@ -7836,9 +7801,16 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
       return 0;
     });
   }
+  if (postIds.length) {
+    rowsVisibleToViewer.sort((a, b) => {
+      const aId = publicId(a?.legacy_post_id || a?.id, 120);
+      const bId = publicId(b?.legacy_post_id || b?.id, 120);
+      return postIds.indexOf(aId) - postIds.indexOf(bId);
+    });
+  }
   const visibleRows = rowsVisibleToViewer
-    .slice(applyOffsetAfterFiltering ? offset : 0)
-    .slice(0, limit);
+    .slice(Math.max(0, visibleOffset))
+    .slice(0, Math.max(0, visibleLimit));
 
   const mapped = visibleRows.map((row) => {
     const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '');
@@ -7853,11 +7825,135 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
           : 'none';
     return supabaseAppPostToLegacy(row, author, connectedOrFollowingIds.has(authorId), commentCounts.get(id) || Number(row?.comments_count || 0), connectionStatus);
   });
-  const ordered = postIds.length
-    ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
-    : mapped;
-  const engaged = await overlaySupabaseViewerEngagement(c, ordered, viewerId);
-  return augmentAuraMeetupState(c, visibleRows, engaged, viewerSet);
+  const engaged = await overlaySupabaseViewerEngagement(c, mapped, viewerId);
+  const posts = await augmentAuraMeetupState(c, visibleRows, engaged, viewerSet);
+  return { sourceRows: visibleRows, posts };
+}
+
+async function supabaseReadVisiblePosts(c: any, viewerId: string, options: SupabasePostReadOptions = {}): Promise<any[]> {
+  const limit = clampNumber(options.limit || 20, 1, 100, 20);
+  const offset = Math.max(0, Math.round(Number(options.offset || 0)));
+  const filters: Record<string, string> = { status: postgrestEqFilter('active') };
+  const postId = publicId(options.postId, 120);
+  const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
+  const ownerId = publicId(options.ownerId, 120);
+  const search = postgrestSearchTerm(options.search || '');
+
+  if (options.socialScope || options.communityOnly) {
+    filters.post_type = postgrestInFilter(Array.from(AURA_COMMUNITY_POST_TYPES));
+  }
+
+  if (postIds.length) {
+    const uuidPostIds = postIds.map((value) => isUuidText(value)).filter((value): value is string => !!value);
+    const orParts = [`legacy_post_id.${postgrestInFilter(postIds)}`];
+    if (uuidPostIds.length) orParts.push(`id.${postgrestInFilter(uuidPostIds)}`);
+    filters.or = `(${orParts.join(',')})`;
+  } else if (postId) {
+    const uuidPostId = isUuidText(postId);
+    filters.or = uuidPostId ? `(legacy_post_id.eq.${postId},id.eq.${postId})` : `(legacy_post_id.eq.${postId})`;
+  } else if (ownerId) {
+    const ownerUuid = isUuidText(ownerId);
+    filters.or = ownerUuid ? `(app_user_id.eq.${ownerId},user_id.eq.${ownerId})` : `(app_user_id.eq.${ownerId})`;
+  } else if (search) {
+    filters.or = `(content.ilike.*${search}*,title.ilike.*${search}*,category.ilike.*${search}*,location.ilike.*${search}*)`;
+  }
+
+  const applyOffsetAfterFiltering = !!(
+    postIds.length
+    || postId
+    || ownerId
+    || search
+    || (options.category && options.category !== 'all')
+    || options.socialScope
+  );
+  const socialCandidateLimit = Math.min(300, Math.max(100, (limit + offset) * 5));
+  const rowLimit = postIds.length
+    ? postIds.length
+    : postId
+      ? 1
+      : options.socialScope
+        ? socialCandidateLimit
+        : Math.min(300, Math.max(limit + offset + 20, options.category && options.category !== 'all' ? (limit + offset) * 4 : limit + offset));
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: SUPABASE_APP_POST_SELECT,
+    filters,
+    order: options.order === 'trending'
+      ? 'likes_count.desc.nullslast,legacy_created_at.desc.nullslast,created_at.desc'
+      : 'legacy_created_at.desc.nullslast,created_at.desc',
+    limit: rowLimit,
+    offset: applyOffsetAfterFiltering ? 0 : offset,
+  });
+  const candidateRows = supabaseCandidatePostRows(rows, options);
+  const projection = await supabaseProjectVisiblePostRows(
+    c,
+    viewerId,
+    candidateRows,
+    options,
+    applyOffsetAfterFiltering ? offset : 0,
+    limit,
+  );
+  return projection.posts;
+}
+
+type AuraCommunityCursorPage = {
+  items: any[];
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
+async function supabaseReadVisibleCommunityCursorPage(
+  c: any,
+  viewerId: string,
+  options: SupabasePostReadOptions,
+  cursor: AuraCommunityFeedCursor | null,
+): Promise<AuraCommunityCursorPage> {
+  const limit = clampNumber(options.limit || 30, 1, 50, 30);
+  const result = await collectAuraCommunityCursorPage<any, any>({
+    limit,
+    chunkSize: 100,
+    cursor,
+    rowCursor: auraCommunityFeedRowCursor,
+    readChunk: async (position, chunkLimit) => {
+      const filters: Record<string, string> = {
+        status: postgrestEqFilter('active'),
+        post_type: postgrestInFilter(Array.from(AURA_COMMUNITY_POST_TYPES)),
+        created_at: 'not.is.null',
+      };
+      if (position) {
+        const cursorFilter = auraCommunityFeedCursorFilter(position);
+        if (!cursorFilter) throw new Error('AURA_COMMUNITY_CURSOR_INVALID');
+        filters.or = cursorFilter;
+      }
+      return supabaseAdminQueryRows(c, 'app_posts', {
+        select: SUPABASE_APP_POST_SELECT,
+        filters,
+        order: 'created_at.desc,id.desc',
+        limit: chunkLimit,
+      });
+    },
+    projectVisible: async (rows) => {
+      const candidates = supabaseCandidatePostRows(rows, options);
+      const projection = await supabaseProjectVisiblePostRows(
+        c,
+        viewerId,
+        candidates,
+        options,
+        0,
+        candidates.length,
+      );
+      return projection.posts.map((item, index) => ({
+        sourceId: String(projection.sourceRows[index]?.id || '').toLowerCase(),
+        item,
+      }));
+    },
+  });
+  return {
+    items: result.items,
+    next_cursor: result.hasMore && result.nextCursor
+      ? encodeAuraCommunityFeedCursor(result.nextCursor)
+      : null,
+    has_more: result.hasMore,
+  };
 }
 
 async function augmentAuraMeetupState(c: any, sourceRows: any[], posts: any[], viewerIds: Set<string>): Promise<any[]> {
@@ -15542,9 +15638,41 @@ api.get('/posts/community-feed', authMiddleware, async (c) => {
   const scope = cleanText(c.req.query('scope') || 'city', 20).toLowerCase();
   if (scope !== 'friends' && scope !== 'city') return c.json({ detail: 'Feed scope must be friends or city.' }, 400);
   const city = cleanText(c.req.query('city') || 'New York City', 100);
+  const pagination = cleanText(c.req.query('pagination') || 'legacy', 20).toLowerCase();
+  if (pagination !== 'legacy' && pagination !== 'cursor') {
+    return c.json({ detail: 'Feed pagination must be legacy or cursor.' }, 400);
+  }
+  const encodedCursor = cleanText(c.req.query('cursor'), 512);
+  const decodedCursor = encodedCursor ? decodeAuraCommunityFeedCursor(encodedCursor) : null;
+  if (pagination === 'cursor' && encodedCursor && !decodedCursor) {
+    return c.json({ detail: 'Feed cursor is invalid.', code: 'INVALID_FEED_CURSOR' }, 400);
+  }
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '30', 1, 50, 30);
   try {
+    if (pagination === 'cursor') {
+      const page = await supabaseReadVisibleCommunityCursorPage(c, userId, {
+        socialScope: scope,
+        city,
+        limit,
+        order: 'newest',
+      }, decodedCursor);
+      console.log(JSON.stringify({
+        event: 'aura_community_feed_cursor_read',
+        scope,
+        city: scope === 'city' ? normalizeAuraCommunityCity(city) : '',
+        limit,
+        returned_count: page.items.length,
+        has_more: page.has_more,
+      }));
+      const response = c.json({
+        items: page.items.map((post) => feedPostPayload(post, [], c.env)),
+        next_cursor: page.next_cursor,
+        has_more: page.has_more,
+      });
+      response.headers.set('cache-control', 'no-store');
+      return response;
+    }
     const rows = await supabaseReadVisiblePosts(c, userId, {
       socialScope: scope,
       city,
