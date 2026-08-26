@@ -62,9 +62,9 @@ test('Aura Mobile auto-recognizes document type and keeps capture alive across s
   ]);
   assert.match(scanView, /if phase == \.background/);
   assert.match(walletView, /if phase == \.background, wallet\.state == \.unlocked/);
-  assert.match(scanView, /Automatic document recognition/);
+  assert.match(scanView, /Automatic recognition/);
   assert.match(scanView, /Aura automatically recognizes receipts and invoices\./);
-  assert.match(scanView, /Recognize & Verify/);
+  assert.match(scanView, /Verify Document/);
   assert.doesNotMatch(scanView, /Scan Receipt/);
   assert.doesNotMatch(scanView, /Scan Invoice/);
   assert.doesNotMatch(scanView, /Import Receipt/);
@@ -99,8 +99,9 @@ test('Aura Mobile uses warm neutral chrome, restrained color, and physical cards
   assert.match(walletView, /physicalAuraCard/);
   assert.match(meView, /physicalAuraCard/);
   assert.match(ticketView, /physicalAuraCard/);
-  assert.match(scanView, /Proof pending/);
-  assert.match(scanView, /Proof confirmed/);
+  assert.match(scanView, /Creating Aura proof/);
+  assert.match(scanView, /Aura proof ready/);
+  assert.doesNotMatch(scanView, /Block #|confirmations/);
 });
 
 test('Aura wallet routes proxy only allowlisted operations to an authenticated Rust gateway', async () => {

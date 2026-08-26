@@ -1,8 +1,54 @@
 import SwiftUI
+import UIKit
+
+enum AuraFeedPalette {
+  static let canvas = Color(UIColor { traits in
+    traits.userInterfaceStyle == .dark
+      ? UIColor(red: 0.055, green: 0.057, blue: 0.052, alpha: 1)
+      : UIColor(red: 0.969, green: 0.965, blue: 0.953, alpha: 1)
+  })
+  static let card = Color(UIColor { traits in
+    traits.userInterfaceStyle == .dark
+      ? UIColor(red: 0.090, green: 0.094, blue: 0.083, alpha: 1)
+      : UIColor(red: 0.997, green: 0.995, blue: 0.989, alpha: 1)
+  })
+  static let muted = Color(UIColor { traits in
+    traits.userInterfaceStyle == .dark
+      ? UIColor(red: 0.125, green: 0.130, blue: 0.115, alpha: 1)
+      : UIColor(red: 0.925, green: 0.920, blue: 0.904, alpha: 1)
+  })
+  static let ink = Color(UIColor { traits in
+    traits.userInterfaceStyle == .dark
+      ? UIColor(red: 0.910, green: 0.905, blue: 0.875, alpha: 1)
+      : UIColor(red: 0.090, green: 0.098, blue: 0.078, alpha: 1)
+  })
+  static let shadow = Color.black.opacity(0.84)
+}
 
 public extension View {
   func physicalAuraCard(cornerRadius: CGFloat = 14) -> some View {
     modifier(PhysicalAuraCardModifier(cornerRadius: cornerRadius))
+  }
+
+  func auraFeedCard(cornerRadius: CGFloat = 13, shadowOffset: CGFloat = 5) -> some View {
+    modifier(AuraFeedCardModifier(cornerRadius: cornerRadius, shadowOffset: shadowOffset))
+  }
+}
+
+private struct AuraFeedCardModifier: ViewModifier {
+  let cornerRadius: CGFloat
+  let shadowOffset: CGFloat
+
+  func body(content: Content) -> some View {
+    content
+      .background(AuraFeedPalette.card)
+      .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+          .stroke(AuraFeedPalette.ink, lineWidth: 1.25)
+      }
+      .shadow(color: AuraFeedPalette.shadow, radius: 0, x: 0, y: shadowOffset)
+      .padding(.bottom, shadowOffset)
   }
 }
 
@@ -15,11 +61,17 @@ private struct PhysicalAuraCardModifier: ViewModifier {
       .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.5)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.25)
       }
-      .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 5)
-      .padding(.bottom, 5)
+      .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 3)
+      .padding(.bottom, 3)
   }
+}
+
+private enum AuraSmallPostCardVariant: Equatable {
+  case micro
+  case small
+  case smallWithImage
 }
 
 public struct AuraSmallPostFeedCard: View {
@@ -29,7 +81,56 @@ public struct AuraSmallPostFeedCard: View {
     self.post = post
   }
 
+  @ViewBuilder
   public var body: some View {
+    switch variant {
+    case .micro:
+      microCard
+    case .small, .smallWithImage:
+      smallCard
+    }
+  }
+
+  private var variant: AuraSmallPostCardVariant {
+    if post.primaryImageURL != nil { return .smallWithImage }
+    if post.titleText.isEmpty && post.bodyText.count <= 120 { return .micro }
+    return .small
+  }
+
+  private var microCard: some View {
+    HStack(alignment: .top, spacing: 9) {
+      RemoteAvatar(url: post.userProfileImage, size: 30)
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 6) {
+          Text(post.authorHandle)
+            .font(.system(size: 13.5, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+          categoryPill
+          Spacer(minLength: 3)
+          timestamp
+        }
+
+        Text(post.bodyText)
+          .font(.system(size: 13.5, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(2)
+          .frame(maxWidth: .infinity, alignment: .leading)
+
+        if let commentsCount = post.commentsCount, commentsCount > 0 {
+          Text("\(commentsCount) replies")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+      }
+    }
+    .padding(10)
+    .auraFeedCard(cornerRadius: 12, shadowOffset: 4)
+    .accessibilityElement(children: .combine)
+  }
+
+  private var smallCard: some View {
     HStack(alignment: .top, spacing: 10) {
       RemoteAvatar(url: post.userProfileImage, size: 34)
 
@@ -40,17 +141,9 @@ public struct AuraSmallPostFeedCard: View {
             .fontWeight(.bold)
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineLimit(1)
-          Text((post.communityCategory ?? "update").uppercased())
-            .font(.caption2)
-            .fontWeight(.black)
-            .foregroundStyle(MIRATheme.Color.auraViolet)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(MIRATheme.Color.auraVioletSoft, in: Capsule())
+          categoryPill
           Spacer(minLength: 4)
-          Text(AuraCommunityFormatting.relativeDate(post.createdAt))
-            .font(.caption)
-            .foregroundStyle(MIRATheme.Color.textMuted)
+          timestamp
         }
 
         if !post.titleText.isEmpty {
@@ -68,7 +161,7 @@ public struct AuraSmallPostFeedCard: View {
               .lineLimit(3)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
-          if post.primaryImageURL != nil {
+          if variant == .smallWithImage {
             AuraCommunityPostMedia(post: post, height: 64)
               .frame(width: 70)
               .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -80,7 +173,7 @@ public struct AuraSmallPostFeedCard: View {
         }
 
         if post.communityAllowReplies != false {
-          Label("\(post.commentsCount ?? 0) replies", systemImage: "bubble.left")
+          Label(replyLabel, systemImage: "bubble.left")
             .font(.caption)
             .fontWeight(.semibold)
             .foregroundStyle(MIRATheme.Color.textSecondary)
@@ -92,8 +185,27 @@ public struct AuraSmallPostFeedCard: View {
       }
     }
     .padding(12)
-    .physicalAuraCard(cornerRadius: 15)
+    .auraFeedCard(cornerRadius: 13, shadowOffset: 5)
     .accessibilityElement(children: .combine)
+  }
+
+  private var categoryPill: some View {
+    Text(post.communityCategory?.uppercased() ?? "POST")
+      .font(.system(size: 9.5, weight: .black))
+      .foregroundStyle(MIRATheme.Color.auraViolet)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2.5)
+      .background(MIRATheme.Color.auraVioletSoft, in: Capsule())
+  }
+
+  private var timestamp: some View {
+    Text(AuraCommunityFormatting.relativeDate(post.createdAt))
+      .font(.caption2)
+      .foregroundStyle(MIRATheme.Color.textMuted)
+  }
+
+  private var replyLabel: String {
+    post.commentsCount.map { "\($0) replies" } ?? "Replies"
   }
 }
 
@@ -166,6 +278,11 @@ public struct AuraSmallPostDetailLoaderView: View {
   }
 }
 
+private enum AuraMeetupCardVariant: Equatable {
+  case compactWithImage
+  case compactWithoutImage
+}
+
 public struct AuraMeetupFeedCard: View {
   let post: AuraCommunityPost
 
@@ -174,62 +291,102 @@ public struct AuraMeetupFeedCard: View {
   }
 
   public var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      AuraCommunityPostMedia(post: post, height: 184)
-        .overlay(alignment: .topLeading) {
-          Text("MEETUP")
-            .font(.caption2)
-            .fontWeight(.black)
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background(MIRATheme.Color.paperSurface, in: Capsule())
-            .overlay {
-              Capsule().stroke(MIRATheme.Color.inkBorder, lineWidth: 1)
-            }
-            .padding(10)
+    HStack(alignment: .top, spacing: 11) {
+      meetupThumbnail
+
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
+          meetupPill
+          Spacer(minLength: 4)
+          entryPill
         }
 
-      VStack(alignment: .leading, spacing: 9) {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-          Text(post.titleText)
-            .font(.title3)
-            .fontWeight(.black)
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(2)
-          Spacer()
-          Text(post.entryLabel)
-            .font(.caption)
-            .fontWeight(.black)
-            .foregroundStyle(post.meetupEntryType == "aur" ? MIRATheme.Color.auraViolet : MIRATheme.Color.forest)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(post.meetupEntryType == "aur" ? MIRATheme.Color.auraVioletSoft : MIRATheme.Color.forestSoft, in: Capsule())
-            .overlay {
-              Capsule().stroke(MIRATheme.Color.inkBorder.opacity(0.72), lineWidth: 1)
-            }
-        }
+        Text(post.titleText)
+          .font(.headline)
+          .fontWeight(.black)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(2)
 
         Label(post.locationLine, systemImage: "mappin.and.ellipse")
-          .font(.subheadline)
+          .font(.caption)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
 
-        HStack {
+        HStack(spacing: 5) {
+          Image(systemName: "calendar")
+          Text(AuraCommunityFormatting.meetupDate(post.meetupStartsAt))
+            .lineLimit(1)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+
+        HStack(spacing: 7) {
           AuraStackedProfilePlaceholders(count: max(0, min(post.meetupJoinedCount ?? 0, 4)))
           Text(attendanceLabel)
-            .font(.caption)
+            .font(.caption2)
             .foregroundStyle(MIRATheme.Color.textSecondary)
-          Spacer()
-          Text(AuraCommunityFormatting.meetupDate(post.meetupStartsAt))
-            .font(.caption)
-            .foregroundStyle(MIRATheme.Color.textMuted)
+          Spacer(minLength: 0)
         }
       }
-      .padding(13)
+      .padding(.vertical, 2)
     }
-    .physicalAuraCard(cornerRadius: 16)
+    .padding(10)
+    .auraFeedCard(cornerRadius: 14, shadowOffset: 5)
     .accessibilityElement(children: .combine)
+  }
+
+  @ViewBuilder
+  private var meetupThumbnail: some View {
+    switch variant {
+    case .compactWithImage:
+      AuraCommunityPostMedia(post: post, height: 104)
+        .frame(width: 100)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(AuraFeedPalette.ink.opacity(0.72), lineWidth: 1)
+        }
+    case .compactWithoutImage:
+      ZStack {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(AuraFeedPalette.muted)
+        Image(systemName: "calendar.badge.plus")
+          .font(.system(size: 24, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.auraViolet)
+      }
+      .frame(width: 72, height: 96)
+      .overlay {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(AuraFeedPalette.ink.opacity(0.48), lineWidth: 1)
+      }
+    }
+  }
+
+  private var meetupPill: some View {
+    Text("MEETUP")
+      .font(.system(size: 9.5, weight: .black))
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+      .background(AuraFeedPalette.card, in: Capsule())
+      .overlay { Capsule().stroke(AuraFeedPalette.ink, lineWidth: 1) }
+  }
+
+  private var entryPill: some View {
+    Text(post.entryLabel)
+      .font(.caption2)
+      .fontWeight(.black)
+      .foregroundStyle(post.meetupEntryType == "aur" ? MIRATheme.Color.auraViolet : MIRATheme.Color.forest)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 5)
+      .background(post.meetupEntryType == "aur" ? MIRATheme.Color.auraVioletSoft : MIRATheme.Color.forestSoft, in: Capsule())
+      .overlay {
+        Capsule().stroke(AuraFeedPalette.ink.opacity(0.72), lineWidth: 1)
+      }
+  }
+
+  private var variant: AuraMeetupCardVariant {
+    post.primaryImageURL == nil ? .compactWithoutImage : .compactWithImage
   }
 
   private var attendanceLabel: String {
@@ -242,6 +399,8 @@ struct AuraStackedProfilePlaceholders: View {
   let count: Int
 
   var body: some View {
+    // The feed projection exposes a canonical joined count, not participant identities. These
+    // overlapping silhouettes visualize only that bounded count and never invent names or photos.
     HStack(spacing: -8) {
       ForEach(0..<count, id: \.self) { index in
         Circle()
@@ -252,7 +411,7 @@ struct AuraStackedProfilePlaceholders: View {
               .font(.caption2)
               .foregroundStyle(index.isMultiple(of: 2) ? MIRATheme.Color.auraViolet : MIRATheme.Color.forest)
           }
-          .overlay { Circle().stroke(MIRATheme.Color.paperSurface, lineWidth: 2) }
+          .overlay { Circle().stroke(AuraFeedPalette.card, lineWidth: 2) }
       }
     }
   }
@@ -269,7 +428,7 @@ struct AuraCommunityRemoteImage: View {
         .scaledToFill()
     } placeholder: {
       ZStack {
-        MIRATheme.Color.paperSurfaceMuted
+        AuraFeedPalette.muted
         Image(systemName: "photo")
           .font(.title2)
           .foregroundStyle(MIRATheme.Color.textMuted)

@@ -214,16 +214,16 @@ public struct AuraHomeView: View {
       VStack(spacing: 0) {
         feedHeader
         ScrollView(showsIndicators: false) {
-          LazyVStack(spacing: 12) {
+          LazyVStack(spacing: 9) {
             feedContent
           }
-          .padding(.horizontal, 14)
-          .padding(.top, 12)
+          .padding(.horizontal, 12)
+          .padding(.top, 9)
           .padding(.bottom, 30)
         }
         .refreshable { await model.load(scope: scope, city: cityName, refresh: true) }
       }
-      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
+      .background(AuraFeedPalette.canvas.ignoresSafeArea())
       .navigationBarHidden(true)
       .task(id: scope) {
         await model.load(scope: scope, city: cityName, refresh: true)
@@ -238,6 +238,8 @@ public struct AuraHomeView: View {
   }
 
   private var feedHeader: some View {
+    // Kept outside the ScrollView so the Friends/NYC selector remains sticky while native
+    // material picks up just enough of the real feed imagery at the scroll edge.
     HStack(alignment: .bottom, spacing: 24) {
       feedScopeButton(.friends, title: "Friends")
       feedScopeButton(.city, title: cityName)
@@ -249,9 +251,9 @@ public struct AuraHomeView: View {
           .font(.system(size: 17, weight: .black))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .frame(width: 40, height: 40)
-          .background(MIRATheme.Color.paperSurface, in: Circle())
-          .overlay { Circle().stroke(MIRATheme.Color.inkBorder, lineWidth: 1.4) }
-          .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 3)
+          .background(AuraFeedPalette.card, in: Circle())
+          .overlay { Circle().stroke(AuraFeedPalette.ink, lineWidth: 1.25) }
+          .shadow(color: AuraFeedPalette.shadow, radius: 0, x: 0, y: 3)
           .padding(.bottom, 3)
       }
       .buttonStyle(.plain)
@@ -260,10 +262,11 @@ public struct AuraHomeView: View {
     .padding(.horizontal, 18)
     .padding(.top, 12)
     .padding(.bottom, 8)
-    .background(MIRATheme.Color.paperCanvas)
+    .background(.thinMaterial)
+    .background(AuraFeedPalette.canvas.opacity(0.82))
     .overlay(alignment: .bottom) {
       Rectangle()
-        .fill(MIRATheme.Color.inkBorder.opacity(0.22))
+        .fill(AuraFeedPalette.ink.opacity(0.20))
         .frame(height: 1)
     }
   }
@@ -291,9 +294,9 @@ public struct AuraHomeView: View {
     if model.isLoading && model.posts.isEmpty {
       ForEach(0..<5, id: \.self) { _ in
         RoundedRectangle(cornerRadius: 14, style: .continuous)
-          .fill(MIRATheme.Color.surfaceSoft)
-          .frame(height: 118)
-          .physicalAuraCard()
+          .fill(AuraFeedPalette.muted)
+          .frame(height: 104)
+          .auraFeedCard(cornerRadius: 13, shadowOffset: 4)
           .redacted(reason: .placeholder)
       }
     } else if let error = model.errorMessage, model.posts.isEmpty {
@@ -303,7 +306,7 @@ public struct AuraHomeView: View {
         systemImage: "person.3.sequence"
       )
       .padding(.vertical, 34)
-      .physicalAuraCard()
+      .auraFeedCard(cornerRadius: 13, shadowOffset: 4)
     } else if model.posts.isEmpty {
       MIRAEmptyState(
         title: scope == .friends ? "No posts from friends yet" : "No posts in \(cityName) yet",
@@ -311,7 +314,7 @@ public struct AuraHomeView: View {
         systemImage: "bubble.left.and.bubble.right"
       )
       .padding(.vertical, 34)
-      .physicalAuraCard()
+      .auraFeedCard(cornerRadius: 13, shadowOffset: 4)
     } else {
       ForEach(model.posts) { post in
         feedRow(post)

@@ -344,23 +344,23 @@ private struct AuraTactileTabBar: View {
   ]
 
   var body: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 2) {
       ForEach(Array(items.enumerated()), id: \.offset) { _, item in
         Button {
           selection = item.tab
         } label: {
-          VStack(spacing: 4) {
+          VStack(spacing: 3) {
             Image(systemName: item.systemImage)
-              .font(.system(size: 18, weight: .bold))
+              .font(.system(size: 17, weight: .bold))
             Text(item.title)
-              .font(.system(size: 10.5, weight: .bold))
+              .font(.caption2.weight(.semibold))
           }
           .foregroundStyle(selection == item.tab ? MIRATheme.Color.auraViolet : MIRATheme.Color.textPrimary)
           .frame(maxWidth: .infinity)
-          .padding(.vertical, 7)
+          .padding(.vertical, 6)
           .background(
             selection == item.tab ? MIRATheme.Color.auraVioletSoft : Color.clear,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
           )
         }
         .buttonStyle(.plain)
@@ -368,11 +368,16 @@ private struct AuraTactileTabBar: View {
         .accessibilityAddTraits(selection == item.tab ? .isSelected : [])
       }
     }
-    .padding(6)
-    .physicalAuraCard(cornerRadius: 18)
-    .padding(.horizontal, 12)
-    .padding(.top, 7)
-    .background(MIRATheme.Color.paperCanvas)
+    .padding(.horizontal, 10)
+    .padding(.top, 6)
+    .padding(.bottom, 3)
+    .background(MIRATheme.Color.paperSurface)
+    .overlay(alignment: .top) {
+      Rectangle()
+        .fill(MIRATheme.Color.inkBorder.opacity(0.55))
+        .frame(height: 1)
+    }
+    .shadow(color: MIRATheme.Color.hardShadow.opacity(0.12), radius: 0, x: 0, y: -3)
   }
 }
 

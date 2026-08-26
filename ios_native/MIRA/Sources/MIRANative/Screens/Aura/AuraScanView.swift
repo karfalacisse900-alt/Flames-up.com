@@ -1,5 +1,7 @@
+import PDFKit
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import VisionKit
 
@@ -35,7 +37,7 @@ public struct AuraScanView: View {
   public var body: some View {
     NavigationStack {
       ScrollView {
-        VStack(spacing: 18) {
+        VStack(spacing: 14) {
           if let selectedDocument {
             documentPreview(selectedDocument)
             if let verificationResult {
@@ -102,38 +104,20 @@ public struct AuraScanView: View {
   }
 
   private var captureCard: some View {
-    VStack(spacing: 0) {
+    VStack(spacing: 14) {
+      cameraPreviewStage
+
       VStack(spacing: 14) {
-          Label("Automatic document recognition", systemImage: "viewfinder")
-            .font(.subheadline)
-            .fontWeight(.semibold)
-            .foregroundStyle(MIRATheme.Color.auraViolet)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(MIRATheme.Color.paperSurface, in: Capsule())
-            .overlay { Capsule().stroke(MIRATheme.Color.inkBorder, lineWidth: 1) }
-
-        scanStage
-
         Text("Scan a receipt or invoice")
           .font(.title2)
           .fontWeight(.black)
           .foregroundStyle(MIRATheme.Color.textPrimary)
+
         Text("Aura automatically recognizes receipts and invoices.")
           .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .multilineTextAlignment(.center)
-          .padding(.horizontal, 20)
-      }
-      .padding(.horizontal, 18)
-      .padding(.vertical, 20)
-      .frame(maxWidth: .infinity)
-      .background(MIRATheme.Color.paperSurfaceMuted)
-      .overlay(alignment: .bottom) {
-        Rectangle().fill(MIRATheme.Color.inkBorder).frame(height: 1.25)
-      }
 
-      VStack(spacing: 12) {
         Button {
           beginScan()
         } label: {
@@ -164,46 +148,63 @@ public struct AuraScanView: View {
         }
       }
       .padding(16)
-      .background(MIRATheme.Color.paperSurface)
+      .frame(maxWidth: .infinity)
+      .physicalAuraCard(cornerRadius: 17)
     }
-    .physicalAuraCard(cornerRadius: 20)
   }
 
-  private var scanStage: some View {
+  private var cameraPreviewStage: some View {
     ZStack {
-      RoundedRectangle(cornerRadius: 6, style: .continuous)
-        .fill(MIRATheme.Color.paperSurface)
-        .frame(width: 168, height: 154)
-        .overlay {
-          RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.25)
-        }
-        .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 4)
-        .rotationEffect(.degrees(-1.2))
+      Color.black.opacity(0.88)
 
-      VStack(spacing: 9) {
-        Image(systemName: "receipt")
-          .font(.system(size: 28, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.inkBorder)
-        Text("RECEIPT / INVOICE")
-          .font(.system(size: 10, weight: .black, design: .monospaced))
-          .tracking(0.8)
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        VStack(spacing: 6) {
-          ForEach([CGFloat(0.88), 0.66, 0.78, 0.50], id: \.self) { width in
-            Capsule()
-              .fill(MIRATheme.Color.inkBorder.opacity(0.38))
-              .frame(width: 112 * width, height: 3)
-          }
-        }
-      }
+      RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .stroke(Color.white.opacity(0.76), lineWidth: 1.5)
+        .padding(.horizontal, 40)
+        .padding(.vertical, 42)
 
       Image(systemName: "viewfinder")
-        .font(.system(size: 178, weight: .thin))
-        .foregroundStyle(MIRATheme.Color.auraViolet)
+        .font(.system(size: 230, weight: .ultraLight))
+        .foregroundStyle(Color.white.opacity(0.92))
+
+      VStack(spacing: 10) {
+        Image(systemName: "doc.viewfinder")
+          .font(.system(size: 34, weight: .medium))
+        Text("Position the document inside the frame")
+          .font(.subheadline)
+          .fontWeight(.semibold)
+        Text("Camera opens when you tap Scan Document")
+          .font(.caption)
+          .foregroundStyle(Color.white.opacity(0.72))
+      }
+      .foregroundStyle(Color.white)
+      .multilineTextAlignment(.center)
+      .padding(.horizontal, 56)
+
+      VStack {
+        HStack {
+          Label("Automatic recognition", systemImage: "sparkle.magnifyingglass")
+            .font(.caption)
+            .fontWeight(.bold)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .background(MIRATheme.Color.paperSurface, in: Capsule())
+          Spacer()
+        }
+        Spacer()
+      }
+      .padding(14)
     }
-    .frame(height: 174)
-    .accessibilityHidden(true)
+    .frame(maxWidth: .infinity)
+    .frame(height: 330)
+    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+        .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.5)
+    }
+    .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 5)
+    .padding(.bottom, 5)
+    .accessibilityElement(children: .combine)
   }
 
   private var privacyNote: some View {
@@ -220,43 +221,58 @@ public struct AuraScanView: View {
   }
 
   private func documentPreview(_ document: AuraLocalDocument) -> some View {
-    VStack(spacing: 0) {
-      Group {
-        if let image = document.firstPageImage {
+    VStack(spacing: 14) {
+      ZStack(alignment: .topLeading) {
+        Color.black.opacity(0.88)
+
+        if let image = actualDocumentPreview(document) {
           Image(uiImage: image)
             .resizable()
             .scaledToFit()
-            .frame(maxWidth: .infinity, maxHeight: 430)
-            .padding(10)
-            .background(MIRATheme.Color.paperSurfaceMuted)
+            .frame(maxWidth: .infinity, maxHeight: 390)
+            .padding(12)
         } else {
           VStack(spacing: 12) {
             Image(systemName: "doc.richtext.fill")
               .font(.system(size: 72, weight: .regular))
-              .foregroundStyle(MIRATheme.Color.auraViolet)
-            Text("PDF ready for recognition")
+              .foregroundStyle(Color.white.opacity(0.88))
+            Text("Document preview unavailable")
               .font(.headline)
+              .foregroundStyle(Color.white)
           }
-          .frame(maxWidth: .infinity, minHeight: 260)
-          .background(MIRATheme.Color.paperSurfaceMuted)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+
+        Label(
+          verificationResult.map { detectedTypeTitle($0) } ?? "Ready to verify",
+          systemImage: verificationResult == nil ? "doc.badge.ellipsis" : "doc.text.magnifyingglass"
+        )
+        .font(.caption)
+        .fontWeight(.bold)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 7)
+        .background(MIRATheme.Color.paperSurface, in: Capsule())
+        .padding(14)
       }
+      .frame(maxWidth: .infinity)
+      .frame(height: 390)
+      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.5)
+      }
+      .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 5)
+      .padding(.bottom, 5)
 
       VStack(alignment: .leading, spacing: 12) {
-        Label(
-          verificationResult.map { detectedTypeTitle($0) } ?? "Document ready",
-          systemImage: verificationResult == nil ? "doc.badge.ellipsis" : "checkmark.circle.fill"
-        )
-        .font(.headline)
-        .foregroundStyle(verificationResult == nil ? MIRATheme.Color.textPrimary : MIRATheme.Color.forest)
-
         Text(document.filename)
           .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(2)
 
         if verificationResult == nil {
-          Button(isVerifying ? "Recognizing…" : "Recognize & Verify") {
+          Button(isVerifying ? "Verifying…" : "Verify Document") {
             verify(document)
           }
           .buttonStyle(AuraTactilePrimaryButtonStyle())
@@ -264,7 +280,7 @@ public struct AuraScanView: View {
           .disabled(isVerifying)
         }
 
-        Button("Scan Another Document") { clearSelection() }
+        Button("Choose Another Document") { clearSelection() }
           .font(.subheadline)
           .fontWeight(.semibold)
           .foregroundStyle(MIRATheme.Color.auraViolet)
@@ -272,9 +288,9 @@ public struct AuraScanView: View {
           .buttonStyle(AuraTactileSecondaryButtonStyle())
       }
       .padding(16)
-      .background(MIRATheme.Color.paperSurface)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .physicalAuraCard(cornerRadius: 17)
     }
-    .physicalAuraCard(cornerRadius: 20)
   }
 
   private func verificationTicket(_ result: AuraDocumentVerificationResult) -> some View {
@@ -315,19 +331,13 @@ public struct AuraScanView: View {
           Text("Proof \(shortIdentifier(record.proofId))")
             .font(.caption)
             .foregroundStyle(MIRATheme.Color.textSecondary)
-          if let height = record.blockHeight {
-            Text("Block #\(height) · \(record.confirmations) confirmations")
-              .font(.subheadline)
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-          } else {
-            Text("Waiting for confirmation.")
-              .font(.subheadline)
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-          }
+          Text(record.isConfirmed ? "Saved to your Aura account." : "Finishing securely…")
+            .font(.subheadline)
+            .foregroundStyle(MIRATheme.Color.textSecondary)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MIRATheme.Color.auraVioletSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .physicalAuraCard(cornerRadius: 16)
       } else if result.documentVerified && wallet.identity == nil {
         Label(
           "Receipt verified. Unlock your wallet to create its Aura proof.",
@@ -399,9 +409,8 @@ public struct AuraScanView: View {
 
   private func proofStateLabel(_ record: AuraPrivateProofRecord) -> String {
     switch record.state {
-    case "confirmed": return "Proof confirmed"
-    case "included": return "Proof included in block"
-    case "pending": return "Proof pending"
+    case "confirmed": return "Aura proof ready"
+    case "included", "pending": return "Creating Aura proof"
     default: return "Proof unavailable"
     }
   }
@@ -417,6 +426,18 @@ public struct AuraScanView: View {
   private func shortIdentifier(_ value: String) -> String {
     guard value.count > 14 else { return value }
     return "\(value.prefix(8))…\(value.suffix(6))"
+  }
+
+  private func actualDocumentPreview(_ document: AuraLocalDocument) -> UIImage? {
+    if let image = document.firstPageImage {
+      return image
+    }
+    guard document.mediaType == "application/pdf",
+          let data = document.pages.first,
+          let page = PDFDocument(data: data)?.page(at: 0) else {
+      return nil
+    }
+    return page.thumbnail(of: CGSize(width: 900, height: 1_200), for: .mediaBox)
   }
 
   private func beginScan() {
@@ -474,6 +495,6 @@ public struct AuraScanView: View {
   }
 
   private var privacyHelp: String {
-    "Aura uploads the selected document only after you tap Recognize & Verify. The image is not published with your Aura proof."
+    "Aura uploads the selected document only after you tap Verify Document. The image is not shown publicly."
   }
 }
