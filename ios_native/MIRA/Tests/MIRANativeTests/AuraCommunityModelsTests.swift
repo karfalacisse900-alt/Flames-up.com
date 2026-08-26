@@ -121,6 +121,63 @@ final class AuraCommunityModelsTests: XCTestCase {
     XCTAssertEqual(post.meetupStateAvailable, false)
   }
 
+  func testCommunityVideoDecodesCanonicalReferenceTypePosterAndAssetIdentity() throws {
+    let data = Data(
+      """
+      {
+        "id": "post-video-1",
+        "title": "Neighborhood basketball",
+        "post_type": "small_post",
+        "image": "cfstream:stream-uid-123",
+        "images": ["cfstream:stream-uid-123"],
+        "feed_media_urls": ["https://videodelivery.net/stream-uid-123/manifest/video.m3u8"],
+        "thumbnail_urls": ["https://videodelivery.net/stream-uid-123/thumbnails/thumbnail.jpg"],
+        "poster_urls": ["https://videodelivery.net/stream-uid-123/thumbnails/thumbnail.jpg"],
+        "media_types": ["video"],
+        "media_asset_ids": ["asset-video-1"]
+      }
+      """.utf8
+    )
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+    let post = try decoder.decode(AuraCommunityPost.self, from: data)
+
+    XCTAssertEqual(post.primaryMediaReference, "cfstream:stream-uid-123")
+    XCTAssertEqual(post.primaryMediaType, "video")
+    XCTAssertTrue(post.containsVideoMedia)
+    XCTAssertEqual(post.primaryPosterURL, "https://videodelivery.net/stream-uid-123/thumbnails/thumbnail.jpg")
+    XCTAssertEqual(post.primaryPlaybackURL, "https://videodelivery.net/stream-uid-123/manifest/video.m3u8")
+    XCTAssertEqual(post.primaryImageURL, post.primaryPosterURL)
+    XCTAssertEqual(post.mediaAssetIds, ["asset-video-1"])
+  }
+
+  func testCommunityPhotoKeepsFeedDeliveryURLAndImageType() throws {
+    let data = Data(
+      """
+      {
+        "id": "post-photo-1",
+        "post_type": "meetup",
+        "image": "https://imagedelivery.net/account/image-id/public",
+        "images": ["https://imagedelivery.net/account/image-id/public"],
+        "feed_media_urls": ["https://imagedelivery.net/account/image-id/feed"],
+        "media_types": ["image"],
+        "media_asset_ids": ["asset-image-1"]
+      }
+      """.utf8
+    )
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+    let post = try decoder.decode(AuraCommunityPost.self, from: data)
+
+    XCTAssertEqual(post.primaryMediaType, "image")
+    XCTAssertFalse(post.containsVideoMedia)
+    XCTAssertEqual(post.primaryMediaReference, "https://imagedelivery.net/account/image-id/public")
+    XCTAssertEqual(post.primaryImageURL, "https://imagedelivery.net/account/image-id/feed")
+    XCTAssertEqual(post.mediaAssetIds, ["asset-image-1"])
+  }
+
   func testCommunityDraftCodableRoundTripPreservesMeetupFields() throws {
     let startsAt = Date(timeIntervalSince1970: 1_777_000_000)
     let draft = AuraCommunityDraft(
@@ -146,7 +203,10 @@ final class AuraCommunityModelsTests: XCTestCase {
       placeCity: "New York",
       placeRegion: "NY",
       placeCountry: "US",
-      hasPhoto: true
+      hasPhoto: true,
+      mediaKind: "video",
+      mediaFileName: "meetup.mov",
+      mediaMimeType: "video/quicktime"
     )
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
@@ -162,5 +222,39 @@ final class AuraCommunityModelsTests: XCTestCase {
     XCTAssertEqual(decoded.maxPeople, 8)
     XCTAssertEqual(decoded.placeProviderId, "place-1")
     XCTAssertTrue(decoded.hasPhoto)
+    XCTAssertEqual(decoded.mediaKind, "video")
+    XCTAssertEqual(decoded.mediaFileName, "meetup.mov")
+    XCTAssertEqual(decoded.mediaMimeType, "video/quicktime")
+  }
+
+  func testCommunityDraftDecodesLegacyPhotoWithoutMediaMetadata() throws {
+    let legacy = Data(
+      """
+      {
+        "mode": "small_post",
+        "title": "Coffee",
+        "bodyText": "Quiet corner",
+        "category": "recommendation",
+        "audience": "public",
+        "allowReplies": true,
+        "neighborhood": "SoHo",
+        "startsAt": "2026-08-26T14:00:00Z",
+        "endsAt": "2026-08-26T15:00:00Z",
+        "entryType": "free",
+        "entryAmountAUR": "",
+        "maxPeople": 12,
+        "hasPhoto": true
+      }
+      """.utf8
+    )
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+
+    let decoded = try decoder.decode(AuraCommunityDraft.self, from: legacy)
+
+    XCTAssertTrue(decoded.hasPhoto)
+    XCTAssertNil(decoded.mediaKind)
+    XCTAssertNil(decoded.mediaFileName)
+    XCTAssertNil(decoded.mediaMimeType)
   }
 }

@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import Foundation
 import UIKit
 import UniformTypeIdentifiers
@@ -171,6 +172,7 @@ public final class MIRAMediaUploadService {
     let fileSize: Int
     let width: Double?
     let height: Double?
+    let sha256Hash: String
   }
 
   private struct MIRAMediaUploadCompleteBody: Encodable {
@@ -178,6 +180,7 @@ public final class MIRAMediaUploadService {
     let fileSize: Int
     let width: Double?
     let height: Double?
+    let sha256Hash: String
   }
 
   private struct MIRAMediaStatusResponse: Decodable, Hashable {
@@ -217,17 +220,32 @@ public final class MIRAMediaUploadService {
     mimeType: String,
     mediaType: String
   ) async throws -> MIRAMediaUploadResult {
-    let dimensions = await media.mediaDimension()
+    let validatedMimeType = try validateUpload(
+      data: uploadData,
+      kind: media.kind,
+      fileName: fileName,
+      declaredMimeType: mimeType
+    )
+    let checksum = SHA256.hash(data: uploadData).map { String(format: "%02x", $0) }.joined()
+    let preparedMedia = MIRAPickedMedia(
+      data: uploadData,
+      kind: media.kind,
+      fileName: fileName,
+      mimeType: validatedMimeType,
+      editorMetadata: media.editorMetadata
+    )
+    let dimensions = await preparedMedia.mediaDimension()
     return try await performUpload(kind: mediaType, bytes: uploadData.count) {
       let intent: MIRAMediaUploadResponse = try await api.post(
         "/media/upload-intent",
         body: MIRAMediaUploadIntentBody(
           mediaType: mediaType,
           filename: fileName,
-          mimeType: mimeType,
+          mimeType: validatedMimeType,
           fileSize: uploadData.count,
           width: dimensions.feedWidth ?? dimensions.width,
-          height: dimensions.feedHeight ?? dimensions.height
+          height: dimensions.feedHeight ?? dimensions.height,
+          sha256Hash: checksum
         )
       )
       guard
@@ -242,21 +260,102 @@ public final class MIRAMediaUploadService {
         to: uploadURL,
         fieldName: "file",
         fileName: fileName,
-        mimeType: mimeType,
+        mimeType: validatedMimeType,
         data: uploadData
       )
 
-      let complete: MIRAMediaStatusResponse = try await api.post(
-        "/media/complete",
-        body: MIRAMediaUploadCompleteBody(
+      let complete = try await completeModeratedUpload(
+        MIRAMediaUploadCompleteBody(
           mediaId: mediaId,
           fileSize: uploadData.count,
           width: dimensions.feedWidth ?? dimensions.width,
-          height: dimensions.feedHeight ?? dimensions.height
+          height: dimensions.feedHeight ?? dimensions.height,
+          sha256Hash: checksum
         )
       )
       let approved = try await waitForModeratedMediaApproval(mediaId: mediaId, initial: complete)
       return MIRAMediaUploadResult(url: approved, mediaAssetId: mediaId)
+    }
+  }
+
+  private func completeModeratedUpload(_ body: MIRAMediaUploadCompleteBody) async throws -> MIRAMediaStatusResponse {
+    for attempt in 0..<6 {
+      do {
+        return try await api.post("/media/complete", body: body)
+      } catch {
+        let providerIsPending: Bool
+        if case MIRAAPIError.badStatus(let status) = error {
+          providerIsPending = status == 425
+        } else if case MIRAAPIError.server(let status, _, _) = error {
+          providerIsPending = status == 425
+        } else {
+          providerIsPending = false
+        }
+        guard providerIsPending, attempt < 5 else { throw error }
+        try await Task.sleep(nanoseconds: 500_000_000)
+      }
+    }
+    throw MIRAAPIError.server(
+      status: 409,
+      code: "MEDIA_PROVIDER_PENDING",
+      detail: "The uploaded media is still processing. Please try again."
+    )
+  }
+
+  private func validateUpload(
+    data: Data,
+    kind: MIRAPickedMediaKind,
+    fileName: String,
+    declaredMimeType: String
+  ) throws -> String {
+    guard !data.isEmpty else {
+      throw MIRAAPIError.server(status: 400, code: "EMPTY_UPLOAD", detail: "The selected file is empty.")
+    }
+    let normalizedMimeType = declaredMimeType
+      .split(separator: ";", maxSplits: 1)
+      .first
+      .map(String.init)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased() ?? ""
+    let fileExtension = URL(fileURLWithPath: fileName).pathExtension.lowercased()
+
+    switch kind {
+    case .image:
+      guard data.count <= 10_000_000 else {
+        throw MIRAAPIError.server(status: 413, code: "IMAGE_TOO_LARGE", detail: "Images must be 10 MB or smaller.")
+      }
+      guard let detected = detectedImageMimeType(data) else {
+        throw MIRAAPIError.server(status: 400, code: "INVALID_IMAGE", detail: "The selected file is not a supported image.")
+      }
+      let declared = normalizedMimeType == "image/jpg" ? "image/jpeg" : normalizedMimeType
+      let allowedExtensions = [
+        "image/jpeg": ["jpg", "jpeg"],
+        "image/png": ["png"],
+        "image/webp": ["webp"],
+        "image/heic": ["heic"],
+        "image/heif": ["heif"],
+      ]
+      guard declared == detected,
+            fileExtension.isEmpty || (allowedExtensions[detected] ?? []).contains(fileExtension)
+      else {
+        throw MIRAAPIError.server(status: 400, code: "IMAGE_TYPE_MISMATCH", detail: "The image contents do not match the selected file type.")
+      }
+      return detected
+
+    case .video:
+      guard data.count <= 200_000_000 else {
+        throw MIRAAPIError.server(status: 413, code: "VIDEO_TOO_LARGE", detail: "Videos must be 200 MB or smaller.")
+      }
+      guard let detected = detectedVideoContainer(data) else {
+        throw MIRAAPIError.server(status: 400, code: "INVALID_VIDEO", detail: "The selected file is not a supported video.")
+      }
+      let declaredIsISO = normalizedMimeType == "video/mp4" || normalizedMimeType == "video/quicktime"
+      let extensionIsISO = fileExtension.isEmpty || ["mp4", "mov"].contains(fileExtension)
+      let matches = detected == "iso" ? declaredIsISO && extensionIsISO : normalizedMimeType == "video/webm" && (fileExtension.isEmpty || fileExtension == "webm")
+      guard matches else {
+        throw MIRAAPIError.server(status: 400, code: "VIDEO_TYPE_MISMATCH", detail: "The video contents do not match the selected file type.")
+      }
+      return normalizedMimeType
     }
   }
 
@@ -410,7 +509,7 @@ public final class MIRAMediaUploadService {
       #if DEBUG
       if let renderedData {
         print(
-          "CaptroCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
+          "AuraCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
           "feed=\(Int(targetSize.width))x\(Int(targetSize.height)) ratio=\(selectedRatio.rawValue) bytes=\(renderedData.count) compression=0.94"
         )
       }
@@ -433,6 +532,30 @@ public final class MIRAMediaUploadService {
       if isRIFF && isWEBP {
         return "image/webp"
       }
+      let isISOBaseMedia = header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70
+      if isISOBaseMedia {
+        let brand = String(bytes: header[8...11], encoding: .ascii)?.lowercased() ?? ""
+        if ["heic", "heix", "hevc", "hevx"].contains(brand) {
+          return "image/heic"
+        }
+        if ["mif1", "msf1"].contains(brand) {
+          return "image/heif"
+        }
+      }
+    }
+    return nil
+  }
+
+  private func detectedVideoContainer(_ data: Data) -> String? {
+    guard data.count >= 12 else { return nil }
+    let header = Array(data.prefix(12))
+    if header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70 {
+      let brand = String(bytes: header[8...11], encoding: .ascii)?.lowercased() ?? ""
+      let imageBrands = ["heic", "heix", "hevc", "hevx", "mif1", "msf1"]
+      return imageBrands.contains(brand) ? nil : "iso"
+    }
+    if header[0] == 0x1a && header[1] == 0x45 && header[2] == 0xdf && header[3] == 0xa3 {
+      return "webm"
     }
     return nil
   }
@@ -445,6 +568,10 @@ public final class MIRAMediaUploadService {
       ext = "png"
     case "image/webp":
       ext = "webp"
+    case "image/heic":
+      ext = "heic"
+    case "image/heif":
+      ext = "heif"
     default:
       ext = "jpg"
     }
@@ -453,22 +580,42 @@ public final class MIRAMediaUploadService {
 }
 
 public func pickedMediaKind(from contentTypes: [UTType], fallbackData: Data) -> (MIRAPickedMediaKind, String, String) {
-  if contentTypes.contains(where: { $0.conforms(to: .movie) || $0.conforms(to: .video) }) {
-    return (.video, "\(UUID().uuidString).mov", "video/quicktime")
+  if let videoType = contentTypes.first(where: { $0.conforms(to: .movie) || $0.conforms(to: .video) }) {
+    let mimeType = ["video/mp4", "video/quicktime", "video/webm"].contains(videoType.preferredMIMEType ?? "")
+      ? (videoType.preferredMIMEType ?? "video/quicktime")
+      : "video/quicktime"
+    let ext = videoType.preferredFilenameExtension ?? (mimeType == "video/mp4" ? "mp4" : mimeType == "video/webm" ? "webm" : "mov")
+    return (.video, "\(UUID().uuidString).\(ext)", mimeType)
   }
-  if let first = contentTypes.first(where: { $0.conforms(to: .image) }), first.conforms(to: .png) {
-    return (.image, "\(UUID().uuidString).png", "image/png")
+  if let imageType = contentTypes.first(where: { $0.conforms(to: .image) }) {
+    let mimeType = imageType.preferredMIMEType ?? "image/jpeg"
+    let ext = imageType.preferredFilenameExtension ?? (mimeType == "image/png" ? "png" : "jpg")
+    return (.image, "\(UUID().uuidString).\(ext)", mimeType)
   }
   if fallbackData.count >= 12 {
     let header = Array(fallbackData.prefix(12))
     let hasISOBaseMediaSignature = header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70
     let hasQuickTimeSignature = header[4] == 0x6d && header[5] == 0x6f && header[6] == 0x6f && header[7] == 0x76
+    let brand = hasISOBaseMediaSignature ? (String(bytes: header[8...11], encoding: .ascii)?.lowercased() ?? "") : ""
+    if ["heic", "heix", "hevc", "hevx"].contains(brand) {
+      return (.image, "\(UUID().uuidString).heic", "image/heic")
+    }
+    if ["mif1", "msf1"].contains(brand) {
+      return (.image, "\(UUID().uuidString).heif", "image/heif")
+    }
     if hasISOBaseMediaSignature || hasQuickTimeSignature {
       return (.video, "\(UUID().uuidString).mp4", "video/mp4")
     }
+    if header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46
+      && header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50 {
+      return (.image, "\(UUID().uuidString).webp", "image/webp")
+    }
+    if header[0] == 0x1a && header[1] == 0x45 && header[2] == 0xdf && header[3] == 0xa3 {
+      return (.video, "\(UUID().uuidString).webm", "video/webm")
+    }
   }
-  if fallbackData.starts(with: [0x00, 0x00, 0x00]) {
-    return (.video, "\(UUID().uuidString).mp4", "video/mp4")
+  if fallbackData.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) {
+    return (.image, "\(UUID().uuidString).png", "image/png")
   }
   return (.image, "\(UUID().uuidString).jpg", "image/jpeg")
 }

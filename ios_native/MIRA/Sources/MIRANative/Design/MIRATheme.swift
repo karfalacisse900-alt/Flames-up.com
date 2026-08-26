@@ -26,6 +26,28 @@ public enum MIRATheme {
       light: UIColor.white,
       dark: UIColor(red: 0.105, green: 0.105, blue: 0.115, alpha: 1)
     )
+    // Aura's tactile social surfaces use a warmer paper system than the shared legacy chrome.
+    // The values intentionally echo uncoated cream paper rather than glass or fintech panels.
+    public static let paperCanvas = adaptive(
+      light: UIColor(red: 0.988, green: 0.949, blue: 0.859, alpha: 1),
+      dark: UIColor(red: 0.075, green: 0.074, blue: 0.057, alpha: 1)
+    )
+    public static let paperSurface = adaptive(
+      light: UIColor(red: 1.000, green: 1.000, blue: 0.918, alpha: 1),
+      dark: UIColor(red: 0.115, green: 0.112, blue: 0.085, alpha: 1)
+    )
+    public static let paperSurfaceMuted = adaptive(
+      light: UIColor(red: 0.957, green: 0.894, blue: 0.749, alpha: 1),
+      dark: UIColor(red: 0.145, green: 0.137, blue: 0.098, alpha: 1)
+    )
+    public static let inkBorder = adaptive(
+      light: UIColor(red: 0.137, green: 0.153, blue: 0.106, alpha: 1),
+      dark: UIColor(red: 0.914, green: 0.900, blue: 0.760, alpha: 1)
+    )
+    public static let hardShadow = adaptive(
+      light: UIColor(red: 0.098, green: 0.110, blue: 0.071, alpha: 0.92),
+      dark: UIColor.black.withAlphaComponent(0.96)
+    )
     public static let mediaPlaceholder = adaptive(
       light: UIColor(red: 0.875, green: 0.872, blue: 0.838, alpha: 1),
       dark: UIColor(red: 0.105, green: 0.105, blue: 0.112, alpha: 1)

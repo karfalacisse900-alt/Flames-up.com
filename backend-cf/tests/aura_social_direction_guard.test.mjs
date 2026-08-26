@@ -27,7 +27,7 @@ test('Aura community feed admits text-only Small Posts and only the two adopted 
 
   assert.match(renderability, /AURA_COMMUNITY_POST_TYPES = new Set\(\['small_post', 'meetup'\]\)/);
   assert.match(renderability, /postType === 'small_post'/);
-  assert.match(renderability, /!!\(title \|\| content \|\| supabaseAppPostHasRenderablePhotoMedia\(row\)\)/);
+  assert.match(renderability, /!!\(title \|\| content \|\| supabaseAppPostHasRenderableMedia\(row\)\)/);
   assert.doesNotMatch(renderability, /receipt|invoice|proof/i);
 
   const readPath = section(worker, 'function supabaseCandidatePostRows', 'async function augmentAuraMeetupState');

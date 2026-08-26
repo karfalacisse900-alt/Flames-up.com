@@ -59,7 +59,7 @@ public struct AuraCreateCommunityPostView: View {
       ScrollView {
         VStack(spacing: 14) {
           modePicker
-          photoSection
+          mediaSection
 
           if mode == .smallPost {
             smallPostFields
@@ -91,9 +91,11 @@ public struct AuraCreateCommunityPostView: View {
         .padding(.top, 12)
         .padding(.bottom, 34)
       }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
       .navigationTitle("Create Post")
       .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(MIRATheme.Color.paperCanvas, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
       .interactiveDismissDisabled(isPublishing)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -125,7 +127,7 @@ public struct AuraCreateCommunityPostView: View {
       .task { restoreDraftIfAvailable() }
       .onChange(of: selectedPhotoItem) { _, item in
         guard let item else { return }
-        Task { await loadPhoto(item) }
+        Task { await loadMedia(item) }
       }
       .onChange(of: selectedPlace) { _, place in
         guard let place else { return }
@@ -160,10 +162,10 @@ public struct AuraCreateCommunityPostView: View {
     .accessibilityHint("Choose Small Post or Meetup")
   }
 
-  private var photoSection: some View {
+  private var mediaSection: some View {
     VStack(alignment: .leading, spacing: 11) {
       HStack {
-        Text(mode == .meetup ? "Cover Image" : "Add Photo")
+        Text(mode == .meetup ? "Cover Photo or Video" : "Add Photo or Video")
           .font(.headline)
         Text(mode == .meetup ? "Required" : "Optional")
           .font(.caption.weight(.semibold))
@@ -180,25 +182,35 @@ public struct AuraCreateCommunityPostView: View {
       }
 
       if let image = selectedPhotoImage {
-        Image(uiImage: image)
-          .resizable()
-          .scaledToFill()
-          .frame(maxWidth: .infinity)
-          .frame(height: mode == .meetup ? 170 : 136)
-          .clipped()
-          .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        ZStack {
+          Image(uiImage: image)
+            .resizable()
+            .scaledToFill()
+            .frame(maxWidth: .infinity)
+            .frame(height: mode == .meetup ? 170 : 136)
+            .clipped()
+
+          if selectedPhoto?.kind == .video {
+            Image(systemName: "play.fill")
+              .font(.system(size: 22, weight: .black))
+              .foregroundStyle(MIRATheme.Color.paperSurface)
+              .frame(width: 50, height: 50)
+              .background(MIRATheme.Color.inkBorder.opacity(0.86), in: Circle())
+          }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
       } else {
         ZStack {
           RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .fill(MIRATheme.Color.surfaceSoft)
+            .fill(MIRATheme.Color.paperSurfaceMuted)
           VStack(spacing: 8) {
             if isLoadingPhoto {
               ProgressView()
             } else {
-              Image(systemName: mode == .meetup ? "photo.badge.plus" : "photo.on.rectangle.angled")
+              Image(systemName: selectedPhoto?.kind == .video ? "video.fill" : "photo.on.rectangle.angled")
                 .font(.title2)
                 .foregroundStyle(MIRATheme.Color.auraViolet)
-              Text(mode == .meetup ? "Choose a meetup cover" : "A photo can help people discover your post")
+              Text(mediaHelperText)
                 .font(.subheadline)
                 .foregroundStyle(MIRATheme.Color.textSecondary)
                 .multilineTextAlignment(.center)
@@ -209,8 +221,12 @@ public struct AuraCreateCommunityPostView: View {
         .frame(height: mode == .meetup ? 152 : 116)
       }
 
-      PhotosPicker(selection: $selectedPhotoItem, matching: .images, preferredItemEncoding: .current) {
-        Label(selectedPhoto == nil ? "Add Photo" : "Change Photo", systemImage: "photo")
+      PhotosPicker(
+        selection: $selectedPhotoItem,
+        matching: .any(of: [.images, .videos]),
+        preferredItemEncoding: .current
+      ) {
+        Label(selectedPhoto == nil ? "Add Photo or Video" : "Change Media", systemImage: "photo.on.rectangle.angled")
           .font(.subheadline.weight(.bold))
           .foregroundStyle(MIRATheme.Color.auraViolet)
           .frame(maxWidth: .infinity)
@@ -318,7 +334,7 @@ public struct AuraCreateCommunityPostView: View {
               .foregroundStyle(category == value ? .white : MIRATheme.Color.textPrimary)
               .frame(maxWidth: .infinity)
               .padding(.vertical, 9)
-              .background(category == value ? MIRATheme.Color.auraViolet : MIRATheme.Color.surface, in: Capsule())
+              .background(category == value ? MIRATheme.Color.auraViolet : MIRATheme.Color.paperSurface, in: Capsule())
               .overlay {
                 Capsule().stroke(category == value ? MIRATheme.Color.auraViolet : MIRATheme.Color.hairline, lineWidth: 1)
               }
@@ -526,6 +542,15 @@ public struct AuraCreateCommunityPostView: View {
           .frame(width: 74, height: 74)
           .clipped()
           .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+          .overlay {
+            if selectedPhoto?.kind == .video {
+              Image(systemName: "play.fill")
+                .font(.system(size: 14, weight: .black))
+                .foregroundStyle(MIRATheme.Color.paperSurface)
+                .frame(width: 30, height: 30)
+                .background(MIRATheme.Color.inkBorder.opacity(0.86), in: Circle())
+            }
+          }
       }
     }
     .padding(14)
@@ -541,9 +566,18 @@ public struct AuraCreateCommunityPostView: View {
           .frame(maxWidth: .infinity)
           .frame(height: 135)
           .clipped()
+          .overlay {
+            if selectedPhoto?.kind == .video {
+              Image(systemName: "play.fill")
+                .font(.system(size: 20, weight: .black))
+                .foregroundStyle(MIRATheme.Color.paperSurface)
+                .frame(width: 48, height: 48)
+                .background(MIRATheme.Color.inkBorder.opacity(0.86), in: Circle())
+            }
+          }
       } else {
         ZStack {
-          MIRATheme.Color.surfaceSoft
+          MIRATheme.Color.paperSurfaceMuted
           Image(systemName: "photo")
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
@@ -617,6 +651,12 @@ public struct AuraCreateCommunityPostView: View {
       .frame(maxWidth: .infinity)
       .padding(.vertical, 15)
       .background(MIRATheme.Color.auraViolet, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.5)
+      }
+      .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 4)
+      .padding(.bottom, 4)
     }
     .buttonStyle(.plain)
     .disabled(isPublishing || isLoadingPhoto)
@@ -629,13 +669,16 @@ public struct AuraCreateCommunityPostView: View {
     } label: {
       Text("Save Draft")
         .font(.headline)
-        .foregroundStyle(MIRATheme.Color.auraViolet)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
+        .background(MIRATheme.Color.paperSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
           RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .stroke(MIRATheme.Color.auraViolet, lineWidth: 1.2)
+            .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.35)
         }
+        .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 3)
+        .padding(.bottom, 3)
     }
     .buttonStyle(.plain)
     .disabled(isPublishing || isLoadingPhoto)
@@ -666,32 +709,44 @@ public struct AuraCreateCommunityPostView: View {
     return clean.isEmpty ? "AUR" : "\(clean) AUR"
   }
 
+  private var mediaHelperText: String {
+    if selectedPhoto?.kind == .video {
+      return "Video selected. Aura will upload and check it before publishing."
+    }
+    return mode == .meetup
+      ? "Choose a photo or video that shows the meetup"
+      : "A photo or short video can help people discover your post"
+  }
+
   @MainActor
-  private func loadPhoto(_ item: PhotosPickerItem) async {
+  private func loadMedia(_ item: PhotosPickerItem) async {
     isLoadingPhoto = true
     errorMessage = nil
     savedDraftMessage = nil
     defer { isLoadingPhoto = false }
     do {
-      guard let data = try await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
+      guard let data = try await item.loadTransferable(type: Data.self), !data.isEmpty else {
         throw MIRAAPIError.emptyResponse
       }
       let details = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
-      guard details.0 == .image else {
-        throw MIRAAPIError.server(status: 400, code: "PHOTO_REQUIRED", detail: "Choose a photo, not a video.")
+      let preview: UIImage?
+      if details.0 == .image {
+        preview = UIImage(data: data)
+      } else {
+        preview = await MIRANativeMediaEditorRenderer.videoThumbnail(from: data, fileName: details.1)
       }
       selectedPhoto = MIRAPickedMedia(
         data: data,
-        kind: .image,
+        kind: details.0,
         fileName: details.1,
         mimeType: details.2
       )
-      selectedPhotoImage = image
+      selectedPhotoImage = preview
     } catch {
       selectedPhotoItem = nil
       selectedPhoto = nil
       selectedPhotoImage = nil
-      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "The selected photo could not be loaded."
+      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "The selected photo or video could not be loaded."
     }
   }
 
@@ -734,7 +789,7 @@ public struct AuraCreateCommunityPostView: View {
         content: cleanBody,
         image: uploadedURL,
         images: uploadedURL.map { [$0] } ?? [],
-        mediaTypes: uploadedURL == nil ? [] : ["image"],
+        mediaTypes: uploadedURL == nil ? [] : [selectedPhoto?.kind.rawValue ?? "image"],
         mediaDimensions: mediaDimension.map { [$0] } ?? [],
         mediaAssetIds: mediaAssetId.map { [$0] },
         location: selectedPlace?.addressText ?? selectedPlace?.displayName,
@@ -783,12 +838,12 @@ public struct AuraCreateCommunityPostView: View {
   private func validateForPublish() -> String? {
     if mode == .smallPost {
       if cleanTitle.isEmpty, cleanBody.isEmpty, selectedPhoto == nil {
-        return "Add a title, some text, or a photo to your Small Post."
+        return "Add a title, some text, a photo, or a video to your Small Post."
       }
     } else {
       if cleanTitle.isEmpty { return "Add a meetup title." }
       if cleanBody.isEmpty { return "Add a meetup description." }
-      if selectedPhoto == nil { return "Choose a cover image for this meetup." }
+      if selectedPhoto == nil { return "Choose a cover photo or video for this meetup." }
       if selectedPlace == nil { return "Choose the meetup place from Apple Maps." }
       if cleanNeighborhood.isEmpty { return "Add the meetup neighborhood." }
       if endsAt <= startsAt { return "The meetup end time must be after its start time." }
@@ -827,7 +882,10 @@ public struct AuraCreateCommunityPostView: View {
       placeCity: selectedPlace?.city,
       placeRegion: selectedPlace?.region,
       placeCountry: selectedPlace?.country,
-      hasPhoto: selectedPhoto != nil
+      hasPhoto: selectedPhoto != nil,
+      mediaKind: selectedPhoto?.kind.rawValue,
+      mediaFileName: selectedPhoto?.fileName,
+      mediaMimeType: selectedPhoto?.mimeType
     )
 
     do {
@@ -877,15 +935,28 @@ public struct AuraCreateCommunityPostView: View {
         )
       }
 
-      if let photoData, let image = UIImage(data: photoData) {
-        let details = pickedMediaKind(from: [], fallbackData: photoData)
-        selectedPhoto = MIRAPickedMedia(
+      if let photoData, draft.hasPhoto {
+        let detected = pickedMediaKind(from: [], fallbackData: photoData)
+        let restoredKind = draft.mediaKind.flatMap(MIRAPickedMediaKind.init(rawValue:)) ?? detected.0
+        let savedFileName = draft.mediaFileName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let savedMimeType = draft.mediaMimeType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let restoredMedia = MIRAPickedMedia(
           data: photoData,
-          kind: .image,
-          fileName: details.1,
-          mimeType: details.2
+          kind: restoredKind,
+          fileName: savedFileName.isEmpty ? detected.1 : savedFileName,
+          mimeType: savedMimeType.isEmpty ? detected.2 : savedMimeType
         )
-        selectedPhotoImage = image
+        selectedPhoto = restoredMedia
+        if restoredKind == .image {
+          selectedPhotoImage = UIImage(data: photoData)
+        } else {
+          Task { @MainActor in
+            selectedPhotoImage = await MIRANativeMediaEditorRenderer.videoThumbnail(
+              from: restoredMedia.data,
+              fileName: restoredMedia.fileName
+            )
+          }
+        }
       }
       savedDraftMessage = "Draft restored."
     } catch {

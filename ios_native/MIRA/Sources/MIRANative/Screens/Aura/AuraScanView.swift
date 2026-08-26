@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import VisionKit
 
-/// Native document capture with provider-side receipt/invoice recognition. The user never selects
+/// Native document capture with server-side receipt/invoice recognition. The user never selects
 /// a document type. Sensitive bytes remain in memory and are sent only after Verify is tapped.
 public struct AuraScanView: View {
   @Environment(\.scenePhase) private var scenePhase
@@ -49,9 +49,11 @@ public struct AuraScanView: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 28)
       }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
       .navigationTitle("Scan")
       .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(MIRATheme.Color.paperCanvas, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button { errorMessage = privacyHelp } label: {
@@ -101,34 +103,34 @@ public struct AuraScanView: View {
 
   private var captureCard: some View {
     VStack(spacing: 0) {
-      ZStack(alignment: .top) {
-        MIRATheme.Color.surfaceSoft
-          .frame(height: 276)
-
-        VStack(spacing: 18) {
+      VStack(spacing: 14) {
           Label("Automatic document recognition", systemImage: "viewfinder")
             .font(.subheadline)
             .fontWeight(.semibold)
             .foregroundStyle(MIRATheme.Color.auraViolet)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(MIRATheme.Color.auraVioletSoft, in: Capsule())
+            .background(MIRATheme.Color.paperSurface, in: Capsule())
+            .overlay { Capsule().stroke(MIRATheme.Color.inkBorder, lineWidth: 1) }
 
-          Image(systemName: "doc.viewfinder")
-            .font(.system(size: 76, weight: .light))
-            .foregroundStyle(MIRATheme.Color.auraViolet)
+        scanStage
 
-          Text("Scan a receipt or invoice")
-            .font(.title2)
-            .fontWeight(.bold)
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text("Aura automatically recognizes receipts and invoices.")
-            .font(.subheadline)
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 26)
-        }
-        .padding(.top, 24)
+        Text("Scan a receipt or invoice")
+          .font(.title2)
+          .fontWeight(.black)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text("Aura automatically recognizes receipts and invoices.")
+          .font(.subheadline)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, 20)
+      }
+      .padding(.horizontal, 18)
+      .padding(.vertical, 20)
+      .frame(maxWidth: .infinity)
+      .background(MIRATheme.Color.paperSurfaceMuted)
+      .overlay(alignment: .bottom) {
+        Rectangle().fill(MIRATheme.Color.inkBorder).frame(height: 1.25)
       }
 
       VStack(spacing: 12) {
@@ -137,20 +139,18 @@ public struct AuraScanView: View {
         } label: {
           Label("Scan Document", systemImage: "camera.viewfinder")
             .font(.headline)
-            .frame(maxWidth: .infinity, minHeight: 48)
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
-        .tint(MIRATheme.Color.auraViolet)
+        .buttonStyle(AuraTactilePrimaryButtonStyle())
 
         HStack(spacing: 12) {
           PhotosPicker(selection: $selectedPhoto, matching: .images) {
             Label("Photos", systemImage: "photo.on.rectangle")
               .font(.subheadline)
               .fontWeight(.semibold)
-              .frame(maxWidth: .infinity, minHeight: 44)
+              .frame(maxWidth: .infinity)
           }
-          .buttonStyle(.bordered)
-          .tint(MIRATheme.Color.auraViolet)
+          .buttonStyle(AuraTactileSecondaryButtonStyle())
 
           Button {
             beginImport()
@@ -158,28 +158,65 @@ public struct AuraScanView: View {
             Label("Import", systemImage: "square.and.arrow.down")
               .font(.subheadline)
               .fontWeight(.semibold)
-              .frame(maxWidth: .infinity, minHeight: 44)
+              .frame(maxWidth: .infinity)
           }
-          .buttonStyle(.bordered)
-          .tint(MIRATheme.Color.auraViolet)
+          .buttonStyle(AuraTactileSecondaryButtonStyle())
         }
       }
       .padding(16)
-      .background(MIRATheme.Color.surface)
+      .background(MIRATheme.Color.paperSurface)
     }
     .physicalAuraCard(cornerRadius: 20)
   }
 
+  private var scanStage: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .fill(MIRATheme.Color.paperSurface)
+        .frame(width: 168, height: 154)
+        .overlay {
+          RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.25)
+        }
+        .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 4)
+        .rotationEffect(.degrees(-1.2))
+
+      VStack(spacing: 9) {
+        Image(systemName: "receipt")
+          .font(.system(size: 28, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.inkBorder)
+        Text("RECEIPT / INVOICE")
+          .font(.system(size: 10, weight: .black, design: .monospaced))
+          .tracking(0.8)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        VStack(spacing: 6) {
+          ForEach([CGFloat(0.88), 0.66, 0.78, 0.50], id: \.self) { width in
+            Capsule()
+              .fill(MIRATheme.Color.inkBorder.opacity(0.38))
+              .frame(width: 112 * width, height: 3)
+          }
+        }
+      }
+
+      Image(systemName: "viewfinder")
+        .font(.system(size: 178, weight: .thin))
+        .foregroundStyle(MIRATheme.Color.auraViolet)
+    }
+    .frame(height: 174)
+    .accessibilityHidden(true)
+  }
+
   private var privacyNote: some View {
     Label(
-      "Aura uploads the document only after you tap Recognize & Verify.",
+      "Your document stays private and is submitted only when you choose to verify.",
       systemImage: "lock.shield.fill"
     )
     .font(.footnote)
     .foregroundStyle(MIRATheme.Color.textSecondary)
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    .background(MIRATheme.Color.paperSurface)
+    .physicalAuraCard(cornerRadius: 15)
   }
 
   private func documentPreview(_ document: AuraLocalDocument) -> some View {
@@ -190,6 +227,8 @@ public struct AuraScanView: View {
             .resizable()
             .scaledToFit()
             .frame(maxWidth: .infinity, maxHeight: 430)
+            .padding(10)
+            .background(MIRATheme.Color.paperSurfaceMuted)
         } else {
           VStack(spacing: 12) {
             Image(systemName: "doc.richtext.fill")
@@ -199,7 +238,7 @@ public struct AuraScanView: View {
               .font(.headline)
           }
           .frame(maxWidth: .infinity, minHeight: 260)
-          .background(MIRATheme.Color.surfaceSoft)
+          .background(MIRATheme.Color.paperSurfaceMuted)
         }
       }
 
@@ -220,8 +259,7 @@ public struct AuraScanView: View {
           Button(isVerifying ? "Recognizing…" : "Recognize & Verify") {
             verify(document)
           }
-          .buttonStyle(.borderedProminent)
-          .tint(MIRATheme.Color.auraViolet)
+          .buttonStyle(AuraTactilePrimaryButtonStyle())
           .frame(maxWidth: .infinity)
           .disabled(isVerifying)
         }
@@ -231,9 +269,10 @@ public struct AuraScanView: View {
           .fontWeight(.semibold)
           .foregroundStyle(MIRATheme.Color.auraViolet)
           .frame(maxWidth: .infinity, minHeight: 42)
+          .buttonStyle(AuraTactileSecondaryButtonStyle())
       }
       .padding(16)
-      .background(MIRATheme.Color.surface)
+      .background(MIRATheme.Color.paperSurface)
     }
     .physicalAuraCard(cornerRadius: 20)
   }
@@ -256,8 +295,7 @@ public struct AuraScanView: View {
         Button("Try Again") {
           if let selectedDocument { verify(selectedDocument) }
         }
-        .buttonStyle(.borderedProminent)
-        .tint(MIRATheme.Color.auraViolet)
+        .buttonStyle(AuraTactilePrimaryButtonStyle())
         .disabled(isVerifying)
       }
 

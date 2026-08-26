@@ -237,7 +237,7 @@ public struct MIRANativeRootView: View {
         } else {
           Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(MIRATheme.Color.appBackground)
+            .background(MIRATheme.Color.paperCanvas)
         }
       }
         .tag(MIRATab.home)
@@ -279,9 +279,11 @@ public struct MIRANativeRootView: View {
         .tabItem { Label("Me", systemImage: "face.smiling") }
     }
     .tint(MIRATheme.Color.auraViolet)
-    .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
-    .toolbarBackground(.visible, for: .tabBar)
-    .background(MIRATheme.Color.appBackground)
+    .toolbar(.hidden, for: .tabBar)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      AuraTactileTabBar(selection: $selectedTab)
+    }
+    .background(MIRATheme.Color.paperCanvas)
     .task {
       await auraProofs.observeLifecycle()
     }
@@ -306,7 +308,7 @@ public struct MIRANativeRootView: View {
     } else {
       Color.clear
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(MIRATheme.Color.appBackground)
+        .background(MIRATheme.Color.paperCanvas)
     }
   }
 
@@ -328,6 +330,49 @@ public struct MIRANativeRootView: View {
     Task {
       await MIRAPushTokenRegistry.shared.registerDeviceToken(token, api: api)
     }
+  }
+}
+
+private struct AuraTactileTabBar: View {
+  @Binding var selection: MIRATab
+
+  private let items: [(tab: MIRATab, title: String, systemImage: String)] = [
+    (.home, "Home", "house.fill"),
+    (.scan, "Scan", "viewfinder"),
+    (.wallet, "Wallet", "wallet.pass.fill"),
+    (.me, "Me", "face.smiling")
+  ]
+
+  var body: some View {
+    HStack(spacing: 4) {
+      ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+        Button {
+          selection = item.tab
+        } label: {
+          VStack(spacing: 4) {
+            Image(systemName: item.systemImage)
+              .font(.system(size: 18, weight: .bold))
+            Text(item.title)
+              .font(.system(size: 10.5, weight: .bold))
+          }
+          .foregroundStyle(selection == item.tab ? MIRATheme.Color.auraViolet : MIRATheme.Color.textPrimary)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 7)
+          .background(
+            selection == item.tab ? MIRATheme.Color.auraVioletSoft : Color.clear,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+          )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(selection == item.tab ? .isSelected : [])
+      }
+    }
+    .padding(6)
+    .physicalAuraCard(cornerRadius: 18)
+    .padding(.horizontal, 12)
+    .padding(.top, 7)
+    .background(MIRATheme.Color.paperCanvas)
   }
 }
 

@@ -35,6 +35,18 @@ Cloudflare D1 is not the production source of truth for Aura app data. Supabase 
 4. Deploy:
    `wrangler deploy --env production --keep-vars`
 
+## Authenticated Aura feed media
+
+Aura feed photos and videos use authenticated Worker intents, one-time Cloudflare direct-upload URLs, authenticated completion, and an owner-scoped Supabase `app_media_assets` record. Cloudflare Images/Stream stores the binary media; Supabase Storage buckets are intentionally not required for this path. Post creation accepts only an uploaded, moderation-approved asset owned by the caller and persists its asset ID, canonical media reference, and authoritative media type.
+
+Required external configuration (names only):
+
+- Worker secrets: `SUPABASE_SERVICE_ROLE_KEY`, `CLOUDFLARE_IMAGES_TOKEN`, `CLOUDFLARE_STREAM_TOKEN`
+- Worker vars: `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_IMAGES_ACCOUNT_HASH`
+- Optional video malware scanning: `MALWARE_SCANNER_URL`, `MALWARE_SCANNER_TOKEN`. Without a configured scanner, the existing moderation policy must treat the resulting `unknown`/`not_scanned` signal honestly; the mobile app must not invent a scan result.
+
+`GET /api/health` reports non-secret `checks.cloudflare_images.configured` and `checks.cloudflare_stream.configured` booleans. It never returns token values. A local dry-run validates bindings but cannot prove production secret presence; check the deployed health response after release.
+
 Google OAuth requires the same client IDs used by the native app and web auth callback:
 
 ```powershell

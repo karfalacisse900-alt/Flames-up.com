@@ -27,15 +27,20 @@ public struct AuraWalletView: View {
 
   public var body: some View {
     NavigationStack {
-      ScrollView {
-        VStack(spacing: MIRATheme.Space.lg) {
+      ScrollView(showsIndicators: false) {
+        VStack(spacing: 14) {
           balanceCard
           content
         }
-        .padding(MIRATheme.Space.lg)
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 28)
       }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
       .navigationTitle("Wallet")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(MIRATheme.Color.paperCanvas, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
       .refreshable {
         if let identity = wallet.identity {
           await gateway.refresh(identity: identity)
@@ -111,15 +116,15 @@ public struct AuraWalletView: View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.xs) {
       Text("Spendable AUR")
         .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.8))
+        .foregroundStyle(MIRATheme.Color.auraViolet)
       Text(gateway.availableAUR.map { "\($0) AUR" } ?? "Unavailable")
         .font(.system(size: 30, weight: .bold, design: .rounded))
-        .foregroundStyle(.white)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
       Text(balanceSubtitle)
         .font(.system(size: 12.5, weight: .medium))
-        .foregroundStyle(.white.opacity(0.75))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
       if let balance = gateway.balance {
-        Divider().overlay(.white.opacity(0.2))
+        Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.24))
         HStack(spacing: MIRATheme.Space.sm) {
           balanceMetric(
             "Confirmed",
@@ -140,7 +145,12 @@ public struct AuraWalletView: View {
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(MIRATheme.Space.lg)
-    .background(MIRATheme.Color.auraViolet)
+    .overlay(alignment: .leading) {
+      Capsule()
+        .fill(MIRATheme.Color.auraViolet)
+        .frame(width: 5)
+        .padding(.vertical, 18)
+    }
     .physicalAuraCard(cornerRadius: MIRATheme.Radius.large)
   }
 
@@ -148,10 +158,10 @@ public struct AuraWalletView: View {
     VStack(alignment: .leading, spacing: 2) {
       Text(label)
         .font(.system(size: 9.5, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.65))
+        .foregroundStyle(MIRATheme.Color.textMuted)
       Text(value)
         .font(.system(size: 12.5, weight: .bold, design: .rounded))
-        .foregroundStyle(.white)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
         .minimumScaleFactor(0.65)
     }
@@ -200,8 +210,12 @@ public struct AuraWalletView: View {
       SecureField("Wallet password", text: $unlockPassword)
         .textContentType(.password)
         .padding(MIRATheme.Space.md)
-        .background(MIRATheme.Color.surfaceSoft)
+        .background(MIRATheme.Color.paperSurfaceMuted)
         .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous)
+            .stroke(MIRATheme.Color.inkBorder.opacity(0.72), lineWidth: 1)
+        }
       Button("Unlock Wallet") {
         do {
           try wallet.unlock(password: unlockPassword)
@@ -280,12 +294,14 @@ public struct AuraWalletView: View {
       VStack(spacing: MIRATheme.Space.xxs) {
         Image(systemName: systemImage)
           .font(.system(size: 17, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.auraViolet)
         Text(label)
           .font(.system(size: 12.5, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
       }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(maxWidth: .infinity, minHeight: 56)
+      .frame(maxWidth: .infinity, minHeight: 52)
     }
+    .buttonStyle(.plain)
     .physicalAuraCard(cornerRadius: 16)
   }
 
@@ -770,8 +786,20 @@ struct AuraPrimaryButtonStyle: ButtonStyle {
       .font(.system(size: 15, weight: .bold))
       .foregroundStyle(.white)
       .frame(maxWidth: .infinity, minHeight: 48)
-      .background(MIRATheme.Color.auraViolet.opacity(configuration.isPressed ? 0.78 : 1))
+      .background(MIRATheme.Color.auraViolet)
       .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.5)
+      }
+      .shadow(
+        color: MIRATheme.Color.hardShadow,
+        radius: 0,
+        x: 0,
+        y: configuration.isPressed ? 1 : 4
+      )
+      .offset(y: configuration.isPressed ? 3 : 0)
+      .padding(.bottom, 4)
   }
 }
 
@@ -779,13 +807,21 @@ private struct AuraSecondaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(.system(size: 15, weight: .bold))
-      .foregroundStyle(MIRATheme.Color.auraViolet)
+      .foregroundStyle(MIRATheme.Color.textPrimary)
       .frame(maxWidth: .infinity, minHeight: 48)
-      .background(MIRATheme.Color.surfaceSoft.opacity(configuration.isPressed ? 0.7 : 1))
+      .background(MIRATheme.Color.paperSurface)
       .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous)
-          .stroke(MIRATheme.Color.auraViolet.opacity(0.28), lineWidth: 1)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.35)
       }
+      .shadow(
+        color: MIRATheme.Color.hardShadow,
+        radius: 0,
+        x: 0,
+        y: configuration.isPressed ? 1 : 3
+      )
+      .offset(y: configuration.isPressed ? 2 : 0)
+      .padding(.bottom, 3)
   }
 }

@@ -11,13 +11,13 @@ private struct PhysicalAuraCardModifier: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .background(MIRATheme.Color.surface)
+      .background(MIRATheme.Color.paperSurface)
       .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-          .stroke(MIRATheme.Color.textPrimary.opacity(0.88), lineWidth: 1.35)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.5)
       }
-      .shadow(color: .black.opacity(0.88), radius: 0, x: 0, y: 5)
+      .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 5)
       .padding(.bottom, 5)
   }
 }
@@ -30,13 +30,13 @@ public struct AuraSmallPostFeedCard: View {
   }
 
   public var body: some View {
-    HStack(alignment: .top, spacing: 12) {
-      RemoteAvatar(url: post.userProfileImage, size: 36)
+    HStack(alignment: .top, spacing: 10) {
+      RemoteAvatar(url: post.userProfileImage, size: 34)
 
-      VStack(alignment: .leading, spacing: 7) {
-        HStack(spacing: 8) {
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(spacing: 7) {
           Text(post.authorHandle)
-            .font(.subheadline)
+            .font(.system(size: 14, weight: .bold))
             .fontWeight(.bold)
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineLimit(1)
@@ -44,8 +44,8 @@ public struct AuraSmallPostFeedCard: View {
             .font(.caption2)
             .fontWeight(.black)
             .foregroundStyle(MIRATheme.Color.auraViolet)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
             .background(MIRATheme.Color.auraVioletSoft, in: Capsule())
           Spacer(minLength: 4)
           Text(AuraCommunityFormatting.relativeDate(post.createdAt))
@@ -55,7 +55,7 @@ public struct AuraSmallPostFeedCard: View {
 
         if !post.titleText.isEmpty {
           Text(post.titleText)
-            .font(.headline)
+            .font(.system(size: 16, weight: .bold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .lineLimit(2)
         }
@@ -63,14 +63,19 @@ public struct AuraSmallPostFeedCard: View {
         HStack(alignment: .top, spacing: 10) {
           if !post.bodyText.isEmpty {
             Text(post.bodyText)
-              .font(.subheadline)
+              .font(.system(size: 14))
               .foregroundStyle(MIRATheme.Color.textSecondary)
-              .lineLimit(4)
+              .lineLimit(3)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
-          if let image = post.primaryImageURL {
-            AuraCommunityRemoteImage(url: image, height: 72)
-              .frame(width: 76)
+          if post.primaryImageURL != nil {
+            AuraCommunityPostMedia(post: post, height: 64)
+              .frame(width: 70)
+              .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+              .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                  .stroke(MIRATheme.Color.inkBorder.opacity(0.72), lineWidth: 1)
+              }
           }
         }
 
@@ -86,8 +91,8 @@ public struct AuraSmallPostFeedCard: View {
         }
       }
     }
-    .padding(14)
-    .physicalAuraCard()
+    .padding(12)
+    .physicalAuraCard(cornerRadius: 15)
     .accessibilityElement(children: .combine)
   }
 }
@@ -154,7 +159,7 @@ public struct AuraSmallPostDetailLoaderView: View {
         .padding(20)
       }
     }
-    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
     .task {
       if model.post == nil { await model.load() }
     }
@@ -170,7 +175,7 @@ public struct AuraMeetupFeedCard: View {
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      AuraCommunityRemoteImage(url: post.primaryImageURL, height: 158)
+      AuraCommunityPostMedia(post: post, height: 184)
         .overlay(alignment: .topLeading) {
           Text("MEETUP")
             .font(.caption2)
@@ -178,7 +183,10 @@ public struct AuraMeetupFeedCard: View {
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
-            .background(MIRATheme.Color.surface, in: Capsule())
+            .background(MIRATheme.Color.paperSurface, in: Capsule())
+            .overlay {
+              Capsule().stroke(MIRATheme.Color.inkBorder, lineWidth: 1)
+            }
             .padding(10)
         }
 
@@ -196,10 +204,10 @@ public struct AuraMeetupFeedCard: View {
             .foregroundStyle(post.meetupEntryType == "aur" ? MIRATheme.Color.auraViolet : MIRATheme.Color.forest)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(
-              post.meetupEntryType == "aur" ? MIRATheme.Color.auraVioletSoft : MIRATheme.Color.forestSoft,
-              in: Capsule()
-            )
+            .background(post.meetupEntryType == "aur" ? MIRATheme.Color.auraVioletSoft : MIRATheme.Color.forestSoft, in: Capsule())
+            .overlay {
+              Capsule().stroke(MIRATheme.Color.inkBorder.opacity(0.72), lineWidth: 1)
+            }
         }
 
         Label(post.locationLine, systemImage: "mappin.and.ellipse")
@@ -218,9 +226,9 @@ public struct AuraMeetupFeedCard: View {
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
       }
-      .padding(14)
+      .padding(13)
     }
-    .physicalAuraCard()
+    .physicalAuraCard(cornerRadius: 16)
     .accessibilityElement(children: .combine)
   }
 
@@ -244,7 +252,7 @@ struct AuraStackedProfilePlaceholders: View {
               .font(.caption2)
               .foregroundStyle(index.isMultiple(of: 2) ? MIRATheme.Color.auraViolet : MIRATheme.Color.forest)
           }
-          .overlay { Circle().stroke(MIRATheme.Color.surface, lineWidth: 2) }
+          .overlay { Circle().stroke(MIRATheme.Color.paperSurface, lineWidth: 2) }
       }
     }
   }
@@ -261,7 +269,7 @@ struct AuraCommunityRemoteImage: View {
         .scaledToFill()
     } placeholder: {
       ZStack {
-        MIRATheme.Color.surfaceSoft
+        MIRATheme.Color.paperSurfaceMuted
         Image(systemName: "photo")
           .font(.title2)
           .foregroundStyle(MIRATheme.Color.textMuted)
@@ -270,6 +278,49 @@ struct AuraCommunityRemoteImage: View {
     .frame(maxWidth: .infinity)
     .frame(height: height)
     .clipped()
+  }
+}
+
+/// Uses a lightweight Cloudflare poster in scrolling feeds and resolves the real Stream
+/// playback URL only on a detail screen. Photos continue through the cached image path.
+private struct AuraCommunityPostMedia: View {
+  let post: AuraCommunityPost
+  let height: CGFloat
+  var playsVideo = false
+
+  var body: some View {
+    Group {
+      if post.primaryMediaType == "video", playsVideo, let playbackURL = post.primaryPlaybackURL {
+        RemoteMediaView(
+          url: playbackURL,
+          isVideo: true,
+          placeholderURL: post.primaryPosterURL,
+          contentMode: .fill,
+          shouldPlay: true,
+          videoMuted: false,
+          maxPixelSize: max(height * 3, 720),
+          showsVideoPlaceholderIcon: true,
+          placeholderColor: MIRATheme.Color.paperSurfaceMuted,
+          placeholderTint: MIRATheme.Color.inkBorder
+        )
+      } else {
+        AuraCommunityRemoteImage(url: post.primaryImageURL, height: height)
+          .overlay {
+            if post.primaryMediaType == "video" {
+              Image(systemName: "play.fill")
+                .font(.system(size: height < 100 ? 13 : 20, weight: .black))
+                .foregroundStyle(MIRATheme.Color.paperSurface)
+                .frame(width: height < 100 ? 30 : 46, height: height < 100 ? 30 : 46)
+                .background(MIRATheme.Color.inkBorder.opacity(0.88), in: Circle())
+                .accessibilityHidden(true)
+            }
+          }
+      }
+    }
+    .frame(maxWidth: .infinity)
+    .frame(height: height)
+    .clipped()
+    .accessibilityLabel(post.primaryMediaType == "video" ? "Video" : "Photo")
   }
 }
 
@@ -290,7 +341,7 @@ public struct AuraMeetupDetailView: View {
   public var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        AuraCommunityRemoteImage(url: post.primaryImageURL, height: 270)
+        AuraCommunityPostMedia(post: post, height: 270, playsVideo: true)
           .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
           .physicalAuraCard(cornerRadius: 16)
 
@@ -308,7 +359,7 @@ public struct AuraMeetupDetailView: View {
       .padding(.horizontal, 16)
       .padding(.bottom, 34)
     }
-    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
     .navigationTitle("Meetup")
     .navigationBarTitleDisplayMode(.inline)
     .task { await loadParticipants() }
@@ -551,7 +602,7 @@ public struct AuraMyCommunityView: View {
       }
       .padding(16)
     }
-    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
     .navigationTitle(title)
     .navigationBarTitleDisplayMode(.inline)
     .task { await model.load(scope: scope) }

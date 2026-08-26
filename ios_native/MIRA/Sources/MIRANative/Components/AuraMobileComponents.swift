@@ -1,5 +1,57 @@
 import SwiftUI
 
+public struct AuraTactilePrimaryButtonStyle: ButtonStyle {
+  public init() {}
+
+  public func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(.white)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 13)
+      .background(MIRATheme.Color.auraViolet)
+      .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 13, style: .continuous)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.5)
+      }
+      .shadow(
+        color: MIRATheme.Color.hardShadow,
+        radius: 0,
+        x: 0,
+        y: configuration.isPressed ? 1 : 4
+      )
+      .offset(y: configuration.isPressed ? 3 : 0)
+      .padding(.bottom, 4)
+      .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+  }
+}
+
+public struct AuraTactileSecondaryButtonStyle: ButtonStyle {
+  public init() {}
+
+  public func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 11)
+      .background(MIRATheme.Color.paperSurface)
+      .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+          .stroke(MIRATheme.Color.inkBorder, lineWidth: 1.35)
+      }
+      .shadow(
+        color: MIRATheme.Color.hardShadow,
+        radius: 0,
+        x: 0,
+        y: configuration.isPressed ? 1 : 3
+      )
+      .offset(y: configuration.isPressed ? 2 : 0)
+      .padding(.bottom, 3)
+      .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+  }
+}
+
 public struct AuraDocumentTicketCard: View {
   let merchant: String?
   let documentType: String

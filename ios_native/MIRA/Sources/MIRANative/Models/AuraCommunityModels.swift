@@ -62,6 +62,10 @@ public struct AuraCommunityPost: Decodable, Identifiable, Hashable {
   public let image: String?
   public let images: [String]?
   public let feedMediaUrls: [String]?
+  public let thumbnailUrls: [String]?
+  public let posterUrls: [String]?
+  public let mediaTypes: [String]?
+  public let mediaAssetIds: [String]?
   public let location: String?
   public let displayCity: String?
   public let displayRegion: String?
@@ -108,11 +112,63 @@ public struct AuraCommunityPost: Decodable, Identifiable, Hashable {
   }
 
   public var primaryImageURL: String? {
+    if primaryMediaType == "video", let poster = primaryPosterURL {
+      return poster
+    }
     for value in (feedMediaUrls ?? []) + (images ?? []) + [image ?? ""] {
       let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
       if !clean.isEmpty { return clean }
     }
     return nil
+  }
+
+  public var primaryMediaReference: String? {
+    for value in (images ?? []) + [image ?? ""] + (feedMediaUrls ?? []) {
+      let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !clean.isEmpty { return clean }
+    }
+    return nil
+  }
+
+  public var primaryMediaType: String? {
+    if let declared = mediaTypes?.first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+       declared == "image" || declared == "video" {
+      return declared
+    }
+    guard let reference = primaryMediaReference?.lowercased() else { return nil }
+    if reference.hasPrefix("cfstream:")
+      || reference.contains("videodelivery.net/")
+      || reference.contains("cloudflarestream.com/") {
+      return "video"
+    }
+    return "image"
+  }
+
+  public var primaryPosterURL: String? {
+    for value in (posterUrls ?? []) + (thumbnailUrls ?? []) {
+      let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !clean.isEmpty { return clean }
+    }
+    return nil
+  }
+
+  public var primaryPlaybackURL: String? {
+    guard primaryMediaType == "video", let reference = primaryMediaReference else { return nil }
+    if reference.lowercased().hasPrefix("cfstream:") {
+      let streamID = String(reference.dropFirst("cfstream:".count))
+      return "https://videodelivery.net/\(streamID)/manifest/video.m3u8"
+    }
+    return (feedMediaUrls ?? []).first ?? reference
+  }
+
+  public var containsVideoMedia: Bool {
+    if mediaTypes?.contains(where: { $0.lowercased() == "video" }) == true { return true }
+    return ((images ?? []) + [image ?? ""] + (feedMediaUrls ?? [])).contains { value in
+      let lowercased = value.lowercased()
+      return lowercased.hasPrefix("cfstream:")
+        || lowercased.contains("videodelivery.net/")
+        || lowercased.contains("cloudflarestream.com/")
+    }
   }
 
   public var locationLine: String {
@@ -208,6 +264,9 @@ struct AuraCommunityDraft: Codable {
   var placeRegion: String?
   var placeCountry: String?
   var hasPhoto: Bool
+  var mediaKind: String? = nil
+  var mediaFileName: String? = nil
+  var mediaMimeType: String? = nil
 }
 
 enum AuraCommunityDraftStore {

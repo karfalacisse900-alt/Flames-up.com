@@ -28,25 +28,35 @@ public struct AuraMeView: View {
 
   public var body: some View {
     NavigationStack {
-      ScrollView {
-        VStack(spacing: 16) {
+      ScrollView(showsIndicators: false) {
+        VStack(spacing: 13) {
           profileCard
           walletCard
           proofStats
           accountMenu
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
         .padding(.bottom, 28)
       }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
       .navigationTitle("Me")
       .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(MIRATheme.Color.paperCanvas, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           NavigationLink {
             SettingsNativeView(api: api, authSession: authSession)
           } label: {
             Image(systemName: "gearshape")
+              .font(.system(size: 15, weight: .bold))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .frame(width: 34, height: 34)
+              .background(MIRATheme.Color.paperSurface, in: Circle())
+              .overlay { Circle().stroke(MIRATheme.Color.inkBorder, lineWidth: 1.2) }
+              .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 2)
+              .padding(.bottom, 2)
           }
           .accessibilityLabel("Settings")
         }
@@ -57,6 +67,7 @@ public struct AuraMeView: View {
   private var profileCard: some View {
     HStack(spacing: 14) {
       RemoteAvatar(url: authSession.user?.profileImage, size: 72)
+        .overlay { Circle().stroke(MIRATheme.Color.inkBorder, lineWidth: 1.25) }
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 5) {
           Text(profileDisplayName)
@@ -99,8 +110,7 @@ public struct AuraMeView: View {
       }
       Spacer()
       Button("View Wallet", action: openWallet)
-        .buttonStyle(.borderedProminent)
-        .tint(MIRATheme.Color.auraViolet)
+        .buttonStyle(AuraTactilePrimaryButtonStyle())
     }
     .padding(16)
     .physicalAuraCard(cornerRadius: 18)
@@ -109,9 +119,9 @@ public struct AuraMeView: View {
   private var proofStats: some View {
     HStack(spacing: 0) {
       stat(value: String(proofs.records.count), label: "Proofs", systemImage: "checkmark.seal")
-      Rectangle().fill(MIRATheme.Color.divider).frame(width: 1, height: 52)
+      Rectangle().fill(MIRATheme.Color.inkBorder.opacity(0.24)).frame(width: 1, height: 52)
       stat(value: String(confirmedProofCount), label: "Confirmed", systemImage: "cube.fill")
-      Rectangle().fill(MIRATheme.Color.divider).frame(width: 1, height: 52)
+      Rectangle().fill(MIRATheme.Color.inkBorder.opacity(0.24)).frame(width: 1, height: 52)
       stat(value: String(feedbackCount), label: "Aura given", systemImage: "star.bubble")
     }
     .padding(.vertical, 16)
@@ -125,31 +135,31 @@ public struct AuraMeView: View {
       } label: {
         menuRow("My Posts", systemImage: "square.and.pencil")
       }
-      Divider().padding(.leading, 52)
+      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
       NavigationLink {
         AuraMyCommunityView(api: api, scope: "joined", title: "Joined Meetups")
       } label: {
         menuRow("Joined Meetups", systemImage: "person.2")
       }
-      Divider().padding(.leading, 52)
+      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
       NavigationLink {
         AuraProofsView(api: api, proofs: proofs)
       } label: {
         menuRow("My Proofs", systemImage: "ticket")
       }
-      Divider().padding(.leading, 52)
+      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
       NavigationLink {
         AuraReputationView(api: api, wallet: wallet, proofs: proofs)
       } label: {
         menuRow("Leave Aura", systemImage: "star.bubble")
       }
-      Divider().padding(.leading, 52)
+      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
       NavigationLink {
         SettingsNativeView(api: api, authSession: authSession)
       } label: {
         menuRow("Privacy & Settings", systemImage: "lock.shield")
       }
-      Divider().padding(.leading, 52)
+      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
       NavigationLink {
         TermsOfServiceView()
       } label: {
@@ -188,7 +198,7 @@ public struct AuraMeView: View {
         .foregroundStyle(MIRATheme.Color.textMuted)
     }
     .padding(.horizontal, 16)
-    .frame(minHeight: 54)
+    .frame(minHeight: 50)
     .contentShape(Rectangle())
   }
 

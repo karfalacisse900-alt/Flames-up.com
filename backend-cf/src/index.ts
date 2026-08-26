@@ -4807,6 +4807,12 @@ function detectImageContentType(bytes: Uint8Array): string {
   if (bytes.length >= 12
     && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
     && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+  if (bytes.length >= 12
+    && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]).toLowerCase();
+    if (['heic', 'heix', 'hevc', 'hevx'].includes(brand)) return 'image/heic';
+    if (['mif1', 'msf1'].includes(brand)) return 'image/heif';
+  }
   return '';
 }
 
@@ -5262,6 +5268,12 @@ function supabaseAppPostHasRenderablePhotoMedia(row: any): boolean {
   });
 }
 
+function supabaseAppPostHasRenderableMedia(row: any): boolean {
+  const postType = String(row?.post_type || '').toLowerCase();
+  if (postType === 'note') return false;
+  return supabaseAppPostMedia(row).mediaUrls.length > 0;
+}
+
 function normalizeStoryDurationSeconds(value: unknown): 15 | 30 | 60 | 0 {
   const duration = Math.round(Number(value || 0));
   if (duration === 15 || duration === 30 || duration === 60) return duration;
@@ -5292,8 +5304,8 @@ function auraCommunityPostHasRenderableContent(row: any): boolean {
   if (!isAuraCommunityPostType(postType)) return false;
   const title = cleanText(row?.title, 180);
   const content = cleanMultilineText(row?.content, 4000);
-  if (postType === 'small_post') return !!(title || content || supabaseAppPostHasRenderablePhotoMedia(row));
-  return !!title && supabaseAppPostHasRenderablePhotoMedia(row);
+  if (postType === 'small_post') return !!(title || content || supabaseAppPostHasRenderableMedia(row));
+  return !!title && supabaseAppPostHasRenderableMedia(row);
 }
 
 function normalizeAuraAtomicAmount(value: unknown): string {
@@ -5411,7 +5423,7 @@ function feedPhotoPostWhere(postAlias = 'p'): string {
 
 function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
-  if (mediaType === 'video') return url;
+  if (mediaType === 'video') return streamPlaybackUrl(url);
   return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'feed');
 }
 
@@ -7633,6 +7645,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     image: mediaUrls[0] || '',
     images: mediaUrls,
     media_types: mediaTypes,
+    media_asset_ids: parseJsonArray((metadata as any).media_asset_ids || (raw as any).media_asset_ids),
     media_dimensions: mediaDimensions,
     editor_overlays: parseJsonArray((row?.editor_data || {}).overlays),
     tagged_users: parseJsonArray(row?.tagged_users),
@@ -12213,10 +12226,15 @@ function normalizeMediaAssetType(value: unknown): CaptroMediaType | '' {
   return mediaType === 'image' || mediaType === 'video' ? mediaType : '';
 }
 
+const CLOUDFLARE_IMAGES_MAX_BYTES = 10_000_000;
+const CLOUDFLARE_IMAGES_VERIFICATION_MAX_BYTES = 16_000_000;
+const CLOUDFLARE_STREAM_BASIC_UPLOAD_MAX_BYTES = 200_000_000;
+
 function mediaModerationMaxBytes(env: Env, mediaType: CaptroMediaType): number {
   const raw = Number(mediaType === 'video' ? env.MEDIA_MAX_VIDEO_BYTES : env.MEDIA_MAX_IMAGE_BYTES);
-  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, mediaType === 'video' ? 500_000_000 : 50_000_000);
-  return mediaType === 'video' ? 250_000_000 : 25_000_000;
+  const providerCap = mediaType === 'video' ? CLOUDFLARE_STREAM_BASIC_UPLOAD_MAX_BYTES : CLOUDFLARE_IMAGES_MAX_BYTES;
+  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, providerCap);
+  return providerCap;
 }
 
 function isUnsafeUploadExtension(filename: unknown): boolean {
@@ -12228,7 +12246,7 @@ function validatePrePublishUploadInput(env: Env, body: any): { ok: true; mediaTy
   const mediaType = normalizeMediaAssetType(body.media_type || body.mediaType || body.type);
   if (!mediaType) return { ok: false, detail: 'Upload must be an image or video.', code: 'invalid_media_type', status: 400 };
 
-  const filename = cleanText(body.filename || body.file_name || (mediaType === 'video' ? 'captro-video.mp4' : 'captro-image.jpg'), 180);
+  const filename = cleanText(body.filename || body.file_name || (mediaType === 'video' ? 'aura-video.mp4' : 'aura-image.jpg'), 180);
   if (isUnsafeUploadExtension(filename)) return { ok: false, detail: 'This file type cannot be uploaded.', code: 'unsafe_extension', status: 400 };
 
   const mimeType = normalizedContentType(body.mime_type || body.mimeType || body.content_type || body.contentType);
@@ -12244,6 +12262,9 @@ function validatePrePublishUploadInput(env: Env, body: any): { ok: true; mediaTy
   }
 
   const fileSize = Math.max(0, Math.round(Number(body.file_size || body.fileSize || body.size || 0)));
+  if (fileSize <= 0) {
+    return { ok: false, detail: 'The upload is empty.', code: 'empty_upload', status: 400 };
+  }
   const maxBytes = mediaModerationMaxBytes(env, mediaType);
   if (fileSize > maxBytes) {
     return { ok: false, detail: 'This upload is too large.', code: 'file_too_large', status: 413 };
@@ -12595,7 +12616,7 @@ function mediaAssetPublicUrl(env: Env, asset: any): string {
   const key = cleanText(asset?.storage_key, 220);
   if (!key) return '';
   if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_FEED_VARIANT || 'public');
-  if (provider === 'stream') return `https://videodelivery.net/${key}/manifest/video.m3u8`;
+  if (provider === 'stream') return `cfstream:${key}`;
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
 }
 
@@ -12606,6 +12627,134 @@ function mediaAssetPreviewUrl(env: Env, asset: any): string {
   if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'public');
   if (provider === 'stream') return streamThumbnailUrl(`cfstream:${key}`);
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
+}
+
+type VerifiedProviderUpload =
+  | {
+      ok: true;
+      fileSize: number;
+      mimeType: string;
+      sha256Hash: string;
+      width: number | null;
+      height: number | null;
+      durationSeconds: number | null;
+    }
+  | { ok: false; status: number; code: string; detail: string };
+
+function verifiedUploadFailure(status: number, code: string, detail: string): VerifiedProviderUpload {
+  return { ok: false, status, code, detail };
+}
+
+function providerMetadataMatchesAsset(raw: any, asset: any, userId: string): boolean {
+  const metadata = parseJsonObject(raw);
+  return cleanText(metadata.userId || metadata.user_id, 160) === userId
+    && cleanText(metadata.mediaId || metadata.media_id, 160) === cleanText(asset?.id, 160);
+}
+
+async function verifyCloudflareProviderUpload(env: Env, asset: any, userId: string): Promise<VerifiedProviderUpload> {
+  const provider = cleanText(asset?.storage_provider, 40);
+  const storageKey = cleanText(asset?.storage_key, 220);
+  const mediaType = normalizeMediaAssetType(asset?.media_type);
+  const accountId = cloudflareAccountId(env);
+  const expectedSize = Math.max(0, Math.round(Number(asset?.file_size || 0)));
+  const expectedChecksum = cleanText(asset?.sha256_hash, 80).toLowerCase();
+  if (!storageKey || !mediaType || !accountId || expectedSize <= 0 || !/^[a-f0-9]{64}$/.test(expectedChecksum)) {
+    return verifiedUploadFailure(409, 'upload_intent_invalid', 'Upload validation could not be completed. Please upload again.');
+  }
+
+  if (provider === 'images' && mediaType === 'image') {
+    const token = cloudflareImagesToken(env);
+    if (!token) return verifiedUploadFailure(503, 'image_upload_not_configured', 'Image upload is not configured.');
+    const headers = { Authorization: `Bearer ${token}` };
+    const detailResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(storageKey)}`,
+      { headers },
+    );
+    const detailData: any = await detailResponse.json().catch(() => ({}));
+    if (!detailResponse.ok || !detailData.success || cleanText(detailData.result?.id, 220) !== storageKey) {
+      return verifiedUploadFailure(425, 'image_upload_pending', 'The image upload is not available yet. Please try again.');
+    }
+    const image = detailData.result || {};
+    if (image.draft === true || !image.uploaded) {
+      return verifiedUploadFailure(425, 'image_upload_pending', 'The image upload has not finished yet. Please try again.');
+    }
+    if (!providerMetadataMatchesAsset(image.meta || image.metadata, asset, userId)) {
+      return verifiedUploadFailure(403, 'media_ownership_mismatch', 'This upload does not belong to the signed-in account.');
+    }
+
+    const blobResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(storageKey)}/blob`,
+      { headers: { ...headers, accept: 'image/*' } },
+    );
+    const contentLength = Math.max(0, Number(blobResponse.headers.get('content-length') || 0));
+    if (!blobResponse.ok || contentLength > CLOUDFLARE_IMAGES_VERIFICATION_MAX_BYTES) {
+      return verifiedUploadFailure(blobResponse.ok ? 413 : 425, 'image_bytes_unavailable', 'The uploaded image could not be validated.');
+    }
+    const bytes = new Uint8Array(await blobResponse.arrayBuffer());
+    if (!bytes.byteLength || bytes.byteLength > CLOUDFLARE_IMAGES_VERIFICATION_MAX_BYTES) {
+      return verifiedUploadFailure(bytes.byteLength ? 413 : 400, bytes.byteLength ? 'file_too_large' : 'empty_upload', 'The uploaded image is invalid.');
+    }
+    const detectedMimeType = detectImageContentType(bytes);
+    if (!detectedMimeType || !ALLOWED_IMAGE_TYPES.has(detectedMimeType)) {
+      return verifiedUploadFailure(400, 'media_type_mismatch', 'The uploaded object is not a supported image.');
+    }
+    const actualChecksum = await sha256BinaryHex(bytes);
+    // Cloudflare Images may return a near-lossless provider representation from /blob,
+    // so its observed bytes are validated and recorded but are not compared byte-for-byte
+    // with the client intent. The signed-in client must still repeat the exact intent hash
+    // and size at completion, and provider metadata binds this object to that intent.
+    return {
+      ok: true,
+      fileSize: bytes.byteLength,
+      mimeType: detectedMimeType,
+      sha256Hash: actualChecksum,
+      width: Number(asset?.width || 0) > 0 ? Number(asset.width) : null,
+      height: Number(asset?.height || 0) > 0 ? Number(asset.height) : null,
+      durationSeconds: null,
+    };
+  }
+
+  if (provider === 'stream' && mediaType === 'video') {
+    const token = cloudflareStreamToken(env);
+    if (!token) return verifiedUploadFailure(503, 'video_upload_not_configured', 'Video upload is not configured.');
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${encodeURIComponent(storageKey)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data: any = await response.json().catch(() => ({}));
+    const video = data.result || {};
+    if (!response.ok || !data.success || cleanText(video.uid, 220) !== storageKey) {
+      return verifiedUploadFailure(425, 'video_upload_pending', 'The video upload is not available yet. Please try again.');
+    }
+    const state = cleanText(video.status?.state, 60).toLowerCase();
+    if (!state || state === 'pendingupload' || state === 'error') {
+      return verifiedUploadFailure(state === 'error' ? 400 : 425, state === 'error' ? 'video_upload_failed' : 'video_upload_pending', 'The video upload has not finished yet. Please try again.');
+    }
+    if (cleanText(video.creator, 160) !== userId || !providerMetadataMatchesAsset(video.meta, asset, userId)) {
+      return verifiedUploadFailure(403, 'media_ownership_mismatch', 'This upload does not belong to the signed-in account.');
+    }
+    const actualSize = Math.max(0, Math.round(Number(video.size || 0)));
+    if (!actualSize) return verifiedUploadFailure(425, 'video_upload_pending', 'The video upload has not finished yet. Please try again.');
+    if (actualSize > CLOUDFLARE_STREAM_BASIC_UPLOAD_MAX_BYTES) {
+      return verifiedUploadFailure(413, 'file_too_large', 'This video is too large.');
+    }
+    if (actualSize !== expectedSize) {
+      return verifiedUploadFailure(409, 'upload_integrity_mismatch', 'The uploaded video does not match the authorized upload.');
+    }
+    const durationSeconds = Number(video.duration || 0);
+    if (durationSeconds > 60.5) return verifiedUploadFailure(400, 'video_too_long', 'Videos must be 60 seconds or shorter.');
+    return {
+      ok: true,
+      fileSize: actualSize,
+      mimeType: normalizedContentType(asset?.mime_type),
+      sha256Hash: expectedChecksum,
+      width: Number(video.input?.width || asset?.width || 0) > 0 ? Number(video.input?.width || asset.width) : null,
+      height: Number(video.input?.height || asset?.height || 0) > 0 ? Number(video.input?.height || asset.height) : null,
+      durationSeconds: durationSeconds > 0 ? durationSeconds : null,
+    };
+  }
+
+  return verifiedUploadFailure(409, 'media_provider_mismatch', 'The upload provider does not match the media type.');
 }
 
 function moderationSampleUrls(env: Env, asset: any): string[] {
@@ -13058,14 +13207,14 @@ function parseMediaAssetIds(body: any): string[] {
     ...parseJsonArray(body.mediaIds),
     body.media_asset_id,
     body.mediaAssetId,
-  ].flat().map((value) => publicId(value, 160)).filter(Boolean)));
+  ].flat().map((value) => publicId(value, 160)).filter(Boolean))).slice(0, 12);
 }
 
 async function approvedMediaAssetsForPost(c: any, userId: string, requestedMediaIds: string[], imageUrls: string[]) {
   if (supabasePrimaryConfigured(c)) {
     let assets: any[] = [];
     if (requestedMediaIds.length) {
-      assets = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+      const rows = (await supabaseAdminQueryRows(c, 'app_media_assets', {
         select: '*',
         filters: {
           user_id: postgrestEqFilter(userId),
@@ -13073,6 +13222,8 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
         },
         limit: requestedMediaIds.length,
       })).map(supabaseMediaAssetToLegacy);
+      const byId = new Map(rows.map((row: any) => [publicId(row?.id, 160), row]));
+      assets = requestedMediaIds.map((mediaId) => byId.get(mediaId)).filter(Boolean);
       if (assets.length !== requestedMediaIds.length) {
         return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
       }
@@ -13123,6 +13274,18 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
           ? 'This upload needs a quick safety review before it can be posted.'
           : 'Checking your upload before posting...';
       return { ok: false, status: 409, detail, code: `MEDIA_${status.toUpperCase()}`, assets };
+    }
+    if (assets.some((asset) => publicId(asset?.legacy_post_id || asset?.post_id, 160))) {
+      return { ok: false, status: 409, detail: 'One upload is already attached to another post.', code: 'MEDIA_ALREADY_ATTACHED', assets };
+    }
+    const invalid = assets.find((asset) => {
+      const type = normalizeMediaAssetType(asset?.media_type);
+      const provider = cleanText(asset?.storage_provider, 40);
+      const reference = safeMediaReference(asset?.public_url) || mediaAssetPublicUrl(c.env, asset);
+      return !type || !reference || (type === 'image' ? provider !== 'images' : provider !== 'stream');
+    });
+    if (invalid) {
+      return { ok: false, status: 409, detail: 'One upload is not ready to attach. Please upload again.', code: 'MEDIA_PROVIDER_MISMATCH', assets };
     }
     return { ok: true, status: 200, detail: '', code: '', assets };
   }
@@ -15420,50 +15583,36 @@ api.post('/posts', authMiddleware, async (c) => {
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
   let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+  const mediaAssetIds = parseMediaAssetIds(b);
   const communityResult = auraCommunityMetadataFromBody(b, postType);
   if (communityResult.error) return c.json({ detail: communityResult.error, code: 'INVALID_AURA_COMMUNITY_POST' }, 400);
   if (isAuraCommunityPostType(postType)) {
     visibility = normalizeVisibility(communityResult.value?.audience);
   }
-  if (postType === 'small_post' && !postTitle && !postContent && !primaryImage) {
-    return c.json({ detail: 'Small Post needs a title, text, or photo.', code: 'EMPTY_SMALL_POST' }, 400);
+  if (postType === 'small_post' && !postTitle && !postContent && !primaryImage && !mediaAssetIds.length) {
+    return c.json({ detail: 'Small Post needs a title, text, photo, or video.', code: 'EMPTY_SMALL_POST' }, 400);
   }
-  if (postType === 'meetup' && (!postTitle || !postContent || !primaryImage || !placeName)) {
+  if (postType === 'meetup' && (!postTitle || !postContent || (!primaryImage && !mediaAssetIds.length) || !placeName)) {
     return c.json({
-      detail: 'Meetup needs a cover image, title, place, and description.',
+      detail: 'Meetup needs cover media, a title, place, and description.',
       code: 'INCOMPLETE_MEETUP',
     }, 400);
   }
-  const requestedPostType = String(b.post_type || b.postType || b.media_type || b.mediaType || '').toLowerCase();
-  const hasVideoMedia = requestedPostType.includes('video') || mediaTypes.includes('video') || imageUrls.some(isVideoMediaUrl);
-  if (hasVideoMedia) {
-    return c.json({
-      detail: 'Feed posts support photos only. Share videos to Stories instead.',
-      code: 'FEED_POSTS_PHOTO_ONLY',
-    }, 400);
-  }
-  const mediaAssetIds = parseMediaAssetIds(b);
   const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, imageUrls);
   if (!mediaApproval.ok) {
     return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
-  }
-  if (mediaApproval.assets.some((asset: any) => normalizeMediaAssetType(asset.media_type) === 'video')) {
-    return c.json({
-      detail: 'Feed posts support photos only. Share videos to Stories instead.',
-      code: 'FEED_POSTS_PHOTO_ONLY',
-    }, 400);
   }
   const approvedMediaAssetIds = Array.from(new Set([
     ...mediaAssetIds,
     ...mediaApproval.assets.map((asset: any) => publicId(asset?.id, 160)).filter(Boolean),
   ]));
-  const moderatedImageUrls = mediaApproval.assets
+  const moderatedMediaUrls = mediaApproval.assets
     .map((asset: any) => safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
     .filter(Boolean);
-  if (moderatedImageUrls.length) {
-    imageUrls = moderatedImageUrls;
+  if (moderatedMediaUrls.length) {
+    imageUrls = moderatedMediaUrls;
     primaryImage = imageUrls[0] || null;
-    mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+    mediaTypes = mediaApproval.assets.map((asset: any) => normalizeMediaAssetType(asset.media_type) || 'image');
   }
   const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
   const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
@@ -17810,24 +17959,32 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   }
 
   const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash, 80).toLowerCase();
-  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) {
+  if (!/^[a-f0-9]{64}$/.test(sha256Hash)) {
     return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
   }
-  if (sha256Hash) {
-    const duplicateCount = (await supabaseAdminQueryRows(c, 'app_media_assets', {
-      select: 'id',
-      filters: {
-        user_id: postgrestEqFilter(userId),
-        sha256_hash: postgrestEqFilter(sha256Hash),
-        created_at: `gte.${new Date(Date.now() - 86400_000).toISOString()}`,
-      },
-      limit: 12,
-    })).length;
-    if (duplicateCount >= 12) {
-      return c.json({ detail: 'Upload limit reached for this file. Try again later.', code: 'duplicate_upload_limit' }, 429);
-    }
+  const duplicateCount = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: 'id',
+    filters: {
+      user_id: postgrestEqFilter(userId),
+      sha256_hash: postgrestEqFilter(sha256Hash),
+      created_at: `gte.${new Date(Date.now() - 86400_000).toISOString()}`,
+    },
+    limit: 12,
+  })).length;
+  if (duplicateCount >= 12) {
+    return c.json({ detail: 'Upload limit reached for this file. Try again later.', code: 'duplicate_upload_limit' }, 429);
   }
 
+  const mediaId = uuid();
+  const providerMetadata = {
+    userId,
+    mediaId,
+    filename: validation.filename,
+    mimeType: validation.mimeType,
+    fileSize: validation.fileSize,
+    moderation: 'pre_publish',
+    source: 'aura_ios',
+  };
   let uploadUrl = '';
   let storageKey = '';
   let storageProvider: 'images' | 'stream' = 'images';
@@ -17835,13 +17992,7 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     const requireSignedURLs = cloudflareImagesRequireSignedUrls(c.env);
     const formData = new FormData();
     formData.append('requireSignedURLs', String(requireSignedURLs));
-    formData.append('metadata', JSON.stringify({
-      userId,
-      filename: validation.filename,
-      mimeType: validation.mimeType,
-      moderation: 'pre_publish',
-      source: 'captro_ios',
-    }));
+    formData.append('metadata', JSON.stringify(providerMetadata));
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
@@ -17865,7 +18016,7 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
         maxDurationSeconds,
         creator: userId,
         requireSignedURLs,
-        meta: { userId, moderation: 'pre_publish', filename: validation.filename },
+        meta: providerMetadata,
       }),
     });
     const data: any = await res.json().catch(() => ({}));
@@ -17879,7 +18030,6 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   }
 
   if (!uploadUrl || !storageKey) return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
-  const mediaId = uuid();
   const assetInput = {
     id: mediaId,
     userId,
@@ -17893,7 +18043,7 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     width: body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
     height: body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
     durationSeconds: body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
-    metadata: { source: 'media_upload_intent' },
+    metadata: { source: 'media_upload_intent', provider_metadata_version: 1 },
   };
   await supabaseInsertMediaAsset(c, assetInput);
   await supabaseInsertModerationEvent(c, mediaId, 'upload_intent_created', {
@@ -17942,24 +18092,64 @@ api.post('/media/complete', authMiddleware, async (c) => {
     });
   }
 
-  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash || asset.sha256_hash, 80).toLowerCase();
-  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
+  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash, 80).toLowerCase();
+  const expectedChecksum = cleanText(asset.sha256_hash, 80).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(sha256Hash) || sha256Hash !== expectedChecksum) {
+    return c.json({ detail: 'The upload checksum does not match its authorization.', code: 'upload_integrity_mismatch' }, 409);
+  }
+  const claimedFileSize = Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0)));
+  if (!claimedFileSize || claimedFileSize !== Math.max(0, Math.round(Number(asset.file_size || 0)))) {
+    return c.json({ detail: 'The upload size does not match its authorization.', code: 'upload_integrity_mismatch' }, 409);
+  }
+  let verifiedUpload: VerifiedProviderUpload;
+  try {
+    verifiedUpload = await verifyCloudflareProviderUpload(c.env, asset, userId);
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: 'media_provider_verification_failed',
+      media_id: mediaId,
+      provider: cleanText(asset.storage_provider, 40),
+      code: getErrorCode(error).slice(0, 180),
+    }));
+    return c.json({ detail: 'The uploaded media could not be validated. Please try again.', code: 'provider_verification_unavailable' }, 502);
+  }
+  if (!verifiedUpload.ok) {
+    return c.json({ detail: verifiedUpload.detail, code: verifiedUpload.code }, verifiedUpload.status as any);
+  }
   const ts = now();
   const updatePatch = {
     upload_status: 'uploaded',
     moderation_status: 'pending_moderation',
-    ...(sha256Hash ? { sha256_hash: sha256Hash } : {}),
-    ...(Number(body.file_size || body.fileSize || 0) > 0 ? { file_size: Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0))) } : {}),
-    ...(body.width == null ? {} : { width: clampNumber(body.width, 1, 10000, 0) }),
-    ...(body.height == null ? {} : { height: clampNumber(body.height, 1, 10000, 0) }),
-    ...(body.duration_seconds == null && body.durationSeconds == null ? {} : { duration_seconds: clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0) }),
+    sha256_hash: verifiedUpload.sha256Hash,
+    file_size: verifiedUpload.fileSize,
+    mime_type: verifiedUpload.mimeType,
+    width: verifiedUpload.width,
+    height: verifiedUpload.height,
+    duration_seconds: verifiedUpload.durationSeconds,
+    metadata: {
+      ...parseJsonObject(asset.metadata),
+      provider_verified: true,
+      provider_verified_at: ts,
+      provider_verified_size: verifiedUpload.fileSize,
+      provider_observed_sha256: verifiedUpload.sha256Hash,
+      client_intent_sha256: expectedChecksum,
+      client_intent_file_size: claimedFileSize,
+      client_intent_mime_type: normalizedContentType(asset.mime_type),
+      checksum_source: cleanText(asset.storage_provider, 40) === 'images' ? 'cloudflare_images_blob' : 'client_intent_stream_provider_size_verified',
+    },
     updated_at: ts,
   };
   await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId), user_id: postgrestEqFilter(userId) }, updatePatch);
   await supabaseInsertModerationEvent(c, mediaId, 'upload_completed', {
     actorUserId: userId,
     beforeState: { upload_status: asset.upload_status, moderation_status: asset.moderation_status },
-    afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
+    afterState: {
+      upload_status: 'uploaded',
+      moderation_status: 'pending_moderation',
+      provider_verified: true,
+      file_size: verifiedUpload.fileSize,
+      mime_type: verifiedUpload.mimeType,
+    },
     requestId: c.get?.('requestId') || '',
   });
   const moderationCaption = cleanMultilineText(body.caption || body.content || body.title || '', 1000);
@@ -23614,6 +23804,12 @@ api.get('/health', async (c) => {
         primary: primaryDatabase,
         healthy: databaseHealthy,
         latency_ms: Date.now() - dbStartedAt,
+      },
+      cloudflare_images: {
+        configured: !!(cloudflareAccountId(c.env) && cloudflareImagesToken(c.env) && cloudflareImagesAccountHash(c.env)),
+      },
+      cloudflare_stream: {
+        configured: !!(cloudflareAccountId(c.env) && cloudflareStreamToken(c.env)),
       },
     },
     latency_ms: Date.now() - startedAt,

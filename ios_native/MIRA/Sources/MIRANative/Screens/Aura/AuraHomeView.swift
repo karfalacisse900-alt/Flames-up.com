@@ -213,17 +213,17 @@ public struct AuraHomeView: View {
     NavigationStack {
       VStack(spacing: 0) {
         feedHeader
-        ScrollView {
-          LazyVStack(spacing: 14) {
+        ScrollView(showsIndicators: false) {
+          LazyVStack(spacing: 12) {
             feedContent
           }
-          .padding(.horizontal, 16)
-          .padding(.top, 14)
+          .padding(.horizontal, 14)
+          .padding(.top, 12)
           .padding(.bottom, 30)
         }
         .refreshable { await model.load(scope: scope, city: cityName, refresh: true) }
       }
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
       .navigationBarHidden(true)
       .task(id: scope) {
         await model.load(scope: scope, city: cityName, refresh: true)
@@ -245,18 +245,27 @@ public struct AuraHomeView: View {
       Button {
         isCreatingPost = true
       } label: {
-        Image(systemName: "person.crop.circle.badge.plus")
-          .font(.title2.weight(.semibold))
+        Image(systemName: "plus")
+          .font(.system(size: 17, weight: .black))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 40, height: 40)
+          .background(MIRATheme.Color.paperSurface, in: Circle())
+          .overlay { Circle().stroke(MIRATheme.Color.inkBorder, lineWidth: 1.4) }
+          .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 3)
+          .padding(.bottom, 3)
       }
-      .buttonStyle(.bordered)
-      .buttonBorderShape(.circle)
-      .tint(MIRATheme.Color.textPrimary)
+      .buttonStyle(.plain)
       .accessibilityLabel("Create post")
     }
     .padding(.horizontal, 18)
     .padding(.top, 12)
     .padding(.bottom, 8)
-    .background(MIRATheme.Color.surface)
+    .background(MIRATheme.Color.paperCanvas)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.inkBorder.opacity(0.22))
+        .frame(height: 1)
+    }
   }
 
   private func feedScopeButton(_ value: AuraCommunityFeedScope, title: String) -> some View {
@@ -268,9 +277,9 @@ public struct AuraHomeView: View {
           .font(.title3)
           .fontWeight(scope == value ? .bold : .semibold)
           .foregroundStyle(scope == value ? MIRATheme.Color.auraViolet : MIRATheme.Color.textSecondary)
-        Rectangle()
+        Capsule()
           .fill(scope == value ? MIRATheme.Color.auraViolet : Color.clear)
-          .frame(height: 3)
+          .frame(height: 3.5)
       }
     }
     .buttonStyle(.plain)
