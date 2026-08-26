@@ -13,6 +13,11 @@ on:
         required: false
         type: string
         default: "Aura Mobile build."
+      use_prevalidated_ios_gate:
+        description: "Use the already-passed Swift tests and arm64 Release gate; skip duplicate simulator work"
+        required: false
+        type: boolean
+        default: false
   push:
     tags:
       - "ios-v*"
@@ -50,12 +55,14 @@ jobs:
       - name: Install fastlane
         run: brew install fastlane
 
-      - name: Build Rust native core for iOS device and Simulator
+      - name: Build Rust native core for required Apple platforms
         if: inputs.existing_build_number == ''
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
           bash ./scripts/build-rust-ios.sh iphoneos
-          bash ./scripts/build-rust-ios.sh iphonesimulator
+          if [[ "${{ inputs.use_prevalidated_ios_gate }}" != "true" ]]; then
+            bash ./scripts/build-rust-ios.sh iphonesimulator
+          fi
 
       - name: Generate Xcode project
         if: inputs.existing_build_number == ''
@@ -75,7 +82,7 @@ jobs:
           echo "MARKETING_VERSION=$MARKETING_VERSION" >> "$GITHUB_ENV"
 
       - name: Run native iOS unit tests
-        if: inputs.existing_build_number == ''
+        if: inputs.existing_build_number == '' && inputs.use_prevalidated_ios_gate != true
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
           set -euo pipefail
@@ -98,7 +105,7 @@ jobs:
             test
 
       - name: Launch Aura Release build in iOS Simulator
-        if: inputs.existing_build_number == ''
+        if: inputs.existing_build_number == '' && inputs.use_prevalidated_ios_gate != true
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: bash ./scripts/smoke-test-ios-launch.sh
 
