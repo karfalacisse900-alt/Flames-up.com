@@ -509,7 +509,7 @@ public final class MIRAMediaUploadService {
       #if DEBUG
       if let renderedData {
         print(
-          "AuraCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
+          "CaptroCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
           "feed=\(Int(targetSize.width))x\(Int(targetSize.height)) ratio=\(selectedRatio.rawValue) bytes=\(renderedData.count) compression=0.94"
         )
       }
