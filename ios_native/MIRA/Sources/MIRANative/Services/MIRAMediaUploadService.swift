@@ -271,7 +271,7 @@ public final class MIRAMediaUploadService {
         throw MIRAAPIError.server(
           status: 409,
           code: "MEDIA_REJECTED",
-          detail: status.rejectionMessage ?? "This upload can't be posted because it may break Captro's safety rules."
+          detail: status.rejectionMessage ?? "This upload can't be posted because it may break Aura's safety rules."
         )
       }
       if moderation == "review_required" {

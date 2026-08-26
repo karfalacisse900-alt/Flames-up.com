@@ -1,4 +1,4 @@
-// Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
+// Aura Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -95,12 +95,6 @@ interface Env {
   MUSIC_DAILY_GENERATION_LIMIT?: string;
   MUSIC_GENERATION_COOLDOWN_SECONDS?: string;
   ABUSE_SIGNAL_SECRET?: string;
-  OWNERSHIP_ANCHOR_PROVIDER?: string;
-  EVM_RPC_URL?: string;
-  EVM_CONTRACT_ADDRESS?: string;
-  SOLANA_RPC_URL?: string;
-  IPFS_API_URL?: string;
-  ARWEAVE_GATEWAY?: string;
   AURA_MOBILE_GATEWAY_URL?: string;
   AURA_MOBILE_GATEWAY_URLS?: string;
   AURA_MOBILE_GATEWAY_TOKEN?: string;
@@ -115,10 +109,12 @@ type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string }
 
 const app = new Hono<HonoApp>();
 const API_VERSION = '2.0';
-const WORKER_NAME = 'captro-api';
+// Public health identity. The deployed Worker resource name remains the legacy
+// `flames-up-api` identifier in wrangler.toml for routing compatibility.
+const WORKER_NAME = 'aura-api';
 
 // Root handler
-app.get('/', (c) => c.json({ name: 'Captro API', version: API_VERSION, status: 'live', docs: '/api/health' }));
+app.get('/', (c) => c.json({ name: 'Aura API', version: API_VERSION, status: 'live', docs: '/api/health' }));
 
 const api = new Hono<HonoApp>();
 
@@ -224,7 +220,7 @@ app.use('*', securityHeaders);
 api.use('*', securityHeaders);
 
 const retiredFeature = (feature: string) => (c: any) => c.json({
-  detail: `${feature} has been removed from Captro.`,
+  detail: `${feature} has been removed from Aura.`,
 }, 410);
 
 api.all('/publisher/*', retiredFeature('Publisher tools'));
@@ -352,7 +348,7 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING' || code === 'SUPABASE_AUTH_KEY_MISSING') {
-      return c.json({ detail: 'Captro production database is not configured. Please try again later.', code: 'SUPABASE_PRIMARY_REQUIRED' }, 503);
+      return c.json({ detail: 'Aura production database is not configured. Please try again later.', code: 'SUPABASE_PRIMARY_REQUIRED' }, 503);
     }
     return c.json({ detail: 'Invalid session. Please sign in again.', code: 'INVALID_TOKEN' }, 401);
   }
@@ -3039,7 +3035,7 @@ async function generatePostAssistWithWorkersAi(env: Env, input: AutoCategoryInpu
       {
         role: 'system',
         content: [
-          'You are Captro Post Assist for a real social photo and short-video app.',
+          'You are Aura Post Assist for a real social photo and short-video app.',
           'Write natural, human captions and short headlines. Keep it premium, simple, and not fake.',
           'Classify the post into exactly one allowed category. Do not invent unsupported categories.',
           'Return JSON only. Do not include markdown.',
@@ -5365,12 +5361,23 @@ function normalizeAuraCommunityCity(value: unknown): string {
   return normalized;
 }
 
-function auraCommunityPostCity(row: any): string {
+function auraCommunityPostCity(row: any, author?: any): string {
   const metadata = parseJsonObject(row?.metadata);
   const raw = parseJsonObject((metadata as any).raw);
   const place = parseJsonObject((metadata as any).place);
-  return normalizeAuraCommunityCity(
+  const postCity = normalizeAuraCommunityCity(
     (place as any).city || (raw as any).display_city || (metadata as any).display_city
+  );
+  if (postCity) return postCity;
+
+  // A location is optional for Small Posts. The city feed must therefore fall back to the
+  // author's persisted public city instead of silently excluding every location-free post.
+  // An explicit post/place city always wins, so a post tagged to another city cannot leak
+  // into the viewer's selected city merely because its author lives there.
+  const authorProfile = parseJsonObject(author?.profile);
+  const authorMetadata = parseJsonObject(author?.metadata);
+  return normalizeAuraCommunityCity(
+    author?.city || (authorProfile as any).city || (authorMetadata as any).city
   );
 }
 
@@ -7363,7 +7370,7 @@ async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
     target_id: blocked,
     target_owner_user_id: blocked,
     reason: 'blocked_user',
-    details: 'User blocked from a Captro safety control.',
+    details: 'User blocked from an Aura safety control.',
     status: 'open',
     priority: 'normal',
     metadata: {
@@ -7805,11 +7812,18 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
       const authorId = publicId(row?.app_user_id || author?.id, 120);
       const authAuthorId = isUuidText(row?.user_id) || '';
       if (options.socialScope === 'friends') {
-        return viewerSet.has(authorId) || (!!authAuthorId && viewerSet.has(authAuthorId)) || connectedIds.has(authorId);
+        // Feed membership is broader than friends-only visibility: public/follower-visible
+        // posts from accounts the viewer follows belong in Friends, while the visibility
+        // guard above still requires an actual friendship for posts marked "friends".
+        return viewerSet.has(authorId)
+          || (!!authAuthorId && viewerSet.has(authAuthorId))
+          || connectedIds.has(authorId)
+          || followingIds.has(authorId)
+          || (!!authAuthorId && followingIds.has(authAuthorId));
       }
       if (options.socialScope === 'city') {
         const requestedCity = normalizeAuraCommunityCity(options.city || 'New York City');
-        return !!requestedCity && auraCommunityPostCity(row) === requestedCity;
+        return !!requestedCity && auraCommunityPostCity(row, author) === requestedCity;
       }
       return true;
     });
@@ -7981,7 +7995,7 @@ function supabasePrimaryRequestedForEnv(env: Env): boolean {
 function requireSupabasePrimaryDatabase(c: any, feature = 'app data') {
   if (supabasePrimaryConfigured(c)) return null;
   return c.json({
-    detail: 'Captro production database is not configured. Please try again later.',
+    detail: 'Aura production database is not configured. Please try again later.',
     code: 'SUPABASE_PRIMARY_REQUIRED',
     feature,
   }, 503);
@@ -9242,7 +9256,7 @@ async function stripeApiGet(c: any, path: string) {
 
 const PREMIUM_PLAN = {
   id: 'monthly',
-  label: 'Captro Premium',
+  label: 'Aura Premium',
   amount_cents: 499,
   currency: 'usd',
   interval: 'month',
@@ -10270,12 +10284,12 @@ async function sendEmailVerificationLink(c: any, email: string, link: string): P
     body: JSON.stringify({
       from,
       to: [email],
-      subject: 'Verify your Captro email',
-      text: `Tap this link to verify your Captro email:\n\n${link}\n\nThis link expires in 30 minutes. If you did not request it, you can ignore this email.`,
+      subject: 'Verify your Aura email',
+      text: `Tap this link to verify your Aura email:\n\n${link}\n\nThis link expires in 30 minutes. If you did not request it, you can ignore this email.`,
       html: `
         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.55;color:#111;padding:24px">
-          <h1 style="font-size:24px;margin:0 0 12px">Verify your Captro email</h1>
-          <p>Tap the button below to verify your Captro account email.</p>
+          <h1 style="font-size:24px;margin:0 0 12px">Verify your Aura email</h1>
+          <p>Tap the button below to verify your Aura account email.</p>
           <p style="margin:24px 0">
             <a href="${link}" style="display:inline-block;background:#0f2d18;color:#fff;text-decoration:none;padding:13px 20px;border-radius:999px;font-weight:700">Verify email</a>
           </p>
@@ -10376,7 +10390,7 @@ async function sendLegacyPhoneCode(c: any, phone: string, code: string): Promise
   const body = new URLSearchParams({
     To: phone,
     From: from,
-    Body: `Your Flames-Up sign-in code is ${code}. It expires in 10 minutes.`,
+    Body: `Your Aura sign-in code is ${code}. It expires in 10 minutes.`,
   });
 
   const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
@@ -10957,7 +10971,7 @@ async function findOrCreateSupabaseAppUser(c: any, payload: any, extras: any = {
   if (!supabaseUserId) throw new Error('SUPABASE_SUBJECT_MISSING');
   const email = normalizeOptionalEmail(payload.email || extras.email);
   const metadata = payload.user_metadata && typeof payload.user_metadata === 'object' ? payload.user_metadata : {};
-  const safeFullName = normalizeOptionalName(extras.full_name || (metadata as any).full_name || (metadata as any).name || (email ? email.split('@')[0] : '') || 'Captro User');
+  const safeFullName = normalizeOptionalName(extras.full_name || (metadata as any).full_name || (metadata as any).name || (email ? email.split('@')[0] : '') || 'Aura User');
   const requestedUsername = normalizeOptionalName(extras.username || (metadata as any).username || '');
   const requestedUsernameCheck = requestedUsername ? validateUsernameForAccount(requestedUsername) : { ok: false, username: '' };
   const profileImage = cleanText((metadata as any).avatar_url || (metadata as any).picture || extras.profile_image || '', 1000);
@@ -12313,7 +12327,7 @@ function decideMediaModeration(scores: MediaModerationScores, mediaType: CaptroM
       decision: 'rejected',
       reasons,
       rejectionCode: reasons[0],
-      userMessage: "This upload can't be posted because it may break Captro's safety rules.",
+      userMessage: "This upload can't be posted because it may break Aura's safety rules.",
     };
   }
 
@@ -12432,7 +12446,7 @@ async function moderateWallVoiceUpload(env: Env, bytes: Uint8Array): Promise<Wal
 
     const localModeration = moderateCommunityText(transcript);
     if (!localModeration.ok) {
-      return { ok: false, status: 400, code: 'VOICE_SAFETY_REJECTED', detail: "This voice note can't be posted because it may break Captro's safety rules." };
+      return { ok: false, status: 400, code: 'VOICE_SAFETY_REJECTED', detail: "This voice note can't be posted because it may break Aura's safety rules." };
     }
 
     const fallback = textSafetyHeuristics(transcript);
@@ -12442,7 +12456,7 @@ async function moderateWallVoiceUpload(env: Env, bytes: Uint8Array): Promise<Wal
         {
           role: 'system',
           content: [
-            'You are Captro voice-note safety classification.',
+            'You are Aura voice-note safety classification.',
             'Return strict JSON only with numbers from 0 to 1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, and malware_status set to not_scanned.',
             'Assess only safety risk in the supplied transcript. Do not repeat or quote the transcript.',
           ].join(' '),
@@ -12463,7 +12477,7 @@ async function moderateWallVoiceUpload(env: Env, bytes: Uint8Array): Promise<Wal
         ok: false,
         status: decision.decision === 'review_required' ? 409 : 400,
         code: decision.decision === 'review_required' ? 'VOICE_REVIEW_REQUIRED' : 'VOICE_SAFETY_REJECTED',
-        detail: decision.userMessage || "This voice note can't be posted because it may break Captro's safety rules.",
+        detail: decision.userMessage || "This voice note can't be posted because it may break Aura's safety rules.",
       };
     }
     return {
@@ -12531,7 +12545,7 @@ async function runWorkersAiImageModeration(env: Env, imageUrl: string, caption: 
     if (!response?.ok) throw new Error(`IMAGE_SAMPLE_FETCH_FAILED:${response?.status || 0}`);
     const imageBytes = await response.arrayBuffer();
     if (!imageBytes.byteLength || imageBytes.byteLength > 4_000_000) throw new Error('IMAGE_SAMPLE_TOO_LARGE');
-    const prompt = `You are Captro's pre-publish media safety classifier. Return strict JSON only with numbers 0..1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, malware_status as "not_scanned", and reasons as an array. Check nudity, explicit sexual content, sexual solicitation, sexualized minors, violence/gore, weapons, hate symbols, scams/spam, unsafe links in caption, and AI-generated likelihood. Caption: ${caption || '(none)'}`;
+    const prompt = `You are Aura's pre-publish media safety classifier. Return strict JSON only with numbers 0..1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, malware_status as "not_scanned", and reasons as an array. Check nudity, explicit sexual content, sexual solicitation, sexualized minors, violence/gore, weapons, hate symbols, scams/spam, unsafe links in caption, and AI-generated likelihood. Caption: ${caption || '(none)'}`;
     const result = await env.AI.run(modelName, {
       messages: [{ role: 'user', content: prompt }],
       image: Array.from(new Uint8Array(imageBytes)),
@@ -13007,7 +13021,7 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
     if (blocking) {
       const status = normalizeMediaModerationStatus(blocking.moderation_status);
       const detail = status === 'rejected'
-        ? "This upload can't be posted because it may break Captro's safety rules."
+        ? "This upload can't be posted because it may break Aura's safety rules."
         : status === 'review_required'
           ? 'This upload needs a quick safety review before it can be posted.'
           : 'Checking your upload before posting...';
@@ -13019,7 +13033,7 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
   return {
     ok: false,
     status: 503,
-    detail: 'Captro production database is not configured. Please try again later.',
+    detail: 'Aura production database is not configured. Please try again later.',
     code: 'SUPABASE_PRIMARY_REQUIRED',
     assets: [] as any[],
   };
@@ -13786,7 +13800,7 @@ api.post('/auth/password/reset/request', async (c) => {
     await logSecurityEvent(c, 'password_reset_requested', '', { email_hash_hint: (await sha256Hex(email)).slice(0, 16), redirect_to: redirectTo.slice(0, 120) });
     return c.json({
       sent: true,
-      detail: 'If that email belongs to a Captro account, we sent a password reset link.',
+      detail: 'If that email belongs to an Aura account, we sent a password reset link.',
       redirect_to: redirectTo,
     });
   } catch (error: any) {
@@ -14044,7 +14058,7 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
     if (!idToken) return { ok: false, detail: 'Re-authenticate with Google before deleting this account.', provider };
     const profile = await verifyGoogleIdToken(c, idToken);
     if (!(await accountIdentityMatches(c, user, 'google', profile.subject))) {
-      return { ok: false, detail: 'Google account did not match this Captro account.', provider };
+      return { ok: false, detail: 'Google account did not match this Aura account.', provider };
     }
     await upsertAccountIdentity(c, { userId: user.id, provider: 'google', providerUserId: profile.subject, email: profile.email || user.email });
     return { ok: true, provider };
@@ -14054,7 +14068,7 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
     if (!idToken) return { ok: false, detail: 'Re-authenticate with Apple before deleting this account.', provider };
     const profile = await verifyAppleIdToken(c, idToken);
     if (!(await accountIdentityMatches(c, user, 'apple', profile.subject))) {
-      return { ok: false, detail: 'Apple account did not match this Captro account.', provider };
+      return { ok: false, detail: 'Apple account did not match this Aura account.', provider };
     }
     await upsertAccountIdentity(c, { userId: user.id, provider: 'apple', providerUserId: profile.subject, email: profile.email || user.email });
     return { ok: true, provider };
@@ -14068,7 +14082,7 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
       const session = await signInSupabasePassword(c, email, password);
       const sessionUserId = isUuidText(session?.user?.id || session?.user?.sub);
       if (sessionUserId && sessionUserId !== user.supabase_user_id) {
-        return { ok: false, detail: 'Password confirmation did not match this Captro account.', provider: 'email' };
+        return { ok: false, detail: 'Password confirmation did not match this Aura account.', provider: 'email' };
       }
       return { ok: true, provider: 'email' };
     } catch {
@@ -14696,7 +14710,7 @@ api.post('/users/me/email/link/start', authMiddleware, async (c) => {
 api.get('/users/me/email/verify-link', async (c) => {
   const token = cleanText(c.req.query('token'), 512);
   const fail = (message = 'This email verification link is invalid or expired.') => c.html(
-    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verification</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email not verified</h1><p style="font-size:16px;line-height:1.55;color:#555">${message}</p></section></main></body></html>`,
+    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aura Email Verification</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email not verified</h1><p style="font-size:16px;line-height:1.55;color:#555">${message}</p></section></main></body></html>`,
     400
   );
   if (!token || token.length < 24) return fail();
@@ -14731,7 +14745,7 @@ api.get('/users/me/email/verify-link', async (c) => {
       }
     });
     return c.html(
-      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Captro email is verified. You can return to the app.</p></section></main></body></html>`
+      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aura Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Aura email is verified. You can return to the app.</p></section></main></body></html>`
     );
   }
   return fail('Email verification is temporarily unavailable. Please try again later.');
@@ -15538,6 +15552,15 @@ api.get('/posts/community-feed', authMiddleware, async (c) => {
       offset: skip,
       order: 'newest',
     });
+    console.log(JSON.stringify({
+      event: 'aura_community_feed_read',
+      scope,
+      city: scope === 'city' ? normalizeAuraCommunityCity(city) : '',
+      offset: skip,
+      limit,
+      returned_count: rows.length,
+      has_more_candidate: rows.length === limit,
+    }));
     const response = c.json(rows.map((post) => feedPostPayload(post, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;
@@ -17832,7 +17855,7 @@ api.post('/media/complete', authMiddleware, async (c) => {
     : latestStatus === 'review_required'
       ? 'This upload needs a quick safety review before it can be posted.'
       : latestStatus === 'rejected'
-        ? "This upload can't be posted because it may break Captro's safety rules."
+        ? "This upload can't be posted because it may break Aura's safety rules."
         : latestStatus === 'failed'
           ? (cleanText(latest?.rejection_message, 240) || 'This upload could not be checked. Please try again.')
           : 'Checking your upload before posting...';
@@ -18352,7 +18375,7 @@ function normalizeWallNoteCanvas(value: unknown): { canvas: any | null; error: s
     const mediaAssetId = publicId(raw.media_asset_id || raw.mediaAssetId, 160) || null;
     if (kind === 'photo' || kind === 'polaroid') {
       photoCount += 1;
-      if (!mediaAssetId) return { canvas: null, error: 'Upload every canvas photo through Captro first.' };
+      if (!mediaAssetId) return { canvas: null, error: 'Upload every canvas photo through Aura first.' };
       if (photoCount > 12) return { canvas: null, error: 'A note can contain up to 12 photos.' };
     } else if (mediaAssetId) {
       return { canvas: null, error: 'Only photo elements can reference uploaded media.' };
@@ -18906,7 +18929,7 @@ api.post('/wall/notes', authMiddleware, async (c) => {
 
   const submittedMediaUrl = safeMediaReference(b.media_url || b.mediaUrl);
   if (submittedMediaUrl && !mediaAssetId) {
-    return c.json({ detail: 'Upload this photo through Captro before attaching it to a note.', code: 'MEDIA_ASSET_REQUIRED' }, 400);
+    return c.json({ detail: 'Upload this photo through Aura before attaching it to a note.', code: 'MEDIA_ASSET_REQUIRED' }, 400);
   }
 
   let mediaAsset: any = null;
@@ -20786,7 +20809,7 @@ api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
     if (supabasePrimaryConfigured(c)) {
       const before: any = await supabaseReadMediaAsset(c, mediaId);
       if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
-      const userMessage = "This upload can't be posted because it may break Captro's safety rules.";
+      const userMessage = "This upload can't be posted because it may break Aura's safety rules.";
       await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
         moderation_status: 'rejected',
         public_url: null,
@@ -20811,7 +20834,7 @@ api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
     await ensureMediaModerationSchema(c.env.DB);
     const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
     if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
-    const userMessage = "This upload can't be posted because it may break Captro's safety rules.";
+    const userMessage = "This upload can't be posted because it may break Aura's safety rules.";
     await c.env.DB.prepare(
       "UPDATE media_assets SET moderation_status = 'rejected', public_url = NULL, rejection_code = ?, rejection_message = ?, updated_at = ? WHERE id = ?"
     ).bind(rejectionCode, userMessage, now(), mediaId).run();
@@ -21388,7 +21411,7 @@ api.post('/admin/users/:userId/warn', authMiddleware, async (c) => {
       await insertNotificationOnce(c, {
         userId: canonicalUserId,
         type: 'moderation_warning',
-        title: 'Captro safety warning',
+        title: 'Aura safety warning',
         body: reason,
         data: { moderation_action: 'warning' },
         dedupeKey: `warn:${canonicalUserId}:${Date.now()}`,
@@ -21414,7 +21437,7 @@ api.post('/admin/users/:userId/warn', authMiddleware, async (c) => {
     await insertNotificationOnce(c, {
       userId: targetUserId,
       type: 'moderation_warning',
-      title: 'Captro safety warning',
+      title: 'Aura safety warning',
       body: reason,
       data: { moderation_action: 'warning' },
       dedupeKey: `warn:${targetUserId}:${Date.now()}`,
@@ -23431,7 +23454,7 @@ api.get('/mapbox-locations/cities', authMiddleware, mapboxCitySearchHandler);
 api.get('/mapbox-locations/reverse', authMiddleware, mapboxReverseBroadLocationHandler);
 
 // Health
-api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + Supabase Postgres + Cloudflare media storage' }));
+api.get('/', (c) => c.json({ message: 'Aura API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + Supabase Postgres + Cloudflare media storage' }));
 api.get('/health', async (c) => {
   const startedAt = Date.now();
   const dbStartedAt = Date.now();
@@ -23497,14 +23520,14 @@ api.get('/database/status', authMiddleware, async (c) => {
         provider: 'supabase_postgres',
         configured: databasePrimary(c) === 'supabase_postgres',
         healthy: supabasePostgresHealthy,
-        note: 'Supabase Postgres is the canonical Captro app database for profiles, posts, interactions, reports, chat metadata, admin roles, and audit records.',
+        note: 'Supabase Postgres is the canonical Aura app database for profiles, posts, interactions, reports, chat metadata, admin roles, and audit records.',
       },
       d1_sqlite_legacy_cache: {
         configured: true,
         healthy: d1Check,
         role: databasePrimary(c) === 'legacy_d1'
           ? 'legacy database mode only'
-          : 'disabled for Supabase-primary production; Cloudflare D1 is not the Captro source of truth.',
+          : 'disabled for Supabase-primary production; Cloudflare D1 is not the Aura source of truth.',
       },
       kv_nosql: { configured: !!c.env.KV, healthy: kvCheck },
       postgres_hyperdrive: {
@@ -23522,7 +23545,7 @@ api.get('/database/status', authMiddleware, async (c) => {
         configured: !!c.env.SUPABASE_URL,
         service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
         anon_key_set: !!c.env.SUPABASE_ANON_KEY,
-        note: 'Captro account creation and social sign-in are bridged into Supabase Authentication and linked by users.supabase_user_id.',
+        note: 'Aura account creation and social sign-in are bridged into Supabase Authentication and linked by users.supabase_user_id.',
       },
       timestamp: now(),
     });
@@ -23539,7 +23562,7 @@ api.get('/database/status', authMiddleware, async (c) => {
 api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
   await requireOwnerOrAdmin(c);
   return c.json({
-    detail: 'Legacy D1 bookmark setup is retired. Captro bookmarks are managed in Supabase.',
+    detail: 'Legacy D1 bookmark setup is retired. Aura bookmarks are managed in Supabase.',
     code: 'LEGACY_D1_SETUP_RETIRED',
   }, 410);
 });

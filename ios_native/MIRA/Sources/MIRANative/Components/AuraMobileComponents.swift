@@ -39,13 +39,7 @@ public struct AuraDocumentTicketCard: View {
       perforation
       ticketBody
     }
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.textPrimary.opacity(0.82), lineWidth: 1.4)
-    }
-    .shadow(color: .black.opacity(0.07), radius: 13, y: 7)
+    .physicalAuraCard(cornerRadius: 18)
     .accessibilityElement(children: .combine)
   }
 

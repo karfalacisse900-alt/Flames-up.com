@@ -81,12 +81,7 @@ public struct AuraMeView: View {
       Spacer(minLength: 0)
     }
     .padding(16)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.2)
-    }
+    .physicalAuraCard(cornerRadius: 18)
   }
 
   private var walletCard: some View {
@@ -108,12 +103,7 @@ public struct AuraMeView: View {
         .tint(MIRATheme.Color.auraViolet)
     }
     .padding(16)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.2)
-    }
+    .physicalAuraCard(cornerRadius: 18)
   }
 
   private var proofStats: some View {
@@ -125,12 +115,7 @@ public struct AuraMeView: View {
       stat(value: String(feedbackCount), label: "Aura given", systemImage: "star.bubble")
     }
     .padding(.vertical, 16)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.2)
-    }
+    .physicalAuraCard(cornerRadius: 18)
   }
 
   private var accountMenu: some View {
@@ -171,12 +156,7 @@ public struct AuraMeView: View {
         menuRow("About Aura", systemImage: "info.circle")
       }
     }
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.2)
-    }
+    .physicalAuraCard(cornerRadius: 18)
   }
 
   private func stat(value: String, label: String, systemImage: String) -> some View {

@@ -1,32 +1,106 @@
+import Foundation
 import SwiftUI
 
 @MainActor
 final class AuraCommunityFeedModel: ObservableObject {
   @Published private(set) var posts: [AuraCommunityPost] = []
   @Published private(set) var isLoading = false
+  @Published private(set) var isLoadingMore = false
+  @Published private(set) var hasMore = true
   @Published private(set) var errorMessage: String?
 
   private let api: MIRAAPIClient
+  private let pageSize: Int
+  private var nextOffset = 0
+  private var activeQuery = ""
+  private var requestGeneration = 0
 
-  init(api: MIRAAPIClient) {
+  init(api: MIRAAPIClient, pageSize: Int = 30) {
     self.api = api
+    self.pageSize = max(1, min(pageSize, 50))
   }
 
   func load(scope: AuraCommunityFeedScope, city: String, refresh: Bool = false) async {
-    guard !isLoading || refresh else { return }
+    let query = "\(scope.rawValue)|\(city.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+    let queryChanged = query != activeQuery
+    guard refresh || queryChanged || posts.isEmpty else { return }
+
+    requestGeneration += 1
+    let generation = requestGeneration
+    activeQuery = query
+    nextOffset = 0
+    hasMore = true
     isLoading = true
+    isLoadingMore = false
     errorMessage = nil
-    defer { isLoading = false }
+    if queryChanged { posts = [] }
+
     do {
-      let encodedCity = city.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "New%20York%20City"
-      let loaded: [AuraCommunityPost] = try await api.get(
-        "/posts/community-feed?scope=\(scope.rawValue)&city=\(encodedCity)&limit=40"
-      )
-      posts = loaded.filter { $0.mode != nil }
+      let loaded = try await fetchPage(scope: scope, city: city, offset: 0)
+      guard generation == requestGeneration, query == activeQuery else { return }
+      posts = uniquePosts(loaded.filter { $0.mode != nil })
+      nextOffset = loaded.count
+      hasMore = loaded.count == pageSize
     } catch {
+      guard generation == requestGeneration, query == activeQuery else { return }
       errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "The community feed could not be loaded."
-      if !refresh { posts = [] }
+      if queryChanged { posts = [] }
     }
+    guard generation == requestGeneration else { return }
+    isLoading = false
+  }
+
+  func loadNextPage(scope: AuraCommunityFeedScope, city: String) async {
+    let query = "\(scope.rawValue)|\(city.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+    guard query == activeQuery, !isLoading, !isLoadingMore, hasMore else { return }
+
+    let generation = requestGeneration
+    let offset = nextOffset
+    isLoadingMore = true
+    errorMessage = nil
+    defer {
+      if generation == requestGeneration { isLoadingMore = false }
+    }
+
+    do {
+      let loaded = try await fetchPage(scope: scope, city: city, offset: offset)
+      guard generation == requestGeneration, query == activeQuery else { return }
+      posts = mergeUnique(existing: posts, incoming: loaded.filter { $0.mode != nil })
+      nextOffset = offset + loaded.count
+      hasMore = loaded.count == pageSize
+    } catch {
+      guard generation == requestGeneration, query == activeQuery else { return }
+      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "More community posts could not be loaded."
+    }
+  }
+
+  private func fetchPage(scope: AuraCommunityFeedScope, city: String, offset: Int) async throws -> [AuraCommunityPost] {
+    var components = URLComponents()
+    components.path = "/posts/community-feed"
+    components.queryItems = [
+      URLQueryItem(name: "scope", value: scope.rawValue),
+      URLQueryItem(name: "city", value: city),
+      URLQueryItem(name: "skip", value: String(offset)),
+      URLQueryItem(name: "limit", value: String(pageSize))
+    ]
+    guard let path = components.string else { throw MIRAAPIError.badURL }
+    return try await api.get(path)
+  }
+
+  private func uniquePosts(_ values: [AuraCommunityPost]) -> [AuraCommunityPost] {
+    mergeUnique(existing: [], incoming: values)
+  }
+
+  private func mergeUnique(
+    existing: [AuraCommunityPost],
+    incoming: [AuraCommunityPost]
+  ) -> [AuraCommunityPost] {
+    var seen = Set(existing.map(\.id))
+    var merged = existing
+    for post in incoming where seen.insert(post.id).inserted {
+      merged.append(post)
+    }
+    return merged
   }
 }
 
@@ -144,22 +218,37 @@ public struct AuraHomeView: View {
       .physicalAuraCard()
     } else {
       ForEach(model.posts) { post in
-        if post.mode == .meetup {
-          NavigationLink {
-            AuraMeetupDetailView(api: api, post: post)
-          } label: {
-            AuraMeetupFeedCard(post: post)
+        feedRow(post)
+          .onAppear {
+            guard post.id == model.posts.last?.id else { return }
+            Task { await model.loadNextPage(scope: scope, city: cityName) }
           }
-          .buttonStyle(.plain)
-        } else {
-          NavigationLink {
-            AuraSmallPostDetailLoaderView(api: api, postID: post.id)
-          } label: {
-            AuraSmallPostFeedCard(post: post)
-          }
-          .buttonStyle(.plain)
-        }
       }
+      if model.isLoadingMore {
+        ProgressView("Loading more posts…")
+          .font(.footnote)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .padding(.vertical, 12)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func feedRow(_ post: AuraCommunityPost) -> some View {
+    if post.mode == .meetup {
+      NavigationLink {
+        AuraMeetupDetailView(api: api, post: post)
+      } label: {
+        AuraMeetupFeedCard(post: post)
+      }
+      .buttonStyle(.plain)
+    } else {
+      NavigationLink {
+        AuraSmallPostDetailLoaderView(api: api, postID: post.id)
+      } label: {
+        AuraSmallPostFeedCard(post: post)
+      }
+      .buttonStyle(.plain)
     }
   }
 }

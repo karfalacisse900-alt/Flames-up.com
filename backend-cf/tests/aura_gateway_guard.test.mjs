@@ -6,8 +6,10 @@ const sourceURL = new URL('../src/aura.ts', import.meta.url);
 const workflowURL = new URL('../../.github/workflows/deploy-worker.yml', import.meta.url);
 const scanViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/Aura/AuraScanView.swift', import.meta.url);
 const walletViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/Aura/AuraWalletView.swift', import.meta.url);
+const meViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/Aura/AuraMeView.swift', import.meta.url);
 const rootViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift', import.meta.url);
 const ticketViewURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Components/AuraMobileComponents.swift', import.meta.url);
+const themeURL = new URL('../../ios_native/MIRA/Sources/MIRANative/Design/MIRATheme.swift', import.meta.url);
 
 test('Aura document verification is authenticated, bounded, non-retaining, and only authorizes privacy-safe proof bytes', async () => {
   const source = await fs.readFile(sourceURL, 'utf8');
@@ -61,6 +63,7 @@ test('Aura Mobile auto-recognizes document type and keeps capture alive across s
   assert.match(scanView, /if phase == \.background/);
   assert.match(walletView, /if phase == \.background, wallet\.state == \.unlocked/);
   assert.match(scanView, /Automatic document recognition/);
+  assert.match(scanView, /Aura automatically recognizes receipts and invoices\./);
   assert.match(scanView, /Recognize & Verify/);
   assert.doesNotMatch(scanView, /Scan Receipt/);
   assert.doesNotMatch(scanView, /Scan Invoice/);
@@ -71,11 +74,33 @@ test('Aura Mobile auto-recognizes document type and keeps capture alive across s
   assert.equal(scanView.includes('Text("Level \\(result.verificationLevel)")'), false);
   assert.doesNotMatch(scanView, /Provider fraud decision/);
   assert.doesNotMatch(scanView, /AI-generated document detected/);
+  assert.doesNotMatch(scanView, /Veryfi|Raw document bytes|provider recognized/);
 
   const source = await fs.readFile(sourceURL, 'utf8');
   assert.match(source, /document_type: null/);
   assert.match(source, /function auraDocumentKind/);
   assert.match(source, /normalized\.submittedType === 'receipt'/);
+});
+
+test('Aura Mobile uses warm neutral chrome, restrained color, and physical cards', async () => {
+  const [theme, scanView, walletView, meView, ticketView] = await Promise.all([
+    fs.readFile(themeURL, 'utf8'),
+    fs.readFile(scanViewURL, 'utf8'),
+    fs.readFile(walletViewURL, 'utf8'),
+    fs.readFile(meViewURL, 'utf8'),
+    fs.readFile(ticketViewURL, 'utf8'),
+  ]);
+
+  assert.match(theme, /appBackground = adaptive\([\s\S]*?light: UIColor\(red: 0\.961, green: 0\.957, blue: 0\.945/);
+  assert.match(theme, /auraViolet = adaptive\([\s\S]*?light: UIColor\(red: 0\.369, green: 0\.247, blue: 0\.847/);
+  assert.doesNotMatch(scanView, /LinearGradient/);
+  assert.doesNotMatch(walletView, /LinearGradient/);
+  assert.match(scanView, /physicalAuraCard/);
+  assert.match(walletView, /physicalAuraCard/);
+  assert.match(meView, /physicalAuraCard/);
+  assert.match(ticketView, /physicalAuraCard/);
+  assert.match(scanView, /Proof pending/);
+  assert.match(scanView, /Proof confirmed/);
 });
 
 test('Aura wallet routes proxy only allowlisted operations to an authenticated Rust gateway', async () => {

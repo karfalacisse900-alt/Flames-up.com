@@ -102,33 +102,29 @@ public struct AuraScanView: View {
   private var captureCard: some View {
     VStack(spacing: 0) {
       ZStack(alignment: .top) {
-        LinearGradient(
-          colors: [MIRATheme.Color.auraViolet.opacity(0.88), MIRATheme.Color.forest.opacity(0.76)],
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        )
-        .frame(height: 310)
+        MIRATheme.Color.surfaceSoft
+          .frame(height: 276)
 
         VStack(spacing: 18) {
-          Label("Automatic document recognition", systemImage: "sparkles")
+          Label("Automatic document recognition", systemImage: "viewfinder")
             .font(.subheadline)
             .fontWeight(.semibold)
-            .foregroundStyle(.white)
+            .foregroundStyle(MIRATheme.Color.auraViolet)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(.black.opacity(0.18), in: Capsule())
+            .background(MIRATheme.Color.auraVioletSoft, in: Capsule())
 
           Image(systemName: "doc.viewfinder")
-            .font(.system(size: 84, weight: .light))
-            .foregroundStyle(.white)
+            .font(.system(size: 76, weight: .light))
+            .foregroundStyle(MIRATheme.Color.auraViolet)
 
           Text("Scan a receipt or invoice")
             .font(.title2)
             .fontWeight(.bold)
-            .foregroundStyle(.white)
-          Text("Aura asks Veryfi to recognize the document type after capture.")
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text("Aura automatically recognizes receipts and invoices.")
             .font(.subheadline)
-            .foregroundStyle(.white.opacity(0.82))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 26)
         }
@@ -171,16 +167,12 @@ public struct AuraScanView: View {
       .padding(16)
       .background(MIRATheme.Color.surface)
     }
-    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 20, style: .continuous)
-        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.3)
-    }
+    .physicalAuraCard(cornerRadius: 20)
   }
 
   private var privacyNote: some View {
     Label(
-      "Receipt or invoice is recognized automatically. Raw document bytes are not written to Aura's blockchain.",
+      "Aura uploads the document only after you tap Recognize & Verify.",
       systemImage: "lock.shield.fill"
     )
     .font(.footnote)
@@ -243,11 +235,7 @@ public struct AuraScanView: View {
       .padding(16)
       .background(MIRATheme.Color.surface)
     }
-    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 20, style: .continuous)
-        .stroke(MIRATheme.Color.textPrimary.opacity(0.75), lineWidth: 1.3)
-    }
+    .physicalAuraCard(cornerRadius: 20)
   }
 
   private func verificationTicket(_ result: AuraDocumentVerificationResult) -> some View {
@@ -261,15 +249,10 @@ public struct AuraScanView: View {
         status: result.documentVerified ? "Verified" : "Could not be verified",
         statusSystemImage: result.documentVerified ? "checkmark.seal.fill" : "xmark.seal.fill",
         statusColor: result.documentVerified ? MIRATheme.Color.forest : .red,
-        detail: result.documentVerified ? "Veryfi" : nil
+        detail: nil
       )
 
-      if result.documentVerified {
-        Text(verificationAccuracyNote(result))
-          .font(.footnote)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .frame(maxWidth: .infinity, alignment: .leading)
-      } else {
+      if !result.documentVerified {
         Button("Try Again") {
           if let selectedDocument { verify(selectedDocument) }
         }
@@ -299,7 +282,7 @@ public struct AuraScanView: View {
               .font(.subheadline)
               .foregroundStyle(MIRATheme.Color.textSecondary)
           } else {
-            Text("Waiting for a real Aura Devnet block.")
+            Text("Waiting for confirmation.")
               .font(.subheadline)
               .foregroundStyle(MIRATheme.Color.textSecondary)
           }
@@ -309,7 +292,7 @@ public struct AuraScanView: View {
         .background(MIRATheme.Color.auraVioletSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
       } else if result.documentVerified && wallet.identity == nil {
         Label(
-          "Receipt verified. Unlock your local wallet to authorize and submit its Aura proof.",
+          "Receipt verified. Unlock your wallet to create its Aura proof.",
           systemImage: "lock.shield"
         )
         .font(.footnote)
@@ -319,7 +302,7 @@ public struct AuraScanView: View {
         .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
       }
     } else if result.submittedType == "invoice" && result.documentVerified {
-      Text("Invoice recognized and verified as a document. An issued invoice is not proof that it was paid, so no purchase proof was created.")
+      Text("Invoice verified. Payment was not confirmed, so no purchase proof was created.")
         .font(.footnote)
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .padding(14)
@@ -374,13 +357,6 @@ public struct AuraScanView: View {
     case "invoice": return "Invoice detected"
     default: return "Document type unsupported"
     }
-  }
-
-  private func verificationAccuracyNote(_ result: AuraDocumentVerificationResult) -> String {
-    if result.submittedType == "receipt" {
-      return "Receipt Verified means Aura's document checks passed. It does not claim merchant or bank confirmation."
-    }
-    return "Document Verified means the provider recognized and parsed this invoice. It does not mean the invoice was paid."
   }
 
   private func proofStateLabel(_ record: AuraPrivateProofRecord) -> String {
@@ -460,6 +436,6 @@ public struct AuraScanView: View {
   }
 
   private var privacyHelp: String {
-    "Aura sends the selected document through its authenticated service to Veryfi only after you tap Recognize & Verify. The raw document is not put on the Aura blockchain."
+    "Aura uploads the selected document only after you tap Recognize & Verify. The image is not published with your Aura proof."
   }
 }

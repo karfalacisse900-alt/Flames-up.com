@@ -590,7 +590,7 @@ public struct ProfileNativeView: View {
     if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName
     }
-    return model.user?.username ?? "captro"
+    return model.user?.username ?? "Aura member"
   }
 }
 
@@ -1138,7 +1138,7 @@ public struct UserProfileNativeView: View {
     if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName
     }
-    return model.user?.username ?? "captro"
+    return model.user?.username ?? "Aura member"
   }
 }
 
@@ -1166,7 +1166,7 @@ private struct UserProfileSafetyOptionsSheet: View {
       Button(role: .destructive, action: onReport) {
         UserProfileOptionRow(
           title: "Report profile",
-          subtitle: "Send this profile to Captro moderation.",
+          subtitle: "Send this profile to Aura moderation.",
           systemImage: "flag",
           tint: .red
         )
@@ -2326,7 +2326,7 @@ public struct VerificationNativeView: View {
       Text("Verify your account")
         .font(.system(size: 26, weight: .bold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-      Text("Confirm your email and phone number to protect your Captro account and make recovery easier.")
+      Text("Confirm your email and phone number to protect your Aura account and make recovery easier.")
         .font(.system(size: 14, weight: .medium))
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -2373,7 +2373,7 @@ public struct VerificationNativeView: View {
           Task { await sendEmailLink() }
         }
         if emailLinkSent {
-          Text("Open Gmail or your email app, tap the Captro verification link, then return here.")
+          Text("Open Gmail or your email app, tap the Aura verification link, then return here.")
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textMuted)
             .fixedSize(horizontal: false, vertical: true)
@@ -2563,7 +2563,7 @@ public struct VerificationNativeView: View {
         body: VerificationStartBody(email: emailAddress.isEmpty ? nil : emailAddress, phone: nil)
       )
       emailLinkSent = true
-      successMessage = "Check your email for a Captro verification link."
+      successMessage = "Check your email for an Aura verification link."
     } catch {
       errorMessage = error.localizedDescription
     }

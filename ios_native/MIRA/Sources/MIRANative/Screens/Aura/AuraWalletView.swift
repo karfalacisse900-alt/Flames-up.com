@@ -103,7 +103,7 @@ public struct AuraWalletView: View {
         message: "Aura could not access this device's protected Application Support directory.",
         systemImage: "exclamationmark.shield"
       )
-      .miraCardSurface()
+      .physicalAuraCard(cornerRadius: 18)
     }
   }
 
@@ -140,14 +140,8 @@ public struct AuraWalletView: View {
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(MIRATheme.Space.lg)
-    .background(
-      LinearGradient(
-        colors: [MIRATheme.Color.auraViolet, MIRATheme.Color.auraViolet.opacity(0.78)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-      )
-    )
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.large, style: .continuous))
+    .background(MIRATheme.Color.auraViolet)
+    .physicalAuraCard(cornerRadius: MIRATheme.Radius.large)
   }
 
   private func balanceMetric(_ label: String, _ value: String) -> some View {
@@ -193,7 +187,7 @@ public struct AuraWalletView: View {
         .buttonStyle(AuraSecondaryButtonStyle())
     }
     .padding(MIRATheme.Space.lg)
-    .miraCardSurface()
+    .physicalAuraCard(cornerRadius: 18)
   }
 
   private var unlockCard: some View {
@@ -221,7 +215,7 @@ public struct AuraWalletView: View {
       .disabled(unlockPassword.isEmpty)
     }
     .padding(MIRATheme.Space.lg)
-    .miraCardSurface()
+    .physicalAuraCard(cornerRadius: 18)
   }
 
   private var unlockedContent: some View {
@@ -245,7 +239,7 @@ public struct AuraWalletView: View {
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
         .padding(MIRATheme.Space.lg)
-        .miraCardSurface()
+        .physicalAuraCard(cornerRadius: 18)
       }
 
       networkContent
@@ -292,7 +286,7 @@ public struct AuraWalletView: View {
       .foregroundStyle(MIRATheme.Color.textPrimary)
       .frame(maxWidth: .infinity, minHeight: 56)
     }
-    .miraCardSurface()
+    .physicalAuraCard(cornerRadius: 16)
   }
 
   @ViewBuilder
@@ -300,7 +294,7 @@ public struct AuraWalletView: View {
     if gateway.isLoading {
       ProgressView("Reading Aura Devnet")
         .frame(maxWidth: .infinity, minHeight: 150)
-        .miraCardSurface()
+        .physicalAuraCard(cornerRadius: 18)
     } else if let status = gateway.chainStatus, let fees = gateway.fees {
       VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
         HStack {
@@ -357,7 +351,7 @@ public struct AuraWalletView: View {
         }
       }
       .padding(MIRATheme.Space.lg)
-      .miraCardSurface()
+      .physicalAuraCard(cornerRadius: 18)
     } else {
       VStack(spacing: MIRATheme.Space.md) {
         MIRAEmptyState(
@@ -372,7 +366,7 @@ public struct AuraWalletView: View {
         }
         .buttonStyle(AuraSecondaryButtonStyle())
       }
-      .miraCardSurface()
+      .physicalAuraCard(cornerRadius: 18)
     }
   }
 }
@@ -776,7 +770,7 @@ struct AuraPrimaryButtonStyle: ButtonStyle {
       .font(.system(size: 15, weight: .bold))
       .foregroundStyle(.white)
       .frame(maxWidth: .infinity, minHeight: 48)
-      .background(MIRATheme.Color.forest.opacity(configuration.isPressed ? 0.78 : 1))
+      .background(MIRATheme.Color.auraViolet.opacity(configuration.isPressed ? 0.78 : 1))
       .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
   }
 }
@@ -785,13 +779,13 @@ private struct AuraSecondaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(.system(size: 15, weight: .bold))
-      .foregroundStyle(MIRATheme.Color.forest)
+      .foregroundStyle(MIRATheme.Color.auraViolet)
       .frame(maxWidth: .infinity, minHeight: 48)
       .background(MIRATheme.Color.surfaceSoft.opacity(configuration.isPressed ? 0.7 : 1))
       .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous))
       .overlay {
         RoundedRectangle(cornerRadius: MIRATheme.Radius.medium, style: .continuous)
-          .stroke(MIRATheme.Color.forest.opacity(0.2), lineWidth: 1)
+          .stroke(MIRATheme.Color.auraViolet.opacity(0.28), lineWidth: 1)
       }
   }
 }

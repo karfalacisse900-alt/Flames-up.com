@@ -55,10 +55,15 @@ test('Friends and city feeds filter real persisted posts before applying a bound
 
   const friendsFilter = section(readPath, "if (options.socialScope === 'friends')", "if (options.socialScope === 'city')");
   assert.match(friendsFilter, /connectedIds\.has\(authorId\)/);
+  assert.match(friendsFilter, /followingIds\.has\(authorId\)/);
   assert.doesNotMatch(friendsFilter, /connectedOrFollowingIds\.has\(authorId\)/);
 
   assert.match(cityHelpers, /normalized === 'nyc' \|\| normalized === 'new york' \|\| normalized === 'new york city'/);
   assert.match(cityHelpers, /\(place as any\)\.city \|\| \(raw as any\)\.display_city \|\| \(metadata as any\)\.display_city/);
+  assert.match(cityHelpers, /author\?\.city \|\| \(authorProfile as any\)\.city \|\| \(authorMetadata as any\)\.city/);
+  assert.match(readPath, /auraCommunityPostCity\(row, author\) === requestedCity/);
+  assert.match(route, /event: 'aura_community_feed_read'/);
+  assert.match(route, /returned_count: rows\.length/);
 
   const mineRoute = section(worker, "api.get('/posts/community-mine'", "api.get('/posts/world-board'");
   assert.match(mineRoute, /ownerId: userId,\s*communityOnly: true/s);
@@ -144,7 +149,9 @@ test('active Aura iOS shell follows the adopted social direction without moving 
 
   assert.match(home, /feedScopeButton\(\.friends, title: "Friends"\)/);
   assert.match(home, /private let cityName = "New York City"/);
-  assert.match(home, /\/posts\/community-feed\?scope=/);
+  assert.match(home, /components\.path = "\/posts\/community-feed"/);
+  assert.match(home, /URLQueryItem\(name: "skip", value: String\(offset\)\)/);
+  assert.match(home, /loadNextPage\(scope: scope, city: cityName\)/);
   assert.match(home, /AuraCreateCommunityPostView/);
   assert.match(home, /AuraSmallPostFeedCard/);
   assert.match(home, /AuraMeetupFeedCard/);

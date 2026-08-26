@@ -1,8 +1,8 @@
-# Captro API (Cloudflare Workers)
+# Aura API (Cloudflare Workers)
 
-Backend stack: Hono + Cloudflare Workers + Supabase Auth/Postgres as the canonical production database + Cloudflare Images/R2/Stream for media storage and delivery.
+Backend stack: Hono + Cloudflare Workers + Supabase Auth/Postgres as the canonical production database + Cloudflare Images/Stream for media storage and delivery. The optional R2 backup binding is not enabled in the current production configuration.
 
-Cloudflare D1 is not the production source of truth for Captro app data. Supabase Auth/Postgres owns application data; Cloudflare is the API/media/security edge.
+Cloudflare D1 is not the production source of truth for Aura app data. Supabase Auth/Postgres owns application data; Cloudflare is the API/media/security edge.
 
 ## Setup
 
@@ -57,7 +57,7 @@ If Twilio is not configured, `/api/auth/phone/start` returns a `dev_code` for lo
 
 ## Supabase Auth + Postgres/JSONB
 
-Supabase is Captro's production database. It stores authentication identity through Supabase Auth and structured app data in Postgres tables. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
+Supabase is Aura's production database. It stores authentication identity through Supabase Auth and structured app data in Postgres tables. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
 
 Run or push the Supabase migrations from the repository root when testing locally:
 
@@ -129,7 +129,7 @@ Google OAuth setup:
 - Supabase Auth redirect URLs should include both `https://flames-up.com/auth/callback` and `captro://auth/callback`
 - Use the Web OAuth client ID and client secret in the Supabase Google provider. Native iOS/Android IDs can be used by the mobile app, but Supabase's provider secret belongs to the Web client.
 - Set the iOS build setting `GOOGLE_SERVER_CLIENT_ID` to the same Web OAuth client ID used by Supabase. The app keeps `GIDClientID` as the iOS client ID for URL handling, and uses `GIDServerClientID` to request an ID token that Supabase can validate.
-- If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Captro` and make sure Supabase's Google provider uses the Captro Web OAuth client. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
+- If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Aura` and keep Supabase's Google provider on the existing configured Web OAuth client until a coordinated provider migration. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
 
 Apple native sign-in:
 - Enable Sign in with Apple on the current iOS App ID `com.karfala90.aura`. The legacy `com.captro.app` audience remains accepted only for existing Captroo clients.
@@ -139,7 +139,7 @@ Apple native sign-in:
 
 ## Admin Moderation API
 
-The private admin web app uses protected `/api/admin/*` endpoints. These routes require normal Captro authentication plus backend role authorization; frontend checks are never the source of truth.
+The private admin web app uses protected `/api/admin/*` endpoints. These routes require normal Aura authentication plus backend role authorization; frontend checks are never the source of truth.
 
 Admin roles:
 

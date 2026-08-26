@@ -3,6 +3,41 @@ import XCTest
 @testable import MIRANative
 
 final class AuraCommunityModelsTests: XCTestCase {
+  func testCommunityFeedArrayDecodesAllRecordsInsteadOfOnlyTheFirst() throws {
+    let data = Data(
+      """
+      [
+        {
+          "id": "post-small-array-1",
+          "title": "Question",
+          "post_type": "small_post",
+          "community_category": "question"
+        },
+        {
+          "id": "post-meetup-array-1",
+          "title": "Coffee meetup",
+          "post_type": "meetup",
+          "meetup_entry_type": "free",
+          "meetup_joined_count": 2
+        },
+        {
+          "id": "post-small-array-2",
+          "content": "An update without optional media or location fields.",
+          "post_type": "small_post",
+          "community_category": "update"
+        }
+      ]
+      """.utf8
+    )
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+    let posts = try decoder.decode([AuraCommunityPost].self, from: data)
+
+    XCTAssertEqual(posts.map(\.id), ["post-small-array-1", "post-meetup-array-1", "post-small-array-2"])
+    XCTAssertEqual(posts.map(\.mode), [.smallPost, .meetup, .smallPost])
+  }
+
   func testTextOnlySmallPostDecodesFromCommunityAPI() throws {
     let data = Data(
       """

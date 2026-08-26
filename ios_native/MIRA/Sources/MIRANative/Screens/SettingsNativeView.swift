@@ -259,13 +259,13 @@ public struct SettingsNativeView: View {
         SettingsCard(title: localization.string("settings.legal_safety")) {
           SettingsNavigationRow(
             title: localization.string("legal.terms"),
-            subtitle: "Rules for using Captro",
+            subtitle: "Rules for using Aura",
             systemImage: "doc.text",
             destination: TermsOfServiceView()
           )
           SettingsNavigationRow(
             title: localization.string("legal.privacy"),
-            subtitle: "How Captro handles data",
+            subtitle: "How Aura handles data",
             systemImage: "hand.raised",
             destination: PrivacyPolicyView()
           )
@@ -299,7 +299,7 @@ public struct SettingsNativeView: View {
     HStack(spacing: 12) {
       RemoteAvatar(url: model.user?.profileImage, size: 48)
       VStack(alignment: .leading, spacing: 2) {
-        Text(model.user?.displayName ?? "Captro")
+        Text(model.user?.displayName ?? "Aura member")
           .font(.system(size: 20, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Text(model.email.isEmpty ? localization.string("settings.manage_account") : model.email)
@@ -420,7 +420,7 @@ private struct BlockedAccountsNativeView: View {
     HStack(spacing: MIRATheme.Space.sm) {
       RemoteAvatar(url: row.user?.profileImage, size: 38)
       VStack(alignment: .leading, spacing: 3) {
-        Text(row.user?.displayName ?? "Captro user")
+        Text(row.user?.displayName ?? "Aura member")
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
@@ -489,7 +489,7 @@ private struct NotificationSettingsNativeView: View {
       SettingsCard(title: "Device") {
         SettingsToggleRow(
           title: "Push notifications",
-          subtitle: "Captro sends notifications about activity on your posts, comments, connections, messages, and important account updates.",
+          subtitle: "Aura sends notifications about activity on your posts, comments, connections, messages, and important account updates.",
           systemImage: "bell.badge",
           isOn: Binding(
             get: { pushEnabled },
@@ -563,7 +563,7 @@ private struct SecuritySettingsNativeView: View {
     SettingsDetailScaffold(title: "Security") {
       SettingsCard(title: "Email") {
         SettingsTextField(title: "Email", text: $newEmail, keyboardType: .emailAddress)
-        Text("Uses your signed-in Captro session. Log out on shared devices.")
+        Text("Uses your signed-in Aura session. Log out on shared devices.")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
           .padding(.horizontal, 8)
@@ -646,7 +646,7 @@ private struct DeleteAccountNativeView: View {
       SettingsCard(title: "What happens") {
         VStack(alignment: .leading, spacing: 12) {
           warningRow("Your profile, posts, comments, likes, connections, saved items, and push tokens are hidden immediately.")
-          warningRow("Captro schedules permanent deletion for 30 days from now.")
+          warningRow("Aura schedules permanent deletion for 30 days from now.")
           warningRow("Signing in during that window lets you restore the account.")
           warningRow("After permanent deletion, old posts, connections, likes, messages, username, and media are not restored.")
         }
@@ -686,7 +686,7 @@ private struct DeleteAccountNativeView: View {
       } else {
         SettingsCard(title: "Password") {
           SettingsSecureField(title: "Current password", text: $password)
-          Text("Recent authentication is required before Captro can schedule deletion.")
+          Text("Recent authentication is required before Aura can schedule deletion.")
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textMuted)
             .padding(.horizontal, 8)

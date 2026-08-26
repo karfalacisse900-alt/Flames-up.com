@@ -32,7 +32,7 @@ crons = ["17 5 * * *"]
 [ai]
 binding = "AI"
 
-# Legacy runtime compatibility only. Supabase Postgres is Captro's app database.
+# Legacy runtime compatibility only. Supabase Postgres is Aura's app database.
 [[d1_databases]]
 binding = "DB"
 database_name = "flames-up"
@@ -85,7 +85,7 @@ crons = ["17 5 * * *"]
 [env.production.ai]
 binding = "AI"
 
-# Legacy runtime compatibility only. Supabase Postgres is Captro's app database.
+# Legacy runtime compatibility only. Supabase Postgres is Aura's app database.
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "flames-up"
