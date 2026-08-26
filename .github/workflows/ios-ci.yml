@@ -1,6 +1,7 @@
 name: Aura iOS CI
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "ios_native/MIRA/**"
