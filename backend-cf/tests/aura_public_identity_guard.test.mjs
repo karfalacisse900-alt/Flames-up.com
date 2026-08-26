@@ -95,16 +95,20 @@ test('approved legacy infrastructure and auth identifiers remain unchanged for c
   assert.match(keychain, /service: String = "com\.captro\.auth"/);
 });
 
-test('Worker deploy stamps public Git commit provenance without replacing bindings or secrets', async () => {
-  const [worker, workflow] = await Promise.all([
+test('Worker deploy stamps public Git commit provenance and keeps Supabase credentials out of tracked runtime values', async () => {
+  const [worker, workflow, wrangler] = await Promise.all([
     read('backend-cf/src/index.ts'),
     read('.github/workflows/deploy-worker.yml'),
+    read('backend-cf/wrangler.toml'),
   ]);
 
   assert.ok((worker.match(/commit: c\.env\.SOURCE_COMMIT \|\| ''/g) || []).length >= 2);
   assert.match(workflow, /\[\[ ! "\$GITHUB_SHA" =~ \^\[0-9a-fA-F\]\{40\}\$ \]\]/);
   assert.match(workflow, /wrangler deploy --env production --keep-vars --var "SOURCE_COMMIT:\$GITHUB_SHA"/);
   assert.doesNotMatch(workflow, /wrangler secret put SOURCE_COMMIT/);
+  assert.match(workflow, /secrets\.SUPABASE_ANON_KEY/);
+  assert.match(workflow, /wrangler secret put SUPABASE_ANON_KEY --env production/);
+  assert.doesNotMatch(wrangler, /^SUPABASE_ANON_KEY\s*=/m);
 });
 
 test('tracked Worker example configuration lists names only', async () => {
@@ -127,6 +131,7 @@ test('tracked Worker example configuration lists names only', async () => {
     'SUPABASE_ACCESS_TOKEN',
     'SUPABASE_PROJECT_REF',
     'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_ANON_KEY',
     'CLOUDFLARE_API_TOKEN',
     'VERYFI_CLIENT_ID',
     'VERYFI_CLIENT_SECRET',
