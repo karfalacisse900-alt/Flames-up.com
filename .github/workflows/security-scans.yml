@@ -79,7 +79,7 @@ jobs:
   codeql:
     name: CodeQL (${{ matrix.language }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,9 +87,13 @@ jobs:
           - language: javascript-typescript
             os: ubuntu-latest
             build-mode: none
+            timeout_minutes: 45
           - language: swift
             os: macos-26
             build-mode: manual
+            # The instrumented Swift/Xcode build exceeded the former 45-minute
+            # whole-job limit before CodeQL could reach its analysis step.
+            timeout_minutes: 90
 
     steps:
       - name: Checkout
