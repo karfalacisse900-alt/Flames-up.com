@@ -124,12 +124,15 @@ jobs:
         run: |
           set -euo pipefail
           arch -arm64 brew install xcodegen
+          bash ./scripts/build-rust-ios.sh iphonesimulator
           xcodegen generate --spec project.yml
           xcodebuild \
             -project Aura.xcodeproj \
             -scheme Aura \
             -configuration Debug \
             -destination "generic/platform=iOS Simulator" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             build
 
