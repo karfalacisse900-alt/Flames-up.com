@@ -107,7 +107,8 @@ test('Worker deploy stamps public Git commit provenance and keeps Supabase crede
   assert.match(workflow, /wrangler deploy --env production --keep-vars --var "SOURCE_COMMIT:\$GITHUB_SHA"/);
   assert.doesNotMatch(workflow, /wrangler secret put SOURCE_COMMIT/);
   assert.match(workflow, /secrets\.SUPABASE_ANON_KEY/);
-  assert.match(workflow, /wrangler secret put SUPABASE_ANON_KEY --env production/);
+  assert.match(workflow, /wrangler secret put SUPABASE_AUTH_ANON_KEY --env production/);
+  assert.match(worker, /c\.env\.SUPABASE_AUTH_ANON_KEY \|\| c\.env\.SUPABASE_ANON_KEY/);
   assert.doesNotMatch(wrangler, /^SUPABASE_ANON_KEY\s*=/m);
 });
 

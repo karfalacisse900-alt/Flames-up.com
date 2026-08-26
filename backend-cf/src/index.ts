@@ -67,6 +67,7 @@ interface Env {
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   SUPABASE_URL?: string;
+  SUPABASE_AUTH_ANON_KEY?: string;
   SUPABASE_ANON_KEY?: string;
   SUPABASE_PUBLISHABLE_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
@@ -11153,7 +11154,7 @@ function getSupabaseServiceRoleKey(c: any): string {
 }
 
 function getSupabaseAuthClientKey(c: any): string {
-  const key = String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_PUBLISHABLE_KEY || '').trim();
+  const key = String(c.env.SUPABASE_AUTH_ANON_KEY || c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_PUBLISHABLE_KEY || '').trim();
   if (!key) throw new Error('SUPABASE_AUTH_KEY_MISSING');
   return key;
 }
@@ -23672,7 +23673,7 @@ api.get('/database/status', authMiddleware, async (c) => {
       supabase_authentication: {
         configured: !!c.env.SUPABASE_URL,
         service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
-        anon_key_set: !!c.env.SUPABASE_ANON_KEY,
+        anon_key_set: !!(c.env.SUPABASE_AUTH_ANON_KEY || c.env.SUPABASE_ANON_KEY),
         note: 'Aura account creation and social sign-in are bridged into Supabase Authentication and linked by users.supabase_user_id.',
       },
       timestamp: now(),
