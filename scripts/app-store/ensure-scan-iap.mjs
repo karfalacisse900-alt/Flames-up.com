@@ -73,7 +73,6 @@ async function createPurchase(appID) {
         productId: productID,
         inAppPurchaseType: 'CONSUMABLE',
         reviewNote: 'Adds 10 private receipt or invoice verification credits. Each completed verification consumes one $0.10 credit.',
-        availableInAllTerritories: true,
       },
       relationships: {
         app: { data: { type: 'apps', id: appID } },
@@ -82,6 +81,41 @@ async function createPurchase(appID) {
   };
   const body = await expect('/v2/inAppPurchases', { method: 'POST', body: JSON.stringify(payload) }, [201]);
   return body.data;
+}
+
+async function ensureAvailability(purchaseID) {
+  const existing = await request(`/v2/inAppPurchases/${purchaseID}/inAppPurchaseAvailability`);
+  if (existing.response.ok && existing.body?.data?.id) {
+    console.log(`Availability already exists: ${existing.body.data.id}`);
+    return;
+  }
+  if (existing.response.status !== 404) {
+    throw new Error(`Could not read availability (${existing.response.status}): ${JSON.stringify(existing.body)}`);
+  }
+
+  const territories = await expect('/v1/territories?limit=200');
+  const availableTerritories = (territories?.data || [])
+    .filter((territory) => territory?.id)
+    .map((territory) => ({ type: 'territories', id: territory.id }));
+  if (!availableTerritories.length) {
+    throw new Error('Apple did not return any App Store territories.');
+  }
+
+  const payload = {
+    data: {
+      type: 'inAppPurchaseAvailabilities',
+      attributes: { availableInNewTerritories: true },
+      relationships: {
+        availableTerritories: { data: availableTerritories },
+        inAppPurchase: { data: { type: 'inAppPurchases', id: purchaseID } },
+      },
+    },
+  };
+  const body = await expect('/v1/inAppPurchaseAvailabilities', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, [201]);
+  console.log(`Created availability for ${availableTerritories.length} territories (${body.data.id}).`);
 }
 
 async function ensureLocalization(purchaseID) {
@@ -162,6 +196,7 @@ if (!purchase) {
 } else {
   console.log(`Using existing ${productID} (${purchase.id}).`);
 }
+await ensureAvailability(purchase.id);
 await ensureLocalization(purchase.id);
 await ensurePrice(purchase.id);
 const finalPurchase = await expect(`/v2/inAppPurchases/${purchase.id}`);

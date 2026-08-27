@@ -110,3 +110,12 @@ test('iOS Scan replaces Discover and preserves the paid-review contract', async 
   assert.doesNotMatch(scanSources, /Aura/);
   assert.doesNotMatch(screen, /\b(?:Fraud|Fake|Scam|Suspicious|Level 1|Level 2|risk percentage)\b/i);
 });
+
+test('App Store setup uses the dedicated in-app purchase availability resource', async () => {
+  const setup = await readFile(path.join(repositoryRoot, 'scripts', 'app-store', 'ensure-scan-iap.mjs'), 'utf8');
+
+  assert.doesNotMatch(setup, /availableInAllTerritories/);
+  assert.match(setup, /\/v1\/inAppPurchaseAvailabilities/);
+  assert.match(setup, /availableInNewTerritories: true/);
+  assert.match(setup, /\/v1\/territories\?limit=200/);
+});

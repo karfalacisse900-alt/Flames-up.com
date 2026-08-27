@@ -2,6 +2,11 @@ name: Native iOS TestFlight
 
 on:
   workflow_dispatch:
+    inputs:
+      configure_only:
+        description: Configure the Captro Scan in-app purchase without rebuilding the app
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -24,12 +29,15 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Show Xcode version
+        if: ${{ !inputs.configure_only }}
         run: xcodebuild -version
 
       - name: Install XcodeGen
+        if: ${{ !inputs.configure_only }}
         run: arch -arm64 brew install xcodegen
 
       - name: Check Rust native core
+        if: ${{ !inputs.configure_only }}
         run: |
           set -euo pipefail
           RUST_CORE_DIR="${IOS_NATIVE_DIR}/rust/mira_core"
@@ -41,10 +49,12 @@ jobs:
           cargo build --manifest-path "$RUST_CORE_DIR/Cargo.toml" --release --target aarch64-apple-ios
 
       - name: Generate Xcode project
+        if: ${{ !inputs.configure_only }}
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: xcodegen generate --spec project.yml
 
       - name: Prepare App Store Connect API key
+        if: ${{ !inputs.configure_only }}
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
@@ -54,6 +64,7 @@ jobs:
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
 
       - name: Install signing certificate and provisioning profile
+        if: ${{ !inputs.configure_only }}
         id: signing
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -112,6 +123,7 @@ jobs:
           echo "profile-name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Archive native iOS app
+        if: ${{ !inputs.configure_only }}
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -133,6 +145,7 @@ jobs:
             clean archive
 
       - name: Export IPA
+        if: ${{ !inputs.configure_only }}
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
@@ -171,6 +184,7 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
       - name: Upload IPA artifact
+        if: ${{ !inputs.configure_only }}
         uses: actions/upload-artifact@v7
         with:
           name: Captro-native-ios-ipa
@@ -178,6 +192,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload to TestFlight
+        if: ${{ !inputs.configure_only }}
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
