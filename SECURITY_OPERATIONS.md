@@ -1,15 +1,14 @@
-# Flames-Up Security Operations Notes
+# Captro Security Operations Notes
 
 ## Third-party services in use
 
-- Cloudflare Workers/D1/R2/Images/Stream: backend API, database, private media backup storage, image/video delivery. Server secrets must stay in Cloudflare Worker secrets.
-- Supabase: authentication bridge and Postgres sync. The native app may use publishable/anon keys only; service-role keys are backend-only.
+- Cloudflare Workers/R2/Images/Stream: backend API edge layer, private media backup storage, image/video delivery, security checks, and rate limiting. Server secrets must stay in Cloudflare Worker secrets.
+- Supabase: authentication and primary Postgres application database. The native app may use publishable/anon keys only; service-role keys are backend-only.
 - Google OAuth: login identity. Client IDs can be public; OAuth secrets stay in provider/Supabase settings.
 - Stripe: wallet coin and Premium checkout. Secret key and webhook secret are backend-only.
 - Mapbox: place search/map display. Mobile clients should use only public-scoped tokens; backend proxy routes are preferred for higher-risk/location-heavy flows.
 - Audius: public music discovery/stream metadata.
 - Twilio Verify/SMS: optional phone verification. Account SID/auth token are backend-only.
-- Agora: calls. App certificate is backend-only; the iOS app receives only short-lived generated call tokens.
 
 No analytics/tracker SDK such as Sentry, Segment, Amplitude, Mixpanel, Firebase Analytics, or Meta Pixel was found in the active native app/backend source during this pass.
 
@@ -27,7 +26,7 @@ No analytics/tracker SDK such as Sentry, Segment, Amplitude, Mixpanel, Firebase 
 - Rotate any key that was pasted into chat, terminal logs, or screenshots.
 - Set `ABUSE_SIGNAL_SECRET` as a Cloudflare Worker secret so ban-evasion signals are keyed hashes.
 - Deploy with the explicit production environment and confirm `ENVIRONMENT=production`.
-- Keep CORS production origins limited to `https://flames-up.com` and `https://www.flames-up.com`.
+- Keep CORS production origins limited to Captro-owned production domains such as `https://captro.app`, `https://www.captro.app`, `https://admin.captro.app`, and the approved admin Pages domain while migration domains remain active.
 - Keep `.env` files out of git; mobile configuration values committed to the app must be safe to ship publicly.
 - Run a database backup before applying new migrations or large admin cleanup jobs.
 - Video metadata stripping is not complete in Workers; use a trusted media processing pipeline before public video delivery if location/device metadata is a concern.

@@ -1,9 +1,9 @@
 import SwiftUI
 
-private let captroLegalLastUpdated = "June 8, 2026"
+private let captroLegalLastUpdated = "August 26, 2026"
 private let captroSupportEmail = "karfalacisse900@gmail.com"
-private let captroWebsiteDomain = "https://flames-up.com"
-private let captroLegalDisclaimer = "Captro may update these pages as the app, safety tools, or legal requirements change."
+private let captroWebsiteDomain = "https://captro.app"
+private let captroLegalDisclaimer = "Aura may update these pages as the app, safety tools, or legal requirements change."
 
 private struct LegalSection: Identifiable {
   let title: String
@@ -58,9 +58,9 @@ private enum CaptroLegalPage: CaseIterable, Hashable {
   var summary: String {
     switch self {
     case .terms:
-      return "The rules for using Captro, posting photos and videos, using chat, and participating safely in Feed, Profile, Discover, Stories, and gallery-style experiences."
+      return "The rules for using Aura, posting photos and videos, using chat, and participating safely in Feed, Profile, Discover, Stories, and gallery-style experiences."
     case .privacy:
-      return "How Captro collects, uses, shares, protects, and retains account, media, chat, location, device, and safety information."
+      return "How Aura collects, uses, shares, protects, and retains account, media, chat, location, device, and safety information."
     case .communityGuidelines:
       return "The culture and safety rules for posts, comments, chat, Discover, stories, check-ins, profiles, and gallery content."
     case .safety:
@@ -178,7 +178,7 @@ private struct LegalDocumentView: View {
       Text("Questions or Requests")
         .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-      Text("For support, safety, privacy, account deletion, or legal questions, contact Captro support.")
+      Text("For support, safety, privacy, account deletion, or legal questions, contact Aura support.")
         .font(.system(size: 14, weight: .medium))
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -290,21 +290,21 @@ private struct LegalFooterLinks: View {
 
 private let termsSections: [LegalSection] = [
   LegalSection(
-    title: "What Captro Is",
+    title: "What Aura Is",
     paragraphs: [
-      "Captro is a social app for sharing photo posts, multi-photo posts, stories, comments, chat messages, profiles, bookmarks, Discover content, and other creative moments.",
-      "These Terms explain the rules for using Captro. By creating an account or using Captro, you agree to follow these Terms, the Privacy Policy, the Community Guidelines, and the Safety & Reporting rules."
+      "Aura is a social app for sharing photo posts, multi-photo posts, stories, comments, chat messages, profiles, bookmarks, Discover content, and other creative moments.",
+      "These Terms explain the rules for using Aura. By creating an account or using Aura, you agree to follow these Terms, the Privacy Policy, the Community Guidelines, and the Safety & Reporting rules."
     ],
     bullets: []
   ),
   LegalSection(
     title: "Age Requirement: 16+",
     paragraphs: [
-      "You must be at least 16 years old to use Captro. Captro is not made for children under 16, and people under 16 are not allowed to create or use an account.",
-      "If we learn that an account belongs to someone under 16, we may remove the account and delete or limit related information. If you believe someone under 16 is using Captro, contact support."
+      "You must be at least 16 years old to use Aura. Aura is not made for children under 16, and people under 16 are not allowed to create or use an account.",
+      "If we learn that an account belongs to someone under 16, we may remove the account and delete or limit related information. If you believe someone under 16 is using Aura, contact support."
     ],
     bullets: [
-      "If you are 16 or older but still under the legal age of majority where you live, use Captro only with permission from a parent or guardian.",
+      "If you are 16 or older but still under the legal age of majority where you live, use Aura only with permission from a parent or guardian.",
       "Do not lie about your age, create accounts for someone under 16, or help someone bypass the age requirement."
     ]
   ),
@@ -312,7 +312,7 @@ private let termsSections: [LegalSection] = [
     title: "Your Account",
     paragraphs: [
       "You are responsible for your account, username, profile, login credentials, and activity. Keep your password private and tell us if you believe your account was accessed without permission.",
-      "Captro may support email/password login, Sign in with Apple, Google sign-in, or other approved authentication methods. You must use accurate account information and may not impersonate another person."
+      "Aura may support email/password login, Sign in with Apple, Google sign-in, or other approved authentication methods. You must use accurate account information and may not impersonate another person."
     ],
     bullets: [
       "Do not sell, transfer, rent, automate, scrape, spam, or misuse an account.",
@@ -324,7 +324,7 @@ private let termsSections: [LegalSection] = [
     title: "User Content and License",
     paragraphs: [
       "You own the content you create or upload, subject to any rights held by other people. This can include photos, story videos, captions, comments, profile details, messages, places, reports, and other content.",
-      "To run Captro, you give Captro a worldwide, non-exclusive, royalty-free license to host, store, process, resize, optimize, moderate, display, and distribute your content inside Captro and related Captro services. This permission is only for operating, protecting, improving, and promoting Captro features."
+      "To run Aura, you give Aura a worldwide, non-exclusive, royalty-free license to host, store, process, resize, optimize, moderate, display, and distribute your content inside Aura and related Aura services. This permission is only for operating, protecting, improving, and promoting Aura features."
     ],
     bullets: [
       "Public or shared content may appear in Feed, Discover, profiles, bookmarks, stories, comments, search, notifications, or other app surfaces depending on your settings and the feature used.",
@@ -335,7 +335,7 @@ private let termsSections: [LegalSection] = [
   LegalSection(
     title: "Posting, Stories, Chat, and Location",
     paragraphs: [
-      "Captro may allow photo posts, multi-photo posts, story videos, comments, direct messages, profile content, and optional location or place features. Use these features safely and respectfully.",
+      "Aura may allow photo posts, multi-photo posts, story videos, comments, direct messages, profile content, and optional location or place features. Use these features safely and respectfully.",
       "Exact place tags and broad city/country labels are optional where available. Do not use location features to expose private places, stalk, harass, threaten, or mislead people."
     ],
     bullets: [
@@ -347,7 +347,7 @@ private let termsSections: [LegalSection] = [
   LegalSection(
     title: "Not Allowed",
     paragraphs: [
-      "You may not use Captro to harm people, abuse the service, or break the law. Captro may remove content, limit features, suspend accounts, ban accounts, or preserve safety records when rules are broken."
+      "You may not use Aura to harm people, abuse the service, or break the law. Aura has zero tolerance for objectionable content or abusive users. Aura may remove content, limit features, suspend accounts, ban accounts, or preserve safety records when rules are broken."
     ],
     bullets: [
       "No harassment, bullying, threats, hate speech, violence, gore, sexual exploitation, sexual content involving minors, doxxing, stalking, or private information abuse.",
@@ -358,15 +358,15 @@ private let termsSections: [LegalSection] = [
   LegalSection(
     title: "Moderation and Safety Review",
     paragraphs: [
-      "Captro may use automated systems, human review, admin tools, user reports, safety signals, and service providers to review content and accounts. Media may be checked before becoming public.",
-      "Captro may remove or restrict posts, comments, profiles, stories, Discover content, messages, places, accounts, or other content if it may violate these Terms or safety rules."
+      "Aura may use automated systems, human review, admin tools, user reports, safety signals, and service providers to review content and accounts. Media may be checked before becoming public.",
+      "Aura may remove or restrict posts, comments, profiles, stories, Discover content, messages, places, accounts, or other content if it may violate these Terms or safety rules."
     ],
     bullets: []
   ),
   LegalSection(
     title: "Account Deletion",
     paragraphs: [
-      "You may request account deletion inside the app where available or by contacting support. Captro may first place the account in a deletion-pending state, hide it from public areas, log out sessions, and permanently delete or anonymize eligible account data after a 30-day deletion period.",
+      "You may request account deletion inside the app where available or by contacting support. Aura may first place the account in a deletion-pending state, hide it from public areas, log out sessions, and permanently delete or anonymize eligible account data after a 30-day deletion period.",
       "Some information may be kept when needed for safety, security, legal compliance, fraud prevention, dispute resolution, audit logs, or ban evasion prevention."
     ],
     bullets: []
@@ -375,8 +375,8 @@ private let termsSections: [LegalSection] = [
     title: "Copyright, Service Availability, and Changes",
     paragraphs: [
       "Respect copyright and intellectual property rights. If you believe content infringes your rights, contact support with enough detail for us to review it.",
-      "Captro is provided as available. We do not guarantee uninterrupted service, error-free features, or that every feature will remain available. We may update, pause, remove, or add features over time.",
-      "To the fullest extent allowed by law, Captro is not responsible for user-generated content, offline interactions, service interruptions, lost data, or indirect damages. Some rights cannot be limited by law, so these limits apply only where legally permitted."
+      "Aura is provided as available. We do not guarantee uninterrupted service, error-free features, or that every feature will remain available. We may update, pause, remove, or add features over time.",
+      "To the fullest extent allowed by law, Aura is not responsible for user-generated content, offline interactions, service interruptions, lost data, or indirect damages. Some rights cannot be limited by law, so these limits apply only where legally permitted."
     ],
     bullets: []
   )
@@ -386,7 +386,7 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Age and Children",
     paragraphs: [
-      "Captro is for people who are at least 16 years old. Captro is not directed to children under 16, and we do not knowingly allow people under 16 to create accounts.",
+      "Aura is for people who are at least 16 years old. Aura is not directed to children under 16, and we do not knowingly allow people under 16 to create accounts.",
       "If you believe a person under 16 created an account, contact support so we can review and take action."
     ],
     bullets: []
@@ -394,7 +394,7 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Account and Identity Information",
     paragraphs: [
-      "Captro collects information needed to create, protect, and manage your account."
+      "Aura collects information needed to create, protect, and manage your account."
     ],
     bullets: [
       "Username, display name, email address, authentication provider information, user ID, profile photo, bio, links, password credentials if you use email/password, and account status.",
@@ -405,10 +405,10 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Content You Create",
     paragraphs: [
-      "Captro collects and processes content you create or choose to share so the app can work."
+      "Aura collects and processes content you create or choose to share so the app can work."
     ],
     bullets: [
-      "Photos, story videos, captions, comments, profile details, bookmarks, saves, likes, follows, reports, moderation notes, and support requests.",
+      "Photos, story videos, captions, comments, profile details, bookmarks, saves, likes, connections, reports, moderation notes, and support requests.",
       "Messages and attachments you send in chat, including metadata such as sender, receiver, timestamps, delivery status, read status if used, and safety signals.",
       "Photos, videos, avatars, thumbnails, posters, and media processing records may be stored, optimized, resized, transcoded, scanned for safety, and delivered through Cloudflare services such as Cloudflare Workers, Cloudflare Images, R2, Stream, Queues, CDN, and Workers AI where configured."
     ]
@@ -416,22 +416,22 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Photos, Videos, Camera, Microphone, and Gallery",
     paragraphs: [
-      "Captro asks for camera, microphone, and photo library permissions only when needed for features such as creating posts, recording stories, choosing media, editing media, saving edited media, and sending media in chat."
+      "Aura asks for camera, microphone, and photo library permissions only when needed for features such as creating posts, recording stories, choosing media, editing media, saving edited media, and sending media in chat."
     ],
     bullets: [
       "Camera access is used to take photos for posts and record story videos.",
       "Microphone access is used when recording story videos or other media features that include audio.",
-      "Photo library access is used to let you choose or save photos and videos. Captro does not need full-library access when a picker can provide selected media only."
+      "Photo library access is used to let you choose or save photos and videos. Aura does not need full-library access when a picker can provide selected media only."
     ]
   ),
   LegalSection(
     title: "Location and Check-In Data",
     paragraphs: [
-      "Captro may offer two different location features: exact place tags and broad city/country labels. These are optional where available.",
+      "Aura may offer two different location features: exact place tags and broad city/country labels. These are optional where available.",
       "Exact place tags can be selected through Apple MapKit or device place search. Broad city/country labels may be created from your profile city, manual selection, or approximate device location with permission. Mapbox may be used to turn approximate coordinates into a city/country label."
     ],
     bullets: [
-      "Captro should not show your precise live location in Feed or Discover.",
+      "Aura should not show your precise live location in Feed or Discover.",
       "If you turn on a city/country label, other users may see that broad label, such as New York, USA.",
       "If you add a place tag, other users may see that place name, such as a restaurant, park, cafe, venue, or gym.",
       "You can remove or hide location features where the app provides controls, and you can turn off device location permission in iOS Settings."
@@ -440,18 +440,18 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Device, Usage, Notifications, and Diagnostics",
     paragraphs: [
-      "Captro may collect device and usage information to keep the app working, secure, and fast."
+      "Aura may collect device and usage information to keep the app working, secure, and fast."
     ],
     bullets: [
       "Device type, operating system, app version, IP address, approximate network location, crash data, performance data, diagnostics, logs, security signals, and interaction data.",
-      "Notification tokens and notification settings so Captro can send alerts for messages, comments, follows, reports, safety events, or other app activity if you allow notifications.",
+      "Notification tokens and notification settings so Aura can send alerts for messages, comments, connections, reports, safety events, or other app activity if you allow notifications.",
       "Cache data may be stored on your device so Feed, Discover, profiles, chat, media previews, and settings can load faster."
     ]
   ),
   LegalSection(
-    title: "How Captro Uses Information",
+    title: "How Aura Uses Information",
     paragraphs: [
-      "Captro uses information to provide, protect, personalize, and improve the app."
+      "Aura uses information to provide, protect, personalize, and improve the app."
     ],
     bullets: [
       "Create accounts, authenticate users, show Feed, Discover, profiles, stories, comments, chat, bookmarks, notifications, and settings.",
@@ -464,14 +464,14 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Sharing and Service Providers",
     paragraphs: [
-      "Captro does not sell your personal information. Captro does not use your data for third-party advertising tracking unless that is disclosed and consent is obtained where required.",
-      "Captro may share information only as needed to operate the app, protect users, comply with law, or support the service."
+      "Aura does not sell your personal information. Aura does not use your data for third-party advertising tracking unless that is disclosed and consent is obtained where required.",
+      "Aura may share information only as needed to operate the app, protect users, comply with law, or support the service."
     ],
     bullets: [
-      "With other users when you post, comment, share a profile, appear in Discover, send messages, like, save, follow, or use public app features.",
+      "With other users when you post, comment, share a profile, appear in Discover, send messages, like, save, connect, or use public app features.",
       "With service providers such as Supabase for authentication and structured Postgres data, Cloudflare for Worker API, media storage, media processing, CDN delivery, and safety jobs, Apple, Google, Mapbox, notification providers, analytics/diagnostics providers, moderation tools, and support tools where configured.",
       "With law enforcement, courts, regulators, or safety partners when required by law, legal process, emergency, abuse prevention, or protection of users and the public.",
-      "If Captro is involved in a merger, sale, financing, acquisition, restructuring, or transfer of assets, information may transfer as part of that transaction."
+      "If Aura is involved in a merger, sale, financing, acquisition, restructuring, or transfer of assets, information may transfer as part of that transaction."
     ]
   ),
   LegalSection(
@@ -481,7 +481,7 @@ private let privacySections: [LegalSection] = [
     ],
     bullets: [
       "Update profile details, username, profile photo, privacy settings, and notification preferences where available.",
-      "Use block, report, delete, hide, unsave, unfollow, or remove-place controls where available.",
+      "Use block, report, delete, hide, unsave, remove connection, or remove-place controls where available.",
       "Turn off camera, microphone, photos, notifications, or location permissions in iOS Settings.",
       "Clear local cache where the app provides a cache clearing control.",
       "Request account deletion in Settings or by contacting support."
@@ -490,15 +490,15 @@ private let privacySections: [LegalSection] = [
   LegalSection(
     title: "Retention and Account Deletion",
     paragraphs: [
-      "Captro keeps information for as long as needed to provide the app, protect users, comply with law, resolve disputes, prevent fraud, enforce rules, and maintain safety records.",
-      "When you request deletion, Captro may place the account in a deletion-pending state, hide your profile and public content, log out sessions, delete push tokens, and permanently delete or anonymize eligible data after a 30-day deletion period. Some limited records may be kept for safety, security, legal, audit, or ban evasion reasons."
+      "Aura keeps information for as long as needed to provide the app, protect users, comply with law, resolve disputes, prevent fraud, enforce rules, and maintain safety records.",
+      "When you request deletion, Aura may place the account in a deletion-pending state, hide your profile and public content, log out sessions, delete push tokens, and permanently delete or anonymize eligible data after a 30-day deletion period. Some limited records may be kept for safety, security, legal, audit, or ban evasion reasons."
     ],
     bullets: []
   ),
   LegalSection(
     title: "Security",
     paragraphs: [
-      "Captro uses technical and organizational safeguards to protect account, media, chat, and safety information. No system is perfectly secure, so you should use a strong password, protect your device, and report suspicious activity."
+      "Aura uses technical and organizational safeguards to protect account, media, chat, and safety information. No system is perfectly secure, so you should use a strong password, protect your device, and report suspicious activity."
     ],
     bullets: []
   )
@@ -506,12 +506,12 @@ private let privacySections: [LegalSection] = [
 
 private let communitySections: [LegalSection] = [
   LegalSection(
-    title: "The Captro Standard",
+    title: "The Aura Standard",
     paragraphs: [
-      "Captro is for real people, original photos, story videos, creativity, respectful comments, safer chat, useful Discover content, and genuine connection. Keep it human, honest, and safe."
+      "Aura is for real people, original photos, story videos, creativity, respectful comments, safer chat, useful Discover content, and genuine connection. Keep it human, honest, and safe."
     ],
     bullets: [
-      "Use Captro only if you are at least 16 years old.",
+      "Use Aura only if you are at least 16 years old.",
       "Share content you created or have permission to share.",
       "Treat people with respect in comments, messages, profiles, stories, and Discover.",
       "Do not pressure people to respond, meet, send media, share private information, or send money."
@@ -556,14 +556,14 @@ private let communitySections: [LegalSection] = [
   LegalSection(
     title: "AI, Editing, and Authenticity",
     paragraphs: [
-      "Captro may use automated tools to help categorize Discover content, improve captions, moderate uploads, or protect safety. Do not use editing tools, AI-generated media, or misleading captions to impersonate people, deceive users, exploit others, or evade moderation."
+      "Aura may use automated tools to help categorize Discover content, improve captions, moderate uploads, or protect safety. Do not use editing tools, AI-generated media, or misleading captions to impersonate people, deceive users, exploit others, or evade moderation."
     ],
     bullets: []
   ),
   LegalSection(
     title: "Enforcement",
     paragraphs: [
-      "Captro may use warnings, content removal, reduced visibility, feature limits, account suspension, permanent bans, deletion of unsafe media, and device, IP, identity, or behavior-based ban evasion review where available."
+      "Aura may use warnings, content removal, reduced visibility, feature limits, account suspension, permanent bans, deletion of unsafe media, and device, IP, identity, or behavior-based ban evasion review where available."
     ],
     bullets: []
   )
@@ -573,7 +573,7 @@ private let safetySections: [LegalSection] = [
   LegalSection(
     title: "Age and Safety",
     paragraphs: [
-      "Captro is for people 16 and older. If you are under 16, do not use Captro. If you believe someone under 16 is using Captro, report it or contact support."
+      "Aura is for people 16 and older. If you are under 16, do not use Aura. If you believe someone under 16 is using Aura, report it or contact support."
     ],
     bullets: []
   ),
@@ -584,7 +584,7 @@ private let safetySections: [LegalSection] = [
     ],
     bullets: [
       "Choose the closest report reason and include helpful context when the app allows it.",
-      "The reported user should not be told who reported them by Captro.",
+      "The reported user should not be told who reported them by Aura.",
       "For urgent support or account issues, contact karfalacisse900@gmail.com."
     ]
   ),
@@ -598,8 +598,8 @@ private let safetySections: [LegalSection] = [
   LegalSection(
     title: "After a Report",
     paragraphs: [
-      "Reports may be reviewed through automated systems, moderation/admin tools, or human reviewers. Captro may remove content, warn users, limit features, suspend accounts, ban accounts, or preserve safety records. Reports may not always receive individual responses.",
-      "If there is immediate danger, contact local emergency services first. Captro is not an emergency service."
+      "Reports may be reviewed through automated systems, moderation/admin tools, or human reviewers. Aura may remove content, warn users, limit features, suspend accounts, ban accounts, or preserve safety records. Reports may not always receive individual responses.",
+      "If there is immediate danger, contact local emergency services first. Aura is not an emergency service."
     ],
     bullets: []
   ),
@@ -618,7 +618,7 @@ private let safetySections: [LegalSection] = [
   LegalSection(
     title: "Chat Safety",
     paragraphs: [
-      "You can report messages and block abusive users where supported. Captro may review reported messages or safety-related content when necessary to investigate reports, enforce policies, protect users, or comply with law."
+      "You can report messages and block abusive users where supported. Aura may review reported messages or safety-related content when necessary to investigate reports, enforce policies, protect users, or comply with law."
     ],
     bullets: [
       "Do not share passwords, verification codes, private documents, money details, your address, or live location.",
@@ -634,7 +634,7 @@ private let safetySections: [LegalSection] = [
     bullets: [
       "Do not tag a private home, school, workplace, or sensitive location unless it is safe and appropriate.",
       "Do not reveal another person's location without permission.",
-      "Turn off location permission in iOS Settings if you do not want Captro to access location."
+      "Turn off location permission in iOS Settings if you do not want Aura to access location."
     ]
   )
 ]

@@ -9,7 +9,7 @@ final class PostDetailModel: ObservableObject {
   @Published var currentUserId: String?
 
   let api: MIRAAPIClient
-  private var likingPostIds = Set<String>()
+  private var likeMutationVersions: [String: Int] = [:]
   private var likingCommentIds = Set<String>()
 
   init(post: MIRAPost, api: MIRAAPIClient) {
@@ -18,20 +18,22 @@ final class PostDetailModel: ObservableObject {
   }
 
   func hydrateFromLocalCache() async {
+    post = await MIRAPostEngagementSync.apply(to: post)
     guard let cached = await MIRAAppCacheStore.shared.loadCachedPost(id: post.id) else { return }
     applyCachedEngagement(from: cached)
   }
 
   func refreshPost() async {
     do {
-      let refreshed: MIRAPost = try await api.get("/posts/\(post.id)")
+      let apiPost: MIRAPost = try await api.get("/posts/\(post.id)")
+      let refreshed = await MIRAPostEngagementSync.apply(to: apiPost)
       let current = post
       let merged = refreshed.updating(
-        liked: refreshed.isLiked ?? current.isLiked,
+        liked: refreshed.viewerLikedValue ?? current.viewerLikedValue,
         likesCount: refreshed.likesCount ?? current.likesCount,
-        commentsCount: bestCount(current.commentsCount, refreshed.commentsCount),
-        saved: refreshed.isSaved ?? refreshed.saved?.value ?? current.viewerSaved,
-        savesCount: bestCount(current.savesCount, refreshed.savesCount),
+        commentsCount: refreshed.commentsCount ?? current.commentsCount,
+        saved: refreshed.viewerSavedValue ?? current.viewerSavedValue,
+        savesCount: refreshed.savesCount ?? current.savesCount,
         following: refreshed.isFollowing ?? refreshed.following?.value ?? refreshed.followed?.value ?? current.viewerFollowing
       )
       var transaction = Transaction()
@@ -211,16 +213,15 @@ final class PostDetailModel: ObservableObject {
   }
 
   func toggleLike() async {
-    guard !likingPostIds.contains(post.id) else { return }
-    likingPostIds.insert(post.id)
-    defer { likingPostIds.remove(post.id) }
-
+    let mutationVersion = beginLikeMutation(for: post.id)
     let previous = post
     let nextLiked = !post.viewerLiked
     let nextCount = max(0, (post.likesCount ?? 0) + (nextLiked ? 1 : -1))
     post = post.updating(liked: nextLiked, likesCount: nextCount)
+    publishEngagement()
     do {
       let response: PostLikeResponse = try await api.post("/posts/\(post.id)/like", body: LikeBody(liked: nextLiked))
+      guard isCurrentLikeMutation(mutationVersion, for: post.id) else { return }
       let reconciledLikesCount = stableEngagementCount(
         current: previous.likesCount,
         incoming: response.likesCount,
@@ -236,14 +237,18 @@ final class PostDetailModel: ObservableObject {
       )
       publishEngagement()
     } catch {
+      guard isCurrentLikeMutation(mutationVersion, for: post.id) else { return }
       post = previous
+      publishEngagement()
     }
+    finishLikeMutation(mutationVersion, for: post.id)
   }
 
   func save(to collection: String) async {
     let previous = post
     let nextCount = max(0, (post.savesCount ?? 0) + (post.viewerSaved ? 0 : 1))
     post = post.updating(saved: true, savesCount: nextCount)
+    publishEngagement()
     do {
       let response: PostSaveResponse = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: collection))
       let reconciledSavesCount = stableEngagementCount(
@@ -262,6 +267,7 @@ final class PostDetailModel: ObservableObject {
       publishEngagement()
     } catch {
       post = previous
+      publishEngagement()
     }
   }
 
@@ -270,6 +276,7 @@ final class PostDetailModel: ObservableObject {
     let previous = post
     let nextCount = max(0, (post.savesCount ?? 0) - 1)
     post = post.updating(saved: false, savesCount: nextCount)
+    publishEngagement()
     do {
       let response: PostSaveResponse = try await api.delete("/library/save/\(post.id)")
       let reconciledSavesCount = stableEngagementCount(
@@ -288,6 +295,7 @@ final class PostDetailModel: ObservableObject {
       publishEngagement()
     } catch {
       post = previous
+      publishEngagement()
     }
   }
 
@@ -301,12 +309,13 @@ final class PostDetailModel: ObservableObject {
 
   func toggleFollowAuthor() async {
     guard let userId = post.userId, !userId.isEmpty else { return }
+    guard !["connected", "request_sent", "request_received", "blocked", "self"].contains(post.viewerConnectionStatus) else { return }
     let previous = post
-    let nextFollowing = !post.viewerFollowing
-    post = post.updating(following: nextFollowing)
+    post = post.updating(following: false, connectionStatus: "request_sent")
     do {
-      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
-      post = post.updating(following: response.following ?? nextFollowing)
+      let response: ConnectionRequestResponse = try await api.post("/friends/request/\(userId)", body: ConnectionRequestBody(note: nil))
+      let status = response.normalizedStatus
+      post = post.updating(following: status == "connected", connectionStatus: status)
     } catch {
       post = previous
     }
@@ -327,17 +336,12 @@ final class PostDetailModel: ObservableObject {
 
   private func applyCachedEngagement(from cached: MIRAPost) {
     post = post.updating(
-      liked: cached.isLiked,
-      likesCount: bestCount(post.likesCount, cached.likesCount),
-      commentsCount: bestCount(post.commentsCount, cached.commentsCount),
-      saved: cached.isSaved ?? cached.saved?.value,
-      savesCount: bestCount(post.savesCount, cached.savesCount)
+      liked: post.viewerLikedValue ?? cached.viewerLikedValue,
+      likesCount: post.likesCount ?? cached.likesCount,
+      commentsCount: post.commentsCount ?? cached.commentsCount,
+      saved: post.viewerSavedValue ?? cached.viewerSavedValue,
+      savesCount: post.savesCount ?? cached.savesCount
     )
-  }
-
-  private func bestCount(_ current: Int?, _ cached: Int?) -> Int? {
-    guard current != nil || cached != nil else { return nil }
-    return max(0, cached ?? current ?? 0)
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
@@ -346,7 +350,23 @@ final class PostDetailModel: ObservableObject {
     return max(0, incoming)
   }
 
-  private func loadCurrentUserIfNeeded() async {
+  private func beginLikeMutation(for postId: String) -> Int {
+    let next = (likeMutationVersions[postId] ?? 0) + 1
+    likeMutationVersions[postId] = next
+    return next
+  }
+
+  private func isCurrentLikeMutation(_ version: Int, for postId: String) -> Bool {
+    likeMutationVersions[postId] == version
+  }
+
+  private func finishLikeMutation(_ version: Int, for postId: String) {
+    if likeMutationVersions[postId] == version {
+      likeMutationVersions[postId] = nil
+    }
+  }
+
+  func loadCurrentUserIfNeeded() async {
     guard currentUserId == nil else { return }
     let me: MIRAUser? = try? await api.get("/auth/me")
     currentUserId = me?.id
@@ -397,6 +417,13 @@ public struct PostDetailNativeView: View {
             )
             .frame(maxWidth: .infinity, minHeight: mediaHeight, maxHeight: mediaHeight)
           }
+
+          MIRAConversationStartersRow(
+            starters: MIRAConversationStarterEngine.starters(for: model.post, viewerID: model.currentUserId),
+            onSelect: selectConversationStarter
+          )
+          .padding(.horizontal, MIRATheme.Space.md)
+          .padding(.top, MIRATheme.Space.sm)
 
           VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
             VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
@@ -551,6 +578,20 @@ public struct PostDetailNativeView: View {
       guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
       model.applyEngagementUpdate(update)
     }
+  }
+
+  private func selectConversationStarter(_ starter: MIRAConversationStarter) {
+    Task {
+      await MIRAObservability.recordConversationStarterSelection(
+        starterID: starter.id,
+        category: starter.category,
+        source: starter.source,
+        surface: "post_detail",
+        api: model.api
+      )
+    }
+    draft = starter.text
+    isCommentFocused = true
   }
 
   private func presentReport(for comment: MIRAComment) {
@@ -775,7 +816,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
           isVideo: isVideo(at: index, url: url),
           placeholderURL: placeholderURL(at: index, mediaURL: url),
           fallbackURL: fallbackURL(at: index, mediaURL: url),
-          contentMode: .fill,
+          contentMode: .fit,
           shouldPlay: false,
           maxPixelSize: MIRAMediaSizing.feedTargetHeight,
           placeholderColor: MIRATheme.Color.mediaPlaceholder
@@ -838,6 +879,7 @@ public struct DiscoverPostDetailNativeView: View {
   @StateObject private var model: PostDetailModel
   @State private var isCaptionExpanded = false
   @State private var isCommentsPresented = false
+  @State private var conversationStarterDraft = ""
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportComment: MIRAComment?
   @State private var isReportSheetPresented = false
@@ -863,6 +905,11 @@ public struct DiscoverPostDetailNativeView: View {
           }
           mediaCarousel
           actionRow
+          MIRAConversationStartersRow(
+            starters: MIRAConversationStarterEngine.starters(for: model.post, viewerID: model.currentUserId),
+            onSelect: selectConversationStarter
+          )
+          .padding(.horizontal, MIRATheme.Space.md)
           postContext
         }
         .padding(.bottom, 32)
@@ -876,10 +923,12 @@ public struct DiscoverPostDetailNativeView: View {
     .miraBottomSheet(
       isPresented: $isCommentsPresented,
       preferredHeightFraction: 0.72,
-      maxHeight: 640
+      maxHeight: 640,
+      onDismissed: { conversationStarterDraft = "" }
     ) { dismissComments in
       DiscoverDetailCommentsSheet(
         model: model,
+        initialDraft: conversationStarterDraft,
         onClose: dismissComments,
         onReportComment: { comment in
           dismissComments()
@@ -916,11 +965,26 @@ public struct DiscoverPostDetailNativeView: View {
     .task {
       await model.hydrateFromLocalCache()
       await model.refreshPost()
+      await model.loadCurrentUserIfNeeded()
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
       guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
       model.applyEngagementUpdate(update)
     }
+  }
+
+  private func selectConversationStarter(_ starter: MIRAConversationStarter) {
+    Task {
+      await MIRAObservability.recordConversationStarterSelection(
+        starterID: starter.id,
+        category: starter.category,
+        source: starter.source,
+        surface: "discover_detail",
+        api: model.api
+      )
+    }
+    conversationStarterDraft = starter.text
+    isCommentsPresented = true
   }
 
   private var topBar: some View {
@@ -1217,7 +1281,7 @@ private struct DiscoverDetailMediaCard: View {
         isVideo: isVideo,
         placeholderURL: placeholderURL,
         fallbackURL: fallbackURL,
-        contentMode: .fill,
+        contentMode: .fit,
         shouldPlay: false,
         maxPixelSize: MIRAMediaSizing.feedTargetHeight,
         showsVideoPlaceholderIcon: isVideo
@@ -1241,6 +1305,20 @@ struct DiscoverDetailCommentsSheet: View {
   let onClose: () -> Void
   let onReportComment: (MIRAComment) -> Void
   let onBlockCommentUser: (MIRAComment) -> Void
+
+  init(
+    model: PostDetailModel,
+    initialDraft: String = "",
+    onClose: @escaping () -> Void,
+    onReportComment: @escaping (MIRAComment) -> Void,
+    onBlockCommentUser: @escaping (MIRAComment) -> Void
+  ) {
+    self.model = model
+    _draft = State(initialValue: initialDraft)
+    self.onClose = onClose
+    self.onReportComment = onReportComment
+    self.onBlockCommentUser = onBlockCommentUser
+  }
 
   var body: some View {
     VStack(spacing: 0) {

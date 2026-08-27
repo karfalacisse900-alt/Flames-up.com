@@ -4,20 +4,15 @@ import Foundation
 import GoogleSignIn
 
 public enum MIRATab: Hashable {
-  case main
-  case discover
-  case chat
-  case profile
+  case home
+  case scan
+  case wallet
+  case me
 }
 
 public enum MIRAStartupPhase: Equatable {
   case launching
   case checkingSession
-  case loadingUser
-  case preparingFeed
-  case preparingDiscover
-  case preparingProfile
-  case preparingMainTabs
   case readyAuthenticated
   case readyUnauthenticated
   case failedWithRetry
@@ -25,23 +20,13 @@ public enum MIRAStartupPhase: Equatable {
   var statusText: String {
     switch self {
     case .launching:
-      return "Opening Captro"
+      return "Opening Aura"
     case .checkingSession:
       return "Checking your session"
-    case .loadingUser:
-      return "Loading your profile"
-    case .preparingFeed:
-      return "Preparing your feed"
-    case .preparingDiscover:
-      return "Preparing Discover"
-    case .preparingProfile:
-      return "Preparing your profile"
-    case .preparingMainTabs:
-      return "Building your tabs"
     case .readyAuthenticated, .readyUnauthenticated:
       return "Ready"
     case .failedWithRetry:
-      return "Still getting Captro ready"
+      return "Still getting Aura ready"
     }
   }
 }
@@ -52,12 +37,6 @@ final class MIRAStartupCoordinator: ObservableObject {
   @Published private(set) var isSplashMounted = true
   @Published private(set) var isSplashVisible = true
   @Published private(set) var showSlowStartupCopy = false
-  @Published private(set) var shouldMountAllAuthenticatedTabs = false
-
-  let feedModel: MainFeedModel
-  let discoverModel: DiscoverNativeModel
-  let chatModel: ChatNativeModel
-  let profileModel: ProfileNativeModel
 
   private let api: MIRAAPIClient
   private var didStart = false
@@ -66,10 +45,6 @@ final class MIRAStartupCoordinator: ObservableObject {
 
   init(api: MIRAAPIClient) {
     self.api = api
-    self.feedModel = MainFeedModel(api: api)
-    self.discoverModel = DiscoverNativeModel(api: api)
-    self.chatModel = ChatNativeModel(api: api)
-    self.profileModel = ProfileNativeModel(api: api)
   }
 
   func start(authSession: MIRAAuthSession) async {
@@ -80,6 +55,7 @@ final class MIRAStartupCoordinator: ObservableObject {
     beginSlowMessageTimer()
 
     phase = .checkingSession
+    await MIRAAppCacheStore.shared.reconcileServerDataState(api: api)
     await authSession.bootstrap(api: api)
 
     guard !Task.isCancelled else { return }
@@ -90,39 +66,14 @@ final class MIRAStartupCoordinator: ObservableObject {
       return
     }
 
-    if authSession.user?.needsUsernameOnboarding == true {
-      phase = .readyAuthenticated
-      await waitForMinimumSplash(since: startedAt)
-      MIRAPerformanceTimeline.mark("startup_username_required")
-      dismissSplash()
-      return
-    }
-
-    shouldMountAllAuthenticatedTabs = true
-    phase = .loadingUser
-    profileModel.primeUser(authSession.user)
-    await Task.yield()
-
-    phase = .preparingMainTabs
-    await Task.yield()
-
-    phase = .preparingFeed
-    let feedTask = Task { await feedModel.prepareForStartup() }
-
-    phase = .preparingDiscover
-    let discoverTask = Task { await discoverModel.prepareForStartup() }
-
-    phase = .preparingProfile
-    let profileTask = Task { await profileModel.prepareForStartup(signedInUser: authSession.user) }
-
-    let chatTask = Task { await chatModel.prepareForStartup() }
-
-    _ = await (feedTask.value, discoverTask.value, profileTask.value, chatTask.value)
-    startInitialMediaPrewarm()
-
     phase = .readyAuthenticated
     await waitForMinimumSplash(since: startedAt)
-    MIRAPerformanceTimeline.mark("startup_prepare_ready", detail: "authenticated")
+    MIRAPerformanceTimeline.mark(
+      authSession.user?.needsUsernameOnboarding == true
+        ? "startup_username_required"
+        : "startup_prepare_ready",
+      detail: "authenticated"
+    )
     dismissSplash()
   }
 
@@ -160,44 +111,25 @@ final class MIRAStartupCoordinator: ObservableObject {
     }
   }
 
-  private func startInitialMediaPrewarm() {
-    let posts = Array(feedModel.posts.prefix(4)) + Array(discoverModel.posts.prefix(9)) + Array(profileModel.posts.prefix(6))
-    let previewURLs = posts.flatMap { post in
-      post.posterMediaURLs + post.thumbnailMediaURLs
-    }
-    let feedImageURLs = posts
-      .flatMap(\.feedMediaURLs)
-      .filter { !$0.isVideoURL }
-    let urls = Array(orderedMediaURLs(previewURLs + feedImageURLs).prefix(16))
-    guard !urls.isEmpty else { return }
-    Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 16)
-    }
-  }
-
-  private func orderedMediaURLs(_ values: [String]) -> [String] {
-    var seen = Set<String>()
-    var result: [String] = []
-    for value in values {
-      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.isEmpty, !trimmed.isVideoURL, seen.insert(trimmed).inserted else { continue }
-      result.append(trimmed)
-    }
-    return result
-  }
 }
 
 public struct MIRANativeRootView: View {
   @Environment(\.scenePhase) private var scenePhase
-  @State private var selectedTab: MIRATab = .main
-  @State private var loadedTabs: Set<MIRATab> = [.main]
+  @State private var selectedTab: MIRATab = .home
+  @State private var loadedTabs: Set<MIRATab> = [.home]
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
+  @State private var isCreateMenuPresented = false
+  @State private var isCommunityComposerPresented = false
+  @State private var pendingCreateAction: AuraRootCreateAction?
+  @State private var communityHomeRefreshID = UUID()
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
-  @StateObject private var callCoordinator: MIRAAppCallCoordinator
   @StateObject private var localization: MIRALocalization
+  @StateObject private var auraWallet: AuraWalletStore
+  @StateObject private var auraGateway: AuraWalletGatewayStore
+  @StateObject private var auraProofs: AuraProofLifecycleStore
   private let api: MIRAAPIClient
 
   public init() {
@@ -205,9 +137,12 @@ public struct MIRANativeRootView: View {
     let client = MIRAAPIClient(sessionProvider: session)
     _authSession = StateObject(wrappedValue: session)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
-    _callCoordinator = StateObject(wrappedValue: MIRAAppCallCoordinator.shared)
     _localization = StateObject(wrappedValue: MIRALocalization.shared)
+    _auraWallet = StateObject(wrappedValue: AuraWalletStore())
+    _auraGateway = StateObject(wrappedValue: AuraWalletGatewayStore(api: client))
+    _auraProofs = StateObject(wrappedValue: AuraProofLifecycleStore(api: client))
     self.api = client
+    MIRAPerformanceTimeline.mark("backend_client_initialized")
     MIRAPerformanceTimeline.mark("native_root_init")
   }
 
@@ -219,25 +154,16 @@ public struct MIRANativeRootView: View {
         .animation(.easeInOut(duration: 0.28), value: startup.isSplashVisible)
 
       if startup.isSplashMounted {
-        CaptroStartupView(phase: startup.phase, showSlowMessage: startup.showSlowStartupCopy)
+        AuraStartupView(phase: startup.phase, showSlowMessage: startup.showSlowStartupCopy)
           .opacity(startup.isSplashVisible ? 1 : 0)
           .scaleEffect(startup.isSplashVisible ? 1 : 0.985)
           .zIndex(10)
       }
 
-      MIRACallOverlays(coordinator: callCoordinator)
-        .zIndex(30)
-
       if isPrivacyShieldVisible {
         MIRAPrivacyShieldView()
           .transition(.opacity)
           .zIndex(100)
-      }
-    }
-    .miraFullScreenOverlay(item: activeCallBinding, background: .black) { presentation, dismissCall in
-      MIRAAgoraCallView(presentation: presentation, api: api) {
-        Task { await callCoordinator.endActiveCall() }
-        dismissCall()
       }
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
@@ -252,18 +178,21 @@ public struct MIRANativeRootView: View {
       MIRAPerformanceTimeline.markOnce("time_to_first_screen")
     }
     .task {
+      await MIRAAppCacheStore.shared.clearPostDraftFromPreviousProcessIfNeeded()
+      await MIRAAppCacheStore.shared.purgeRetiredHomeCachesIfNeeded()
       await startup.start(authSession: authSession)
-      callCoordinator.configure(api: api, currentUserId: authSession.user?.id)
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
       if userID == nil {
-        selectedTab = .main
-        loadedTabs = [.main]
+        selectedTab = .home
+        loadedTabs = [.home]
+        isCreateMenuPresented = false
+        isCommunityComposerPresented = false
+        pendingCreateAction = nil
       } else {
-        loadedTabs.formUnion([.main, .discover, .profile])
+        loadedTabs.insert(.home)
       }
-      callCoordinator.configure(api: api, currentUserId: userID)
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: scenePhase) { _, phase in
@@ -272,9 +201,6 @@ public struct MIRANativeRootView: View {
       }
       if phase == .active {
         registerCachedPushTokenIfPossible()
-        if selectedTab == .main {
-          MIRAPlaybackCoordinator.resumeVisible(reason: "app_active_home")
-        }
       } else {
         MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")
       }
@@ -285,18 +211,12 @@ public struct MIRANativeRootView: View {
     }
     .onOpenURL { url in
       _ = GIDSignIn.sharedInstance.handle(url)
+      authSession.handleIncomingURL(url)
     }
   }
 
-  private var activeCallBinding: Binding<MIRAAgoraCallPresentation?> {
-    Binding(
-      get: { callCoordinator.activeCall },
-      set: { callCoordinator.activeCall = $0 }
-    )
-  }
-
   private var shouldHideStatusBar: Bool {
-    startup.isSplashMounted || featureStatusBarHidden || (authSession.user != nil && selectedTab == .main)
+    startup.isSplashMounted || featureStatusBarHidden
   }
 
   @ViewBuilder
@@ -318,42 +238,101 @@ public struct MIRANativeRootView: View {
 
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
-      lazyTab(.main) {
-        MainFeedView(api: api, model: startup.feedModel, isTabActive: selectedTab == .main)
+      lazyTab(.home) {
+        if let currentUser = authSession.user {
+          AuraHomeView(api: api, currentUser: currentUser)
+            .id(communityHomeRefreshID)
+        } else {
+          Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MIRATheme.Color.paperCanvas)
+        }
       }
-        .tag(MIRATab.main)
+        .tag(MIRATab.home)
         .tabItem { Label("Home", systemImage: "house.fill") }
 
-      lazyTab(.discover) {
-        DiscoverNativeView(api: api, model: startup.discoverModel)
+      lazyTab(.scan) {
+        AuraScanView(
+          api: api,
+          wallet: auraWallet,
+          gateway: auraGateway,
+          proofs: auraProofs
+        )
       }
-        .tag(MIRATab.discover)
-        .tabItem { Label("Discover", systemImage: "safari.fill") }
+        .tag(MIRATab.scan)
+        .tabItem { Label("Scan", systemImage: "viewfinder") }
 
-      lazyTab(.chat) {
-        ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)
+      lazyTab(.wallet) {
+        AuraWalletView(
+          api: api,
+          wallet: auraWallet,
+          gateway: auraGateway,
+          proofs: auraProofs
+        )
       }
-        .tag(MIRATab.chat)
-        .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
+        .tag(MIRATab.wallet)
+        .tabItem { Label("Wallet", systemImage: "wallet.pass.fill") }
 
-      lazyTab(.profile) {
-        ProfileNativeView(api: api, authSession: authSession, model: startup.profileModel)
+      lazyTab(.me) {
+        AuraMeView(
+          api: api,
+          authSession: authSession,
+          wallet: auraWallet,
+          gateway: auraGateway,
+          proofs: auraProofs,
+          openWallet: { selectedTab = .wallet }
+        )
       }
-        .tag(MIRATab.profile)
-        .tabItem { Label("Profile", systemImage: "person.fill") }
+        .tag(MIRATab.me)
+        .tabItem { Label("Me", systemImage: "face.smiling") }
     }
-    .tint(MIRATheme.Color.forest)
-    .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
-    .toolbarBackground(.visible, for: .tabBar)
-    .background(MIRATheme.Color.appBackground)
+    .tint(MIRATheme.Color.auraViolet)
+    .toolbar(.hidden, for: .tabBar)
+    .overlay(alignment: .bottom) {
+      AuraTactileTabBar(selection: $selectedTab) {
+        isCreateMenuPresented = true
+      }
+      .padding(.horizontal, 16)
+      .padding(.bottom, 8)
+      .zIndex(2)
+    }
+    .background(MIRATheme.Color.paperCanvas)
+    .sheet(
+      isPresented: $isCreateMenuPresented,
+      onDismiss: openPendingCreateAction
+    ) {
+      AuraRootCreateSheet { action in
+        pendingCreateAction = action
+      }
+      .presentationDetents([.height(300)])
+      .presentationDragIndicator(.visible)
+      .presentationCornerRadius(30)
+      .presentationBackground(MIRATheme.Color.paperCanvas)
+    }
+    .fullScreenCover(isPresented: $isCommunityComposerPresented) {
+      if let currentUser = authSession.user {
+        AuraCreateCommunityPostView(api: api, currentUser: currentUser) {
+          isCommunityComposerPresented = false
+          communityHomeRefreshID = UUID()
+          selectedTab = .home
+          loadedTabs.insert(.home)
+        }
+      }
+    }
+    .task {
+      await auraProofs.observeLifecycle()
+    }
+    .task(id: auraWallet.identity?.address) {
+      if let identity = auraWallet.identity {
+        auraGateway.start(identity: identity)
+      } else {
+        auraGateway.clear()
+      }
+    }
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")
       loadedTabs.insert(tab)
-      if tab == .main {
-        MIRAPlaybackCoordinator.resumeVisible(reason: "home_tab_selected")
-      } else {
-        MIRAPlaybackCoordinator.pauseAll(reason: "tab_changed")
-      }
+      MIRAPlaybackCoordinator.pauseAll(reason: "tab_changed")
     }
   }
 
@@ -364,15 +343,25 @@ public struct MIRANativeRootView: View {
     } else {
       Color.clear
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(MIRATheme.Color.appBackground)
+        .background(MIRATheme.Color.paperCanvas)
     }
   }
 
   private func shouldMountTab(_ tab: MIRATab) -> Bool {
-    if authSession.user != nil && startup.shouldMountAllAuthenticatedTabs {
-      return true
-    }
     return loadedTabs.contains(tab) || selectedTab == tab
+  }
+
+  private func openPendingCreateAction() {
+    guard let action = pendingCreateAction else { return }
+    pendingCreateAction = nil
+    switch action {
+    case .communityPost:
+      guard authSession.user != nil else { return }
+      isCommunityComposerPresented = true
+    case .scanDocument:
+      selectedTab = .scan
+      loadedTabs.insert(.scan)
+    }
   }
 
   private func registerCachedPushTokenIfPossible() {
@@ -389,6 +378,170 @@ public struct MIRANativeRootView: View {
     Task {
       await MIRAPushTokenRegistry.shared.registerDeviceToken(token, api: api)
     }
+  }
+}
+
+private enum AuraRootCreateAction {
+  case communityPost
+  case scanDocument
+}
+
+private struct AuraTactileTabBar: View {
+  @Binding var selection: MIRATab
+  let onCreate: () -> Void
+
+  private let items: [(tab: MIRATab, title: String, systemImage: String, selectedImage: String)] = [
+    (.home, "Home", "house", "house.fill"),
+    (.scan, "Scan", "viewfinder", "viewfinder"),
+    (.wallet, "Wallet", "wallet.pass", "wallet.pass.fill"),
+    (.me, "Me", "face.smiling", "face.smiling")
+  ]
+
+  var body: some View {
+    HStack(spacing: 12) {
+      HStack(spacing: 3) {
+        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+          Button {
+            selection = item.tab
+          } label: {
+            Image(systemName: selection == item.tab ? item.selectedImage : item.systemImage)
+              .font(.system(size: 19, weight: .semibold))
+              .foregroundStyle(
+                selection == item.tab
+                  ? MIRATheme.Color.auraViolet
+                  : MIRATheme.Color.textPrimary.opacity(0.72)
+              )
+              .frame(width: 46, height: 46)
+              .background(
+                selection == item.tab ? MIRATheme.Color.auraVioletSoft : Color.clear,
+                in: Circle()
+              )
+          }
+          .buttonStyle(.plain)
+          .contentShape(Circle())
+          .accessibilityLabel(item.title)
+          .accessibilityAddTraits(selection == item.tab ? .isSelected : [])
+        }
+      }
+      .padding(6)
+      .background(MIRATheme.Color.paperSurface, in: Capsule())
+      .overlay {
+        Capsule()
+          .stroke(MIRATheme.Color.inkBorder.opacity(0.16), lineWidth: 1)
+      }
+      .shadow(color: Color.black.opacity(0.17), radius: 18, x: 0, y: 9)
+      .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 2)
+
+      Button(action: onCreate) {
+        Image(systemName: "plus")
+          .font(.system(size: 21, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary.opacity(0.72))
+          .frame(width: 56, height: 56)
+          .background(MIRATheme.Color.paperSurface, in: Circle())
+          .overlay {
+            Circle()
+              .stroke(MIRATheme.Color.inkBorder.opacity(0.22), lineWidth: 1)
+          }
+      }
+      .buttonStyle(.plain)
+      .contentShape(Circle())
+      .shadow(color: Color.black.opacity(0.20), radius: 16, x: 0, y: 8)
+      .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 2)
+      .accessibilityLabel("Create")
+    }
+    .frame(maxWidth: .infinity)
+  }
+}
+
+private struct AuraRootCreateSheet: View {
+  @Environment(\.dismiss) private var dismiss
+  let onSelect: (AuraRootCreateAction) -> Void
+
+  var body: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Choose what you want to make in Aura.")
+          .font(.subheadline)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+
+        createRow(
+          title: "Post or Meetup",
+          subtitle: "Share with your community",
+          systemImage: "square.and.pencil",
+          action: .communityPost
+        )
+
+        createRow(
+          title: "Scan Document",
+          subtitle: "Scan or import a receipt or invoice",
+          systemImage: "viewfinder",
+          action: .scanDocument
+        )
+
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 18)
+      .padding(.top, 6)
+      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
+      .navigationTitle("Create")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button {
+            dismiss()
+          } label: {
+            Image(systemName: "xmark")
+          }
+          .buttonStyle(.bordered)
+          .buttonBorderShape(.circle)
+          .accessibilityLabel("Close")
+        }
+      }
+    }
+  }
+
+  private func createRow(
+    title: String,
+    subtitle: String,
+    systemImage: String,
+    action: AuraRootCreateAction
+  ) -> some View {
+    Button {
+      onSelect(action)
+      dismiss()
+    } label: {
+      HStack(spacing: 14) {
+        Image(systemName: systemImage)
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.auraViolet)
+          .frame(width: 42, height: 42)
+          .background(MIRATheme.Color.auraVioletSoft, in: Circle())
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.headline)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text(subtitle)
+            .font(.footnote)
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+
+        Spacer(minLength: 8)
+
+        Image(systemName: "chevron.right")
+          .font(.footnote.weight(.bold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+      .padding(.horizontal, 14)
+      .frame(maxWidth: .infinity, minHeight: 64)
+      .background(MIRATheme.Color.paperSurface)
+      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .stroke(MIRATheme.Color.inkBorder.opacity(0.16), lineWidth: 1)
+      }
+    }
+    .buttonStyle(.plain)
   }
 }
 
@@ -426,7 +579,7 @@ private struct RestoreAccountNativeView: View {
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .multilineTextAlignment(.center)
 
-            Text("This Captro account is scheduled for deletion. Restore it now to keep using it, or sign out and deletion will continue.")
+            Text("This Aura account is scheduled for deletion. Restore it now to keep using it, or sign out and deletion will continue.")
               .font(.system(size: 15, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textSecondary)
               .multilineTextAlignment(.center)
@@ -520,7 +673,7 @@ private struct MIRAPrivacyShieldView: View {
   var body: some View {
     ZStack {
       MIRATheme.Color.launchBackground.ignoresSafeArea()
-      CaptroWordmarkView()
+      AuraWordmarkView()
         .scaleEffect(0.74)
         .opacity(0.92)
         .accessibilityHidden(true)
@@ -528,7 +681,7 @@ private struct MIRAPrivacyShieldView: View {
   }
 }
 
-private struct CaptroStartupView: View {
+private struct AuraStartupView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let phase: MIRAStartupPhase
   let showSlowMessage: Bool
@@ -540,7 +693,7 @@ private struct CaptroStartupView: View {
 
       VStack(spacing: MIRATheme.Space.xl) {
         VStack(spacing: MIRATheme.Space.sm) {
-          CaptroWordmarkView()
+          AuraWordmarkView()
             .scaleEffect(reduceMotion ? 1 : (appeared ? 1 : 0.96))
             .opacity(appeared ? 1 : 0)
 
@@ -549,14 +702,14 @@ private struct CaptroStartupView: View {
             .frame(width: 128, height: 1)
             .opacity(appeared ? 1 : 0)
 
-          Text("capture moments")
+          Text("verified purchases, real reputation")
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Color.black.opacity(0.52))
             .opacity(appeared ? 1 : 0)
         }
 
         VStack(spacing: MIRATheme.Space.sm) {
-          CaptroStartupPulse()
+          AuraStartupPulse()
             .opacity(appeared ? 1 : 0)
 
           if showSlowMessage {
@@ -581,17 +734,29 @@ private struct CaptroStartupView: View {
   }
 }
 
-private struct CaptroWordmarkView: View {
+private struct AuraWordmarkView: View {
   var body: some View {
-    Image("CaptroLaunchLogo", bundle: .main)
-      .resizable()
-      .scaledToFit()
-      .frame(width: 292, height: 98)
-    .accessibilityLabel("Cap Tro")
+    HStack(spacing: 14) {
+      ZStack {
+        Image(systemName: "hexagon")
+          .font(.system(size: 48, weight: .semibold))
+        Circle()
+          .stroke(lineWidth: 3)
+          .frame(width: 20, height: 20)
+      }
+      .foregroundStyle(MIRATheme.Color.forest)
+
+      Text("AURA")
+        .font(.system(size: 44, weight: .bold, design: .rounded))
+        .tracking(4)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Aura")
   }
 }
 
-private struct CaptroStartupPulse: View {
+private struct AuraStartupPulse: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {

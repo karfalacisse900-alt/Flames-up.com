@@ -33,14 +33,14 @@ Local Captro branding is already configured in the iOS app:
 
 - `CFBundleDisplayName = Captro`
 - `CFBundleName = Captro`
-- `PRODUCT_BUNDLE_IDENTIFIER = com.captro.app`
+- `PRODUCT_BUNDLE_IDENTIFIER = com.karfala90.aura`
 
 Update production OAuth branding:
 
 1. Google Cloud Console > APIs & Services > OAuth consent screen / Branding.
 2. Set the app name to `Captro`.
 3. Confirm the support email and developer contact email.
-4. Rename or recreate the iOS OAuth client for bundle ID `com.captro.app`.
+4. Rename or recreate the iOS OAuth client for bundle ID `com.karfala90.aura`.
 5. Rename or recreate the Web OAuth client used by Supabase Authentication.
 6. Supabase Dashboard > Authentication > Providers > Google: use the Captro Web OAuth client ID and secret.
 7. Keep `GOOGLE_OAUTH_CLIENT_IDS` in the Worker secret in sync with the current Captro OAuth client IDs.

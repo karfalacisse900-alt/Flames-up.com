@@ -1,17 +1,34 @@
-name: Native iOS TestFlight
+name: Aura iOS TestFlight
 
 on:
   workflow_dispatch:
+    inputs:
+      existing_build_number:
+        description: "Distribute an already uploaded build without rebuilding"
+        required: false
+        type: string
+        default: ""
+      release_notes:
+        description: "TestFlight 'What to Test' changelog for this build"
+        required: false
+        type: string
+        default: "Aura Mobile build."
+      use_prevalidated_ios_gate:
+        description: "Use the already-passed Swift tests and arm64 Release gate; skip duplicate simulator work"
+        required: false
+        type: boolean
+        default: false
   push:
-    branches: [main]
-    paths:
-      - "ios_native/MIRA/**"
-      - ".github/workflows/native-ios-testflight.yml"
+    tags:
+      - "ios-v*"
 
 env:
   IOS_NATIVE_DIR: ios_native/MIRA
-  BUNDLE_ID: com.captro.app
-  SCHEME: Captro
+  BUNDLE_ID: com.karfala90.aura
+  SCHEME: Aura
+  # Must match the internal TestFlight group created for the clean Aura app record.
+  BETA_GROUP: "Aura Internal Beta"
+  APPLE_APP_ID: "6804671675"
 
 jobs:
   build-testflight:
@@ -23,37 +40,122 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Select existing TestFlight build
+        if: inputs.existing_build_number != ''
+        run: echo "BUILD_NUMBER=${{ inputs.existing_build_number }}" >> "$GITHUB_ENV"
+
       - name: Show Xcode version
+        if: inputs.existing_build_number == ''
         run: xcodebuild -version
 
       - name: Install XcodeGen
-        run: arch -arm64 brew install xcodegen
+        if: inputs.existing_build_number == ''
+        run: brew install xcodegen
 
-      - name: Check Rust native core
+      - name: Install fastlane
+        run: brew install fastlane
+
+      - name: Build Rust native core for required Apple platforms
+        if: inputs.existing_build_number == ''
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: |
-          set -euo pipefail
-          RUST_CORE_DIR="${IOS_NATIVE_DIR}/rust/mira_core"
-          if [ ! -f "$RUST_CORE_DIR/Cargo.toml" ]; then
-            echo "::warning::Rust native core not found at $RUST_CORE_DIR. Skipping Rust build for this branch."
-            exit 0
+          bash ./scripts/build-rust-ios.sh iphoneos
+          if [[ "${{ inputs.use_prevalidated_ios_gate }}" != "true" ]]; then
+            bash ./scripts/build-rust-ios.sh iphonesimulator
           fi
-          rustup target add aarch64-apple-ios
-          cargo build --manifest-path "$RUST_CORE_DIR/Cargo.toml" --release --target aarch64-apple-ios
 
       - name: Generate Xcode project
+        if: inputs.existing_build_number == ''
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         run: xcodegen generate --spec project.yml
+
+      - name: Read marketing version from project.yml
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          MARKETING_VERSION=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"?([0-9A-Za-z.-]+)"?.*$/\1/p' project.yml | head -n 1)
+          if [ -z "$MARKETING_VERSION" ]; then
+            echo "::error::Could not read MARKETING_VERSION from project.yml"
+            exit 1
+          fi
+          echo "Marketing version: $MARKETING_VERSION"
+          echo "MARKETING_VERSION=$MARKETING_VERSION" >> "$GITHUB_ENV"
+
+      - name: Run native iOS unit tests
+        if: inputs.existing_build_number == '' && inputs.use_prevalidated_ios_gate != true
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin).get("devices", {})
+          for runtime_devices in devices.values():
+              for device in runtime_devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator was found")
+          ')
+          xcodebuild \
+            -project Aura.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -only-testing:AuraTests \
+            test
+
+      - name: Launch Aura Release build in iOS Simulator
+        if: inputs.existing_build_number == '' && inputs.use_prevalidated_ios_gate != true
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: bash ./scripts/smoke-test-ios-launch.sh
 
       - name: Prepare App Store Connect API key
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           echo -n "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 -D > "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
 
+      - name: Write App Store Connect API key JSON
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          API_KEY_JSON="$RUNNER_TEMP/app-store-connect-api-key.json"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          python3 - "$API_KEY_JSON" "$KEY_PATH" <<'PY'
+          import json
+          import os
+          import sys
+
+          output_path, key_path = sys.argv[1:]
+          with open(key_path, "r", encoding="utf-8") as handle:
+              private_key = handle.read()
+          payload = {
+              "key_id": os.environ["APP_STORE_CONNECT_API_KEY_ID"],
+              "issuer_id": os.environ["APP_STORE_CONNECT_API_ISSUER_ID"],
+              "key": private_key,
+              "in_house": False,
+          }
+          with open(output_path, "w", encoding="utf-8") as handle:
+              json.dump(payload, handle)
+          PY
+          echo "ASC_API_KEY_JSON=$API_KEY_JSON" >> "$GITHUB_ENV"
+
+      - name: Determine next TestFlight build number
+        if: inputs.existing_build_number == ''
+        env:
+          ASC_API_KEY_JSON: ${{ env.ASC_API_KEY_JSON }}
+        run: |
+          set -euo pipefail
+          fastlane next_build_number
+
       - name: Install signing certificate and provisioning profile
+        if: inputs.existing_build_number == ''
         id: signing
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -66,10 +168,10 @@ jobs:
           set -euo pipefail
 
           KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-$(uuidgen)}"
-          KEYCHAIN_PATH="$RUNNER_TEMP/captro-signing.keychain-db"
+          KEYCHAIN_PATH="$RUNNER_TEMP/aura-signing.keychain-db"
           CERT_PATH="$RUNNER_TEMP/ios_distribution.p12"
-          PROFILE_PATH="$RUNNER_TEMP/captro.mobileprovision"
-          PROFILE_PLIST="$RUNNER_TEMP/captro-profile.plist"
+          PROFILE_PATH="$RUNNER_TEMP/aura.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/aura-profile.plist"
 
           echo -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > "$CERT_PATH"
           echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
@@ -95,6 +197,7 @@ jobs:
           echo "profile-name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Archive native iOS app
+        if: inputs.existing_build_number == ''
         working-directory: ${{ env.IOS_NATIVE_DIR }}
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -102,20 +205,27 @@ jobs:
           PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
         run: |
           set -euo pipefail
-          BUILD_NUMBER="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
           xcodebuild \
-            -project Captro.xcodeproj \
+            -project Aura.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
-            -archivePath "$RUNNER_TEMP/Captro.xcarchive" \
+            -archivePath "$RUNNER_TEMP/Aura.xcarchive" \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            MARKETING_VERSION="1.0.0" \
             OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH" \
             clean archive
 
+      - name: Audit signed iPhone archive linkage
+        if: inputs.existing_build_number == ''
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/Aura.xcarchive/Products/Applications/Aura.app"
+          codesign --verify --deep --strict "$APP_PATH"
+          bash ./scripts/audit-ios-binary-linkage.sh "$APP_PATH/Aura" arm64
+
       - name: Export IPA
+        if: inputs.existing_build_number == ''
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
@@ -149,27 +259,113 @@ jobs:
 
           xcodebuild \
             -exportArchive \
-            -archivePath "$RUNNER_TEMP/Captro.xcarchive" \
+            -archivePath "$RUNNER_TEMP/Aura.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
 
       - name: Upload IPA artifact
+        if: inputs.existing_build_number == ''
         uses: actions/upload-artifact@v7
         with:
-          name: Captro-native-ios-ipa
+          name: Aura-native-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
 
+      - name: Upload device symbols
+        if: inputs.existing_build_number == ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: Aura-native-ios-dsyms
+          path: ${{ runner.temp }}/Aura.xcarchive/dSYMs/
+          if-no-files-found: error
+
       - name: Upload to TestFlight
+        if: inputs.existing_build_number == ''
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
         run: |
           set -euo pipefail
           IPA_PATH=$(find "$RUNNER_TEMP/export" -type f -name "*.ipa" | head -n 1)
-          xcrun altool \
-            --upload-app \
-            --type ios \
-            --file "$IPA_PATH" \
-            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
-            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+          for attempt in 1 2 3 4; do
+            if xcrun altool \
+              --upload-app \
+              --type ios \
+              --file "$IPA_PATH" \
+              --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+              --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 4 ]; then
+              echo "TestFlight upload failed after $attempt attempts."
+              exit 1
+            fi
+
+            delay=$((attempt * 30))
+            echo "App Store Connect upload failed on attempt $attempt; retrying in ${delay}s."
+            sleep "$delay"
+          done
+
+      - name: Wait for processing and distribute to Aura Internal Beta
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          CHANGELOG="${RELEASE_NOTES:-Aura Mobile build.}"
+
+          echo "TESTFLIGHT_DISTRIBUTION_STATUS=pending" >> "$GITHUB_ENV"
+          for attempt in {1..60}; do
+            LOG_PATH="$RUNNER_TEMP/testflight-distribution-${attempt}.log"
+            set +e
+            fastlane pilot distribute \
+              --api_key_path "$ASC_API_KEY_JSON" \
+              --app_platform ios \
+              --app_identifier "$BUNDLE_ID" \
+              --apple_id "$APPLE_APP_ID" \
+              --app_version "$MARKETING_VERSION" \
+              --build_number "$BUILD_NUMBER" \
+              --groups "$BETA_GROUP" \
+              --distribute_external false \
+              --notify_external_testers false \
+              --submit_beta_review false \
+              --wait_processing_interval 30 \
+              --wait_processing_timeout_duration 1800 \
+              --changelog "$CHANGELOG" \
+              2>&1 | tee "$LOG_PATH"
+            status=${PIPESTATUS[0]}
+            set -e
+
+            if [ "$status" -eq 0 ]; then
+              echo "TESTFLIGHT_DISTRIBUTION_STATUS=assigned" >> "$GITHUB_ENV"
+              exit 0
+            fi
+
+            if grep -qiE "No build to distribute|Server error got 5[0-9][0-9]|temporarily unavailable|timed out" "$LOG_PATH" && [ "$attempt" -lt 60 ]; then
+              echo "Build $BUILD_NUMBER is still processing or App Store Connect returned a transient error; retrying in 30 seconds."
+              sleep 30
+              continue
+            fi
+
+            if grep -qiE "forbidden for security reasons|API key in use does not allow this request" "$LOG_PATH"; then
+              echo "::warning::Aura $BUILD_NUMBER is uploaded to TestFlight, but the App Store Connect API key cannot assign it to $BETA_GROUP. Assign the build to the group manually or grant the key TestFlight distribution permissions."
+              echo "TESTFLIGHT_DISTRIBUTION_STATUS=manual_required" >> "$GITHUB_ENV"
+              exit 0
+            fi
+
+            exit "$status"
+          done
+
+      - name: Confirm TestFlight distribution
+        run: |
+          case "${TESTFLIGHT_DISTRIBUTION_STATUS:-assigned}" in
+            assigned)
+              echo "Aura ${BUILD_NUMBER} was uploaded, processed, and assigned to ${BETA_GROUP}."
+              ;;
+            manual_required)
+              echo "::warning::Aura ${BUILD_NUMBER} is in TestFlight. ${BETA_GROUP} assignment still requires App Store Connect permissions or manual assignment."
+              ;;
+            *)
+              echo "Aura ${BUILD_NUMBER} completed with distribution status: ${TESTFLIGHT_DISTRIBUTION_STATUS:-unknown}."
+              ;;
+          esac

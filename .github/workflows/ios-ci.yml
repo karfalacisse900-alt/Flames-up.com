@@ -1,0 +1,98 @@
+name: Aura iOS CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "ios_native/MIRA/**"
+      - ".github/workflows/ios-ci.yml"
+  push:
+    paths:
+      - "ios_native/MIRA/**"
+      - ".github/workflows/ios-ci.yml"
+
+env:
+  IOS_NATIVE_DIR: ios_native/MIRA
+  SCHEME: Aura
+
+jobs:
+  ios-gate:
+    name: iOS gate (${{ matrix.gate }})
+    runs-on: macos-26
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        gate:
+          - unit-tests
+          - release-simulator-launch
+          - release-device-linkage
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build Rust native core for required Apple platform
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          if [[ "${{ matrix.gate }}" == "release-device-linkage" ]]; then
+            bash ./scripts/build-rust-ios.sh iphoneos
+          else
+            bash ./scripts/build-rust-ios.sh iphonesimulator
+          fi
+
+      - name: Generate Xcode project
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: xcodegen generate --spec project.yml
+
+      - name: Run unit tests
+        if: matrix.gate == 'unit-tests'
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin).get("devices", {})
+          for runtime_devices in devices.values():
+              for device in runtime_devices:
+                  if device.get("isAvailable") and device.get("name", "").startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator was found")
+          ')
+          xcodebuild \
+            -project Aura.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -only-testing:AuraTests \
+            test
+
+      - name: Launch Aura Release build in iOS Simulator
+        if: matrix.gate == 'release-simulator-launch'
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: bash ./scripts/smoke-test-ios-launch.sh
+
+      - name: Build and audit unsigned Aura Release for iPhone
+        if: matrix.gate == 'release-device-linkage'
+        working-directory: ${{ env.IOS_NATIVE_DIR }}
+        run: |
+          set -euo pipefail
+          DEVICE_DERIVED_DATA="$RUNNER_TEMP/aura-device-release"
+          xcodebuild \
+            -project Aura.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DEVICE_DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          DEVICE_APP=$(find "$DEVICE_DERIVED_DATA/Build/Products" -type d -path "*Release-iphoneos/Aura.app" -print -quit)
+          test -n "$DEVICE_APP"
+          bash ./scripts/audit-ios-binary-linkage.sh "$DEVICE_APP/Aura" arm64

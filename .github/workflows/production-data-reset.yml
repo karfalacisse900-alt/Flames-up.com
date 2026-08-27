@@ -20,11 +20,6 @@ on:
         required: true
         default: true
         type: boolean
-      reset_legacy_d1:
-        description: "Execute legacy D1 cleanup after Supabase reset. Ignored for dry_run."
-        required: true
-        default: false
-        type: boolean
       backup_confirmed:
         description: "Required true for execute mode after Supabase backup/export exists"
         required: true
@@ -68,7 +63,7 @@ jobs:
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: v2.106.0
 
       - name: Link Supabase production project
         shell: bash
@@ -78,6 +73,24 @@ jobs:
         run: |
           set -euo pipefail
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Create Supabase pre-reset data backup
+        if: ${{ inputs.reset_mode == 'execute' }}
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          supabase db dump --linked --data-only --use-copy --schema public,auth --file /tmp/captro-supabase-pre-reset-data.sql
+          gzip -9 /tmp/captro-supabase-pre-reset-data.sql
+
+      - name: Upload Supabase pre-reset data backup artifact
+        if: ${{ inputs.reset_mode == 'execute' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: captro-supabase-pre-reset-data-${{ github.run_id }}
+          path: /tmp/captro-supabase-pre-reset-data.sql.gz
+          retention-days: 14
 
       - name: Cloudflare media cleanup dry-run / execute
         if: ${{ inputs.cleanup_media == true }}
@@ -91,12 +104,6 @@ jobs:
           CONFIRM_PRODUCTION_RESET: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
-          cd backend-cf
-          npx wrangler d1 execute DB --env production --remote --json --command \
-            "SELECT id, media_type, storage_provider, storage_key, public_url FROM media_assets;" \
-            > /tmp/captro-legacy-d1-media-assets.json
-          cd ..
-          export CLOUDFLARE_MEDIA_ASSETS_FILE=/tmp/captro-legacy-d1-media-assets.json
           node scripts/production-reset/cloudflare-media-cleanup.mjs
 
       - name: Build Supabase reset SQL
@@ -118,29 +125,3 @@ jobs:
         run: |
           set -euo pipefail
           supabase db query --linked --file /tmp/captro-production-reset.sql --output table
-
-      - name: Legacy D1 dry-run counts
-        if: ${{ inputs.reset_mode == 'dry_run' }}
-        working-directory: ./backend-cf
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: >
-          npx wrangler d1 execute DB --env production --remote --command
-          "SELECT
-          (SELECT COUNT(*) FROM users) AS users_count,
-          (SELECT COUNT(*) FROM posts) AS posts_count,
-          (SELECT COUNT(*) FROM likes) AS likes_count,
-          (SELECT COUNT(*) FROM saved_posts) AS saved_posts_count,
-          (SELECT COUNT(*) FROM comments) AS comments_count,
-          (SELECT COUNT(*) FROM messages) AS messages_count,
-          (SELECT COUNT(*) FROM statuses) AS statuses_count,
-          (SELECT COUNT(*) FROM media_assets) AS media_assets_count;"
-
-      - name: Legacy D1 execute reset
-        if: ${{ inputs.reset_mode == 'execute' && inputs.reset_legacy_d1 == true }}
-        working-directory: ./backend-cf
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler d1 execute DB --env production --remote --yes --file=../scripts/production-reset/d1-legacy-data-reset.sql

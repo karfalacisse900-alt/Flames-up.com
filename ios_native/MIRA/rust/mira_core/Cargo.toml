@@ -5,10 +5,33 @@ edition = "2021"
 
 [lib]
 name = "mira_core"
-crate-type = ["staticlib", "cdylib"]
+# iOS embeds this bridge into the app executable. Producing a cdylib beside the archive lets
+# Xcode's `-l` lookup prefer the dylib and record a build-machine path in LC_LOAD_DYLIB, which
+# makes the TestFlight app terminate in dyld before main. Keep the mobile bridge static-only.
+crate-type = ["staticlib"]
+
+[dependencies]
+# Vendored Aura consensus types and wallet crypto -- see rust/vendor/README.md. This FFI layer
+# only calls their existing public API; it does not reimplement any cryptography.
+aura-core = { path = "../vendor/aura-core" }
+aura-wallet = { path = "../vendor/aura-wallet" }
+# Well-established BIP39 mnemonic generation/validation, used only for its standard word-list
+# encoding of the wallet seed. No custom mnemonic or key-derivation scheme is implemented here.
+bip39 = { version = "2", default-features = false, features = ["std"] }
+hex = "0.4.3"
+rand_core = { version = "=0.6.4", features = ["getrandom"] }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.137"
+zeroize = "1.9.0"
+
+[dev-dependencies]
+ed25519-dalek = "2.2.0"
+tempfile = "3.15.0"
 
 [profile.release]
 codegen-units = 1
 lto = "thin"
-panic = "abort"
+# Every exported C ABI function catches Rust unwinds before returning to Swift. Keep unwinding
+# enabled so a dependency panic can be converted into a bounded error instead of aborting iOS.
+panic = "unwind"
 strip = "symbols"

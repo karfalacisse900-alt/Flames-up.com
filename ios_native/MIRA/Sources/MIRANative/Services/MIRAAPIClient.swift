@@ -3,7 +3,7 @@ import Foundation
 
 public enum MIRAProductionBackend {
   public static let apiBaseURL = URL(string: "https://api.flames-up.com/api")!
-  public static let siteBaseURL = URL(string: "https://flames-up.com")!
+  public static let siteBaseURL = URL(string: "https://captro.app")!
 
   public static func apiURL(_ path: String) -> URL {
     makeURL(baseURL: apiBaseURL, path: path)
@@ -24,6 +24,10 @@ public protocol MIRASessionProviding: AnyObject {
   func accessToken() async -> String?
 }
 
+public protocol MIRARefreshableSessionProviding: MIRASessionProviding {
+  func refreshAccessTokenIfNeeded(api: MIRAAPIClient) async -> Bool
+}
+
 public final class StaticSessionProvider: MIRASessionProviding {
   private let token: String?
 
@@ -34,6 +38,12 @@ public final class StaticSessionProvider: MIRASessionProviding {
   public func accessToken() async -> String? {
     token
   }
+}
+
+public struct MIRAEventStreamFrame: Equatable, Sendable {
+  public let id: String?
+  public let event: String
+  public let data: Data
 }
 
 public enum MIRAAPIError: Error, LocalizedError {
@@ -73,6 +83,7 @@ private struct MIRAAPIErrorPayload: Decodable {
 public enum MIRANetworkSecurityPolicy {
   private static let apiHosts: Set<String> = [
     "api.flames-up.com",
+    "api.captro.app",
     "flames-up-api.karfalacisse900.workers.dev"
   ]
 
@@ -185,14 +196,102 @@ public final class MIRAAPIClient {
     try await request(path, method: "GET", body: Optional<Data>.none)
   }
 
+  /// Opens one authenticated server-sent-event stream. Values are transport notifications only;
+  /// wallet callers must re-read validated gateway snapshots instead of applying amount deltas.
+  public func eventStream(_ path: String) -> AsyncThrowingStream<MIRAEventStreamFrame, Error> {
+    AsyncThrowingStream { continuation in
+      let task = Task {
+        do {
+          let url = try makeURL(path)
+          var request = URLRequest(url: url)
+          request.httpMethod = "GET"
+          request.timeoutInterval = 0
+          try MIRANetworkSecurityPolicy.validateAPIURL(url)
+          request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+          request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+          request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
+          request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+          if let token = await sessionProvider?.accessToken(), !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+          }
+          let trustHeaders = await MIRADeviceTrustService.shared.headers(for: "GET", path: url.path)
+          trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+
+          let (bytes, response) = try await session.bytes(for: request)
+          let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+          guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+
+          var eventID: String?
+          var eventName = "message"
+          var dataLines: [String] = []
+          for try await line in bytes.lines {
+            try Task.checkCancellation()
+            if line.isEmpty {
+              if !dataLines.isEmpty {
+                continuation.yield(
+                  MIRAEventStreamFrame(
+                    id: eventID,
+                    event: eventName,
+                    data: Data(dataLines.joined(separator: "\n").utf8)
+                  )
+                )
+              }
+              eventID = nil
+              eventName = "message"
+              dataLines.removeAll(keepingCapacity: true)
+            } else if line.hasPrefix("id:") {
+              eventID = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("event:") {
+              eventName = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("data:") {
+              dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+            }
+          }
+          continuation.finish()
+        } catch is CancellationError {
+          continuation.finish()
+        } catch {
+          continuation.finish(throwing: error)
+        }
+      }
+      continuation.onTermination = { _ in task.cancel() }
+    }
+  }
+
   public func post<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
     let data = try encoder.encode(body)
-    return try await request(path, method: "POST", body: data)
+    return try await request(path, method: "POST", body: data, additionalHeaders: [:])
+  }
+
+  /// Sends a signed Aura transaction with the gateway's bounded replay-protection headers.
+  /// Authorization still comes from the Keychain-backed session provider; callers cannot
+  /// override it or inject arbitrary transport headers.
+  public func postAuraTransaction<T: Decodable, Body: Encodable>(
+    _ path: String,
+    body: Body,
+    idempotencyKey: String,
+    timestampSeconds: UInt64
+  ) async throws -> T {
+    let data = try encoder.encode(body)
+    return try await request(
+      path,
+      method: "POST",
+      body: data,
+      additionalHeaders: [
+        "Idempotency-Key": idempotencyKey,
+        "X-Aura-Request-Timestamp": String(timestampSeconds)
+      ]
+    )
   }
 
   public func put<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
     let data = try encoder.encode(body)
     return try await request(path, method: "PUT", body: data)
+  }
+
+  public func patch<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
+    let data = try encoder.encode(body)
+    return try await request(path, method: "PATCH", body: data)
   }
 
   public func delete<T: Decodable>(_ path: String) async throws -> T {
@@ -204,10 +303,11 @@ public final class MIRAAPIClient {
     fieldName: String = "file",
     fileName: String,
     mimeType: String,
-    data: Data
+    data: Data,
+    fields: [String: String] = [:]
   ) async throws -> T {
     let url = try makeURL(path)
-    return try await uploadMultipart(to: url, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data, authorize: true)
+    return try await uploadMultipart(to: url, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data, fields: fields, authorize: true)
   }
 
   public func uploadMultipart<T: Decodable>(
@@ -216,6 +316,7 @@ public final class MIRAAPIClient {
     fileName: String,
     mimeType: String,
     data: Data,
+    fields: [String: String] = [:],
     authorize: Bool = false
   ) async throws -> T {
     var request = URLRequest(url: absoluteURL)
@@ -230,7 +331,7 @@ public final class MIRAAPIClient {
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
     request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
     request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
-    request.httpBody = multipartBody(boundary: boundary, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data)
+    request.httpBody = multipartBody(boundary: boundary, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data, fields: fields)
     if authorize, let token = await sessionProvider?.accessToken(), !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
@@ -262,7 +363,12 @@ public final class MIRAAPIClient {
     }
   }
 
-  private func request<T: Decodable>(_ path: String, method: String, body: Data?) async throws -> T {
+  private func request<T: Decodable>(
+    _ path: String,
+    method: String,
+    body: Data?,
+    additionalHeaders: [String: String] = [:]
+  ) async throws -> T {
     let url = try makeURL(path)
     var request = URLRequest(url: url)
     request.httpMethod = method
@@ -278,6 +384,12 @@ public final class MIRAAPIClient {
     }
     if let token, !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+    for (name, value) in additionalHeaders {
+      guard name == "Idempotency-Key" || name == "X-Aura-Request-Timestamp" else {
+        throw MIRAAPIError.insecureURL
+      }
+      request.setValue(value, forHTTPHeaderField: name)
     }
     let trustHeaders = await MIRADeviceTrustService.shared.headers(for: method, path: url.path)
     trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
@@ -311,6 +423,29 @@ public final class MIRAAPIClient {
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: data.count)
+    let isRefreshRequest = request.url?.path.hasSuffix("/auth/refresh") == true
+    if !isRefreshRequest,
+       (status == 401 || status == 403),
+       let refreshable = sessionProvider as? MIRARefreshableSessionProviding,
+       await refreshable.refreshAccessTokenIfNeeded(api: self) {
+      var retry = request
+      if let refreshedToken = await sessionProvider?.accessToken(), !refreshedToken.isEmpty {
+        retry.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
+      }
+      let retryMetric = await MIRAPerformanceMetric.begin(category: "network", label: "\(metricLabel) retry")
+      let retryResponse: URLResponse
+      let retryData: Data
+      do {
+        (retryData, retryResponse) = try await session.data(for: retry)
+      } catch {
+        await retryMetric.finish(status: "error")
+        throw error
+      }
+      let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
+      await retryMetric.finish(status: "\(retryStatus)", bytes: retryData.count)
+      guard (200..<300).contains(retryStatus) else { throw apiError(status: retryStatus, data: retryData) }
+      return retryData
+    }
     guard (200..<300).contains(status) else { throw apiError(status: status, data: data) }
     return data
   }
@@ -349,8 +484,25 @@ public final class MIRAAPIClient {
     )
   }
 
-  private func multipartBody(boundary: String, fieldName: String, fileName: String, mimeType: String, data: Data) -> Data {
+  private func multipartBody(
+    boundary: String,
+    fieldName: String,
+    fileName: String,
+    mimeType: String,
+    data: Data,
+    fields: [String: String]
+  ) -> Data {
     var body = Data()
+    for key in fields.keys.sorted() {
+      guard let value = fields[key],
+            key.range(of: "^[a-zA-Z0-9_-]{1,64}$", options: .regularExpression) != nil else {
+        continue
+      }
+      body.append("--\(boundary)\r\n".data(using: .utf8)!)
+      body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+      body.append(value.data(using: .utf8)!)
+      body.append("\r\n".data(using: .utf8)!)
+    }
     body.append("--\(boundary)\r\n".data(using: .utf8)!)
     body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
     body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)

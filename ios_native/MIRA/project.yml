@@ -1,4 +1,4 @@
-name: Captro
+name: Aura
 
 options:
   minimumXcodeGenVersion: 2.42.0
@@ -14,12 +14,12 @@ settings:
   base:
     SWIFT_VERSION: "5.9"
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    CURRENT_PROJECT_VERSION: "1"
-    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "1.0.1"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
 
 targets:
-  Captro:
+  Aura:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
@@ -32,10 +32,11 @@ targets:
         product: MIRACoreCpp
     settings:
       base:
-        PRODUCT_NAME: Captro
-        PRODUCT_BUNDLE_IDENTIFIER: com.captro.app
+        PRODUCT_NAME: Aura
+        PRODUCT_BUNDLE_IDENTIFIER: com.karfala90.aura
+        GOOGLE_SERVER_CLIENT_ID: "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com"
         INFOPLIST_FILE: AppTarget/Info.plist
-        CODE_SIGN_ENTITLEMENTS: AppTarget/Captro.entitlements
+        CODE_SIGN_ENTITLEMENTS: AppTarget/Aura.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
@@ -44,6 +45,8 @@ targets:
         GCC_C_LANGUAGE_STANDARD: gnu17
         CLANG_CXX_LANGUAGE_STANDARD: "gnu++17"
         CLANG_CXX_LIBRARY: libc++
+        "OTHER_LDFLAGS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/aarch64-apple-ios/release/libmira_core.a -framework Security"
+        "OTHER_LDFLAGS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/ios-simulator-universal/release/libmira_core.a -framework Security"
       configs:
         Debug:
           CODE_SIGN_STYLE: Automatic
@@ -62,14 +65,33 @@ targets:
           SWIFT_COMPILATION_MODE: wholemodule
           SWIFT_OPTIMIZATION_LEVEL: -O
 
+  AuraTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Tests/MIRANativeTests
+    dependencies:
+      - package: MIRANative
+        product: MIRANative
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.karfala90.aura.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+        "OTHER_LDFLAGS[sdk=iphoneos*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/aarch64-apple-ios/release/libmira_core.a -framework Security"
+        "OTHER_LDFLAGS[sdk=iphonesimulator*]": "$(inherited) $(PROJECT_DIR)/rust/mira_core/target/ios-simulator-universal/release/libmira_core.a -framework Security"
+
 schemes:
-  Captro:
+  Aura:
     build:
       targets:
-        Captro: all
+        Aura: all
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - AuraTests
     archive:
       config: Release

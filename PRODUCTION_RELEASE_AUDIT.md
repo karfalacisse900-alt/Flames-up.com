@@ -1,24 +1,35 @@
 # Captro Production Release Audit
 
-Date: 2026-06-11
+Date: 2026-06-12
 
 ## Status
 
-Captro's production backend deploy blocker is resolved. Captro is not ready to mark as fully production-clean until the protected data/media reset is executed and a real-device smoke test passes on the latest TestFlight build.
+Captro's Supabase security/RLS hardening is applied in production and the app database source of truth is now documented as Supabase Postgres. Captro is not ready to mark as fully production-clean until the protected data/media reset is executed, the remaining legacy D1 route groups are removed or isolated, and a real-device smoke test passes on the latest TestFlight build.
 
 ## Verified
 
-- Latest completed TestFlight workflow succeeded for commit `b6d929008c3e09f1f1c8e3bcacf12b18c51a257c`.
-- Production backend deploy succeeded for commit `2f306f1f07c1e9b5b5a04e374ed5e712eeb37643`.
+- Latest completed TestFlight workflow succeeded for commit `9a171948c6da4050b2e697a26c551d60ab0a935d`.
+- Production backend deploy succeeded for commit `9a171948c6da4050b2e697a26c551d60ab0a935d`.
 - Production `/api/health` reports `environment = "production"`, `service = "captro-api"`, `primary = "supabase_postgres"`, and `healthy = true`.
 - `backend-cf` TypeScript check passes with `npx.cmd tsc --noEmit`.
 - Pre-publish moderation tests pass with `npm.cmd run test:moderation`.
 - `git diff --check` has no whitespace errors.
-- Supabase Postgres production migrations are applied through `202606080003_account_verification`.
+- Supabase Postgres production migrations are applied through `20260612093414_harden_supabase_policy_overlap`.
 - Worker config sets `DATABASE_PRIMARY = "supabase_postgres"`.
 - Cloudflare remains the media layer for Images/R2/Stream.
 - Unauthenticated `/api/posts/feed` and `/api/admin/me` return `401`, as expected.
 - `admin-web` production build passes.
+- Production Supabase RLS policies are applied for app users, posts, likes/saves, comments, follows, blocks, messages, reports, media assets, push tokens, and admin/moderation tables.
+- Supabase security advisor no longer reports missing RLS policies or disabled RLS on public app tables. Remaining warnings: `citext` extension in `public`, and Auth leaked-password protection disabled in the dashboard.
+- Supabase policy overlap cleanup removed older broad legacy policies for app users, active posts, visible comments, legacy interactions, and legacy follows.
+- Worker engagement logic now treats Supabase `app_post_interactions` as canonical for like/save state and counts; D1 engagement rows are best-effort legacy cache only.
+- `backend-cf` TypeScript check passes after the Supabase engagement/RLS changes.
+- `npm.cmd run test:moderation` passes after the Supabase engagement/RLS changes.
+- No Supabase service-role JWT is present in `ios_native/MIRA` or `admin-web`; service-role usage is restricted to Worker/GitHub secret wiring.
+- Follow-up hardening on 2026-06-12 added Supabase-auth/app-user alias cleanup for like/save reads, deletes, inserts, and actor counts so one person cannot inflate engagement through legacy id drift.
+- Follow-up hardening on 2026-06-12 made Cloudflare Stream signed playback explicit with `CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS=false` by default, preventing new videos from being uploaded into an unplayable signed-only state before a signed playback resolver exists.
+- Follow-up hardening on 2026-06-12 moved iOS Stream metadata resolution into shared `MIRAStreamPlaybackResolver`, attaches the Keychain bearer token for video player/prewarm calls, and requires auth on `/api/stream/video/:uid`.
+- Follow-up hardening on 2026-06-12 made like/save state bridge both legacy text interaction columns and native Supabase UUID columns, including bookmark checks.
 
 ## Blockers
 
@@ -29,6 +40,8 @@ Captro's production backend deploy blocker is resolved. Captro is not ready to m
 2. Full iOS device QA cannot be completed on this Windows machine.
 
    TestFlight succeeded through GitHub Actions, but App Store readiness still requires real-device validation for login, upload, feed, Discover, chat, stories, report/block, delete account, and legal links.
+
+   Latest iOS video resolver changes must be validated by the next GitHub Actions/TestFlight build because no local Xcode/Swift toolchain is available on this Windows machine.
 
 3. Production still contains test data.
 
@@ -55,7 +68,19 @@ Captro's production backend deploy blocker is resolved. Captro is not ready to m
    D1 duplicate like check returned zero duplicate `(user_id, post_id)` pairs.
    Supabase duplicate `app_post_interactions` check returned zero duplicate `(legacy_post_id, app_user_id, kind)` rows.
 
-4. Protected reset workflow is staged on the working branch.
+4. Legacy D1 database code is still present in the Worker.
+
+   Captro's target architecture is Supabase for app data and Cloudflare for media/security only. The codebase still contains many `c.env.DB`/`D1Database` references, so the D1 binding and D1 migration workflow must stay until each route group is cut over and verified.
+
+   Current examples still on D1 include older auth/session helpers, report/block legacy routes, admin legacy routes, media moderation tables, legacy chat/messages, creator/application routes, and production reset D1 cleanup. These must be moved to Supabase before D1 can be removed from `backend-cf/wrangler.toml` and GitHub deploy.
+
+   Current code search still shows over 1,000 D1/`c.env.DB` references in `backend-cf/src/index.ts`; treat D1 as active legacy infrastructure until the route groups are fully cut over.
+
+5. Stream playback route is authenticated but not fully object-authorized.
+
+   `/api/stream/video/:uid` now requires a valid app session. The next media-security hardening pass should verify the requesting user can actually view the specific story/chat/post media before returning Stream playback metadata.
+
+6. Protected reset workflow is staged on the working branch.
 
    Added `.github/workflows/production-data-reset.yml`. GitHub will allow manual dispatch after this workflow file is present on the default branch. It supports:
 
@@ -111,13 +136,15 @@ R2 objects need separate cleanup if rows use `storage_provider = r2`.
 
 ## Required Next Steps
 
-1. Back up Supabase Postgres.
-2. Run Supabase reset dry-run and review row counts.
-3. Run Cloudflare media cleanup dry-run and review asset list.
-4. Execute reset only after confirming preserved admin/reviewer accounts.
-5. Run legacy D1 reset if production can still serve D1 rows.
-6. Upload a fresh TestFlight build after any app-code changes.
-7. Smoke test the App Store review checklist on a real iPhone.
+1. Finish cutting remaining Worker route groups from D1 to Supabase Postgres.
+2. Remove D1 app-data migrations and D1 app-data deploy steps after the route cutover is verified.
+3. Back up Supabase Postgres.
+4. Run Supabase reset dry-run and review row counts.
+5. Run Cloudflare media cleanup dry-run and review asset list.
+6. Execute reset only after confirming preserved admin/reviewer accounts.
+7. Run legacy D1 reset if production can still serve D1 rows.
+8. Upload a fresh TestFlight build after any app-code changes.
+9. Smoke test the App Store review checklist on a real iPhone.
 
 ## App Store Review Checklist
 

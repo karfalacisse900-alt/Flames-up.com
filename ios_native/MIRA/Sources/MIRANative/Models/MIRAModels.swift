@@ -65,6 +65,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let profileImage: String?
   public let bio: String?
   public let city: String?
+  public let interests: FlexibleStringArray?
   public let email: String?
   public let emailVerified: Bool?
   public let phone: String?
@@ -73,10 +74,13 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   public let followingCount: Int?
   public let postsCount: Int?
   public let isFollowing: Bool?
+  public let connectionStatus: String?
+  public let connectionRequestId: String?
   public let viewerHasBlocked: Bool?
   public let viewerBlockedBy: Bool?
   public let privacyLocked: Bool?
   public let isPrivate: Bool?
+  public let isVerified: Bool?
   public let isPremium: Bool?
   public let language: String?
   public let status: String?
@@ -91,7 +95,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
     if let fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    return "Captro"
+    return "Aura member"
   }
 
   public var needsUsernameOnboarding: Bool {
@@ -99,7 +103,12 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
   }
 
   public var viewerFollowing: Bool {
-    isFollowing == true
+    connectionStatus?.lowercased() == "connected" || isFollowing == true
+  }
+
+  public var viewerConnectionStatus: String {
+    let clean = connectionStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    return clean.isEmpty ? (viewerFollowing ? "connected" : "none") : clean
   }
 
   public var isDeletionPending: Bool {
@@ -113,6 +122,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let userUsername: String?
   public let userFullName: String?
   public let userProfileImage: String?
+  public let userProfileHeadline: String?
+  public let userLookingFor: String?
+  public let userAvailabilityText: String?
+  public let userSocialPreference: String?
+  public let userInterests: FlexibleStringArray?
   public let title: String?
   public let content: String?
   public let caption: String?
@@ -175,7 +189,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let pinnedAt: String?
   public let isLiked: Bool?
   public let isSaved: Bool?
+  public let likedByMe: Bool?
+  public let liked: Bool?
+  public let savedByMe: Bool?
   public let isFollowing: Bool?
+  public let connectionStatus: String?
   public let saved: FlexibleBool?
   public let following: FlexibleBool?
   public let followed: FlexibleBool?
@@ -292,21 +310,34 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     if let userFullName, !userFullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return userFullName.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    return "Captro"
+    return "Aura member"
   }
 
   public var viewerSaved: Bool {
-    if let isSaved { return isSaved }
-    return saved?.value == true
+    viewerSavedValue == true
   }
 
   public var viewerLiked: Bool {
-    isLiked == true
+    viewerLikedValue == true
+  }
+
+  public var viewerLikedValue: Bool? {
+    isLiked ?? likedByMe ?? liked
+  }
+
+  public var viewerSavedValue: Bool? {
+    isSaved ?? savedByMe ?? saved?.value
   }
 
   public var viewerFollowing: Bool {
+    if connectionStatus?.lowercased() == "connected" { return true }
     if let isFollowing { return isFollowing }
     return following?.value == true || followed?.value == true
+  }
+
+  public var viewerConnectionStatus: String {
+    let clean = connectionStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    return clean.isEmpty ? (viewerFollowing ? "connected" : "none") : clean
   }
 
   public var isPinned: Bool {
@@ -319,7 +350,8 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     commentsCount: Int? = nil,
     saved: Bool? = nil,
     savesCount: Int? = nil,
-    following: Bool? = nil
+    following: Bool? = nil,
+    connectionStatus: String? = nil
   ) -> MIRAPost {
     MIRAPost(
       id: id,
@@ -327,6 +359,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       userUsername: userUsername,
       userFullName: userFullName,
       userProfileImage: userProfileImage,
+      userProfileHeadline: userProfileHeadline,
+      userLookingFor: userLookingFor,
+      userAvailabilityText: userAvailabilityText,
+      userSocialPreference: userSocialPreference,
+      userInterests: userInterests,
       title: title,
       content: content,
       caption: caption,
@@ -389,8 +426,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       pinnedAt: pinnedAt,
       isLiked: liked ?? isLiked,
       isSaved: saved ?? isSaved,
+      likedByMe: liked ?? likedByMe,
+      liked: liked ?? self.liked,
+      savedByMe: saved ?? savedByMe,
       isFollowing: following ?? isFollowing,
-      saved: self.saved,
+      connectionStatus: connectionStatus ?? self.connectionStatus,
+      saved: saved.map(FlexibleBool.init) ?? self.saved,
       following: self.following,
       followed: self.followed
     )
@@ -403,6 +444,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       userUsername: userUsername,
       userFullName: userFullName,
       userProfileImage: userProfileImage,
+      userProfileHeadline: userProfileHeadline,
+      userLookingFor: userLookingFor,
+      userAvailabilityText: userAvailabilityText,
+      userSocialPreference: userSocialPreference,
+      userInterests: userInterests,
       title: title,
       content: content,
       caption: caption,
@@ -465,7 +511,11 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       pinnedAt: value,
       isLiked: isLiked,
       isSaved: isSaved,
+      likedByMe: likedByMe,
+      liked: liked,
+      savedByMe: savedByMe,
       isFollowing: isFollowing,
+      connectionStatus: connectionStatus,
       saved: saved,
       following: following,
       followed: followed
@@ -491,8 +541,9 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
   case threeFour = "3:4"
   case fourFive = "4:5"
   case twoThree = "2:3"
+  case nineSixteen = "9:16"
 
-  public static let defaultRatio: MIRASupportedPostAspectRatio = .threeFour
+  public static let defaultRatio: MIRASupportedPostAspectRatio = .fourFive
 
   public var feedWidth: Double { 1080 }
 
@@ -501,6 +552,7 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
     case .threeFour: return 1440
     case .fourFive: return 1350
     case .twoThree: return 1620
+    case .nineSixteen: return 1920
     }
   }
 
@@ -512,7 +564,7 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
     CGFloat(feedHeight / feedWidth)
   }
 
-  public static func nearest(width: Double?, height: Double?, preferred: MIRASupportedPostAspectRatio = .threeFour) -> MIRASupportedPostAspectRatio {
+  public static func nearest(width: Double?, height: Double?, preferred: MIRASupportedPostAspectRatio = .fourFive) -> MIRASupportedPostAspectRatio {
     guard let width, let height, width > 0, height > 0 else { return preferred }
     let original = width / height
     guard original < 1 else { return preferred }
@@ -805,7 +857,7 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
 }
 
 public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
-  public var id: String { userId }
+  public var id: String { statuses?.first?.id ?? userId }
   public let userId: String
   public let userUsername: String?
   public let userFullName: String?
@@ -931,6 +983,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
           profileImage: profileImage,
           bio: nil,
           city: nil,
+          interests: nil,
           email: nil,
           emailVerified: nil,
           phone: nil,
@@ -939,10 +992,13 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
           followingCount: nil,
           postsCount: nil,
           isFollowing: nil,
+          connectionStatus: nil,
+          connectionRequestId: nil,
           viewerHasBlocked: nil,
           viewerBlockedBy: nil,
           privacyLocked: nil,
           isPrivate: nil,
+          isVerified: nil,
           isPremium: nil,
           language: nil,
           status: nil,
@@ -1250,97 +1306,6 @@ public struct MIRAPresence: Decodable, Hashable {
   public let isTyping: Bool?
 }
 
-public struct MIRAAgoraTokenRequest: Encodable {
-  public let channel: String
-  public let role: String
-  public let mode: String
-}
-
-public struct MIRAAgoraTokenResponse: Decodable, Hashable {
-  public let appId: String?
-  public let channel: String
-  public let uid: UInt
-  public let role: String
-  public let mode: String
-  public let token: String
-  public let expiresIn: Int?
-  public let expiresAt: String?
-}
-
-enum MIRACallStatus: String, Decodable, Hashable {
-  case idle
-  case creatingCall
-  case ringing
-  case incoming
-  case accepted
-  case connecting
-  case active
-  case declined
-  case cancelled
-  case missed
-  case failed
-  case ended
-}
-
-struct MIRACallSession: Decodable, Identifiable, Hashable {
-  let id: String
-  let callId: String?
-  let callerUserId: String
-  let calleeUserId: String
-  let callerName: String?
-  let callerAvatar: String?
-  let calleeName: String?
-  let calleeAvatar: String?
-  let callType: String?
-  let status: MIRACallStatus
-  let roomId: String?
-  let channelName: String
-  let pushDeliveryStatus: String?
-  let createdAt: String?
-  let answeredAt: String?
-  let endedAt: String?
-  let timeoutAt: String?
-
-  var resolvedId: String { callId ?? id }
-
-  func agoraPresentation(currentUserId: String) -> MIRAAgoraCallPresentation {
-    let isCaller = callerUserId == currentUserId
-    let peerId = isCaller ? calleeUserId : callerUserId
-    let peerName = isCaller ? (calleeName ?? "Video call") : (callerName ?? "Video call")
-    let peerAvatar = isCaller ? calleeAvatar : callerAvatar
-    return MIRAAgoraCallPresentation(
-      callId: resolvedId,
-      peerId: peerId,
-      peerName: peerName,
-      peerAvatar: peerAvatar,
-      channel: channelName,
-      mode: .video,
-      role: .host
-    )
-  }
-}
-
-struct MIRACallStartBody: Encodable {
-  let calleeUserId: String
-  let callType: String
-
-  init(calleeUserId: String, callType: String = "video") {
-    self.calleeUserId = calleeUserId
-    self.callType = callType
-  }
-}
-
-struct MIRAVoIPTokenBody: Encodable {
-  let token: String
-  let deviceId: String
-  let bundleId: String
-  let environment: String
-}
-
-struct MIRAIncomingCallEnvelope: Decodable, Hashable {
-  let call: MIRACallSession?
-}
-
 public struct MIRANotification: Codable, Identifiable, Hashable {
   public let id: String
   public let type: String?
@@ -1383,6 +1348,7 @@ public struct MIRANotification: Codable, Identifiable, Hashable {
 
 public struct MIRAAuthResponse: Decodable, Hashable {
   public let accessToken: String
+  public let refreshToken: String?
   public let tokenType: String?
   public let user: MIRAUser
 }
@@ -1390,6 +1356,8 @@ public struct MIRAAuthResponse: Decodable, Hashable {
 public struct MIRAAuthLoginBody: Encodable {
   public let email: String
   public let password: String
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
 public struct MIRAAuthRegisterBody: Encodable {
@@ -1397,6 +1365,8 @@ public struct MIRAAuthRegisterBody: Encodable {
   public let password: String
   public let username: String
   public let fullName: String
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
 public struct MIRAAppleOAuthBody: Encodable {
@@ -1404,21 +1374,37 @@ public struct MIRAAppleOAuthBody: Encodable {
   public let email: String?
   public let fullName: String?
   public let appleUser: String?
+  public let nonce: String?
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
 public struct MIRAGoogleOAuthBody: Encodable {
   public let idToken: String
+  public let accessToken: String?
+  public let termsVersion: String?
+  public let termsAcceptedAt: String?
 }
 
-public struct MIRAUploadImageBody: Encodable {
-  public let image: String
-  public let filename: String
+public struct MIRARefreshSessionBody: Encodable {
+  public let refreshToken: String
 }
 
-public struct MIRAUploadImageDirectBody: Encodable {
-  public let filename: String
-  public let mimeType: String
-  public let target: String
+public struct MIRAPasswordResetRequestBody: Encodable {
+  public let email: String
+  public let redirectTo: String
+}
+
+public struct MIRAPasswordResetConfirmBody: Encodable {
+  public let accessToken: String
+  public let refreshToken: String?
+  public let password: String
+}
+
+public struct MIRAPasswordResetRequestResponse: Decodable, Hashable {
+  public let sent: Bool?
+  public let detail: String?
+  public let redirectTo: String?
 }
 
 public struct MIRAMediaUploadResponse: Decodable, Hashable {
@@ -1626,6 +1612,8 @@ public struct MIRAEditorUploadMetadata: Encodable, Hashable {
   public let editorVersion: String
   public let appliedFilter: String
   public let hasTextOverlay: Bool
+  public let layerCount: Int?
+  public let compositionJSON: String?
 
   public init(mediaIndex: Int, metadata: MIRANativeEditedMediaMetadata) {
     self.type = "native_editor"
@@ -1634,6 +1622,8 @@ public struct MIRAEditorUploadMetadata: Encodable, Hashable {
     self.editorVersion = metadata.editorVersion
     self.appliedFilter = metadata.appliedFilter
     self.hasTextOverlay = metadata.hasTextOverlay
+    self.layerCount = metadata.layerCount
+    self.compositionJSON = metadata.compositionJSON
   }
 }
 
@@ -1764,6 +1754,46 @@ public struct PostReportBody: Encodable {
 
 public struct FollowBody: Encodable {
   public let following: Bool
+}
+
+public struct ConnectionRequestBody: Encodable {
+  public let note: String?
+}
+
+public struct ConnectionRequestResponse: Decodable {
+  public let id: String?
+  public let requestId: String?
+  public let connectionId: String?
+  public let status: String?
+  public let detail: String?
+
+  public var normalizedStatus: String {
+    let clean = status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    if clean == "friends" { return "connected" }
+    return clean.isEmpty ? "request_sent" : clean
+  }
+}
+
+public struct MIRAConnectionRequest: Codable, Identifiable, Hashable {
+  public let id: String
+  public let fromUserId: String?
+  public let toUserId: String?
+  public let status: String?
+  public let note: String?
+  public let createdAt: String?
+  public let username: String?
+  public let fullName: String?
+  public let profileImage: String?
+
+  public var displayName: String {
+    if MIRAUsernameRules.isValidPublicUsername(username) {
+      return MIRAUsernameRules.normalized(username)
+    }
+    if let fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      return fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return "Aura member"
+  }
 }
 
 public struct LikeBody: Encodable {

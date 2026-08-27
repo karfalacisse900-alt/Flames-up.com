@@ -79,7 +79,7 @@ jobs:
   codeql:
     name: CodeQL (${{ matrix.language }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
@@ -87,9 +87,13 @@ jobs:
           - language: javascript-typescript
             os: ubuntu-latest
             build-mode: none
+            timeout_minutes: 45
           - language: swift
             os: macos-26
             build-mode: manual
+            # The instrumented Swift/Xcode build exceeded the former 45-minute
+            # whole-job limit before CodeQL could reach its analysis step.
+            timeout_minutes: 90
 
     steps:
       - name: Checkout
@@ -120,12 +124,15 @@ jobs:
         run: |
           set -euo pipefail
           arch -arm64 brew install xcodegen
+          bash ./scripts/build-rust-ios.sh iphonesimulator
           xcodegen generate --spec project.yml
           xcodebuild \
-            -project Captro.xcodeproj \
-            -scheme Captro \
+            -project Aura.xcodeproj \
+            -scheme Aura \
             -configuration Debug \
             -destination "generic/platform=iOS Simulator" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             build
 

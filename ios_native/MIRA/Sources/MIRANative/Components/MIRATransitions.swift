@@ -686,6 +686,12 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
       .overlay {
         if isMounted {
           ZStack {
+            Rectangle()
+              .fill(.ultraThinMaterial)
+              .opacity(isVisible ? 0.88 : 0)
+              .ignoresSafeArea()
+              .allowsHitTesting(false)
+
             Color.black
               .opacity(isVisible ? scrimOpacity : 0)
               .ignoresSafeArea()

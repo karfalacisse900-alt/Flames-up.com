@@ -1,19 +1,16 @@
 {
-  "name": "captro-api",
+  "name": "aura-api",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --env production --keep-vars",
-    "db:migrate": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql",
-    "db:migrate:prod": "wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote",
-    "db:perf-indexes:prod": "wrangler d1 execute DB --env production --remote --yes --file=./migrations/0019_production_performance_indexes.sql",
-    "db:readiness:prod": "wrangler d1 execute DB --env production --remote --yes --file=./migrations/0020_production_readiness.sql",
-    "db:admin-moderation:prod": "wrangler d1 execute DB --env production --remote --yes --file=./migrations/0021_admin_moderation.sql",
+    "test": "node --test tests/*.test.mjs",
+    "test:engagement": "node --test tests/ios_engagement_merge_guard.test.mjs",
     "test:moderation": "node --test tests/pre_publish_media_moderation.test.mjs"
   },
   "dependencies": {
-    "agora-token": "^2.0.5",
     "bcryptjs": "^3.0.3",
     "hono": "^4.12.22",
     "jose": "^6.2.3"

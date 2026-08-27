@@ -9,13 +9,126 @@ private func profileVisiblePosts(_ posts: [MIRAPost]) -> [MIRAPost] {
   }
 }
 
+private func cleanProfileNeighborhood(_ value: String?) -> String? {
+  let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return nil }
+  let withoutCountry = trimmed
+    .replacingOccurrences(of: ", United States", with: "", options: [.caseInsensitive])
+    .replacingOccurrences(of: ", USA", with: "", options: [.caseInsensitive])
+    .replacingOccurrences(of: ", U.S.A.", with: "", options: [.caseInsensitive])
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+  let firstPart = withoutCountry.split(separator: ",").first.map(String.init) ?? withoutCountry
+  let clean = firstPart.trimmingCharacters(in: .whitespacesAndNewlines)
+  return clean.isEmpty ? nil : clean
+}
+
+private func profileMetaLine(username: String?, city: String?) -> String? {
+  let cleanUsername = MIRAUsernameRules.normalized(username)
+  let usernamePart = cleanUsername.isEmpty ? nil : "@\(cleanUsername)"
+  let locationPart = cleanProfileNeighborhood(city)
+  let parts = [usernamePart, locationPart].compactMap { $0 }
+  return parts.isEmpty ? nil : parts.joined(separator: " · ")
+}
+
+private func compactProfileInterests(_ user: MIRAUser?) -> [String] {
+  uniqueProfileInterests((user?.interests?.values ?? [])
+    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty })
+}
+
+private func uniqueProfileInterests(_ values: [String]) -> [String] {
+  var seen = Set<String>()
+  var unique: [String] = []
+  for value in values {
+    let clean = String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(32))
+    let key = clean.lowercased()
+    guard !clean.isEmpty, !seen.contains(key) else { continue }
+    seen.insert(key)
+    unique.append(clean)
+    if unique.count == 3 { break }
+  }
+  return unique
+}
+
+private func parseProfileInterests(_ text: String) -> [String] {
+  uniqueProfileInterests(text
+    .split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == "·" })
+    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+    .filter { !$0.isEmpty })
+}
+
+private struct ProfileIdentitySummary: View {
+  let user: MIRAUser?
+  let title: String
+  let postCount: Int
+
+  var body: some View {
+    VStack(spacing: MIRATheme.Space.sm) {
+      HStack(spacing: 6) {
+        Text(title)
+          .font(.system(size: 24, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+        if user?.isVerified == true {
+          Image(systemName: "checkmark.seal.fill")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+            .accessibilityLabel("Verified")
+        }
+      }
+
+      if let meta = profileMetaLine(username: user?.username, city: user?.city) {
+        Text(meta)
+          .font(.system(size: 14, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+      }
+
+      if let bio = user?.bio?.trimmingCharacters(in: .whitespacesAndNewlines), !bio.isEmpty {
+        Text(bio)
+          .font(.system(size: 14, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .multilineTextAlignment(.center)
+          .lineLimit(3)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 2)
+      }
+
+      if !interestText.isEmpty {
+        Text(interestText)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+          .minimumScaleFactor(0.82)
+      }
+
+      VStack(spacing: 4) {
+        Text("\(postCount)")
+          .font(.system(size: 20, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(postCount == 1 ? "Post" : "Posts")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+      .padding(.top, MIRATheme.Space.xs)
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var interestText: String {
+    compactProfileInterests(user).joined(separator: " · ")
+  }
+}
+
 @MainActor
 final class ProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
   @Published var profileError: String?
   let api: MIRAAPIClient
-  private let userCacheKey = "native.profile.me.v2"
+  private let userCacheKey = "native.profile.me.v5"
   private var isLoadingFreshProfile = false
 
   init(api: MIRAAPIClient) {
@@ -72,7 +185,7 @@ final class ProfileNativeModel: ObservableObject {
     if cachedPosts == nil {
       cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id), maxAge: 60 * 60 * 24 * 90)
     }
-    posts = profileVisiblePosts(cachedPosts ?? posts)
+    posts = await MIRAPostEngagementSync.apply(to: profileVisiblePosts(cachedPosts ?? posts))
   }
 
   func applyUpdatedUser(_ updated: MIRAUser) async {
@@ -125,6 +238,19 @@ final class ProfileNativeModel: ObservableObject {
     await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
   }
 
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) async {
+    guard let user, let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
+    posts[index] = posts[index].updating(
+      liked: update.liked,
+      likesCount: update.likesCount,
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+  }
+
   func togglePin(_ post: MIRAPost) async {
     guard let user else { return }
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
@@ -150,7 +276,7 @@ final class ProfileNativeModel: ObservableObject {
   }
 
   private func postsCacheKey(for userID: String) -> String {
-    "native.profile.posts.\(userID).v2"
+    "native.profile.posts.\(userID).v6"
   }
 }
 
@@ -161,6 +287,9 @@ private struct PostVisibilityUpdateBody: Encodable {
 private struct ProfileUpdateBody: Encodable {
   let fullName: String?
   let username: String?
+  let bio: String
+  let city: String
+  let interests: [String]
   let profileImage: String?
 }
 
@@ -271,6 +400,10 @@ public struct ProfileNativeView: View {
       .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
         guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
         Task { await model.removePostLocally(id: update.postId) }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+        guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+        Task { await model.applyEngagementUpdate(update) }
       }
       .miraBottomSheet(isPresented: $showEditProfile, preferredHeightFraction: 0.86) { dismissEditProfile in
         EditProfileNativeView(user: model.user, api: model.api, onCancel: dismissEditProfile) { updated in
@@ -435,23 +568,11 @@ public struct ProfileNativeView: View {
   private var profileHeader: some View {
     VStack(spacing: MIRATheme.Space.md) {
       RemoteAvatar(url: model.user?.profileImage, size: 92)
-      VStack(spacing: 4) {
-        Text(profileTitle)
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        if let username = model.user?.username, !username.isEmpty {
-          Text("@\(username)")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
-      }
-      HStack(spacing: MIRATheme.Space.xl) {
-        profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Followers", model.user?.followersCount ?? 0)
-        profileMetric("Following", model.user?.followingCount ?? 0)
-      }
+      ProfileIdentitySummary(
+        user: model.user,
+        title: profileTitle,
+        postCount: model.user?.postsCount ?? model.posts.count
+      )
       MIRAPrimaryButton("Edit profile", systemImage: "pencil") {
         CaptroHaptics.light()
         withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
@@ -465,18 +586,11 @@ public struct ProfileNativeView: View {
     .padding(.horizontal, MIRATheme.Space.md)
   }
 
-  private func profileMetric(_ label: String, _ value: Int) -> some View {
-    VStack(spacing: 4) {
-      Text("\(value)").font(.system(size: 18, weight: .semibold))
-      Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
-    }
-  }
-
   private var profileTitle: String {
     if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName
     }
-    return model.user?.username ?? "captro"
+    return model.user?.username ?? "Aura member"
   }
 }
 
@@ -514,6 +628,7 @@ final class UserProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
   @Published var isFollowing = false
+  @Published var connectionStatus = "none"
   @Published var followersCount = 0
   @Published var isBlocked = false
   @Published var isBlockedBy = false
@@ -521,8 +636,8 @@ final class UserProfileNativeModel: ObservableObject {
   @Published var errorMessage: String?
   let userId: String
   let api: MIRAAPIClient
-  private var userCacheKey: String { "native.profile.user.\(userId).v2" }
-  private var postsCacheKey: String { "native.profile.posts.\(userId).v2" }
+  private var userCacheKey: String { "native.profile.user.\(userId).v5" }
+  private var postsCacheKey: String { "native.profile.posts.\(userId).v6" }
 
   init(userId: String, api: MIRAAPIClient) {
     self.userId = userId
@@ -541,7 +656,7 @@ final class UserProfileNativeModel: ObservableObject {
         if cachedPosts == nil {
           cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey, maxAge: 60 * 60 * 24 * 90)
         }
-        posts = profileVisiblePosts(cachedPosts ?? posts)
+        posts = await MIRAPostEngagementSync.apply(to: profileVisiblePosts(cachedPosts ?? posts))
       }
     }
 
@@ -573,19 +688,34 @@ final class UserProfileNativeModel: ObservableObject {
     await MIRALocalJSONCache.save(posts, key: postsCacheKey)
   }
 
+  func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) async {
+    guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
+    posts[index] = posts[index].updating(
+      liked: update.liked,
+      likesCount: update.likesCount,
+      commentsCount: update.commentsCount,
+      saved: update.saved,
+      savesCount: update.savesCount
+    )
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: userId)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey)
+  }
+
   func toggleFollow() async {
     let previousFollowing = isFollowing
+    let previousStatus = connectionStatus
     let previousFollowers = followersCount
-    let nextFollowing = !isFollowing
-    isFollowing = nextFollowing
-    followersCount = max(0, followersCount + (nextFollowing ? 1 : -1))
+    guard !["connected", "request_sent", "request_received", "blocked", "self"].contains(connectionStatus) else { return }
+    isFollowing = false
+    connectionStatus = "request_sent"
     do {
-      let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
-      isFollowing = response.following ?? nextFollowing
-      followersCount = response.followersCount ?? followersCount
+      let response: ConnectionRequestResponse = try await api.post("/friends/request/\(userId)", body: ConnectionRequestBody(note: nil))
+      connectionStatus = response.normalizedStatus
+      isFollowing = connectionStatus == "connected"
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: isFollowing, followersCount: followersCount))
     } catch {
       isFollowing = previousFollowing
+      connectionStatus = previousStatus
       followersCount = previousFollowers
     }
   }
@@ -595,6 +725,7 @@ final class UserProfileNativeModel: ObservableObject {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
       isBlocked = true
       isFollowing = false
+      connectionStatus = "blocked"
       posts = []
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: false))
       errorMessage = nil
@@ -618,9 +749,25 @@ final class UserProfileNativeModel: ObservableObject {
     }
   }
 
+  func removeConnection() async {
+    let previousFollowing = isFollowing
+    let previousStatus = connectionStatus
+    isFollowing = false
+    connectionStatus = "none"
+    do {
+      let _: EmptyResponse? = try await api.delete("/friends/\(userId)")
+      MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: false, followersCount: followersCount))
+    } catch {
+      isFollowing = previousFollowing
+      connectionStatus = previousStatus
+      errorMessage = "Could not remove this connection. Try again in a moment."
+    }
+  }
+
   private func apply(user freshUser: MIRAUser) {
     user = freshUser
     isFollowing = freshUser.viewerFollowing
+    connectionStatus = freshUser.viewerConnectionStatus
     followersCount = freshUser.followersCount ?? followersCount
     isBlocked = freshUser.viewerHasBlocked == true
     isBlockedBy = freshUser.viewerBlockedBy == true
@@ -677,6 +824,10 @@ public struct UserProfileNativeView: View {
     .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
       guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
       Task { await model.removePostLocally(id: update.postId) }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
+      guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
+      Task { await model.applyEngagementUpdate(update) }
     }
     .background {
       NavigationLink(
@@ -771,14 +922,14 @@ public struct UserProfileNativeView: View {
           }
         }
 
-        if model.isFollowing {
+        if model.connectionStatus == "connected" {
           MIRAActionModalButton(
-            title: "Unfollow",
+            title: "Remove connection",
             systemImage: "person.badge.minus",
             staggerIndex: 2
           ) {
             dismissOptions()
-            Task { await model.toggleFollow() }
+            Task { await model.removeConnection() }
           }
         }
       }
@@ -832,27 +983,14 @@ public struct UserProfileNativeView: View {
           .frame(maxWidth: .infinity)
         profileSafetyMenu
       }
-      VStack(spacing: 4) {
-        Text(profileTitle)
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        if let username = model.user?.username, !username.isEmpty {
-          Text("@\(username)")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
-      }
-
-      HStack(spacing: MIRATheme.Space.xl) {
-        profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Followers", model.followersCount)
-        profileMetric("Following", model.user?.followingCount ?? 0)
-      }
+      ProfileIdentitySummary(
+        user: model.user,
+        title: profileTitle,
+        postCount: model.user?.postsCount ?? model.posts.count
+      )
 
       if model.isBlocked {
-        profileStatusNotice("You blocked this user. Unblock them to message or follow again.")
+        profileStatusNotice("You blocked this user. Unblock them to message or connect again.")
       } else if model.isBlockedBy {
         profileStatusNotice("This profile is unavailable.")
       } else {
@@ -860,17 +998,22 @@ public struct UserProfileNativeView: View {
           Button {
             Task { await model.toggleFollow() }
           } label: {
-            Label(model.isFollowing ? "Following" : "Follow", systemImage: model.isFollowing ? "checkmark" : "plus")
+            Label(connectionButtonTitle, systemImage: connectionButtonIcon)
               .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(model.isFollowing ? MIRATheme.Color.textPrimary : .white)
+              .foregroundStyle(connectionButtonIsActive ? MIRATheme.Color.textPrimary : .white)
               .frame(maxWidth: .infinity, minHeight: 46)
-              .background(model.isFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
+              .background(connectionButtonIsActive ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
               .clipShape(Capsule())
           }
           .buttonStyle(.plain)
+          .disabled(connectionButtonIsActive)
 
           Button {
-            Task { await openMessageChat() }
+            if model.connectionStatus == "connected" {
+              Task { await openMessageChat() }
+            } else {
+              model.errorMessage = "Connect first to start a conversation."
+            }
           } label: {
             Label(isOpeningMessage ? "Opening" : "Message", systemImage: isOpeningMessage ? "hourglass" : "message")
               .font(.system(size: 15, weight: .semibold))
@@ -880,7 +1023,15 @@ public struct UserProfileNativeView: View {
               .clipShape(Capsule())
           }
           .buttonStyle(.plain)
+          .opacity(model.connectionStatus == "connected" ? 1 : 0.58)
           .disabled(isOpeningMessage)
+        }
+
+        if let errorMessage = model.errorMessage, !errorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text(errorMessage)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .multilineTextAlignment(.center)
         }
       }
     }
@@ -888,6 +1039,36 @@ public struct UserProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var connectionButtonTitle: String {
+    switch model.connectionStatus {
+    case "connected":
+      return "Connected"
+    case "request_sent":
+      return "Sent"
+    case "request_received":
+      return "Respond"
+    default:
+      return "Connect"
+    }
+  }
+
+  private var connectionButtonIcon: String {
+    switch model.connectionStatus {
+    case "connected":
+      return "checkmark"
+    case "request_sent":
+      return "paperplane"
+    case "request_received":
+      return "person.crop.circle.badge.exclamationmark"
+    default:
+      return "plus"
+    }
+  }
+
+  private var connectionButtonIsActive: Bool {
+    ["connected", "request_sent", "request_received"].contains(model.connectionStatus)
   }
 
   private var profileSafetyMenu: some View {
@@ -953,18 +1134,11 @@ public struct UserProfileNativeView: View {
       .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
-  private func profileMetric(_ label: String, _ value: Int) -> some View {
-    VStack(spacing: 4) {
-      Text("\(value)").font(.system(size: 18, weight: .semibold))
-      Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
-    }
-  }
-
   private var profileTitle: String {
     if let fullName = model.user?.fullName, !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       return fullName
     }
-    return model.user?.username ?? "captro"
+    return model.user?.username ?? "Aura member"
   }
 }
 
@@ -992,7 +1166,7 @@ private struct UserProfileSafetyOptionsSheet: View {
       Button(role: .destructive, action: onReport) {
         UserProfileOptionRow(
           title: "Report profile",
-          subtitle: "Send this profile to Captro moderation.",
+          subtitle: "Send this profile to Aura moderation.",
           systemImage: "flag",
           tint: .red
         )
@@ -1205,7 +1379,7 @@ private struct ProfilePostOwnerActionModal: View {
   }
 }
 
-private struct EditProfileNativeView: View {
+struct EditProfileNativeView: View {
   let user: MIRAUser?
   let api: MIRAAPIClient
   let onCancel: (() -> Void)?
@@ -1214,6 +1388,9 @@ private struct EditProfileNativeView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var fullName: String
   @State private var username: String
+  @State private var city: String
+  @State private var bio: String
+  @State private var interestsText: String
   @State private var profileImage: String?
   @State private var originalUsername: String
   @State private var pickerItem: PhotosPickerItem?
@@ -1230,6 +1407,9 @@ private struct EditProfileNativeView: View {
     self.onSaved = onSaved
     _fullName = State(initialValue: user?.fullName ?? "")
     _username = State(initialValue: user?.username ?? "")
+    _city = State(initialValue: cleanProfileNeighborhood(user?.city) ?? "")
+    _bio = State(initialValue: String((user?.bio ?? "").prefix(220)))
+    _interestsText = State(initialValue: compactProfileInterests(user).joined(separator: ", "))
     _profileImage = State(initialValue: user?.profileImage)
     _originalUsername = State(initialValue: MIRAUsernameRules.normalized(user?.username))
   }
@@ -1256,6 +1436,13 @@ private struct EditProfileNativeView: View {
             editField(title: "Name", text: $fullName, placeholder: "Your name")
             editField(title: "Username", text: $username, placeholder: "username")
             Text("Use 3-20 lowercase letters, numbers, underscores, or periods. Do not include @.")
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+              .frame(maxWidth: .infinity, alignment: .leading)
+            editField(title: "Neighborhood", text: $city, placeholder: "Bronx")
+            editMultilineField(title: "Bio", text: $bio, placeholder: "Tell people a little about you", limit: 220)
+            editField(title: "Interests", text: $interestsText, placeholder: "Music, Hiking, Coffee")
+            Text("Shown on your profile. Keep location broad, like a neighborhood or city. Interests are limited to three.")
               .font(.system(size: 12, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textMuted)
               .frame(maxWidth: .infinity, alignment: .leading)
@@ -1355,10 +1542,52 @@ private struct EditProfileNativeView: View {
     }
   }
 
+  private func editMultilineField(title: String, text: Binding<String>, placeholder: String, limit: Int) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Text(title)
+          .font(.system(size: 13, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        Spacer()
+        Text("\(min(text.wrappedValue.count, limit))/\(limit)")
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+      ZStack(alignment: .topLeading) {
+        if text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          Text(placeholder)
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
+            .padding(.horizontal, MIRATheme.Space.md + 4)
+            .padding(.vertical, 14)
+        }
+        TextEditor(text: text)
+          .font(.system(size: 16, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .scrollContentBackground(.hidden)
+          .frame(minHeight: 104, maxHeight: 132)
+          .padding(.horizontal, MIRATheme.Space.sm)
+          .padding(.vertical, 6)
+          .background(Color.clear)
+          .onChange(of: text.wrappedValue) { newValue in
+            if newValue.count > limit {
+              text.wrappedValue = String(newValue.prefix(limit))
+            }
+          }
+      }
+      .background(MIRATheme.Color.surface)
+      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+    }
+  }
+
   private func save() async {
     guard !isSaving else { return }
     let cleanName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
     let cleanUsername = MIRAUsernameRules.normalized(username)
+    let cleanBio = cleanMultilineProfileInput(bio, limit: 220)
+    let cleanCity = cleanProfileNeighborhood(city)
+    let cleanInterests = parseProfileInterests(interestsText)
     let usernameToSave = cleanUsername.isEmpty ? nil : cleanUsername
     if let usernameToSave, !MIRAUsernameRules.isValidPublicUsername(usernameToSave) {
       errorMessage = "Choose a username with 3-20 letters, numbers, underscores, or periods."
@@ -1390,6 +1619,9 @@ private struct EditProfileNativeView: View {
         body: ProfileUpdateBody(
           fullName: cleanName.isEmpty ? nil : cleanName,
           username: usernameToSave,
+          bio: cleanBio,
+          city: cleanCity ?? "",
+          interests: cleanInterests,
           profileImage: uploadedImage
         )
       )
@@ -1401,6 +1633,13 @@ private struct EditProfileNativeView: View {
     } catch {
       errorMessage = profileSaveErrorMessage(for: error)
     }
+  }
+
+  private func cleanMultilineProfileInput(_ value: String, limit: Int) -> String {
+    let clean = value
+      .replacingOccurrences(of: "\r\n", with: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return String(clean.prefix(limit))
   }
 
   private func verifyUsernameAvailability(_ username: String) async throws {
@@ -1468,6 +1707,15 @@ private struct EditProfileNativeView: View {
     }
     if username.isEmpty {
       username = me.username ?? ""
+    }
+    if city.isEmpty {
+      city = cleanProfileNeighborhood(me.city) ?? ""
+    }
+    if bio.isEmpty {
+      bio = String((me.bio ?? "").prefix(220))
+    }
+    if interestsText.isEmpty {
+      interestsText = compactProfileInterests(me).joined(separator: ", ")
     }
     if originalUsername.isEmpty {
       originalUsername = MIRAUsernameRules.normalized(me.username)
@@ -2078,7 +2326,7 @@ public struct VerificationNativeView: View {
       Text("Verify your account")
         .font(.system(size: 26, weight: .bold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
-      Text("Confirm your email and phone number to protect your Captro account and make recovery easier.")
+      Text("Confirm your email and phone number to protect your Aura account and make recovery easier.")
         .font(.system(size: 14, weight: .medium))
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -2125,7 +2373,7 @@ public struct VerificationNativeView: View {
           Task { await sendEmailLink() }
         }
         if emailLinkSent {
-          Text("Open Gmail or your email app, tap the Captro verification link, then return here.")
+          Text("Open Gmail or your email app, tap the Aura verification link, then return here.")
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textMuted)
             .fixedSize(horizontal: false, vertical: true)
@@ -2315,7 +2563,7 @@ public struct VerificationNativeView: View {
         body: VerificationStartBody(email: emailAddress.isEmpty ? nil : emailAddress, phone: nil)
       )
       emailLinkSent = true
-      successMessage = "Check your email for a Captro verification link."
+      successMessage = "Check your email for an Aura verification link."
     } catch {
       errorMessage = error.localizedDescription
     }

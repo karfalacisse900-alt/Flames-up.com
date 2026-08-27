@@ -1,29 +1,24 @@
-# Captro API (Cloudflare Workers)
+# Aura API (Cloudflare Workers)
 
-Backend stack: Hono + Cloudflare Workers + Supabase Auth/Postgres as the canonical production database + Cloudflare Images/R2/Stream for media storage and delivery.
+Backend stack: Hono + Cloudflare Workers + Supabase Auth/Postgres as the canonical production database + Cloudflare Images/Stream for media storage and delivery. The optional R2 backup binding is not enabled in the current production configuration.
 
-Cloudflare D1 remains bound only for legacy compatibility/cache while old routes are migrated. Do not treat D1 as the production source of truth for Captro app data.
+Cloudflare D1 is not the production source of truth for Aura app data. Supabase Auth/Postgres owns application data; Cloudflare is the API/media/security edge.
 
 ## Setup
 
 1. Install dependencies:
    `npm install`
 
-2. Run legacy D1 compatibility migrations only when maintaining the D1 cache/fallback:
-   `wrangler d1 execute flames-up-db --file=./migrations/0001_init.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0002_additions.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0003_creators.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0004_oauth.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0005_phone_auth.sql --remote`
-   `wrangler d1 execute flames-up-db --file=./migrations/0019_production_performance_indexes.sql --remote`
-   `wrangler d1 execute DB --env production --remote --yes --file=./migrations/0020_production_readiness.sql`
-   `wrangler d1 execute DB --env production --remote --yes --file=./migrations/0021_admin_moderation.sql`
+2. Push Supabase migrations from the repository root:
+   `npx supabase db push`
 
 3. Configure vars:
    - `JWT_SECRET`
    - `CLOUDFLARE_ACCOUNT_ID`
    - `CLOUDFLARE_IMAGES_TOKEN` and `CLOUDFLARE_STREAM_TOKEN` as Worker secrets, or a shared `CLOUDFLARE_API_TOKEN` that has Cloudflare Images and Stream permissions
    - `CLOUDFLARE_IMAGES_ACCOUNT_HASH` for `https://imagedelivery.net/...` delivery URLs
+   - `CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS=true` and the Cloudflare Images dashboard setting to preserve Content Credentials through transformations
+   - Optional `C2PA_VERIFIER_URL` and `C2PA_VERIFIER_TOKEN` for server-side C2PA summary verification
    - Workers AI is enabled with the `AI` binding in `wrangler.toml`; optional `POST_ASSIST_MODEL` controls the caption/headline/category helper model
    - `MAPBOX_ACCESS_TOKEN`
    - `OWNER_EMAILS` (comma-separated verified account emails that receive owner admin role)
@@ -39,6 +34,18 @@ Cloudflare D1 remains bound only for legacy compatibility/cache while old routes
 
 4. Deploy:
    `wrangler deploy --env production --keep-vars`
+
+## Authenticated Aura feed media
+
+Aura feed photos and videos use authenticated Worker intents, one-time Cloudflare direct-upload URLs, authenticated completion, and an owner-scoped Supabase `app_media_assets` record. Cloudflare Images/Stream stores the binary media; Supabase Storage buckets are intentionally not required for this path. Post creation accepts only an uploaded, moderation-approved asset owned by the caller and persists its asset ID, canonical media reference, and authoritative media type.
+
+Required external configuration (names only):
+
+- Worker secrets: `SUPABASE_SERVICE_ROLE_KEY`, `CLOUDFLARE_IMAGES_TOKEN`, `CLOUDFLARE_STREAM_TOKEN`
+- Worker vars: `SUPABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_IMAGES_ACCOUNT_HASH`
+- Optional video malware scanning: `MALWARE_SCANNER_URL`, `MALWARE_SCANNER_TOKEN`. Without a configured scanner, the existing moderation policy must treat the resulting `unknown`/`not_scanned` signal honestly; the mobile app must not invent a scan result.
+
+`GET /api/health` reports non-secret `checks.cloudflare_images.configured` and `checks.cloudflare_stream.configured` booleans. It never returns token values. A local dry-run validates bindings but cannot prove production secret presence; check the deployed health response after release.
 
 Google OAuth requires the same client IDs used by the native app and web auth callback:
 
@@ -62,7 +69,7 @@ If Twilio is not configured, `/api/auth/phone/start` returns a `dev_code` for lo
 
 ## Supabase Auth + Postgres/JSONB
 
-Supabase is Captro's production database. It stores authentication identity through Supabase Auth and structured app data in Postgres tables. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
+Supabase is Aura's production database. It stores authentication identity through Supabase Auth and structured app data in Postgres tables. The JSONB `app_documents` table is the app's flexible NoSQL-style layer; it is still stored securely inside Postgres with RLS.
 
 Run or push the Supabase migrations from the repository root when testing locally:
 
@@ -133,16 +140,18 @@ Google OAuth setup:
 - Google Cloud authorized redirect URI should be the Supabase callback: `https://your-project-ref.supabase.co/auth/v1/callback`
 - Supabase Auth redirect URLs should include both `https://flames-up.com/auth/callback` and `captro://auth/callback`
 - Use the Web OAuth client ID and client secret in the Supabase Google provider. Native iOS/Android IDs can be used by the mobile app, but Supabase's provider secret belongs to the Web client.
-- If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Captro` and make sure Supabase's Google provider uses the Captro Web OAuth client. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
+- Set the iOS build setting `GOOGLE_SERVER_CLIENT_ID` to the same Web OAuth client ID used by Supabase. The app keeps `GIDClientID` as the iOS client ID for URL handling, and uses `GIDServerClientID` to request an ID token that Supabase can validate.
+- If the Google account chooser says `continue with MIRA`, update the Google Cloud OAuth consent screen / branding app name to `Aura` and keep Supabase's Google provider on the existing configured Web OAuth client until a coordinated provider migration. This wording is controlled by Google's OAuth app branding, not by a SwiftUI label.
 
 Apple native sign-in:
-- Enable Sign in with Apple on the iOS App ID `com.captro.app`.
+- Enable Sign in with Apple on the current iOS App ID `com.karfala90.aura`. The legacy `com.captro.app` audience remains accepted only for existing Captroo clients.
 - Configure the Apple Services ID in Supabase for web OAuth.
-- Set `APPLE_OAUTH_AUDIENCES` on the Worker to include both the iOS bundle ID and the Services ID, for example `com.captro.app,com.captro.app.auth`.
+- The iOS app sends a raw Apple nonce through the Worker; Supabase Auth validates the native Apple identity token.
+- Set `APPLE_OAUTH_AUDIENCES` on the Worker only for optional local diagnostics; Supabase Auth is the source of truth for Apple token validation.
 
 ## Admin Moderation API
 
-The private admin web app uses protected `/api/admin/*` endpoints. These routes require normal Captro authentication plus backend role authorization; frontend checks are never the source of truth.
+The private admin web app uses protected `/api/admin/*` endpoints. These routes require normal Aura authentication plus backend role authorization; frontend checks are never the source of truth.
 
 Admin roles:
 

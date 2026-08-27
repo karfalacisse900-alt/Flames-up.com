@@ -75,6 +75,107 @@ public enum MIRANativeEditorFilter: String, Codable, Hashable, CaseIterable, Ide
   }
 }
 
+public enum MIRANativeTextStyle: String, Codable, Hashable, CaseIterable, Identifiable {
+  case clean
+  case editorial
+  case handwritten
+  case typewriter
+  case bold
+  case outline
+  case cutout
+  case label
+  case script
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .clean: return "Clean"
+    case .editorial: return "Editorial"
+    case .handwritten: return "Handwritten"
+    case .typewriter: return "Typewriter"
+    case .bold: return "Bold"
+    case .outline: return "Outline"
+    case .cutout: return "Cutout"
+    case .label: return "Label"
+    case .script: return "Script"
+    }
+  }
+}
+
+public enum MIRANativeTextBackgroundStyle: String, Codable, Hashable, CaseIterable, Identifiable {
+  case none
+  case highlight
+  case paper
+  case tape
+  case label
+  case tornPaper
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .none: return "None"
+    case .highlight: return "Highlight"
+    case .paper: return "Paper"
+    case .tape: return "Tape"
+    case .label: return "Label"
+    case .tornPaper: return "Torn"
+    }
+  }
+}
+
+public enum MIRANativeStickerAsset: String, Codable, Hashable, CaseIterable, Identifiable {
+  case star
+  case starOutline
+  case sparkle
+  case paperclip
+  case tape
+  case arrow
+  case underline
+  case circle
+  case heart
+  case scribble
+  case flower
+  case pin
+
+  public var id: String { rawValue }
+
+  public var title: String {
+    switch self {
+    case .star: return "Star"
+    case .starOutline: return "Outline"
+    case .sparkle: return "Sparkle"
+    case .paperclip: return "Clip"
+    case .tape: return "Tape"
+    case .arrow: return "Arrow"
+    case .underline: return "Underline"
+    case .circle: return "Circle"
+    case .heart: return "Heart"
+    case .scribble: return "Scribble"
+    case .flower: return "Flower"
+    case .pin: return "Pin"
+    }
+  }
+
+  public var systemImage: String {
+    switch self {
+    case .star: return "star.fill"
+    case .starOutline: return "star"
+    case .sparkle: return "sparkles"
+    case .paperclip: return "paperclip"
+    case .tape: return "rectangle.fill"
+    case .arrow: return "arrow.up.right"
+    case .underline: return "scribble.variable"
+    case .circle: return "circle"
+    case .heart: return "heart"
+    case .scribble: return "scribble"
+    case .flower: return "camera.macro"
+    case .pin: return "pin.fill"
+    }
+  }
+}
+
 public struct MIRANativeTextLayer: Identifiable, Codable, Hashable {
   public var id: String
   public var text: String
@@ -87,6 +188,13 @@ public struct MIRANativeTextLayer: Identifiable, Codable, Hashable {
   public var fontSize: CGFloat
   public var alignment: String
   public var zIndex: Int
+  public var width: CGFloat?
+  public var style: MIRANativeTextStyle?
+  public var fontWeight: String?
+  public var opacity: CGFloat?
+  public var backgroundStyle: MIRANativeTextBackgroundStyle?
+  public var backgroundOpacity: CGFloat?
+  public var backgroundPadding: CGFloat?
 
   public init(
     id: String = UUID().uuidString,
@@ -99,7 +207,14 @@ public struct MIRANativeTextLayer: Identifiable, Codable, Hashable {
     fontName: String? = nil,
     fontSize: CGFloat = 34,
     alignment: String = "center",
-    zIndex: Int = 0
+    zIndex: Int = 0,
+    width: CGFloat? = 0.76,
+    style: MIRANativeTextStyle? = .clean,
+    fontWeight: String? = "semibold",
+    opacity: CGFloat? = 1,
+    backgroundStyle: MIRANativeTextBackgroundStyle? = .none,
+    backgroundOpacity: CGFloat? = 0.86,
+    backgroundPadding: CGFloat? = 10
   ) {
     self.id = id
     self.text = text
@@ -111,6 +226,47 @@ public struct MIRANativeTextLayer: Identifiable, Codable, Hashable {
     self.fontName = fontName
     self.fontSize = fontSize
     self.alignment = alignment
+    self.zIndex = zIndex
+    self.width = width
+    self.style = style
+    self.fontWeight = fontWeight
+    self.opacity = opacity
+    self.backgroundStyle = backgroundStyle
+    self.backgroundOpacity = backgroundOpacity
+    self.backgroundPadding = backgroundPadding
+  }
+}
+
+public struct MIRANativeStickerLayer: Identifiable, Codable, Hashable {
+  public var id: String
+  public var assetType: MIRANativeStickerAsset
+  public var x: CGFloat
+  public var y: CGFloat
+  public var scale: CGFloat
+  public var rotation: CGFloat
+  public var opacity: CGFloat
+  public var colorHex: String
+  public var zIndex: Int
+
+  public init(
+    id: String = UUID().uuidString,
+    assetType: MIRANativeStickerAsset,
+    x: CGFloat = 0.5,
+    y: CGFloat = 0.5,
+    scale: CGFloat = 1,
+    rotation: CGFloat = 0,
+    opacity: CGFloat = 1,
+    colorHex: String = "#FFFFFF",
+    zIndex: Int = 0
+  ) {
+    self.id = id
+    self.assetType = assetType
+    self.x = x
+    self.y = y
+    self.scale = scale
+    self.rotation = rotation
+    self.opacity = opacity
+    self.colorHex = colorHex
     self.zIndex = zIndex
   }
 }
@@ -130,6 +286,7 @@ public struct MIRANativeEditRecipe: Codable, Hashable {
   public var trimStartSeconds: Double
   public var trimEndSeconds: Double
   public var textLayers: [MIRANativeTextLayer]
+  public var stickerLayers: [MIRANativeStickerLayer]?
 
   public init(
     mediaId: String = UUID().uuidString,
@@ -145,7 +302,8 @@ public struct MIRANativeEditRecipe: Codable, Hashable {
     rotationQuarterTurns: Int = 0,
     trimStartSeconds: Double = 0,
     trimEndSeconds: Double = 0,
-    textLayers: [MIRANativeTextLayer] = []
+    textLayers: [MIRANativeTextLayer] = [],
+    stickerLayers: [MIRANativeStickerLayer]? = []
   ) {
     self.mediaId = mediaId
     self.mediaType = mediaType
@@ -161,6 +319,7 @@ public struct MIRANativeEditRecipe: Codable, Hashable {
     self.trimStartSeconds = trimStartSeconds
     self.trimEndSeconds = trimEndSeconds
     self.textLayers = textLayers
+    self.stickerLayers = stickerLayers
   }
 
   public var hasEdits: Bool {
@@ -174,7 +333,8 @@ public struct MIRANativeEditRecipe: Codable, Hashable {
       abs(sharpness) > 0.001 ||
       rotationQuarterTurns % 4 != 0 ||
       trimEndSeconds > trimStartSeconds ||
-      !textLayers.isEmpty
+      !textLayers.isEmpty ||
+      !(stickerLayers ?? []).isEmpty
   }
 }
 
@@ -183,15 +343,25 @@ public struct MIRANativeEditedMediaMetadata: Codable, Hashable {
   public let editorVersion: String
   public let appliedFilter: String
   public let hasTextOverlay: Bool
+  public let layerCount: Int?
+  public let compositionJSON: String?
 
-  public init(wasEdited: Bool, editorVersion: String = "native_v2", appliedFilter: String, hasTextOverlay: Bool) {
+  public init(
+    wasEdited: Bool,
+    editorVersion: String = "native_v3",
+    appliedFilter: String,
+    hasTextOverlay: Bool,
+    layerCount: Int? = nil,
+    compositionJSON: String? = nil
+  ) {
     self.wasEdited = wasEdited
     self.editorVersion = editorVersion
     self.appliedFilter = appliedFilter
     self.hasTextOverlay = hasTextOverlay
+    self.layerCount = layerCount
+    self.compositionJSON = compositionJSON
   }
 }
-
 public enum MIRANativeMediaEditorError: LocalizedError {
   case invalidImage
   case invalidVideo
@@ -351,7 +521,7 @@ public enum MIRANativeMediaEditorRenderer {
       ))
       context.cgContext.restoreGState()
       if includeText {
-        drawTextLayers(recipe.textLayers, in: size)
+        drawCanvasLayers(recipe: recipe, in: size)
       }
     }
   }
@@ -406,41 +576,261 @@ public enum MIRANativeMediaEditorRenderer {
     return CGSize(width: max(1, sourceSize.width * scale), height: max(1, sourceSize.height * scale))
   }
 
-  private static func drawTextLayers(_ layers: [MIRANativeTextLayer], in size: CGSize) {
-    for layer in layers.sorted(by: { $0.zIndex < $1.zIndex }) where !layer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      guard let context = UIGraphicsGetCurrentContext() else { continue }
-      context.saveGState()
-      let center = CGPoint(
-        x: min(max(layer.x, 0.06), 0.94) * size.width,
-        y: min(max(layer.y, 0.06), 0.94) * size.height
-      )
-      context.translateBy(x: center.x, y: center.y)
-      context.rotate(by: layer.rotation)
+  private enum ExportCanvasLayer {
+    case text(MIRANativeTextLayer)
+    case sticker(MIRANativeStickerLayer)
 
-      let fontSize = max(12, min(132, layer.fontSize * layer.scale))
-      let font = layer.fontName.flatMap { UIFont(name: $0, size: fontSize) } ?? .systemFont(ofSize: fontSize, weight: .semibold)
-      let paragraph = NSMutableParagraphStyle()
-      paragraph.alignment = layer.nsTextAlignment
-      let attributed = NSAttributedString(
-        string: layer.text,
-        attributes: [
-          .font: font,
-          .foregroundColor: UIColor(hex: layer.colorHex),
-          .paragraphStyle: paragraph,
-          .shadow: NSShadow.miraDefaultTextShadow
-        ]
-      )
-      let maxWidth = size.width * 0.82
-      let bounding = attributed.boundingRect(
-        with: CGSize(width: maxWidth, height: size.height * 0.5),
-        options: [.usesLineFragmentOrigin, .usesFontLeading],
-        context: nil
-      )
-      attributed.draw(in: CGRect(x: -maxWidth / 2, y: -bounding.height / 2, width: maxWidth, height: bounding.height + 12))
-      context.restoreGState()
+    var zIndex: Int {
+      switch self {
+      case .text(let layer): return layer.zIndex
+      case .sticker(let layer): return layer.zIndex
+      }
     }
   }
 
+  private static func drawCanvasLayers(recipe: MIRANativeEditRecipe, in size: CGSize) {
+    let layers = recipe.textLayers.map(ExportCanvasLayer.text) +
+      (recipe.stickerLayers ?? []).map(ExportCanvasLayer.sticker)
+    for layer in layers.sorted(by: { $0.zIndex < $1.zIndex }) {
+      switch layer {
+      case .text(let textLayer):
+        drawTextLayer(textLayer, in: size)
+      case .sticker(let stickerLayer):
+        drawStickerLayer(stickerLayer, in: size)
+      }
+    }
+  }
+
+  private static func drawTextLayer(_ layer: MIRANativeTextLayer, in size: CGSize) {
+    guard !layer.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          let context = UIGraphicsGetCurrentContext()
+    else { return }
+
+    context.saveGState()
+    context.setAlpha(layer.resolvedOpacity)
+    let center = CGPoint(
+      x: min(max(layer.x, 0.04), 0.96) * size.width,
+      y: min(max(layer.y, 0.04), 0.96) * size.height
+    )
+    context.translateBy(x: center.x, y: center.y)
+    context.rotate(by: layer.rotation)
+    context.scaleBy(x: layer.resolvedScale, y: layer.resolvedScale)
+
+    let exportScale = max(1, size.width / 390)
+    let fontSize = max(12 * exportScale, min(144 * exportScale, layer.fontSize * exportScale))
+    let maxWidth = size.width * min(max(layer.width ?? 0.76, 0.20), 0.92)
+
+    if layer.resolvedStyle == .cutout, layer.text.count <= 28, !layer.text.contains("\n") {
+      drawCutoutText(layer, fontSize: fontSize, maxWidth: maxWidth, exportScale: exportScale)
+      context.restoreGState()
+      return
+    }
+
+    let font = layer.exportFont(size: fontSize)
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.alignment = layer.nsTextAlignment
+    let attributes = textAttributes(layer: layer, font: font, paragraph: paragraph, exportScale: exportScale)
+    let attributed = NSAttributedString(string: layer.text, attributes: attributes)
+    let bounding = attributed.boundingRect(
+      with: CGSize(width: maxWidth, height: size.height * 0.72),
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      context: nil
+    ).integral
+    let padding = max(0, layer.backgroundPadding ?? 10) * exportScale
+    let textRect = CGRect(
+      x: -maxWidth / 2,
+      y: -bounding.height / 2,
+      width: maxWidth,
+      height: bounding.height + 4 * exportScale
+    )
+    let backgroundX: CGFloat
+    switch layer.nsTextAlignment {
+    case .left:
+      backgroundX = -maxWidth / 2
+    case .right:
+      backgroundX = maxWidth / 2 - bounding.width
+    default:
+      backgroundX = -bounding.width / 2
+    }
+    let backgroundRect = CGRect(
+      x: backgroundX - padding,
+      y: -bounding.height / 2 - padding,
+      width: bounding.width + padding * 2,
+      height: bounding.height + padding * 2
+    )
+    drawTextBackground(
+      style: layer.resolvedBackgroundStyle,
+      rect: backgroundRect,
+      opacity: layer.backgroundOpacity ?? 0.86,
+      exportScale: exportScale
+    )
+    attributed.draw(in: textRect)
+    context.restoreGState()
+  }
+
+  private static func textAttributes(
+    layer: MIRANativeTextLayer,
+    font: UIFont,
+    paragraph: NSParagraphStyle,
+    exportScale: CGFloat
+  ) -> [NSAttributedString.Key: Any] {
+    var attributes: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: UIColor(hex: layer.colorHex),
+      .paragraphStyle: paragraph,
+      .shadow: NSShadow.miraDefaultTextShadow
+    ]
+    if layer.resolvedStyle == .outline {
+      attributes[.foregroundColor] = UIColor.clear
+      attributes[.strokeColor] = UIColor(hex: layer.colorHex)
+      attributes[.strokeWidth] = max(2, 1.35 * exportScale)
+    }
+    return attributes
+  }
+
+  private static func drawTextBackground(
+    style: MIRANativeTextBackgroundStyle,
+    rect: CGRect,
+    opacity: CGFloat,
+    exportScale: CGFloat
+  ) {
+    guard style != .none, let context = UIGraphicsGetCurrentContext() else { return }
+    let alpha = min(max(opacity, 0.08), 1)
+    context.saveGState()
+    context.setShadow(offset: CGSize(width: 0, height: 2 * exportScale), blur: 4 * exportScale, color: UIColor.black.withAlphaComponent(0.16).cgColor)
+
+    let color: UIColor
+    let cornerRadius: CGFloat
+    switch style {
+    case .none:
+      context.restoreGState()
+      return
+    case .highlight:
+      color = UIColor(red: 0.98, green: 0.85, blue: 0.27, alpha: alpha * 0.86)
+      cornerRadius = 1.5 * exportScale
+    case .paper:
+      color = UIColor(red: 0.96, green: 0.93, blue: 0.85, alpha: alpha)
+      cornerRadius = 2 * exportScale
+    case .tape:
+      color = UIColor(red: 0.91, green: 0.82, blue: 0.62, alpha: alpha * 0.78)
+      cornerRadius = 1.5 * exportScale
+    case .label:
+      color = UIColor.white.withAlphaComponent(alpha)
+      cornerRadius = 8 * exportScale
+    case .tornPaper:
+      color = UIColor(red: 0.95, green: 0.91, blue: 0.82, alpha: alpha)
+      cornerRadius = 0
+    }
+
+    color.setFill()
+    if style == .tornPaper {
+      let path = UIBezierPath()
+      let teeth = 9
+      path.move(to: CGPoint(x: rect.minX, y: rect.minY + 3 * exportScale))
+      for index in 0...teeth {
+        let x = rect.minX + rect.width * CGFloat(index) / CGFloat(teeth)
+        let y = rect.minY + CGFloat(index % 2) * 3 * exportScale
+        path.addLine(to: CGPoint(x: x, y: y))
+      }
+      for index in stride(from: teeth, through: 0, by: -1) {
+        let x = rect.minX + rect.width * CGFloat(index) / CGFloat(teeth)
+        let y = rect.maxY - CGFloat(index % 2) * 3 * exportScale
+        path.addLine(to: CGPoint(x: x, y: y))
+      }
+      path.close()
+      path.fill()
+    } else {
+      UIBezierPath(roundedRect: rect, cornerRadius: cornerRadius).fill()
+    }
+    context.restoreGState()
+  }
+
+  private static func drawCutoutText(
+    _ layer: MIRANativeTextLayer,
+    fontSize: CGFloat,
+    maxWidth: CGFloat,
+    exportScale: CGFloat
+  ) {
+    let characters = Array(layer.text)
+    let visibleCount = max(1, characters.filter { !$0.isWhitespace }.count)
+    let slotWidth = min(fontSize * 0.82, maxWidth / CGFloat(visibleCount + 1))
+    let totalWidth = characters.reduce(CGFloat.zero) { partial, character in
+      partial + (character.isWhitespace ? slotWidth * 0.55 : slotWidth)
+    }
+    var cursor = -totalWidth / 2
+    let papers = [
+      UIColor.white,
+      UIColor(red: 0.96, green: 0.91, blue: 0.78, alpha: 1),
+      UIColor(red: 0.84, green: 0.84, blue: 0.82, alpha: 1),
+      UIColor(red: 0.90, green: 0.87, blue: 0.78, alpha: 1)
+    ]
+    let fonts = ["HelveticaNeue-Bold", "Georgia", "Courier-Bold", "AvenirNext-Heavy"]
+
+    for (index, character) in characters.enumerated() {
+      if character.isWhitespace {
+        cursor += slotWidth * 0.55
+        continue
+      }
+      let seed = stableLayerHash("\(layer.id)-\(index)-\(character)")
+      let letterSize = min(fontSize * (0.82 + CGFloat(seed % 17) / 100), slotWidth * 0.96)
+      let fontName = fonts[Int(seed % UInt64(fonts.count))]
+      let font = UIFont(name: fontName, size: letterSize) ?? UIFont.systemFont(ofSize: letterSize, weight: .bold)
+      let string = String(character) as NSString
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: UIColor(hex: layer.colorHex)
+      ]
+      let measured = string.size(withAttributes: attributes)
+      let paperRect = CGRect(
+        x: cursor,
+        y: -letterSize * 0.64,
+        width: min(slotWidth, max(slotWidth - 2 * exportScale, measured.width + 6 * exportScale)),
+        height: letterSize * 1.20
+      )
+      guard let context = UIGraphicsGetCurrentContext() else { continue }
+      context.saveGState()
+      context.translateBy(x: paperRect.midX, y: paperRect.midY)
+      context.rotate(by: CGFloat(Int(seed % 9) - 4) * .pi / 180)
+      let localRect = CGRect(x: -paperRect.width / 2, y: -paperRect.height / 2, width: paperRect.width, height: paperRect.height)
+      papers[Int((seed / 7) % UInt64(papers.count))].setFill()
+      UIBezierPath(roundedRect: localRect, cornerRadius: 1.5 * exportScale).fill()
+      string.draw(
+        at: CGPoint(x: -measured.width / 2, y: -measured.height / 2),
+        withAttributes: attributes
+      )
+      context.restoreGState()
+      cursor += slotWidth
+    }
+  }
+
+  private static func drawStickerLayer(_ layer: MIRANativeStickerLayer, in size: CGSize) {
+    guard let context = UIGraphicsGetCurrentContext() else { return }
+    context.saveGState()
+    context.setAlpha(min(max(layer.opacity, 0.08), 1))
+    context.translateBy(
+      x: min(max(layer.x, 0.03), 0.97) * size.width,
+      y: min(max(layer.y, 0.03), 0.97) * size.height
+    )
+    context.rotate(by: layer.rotation)
+    let exportScale = max(1, size.width / 390)
+    let side = 62 * exportScale * min(max(layer.scale, 0.35), 4)
+    let rect = CGRect(x: -side / 2, y: -side / 2, width: side, height: side)
+    let tint = UIColor(hex: layer.colorHex)
+
+    if layer.assetType == .tape {
+      tint.withAlphaComponent(0.62).setFill()
+      UIBezierPath(roundedRect: CGRect(x: -side * 0.65, y: -side * 0.20, width: side * 1.30, height: side * 0.40), cornerRadius: side * 0.04).fill()
+    } else if let image = UIImage(systemName: layer.assetType.systemImage)?.withTintColor(tint, renderingMode: .alwaysOriginal) {
+      image.draw(in: rect)
+    }
+    context.restoreGState()
+  }
+
+  private static func stableLayerHash(_ value: String) -> UInt64 {
+    value.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { partial, byte in
+      (partial ^ UInt64(byte)) &* 1_099_511_628_211
+    }
+  }
   private static func downscaled(_ image: UIImage, maxSide: CGFloat) -> UIImage {
     let side = max(image.size.width, image.size.height)
     guard side > maxSide else { return image.normalizedOrientation() }
@@ -650,14 +1040,17 @@ public enum MIRANativeMediaEditorExporter {
 
 private extension MIRANativeEditRecipe {
   var editorMetadata: MIRANativeEditedMediaMetadata {
-    MIRANativeEditedMediaMetadata(
+    let compositionData = try? JSONEncoder().encode(self)
+    let compositionJSON = compositionData.flatMap { String(data: $0, encoding: .utf8) }
+    return MIRANativeEditedMediaMetadata(
       wasEdited: true,
       appliedFilter: selectedFilter.rawValue,
-      hasTextOverlay: !textLayers.isEmpty
+      hasTextOverlay: !textLayers.isEmpty,
+      layerCount: textLayers.count + (stickerLayers?.count ?? 0),
+      compositionJSON: compositionJSON
     )
   }
 }
-
 private extension AVAssetExportSession {
   func miraAwaitExport() async throws {
     try await withCheckedThrowingContinuation { continuation in
@@ -678,6 +1071,30 @@ private extension AVAssetExportSession {
 }
 
 private extension MIRANativeTextLayer {
+  var resolvedStyle: MIRANativeTextStyle { style ?? .clean }
+  var resolvedOpacity: CGFloat { min(max(opacity ?? 1, 0.08), 1) }
+  var resolvedScale: CGFloat { min(max(scale, 0.38), 4) }
+  var resolvedBackgroundStyle: MIRANativeTextBackgroundStyle {
+    let selected = backgroundStyle ?? .none
+    return selected == .none && resolvedStyle == .label ? .label : selected
+  }
+
+  func exportFont(size: CGFloat) -> UIFont {
+    if let fontName, let custom = UIFont(name: fontName, size: size) { return custom }
+    let name: String?
+    switch resolvedStyle {
+    case .clean: name = "AvenirNext-DemiBold"
+    case .editorial: name = "Georgia"
+    case .handwritten: name = "MarkerFelt-Wide"
+    case .typewriter: name = "Courier-Bold"
+    case .bold, .outline: name = "AvenirNext-Heavy"
+    case .cutout: name = "HelveticaNeue-Bold"
+    case .label: name = "AvenirNext-Bold"
+    case .script: name = "SnellRoundhand-Bold"
+    }
+    if let name, let font = UIFont(name: name, size: size) { return font }
+    return UIFont.systemFont(ofSize: size, weight: resolvedStyle == .bold ? .heavy : .semibold)
+  }
   var nsTextAlignment: NSTextAlignment {
     switch alignment {
     case "left": return .left

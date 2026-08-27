@@ -259,13 +259,13 @@ public struct SettingsNativeView: View {
         SettingsCard(title: localization.string("settings.legal_safety")) {
           SettingsNavigationRow(
             title: localization.string("legal.terms"),
-            subtitle: "Rules for using Captro",
+            subtitle: "Rules for using Aura",
             systemImage: "doc.text",
             destination: TermsOfServiceView()
           )
           SettingsNavigationRow(
             title: localization.string("legal.privacy"),
-            subtitle: "How Captro handles data",
+            subtitle: "How Aura handles data",
             systemImage: "hand.raised",
             destination: PrivacyPolicyView()
           )
@@ -299,7 +299,7 @@ public struct SettingsNativeView: View {
     HStack(spacing: 12) {
       RemoteAvatar(url: model.user?.profileImage, size: 48)
       VStack(alignment: .leading, spacing: 2) {
-        Text(model.user?.displayName ?? "Captro")
+        Text(model.user?.displayName ?? "Aura member")
           .font(.system(size: 20, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Text(model.email.isEmpty ? localization.string("settings.manage_account") : model.email)
@@ -420,7 +420,7 @@ private struct BlockedAccountsNativeView: View {
     HStack(spacing: MIRATheme.Space.sm) {
       RemoteAvatar(url: row.user?.profileImage, size: 38)
       VStack(alignment: .leading, spacing: 3) {
-        Text(row.user?.displayName ?? "Captro user")
+        Text(row.user?.displayName ?? "Aura member")
           .font(.system(size: 15, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
@@ -489,7 +489,7 @@ private struct NotificationSettingsNativeView: View {
       SettingsCard(title: "Device") {
         SettingsToggleRow(
           title: "Push notifications",
-          subtitle: "Use iPhone notifications for important activity.",
+          subtitle: "Aura sends notifications about activity on your posts, comments, connections, messages, and important account updates.",
           systemImage: "bell.badge",
           isOn: Binding(
             get: { pushEnabled },
@@ -510,9 +510,9 @@ private struct NotificationSettingsNativeView: View {
       SettingsCard(title: "Activity") {
         SettingsToggleRow(title: "Likes", subtitle: "When someone likes your post.", systemImage: "heart", isOn: $notifyLikes)
         SettingsToggleRow(title: "Comments and replies", subtitle: "When someone comments or replies.", systemImage: "bubble.left", isOn: $notifyComments)
-        SettingsToggleRow(title: "Follows", subtitle: "When someone follows you.", systemImage: "person.badge.plus", isOn: $notifyFollows)
-        SettingsToggleRow(title: "Messages", subtitle: "New chat messages and calls.", systemImage: "message", isOn: $notifyMessages)
-        SettingsToggleRow(title: "New posts", subtitle: "When people you follow post.", systemImage: "photo.on.rectangle", isOn: $notifyPosts)
+        SettingsToggleRow(title: "Connections", subtitle: "When someone sends or accepts a connection request.", systemImage: "person.badge.plus", isOn: $notifyFollows)
+        SettingsToggleRow(title: "Messages", subtitle: "New chat messages.", systemImage: "message", isOn: $notifyMessages)
+        SettingsToggleRow(title: "New posts", subtitle: "When connected people post.", systemImage: "photo.on.rectangle", isOn: $notifyPosts)
         SettingsToggleRow(title: "Email updates", subtitle: "Occasional account and safety emails.", systemImage: "envelope", isOn: $emailUpdates)
       }
     }
@@ -563,7 +563,7 @@ private struct SecuritySettingsNativeView: View {
     SettingsDetailScaffold(title: "Security") {
       SettingsCard(title: "Email") {
         SettingsTextField(title: "Email", text: $newEmail, keyboardType: .emailAddress)
-        Text("Uses your signed-in Captro session. Log out on shared devices.")
+        Text("Uses your signed-in Aura session. Log out on shared devices.")
           .font(.system(size: 12, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textMuted)
           .padding(.horizontal, 8)
@@ -645,10 +645,10 @@ private struct DeleteAccountNativeView: View {
     SettingsDetailScaffold(title: "Delete account") {
       SettingsCard(title: "What happens") {
         VStack(alignment: .leading, spacing: 12) {
-          warningRow("Your profile, posts, comments, likes, follows, saved items, and push tokens are hidden immediately.")
-          warningRow("Captro schedules permanent deletion for 30 days from now.")
+          warningRow("Your profile, posts, comments, likes, connections, saved items, and push tokens are hidden immediately.")
+          warningRow("Aura schedules permanent deletion for 30 days from now.")
           warningRow("Signing in during that window lets you restore the account.")
-          warningRow("After permanent deletion, old posts, followers, likes, messages, username, and media are not restored.")
+          warningRow("After permanent deletion, old posts, connections, likes, messages, username, and media are not restored.")
         }
         .padding(16)
         .settingsPillSurface(cornerRadius: 28)
@@ -686,7 +686,7 @@ private struct DeleteAccountNativeView: View {
       } else {
         SettingsCard(title: "Password") {
           SettingsSecureField(title: "Current password", text: $password)
-          Text("Recent authentication is required before Captro can schedule deletion.")
+          Text("Recent authentication is required before Aura can schedule deletion.")
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textMuted)
             .padding(.horizontal, 8)
@@ -785,9 +785,24 @@ private struct DeleteAccountNativeView: View {
       ?? "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
   }
 
+  private var googleServerClientID: String? {
+    guard let value = Bundle.main.object(forInfoDictionaryKey: "GIDServerClientID") as? String else {
+      return nil
+    }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty || trimmed.contains("$(") {
+      return nil
+    }
+    return trimmed
+  }
+
   @MainActor
   private func startGoogleReauth() {
-    GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    if let googleServerClientID {
+      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID, serverClientID: googleServerClientID)
+    } else {
+      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    }
     guard let presenter = UIApplication.shared.miraSettingsTopPresentedViewController() else {
       localError = "Google sign in is not ready. Please try again."
       return

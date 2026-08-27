@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { AdminApi, ApiError, API_BASE, login } from './api';
+import { ADMIN_REFRESH_TOKEN_KEY, ADMIN_TOKEN_KEY, AdminApi, ApiError, API_BASE, login } from './api';
 import type {
   AdminComment,
   AdminMedia,
@@ -35,8 +35,6 @@ type MediaPreviewModel = {
   iframeUrl: string;
   aspectRatio: number;
 };
-
-const TOKEN_KEY = 'captro_admin_token';
 
 const navItems: Array<{ key: ViewKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
@@ -307,11 +305,21 @@ function Avatar({ src, label }: { src?: string; label: string }) {
   return <span className="avatar fallback">{label.slice(0, 1).toUpperCase()}</span>;
 }
 
-function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
+function LoginScreen({
+  onLogin,
+  initialError = '',
+}: {
+  onLogin: (session: { accessToken: string; refreshToken?: string }) => void;
+  initialError?: string;
+}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialError);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setError(initialError);
+  }, [initialError]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -319,7 +327,7 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
     setSubmitting(true);
     try {
       const payload = await login(email, password);
-      onLogin(payload.access_token);
+      onLogin({ accessToken: payload.access_token, refreshToken: payload.refresh_token });
     } catch (error) {
       const message = error instanceof ApiError && error.status === 403
         ? 'This account is not allowed to access Captro Admin.'
@@ -333,21 +341,35 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
   return (
     <main className="login-shell">
       <form className="login-card" onSubmit={submit}>
-        <div className="brand-mark">C</div>
-        <span className="eyebrow">Production access</span>
-        <h1>Captro Admin</h1>
-        <p>Private moderation access for approved Captro staff only.</p>
+        <div className="login-hero">
+          <div className="brand-mark">C</div>
+          <div>
+            <span className="eyebrow">Production moderation access</span>
+            <h1>Captro Admin</h1>
+            <p>Private moderation workspace for approved Captro staff only.</p>
+          </div>
+        </div>
+        <div className="login-security-panel">
+          <strong>Admin-only access</strong>
+          <ul className="login-check-list">
+            <li>Backend role checks run before any queue, post, message, or audit data loads</li>
+            <li>Only approved owner, admin, moderator, support, or viewer accounts can continue</li>
+            <li>No public signup, no demo mode, and no frontend-only admin bypass</li>
+          </ul>
+        </div>
         <ErrorBanner message={error} />
-        <label>
-          Email
-          <input autoComplete="email" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-        </label>
-        <label>
-          Password
-          <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-        </label>
-        <button className="primary-button full-width" disabled={submitting}>{submitting ? 'Checking access...' : 'Sign in'}</button>
-        <small>No public signup. Backend role checks run before any admin data loads.</small>
+        <div className="login-form-grid">
+          <label>
+            Email
+            <input autoComplete="email" inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+          </label>
+          <label>
+            Password
+            <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          </label>
+        </div>
+        <button className="primary-button full-width login-submit" disabled={submitting}>{submitting ? 'Checking access...' : 'Sign in to production'}</button>
+        <small>Use your real Captro staff account. Admin data stays blocked until the backend confirms your role.</small>
       </form>
     </main>
   );
@@ -1437,7 +1459,7 @@ function SettingsPage({ session }: { session: AdminSession }) {
 }
 
 function App() {
-  const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || '');
+  const [token, setToken] = useState(() => sessionStorage.getItem(ADMIN_TOKEN_KEY) || '');
   const [session, setSession] = useState<AdminSession | null>(null);
   const [booting, setBooting] = useState(true);
   const [accessError, setAccessError] = useState('');
@@ -1447,19 +1469,27 @@ function App() {
   const [dialog, setDialog] = useState<ActionDialogState | null>(null);
   const [toast, setToast] = useState('');
 
-  const loadSession = useCallback(async (nextToken: string) => {
+  const loadSession = useCallback(async (nextToken: string, nextRefreshToken?: string) => {
     setBooting(true);
     setAccessError('');
     try {
       const next = await AdminApi.me(nextToken);
+      const resolvedAccessToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || nextToken;
+      const resolvedRefreshToken = sessionStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || nextRefreshToken || '';
       setSession(next);
-      sessionStorage.setItem(TOKEN_KEY, nextToken);
-      setToken(nextToken);
+      sessionStorage.setItem(ADMIN_TOKEN_KEY, resolvedAccessToken);
+      if (resolvedRefreshToken) sessionStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, resolvedRefreshToken);
+      setToken(resolvedAccessToken);
     } catch (error) {
-      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+      sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
       setToken('');
       setSession(null);
-      setAccessError(error instanceof Error ? error.message : 'Access denied');
+      if (error instanceof ApiError && error.status === 403) {
+        setAccessError('This account signed in, but it is not approved for Captro Admin yet.');
+      } else {
+        setAccessError(error instanceof Error ? error.message : 'Access denied');
+      }
     } finally {
       setBooting(false);
     }
@@ -1471,7 +1501,8 @@ function App() {
   }, []);
 
   function logout() {
-    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
     setToken('');
     setSession(null);
   }
@@ -1494,7 +1525,14 @@ function App() {
   }
 
   if (booting) return <main className="login-shell"><div className="loading-card">Checking admin access...</div></main>;
-  if (!session || !token) return <LoginScreen onLogin={(nextToken) => void loadSession(nextToken)} />;
+  if (!session || !token) {
+    return (
+      <LoginScreen
+        initialError={accessError}
+        onLogin={({ accessToken, refreshToken }) => void loadSession(accessToken, refreshToken)}
+      />
+    );
+  }
 
   const content = (() => {
     if (active === 'dashboard') return <DashboardPage token={token} openReport={(id) => { setSelectedReportId(id); setActive('reports'); }} />;

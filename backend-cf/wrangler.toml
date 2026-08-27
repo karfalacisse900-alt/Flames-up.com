@@ -11,11 +11,15 @@ CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
 SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
 DATABASE_PRIMARY = "supabase_postgres"
 GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
-APPLE_OAUTH_AUDIENCES = "com.captro.app"
+APPLE_OAUTH_AUDIENCES = "com.karfala90.aura,com.captro.app,com.karfala90.frontend,com.karfala90.frontend.auth"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
 CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED = "true"
+CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS = "true"
 CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL = "https://api.flames-up.com"
+CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS = "false"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
+DATA_RESET_VERSION = "2026-06-15-production-reset-v1"
+DATA_RESET_AT = "2026-06-15T21:44:27Z"
 
 [observability]
 enabled = true
@@ -27,6 +31,7 @@ crons = ["17 5 * * *"]
 [ai]
 binding = "AI"
 
+# Legacy runtime compatibility only. Supabase Postgres is Aura's app database.
 [[d1_databases]]
 binding = "DB"
 database_name = "flames-up"
@@ -35,10 +40,6 @@ database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
 [[kv_namespaces]]
 binding = "KV"
 id = "cecde60b06c24da8abfa01a617aac9eb"
-
-[[r2_buckets]]
-binding = "MEDIA_BACKUP"
-bucket_name = "flames-up-media-backup"
 
 [[queues.producers]]
 binding = "MEDIA_MODERATION_QUEUE"
@@ -51,6 +52,9 @@ max_batch_timeout = 30
 
 [env.production]
 name = "flames-up-api"
+# MEDIA_BACKUP is optional at runtime. Keep it unbound in production until R2
+# is enabled for this account so it cannot block Cloudflare Images API deploys.
+r2_buckets = []
 
 [env.production.vars]
 ENVIRONMENT = "production"
@@ -59,11 +63,15 @@ CLOUDFLARE_ACCOUNT_ID = "2ca88b3551321681a5f9434814f38ec8"
 SUPABASE_URL = "https://cclgvxukwccvtgrbcwie.supabase.co"
 DATABASE_PRIMARY = "supabase_postgres"
 GOOGLE_OAUTH_CLIENT_IDS = "702354172189-dcg22qr9dqln7mqd1gi3q3bdbl9dajcd.apps.googleusercontent.com,702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
-APPLE_OAUTH_AUDIENCES = "com.captro.app"
+APPLE_OAUTH_AUDIENCES = "com.karfala90.aura,com.captro.app,com.karfala90.frontend,com.karfala90.frontend.auth"
 CLOUDFLARE_IMAGES_ACCOUNT_HASH = "DY-IgVdOm-0zb0K5ZFnpKA"
 CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED = "true"
+CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS = "true"
 CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL = "https://api.flames-up.com"
+CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS = "false"
 MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
+DATA_RESET_VERSION = "2026-06-15-production-reset-v1"
+DATA_RESET_AT = "2026-06-15T21:44:27Z"
 
 [env.production.observability]
 enabled = true
@@ -75,6 +83,7 @@ crons = ["17 5 * * *"]
 [env.production.ai]
 binding = "AI"
 
+# Legacy runtime compatibility only. Supabase Postgres is Aura's app database.
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "flames-up"
@@ -83,10 +92,6 @@ database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
 [[env.production.kv_namespaces]]
 binding = "KV"
 id = "cecde60b06c24da8abfa01a617aac9eb"
-
-[[env.production.r2_buckets]]
-binding = "MEDIA_BACKUP"
-bucket_name = "flames-up-media-backup"
 
 [[env.production.queues.producers]]
 binding = "MEDIA_MODERATION_QUEUE"

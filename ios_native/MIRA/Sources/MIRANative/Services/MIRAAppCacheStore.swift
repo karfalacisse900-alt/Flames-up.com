@@ -42,18 +42,33 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let title: String
   let bodyText: String
   let hashtags: [String]
+  let selectedDiscoverCategory: String?
   let selectedAudioTrack: MIRAAudiusTrack?
   let place: MIRADraftPlaceSnapshot?
   let broadLocation: MIRADraftBroadLocationSnapshot?
   let showBroadLocation: Bool
+  let isEditingPostDetails: Bool?
   let media: [MIRAPostDraftMediaSnapshot]
   let uploadStatus: String
   let errorMessage: String?
   let savedAt: String
 }
 
+private struct MIRAAppDataStateSnapshot: Codable, Hashable {
+  let database: String?
+  let mediaStorage: String?
+  let dataGeneration: String?
+  let dataResetAt: String?
+  let appDataCleared: Bool?
+}
+
 actor MIRAAppCacheStore {
   static let shared = MIRAAppCacheStore()
+
+  private static let dataGenerationDefaultsKey = "native.app.data_generation.v1"
+  private static let retiredHomeCacheCleanupKey = "native.retired_home_cache_cleanup.v1"
+
+  private var didClearPostDraftFromPreviousProcess = false
 
   private let shortCacheAge: TimeInterval = 60 * 60 * 24 * 7
   private let contentCacheAge: TimeInterval = 60 * 60 * 24 * 30
@@ -64,8 +79,51 @@ actor MIRAAppCacheStore {
   private let maxCachedComments = 80
   private let maxNotifications = 120
 
+  func reconcileServerDataState(api: MIRAAPIClient) async {
+    do {
+      let snapshot: MIRAAppDataStateSnapshot = try await api.get("system/data-state")
+      guard let generation = snapshot.dataGeneration?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !generation.isEmpty
+      else { return }
+
+      let defaults = UserDefaults.standard
+      let stored = defaults.string(forKey: Self.dataGenerationDefaultsKey)
+      guard stored != generation else { return }
+
+      await purgeContentCaches()
+      defaults.set(generation, forKey: Self.dataGenerationDefaultsKey)
+      MIRAPerformanceTimeline.mark("app_data_generation_reconciled", detail: snapshot.dataResetAt ?? "unknown")
+    } catch {
+      MIRAPerformanceTimeline.mark("app_data_generation_check_failed", detail: "will_keep_existing_cache")
+    }
+  }
+
+  func purgeContentCaches() async {
+    let preservedDraft = await loadPostDraft()
+    await MIRALocalJSONCache.removeAll()
+    if let preservedDraft {
+      await savePostDraft(preservedDraft)
+    }
+    await MIRAImageDiskCache.clear()
+    MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
+  }
+
+  func purgeRetiredHomeCachesIfNeeded() async {
+    let defaults = UserDefaults.standard
+    guard !defaults.bool(forKey: Self.retiredHomeCacheCleanupKey) else { return }
+
+    await MIRALocalJSONCache.remove(key: CacheKey.feed)
+    for category in CacheKey.discoverCategoryIds {
+      await MIRALocalJSONCache.remove(key: CacheKey.discoverPosts(category))
+    }
+    defaults.set(true, forKey: Self.retiredHomeCacheCleanupKey)
+    MIRAPerformanceTimeline.mark("retired_home_cache_cleared")
+  }
   func loadFeed() async -> [MIRAPost]? {
-    await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.feed, maxAge: contentCacheAge)
+    guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.feed, maxAge: contentCacheAge) else {
+      return nil
+    }
+    return await MIRAPostEngagementSync.apply(to: posts)
   }
 
   func saveFeed(_ posts: [MIRAPost]) async {
@@ -93,9 +151,13 @@ actor MIRAAppCacheStore {
     return Array(merged.prefix(maxFeedPosts))
   }
 
-  func mergeFreshFirstPage(existing: [MIRAPost], fresh: [MIRAPost], pageLimit: Int) -> [MIRAPost] {
-    guard !existing.isEmpty else { return Array(fresh.prefix(maxFeedPosts)) }
-    guard !fresh.isEmpty else { return existing }
+  func mergeFreshFirstPage(existing: [MIRAPost], fresh: [MIRAPost], pageLimit: Int) async -> [MIRAPost] {
+    guard !existing.isEmpty else {
+      return await MIRAPostEngagementSync.apply(to: Array(fresh.prefix(maxFeedPosts)))
+    }
+    guard !fresh.isEmpty else {
+      return await MIRAPostEngagementSync.apply(to: existing)
+    }
 
     let freshIds = Set(fresh.map(\.id))
     let preservedTail = existing.enumerated().compactMap { index, post -> MIRAPost? in
@@ -103,13 +165,13 @@ actor MIRAAppCacheStore {
       if index < pageLimit { return nil }
       return post
     }
-    let mergedFresh = mergeFreshPostsPreservingViewerState(existing: existing, fresh: fresh)
-    return Array((mergedFresh + preservedTail).prefix(maxFeedPosts))
+    let mergedFresh = await mergeFreshPostsPreservingViewerState(existing: existing, fresh: fresh)
+    return await MIRAPostEngagementSync.apply(to: Array((mergedFresh + preservedTail).prefix(maxFeedPosts)))
   }
 
-  func mergeFreshPostsPreservingViewerState(existing: [MIRAPost], fresh: [MIRAPost], maxCount: Int? = nil) -> [MIRAPost] {
+  func mergeFreshPostsPreservingViewerState(existing: [MIRAPost], fresh: [MIRAPost], maxCount: Int? = nil) async -> [MIRAPost] {
     guard !existing.isEmpty, !fresh.isEmpty else {
-      return Array(fresh.prefix(maxCount ?? fresh.count))
+      return await MIRAPostEngagementSync.apply(to: Array(fresh.prefix(maxCount ?? fresh.count)))
     }
     var existingById: [String: MIRAPost] = [:]
     for post in existing {
@@ -119,11 +181,14 @@ actor MIRAAppCacheStore {
       guard let cached = existingById[freshPost.id] else { return freshPost }
       return mergedPostPreservingViewerState(cached: cached, fresh: freshPost)
     }
-    return Array(merged.prefix(maxCount ?? merged.count))
+    return await MIRAPostEngagementSync.apply(to: Array(merged.prefix(maxCount ?? merged.count)))
   }
 
   func loadDiscoverPosts(category: String) async -> [MIRAPost]? {
-    await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.discoverPosts(category), maxAge: contentCacheAge)
+    guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.discoverPosts(category), maxAge: contentCacheAge) else {
+      return nil
+    }
+    return await MIRAPostEngagementSync.apply(to: posts)
   }
 
   func saveDiscoverPosts(_ posts: [MIRAPost], category: String) async {
@@ -140,7 +205,8 @@ actor MIRAAppCacheStore {
         best = preferredPost(best, posts.first { $0.id == postId })
       }
     }
-    return best
+    guard let best else { return nil }
+    return await MIRAPostEngagementSync.apply(to: best)
   }
 
   func loadDiscoverStories() async -> [MIRAStoryGroup]? {
@@ -160,7 +226,10 @@ actor MIRAAppCacheStore {
   }
 
   func loadProfilePosts(userId: String) async -> [MIRAPost]? {
-    await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.profilePosts(userId), maxAge: profileCacheAge)
+    guard let posts = await MIRALocalJSONCache.load([MIRAPost].self, key: CacheKey.profilePosts(userId), maxAge: profileCacheAge) else {
+      return nil
+    }
+    return await MIRAPostEngagementSync.apply(to: posts)
   }
 
   func saveProfilePosts(_ posts: [MIRAPost], userId: String) async {
@@ -217,6 +286,12 @@ actor MIRAAppCacheStore {
 
   func savePostDraft(_ draft: MIRAPostDraftSnapshot) async {
     await MIRALocalJSONCache.save(draft, key: CacheKey.postDraft)
+  }
+
+  func clearPostDraftFromPreviousProcessIfNeeded() async {
+    guard !didClearPostDraftFromPreviousProcess else { return }
+    didClearPostDraftFromPreviousProcess = true
+    await clearPostDraft()
   }
 
   func storePostDraftMedia(_ mediaItems: [MIRAPickedMedia]) async -> [MIRAPostDraftMediaSnapshot] {
@@ -279,19 +354,38 @@ actor MIRAAppCacheStore {
   private func preferredPost(_ lhs: MIRAPost?, _ rhs: MIRAPost?) -> MIRAPost? {
     guard let lhs else { return rhs }
     guard let rhs else { return lhs }
-    let lhsScore = (lhs.likesCount ?? 0) + (lhs.commentsCount ?? 0) + (lhs.savesCount ?? 0)
-    let rhsScore = (rhs.likesCount ?? 0) + (rhs.commentsCount ?? 0) + (rhs.savesCount ?? 0)
-    return rhsScore >= lhsScore ? rhs : lhs
+    return mergedPostPreservingViewerState(cached: lhs, fresh: rhs)
   }
 
   private func mergedPostPreservingViewerState(cached: MIRAPost, fresh: MIRAPost) -> MIRAPost {
     fresh.updating(
-      liked: fresh.isLiked ?? cached.isLiked,
-      likesCount: fresh.likesCount ?? cached.likesCount,
+      liked: mergedViewerFlag(cached: cached.viewerLikedValue, fresh: fresh.viewerLikedValue, cachedCount: cached.likesCount, freshCount: fresh.likesCount),
+      likesCount: mergedEngagementCount(
+        cached: cached.likesCount,
+        fresh: fresh.likesCount,
+        cachedFlag: cached.viewerLikedValue,
+        freshFlag: fresh.viewerLikedValue
+      ),
       commentsCount: fresh.commentsCount ?? cached.commentsCount,
-      saved: fresh.isSaved ?? cached.isSaved ?? cached.saved?.value,
-      savesCount: fresh.savesCount ?? cached.savesCount
+      saved: mergedViewerFlag(cached: cached.viewerSavedValue, fresh: fresh.viewerSavedValue, cachedCount: cached.savesCount, freshCount: fresh.savesCount),
+      savesCount: mergedEngagementCount(
+        cached: cached.savesCount,
+        fresh: fresh.savesCount,
+        cachedFlag: cached.viewerSavedValue,
+        freshFlag: fresh.viewerSavedValue
+      )
     )
+  }
+
+  private func mergedViewerFlag(cached: Bool?, fresh: Bool?, cachedCount _: Int?, freshCount _: Int?) -> Bool? {
+    if let fresh { return fresh }
+    return cached
+  }
+
+  private func mergedEngagementCount(cached: Int?, fresh: Int?, cachedFlag _: Bool?, freshFlag _: Bool?) -> Int? {
+    guard cached != nil || fresh != nil else { return nil }
+    if let fresh { return max(0, fresh) }
+    return max(0, cached ?? 0)
   }
 
   private func nowISO() -> String {
@@ -300,10 +394,10 @@ actor MIRAAppCacheStore {
 }
 
 private enum CacheKey {
-  static let feed = "native.main.feed.v4.cache_first"
-  static let discoverStories = "native.discover.stories.v4.cache_first"
-  static let currentProfile = "native.profile.me.v3.cache_first"
-  static let notifications = "native.notifications.v2.cache_first"
+  static let feed = "native.main.feed.v7.cache_first"
+  static let discoverStories = "native.discover.stories.v6.cache_first"
+  static let currentProfile = "native.profile.me.v5.cache_first"
+  static let notifications = "native.notifications.v4.cache_first"
   static let settings = "native.settings.v1.cache_first"
   static let postDraft = "native.post_draft.v1.cache_first"
   static let discoverCategoryIds = [
@@ -317,19 +411,19 @@ private enum CacheKey {
   ]
 
   static func discoverPosts(_ category: String) -> String {
-    "native.discover.posts.v4.cache_first.\(category)"
+    "native.discover.posts.v7.cache_first.\(category)"
   }
 
   static func profilePosts(_ userId: String) -> String {
-    "native.profile.posts.v3.cache_first.\(userId)"
+    "native.profile.posts.v6.cache_first.\(userId)"
   }
 
   static func viewedProfile(_ userId: String) -> String {
-    "native.profile.user.v3.cache_first.\(userId)"
+    "native.profile.user.v5.cache_first.\(userId)"
   }
 
   static func comments(_ postId: String) -> String {
-    "native.comments.v1.cache_first.\(postId)"
+    "native.comments.v3.cache_first.\(postId)"
   }
 }
 

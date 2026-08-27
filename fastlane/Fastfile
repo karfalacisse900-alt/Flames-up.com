@@ -1,0 +1,20 @@
+default_platform(:ios)
+
+platform :ios do
+  desc "Read the latest TestFlight build number from App Store Connect and write BUILD_NUMBER=<latest+1> to $GITHUB_ENV. Never invents a build number when the API can't be reached."
+  lane :next_build_number do
+    api_key_path = ENV.fetch("ASC_API_KEY_JSON")
+    bundle_id = ENV.fetch("BUNDLE_ID")
+    github_env = ENV.fetch("GITHUB_ENV")
+
+    latest = latest_testflight_build_number(
+      api_key_path: api_key_path,
+      app_identifier: bundle_id
+    )
+    next_build = latest.to_i + 1
+
+    UI.message("Latest App Store Connect build for #{bundle_id} is #{latest}; using #{next_build} for this upload.")
+
+    File.open(github_env, "a") { |file| file.puts("BUILD_NUMBER=#{next_build}") }
+  end
+end

@@ -9,7 +9,7 @@ import MetricKit
 #endif
 
 public enum MIRAApplePerformanceLogger {
-  private static let subsystem = Bundle.main.bundleIdentifier ?? "com.captro.ios"
+  private static let subsystem = Bundle.main.bundleIdentifier ?? "com.karfala90.aura"
   private static let logger = Logger(subsystem: subsystem, category: "performance")
   private static let signpostLog = OSLog(subsystem: subsystem, category: "performance")
 
@@ -274,6 +274,14 @@ public enum MIRALocalJSONCache {
     await Task.detached(priority: .utility) {
       guard let fileURL = cacheFileURL(for: key) else { return }
       try? FileManager.default.removeItem(at: fileURL)
+    }.value
+  }
+
+  public static func removeAll() async {
+    await Task.detached(priority: .utility) {
+      guard let directory = cacheDirectory() else { return }
+      try? FileManager.default.removeItem(at: directory)
+      try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }.value
   }
 

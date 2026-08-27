@@ -16,6 +16,31 @@ public extension Notification.Name {
   static let miraPlaybackMayResume = Notification.Name("mira.playback.resumeVisible")
 }
 
+public enum MIRAStreamPlaybackResolver {
+  private static let keychain = MIRAKeychainSessionProvider()
+
+  public static func playbackInfo(for uid: String) async throws -> (info: MIRAStreamPlaybackInfo, status: Int, bytes: Int) {
+    let cleanUID = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+    let endpoint = MIRAProductionBackend.apiURL("stream/video/\(cleanUID)")
+    var request = URLRequest(url: endpoint)
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
+    request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
+    if let token = await keychain.accessToken(), !token.isEmpty {
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
+    return (info, status, data.count)
+  }
+}
+
 @MainActor
 public final class MIRAVideoPrewarmManager {
   public static let shared = MIRAVideoPrewarmManager()
@@ -24,7 +49,7 @@ public final class MIRAVideoPrewarmManager {
   private var preparedPlayers: [String: AVPlayer] = [:]
   private var preparedOrder: [String] = []
   private var inFlight = Set<String>()
-  private let maxMetadataPreloads = 8
+  private let maxMetadataPreloads = 16
   private let maxPreparedPlayers = 5
 
   private init() {}
@@ -50,19 +75,21 @@ public final class MIRAVideoPrewarmManager {
   }
 
   public func streamInfo(for url: String) -> MIRAStreamPlaybackInfo? {
-    guard let info = cachedStreamInfo[normalized(url)], info.ready != false else { return nil }
+    guard let info = cachedStreamInfo[normalized(url)] else { return nil }
+    let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard info.ready != false || !hls.isEmpty else { return nil }
     return info
   }
 
   private func prewarm(url: String, shouldPreparePlayer: Bool) {
     let key = normalized(url)
     guard !key.isEmpty, !inFlight.contains(key) else {
-      if shouldPreparePlayer, let info = cachedStreamInfo[key], info.ready != false, let hls = info.hls, let hlsURL = URL(string: hls) {
+      if shouldPreparePlayer, let info = cachedStreamInfo[key], let hls = info.hls, let hlsURL = URL(string: hls) {
         preparePlayer(for: key, playbackURL: hlsURL)
       }
       return
     }
-    if let info = cachedStreamInfo[key], info.ready != false {
+    if let info = cachedStreamInfo[key], (info.ready != false || info.hls?.isEmpty == false) {
       if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {
         preparePlayer(for: key, playbackURL: hlsURL)
       }
@@ -101,26 +128,13 @@ public final class MIRAVideoPrewarmManager {
 
   private func resolveCloudflareStream(for key: String, shouldPreparePlayer: Bool) async {
     let uid = String(key.dropFirst("cfstream:".count))
-    let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
     do {
-      let data: Data
-      let response: URLResponse
-      do {
-        var request = URLRequest(url: endpoint)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      } catch {
-        throw error
-      }
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-      guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
-
-      let decoder = JSONDecoder()
-      decoder.keyDecodingStrategy = .convertFromSnakeCase
-      let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
+      let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
+      let info = result.info
       inFlight.remove(key)
-      if info.ready != false {
+      let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if info.ready != false || !hls.isEmpty {
         cachedStreamInfo[key] = info
         MIRAApplePerformanceLogger.event("video_ready_to_play", detail: "stream_info")
         if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {

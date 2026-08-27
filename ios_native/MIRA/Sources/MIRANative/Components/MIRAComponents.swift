@@ -1143,7 +1143,7 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 
   private var playbackTaskID: String {
-    "\(url)|\(shouldPlay ? "play" : "poster")|\(isMuted ? "muted" : "sound")"
+    "\(url)|\(isMuted ? "muted" : "sound")"
   }
 
   private var placeholder: some View {
@@ -1265,27 +1265,17 @@ private struct MIRAResolvedVideoPlayer: View {
     }
 
     let uid = String(url.dropFirst("cfstream:".count))
-    let endpoint = MIRAProductionBackend.apiURL("stream/video/\(uid)")
 
     do {
       let metric = await MIRAPerformanceMetric.begin(category: "network", label: "STREAM \(uid)")
-      let data: Data
-      let response: URLResponse
       do {
-        var request = URLRequest(url: endpoint)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+        let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
+        await metric.finish(status: "\(result.status)", bytes: result.bytes)
+        applyStreamPlaybackInfo(result.info, createPlayer: createPlayer)
       } catch {
         await metric.finish(status: "error")
         throw error
       }
-      let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-      await metric.finish(status: "\(status)", bytes: data.count)
-      guard (200..<300).contains(status) else { throw MIRAAPIError.badStatus(status) }
-      let decoder = JSONDecoder()
-      decoder.keyDecodingStrategy = .convertFromSnakeCase
-      let info = try decoder.decode(MIRAStreamPlaybackInfo.self, from: data)
-      applyStreamPlaybackInfo(info, createPlayer: createPlayer)
     } catch {
       if createPlayer {
         failed = false
@@ -1298,7 +1288,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
     thumbnailURL = info.thumbnail
-    if createPlayer, let hls = info.hls, let hlsURL = URL(string: hls), info.ready != false {
+    if createPlayer, let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines), !hls.isEmpty, let hlsURL = URL(string: hls) {
       let item = AVPlayerItem(url: hlsURL)
       configurePlayerItemForFastStoryPlayback(item)
       let avPlayer = AVPlayer(playerItem: item)
@@ -1646,11 +1636,11 @@ public struct MIRAAdaptiveMediaView: View {
 
 public enum MIRAMediaSizing {
   public static let feedTargetWidth: CGFloat = 1080
-  public static let feedTargetHeight: CGFloat = 1440
-  public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
+  public static let feedTargetHeight: CGFloat = 1920
+  public static let feedPreviewRatio: CGFloat = 5.0 / 4.0
   public static let feedShortPortraitRatio: CGFloat = 5.0 / 4.0
   public static let feedTallRatio: CGFloat = 3.0 / 2.0
-  public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
+  public static let feedImmersiveRatio: CGFloat = 16.0 / 9.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
@@ -1737,7 +1727,7 @@ public enum MIRAMediaSizing {
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
     let minHeight = width * feedShortPortraitRatio
-    let maxHeight = min(width * feedTallRatio, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
+    let maxHeight = min(width * feedImmersiveRatio, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
     return min(max(height, minHeight), maxHeight)
   }
 
@@ -1790,6 +1780,7 @@ public enum MIRAMediaSizing {
     if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
     if containsRatio("3", "4", in: decoded) { return 4.0 / 3.0 }
     if containsRatio("2", "3", in: decoded) { return 3.0 / 2.0 }
+    if containsRatio("9", "16", in: decoded) { return 16.0 / 9.0 }
     if decoded.contains("portrait") { return feedPreviewRatio }
     return nil
   }

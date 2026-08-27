@@ -1,0 +1,11 @@
+-- Remote migration history placeholder.
+-- Production already has migration version 20260625142156 recorded in
+-- supabase_migrations.schema_migrations, but the corresponding SQL file
+-- was missing from Git history.
+--
+-- This placeholder restores migration-chain consistency so production
+-- deploys can continue to use a migration-first workflow from GitHub.
+--
+-- If the exact original SQL is recovered later, replace this file with the
+-- true migration contents in a controlled follow-up and verify that local,
+-- staging, and production schemas remain aligned.

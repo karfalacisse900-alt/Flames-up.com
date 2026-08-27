@@ -1,59 +1,55 @@
-# Captro TestFlight Public Beta Setup
+# Aura Mobile TestFlight Public Beta Setup
 
-Captro builds are uploaded to TestFlight by the GitHub Actions workflow `Native iOS TestFlight`.
+Aura Mobile builds are uploaded to TestFlight by the GitHub Actions workflow `Aura iOS TestFlight` (`.github/workflows/native-ios-testflight.yml`), triggered manually or by pushing an `ios-v*` tag.
+
 Apple still requires the first external TestFlight build to pass TestFlight App Review before a public link can be opened.
 
-Production Captro iOS bundle ID: `com.captro.app`.
-
-Before running the first TestFlight upload for this new app record, create an App Store distribution provisioning profile for `com.captro.app` and update the GitHub Actions provisioning profile secret to match it.
+iOS bundle ID: `com.karfala90.aura`. App Store Connect app: **Aura Proof Network** (`6804671675`). This is a clean app record separate from Captroo.
 
 ## Recommended Public Beta Group
 
-- Group name: `Captro Public Beta`
+- Group name: `Aura Internal Beta` for immediate internal testing; create `Aura Public Beta` later for external testing.
 - Public link access: `Open to Anyone`
 - Starting tester limit: `300`
 - Increase later if crashes and feedback look healthy.
 
 ## Beta App Description
 
-Captro is a social app for sharing real photo moments, short stories, Discover posts, comments, chat, and profile updates.
+> The copy below describes the Experimental Devnet build. Wallet and document parsing are connected to authenticated services. Proof issuance, on-chain purchase proofs, and reputation consensus remain unavailable and must still show truthful unavailable states.
 
-This beta is focused on testing the core Captro experience before public launch:
+Aura Mobile is a native iOS Devnet app with a local encrypted Rust wallet, real Aura chain-state reads, locally signed AUR transfers, and authenticated receipt/invoice parsing.
 
-- Creating an account and choosing a username
-- Posting photos and multi-photo carousels
-- Viewing Home Feed and Discover
-- Opening post details, liking, commenting, saving, and reporting
-- Creating and viewing Stories
-- Using chat and media messages
-- Editing profile information
-- Testing blocking, reporting, and safety flows
+This beta is focused on testing:
 
-Please report crashes, broken media, slow loading, login issues, posting problems, chat problems, or anything that feels confusing.
+- Creating an account and signing in
+- Navigating Home, Scan, Proofs, Reputation, and Wallet
+- Reading real Devnet balance, nonce, fee, height, peers, mempool, latency, history, and confirmations
+- Signing AUR transfers locally and broadcasting only canonical signed transaction bytes
+- Parsing receipts/invoices through the authenticated provider while keeping proof issuance unavailable
+- Confirming that unfinished proof/reputation features show a clear, honest empty state rather than fake data
+- App stability, dark mode, and general navigation
 
-Captro is still in beta, so some content, media loading, moderation, or notification behavior may change as we improve the app.
+Please report crashes, broken navigation, login issues, or any screen that shows data that looks invented rather than a genuine empty state.
+
+Aura Mobile is still Experimental Devnet software. It is not Mainnet, not production-ready, and does not yet issue on-chain purchase proofs or reputation changes.
 
 ## What To Test
 
 Please focus on:
 
-- Sign up, log in, and username onboarding
-- Creating photo posts and multi-photo posts
-- Story recording, story upload, and story playback
-- Feed scrolling, media loading, likes, comments, saves, and post menus
-- Discover filters, Discover post opening, and post detail interactions
-- Profile editing, profile posts, bookmarks, and pinned/private post states
-- Chat text messages and photo/video media messages
-- Report and block flows
+- Sign up, log in, and account flows
+- Tab navigation across Home, Scan, Proofs, Reputation, and Wallet
+- Unlock the encrypted local wallet and confirm the real Devnet balance/history loads
+- Send a small Devnet transfer, then confirm pending and mined confirmation states
+- Scan a receipt or invoice and compare extracted fields with the document
+- Empty-state screens remain honest (no invented scores, balances, proofs, or history)
 - App stability after closing/reopening the app
 - Dark mode, Settings, and cache clearing
 
 Please send feedback for:
 
 - Crashes
-- Blank images or videos
-- Videos stuck on processing
-- Duplicate likes/comments/messages
+- Any screen showing a fabricated Aura Score, AUR balance, transaction, proof, or reputation event
 - Slow screens
 - Broken buttons
 - Login or signup issues
@@ -77,12 +73,12 @@ Suggested contact email:
 
 ## Sign-In / Test Account Info
 
-Captro supports normal account creation and login. No special invite code is required for beta testers.
+Aura Mobile supports normal account creation and login. No special invite code is required for beta testers.
 
 Suggested App Review note:
 
 ```
-Testers can create a new Captro account inside the app using email/password or supported social sign-in.
+Testers can create a new Aura account inside the app using email/password or supported social sign-in.
 
 No paid account is required.
 No invite code is required.
@@ -98,7 +94,7 @@ Create a dedicated non-admin test account before submitting the first external b
 
 ## App Store Connect Steps
 
-1. Go to `My Apps -> Captro -> TestFlight`.
+1. Go to `My Apps -> Aura Proof Network -> TestFlight`.
 2. Confirm the latest GitHub Actions build is processed and available.
 3. Fill in `Test Information`:
    - Beta App Description: use the copy above.
@@ -106,38 +102,25 @@ Create a dedicated non-admin test account before submitting the first external b
    - Contact Info: use owner/developer contact info.
    - Sign-in/test account info: use the review note above.
 4. Create or verify an internal testing group.
-5. Create an external testing group named `Captro Public Beta`.
-6. Add the latest build to `Captro Public Beta`.
+5. After internal testing is stable, create an external testing group named `Aura Public Beta` and keep `BETA_GROUP` in the workflow synchronized with the group being targeted.
+6. Add the latest build to the group.
 7. Paste the `What To Test` copy above.
 8. Submit the build for TestFlight App Review.
 9. After Apple approves it, open the external group.
 10. Click `Create Public Link`.
 11. Choose `Open to Anyone`.
 12. Set the tester limit to `300` to start.
-13. Copy the public link and share it on TikTok, Instagram, SMS, Discord, and other channels.
+13. Copy the public link and share it once you're ready to promote it.
 
 ## Public Link Sharing Copy
 
 Short version:
 
 ```
-Captro beta is open on TestFlight. Join here:
+Aura Mobile beta is open on TestFlight. Join here:
 [PASTE PUBLIC TESTFLIGHT LINK]
 
-You need Apple’s TestFlight app installed. Spots are limited.
-```
-
-Social version:
-
-```
-Captro beta is live on TestFlight.
-
-Post real photo moments, try Stories, Discover, chat, profiles, and help shape the app before launch.
-
-Join here:
-[PASTE PUBLIC TESTFLIGHT LINK]
-
-You need the TestFlight app from the App Store.
+You need Apple's TestFlight app installed. Spots are limited.
 ```
 
 ## Notes

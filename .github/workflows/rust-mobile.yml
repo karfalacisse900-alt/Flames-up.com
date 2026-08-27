@@ -1,0 +1,30 @@
+name: Rust Mobile Core
+
+on:
+  pull_request:
+    paths:
+      - "ios_native/MIRA/rust/**"
+      - ".github/workflows/rust-mobile.yml"
+  push:
+    paths:
+      - "ios_native/MIRA/rust/**"
+      - ".github/workflows/rust-mobile.yml"
+
+jobs:
+  test:
+    name: cargo test (${{ matrix.crate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - ios_native/MIRA/rust/mira_core
+          - ios_native/MIRA/rust/vendor/aura-core
+          - ios_native/MIRA/rust/vendor/aura-wallet
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: cargo test
+        run: cargo test --manifest-path "${{ matrix.crate }}/Cargo.toml"

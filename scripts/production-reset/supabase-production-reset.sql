@@ -18,6 +18,13 @@
 
 begin;
 
+create temporary table if not exists captro_reset_context (
+  started_at timestamptz not null
+) on commit drop;
+
+truncate table captro_reset_context;
+insert into captro_reset_context(started_at) values (transaction_timestamp());
+
 create table if not exists public.production_reset_events (
   id uuid primary key default gen_random_uuid(),
   mode text not null,
@@ -43,27 +50,40 @@ end $$;
 do $$
 declare
   reset_mode text := coalesce(current_setting('app.reset_mode', true), 'dry_run');
+  keep_emails text[] := string_to_array(lower(replace(coalesce(current_setting('app.keep_emails', true), ''), ' ', '')), ',');
+  keep_auth_user_ids text[] := string_to_array(replace(coalesce(current_setting('app.keep_auth_user_ids', true), ''), ' ', ''), ',');
   table_names text[] := array[
+    'app_story_thoughts',
+    'app_story_views',
+    'app_story_likes',
+    'app_stories',
+    'app_favorite_sounds',
+    'app_hidden_sounds',
+    'app_client_events',
+    'post_comment_likes',
     'app_moderation_results',
+    'app_moderation_jobs',
+    'app_moderation_events',
     'app_media_assets',
     'app_moderation_actions',
     'app_audit_logs',
     'app_reports',
     'app_notifications',
     'app_push_tokens',
+    'app_account_verification_tokens',
     'app_group_messages',
     'app_group_chat_members',
     'app_group_chats',
     'app_messages',
+    'app_friendships',
+    'app_friend_requests',
     'app_blocks',
     'app_post_places',
     'post_comments',
     'app_post_interactions',
     'app_follows',
     'app_documents',
-    'app_posts',
-    'app_account_identities',
-    'app_users'
+    'app_posts'
   ];
   table_name text;
   affected bigint;
@@ -89,6 +109,65 @@ begin
     insert into public.production_reset_events(mode, table_name, rows_affected)
     values (reset_mode, table_name, affected);
   end loop;
+
+  keep_emails := array_remove(keep_emails, '');
+  keep_auth_user_ids := array_remove(keep_auth_user_ids, '');
+
+  create temporary table if not exists captro_reset_keep_users(id text primary key) on commit drop;
+  truncate table captro_reset_keep_users;
+
+  if to_regclass('public.app_users') is not null then
+    insert into captro_reset_keep_users(id)
+    select distinct u.id
+    from public.app_users u
+    where (coalesce(lower(u.email), '') = any(keep_emails))
+       or (u.supabase_user_id::text = any(keep_auth_user_ids))
+    on conflict do nothing;
+
+    if to_regclass('auth.users') is not null then
+      insert into captro_reset_keep_users(id)
+      select distinct u.id
+      from public.app_users u
+      join auth.users au on au.id = u.supabase_user_id
+      where coalesce(lower(au.email), '') = any(keep_emails)
+         or au.id::text = any(keep_auth_user_ids)
+      on conflict do nothing;
+    end if;
+
+    if to_regclass('public.app_account_identities') is not null then
+      if reset_mode = 'dry_run' then
+        select count(*) into affected
+        from public.app_account_identities i
+        where not exists (select 1 from captro_reset_keep_users keep where keep.id = i.user_id);
+      else
+        delete from public.app_account_identities i
+        where not exists (select 1 from captro_reset_keep_users keep where keep.id = i.user_id);
+        get diagnostics affected = row_count;
+      end if;
+
+      insert into public.production_reset_events(mode, table_name, rows_affected)
+      values (reset_mode, 'app_account_identities', affected);
+    else
+      insert into public.production_reset_events(mode, table_name, rows_affected)
+      values (reset_mode, 'app_account_identities (missing)', 0);
+    end if;
+
+    if reset_mode = 'dry_run' then
+      select count(*) into affected
+      from public.app_users u
+      where not exists (select 1 from captro_reset_keep_users keep where keep.id = u.id);
+    else
+      delete from public.app_users u
+      where not exists (select 1 from captro_reset_keep_users keep where keep.id = u.id);
+      get diagnostics affected = row_count;
+    end if;
+
+    insert into public.production_reset_events(mode, table_name, rows_affected)
+    values (reset_mode, 'app_users', affected);
+  else
+    insert into public.production_reset_events(mode, table_name, rows_affected)
+    values (reset_mode, 'app_users (missing)', 0);
+  end if;
 end $$;
 
 do $$
@@ -125,6 +204,7 @@ end $$;
 
 select mode, table_name, rows_affected, created_at
 from public.production_reset_events
+where created_at >= (select started_at from captro_reset_context)
 order by created_at desc, table_name asc
 limit 100;
 

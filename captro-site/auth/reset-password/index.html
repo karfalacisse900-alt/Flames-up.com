@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Captro | Reset password</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .reset-shell {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px 18px;
+        background:
+          radial-gradient(circle at top, rgba(37, 66, 43, 0.12), transparent 48%),
+          #f7f3ed;
+      }
+
+      .reset-card {
+        width: min(100%, 520px);
+        padding: 32px 28px;
+        border-radius: 32px;
+        background: rgba(255, 252, 248, 0.94);
+        box-shadow: 0 26px 80px rgba(18, 29, 22, 0.14);
+        text-align: left;
+      }
+
+      .reset-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border-radius: 999px;
+        background: rgba(30, 56, 35, 0.08);
+        color: #1c3522;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .reset-card h1 {
+        margin: 20px 0 12px;
+        font-size: clamp(34px, 6vw, 54px);
+        line-height: 0.95;
+        letter-spacing: -0.03em;
+        color: #111111;
+      }
+
+      .reset-card p {
+        margin: 0;
+        color: rgba(17, 17, 17, 0.72);
+        font-size: 17px;
+        line-height: 1.55;
+      }
+
+      .reset-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        margin-top: 28px;
+      }
+
+      .reset-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 56px;
+        border: 0;
+        border-radius: 999px;
+        background: #1d3523;
+        color: #fff;
+        font-size: 16px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      .reset-button.secondary {
+        background: rgba(29, 53, 35, 0.08);
+        color: #1d3523;
+      }
+
+      .reset-status {
+        margin-top: 18px;
+        font-size: 14px;
+        color: rgba(17, 17, 17, 0.58);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="reset-shell">
+      <section class="reset-card">
+        <span class="reset-kicker">Captro account</span>
+        <h1>Reset your password</h1>
+        <p>
+          We’re opening Captro so you can choose a new password. If the app does not open
+          automatically, use the button below.
+        </p>
+
+        <div class="reset-actions">
+          <a id="open-app" class="reset-button" href="#">Open Captro</a>
+          <button id="copy-link" class="reset-button secondary" type="button">Copy reset link</button>
+        </div>
+
+        <div class="reset-status" id="status">Preparing your reset link…</div>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        const query = window.location.search || "";
+        const hash = window.location.hash || "";
+        const deepLink = `captro://auth/reset-password${query}${hash}`;
+        const openApp = document.getElementById("open-app");
+        const copyLink = document.getElementById("copy-link");
+        const status = document.getElementById("status");
+
+        openApp.setAttribute("href", deepLink);
+
+        const openDeepLink = () => {
+          window.location.replace(deepLink);
+        };
+
+        const updateStatus = (message) => {
+          status.textContent = message;
+        };
+
+        copyLink.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(deepLink);
+            updateStatus("Reset link copied. Open Captro and paste the link if needed.");
+          } catch (error) {
+            updateStatus("Could not copy the link automatically. Use the Open Captro button.");
+          }
+        });
+
+        updateStatus("Opening Captro…");
+        setTimeout(openDeepLink, 120);
+        setTimeout(() => {
+          updateStatus("If nothing happened, tap Open Captro.");
+        }, 1800);
+      })();
+    </script>
+  </body>
+</html>

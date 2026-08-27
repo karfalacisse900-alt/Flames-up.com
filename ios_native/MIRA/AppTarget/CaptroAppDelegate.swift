@@ -7,9 +7,14 @@ final class MIRAAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
+    MIRAApplePerformanceLogger.event("application_launch_started")
     MIRAAppleRuntimeDiagnostics.start()
+    _ = MIRANativeBridgeDiagnostics.verifyStartupLinkage()
+    MIRAApplePerformanceLogger.event("background_task_registration_started")
     MIRABackgroundTaskCoordinator.shared.register()
+    MIRAApplePerformanceLogger.event("background_task_registration_finished")
     UNUserNotificationCenter.current().delegate = self
+    MIRAApplePerformanceLogger.event("application_launch_finished")
     return true
   }
 

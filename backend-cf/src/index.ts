@@ -1,9 +1,18 @@
-// Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
+// Aura Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
-import { RtcRole, RtcTokenBuilder } from 'agora-token';
+import { createAuraRoutes } from './aura';
+import {
+  auraCommunityFeedCursorFilter,
+  auraCommunityFeedRowCursor,
+  collectAuraCommunityCursorPage,
+  decodeAuraCommunityFeedCursor,
+  encodeAuraCommunityFeedCursor,
+  normalizeAuraCommunityCity,
+  type AuraCommunityFeedCursor,
+} from './aura-community-pagination.js';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -32,9 +41,11 @@ interface Env {
   CLOUDFLARE_IMAGES_FEED_VARIANT?: string;
   CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT?: string;
   CLOUDFLARE_IMAGES_REQUIRE_SIGNED_URLS?: string;
+  CLOUDFLARE_IMAGES_PRESERVE_CONTENT_CREDENTIALS?: string;
   CLOUDFLARE_IMAGE_TRANSFORMS_ENABLED?: string;
   CLOUDFLARE_IMAGE_TRANSFORM_BASE_URL?: string;
   CLOUDFLARE_STREAM_TOKEN?: string;
+  CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   EMAIL_VERIFICATION_BASE_URL?: string;
@@ -45,6 +56,8 @@ interface Env {
   MALWARE_SCANNER_TOKEN?: string;
   MEDIA_MAX_IMAGE_BYTES?: string;
   MEDIA_MAX_VIDEO_BYTES?: string;
+  C2PA_VERIFIER_URL?: string;
+  C2PA_VERIFIER_TOKEN?: string;
   POST_ASSIST_MODEL?: string;
   MAPBOX_ACCESS_TOKEN?: string;
   ENVIRONMENT?: string;
@@ -54,7 +67,9 @@ interface Env {
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
   SUPABASE_URL?: string;
+  SUPABASE_AUTH_ANON_KEY?: string;
   SUPABASE_ANON_KEY?: string;
+  SUPABASE_PUBLISHABLE_KEY?: string;
   SUPABASE_JWT_ISSUER?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
   DATABASE_PRIMARY?: string;
@@ -68,19 +83,17 @@ interface Env {
   TWILIO_VERIFY_SERVICE_SID?: string;
   TWILIO_SERVICE_SID?: string;
   TWILIO_FROM_PHONE?: string;
-  AGORA_APP_ID?: string;
-  AGORA_APP_CERTIFICATE?: string;
-  AGORA_TOKEN_TTL_SECONDS?: string;
   APNS_TEAM_ID?: string;
   APNS_KEY_ID?: string;
   APNS_BUNDLE_ID?: string;
   APNS_PRIVATE_KEY?: string;
-  APNS_VOIP_PRIVATE_KEY?: string;
   APNS_ENVIRONMENT?: string;
   MEDIA_BACKUP_MAX_VIDEO_BYTES?: string;
   PUBLIC_API_BASE_URL?: string;
   SOURCE_COMMIT?: string;
   WORKER_VERSION?: string;
+  DATA_RESET_VERSION?: string;
+  DATA_RESET_AT?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_PUBLISHABLE_KEY?: string;
   STRIPE_DEFAULT_PRICE_ID?: string;
@@ -92,27 +105,34 @@ interface Env {
   MUSIC_DAILY_GENERATION_LIMIT?: string;
   MUSIC_GENERATION_COOLDOWN_SECONDS?: string;
   ABUSE_SIGNAL_SECRET?: string;
-  OWNERSHIP_ANCHOR_PROVIDER?: string;
-  EVM_RPC_URL?: string;
-  EVM_CONTRACT_ADDRESS?: string;
-  SOLANA_RPC_URL?: string;
-  IPFS_API_URL?: string;
-  ARWEAVE_GATEWAY?: string;
+  AURA_MOBILE_GATEWAY_URL?: string;
+  AURA_MOBILE_GATEWAY_URLS?: string;
+  AURA_MOBILE_GATEWAY_TOKEN?: string;
+  VERYFI_CLIENT_ID?: string;
+  VERYFI_CLIENT_SECRET?: string;
+  VERYFI_USERNAME?: string;
+  VERYFI_API_KEY?: string;
+  VERYFI_BASE_URL?: string;
 }
 
 type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string } };
 
 const app = new Hono<HonoApp>();
 const API_VERSION = '2.0';
-const WORKER_NAME = 'captro-api';
+// Public health identity. The deployed Worker resource name remains the legacy
+// `flames-up-api` identifier in wrangler.toml for routing compatibility.
+const WORKER_NAME = 'aura-api';
 
 // Root handler
-app.get('/', (c) => c.json({ name: 'Captro API', version: API_VERSION, status: 'live', docs: '/api/health' }));
+app.get('/', (c) => c.json({ name: 'Aura API', version: API_VERSION, status: 'live', docs: '/api/health' }));
 
 const api = new Hono<HonoApp>();
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const DEFAULT_ALLOWED_ORIGINS = [
+  'https://captro.app',
+  'https://www.captro.app',
+  'https://admin.captro.app',
   'https://flames-up.com',
   'https://www.flames-up.com',
   'https://admin.flames-up.com',
@@ -145,6 +165,7 @@ const corsOpts = {
     'Content-Type',
     'Range',
     'Idempotency-Key',
+    'X-Aura-Request-Timestamp',
     'X-Idempotency-Key',
     'X-Request-ID',
     'X-Captro-Device-Trust-Mode',
@@ -209,7 +230,7 @@ app.use('*', securityHeaders);
 api.use('*', securityHeaders);
 
 const retiredFeature = (feature: string) => (c: any) => c.json({
-  detail: `${feature} has been removed from Captro.`,
+  detail: `${feature} has been removed from Aura.`,
 }, 410);
 
 api.all('/publisher/*', retiredFeature('Publisher tools'));
@@ -217,6 +238,22 @@ api.all('/admin/publisher-applications', retiredFeature('Publisher applications'
 api.all('/admin/publisher-applications/*', retiredFeature('Publisher applications'));
 api.all('/creators', retiredFeature('Creator Hub'));
 api.all('/creators/*', retiredFeature('Creator Hub'));
+
+function appDataGeneration(env: Env): string {
+  return cleanText(env.DATA_RESET_VERSION || env.WORKER_VERSION || env.SOURCE_COMMIT || '2026-06-15-production-reset-v1', 120)
+    || '2026-06-15-production-reset-v1';
+}
+
+api.get('/system/data-state', (c) => {
+  c.header('Cache-Control', 'no-store');
+  return c.json({
+    database: 'supabase_postgres',
+    media_storage: 'cloudflare_images_stream',
+    data_generation: appDataGeneration(c.env),
+    data_reset_at: cleanText(c.env.DATA_RESET_AT || '2026-06-15T21:44:27Z', 80),
+    app_data_cleared: true,
+  });
+});
 api.all('/admin/creator-applications', retiredFeature('Creator applications'));
 api.all('/admin/creator-applications/*', retiredFeature('Creator applications'));
 api.all('/admin/creators/*', retiredFeature('Creator admin tools'));
@@ -236,6 +273,32 @@ api.use('/music/*', async (c, next) => {
 });
 api.all('/admin/music', retiredFeature('Music admin tools'));
 api.all('/admin/music/*', retiredFeature('Music admin tools'));
+api.all('/recommendations', retiredFeature('Recommendations'));
+api.all('/recommendations/*', retiredFeature('Recommendations'));
+api.all('/people', retiredFeature('People profiles'));
+api.all('/people/*', retiredFeature('People profiles'));
+api.all('/admin/people/*', retiredFeature('People profile admin tools'));
+api.all('/premium', retiredFeature('Premium checkout'));
+api.all('/premium/*', retiredFeature('Premium checkout'));
+api.all('/places', retiredFeature('Legacy custom places'));
+api.all('/places/*', retiredFeature('Legacy custom places'));
+api.all('/saved-places', retiredFeature('Legacy saved places'));
+api.all('/saved-places/*', retiredFeature('Legacy saved places'));
+api.all('/discover/posts', retiredFeature('Legacy Discover posts'));
+api.all('/discover/posts/*', retiredFeature('Legacy Discover posts'));
+api.all('/admin/governance', retiredFeature('Legacy governance admin tools'));
+api.all('/admin/governance/*', retiredFeature('Legacy governance admin tools'));
+api.all('/admin/init-governance', retiredFeature('Legacy governance initialization'));
+api.all('/admin/applications', retiredFeature('Creator and publisher applications'));
+api.all('/admin/applications/*', retiredFeature('Creator and publisher applications'));
+api.all('/admin/media-backups', retiredFeature('Legacy media backups'));
+api.all('/admin/media-backups/*', retiredFeature('Legacy media backups'));
+
+api.use('/admin/*', async (c, next) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin');
+  if (supabaseRequired) return supabaseRequired;
+  await next();
+});
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
@@ -263,6 +326,18 @@ function getUserId(c: any): string {
   return payload?.sub || payload?.userId || '';
 }
 
+function canonicalSupabaseRequestPayload(payload: any, user: any): any {
+  const appUserId = publicId(user?.id, 120);
+  if (!appUserId) return payload || {};
+  const supabaseSub = isUuidText(user?.supabase_user_id || (payload as any)?.supabase_sub || (payload as any)?.supabaseSub);
+  return {
+    ...(payload || {}),
+    sub: appUserId,
+    userId: appUserId,
+    supabase_sub: supabaseSub || undefined,
+  };
+}
+
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
 const authMiddleware = async (c: any, next: () => Promise<void>) => {
   const authHeader = c.req.header('Authorization');
@@ -270,45 +345,27 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   const token = authHeader.slice(7);
   let payload: any;
   let userId = '';
+  let user: any = null;
 
   try {
-    const { jwtVerify } = await import('jose');
-    const verified = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
-    payload = verified.payload;
-    userId = String(payload?.sub || payload?.userId || '');
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_context');
+    if (supabaseRequired) return supabaseRequired;
+    const resolved = await resolveSupabaseSessionUser(c, token);
+    payload = resolved.payload;
+    userId = resolved.userId;
+    user = resolved.user;
     c.set('jwtPayload', payload);
   } catch (error: any) {
-    try {
-      const resolved = await resolveSupabaseSessionUser(c, token);
-      payload = resolved.payload;
-      userId = resolved.userId;
-      c.set('jwtPayload', payload);
-    } catch {
-      if (getErrorCode(error).includes('JWT_SECRET_MISSING')) {
-        return c.json({ detail: 'Auth service is not configured.', code: 'JWT_SECRET_MISSING' }, 503);
-      }
-      return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING' || code === 'SUPABASE_AUTH_KEY_MISSING') {
+      return c.json({ detail: 'Aura production database is not configured. Please try again later.', code: 'SUPABASE_PRIMARY_REQUIRED' }, 503);
     }
+    return c.json({ detail: 'Invalid session. Please sign in again.', code: 'INVALID_TOKEN' }, 401);
   }
 
   if (!userId) return c.json({ detail: 'Invalid token', code: 'INVALID_TOKEN' }, 401);
 
   try {
-    await ensureAccountDeletionSchema(c.env.DB);
-    let user: any;
-    try {
-      user = await c.env.DB.prepare('SELECT id, status, suspended_until, session_revoked_at FROM users WHERE id = ?').bind(userId).first();
-    } catch (error: any) {
-      const message = String(error?.message || '');
-      if (message.includes('no such column: suspended_until')) {
-        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?').bind(userId).first();
-      } else if (message.includes('no such column: status')) {
-        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until, NULL AS session_revoked_at FROM users WHERE id = ?").bind(userId).first();
-      } else {
-        throw error;
-      }
-    }
-
     if (!user) return c.json({ detail: 'Session user was not found.', code: 'USER_NOT_FOUND' }, 401);
 
     const accountStatus = String(user?.status || 'active');
@@ -327,16 +384,16 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     if (accountStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) {
-        await c.env.DB.prepare("UPDATE users SET status = 'active', suspended_until = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'suspended'")
-          .bind(userId)
-          .run()
-          .catch(() => {});
+        await supabaseClearExpiredSuspension(c, userId).catch(() => {});
       } else {
         return c.json({ detail: 'This account is suspended.' }, 403);
       }
     } else if (accountStatus === 'banned' || accountStatus === 'deleted') {
       return c.json({ detail: 'This account cannot be used.' }, 403);
     }
+    payload = canonicalSupabaseRequestPayload(payload, user);
+    userId = String(payload?.sub || userId);
+    c.set('jwtPayload', payload);
     await next();
   } catch (error: any) {
     console.error(JSON.stringify({
@@ -354,57 +411,24 @@ async function getOptionalUserId(c: any): Promise<string> {
 
   const token = authHeader.slice(7);
   try {
-    const { jwtVerify } = await import('jose');
-    const verified = await jwtVerify(token, new TextEncoder().encode(getJwtSecret(c)));
-    const payload: any = verified.payload;
-    const userId = String(payload?.sub || payload?.userId || '');
-    if (!userId) return '';
-
-    let user: any;
-    try {
-      user = await c.env.DB.prepare('SELECT id, status, suspended_until FROM users WHERE id = ?').bind(userId).first();
-    } catch (error: any) {
-      const message = String(error?.message || '');
-      if (message.includes('no such column: suspended_until')) {
-        user = await c.env.DB.prepare('SELECT id, status, NULL AS suspended_until FROM users WHERE id = ?').bind(userId).first();
-      } else if (message.includes('no such column: status')) {
-        user = await c.env.DB.prepare("SELECT id, 'active' AS status, NULL AS suspended_until FROM users WHERE id = ?").bind(userId).first();
-      } else {
-        throw error;
-      }
-    }
+    if (!supabasePrimaryConfigured(c)) return '';
+    const resolved = await resolveSupabaseSessionUser(c, token);
+    const userId = resolved.userId;
+    const user = resolved.user;
 
     const optionalStatus = String(user?.status || 'active');
     if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted' || optionalStatus === 'deletion_pending') return '';
     if (optionalStatus === 'suspended') {
       const suspendedUntil = Date.parse(String(user?.suspended_until || ''));
       if (!Number.isFinite(suspendedUntil) || suspendedUntil > Date.now()) return '';
-      await c.env.DB.prepare("UPDATE users SET status = 'active', suspended_until = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'suspended'")
-        .bind(userId)
-        .run()
-        .catch(() => {});
+      await supabaseClearExpiredSuspension(c, userId).catch(() => {});
     }
-    c.set('jwtPayload', payload);
-    return userId;
+    const canonicalPayload = canonicalSupabaseRequestPayload(resolved.payload, user);
+    c.set('jwtPayload', canonicalPayload);
+    return String(canonicalPayload?.sub || userId);
   } catch {
-    try {
-      const resolved = await resolveSupabaseSessionUser(c, token);
-      if (['banned', 'deleted', 'deletion_pending'].includes(String(resolved.user?.status || 'active'))) return '';
-      c.set('jwtPayload', resolved.payload);
-      return resolved.userId;
-    } catch {
-      return '';
-    }
+    return '';
   }
-}
-
-async function createToken(userId: string, secret: string): Promise<string> {
-  const { SignJWT } = await import('jose');
-  return new SignJWT({ sub: userId })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('30d')
-    .sign(new TextEncoder().encode(secret));
 }
 
 function parseAudiences(...values: Array<string | undefined>): string[] {
@@ -537,7 +561,8 @@ function validateUsernameForAccount(
 }
 
 function pendingUsernameForUser(id: string): string {
-  return `pending_${String(id || uuid()).replace(/[^a-z0-9]/gi, '').slice(0, 18).toLowerCase()}`;
+  const suffix = String(id || uuid()).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return `pending_${suffix.slice(0, 12)}`;
 }
 
 async function ensureUniqueUsername(db: D1Database, desired: string): Promise<string> {
@@ -554,6 +579,32 @@ async function ensureUniqueUsername(db: D1Database, desired: string): Promise<st
   }
 
   return pendingUsernameForUser(uuid());
+}
+
+async function ensureUniqueSupabaseUsername(c: any, desired: string, fallbackId: string): Promise<string> {
+  const desiredSlug = strictUsernameSlug(desired);
+  let base = (desiredSlug || usernameSlug(desired)).slice(0, 16).replace(/^\.+|\.+$/g, '');
+  if (!validateUsernameForAccount(base, { allowGenerated: true }).ok || isReservedOrStaffUsername(base)) {
+    return pendingUsernameForUser(fallbackId);
+  }
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? '' : String(attempt).padStart(2, '0');
+    const candidate = `${base.slice(0, Math.max(3, 20 - suffix.length))}${suffix}`;
+    try {
+      const rows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,username',
+        filters: { username: postgrestEqFilter(candidate) },
+        limit: 1,
+      });
+      if (!rows.length) return candidate;
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_username_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      break;
+    }
+  }
+
+  return pendingUsernameForUser(fallbackId);
 }
 
 let phoneAuthSchemaReady = false;
@@ -956,6 +1007,68 @@ async function touchUserPresence(db: D1Database, userId: string) {
       last_seen_at = excluded.last_seen_at,
       updated_at = excluded.updated_at
   `).bind(userId, timestamp, timestamp).run();
+}
+
+function presenceKvKey(userId: string): string {
+  return `presence:user:${safeRateLimitPart(userId)}`;
+}
+
+function typingKvKey(userId: string, peerId: string): string {
+  return `presence:typing:${safeRateLimitPart(userId)}:${safeRateLimitPart(peerId)}`;
+}
+
+async function touchSupabasePrimaryPresence(c: any, userId: string): Promise<string> {
+  const timestamp = now();
+  if (!userId || !c.env.KV) return timestamp;
+  await c.env.KV.put(presenceKvKey(userId), JSON.stringify({ last_seen_at: timestamp }), {
+    expirationTtl: 4 * 60,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({
+      event: 'kv_presence_touch_failed',
+      request_id: c.get?.('requestId') || '',
+      code: getErrorCode(error).slice(0, 160),
+    }));
+  });
+  return timestamp;
+}
+
+async function readSupabasePrimaryPresence(c: any, userId: string): Promise<string | null> {
+  if (!userId || !c.env.KV) return null;
+  const cached: any = await c.env.KV.get(presenceKvKey(userId), 'json').catch(() => null);
+  const lastSeenAt = cleanText(cached?.last_seen_at, 80);
+  return lastSeenAt || null;
+}
+
+async function setSupabasePrimaryTyping(c: any, userId: string, peerId: string, isTyping: boolean): Promise<string> {
+  const timestamp = now();
+  if (!userId || !peerId || !c.env.KV) return timestamp;
+  const key = typingKvKey(userId, peerId);
+  if (isTyping) {
+    await c.env.KV.put(key, JSON.stringify({ is_typing: true, updated_at: timestamp }), {
+      expirationTtl: 15,
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({
+        event: 'kv_typing_write_failed',
+        request_id: c.get?.('requestId') || '',
+        code: getErrorCode(error).slice(0, 160),
+      }));
+    });
+  } else {
+    await c.env.KV.delete(key).catch((error: any) => {
+      console.warn(JSON.stringify({
+        event: 'kv_typing_delete_failed',
+        request_id: c.get?.('requestId') || '',
+        code: getErrorCode(error).slice(0, 160),
+      }));
+    });
+  }
+  return timestamp;
+}
+
+async function readSupabasePrimaryTyping(c: any, userId: string, peerId: string): Promise<boolean> {
+  if (!userId || !peerId || !c.env.KV) return false;
+  const cached: any = await c.env.KV.get(typingKvKey(userId, peerId), 'json').catch(() => null);
+  return cached?.is_typing === true;
 }
 
 function isPresenceOnline(lastSeenAt?: string | null): boolean {
@@ -1784,38 +1897,6 @@ async function ensureAbuseProtectionSchema(db: D1Database) {
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(blocker_id, blocked_id)
     )`,
-    `CREATE TABLE IF NOT EXISTS call_sessions (
-      id TEXT PRIMARY KEY,
-      caller_id TEXT NOT NULL,
-      callee_id TEXT NOT NULL,
-      caller_name TEXT DEFAULT '',
-      caller_avatar TEXT DEFAULT '',
-      callee_name TEXT DEFAULT '',
-      callee_avatar TEXT DEFAULT '',
-      call_type TEXT DEFAULT 'video',
-      status TEXT DEFAULT 'ringing',
-      room_id TEXT NOT NULL,
-      channel_name TEXT NOT NULL,
-      push_delivery_status TEXT DEFAULT '',
-      created_at TEXT NOT NULL,
-      answered_at TEXT DEFAULT '',
-      ended_at TEXT DEFAULT '',
-      timeout_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`,
-    `CREATE TABLE IF NOT EXISTS voip_push_tokens (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token TEXT NOT NULL,
-      device_id TEXT DEFAULT '',
-      bundle_id TEXT DEFAULT '',
-      environment TEXT DEFAULT 'production',
-      platform TEXT DEFAULT 'ios',
-      is_active INTEGER DEFAULT 1,
-      last_seen_at TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      UNIQUE(user_id, token)
-    )`,
     `CREATE TABLE IF NOT EXISTS abuse_signals (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -1845,9 +1926,6 @@ async function ensureAbuseProtectionSchema(db: D1Database) {
     'CREATE INDEX IF NOT EXISTS idx_security_events_user_created ON security_events(user_id, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_notifications_user_type_created ON notifications(user_id, type, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_blocks_blocker ON blocks(blocker_id, blocked_id)',
-    'CREATE INDEX IF NOT EXISTS idx_call_sessions_callee_status ON call_sessions(callee_id, status, timeout_at)',
-    'CREATE INDEX IF NOT EXISTS idx_call_sessions_caller_status ON call_sessions(caller_id, status, timeout_at)',
-    'CREATE INDEX IF NOT EXISTS idx_voip_push_tokens_user ON voip_push_tokens(user_id, is_active, last_seen_at)',
     'CREATE INDEX IF NOT EXISTS idx_abuse_signals_hash ON abuse_signals(signal_type, signal_hash, user_id)',
     'CREATE INDEX IF NOT EXISTS idx_abuse_signals_user ON abuse_signals(user_id, last_seen_at)',
     'CREATE INDEX IF NOT EXISTS idx_ban_evasion_flags_status ON ban_evasion_flags(status, created_at)',
@@ -2302,6 +2380,11 @@ function cloudflareImagesRequireSignedUrls(env: Env): boolean {
   return value === '1' || value === 'true' || value === 'yes';
 }
 
+function cloudflareStreamRequireSignedUrls(env: Env): boolean {
+  const value = cleanText(env.CLOUDFLARE_STREAM_REQUIRE_SIGNED_URLS || '', 20).toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
 function publicApiBaseUrl(env?: Env): string {
   const configured = cleanText(env?.PUBLIC_API_BASE_URL || '', 300).replace(/\/+$/, '');
   if (configured && /^https:\/\//i.test(configured)) return configured;
@@ -2353,10 +2436,11 @@ function cloudflareImageTransformBaseUrl(env?: Env): string {
 }
 
 function cloudflareImageTransformOptions(preset: 'feed' | 'thumbnail'): string {
+  const metadata = 'metadata=copyright';
   if (preset === 'thumbnail') {
-    return 'width=480,quality=84,format=auto,metadata=none';
+    return `width=480,quality=84,format=auto,${metadata}`;
   }
-  return 'width=1080,quality=92,format=auto,metadata=none';
+  return `width=1080,quality=92,format=auto,${metadata}`;
 }
 
 function canProxyThroughCloudflareImageTransform(url: URL): boolean {
@@ -2961,7 +3045,7 @@ async function generatePostAssistWithWorkersAi(env: Env, input: AutoCategoryInpu
       {
         role: 'system',
         content: [
-          'You are Captro Post Assist for a real social photo and short-video app.',
+          'You are Aura Post Assist for a real social photo and short-video app.',
           'Write natural, human captions and short headlines. Keep it premium, simple, and not fake.',
           'Classify the post into exactly one allowed category. Do not invent unsupported categories.',
           'Return JSON only. Do not include markdown.',
@@ -3048,11 +3132,33 @@ function d1Changes(result: any): number {
 }
 
 async function enforceRateLimit(c: any, bucket: string, identity: string, limit: number, windowSeconds: number) {
-  await ensureReliabilitySchema(c.env.DB);
   const nowSeconds = Math.floor(Date.now() / 1000);
   const windowStart = Math.floor(nowSeconds / windowSeconds) * windowSeconds;
   const key = `${safeRateLimitPart(bucket)}:${safeRateLimitPart(identity)}:${windowStart}`;
   const updatedAt = now();
+  if (c.env.KV) {
+    const cached: any = await c.env.KV.get(key, 'json').catch(() => null);
+    const count = Math.max(0, Number(cached?.count || 0)) + 1;
+    await c.env.KV.put(key, JSON.stringify({ window_start: windowStart, count, updated_at: updatedAt }), {
+      expirationTtl: Math.max(60, windowSeconds + 30),
+    });
+    if (count > limit) {
+      console.warn(JSON.stringify({ event: 'rate_limit_hit', request_id: c.get?.('requestId') || '', bucket: safeRateLimitPart(bucket), identity: safeRateLimitPart(identity), count, limit }));
+      return c.json({ detail: 'Too many requests. Try again in a moment.', retry_after_seconds: windowSeconds }, 429);
+    }
+    return null;
+  }
+
+  if (supabasePrimaryConfigured(c) && isProductionEnv(c)) {
+    console.error(JSON.stringify({
+      event: 'rate_limit_kv_missing',
+      request_id: c.get?.('requestId') || '',
+      bucket: safeRateLimitPart(bucket),
+    }));
+    return c.json({ detail: 'Temporary protection is unavailable. Please try again in a moment.' }, 503);
+  }
+
+  await ensureReliabilitySchema(c.env.DB);
   const results = await c.env.DB.batch([
     c.env.DB.prepare('INSERT INTO request_rate_limits (key, window_start, count, updated_at) VALUES (?, ?, 0, ?) ON CONFLICT(key) DO NOTHING')
       .bind(key, windowStart, updatedAt),
@@ -3079,6 +3185,7 @@ async function usersAreBlocked(db: D1Database, firstUserId: string, secondUserId
 }
 
 async function validateDirectMessagePeer(c: any, currentUserId: string, peerId: string) {
+  if (supabasePrimaryConfigured(c)) return supabaseValidateDirectMessagePeer(c, currentUserId, peerId);
   if (!peerId || peerId === currentUserId) {
     return c.json({ detail: 'Choose a valid recipient.' }, 400);
   }
@@ -3108,6 +3215,7 @@ const REPORT_REASONS = new Set([
   'sexual_content',
   'sexual_exploitation',
   'sexual_content_or_exploitation',
+  'blocked_user',
   'minor_safety',
   'self_harm_concern',
   'false_or_misleading_content',
@@ -3156,6 +3264,8 @@ const REPORT_TARGET_TYPES = new Set([
   'handshake_request',
   'story',
   'note',
+  'wall_note',
+  'wall_note_contribution',
   'music',
   'sound',
   'recommendation',
@@ -3237,6 +3347,10 @@ function normalizeReportReason(value: unknown): string {
     copyright: 'stolen_content_or_copyright',
     sexual_content_exploitation: 'sexual_content_or_exploitation',
     sexual_content_or_exploitation: 'sexual_content_or_exploitation',
+    nudity: 'sexual_content',
+    nudity_or_sexual_content: 'sexual_content',
+    child_safety: 'minor_safety',
+    child_safety_concern: 'minor_safety',
     illegal_dangerous_activity: 'illegal_or_dangerous_activity',
     illegal_or_dangerous_activity: 'illegal_or_dangerous_activity',
     self_harm: 'self_harm_concern',
@@ -3273,6 +3387,7 @@ function normalizeReportTargetType(value: unknown): string {
   if (type === 'user_profile') return 'profile';
   if (type === 'discover' || type === 'discover_item') return 'discover_post';
   if (type === 'status') return 'story';
+  if (type === 'wall' || type === 'wallnote' || type === 'wall_note') return 'wall_note';
   if (type === 'handshake') return 'handshake_request';
   return REPORT_TARGET_TYPES.has(type) ? type : 'other';
 }
@@ -3312,6 +3427,18 @@ function sanitizeClientEventMetadata(value: unknown): Record<string, unknown> {
 
 async function logSecurityEvent(c: any, eventType: string, userId = '', metadata: Record<string, unknown> = {}) {
   try {
+    if (supabasePrimaryConfigured(c)) {
+      await writeSupabaseAuditLog(c, {
+        actionType: `security_${cleanText(eventType, 70) || 'event'}`,
+        actorUserId: userId || 'system',
+        actorRole: userId ? 'user' : 'system',
+        targetType: userId ? 'user' : 'security_event',
+        targetId: userId || cleanText(eventType, 80) || 'event',
+        reason: cleanText((metadata.reason as any) || '', 180),
+        metadata,
+      });
+      return;
+    }
     await ensureAbuseProtectionSchema(c.env.DB);
     await c.env.DB.prepare(
       'INSERT INTO security_events (id, event_type, user_id, ip, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?)'
@@ -3319,6 +3446,84 @@ async function logSecurityEvent(c: any, eventType: string, userId = '', metadata
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'security_event_log_failed', type: cleanText(eventType, 80), code: getErrorCode(error) }));
   }
+}
+
+async function writeSupabaseAuditLog(c: any, input: {
+  actionType: string;
+  actorUserId?: string;
+  actorRole?: string;
+  targetType: string;
+  targetId: string;
+  targetUserId?: string;
+  reason?: string;
+  internalNote?: string;
+  beforeState?: Record<string, unknown>;
+  afterState?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}) {
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_audit_logs', [{
+    id: uuid(),
+    actor_admin_user_id: publicId(input.actorUserId || 'system', 120) || 'system',
+    actor_role: cleanText(input.actorRole || 'system', 40),
+    action_type: cleanText(input.actionType, 80),
+    target_type: cleanText(input.targetType, 80),
+    target_id: publicId(input.targetId || 'system', 120) || 'system',
+    target_user_id: input.targetUserId ? publicId(input.targetUserId, 120) : null,
+    reason: cleanText(input.reason || '', 300),
+    internal_note: cleanMultilineText(input.internalNote || '', 600),
+    before_state: input.beforeState || {},
+    after_state: input.afterState || {},
+    request_id: cleanText(c.get?.('requestId') || '', 120) || null,
+    metadata: scrubLogMetadata(input.metadata || {}),
+    created_at: ts,
+  }], 'id');
+}
+
+async function recordTermsAcceptance(
+  c: any,
+  user: any,
+  supabaseUserId: unknown,
+  acceptance: { version: string; acceptedAt: string } | null,
+  source: string
+) {
+  if (!acceptance) return;
+  const userId = publicId(user?.id || '', 120);
+  const authUserId = cleanText(supabaseUserId || user?.supabase_user_id, 160);
+  if (!userId) return;
+  if (authUserId) {
+    try {
+      const existing = await findSupabaseAuthUser(c, { id: authUserId });
+      const currentMetadata = existing?.user_metadata && typeof existing.user_metadata === 'object' ? existing.user_metadata : {};
+      await updateSupabaseAuthUser(c, authUserId, {
+        user_metadata: {
+          ...currentMetadata,
+          ...termsAcceptanceMetadata(acceptance),
+        },
+      });
+    } catch (error: any) {
+      console.warn(JSON.stringify({
+        event: 'terms_acceptance_auth_metadata_failed',
+        user_id: userId,
+        code: getErrorCode(error).slice(0, 160),
+      }));
+    }
+  }
+  await writeSupabaseAuditLog(c, {
+    actionType: 'terms_accepted',
+    actorUserId: userId,
+    actorRole: 'user',
+    targetType: 'user',
+    targetId: userId,
+    targetUserId: userId,
+    reason: 'terms_acceptance',
+    metadata: {
+      terms_version: acceptance.version,
+      terms_accepted_at: acceptance.acceptedAt,
+      source: cleanText(source, 80),
+      supabase_user_id: authUserId || null,
+    },
+  });
 }
 
 function abuseSignalSalt(c: any): string {
@@ -3395,6 +3600,24 @@ async function buildAbuseSignals(c: any, fields: Record<string, unknown> = {}) {
 async function recordAbuseSignals(c: any, userId: string, source: string, fields: Record<string, unknown> = {}) {
   if (!userId) return;
   try {
+    if (supabasePrimaryConfigured(c)) {
+      const signals = await buildAbuseSignals(c, fields);
+      if (!signals.length) return;
+      await writeSupabaseAuditLog(c, {
+        actionType: 'abuse_signal_recorded',
+        actorUserId: userId,
+        actorRole: 'user',
+        targetType: 'user',
+        targetId: userId,
+        targetUserId: userId,
+        metadata: {
+          source: cleanText(source, 80),
+          signal_count: signals.length,
+          signals: JSON.stringify(signals.slice(0, 24)),
+        },
+      });
+      return;
+    }
     await ensureAbuseProtectionSchema(c.env.DB);
     const signals = await buildAbuseSignals(c, fields);
     const ts = now();
@@ -3454,6 +3677,15 @@ function safeNotificationPayload(row: any) {
   };
 }
 
+async function supabasePreferredNotificationLanguage(c: any, userId: string): Promise<'en' | 'fr' | 'es' | null> {
+  if (!supabasePrimaryConfigured(c)) return null;
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!row) return null;
+  const profile = parseJsonObject(row.profile);
+  const language = cleanText((profile as any).language || row.language || '', 8).toLowerCase().split('-')[0];
+  return language === 'fr' || language === 'es' ? language : 'en';
+}
+
 async function insertNotificationOnce(c: any, input: {
   userId: string;
   type: string;
@@ -3470,7 +3702,38 @@ async function insertNotificationOnce(c: any, input: {
   const language = await preferredNotificationLanguage(c, input.userId);
   const copy = localizedNotificationCopy(language, type, input.title, input.body, data);
 
-  if (dedupeKey) {
+  if (supabasePrimaryConfigured(c)) {
+    if (dedupeKey) {
+      const windowStart = new Date(Date.now() - Math.max(60, input.dedupeSeconds || 86400) * 1000).toISOString();
+      const existing = await supabaseAdminQueryRows(c, 'app_notifications', {
+        select: 'id,data',
+        filters: {
+          user_id: postgrestEqFilter(input.userId),
+          type: postgrestEqFilter(type),
+          created_at: `gte.${windowStart}`,
+        },
+        limit: 100,
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_notification_dedupe_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      });
+      if (existing.some((row) => cleanText((parseJsonObject(row.data) as any).dedupe_key, 160) === dedupeKey)) return false;
+    }
+
+    await supabaseAdminUpsert(c, 'app_notifications', [{
+      id: uuid(),
+      user_id: input.userId,
+      type,
+      title: cleanText(copy.title, 120),
+      body: cleanText(copy.body, 300),
+      content: cleanText(copy.body, 300),
+      reference_id: cleanText((data.reference_id || data.post_id || data.message_id || '') as string, 160),
+      data,
+      is_read: false,
+      created_at: now(),
+      updated_at: now(),
+    }], 'id');
+  } else if (dedupeKey) {
     try {
       const existing = await c.env.DB.prepare(
         "SELECT id FROM notifications WHERE user_id = ? AND type = ? AND json_extract(data, '$.dedupe_key') = ? AND created_at > datetime('now', ?) LIMIT 1"
@@ -3479,11 +3742,15 @@ async function insertNotificationOnce(c: any, input: {
     } catch {
       // Older local D1 builds may not expose JSON functions; insert remains safe because engagement rows are idempotent.
     }
+    await c.env.DB.prepare(
+      'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
+    ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
+  } else {
+    await c.env.DB.prepare(
+      'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
+    ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
   }
 
-  await c.env.DB.prepare(
-    'INSERT INTO notifications (id, user_id, type, title, body, data, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, datetime(\'now\'))'
-  ).bind(uuid(), input.userId, type, cleanText(copy.title, 120), cleanText(copy.body, 300), JSON.stringify(data)).run();
   runBackgroundTask(c, 'alert_push_failed', async () => {
     const status = await sendAlertPushForNotification(c, {
       userId: input.userId,
@@ -3500,6 +3767,8 @@ async function insertNotificationOnce(c: any, input: {
 }
 
 async function preferredNotificationLanguage(c: any, userId: string): Promise<'en' | 'fr' | 'es'> {
+  const supabaseLanguage = await supabasePreferredNotificationLanguage(c, userId).catch(() => null);
+  if (supabaseLanguage) return supabaseLanguage;
   try {
     const row: any = await c.env.DB.prepare('SELECT language FROM users WHERE id = ? LIMIT 1').bind(userId).first();
     const language = cleanText(row?.language || '', 8).toLowerCase().split('-')[0];
@@ -3527,10 +3796,31 @@ function localizedNotificationCopy(language: 'en' | 'fr' | 'es', type: string, t
     if (language === 'es') return { title: 'Nuevo mensaje', body: `Nuevo mensaje de ${actorName}` };
     return { title: 'New message', body: `New message from ${actorName}` };
   }
+  if (type === 'follow') {
+    if (language === 'fr') return { title: 'Nouvelle connexion', body: `${actorName} vous suit.` };
+    if (language === 'es') return { title: 'Nueva conexión', body: `${actorName} te sigue.` };
+    return { title: 'New Connection', body: `${actorName} connected with you.` };
+  }
+  if (type === 'connection_request') {
+    if (language === 'fr') return { title: 'Demande de connexion', body: `${actorName} veut se connecter avec vous.` };
+    if (language === 'es') return { title: 'Solicitud de conexion', body: `${actorName} quiere conectar contigo.` };
+    return { title: 'Connection Request', body: `${actorName} wants to connect with you.` };
+  }
+  if (type === 'connection_accepted') {
+    if (language === 'fr') return { title: 'Connexion acceptee', body: `${actorName} a accepte votre demande.` };
+    if (language === 'es') return { title: 'Conexion aceptada', body: `${actorName} acepto tu solicitud.` };
+    return { title: 'Connection Accepted', body: `${actorName} accepted your request.` };
+  }
   return { title, body };
 }
 
 async function resolveReportTarget(c: any, reporterId: string, type: string, reportedId: string, body: any): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string; targetOwnerUserId?: string }> {
+  if (supabasePrimaryConfigured(c)) {
+    const supabaseTarget = await supabaseResolveReportTarget(c, reporterId, type, reportedId);
+    if (supabaseTarget) return supabaseTarget;
+    return { ok: false, status: 404, detail: 'Reported content was not found.' };
+  }
+
   try {
     if (!reportedId) return { ok: false, status: 400, detail: 'Choose something to report.' };
     if (type === 'post') {
@@ -3580,7 +3870,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
     if (type === 'story') {
       const storySql = [
         'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-        `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
+        `WHERE s.id = ? AND s.created_at >= datetime('now', '-14 days') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
       ].join(' ');
       const row: any = await c.env.DB.prepare(storySql).bind(reportedId, reporterId, reporterId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported story was not found.' };
@@ -3614,9 +3904,122 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
   }
 }
 
+async function supabaseResolveReportTarget(
+  c: any,
+  reporterId: string,
+  type: string,
+  reportedId: string
+): Promise<{ ok: boolean; status?: number; detail?: string; contentId?: string; targetOwnerUserId?: string } | null> {
+  if (!reportedId) return { ok: false, status: 400, detail: 'Choose something to report.' };
+  const reporterAliases = await supabaseRelatedInteractionUserIds(c, reporterId);
+  const reporterAliasSet = new Set(reporterAliases.map((value) => publicId(value, 120)).filter(Boolean));
+  const isReporter = (value: unknown) => {
+    const clean = publicId(value, 120);
+    return !!clean && reporterAliasSet.has(clean);
+  };
+
+  try {
+    if (type === 'post' || type === 'discover_post') {
+      const [post] = await supabaseReadVisiblePosts(c, reporterId, { postId: reportedId, limit: 1 });
+      if (!post) {
+        return { ok: false, status: 404, detail: type === 'discover_post' ? 'Reported Discover post was not found.' : 'Reported post was not found.' };
+      }
+      const ownerId = publicId(post.user_id, 120);
+      if (isReporter(ownerId)) return { ok: false, status: 400, detail: 'You cannot report your own content.' };
+      return { ok: true, contentId: publicId(post.id || reportedId, 120), targetOwnerUserId: ownerId };
+    }
+
+    if (type === 'comment') {
+      const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_comment_id,legacy_post_id,app_user_id,user_id,status',
+        filters: { legacy_comment_id: postgrestEqFilter(reportedId) },
+        limit: 1,
+      });
+      const comment = rows[0];
+      if (!comment || ['removed', 'hidden'].includes(cleanText(comment.status || 'active', 40))) {
+        return { ok: false, status: 404, detail: 'Reported comment was not found.' };
+      }
+      const commentOwnerId = publicId(comment.app_user_id || comment.user_id, 120);
+      if (isReporter(commentOwnerId)) return { ok: false, status: 400, detail: 'You cannot report your own comment.' };
+      const postId = publicId(comment.legacy_post_id, 120);
+      if (!postId) return { ok: false, status: 404, detail: 'Reported comment was not found.' };
+      const visiblePost = await supabaseReadVisiblePosts(c, reporterId, { postId, limit: 1 });
+      if (!visiblePost.length) return { ok: false, status: 404, detail: 'Reported comment was not found.' };
+      return { ok: true, contentId: postId, targetOwnerUserId: commentOwnerId };
+    }
+
+    if (type === 'profile' || type === 'user') {
+      const target = await supabaseUserByAnyId(c, reportedId);
+      const targetId = publicId(target?.id, 120);
+      if (!targetId) return { ok: false, status: 404, detail: 'Reported profile was not found.' };
+      if (isReporter(targetId)) return { ok: false, status: 400, detail: 'You cannot report your own profile.' };
+      return { ok: true, contentId: targetId, targetOwnerUserId: targetId };
+    }
+
+    if (type === 'message') {
+      const rows = await supabaseAdminQueryRows(c, 'app_messages', {
+        select: 'id,sender_id,receiver_id,status',
+        filters: {
+          id: postgrestEqFilter(reportedId),
+          or: `(sender_id.${postgrestInFilter(reporterAliases)},receiver_id.${postgrestInFilter(reporterAliases)})`,
+        },
+        limit: 1,
+      });
+      const message = rows[0];
+      if (!message || cleanText(message.status || 'sent', 40) === 'deleted') {
+        return { ok: false, status: 404, detail: 'Reported message was not found.' };
+      }
+      const senderId = publicId(message.sender_id, 120);
+      const receiverId = publicId(message.receiver_id, 120);
+      const targetOwnerUserId = isReporter(senderId) ? receiverId : senderId;
+      if (!targetOwnerUserId || isReporter(targetOwnerUserId)) return { ok: false, status: 400, detail: 'You cannot report your own message.' };
+      return { ok: true, contentId: publicId(message.id || reportedId, 120), targetOwnerUserId };
+    }
+
+    if (type === 'wall_note') {
+      const rows = await supabaseAdminQueryRows(c, 'wall_notes', {
+        select: 'id,author_account_id,status,moderation_status',
+        filters: { id: postgrestEqFilter(reportedId) },
+        limit: 1,
+      });
+      const note = rows[0];
+      if (!note || cleanText(note.status, 40) !== 'active' || cleanText(note.moderation_status, 40) !== 'approved') {
+        return { ok: false, status: 404, detail: 'Reported note was not found.' };
+      }
+      const ownerId = publicId(note.author_account_id, 120);
+      if (isReporter(ownerId)) return { ok: false, status: 400, detail: 'You cannot report your own note.' };
+      return { ok: true, contentId: publicId(note.id || reportedId, 120), targetOwnerUserId: ownerId };
+    }
+
+    if (type === 'wall_note_contribution') {
+      const rows = await supabaseAdminQueryRows(c, 'wall_note_contributions', {
+        select: 'id,author_account_id,status,moderation_status',
+        filters: { id: postgrestEqFilter(reportedId) },
+        limit: 1,
+      });
+      const contribution = rows[0];
+      if (!contribution || cleanText(contribution.status, 40) !== 'active' || cleanText(contribution.moderation_status, 40) !== 'approved') {
+        return { ok: false, status: 404, detail: 'Reported contribution was not found.' };
+      }
+      const ownerId = publicId(contribution.author_account_id, 120);
+      if (isReporter(ownerId)) return { ok: false, status: 400, detail: 'You cannot report your own contribution.' };
+      return { ok: true, contentId: publicId(contribution.id || reportedId, 120), targetOwnerUserId: ownerId };
+    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_report_target_check_failed', type, code: getErrorCode(error).slice(0, 180) }));
+    return { ok: false, status: 404, detail: 'Reported content was not found.' };
+  }
+
+  return null;
+}
+
 async function blockUserForReporter(c: any, blockerId: string, blockedId: string): Promise<boolean> {
   const cleanBlockedId = publicId(blockedId, 120);
   if (!cleanBlockedId || cleanBlockedId === blockerId) return false;
+  if (supabasePrimaryConfigured(c)) {
+    const result = await supabaseBlockUser(c, blockerId, cleanBlockedId);
+    return result.status >= 200 && result.status < 300;
+  }
   await ensureAbuseProtectionSchema(c.env.DB);
   const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ? LIMIT 1').bind(cleanBlockedId).first();
   if (!target) return false;
@@ -3629,7 +4032,8 @@ async function blockUserForReporter(c: any, blockerId: string, blockedId: string
 }
 
 async function submitReportRequest(c: any) {
-  await ensureAdminModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'report_submit');
+  if (supabaseRequired) return supabaseRequired;
   const bodyTooLarge = rejectLargeRequest(c, 50_000);
   if (bodyTooLarge) return bodyTooLarge;
   const reporterId = getUserId(c);
@@ -3649,9 +4053,21 @@ async function submitReportRequest(c: any) {
   const target = await resolveReportTarget(c, reporterId, reportedType, reportedId, body);
   if (!target.ok) return c.json({ error_code: 'target_not_found', detail: target.detail || 'Reported content was not found.' }, target.status || 400);
 
-  const existing: any = await c.env.DB.prepare(
-    "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
-  ).bind(reporterId, reportedType, reportedId).first();
+  const reporterAliases = supabasePrimaryConfigured(c) ? await supabaseRelatedInteractionUserIds(c, reporterId) : [reporterId];
+  const existing: any = supabasePrimaryConfigured(c)
+    ? (await supabaseAdminQueryRows(c, 'app_reports', {
+      select: 'id',
+      filters: {
+        reporter_id: postgrestInFilter(reporterAliases),
+        target_type: postgrestEqFilter(reportedType),
+        target_id: postgrestEqFilter(reportedId),
+        status: postgrestInFilter(['open', 'pending', 'under_review', 'reviewing', 'in_review', 'escalated']),
+      },
+      limit: 1,
+    }))[0]
+    : await c.env.DB.prepare(
+      "SELECT id FROM reports WHERE reporter_id = ? AND reported_type = ? AND reported_id = ? AND COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'reviewing', 'escalated') LIMIT 1"
+    ).bind(reporterId, reportedType, reportedId).first();
   if (existing) {
     await logSecurityEvent(c, 'duplicate_report_blocked', reporterId, { reported_type: reportedType, reason });
     const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
@@ -3660,11 +4076,34 @@ async function submitReportRequest(c: any) {
 
   const id = uuid();
   const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO reports (
-      id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, priority, target_owner_user_id, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`
-  ).bind(id, reporterId, reportedId, reportedType, reportedType, reason, details, target.contentId || '', priority, target.targetOwnerUserId || '', ts, ts).run();
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseAdminUpsert(c, 'app_reports', [{
+      id,
+      reporter_id: reporterId,
+      target_type: reportedType,
+      target_id: reportedId,
+      target_owner_user_id: target.targetOwnerUserId || null,
+      reason,
+      details,
+      status: 'open',
+      priority,
+      metadata: {
+        content_id: target.contentId || '',
+        hide_content_for_reporter: wantsHideContent,
+        source: 'captro_user_report_flow',
+      },
+      legacy_created_at: ts,
+      legacy_updated_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id');
+  } else {
+    await c.env.DB.prepare(
+      `INSERT INTO reports (
+        id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, priority, target_owner_user_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)`
+    ).bind(id, reporterId, reportedId, reportedType, reportedType, reason, details, target.contentId || '', priority, target.targetOwnerUserId || '', ts, ts).run();
+  }
   const blocked = wantsBlock && target.targetOwnerUserId ? await blockUserForReporter(c, reporterId, target.targetOwnerUserId) : false;
   await logSecurityEvent(c, priority === 'urgent' ? 'urgent_report_submitted' : priority === 'high' ? 'high_priority_report_submitted' : 'report_submitted', reporterId, { reported_type: reportedType, reason, priority, target_owner: target.targetOwnerUserId || '' });
   await recordAbuseSignals(c, reporterId, 'report_submit', {});
@@ -4368,7 +4807,32 @@ function detectImageContentType(bytes: Uint8Array): string {
   if (bytes.length >= 12
     && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
     && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+  if (bytes.length >= 12
+    && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11]).toLowerCase();
+    if (['heic', 'heix', 'hevc', 'hevx'].includes(brand)) return 'image/heic';
+    if (['mif1', 'msf1'].includes(brand)) return 'image/heif';
+  }
   return '';
+}
+
+function detectAudioContentType(bytes: Uint8Array): string {
+  if (bytes.length >= 12
+    && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) return 'audio/mp4';
+  if (bytes.length >= 12
+    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45) return 'audio/wav';
+  if (bytes.length >= 4
+    && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return 'audio/webm';
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return 'audio/mpeg';
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0) return 'audio/aac';
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0) return 'audio/mpeg';
+  return '';
+}
+
+function audioContentMatches(declaredType: string, detectedType: string): boolean {
+  if (declaredType === detectedType) return true;
+  return detectedType === 'audio/mp4' && (declaredType === 'audio/m4a' || declaredType === 'audio/mp4');
 }
 
 function looksLikePlainText(bytes: Uint8Array): boolean {
@@ -4609,9 +5073,11 @@ async function storeMediaBackup(c: any, opts: {
   contentType: string;
   bytes: ArrayBuffer | Uint8Array;
   originalFilename?: string;
+  persistLegacyMetadata?: boolean;
 }) {
   if (!c.env.MEDIA_BACKUP) return null;
-  await ensureMediaBackupSchema(c.env.DB);
+  const persistLegacyMetadata = opts.persistLegacyMetadata !== false;
+  if (persistLegacyMetadata) await ensureMediaBackupSchema(c.env.DB);
 
   const id = uuid();
   const date = new Date().toISOString().slice(0, 10);
@@ -4633,25 +5099,27 @@ async function storeMediaBackup(c: any, opts: {
     },
   });
 
-  await c.env.DB.prepare(
-    `INSERT INTO media_backups (id, user_id, post_id, media_kind, provider, provider_id, delivery_url, r2_key, content_type, size_bytes, checksum_sha256, original_filename, backup_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?)`
-  ).bind(
-    id,
-    opts.userId,
-    opts.postId || null,
-    opts.mediaKind,
-    opts.provider,
-    opts.providerId || '',
-    deliveryUrl,
-    key,
-    opts.contentType,
-    buffer.byteLength,
-    checksum,
-    opts.originalFilename || '',
-    createdAt,
-    createdAt,
-  ).run();
+  if (persistLegacyMetadata) {
+    await c.env.DB.prepare(
+      `INSERT INTO media_backups (id, user_id, post_id, media_kind, provider, provider_id, delivery_url, r2_key, content_type, size_bytes, checksum_sha256, original_filename, backup_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?)`
+    ).bind(
+      id,
+      opts.userId,
+      opts.postId || null,
+      opts.mediaKind,
+      opts.provider,
+      opts.providerId || '',
+      deliveryUrl,
+      key,
+      opts.contentType,
+      buffer.byteLength,
+      checksum,
+      opts.originalFilename || '',
+      createdAt,
+      createdAt,
+    ).run();
+  }
 
   return { id, r2_key: key, delivery_url: deliveryUrl, size_bytes: buffer.byteLength, checksum_sha256: checksum };
 }
@@ -4712,14 +5180,15 @@ async function messagePayload(c: any, row: any): Promise<any> {
 }
 
 const FEED_MEDIA_WIDTH = 1080;
-const FEED_MEDIA_HEIGHT = 1440;
+const FEED_MEDIA_HEIGHT = 1350;
 const FEED_MEDIA_ASPECT_RATIO = FEED_MEDIA_WIDTH / FEED_MEDIA_HEIGHT;
 const SUPPORTED_FEED_MEDIA_RATIOS = [
   { format: '3:4', feed_width: 1080, feed_height: 1440, feed_aspect_ratio: 1080 / 1440 },
   { format: '4:5', feed_width: 1080, feed_height: 1350, feed_aspect_ratio: 1080 / 1350 },
   { format: '2:3', feed_width: 1080, feed_height: 1620, feed_aspect_ratio: 1080 / 1620 },
+  { format: '9:16', feed_width: 1080, feed_height: 1920, feed_aspect_ratio: 1080 / 1920 },
 ];
-const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[0];
+const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS.find((item) => item.format === '4:5') || SUPPORTED_FEED_MEDIA_RATIOS[0];
 
 function supportedFeedMediaVariant(source: any = {}) {
   const format = cleanText(source?.format, 16);
@@ -4778,6 +5247,33 @@ function postContainsVideoMedia(post: any): boolean {
   return postType.includes('video') || mediaTypes.some((type) => type.includes('video')) || mediaUrls.some(isVideoMediaUrl);
 }
 
+function postHasRenderablePhotoMedia(post: any): boolean {
+  const mediaUrls = sanitizeMediaReferences(post?.images, post?.image);
+  if (!mediaUrls.length) return false;
+  const mediaTypes = parseJsonArray(post?.media_types).map((item) => String(item || '').toLowerCase());
+  return mediaUrls.some((url, index) => {
+    const type = mediaTypes[index] || '';
+    return !type.includes('video') && !isVideoMediaUrl(url);
+  });
+}
+
+function supabaseAppPostHasRenderablePhotoMedia(row: any): boolean {
+  const postType = String(row?.post_type || '').toLowerCase();
+  if (postType === 'note' || postType.includes('video')) return false;
+  const media = supabaseAppPostMedia(row);
+  if (!media.mediaUrls.length) return false;
+  return media.mediaUrls.some((url, index) => {
+    const type = String(media.mediaTypes[index] || '').toLowerCase();
+    return !type.includes('video') && !isVideoMediaUrl(url);
+  });
+}
+
+function supabaseAppPostHasRenderableMedia(row: any): boolean {
+  const postType = String(row?.post_type || '').toLowerCase();
+  if (postType === 'note') return false;
+  return supabaseAppPostMedia(row).mediaUrls.length > 0;
+}
+
 function normalizeStoryDurationSeconds(value: unknown): 15 | 30 | 60 | 0 {
   const duration = Math.round(Number(value || 0));
   if (duration === 15 || duration === 30 || duration === 60) return duration;
@@ -4791,7 +5287,111 @@ function maxPostCounterAfterToggle(current: unknown, enabled: boolean, changed: 
 }
 
 function feedPhotoPostsOnly(posts: any[]): any[] {
-  return posts.filter((post) => !postContainsVideoMedia(post) && String(post?.post_type || '').toLowerCase() !== 'note');
+  return posts.filter((post) => postHasRenderablePhotoMedia(post) && !postContainsVideoMedia(post) && String(post?.post_type || '').toLowerCase() !== 'note');
+}
+
+const AURA_SMALL_POST_CATEGORIES = new Set(['question', 'idea', 'concern', 'recommendation', 'update']);
+const AURA_COMMUNITY_POST_TYPES = new Set(['small_post', 'meetup']);
+const AURA_MEETUP_ENTRY_TYPES = new Set(['free', 'aur']);
+const AURA_COMMUNITY_AUDIENCES = new Set(['public', 'friends', 'followers', 'private']);
+
+function isAuraCommunityPostType(value: unknown): boolean {
+  return AURA_COMMUNITY_POST_TYPES.has(cleanText(value, 40).toLowerCase());
+}
+
+function auraCommunityPostHasRenderableContent(row: any): boolean {
+  const postType = cleanText(row?.post_type, 40).toLowerCase();
+  if (!isAuraCommunityPostType(postType)) return false;
+  const title = cleanText(row?.title, 180);
+  const content = cleanMultilineText(row?.content, 4000);
+  if (postType === 'small_post') return !!(title || content || supabaseAppPostHasRenderableMedia(row));
+  return !!title && supabaseAppPostHasRenderableMedia(row);
+}
+
+function normalizeAuraAtomicAmount(value: unknown): string {
+  const amount = cleanText(value, 24);
+  if (!/^[1-9][0-9]{0,19}$/.test(amount)) return '';
+  if (amount.length < 20) return amount;
+  return amount <= '18446744073709551615' ? amount : '';
+}
+
+function auraCommunityMetadataFromBody(body: any, postType: string): { value?: any; error?: string } {
+  if (!isAuraCommunityPostType(postType)) return {};
+  const audience = cleanText(body.audience || body.visibility || 'public', 24).toLowerCase();
+  if (!AURA_COMMUNITY_AUDIENCES.has(audience)) {
+    return { error: 'Audience must be Public, Friends, Followers, or Private.' };
+  }
+  const normalizedAudience = audience;
+
+  if (postType === 'small_post') {
+    const category = cleanText(body.community_category || body.communityCategory, 40).toLowerCase();
+    if (!AURA_SMALL_POST_CATEGORIES.has(category)) {
+      return { error: 'Choose Question, Idea, Concern, Recommendation, or Update.' };
+    }
+    return {
+      value: {
+        version: 1,
+        kind: 'small_post',
+        category,
+        audience: normalizedAudience,
+        allow_replies: optionalBoolean(body.allow_replies ?? body.allowReplies) !== false,
+      },
+    };
+  }
+
+  const neighborhood = cleanText(body.meetup_neighborhood || body.meetupNeighborhood, 100);
+  const startsAt = cleanText(body.meetup_starts_at || body.meetupStartsAt, 80);
+  const endsAt = cleanText(body.meetup_ends_at || body.meetupEndsAt, 80);
+  const entryType = cleanText(body.meetup_entry_type || body.meetupEntryType || 'free', 20).toLowerCase();
+  const maxPeople = clampNumber(body.meetup_max_people ?? body.meetupMaxPeople ?? 12, 2, 500, 12);
+  if (!neighborhood) return { error: 'Meetup neighborhood is required.' };
+  if (!Number.isFinite(Date.parse(startsAt)) || !Number.isFinite(Date.parse(endsAt)) || Date.parse(endsAt) <= Date.parse(startsAt)) {
+    return { error: 'Meetup start and end time are invalid.' };
+  }
+  if (!AURA_MEETUP_ENTRY_TYPES.has(entryType)) return { error: 'Meetup entry must be Free or Paid in AUR.' };
+  const entryAmountAtoms = entryType === 'aur'
+    ? normalizeAuraAtomicAmount(body.meetup_entry_amount_atoms || body.meetupEntryAmountAtoms)
+    : '';
+  if (entryType === 'aur' && !entryAmountAtoms) return { error: 'Enter a valid positive AUR amount.' };
+
+  return {
+    value: {
+      version: 1,
+      kind: 'meetup',
+      audience: normalizedAudience,
+      neighborhood,
+      starts_at: new Date(startsAt).toISOString(),
+      ends_at: new Date(endsAt).toISOString(),
+      entry_type: entryType,
+      entry_amount_atoms: entryAmountAtoms || null,
+      max_people: maxPeople,
+    },
+  };
+}
+
+function auraCommunityMetadataFromRow(row: any): any {
+  const metadata = parseJsonObject(row?.metadata);
+  return parseJsonObject((metadata as any).community);
+}
+
+function auraCommunityPostCity(row: any, author?: any): string {
+  const metadata = parseJsonObject(row?.metadata);
+  const raw = parseJsonObject((metadata as any).raw);
+  const place = parseJsonObject((metadata as any).place);
+  const postCity = normalizeAuraCommunityCity(
+    (place as any).city || (raw as any).display_city || (metadata as any).display_city
+  );
+  if (postCity) return postCity;
+
+  // A location is optional for Small Posts. The city feed must therefore fall back to the
+  // author's persisted public city instead of silently excluding every location-free post.
+  // An explicit post/place city always wins, so a post tagged to another city cannot leak
+  // into the viewer's selected city merely because its author lives there.
+  const authorProfile = parseJsonObject(author?.profile);
+  const authorMetadata = parseJsonObject(author?.metadata);
+  return normalizeAuraCommunityCity(
+    author?.city || (authorProfile as any).city || (authorMetadata as any).city
+  );
 }
 
 function feedPhotoPostWhere(postAlias = 'p'): string {
@@ -4823,7 +5423,7 @@ function feedPhotoPostWhere(postAlias = 'p'): string {
 
 function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
-  if (mediaType === 'video') return url;
+  if (mediaType === 'video') return streamPlaybackUrl(url);
   return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'feed');
 }
 
@@ -4932,8 +5532,15 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   const likesCount = Math.max(0, Number(post.live_likes_count ?? post.likes_count ?? 0));
   const commentsCount = Math.max(0, Number(post.live_comments_count ?? post.comments_count ?? 0));
   const savesCount = Math.max(0, Number(post.live_saves_count ?? post.saves_count ?? 0));
-  const isLiked = post.is_liked === true || post.is_liked === 1 || post.is_liked === '1';
-  const isSaved = post.is_saved === true || post.is_saved === 1 || post.is_saved === '1' || post.saved === true || post.saved === 1 || post.saved === '1';
+  const isLiked =
+    post.is_liked === true || post.is_liked === 1 || post.is_liked === '1' ||
+    post.viewer_liked === true || post.viewer_liked === 1 || post.viewer_liked === '1' ||
+    post.liked_by_me === true || post.liked_by_me === 1 || post.liked_by_me === '1';
+  const isSaved =
+    post.is_saved === true || post.is_saved === 1 || post.is_saved === '1' ||
+    post.saved === true || post.saved === 1 || post.saved === '1' ||
+    post.viewer_saved === true || post.viewer_saved === 1 || post.viewer_saved === '1' ||
+    post.saved_by_me === true || post.saved_by_me === 1 || post.saved_by_me === '1';
   const mediaUrls = sanitizeMediaReferences(post.images, post.image);
   const primaryMediaUrl = safeMediaReference(post.image) || mediaUrls[0] || '';
   const mediaTypes = parseJsonArray(post.media_types).map((item) => String(item || '').toLowerCase().includes('video') ? 'video' : 'image');
@@ -5066,47 +5673,2394 @@ function feedPostPayload(post: any, likedBy: string[] = [], env?: Env) {
   return payload;
 }
 
-async function getPostEngagementState(db: D1Database, postId: string, userId: string) {
-  await ensureLikeUniquenessSchema(db);
-  await reconcileLegacyDiscoverLikes(db, postId);
-  await coalesceViewerPostInteractions(db, postId, userId);
-  const relatedUserIds = await relatedInteractionUserIds(db, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const row: any = await db.prepare(
-    `SELECT
-       COALESCE(p.likes_count, 0) AS stored_likes_count,
-       COALESCE(p.comments_count, 0) AS stored_comments_count,
-       COALESCE(p.saves_count, 0) AS stored_saves_count,
-       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) AS counted_likes_count,
-       (SELECT COUNT(*) FROM comments WHERE post_id = p.id AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')) AS counted_comments_count,
-       (SELECT COUNT(*) FROM saved_posts WHERE post_id = p.id) AS counted_saves_count,
-       EXISTS (SELECT 1 FROM likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS saved`
-  + ' FROM posts p WHERE p.id = ?'
-  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds, postId).first();
+const SUPABASE_APP_POST_SELECT = [
+  'id',
+  'legacy_post_id',
+  'user_id',
+  'app_user_id',
+  'title',
+  'content',
+  'visibility',
+  'status',
+  'post_type',
+  'category',
+  'location',
+  'media',
+  'media_dimensions',
+  'editor_data',
+  'product_tags',
+  'tagged_users',
+  'metadata',
+  'likes_count',
+  'comments_count',
+  'saves_count',
+  'created_at',
+  'updated_at',
+  'legacy_created_at',
+  'legacy_updated_at',
+].join(',');
 
-  const state = {
-    likes_count: Math.max(0, Number(row?.counted_likes_count || 0)),
-    comments_count: Math.max(0, Number(row?.counted_comments_count || 0)),
-    saves_count: Math.max(0, Number(row?.counted_saves_count || 0)),
-    liked: row?.is_liked === true || row?.is_liked === 1 || row?.is_liked === '1',
-    saved: row?.saved === true || row?.saved === 1 || row?.saved === '1',
+type SupabasePostReadOptions = {
+  postId?: string;
+  postIds?: string[];
+  ownerId?: string;
+  category?: DiscoverCategory | 'all';
+  socialScope?: 'friends' | 'city';
+  communityOnly?: boolean;
+  city?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  order?: 'newest' | 'trending';
+};
+
+function postgrestSearchTerm(value: string): string {
+  return cleanText(value, 80).replace(/[(),*]/g, ' ').trim();
+}
+
+function supabaseAccountIdentityKeys(row: any): string[] {
+  const keys: string[] = [];
+  const provider = cleanText(row?.provider, 40);
+  const providerUserId = cleanText(row?.provider_user_id, 240);
+  const emailHash = cleanText(row?.email_hash, 160);
+  if (provider && providerUserId) keys.push(`provider:${provider}:${providerUserId}`);
+  if (emailHash) keys.push(`email:${emailHash}`);
+  return keys;
+}
+
+async function supabaseAccountIdentityActorKeysMap(c: any, userIds: string[]): Promise<Map<string, string[]>> {
+  const cleanUserIds = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const actorKeys = new Map<string, string[]>();
+  if (!cleanUserIds.length) return actorKeys;
+
+  try {
+    const rows = await supabaseAdminQueryRows(c, 'app_account_identities', {
+      select: 'user_id,provider,provider_user_id,email_hash',
+      filters: { user_id: postgrestInFilter(cleanUserIds) },
+      limit: Math.max(50, cleanUserIds.length * 8),
+    });
+    for (const row of rows) {
+      const userId = publicId(row?.user_id, 120);
+      const keys = supabaseAccountIdentityKeys(row);
+      if (!userId || !keys.length) continue;
+      const existing = actorKeys.get(userId) || [];
+      actorKeys.set(userId, Array.from(new Set([...existing, ...keys])));
+    }
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_account_identity_actor_map_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  return actorKeys;
+}
+
+async function supabaseAccountIdentityAliasUserIds(c: any, userIds: string[]): Promise<string[]> {
+  const cleanUserIds = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  if (!cleanUserIds.length) return [];
+
+  try {
+    const ownedIdentities = await supabaseAdminQueryRows(c, 'app_account_identities', {
+      select: 'user_id,provider,provider_user_id,email_hash',
+      filters: { user_id: postgrestInFilter(cleanUserIds) },
+      limit: Math.max(20, cleanUserIds.length * 8),
+    });
+    const identityKeys = new Set(ownedIdentities.flatMap(supabaseAccountIdentityKeys));
+    if (!identityKeys.size) return [];
+
+    const providerUserIds = Array.from(new Set(ownedIdentities.map((row) => cleanText(row?.provider_user_id, 240)).filter(Boolean)));
+    const emailHashes = Array.from(new Set(ownedIdentities.map((row) => cleanText(row?.email_hash, 160)).filter(Boolean)));
+    const orParts: string[] = [];
+    if (providerUserIds.length) orParts.push(`provider_user_id.${postgrestInFilter(providerUserIds)}`);
+    if (emailHashes.length) orParts.push(`email_hash.${postgrestInFilter(emailHashes)}`);
+    if (!orParts.length) return [];
+
+    const matchingIdentities = await supabaseAdminQueryRows(c, 'app_account_identities', {
+      select: 'user_id,provider,provider_user_id,email_hash',
+      filters: { or: `(${orParts.join(',')})` },
+      limit: Math.max(100, (providerUserIds.length + emailHashes.length) * 20),
+    });
+    return Array.from(new Set(matchingIdentities
+      .filter((row) => supabaseAccountIdentityKeys(row).some((key) => identityKeys.has(key)))
+      .map((row) => publicId(row?.user_id, 120))
+      .filter(Boolean)));
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_account_identity_alias_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+    return [];
+  }
+}
+
+async function supabaseAccountIdentityActorKeyMap(c: any, userIds: string[]): Promise<Map<string, string>> {
+  const actorKeys = new Map<string, string>();
+  const allActorKeys = await supabaseAccountIdentityActorKeysMap(c, userIds);
+  for (const [userId, keys] of allActorKeys.entries()) {
+    const key = keys[0];
+    if (key) actorKeys.set(userId, key);
+  }
+  return actorKeys;
+}
+
+async function supabaseRelatedInteractionUserIds(c: any, userId: string): Promise<string[]> {
+  const ids = new Set<string>();
+  const cleanUserId = publicId(userId, 120);
+  if (cleanUserId) ids.add(cleanUserId);
+
+  const payload = c.get?.('jwtPayload') || {};
+  const payloadSupabaseSub = isUuidText(payload?.supabase_sub || payload?.supabaseSub);
+  if (payloadSupabaseSub) ids.add(payloadSupabaseSub);
+
+  const directAuthId = isUuidText(cleanUserId);
+  const orParts: string[] = [];
+  if (cleanUserId) orParts.push(`id.eq.${cleanUserId}`);
+  if (payloadSupabaseSub) orParts.push(`supabase_user_id.eq.${payloadSupabaseSub}`);
+  if (directAuthId) orParts.push(`supabase_user_id.eq.${directAuthId}`);
+
+  if (orParts.length) {
+    try {
+      const rows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,supabase_user_id',
+        filters: { or: `(${orParts.join(',')})` },
+        limit: 20,
+      });
+      for (const row of rows) {
+        const appUserId = publicId(row?.id, 120);
+        const authUserId = isUuidText(row?.supabase_user_id);
+        if (appUserId) ids.add(appUserId);
+        if (authUserId) ids.add(authUserId);
+      }
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_identity_alias_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  const identityAliasUserIds = await supabaseAccountIdentityAliasUserIds(c, Array.from(ids));
+  for (const aliasUserId of identityAliasUserIds) ids.add(aliasUserId);
+  if (identityAliasUserIds.length) {
+    try {
+      const rows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,supabase_user_id',
+        filters: { id: postgrestInFilter(identityAliasUserIds) },
+        limit: Math.max(20, identityAliasUserIds.length),
+      });
+      for (const row of rows) {
+        const appUserId = publicId(row?.id, 120);
+        const authUserId = isUuidText(row?.supabase_user_id);
+        if (appUserId) ids.add(appUserId);
+        if (authUserId) ids.add(authUserId);
+      }
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'supabase_identity_alias_user_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  return Array.from(ids);
+}
+
+async function supabaseUsersByAnyIds(c: any, ids: string[]): Promise<Map<string, any>> {
+  const cleanIds = Array.from(new Set(ids.map((value) => publicId(value, 120)).filter(Boolean)));
+  const map = new Map<string, any>();
+  if (!cleanIds.length) return map;
+  const appIds = cleanIds.filter((id) => !isUuidText(id) || true);
+  const authIds = cleanIds.map((id) => isUuidText(id)).filter((id): id is string => !!id);
+
+  try {
+    if (appIds.length) {
+      const rows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata',
+        filters: { id: postgrestInFilter(appIds) },
+        limit: Math.max(1, appIds.length),
+      });
+      for (const row of rows) {
+        const appUserId = publicId(row?.id, 120);
+        const authUserId = isUuidText(row?.supabase_user_id);
+        if (appUserId) map.set(appUserId, row);
+        if (authUserId) map.set(authUserId, row);
+      }
+    }
+    if (authIds.length) {
+      const rows = await supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,supabase_user_id,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata',
+        filters: { supabase_user_id: postgrestInFilter(authIds) },
+        limit: Math.max(1, authIds.length),
+      });
+      for (const row of rows) {
+        const appUserId = publicId(row?.id, 120);
+        const authUserId = isUuidText(row?.supabase_user_id);
+        if (appUserId) map.set(appUserId, row);
+        if (authUserId) map.set(authUserId, row);
+      }
+    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_users_read_failed', code: getErrorCode(error).slice(0, 180) }));
+  }
+  return map;
+}
+
+async function supabaseBlockedUserIds(c: any, viewerId: string): Promise<Set<string>> {
+  const aliases = await supabaseRelatedInteractionUserIds(c, viewerId);
+  const blocked = new Set<string>();
+  if (!aliases.length) return blocked;
+  try {
+    const rows = await supabaseAdminQueryRows(c, 'app_blocks', {
+      select: 'blocker_id,blocked_id',
+      filters: {
+        or: `(blocker_id.${postgrestInFilter(aliases)},blocked_id.${postgrestInFilter(aliases)})`,
+      },
+      limit: Math.max(50, aliases.length * 20),
+    });
+    for (const row of rows) {
+      const blockerId = publicId(row?.blocker_id, 120);
+      const blockedId = publicId(row?.blocked_id, 120);
+      if (blockerId && aliases.includes(blockerId) && blockedId) blocked.add(blockedId);
+      if (blockedId && aliases.includes(blockedId) && blockerId) blocked.add(blockerId);
+    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_blocks_read_failed', code: getErrorCode(error).slice(0, 180) }));
+  }
+  return blocked;
+}
+
+async function supabaseUserIdsAreBlocked(c: any, leftUserId: string, rightUserId: string): Promise<boolean> {
+  const rightId = publicId(rightUserId, 120);
+  if (!rightId) return false;
+  const blocked = await supabaseBlockedUserIds(c, leftUserId);
+  return blocked.has(rightId);
+}
+
+async function supabaseFollowingUserIds(c: any, viewerId: string, targetIds: string[]): Promise<Set<string>> {
+  const aliases = await supabaseRelatedInteractionUserIds(c, viewerId);
+  const cleanTargets = Array.from(new Set(targetIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const following = new Set<string>();
+  if (!aliases.length || !cleanTargets.length) return following;
+  try {
+    const rows = await supabaseAdminQueryRows(c, 'app_follows', {
+      select: 'app_follower_id,app_following_id,status',
+      filters: {
+        app_follower_id: postgrestInFilter(aliases),
+        app_following_id: postgrestInFilter(cleanTargets),
+      },
+      limit: Math.max(50, cleanTargets.length * aliases.length),
+    });
+    for (const row of rows) {
+      if (cleanText(row?.status || 'active', 40) !== 'active') continue;
+      const followingId = publicId(row?.app_following_id, 120);
+      if (followingId) following.add(followingId);
+    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_follows_read_failed', code: getErrorCode(error).slice(0, 180) }));
+  }
+  return following;
+}
+
+async function supabasePostCommentCounts(c: any, postRows: any[]): Promise<Map<string, number>> {
+  const postIds = Array.from(new Set(postRows.map((row) => publicId(row?.legacy_post_id || row?.id, 120)).filter(Boolean)));
+  const uuidIds = Array.from(new Set(postRows.map((row) => isUuidText(row?.id)).filter((value): value is string => !!value)));
+  const counts = new Map<string, number>();
+  for (const postId of postIds) counts.set(postId, 0);
+  if (!postIds.length && !uuidIds.length) return counts;
+
+  const addRows = (rows: any[]) => {
+    for (const row of rows) {
+      const status = cleanText(row?.status || 'active', 40);
+      if (status === 'removed' || status === 'hidden') continue;
+      const postId = publicId(row?.legacy_post_id || row?.post_id, 120);
+      if (!postId) continue;
+      counts.set(postId, (counts.get(postId) || 0) + 1);
+    }
   };
 
-  // Keep denormalized counters repaired from canonical interaction rows so old
-  // duplicate/stale counters cannot make a post look liked more than once.
   try {
-    await db.prepare(
-      `UPDATE posts
-       SET likes_count = ?,
-           comments_count = ?,
-           saves_count = ?
-       WHERE id = ?`
-    )
-      .bind(state.likes_count, state.comments_count, state.saves_count, postId)
-      .run();
-  } catch {}
-  return state;
+    if (postIds.length) {
+      addRows(await supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_post_id,post_id,status',
+        filters: { legacy_post_id: postgrestInFilter(postIds) },
+        limit: Math.max(1000, postIds.length * 300),
+      }));
+    }
+    if (uuidIds.length) {
+      addRows(await supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_post_id,post_id,status',
+        filters: { post_id: postgrestInFilter(uuidIds) },
+        limit: Math.max(1000, uuidIds.length * 300),
+      }));
+    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_comment_counts_failed', code: getErrorCode(error).slice(0, 180) }));
+  }
+  return counts;
+}
+
+async function supabasePostCommentCount(c: any, postId: string): Promise<number> {
+  const rows = await supabasePostCommentCounts(c, [{ id: isUuidText(postId), legacy_post_id: postId }]);
+  return rows.get(postId) || 0;
+}
+
+function supabaseCommentPayload(row: any, author: any, fallbackPostId: string, likedByMe = false) {
+  const metadata = parseJsonObject(row?.metadata);
+  const commentId = publicId(row?.legacy_comment_id || row?.id, 120);
+  const appUserId = publicId(row?.app_user_id || author?.id, 120);
+  const parentId = publicId((metadata as any).parent_legacy_id || row?.parent_id, 120);
+  const likesCount = Math.max(0, Number((metadata as any).likes_count || 0));
+  const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
+  return {
+    id: commentId,
+    supabase_comment_id: isUuidText(row?.id),
+    user_id: appUserId,
+    post_id: publicId(row?.legacy_post_id || row?.post_id || fallbackPostId, 120),
+    parent_id: parentId || null,
+    content: cleanMultilineText(row?.body, 1200),
+    body: cleanMultilineText(row?.body, 1200),
+    likes_count: likesCount,
+    post_user_id: publicId((metadata as any).post_user_id, 120),
+    liked_by_me: likedByMe,
+    pinned_at: pinnedAt,
+    is_pinned: !!pinnedAt,
+    user_username: publicUsernameFor(author),
+    user_full_name: author?.full_name,
+    user_profile_image: safeMediaReference(author?.avatar_url),
+    created_at: row?.legacy_created_at || row?.created_at,
+    updated_at: row?.updated_at || row?.created_at,
+  };
+}
+
+async function supabaseVisiblePostForComments(c: any, viewerId: string, postId: string) {
+  const [post] = await supabaseReadVisiblePosts(c, viewerId, { postId, limit: 1 });
+  return post || null;
+}
+
+function supabaseCommentPostFilter(post: any, postId: string): string {
+  const legacyPostId = publicId(postId || post?.id, 120);
+  const supabasePostId = isUuidText(post?.supabase_post_id || postId);
+  const parts: string[] = [];
+  if (legacyPostId) parts.push(`legacy_post_id.eq.${legacyPostId}`);
+  if (supabasePostId) parts.push(`post_id.eq.${supabasePostId}`);
+  return `(${parts.join(',')})`;
+}
+
+type SupabaseCommentIdentity = {
+  requestedCommentId: string;
+  legacyCommentId: string;
+  commentUuid: string;
+  legacyPostId: string;
+  postUuid: string;
+  metadata: Record<string, unknown>;
+  row: any;
+};
+
+function supabaseCommentIdentityFromRow(row: any, requestedCommentId: string): SupabaseCommentIdentity {
+  const requested = publicId(requestedCommentId, 120);
+  const requestedUuid = isUuidText(requested);
+  return {
+    requestedCommentId: requested,
+    legacyCommentId: publicId(row?.legacy_comment_id || (requestedUuid ? '' : requested), 120),
+    commentUuid: isUuidText(row?.id) || requestedUuid || '',
+    legacyPostId: publicId(row?.legacy_post_id, 120),
+    postUuid: isUuidText(row?.post_id) || '',
+    metadata: parseJsonObject(row?.metadata),
+    row,
+  };
+}
+
+function supabaseCommentRowOrFilter(identity: SupabaseCommentIdentity): string {
+  const parts: string[] = [];
+  if (identity.legacyCommentId) parts.push(`legacy_comment_id.eq.${identity.legacyCommentId}`);
+  if (identity.commentUuid) parts.push(`id.eq.${identity.commentUuid}`);
+  if (!parts.length && identity.requestedCommentId) parts.push(`legacy_comment_id.eq.${identity.requestedCommentId}`);
+  return `(${parts.join(',')})`;
+}
+
+function supabaseCommentLikeOrFilter(identity: SupabaseCommentIdentity): string {
+  const parts: string[] = [];
+  if (identity.legacyCommentId) parts.push(`legacy_comment_id.eq.${identity.legacyCommentId}`);
+  if (identity.commentUuid) parts.push(`comment_id.eq.${identity.commentUuid}`);
+  if (!parts.length && identity.requestedCommentId) parts.push(`legacy_comment_id.eq.${identity.requestedCommentId}`);
+  return `(${parts.join(',')})`;
+}
+
+async function supabaseResolveCommentIdentity(c: any, commentId: string): Promise<SupabaseCommentIdentity | null> {
+  const cleanCommentId = publicId(commentId, 120);
+  if (!cleanCommentId) return null;
+  const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,legacy_comment_id,legacy_post_id,post_id,app_user_id,user_id,body,status,metadata,created_at,updated_at,legacy_created_at',
+    filters: {
+      or: isUuidText(cleanCommentId)
+        ? `(legacy_comment_id.eq.${cleanCommentId},id.eq.${cleanCommentId})`
+        : `(legacy_comment_id.eq.${cleanCommentId})`,
+    },
+    limit: 1,
+  });
+  return rows[0] ? supabaseCommentIdentityFromRow(rows[0], cleanCommentId) : null;
+}
+
+async function supabaseViewerLikedCommentIds(c: any, commentRows: any[], userId: string): Promise<Set<string>> {
+  const liked = new Set<string>();
+  if (!commentRows.length) return liked;
+  const legacyCommentIds = Array.from(new Set(commentRows.map((row) => publicId(row?.legacy_comment_id, 120)).filter(Boolean)));
+  const commentUuids = Array.from(new Set(commentRows.map((row) => isUuidText(row?.id)).filter((value): value is string => !!value)));
+  const orParts: string[] = [];
+  if (legacyCommentIds.length) orParts.push(`legacy_comment_id.${postgrestInFilter(legacyCommentIds)}`);
+  if (commentUuids.length) orParts.push(`comment_id.${postgrestInFilter(commentUuids)}`);
+  if (!orParts.length) return liked;
+
+  const addRows = (rows: any[]) => {
+    for (const row of rows) {
+      const legacyCommentId = publicId(row?.legacy_comment_id, 120);
+      const commentUuid = isUuidText(row?.comment_id);
+      if (legacyCommentId) liked.add(legacyCommentId);
+      if (commentUuid) liked.add(commentUuid);
+    }
+  };
+
+  try {
+    const keys = await supabaseInteractionIdentityKeys(c, [userId]);
+    if (keys.appUserIds.length) {
+      addRows(await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: `(${orParts.join(',')})`,
+        app_user_id: postgrestInFilter(keys.appUserIds),
+      }, 'legacy_comment_id,comment_id', Math.max(1, commentRows.length * 2)));
+    }
+    if (keys.authUserIds.length) {
+      addRows(await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: `(${orParts.join(',')})`,
+        user_id: postgrestInFilter(keys.authUserIds),
+      }, 'legacy_comment_id,comment_id', Math.max(1, commentRows.length * 2)));
+    }
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_comment_like_state_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  return liked;
+}
+
+async function supabaseViewerCommentLikeExists(c: any, identity: SupabaseCommentIdentity, userId: string): Promise<boolean> {
+  try {
+    const keys = await supabaseInteractionIdentityKeys(c, [userId]);
+    if (keys.appUserIds.length) {
+      const appRows = await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: supabaseCommentLikeOrFilter(identity),
+        app_user_id: postgrestInFilter(keys.appUserIds),
+      }, 'id', 1);
+      if (appRows.length > 0) return true;
+    }
+    if (keys.authUserIds.length) {
+      const authRows = await supabaseAdminSelectRows(c, 'post_comment_likes', {
+        or: supabaseCommentLikeOrFilter(identity),
+        user_id: postgrestInFilter(keys.authUserIds),
+      }, 'id', 1);
+      return authRows.length > 0;
+    }
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+  }
+  return false;
+}
+
+async function supabaseDeleteCommentLikesForViewer(c: any, identity: SupabaseCommentIdentity, userId: string) {
+  const keys = await supabaseInteractionIdentityKeys(c, [userId]);
+  if (keys.appUserIds.length) {
+    await supabaseAdminDeleteRows(c, 'post_comment_likes', {
+      or: supabaseCommentLikeOrFilter(identity),
+      app_user_id: postgrestInFilter(keys.appUserIds),
+    });
+  }
+  if (keys.authUserIds.length) {
+    await supabaseAdminDeleteRows(c, 'post_comment_likes', {
+      or: supabaseCommentLikeOrFilter(identity),
+      user_id: postgrestInFilter(keys.authUserIds),
+    });
+  }
+}
+
+async function supabaseCommentLikeActorCount(c: any, identity: SupabaseCommentIdentity): Promise<number> {
+  let rows: any[] = [];
+  try {
+    rows = await supabaseAdminSelectRows(c, 'post_comment_likes', {
+      or: supabaseCommentLikeOrFilter(identity),
+    }, 'app_user_id,user_id,legacy_comment_id,comment_id', 10000);
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+    return Math.max(0, Number((identity.metadata as any).likes_count || 0));
+  }
+  const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, appUserIds);
+  const actors = new Set<string>();
+  for (const row of rows) {
+    const appUserId = publicId(row?.app_user_id, 120);
+    const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
+    const actor = cleanText(authUserId || appToIdentityActor.get(appUserId) || appUserId, 160);
+    if (actor) actors.add(actor);
+  }
+  return actors.size;
+}
+
+async function supabasePatchCommentMetadata(c: any, identity: SupabaseCommentIdentity, patch: Record<string, unknown>) {
+  const metadata = { ...identity.metadata, ...patch };
+  await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, {
+    metadata,
+    updated_at: now(),
+  });
+  identity.metadata = metadata;
+}
+
+async function supabaseSetCommentLike(c: any, commentId: string, userId: string, requested: boolean | null) {
+  const identity = await supabaseResolveCommentIdentity(c, commentId);
+  if (!identity || cleanText(identity.row?.status || 'active', 40) !== 'active') {
+    return { status: 404 as const, body: { detail: 'Comment not found' } };
+  }
+  const postKey = identity.legacyPostId || identity.postUuid;
+  const visiblePost = await supabaseVisiblePostForComments(c, userId, postKey);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Comment not found' } };
+
+  let nextLiked = requested;
+  if (nextLiked === null) {
+    nextLiked = !(await supabaseViewerCommentLikeExists(c, identity, userId));
+  }
+
+  await supabaseDeleteCommentLikesForViewer(c, identity, userId);
+  if (nextLiked) {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, userId);
+    const row: any = {
+      legacy_comment_id: identity.legacyCommentId || identity.requestedCommentId,
+      app_user_id: publicId(userId, 120),
+      metadata: { source: 'cloudflare_worker_primary' },
+      legacy_created_at: now(),
+    };
+    if (identity.commentUuid) row.comment_id = identity.commentUuid;
+    if (authUserId) row.user_id = authUserId;
+    await supabaseAdminUpsert(c, 'post_comment_likes', [row], 'legacy_comment_id,app_user_id');
+  }
+
+  const likesCount = await supabaseCommentLikeActorCount(c, identity);
+  await supabasePatchCommentMetadata(c, identity, { likes_count: likesCount });
+  return { status: 200 as const, body: { liked: !!nextLiked, likes_count: likesCount } };
+}
+
+async function supabaseSetCommentPinned(c: any, commentId: string, userId: string, requested: boolean | null) {
+  const identity = await supabaseResolveCommentIdentity(c, commentId);
+  if (!identity || cleanText(identity.row?.status || 'active', 40) !== 'active') {
+    return { status: 404 as const, body: { detail: 'Comment not found' } };
+  }
+  const postKey = identity.legacyPostId || identity.postUuid;
+  const visiblePost = await supabaseVisiblePostForComments(c, userId, postKey);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Comment not found' } };
+  if (publicId(visiblePost?.user_id, 120) !== publicId(userId, 120)) {
+    return { status: 403 as const, body: { detail: 'Only the creator can pin comments.' } };
+  }
+
+  const shouldPin = requested === null ? true : requested;
+  const pinnedAt = shouldPin ? now() : null;
+  if (shouldPin) {
+    const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+      select: 'id,legacy_comment_id,legacy_post_id,post_id,metadata,status',
+      filters: {
+        or: supabaseCommentPostFilter(visiblePost, postKey),
+        status: postgrestEqFilter('active'),
+      },
+      limit: 500,
+    });
+    for (const row of rows) {
+      const rowIdentity = supabaseCommentIdentityFromRow(row, publicId(row?.legacy_comment_id || row?.id, 120));
+      const isCurrent = (rowIdentity.legacyCommentId && rowIdentity.legacyCommentId === identity.legacyCommentId)
+        || (rowIdentity.commentUuid && rowIdentity.commentUuid === identity.commentUuid);
+      await supabasePatchCommentMetadata(c, rowIdentity, { pinned_at: isCurrent ? pinnedAt : null });
+    }
+  } else {
+    await supabasePatchCommentMetadata(c, identity, { pinned_at: null });
+  }
+  return { status: 200 as const, body: { pinned: shouldPin, pinned_at: pinnedAt } };
+}
+
+async function supabaseCreatePostComment(c: any, input: {
+  postId: string;
+  userId: string;
+  content: string;
+  parentId?: string | null;
+  clientRequestId?: string;
+}) {
+  const visiblePost = await supabaseVisiblePostForComments(c, input.userId, input.postId);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Post not found' } };
+
+  const nowIso = now();
+  const userRows = await supabaseUsersByAnyIds(c, [input.userId]);
+  const user = userRows.get(input.userId) || await getSupabaseSessionUserByAnyId(c, input.userId);
+  let parent: any = null;
+  if (input.parentId) {
+    const parentRows = await supabaseAdminQueryRows(c, 'post_comments', {
+      select: 'id,legacy_comment_id,app_user_id,user_id,status,metadata',
+      filters: {
+        or: isUuidText(input.parentId)
+          ? `(legacy_comment_id.eq.${input.parentId},id.eq.${input.parentId})`
+          : `(legacy_comment_id.eq.${input.parentId})`,
+        status: postgrestEqFilter('active'),
+      },
+      limit: 1,
+    });
+    parent = parentRows[0] || null;
+    if (!parent) return { status: 404 as const, body: { detail: 'Comment to reply to was not found.' } };
+  }
+
+  const duplicateRows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,legacy_comment_id,legacy_post_id,app_user_id,user_id,body,status,metadata,legacy_created_at,created_at,updated_at',
+    filters: {
+      legacy_post_id: postgrestEqFilter(input.postId),
+      app_user_id: postgrestEqFilter(input.userId),
+      body: postgrestEqFilter(input.content),
+      created_at: `gte.${new Date(Date.now() - 30_000).toISOString()}`,
+    },
+    order: 'created_at.desc',
+    limit: 1,
+  }).catch(() => []);
+  if (duplicateRows[0]) {
+    return {
+      status: 200 as const,
+      body: {
+        ...supabaseCommentPayload(duplicateRows[0], user, input.postId),
+        post_comments_count: await supabasePostCommentCount(c, input.postId),
+        idempotent_replay: true,
+      },
+    };
+  }
+
+  const id = uuid();
+  const authUserId = await supabaseAuthUserIdForAppUserId(c, input.userId);
+  const parentUuid = isUuidText(parent?.id);
+  const row: any = {
+    id,
+    legacy_comment_id: id,
+    legacy_post_id: input.postId,
+    post_id: isUuidText(visiblePost?.supabase_post_id || ''),
+    app_user_id: input.userId,
+    user_id: authUserId || null,
+    parent_id: parentUuid || null,
+    body: input.content,
+    status: 'active',
+    metadata: {
+      source: 'cloudflare_worker_primary',
+      parent_legacy_id: publicId(input.parentId, 120),
+      client_request_id: cleanText(input.clientRequestId, 160),
+      post_user_id: publicId(visiblePost?.user_id, 120),
+      likes_count: 0,
+    },
+    legacy_created_at: nowIso,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+  await supabaseAdminUpsert(c, 'post_comments', [row], 'legacy_comment_id');
+  const engagement = await getSupabasePostEngagementState(c, input.postId, input.userId);
+  const actorName = cleanText(user?.full_name || user?.username || 'Someone', 80);
+  const postOwnerId = publicId(visiblePost?.user_id, 120);
+  const parentOwnerId = publicId(parent?.app_user_id || parent?.user_id, 120);
+  const notificationTargetId = parentOwnerId && parentOwnerId !== input.userId
+    ? parentOwnerId
+    : (postOwnerId && postOwnerId !== input.userId ? postOwnerId : '');
+  if (notificationTargetId) {
+    const notificationType = parentOwnerId && parentOwnerId !== input.userId ? 'comment_reply' : 'comment';
+    runBackgroundTask(c, 'supabase_comment_notification_failed', async () => {
+      await insertNotificationOnce(c, {
+        userId: notificationTargetId,
+        type: notificationType,
+        title: notificationType === 'comment_reply' ? 'New Reply' : 'New Comment',
+        body: notificationType === 'comment_reply'
+          ? `${actorName} replied to your comment.`
+          : `${actorName} commented on your post.`,
+        data: {
+          post_id: input.postId,
+          comment_id: id,
+          parent_comment_id: publicId(input.parentId, 120),
+          from_user_id: input.userId,
+          actor_name: actorName,
+        },
+        dedupeKey: `${notificationType}:${input.userId}:${id}`,
+        dedupeSeconds: 60,
+      });
+    });
+  }
+  return {
+    status: 200 as const,
+    body: {
+      ...supabaseCommentPayload(row, user, input.postId),
+      post_user_id: visiblePost.user_id,
+      post_comments_count: engagement.comments_count,
+    },
+  };
+}
+
+async function supabaseReadPostComments(c: any, postId: string, userId: string, limit: number) {
+  const visiblePost = await supabaseVisiblePostForComments(c, userId, postId);
+  if (!visiblePost) return { status: 404 as const, body: { detail: 'Post not found' } };
+  const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,post_id,user_id,parent_id,body,status,metadata,created_at,updated_at,legacy_comment_id,legacy_post_id,app_user_id,legacy_created_at',
+    filters: {
+      or: supabaseCommentPostFilter(visiblePost, postId),
+      status: postgrestEqFilter('active'),
+    },
+    order: 'legacy_created_at.asc.nullslast,created_at.asc',
+    limit,
+  });
+  const userIds = rows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
+  const authors = await supabaseUsersByAnyIds(c, userIds);
+  const likedCommentIds = await supabaseViewerLikedCommentIds(c, rows, userId);
+  const comments = rows.map((row) => {
+    const author = authors.get(publicId(row?.app_user_id, 120)) || authors.get(isUuidText(row?.user_id) || '') || {};
+    const legacyCommentId = publicId(row?.legacy_comment_id, 120);
+    const commentUuid = isUuidText(row?.id);
+    const likedByMe = !!((legacyCommentId && likedCommentIds.has(legacyCommentId)) || (commentUuid && likedCommentIds.has(commentUuid)));
+    return supabaseCommentPayload(row, author, postId, likedByMe);
+  });
+  comments.sort((a, b) => {
+    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+    const aParent = String(a.parent_id || a.id);
+    const bParent = String(b.parent_id || b.id);
+    if (aParent !== bParent) return aParent.localeCompare(bParent);
+    return (Date.parse(String(a.created_at || '')) || 0) - (Date.parse(String(b.created_at || '')) || 0);
+  });
+  return { status: 200 as const, body: comments };
+}
+
+async function supabaseUpdateCommentStatus(c: any, commentId: string, userId: string, status: 'removed' | 'hidden') {
+  const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+    select: 'id,legacy_comment_id,legacy_post_id,post_id,app_user_id,user_id,status,metadata',
+    filters: {
+      or: isUuidText(commentId)
+        ? `(legacy_comment_id.eq.${commentId},id.eq.${commentId})`
+        : `(legacy_comment_id.eq.${commentId})`,
+    },
+    limit: 1,
+  });
+  const comment = rows[0];
+  if (!comment || cleanText(comment.status || 'active', 40) !== 'active') return { status: 404 as const, body: { detail: 'Comment not found' } };
+  const identity = supabaseCommentIdentityFromRow(comment, commentId);
+  const commentOwner = publicId(comment.app_user_id, 120);
+  const metadata = parseJsonObject(comment.metadata);
+  const postOwner = publicId((metadata as any).post_user_id, 120);
+  if (status === 'removed' && commentOwner !== userId) return { status: 403 as const, body: { detail: 'Not your comment' } };
+  if (status === 'hidden' && postOwner !== userId) return { status: 403 as const, body: { detail: 'Only the creator can hide comments.' } };
+  const patch = {
+    status,
+    metadata: {
+      ...metadata,
+      hidden_by_user_id: status === 'hidden' ? userId : undefined,
+      removed_reason: status === 'hidden' ? 'Hidden by creator' : 'Deleted by commenter',
+      removed_at: now(),
+      pinned_at: null,
+    },
+    updated_at: now(),
+  };
+  await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, patch);
+  const postId = publicId(comment.legacy_post_id || comment.post_id, 120);
+  const engagement = await getSupabasePostEngagementState(c, postId, userId);
+  return { status: 200 as const, body: status === 'hidden' ? { hidden: true, comments_count: engagement.comments_count } : { deleted: true, comments_count: engagement.comments_count } };
+}
+
+async function supabaseUserByAnyId(c: any, userId: string): Promise<any | null> {
+  const rows = await supabaseUsersByAnyIds(c, [userId]);
+  return rows.get(publicId(userId, 120)) || rows.get(isUuidText(userId) || '') || null;
+}
+
+async function supabaseFollowStats(c: any, userId: string) {
+  const cleanUserId = publicId(userId, 120);
+  if (!cleanUserId) return { followers_count: 0, following_count: 0 };
+  const [followers, following] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_follows', {
+      select: 'app_follower_id,status',
+      filters: { app_following_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') },
+      limit: 10000,
+    }).catch(() => []),
+    supabaseAdminQueryRows(c, 'app_follows', {
+      select: 'app_following_id,status',
+      filters: { app_follower_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') },
+      limit: 10000,
+    }).catch(() => []),
+  ]);
+  return {
+    followers_count: followers.length,
+    following_count: following.length,
+  };
+}
+
+async function supabaseBlockPair(c: any, firstUserId: string, secondUserId: string): Promise<any | null> {
+  const first = publicId(firstUserId, 120);
+  const second = publicId(secondUserId, 120);
+  if (!first || !second || first === second) return null;
+  const [forward, reverse] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_blocks', {
+      select: 'id,blocker_id,blocked_id,created_at',
+      filters: { blocker_id: postgrestEqFilter(first), blocked_id: postgrestEqFilter(second) },
+      limit: 1,
+    }).catch(() => []),
+    supabaseAdminQueryRows(c, 'app_blocks', {
+      select: 'id,blocker_id,blocked_id,created_at',
+      filters: { blocker_id: postgrestEqFilter(second), blocked_id: postgrestEqFilter(first) },
+      limit: 1,
+    }).catch(() => []),
+  ]);
+  return forward[0] || reverse[0] || null;
+}
+
+async function supabaseIsFollowing(c: any, followerId: string, followingId: string): Promise<boolean> {
+  const follower = publicId(followerId, 120);
+  const following = publicId(followingId, 120);
+  if (!follower || !following || follower === following) return false;
+  const rows = await supabaseAdminQueryRows(c, 'app_follows', {
+    select: 'app_follower_id',
+    filters: {
+      app_follower_id: postgrestEqFilter(follower),
+      app_following_id: postgrestEqFilter(following),
+      status: postgrestEqFilter('active'),
+    },
+    limit: 1,
+  }).catch(() => []);
+  return rows.length > 0;
+}
+
+async function supabasePublicUserPayload(c: any, viewerId: string, targetId: string) {
+  const target = await supabaseUserByAnyId(c, targetId);
+  if (!target || supabaseUserStatus(target) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
+  const targetAppId = publicId(target.id, 120);
+  const [followStats, isFollowing, friendStatus, block] = await Promise.all([
+    supabaseFollowStats(c, targetAppId),
+    viewerId && viewerId !== targetAppId ? supabaseIsFollowing(c, viewerId, targetAppId) : Promise.resolve(false),
+    viewerId && viewerId !== targetAppId ? supabaseFriendStatus(c, viewerId, targetAppId) : Promise.resolve({ status: 'self' }),
+    viewerId && viewerId !== targetAppId ? supabaseBlockPair(c, viewerId, targetAppId) : Promise.resolve(null),
+  ]);
+  const connectionStatus = cleanText((friendStatus as any).status, 40) || (isFollowing ? 'connected' : 'none');
+  const connected = connectionStatus === 'connected' || connectionStatus === 'friends';
+  const viewerHasBlocked = publicId(block?.blocker_id, 120) === viewerId && publicId(block?.blocked_id, 120) === targetAppId;
+  const viewerBlockedBy = publicId(block?.blocker_id, 120) === targetAppId && publicId(block?.blocked_id, 120) === viewerId;
+  const counts = parseJsonObject(target.counts);
+  const safe = safeUserPayload({
+    id: targetAppId,
+    username: target.username,
+    full_name: target.full_name,
+    profile_image: target.avatar_url,
+    cover_image: target.cover_url,
+    bio: target.bio,
+    city: target.city,
+    is_private: target.is_private ? 1 : 0,
+    is_verified: target.is_verified ? 1 : 0,
+    followers_count: followStats.followers_count,
+    following_count: followStats.following_count,
+    posts_count: Number((counts as any).posts_count || 0),
+  });
+  const privacyLocked = !!target.is_private && viewerId !== targetAppId && !connected;
+  if (viewerBlockedBy || privacyLocked) {
+    return {
+      status: 200 as const,
+      body: {
+        id: safe.id,
+        username: safe.username,
+        full_name: safe.full_name,
+        profile_image: safe.profile_image,
+        followers_count: safe.followers_count,
+        following_count: safe.following_count,
+        posts_count: safe.posts_count,
+        is_following: connected,
+        connection_status: connectionStatus,
+        connection_request_id: cleanText((friendStatus as any).request_id, 120),
+        viewer_has_blocked: viewerHasBlocked,
+        viewer_blocked_by: viewerBlockedBy,
+        is_private: true,
+        privacy_locked: true,
+      },
+    };
+  }
+  return { status: 200 as const, body: { ...safe, is_following: connected, connection_status: connectionStatus, connection_request_id: cleanText((friendStatus as any).request_id, 120), viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy } };
+}
+
+async function supabaseSetFollowState(c: any, followerId: string, followingId: string, requested: boolean | null) {
+  const inputFollower = publicId(followerId, 120);
+  const inputFollowing = publicId(followingId, 120);
+  if (!inputFollower || !inputFollowing) return { status: 400 as const, body: { detail: 'Cannot follow yourself' } };
+  const [followerRow, target] = await Promise.all([
+    supabaseUserByAnyId(c, inputFollower),
+    supabaseUserByAnyId(c, inputFollowing),
+  ]);
+  const follower = publicId(followerRow?.id || inputFollower, 120);
+  const following = publicId(target?.id || inputFollowing, 120);
+  if (!follower || !following || follower === following) return { status: 400 as const, body: { detail: 'Cannot follow yourself' } };
+  if (!followerRow || supabaseUserStatus(followerRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot follow profiles right now.' } };
+  if (!target || supabaseUserStatus(target) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
+  if (await supabaseBlockPair(c, follower, following)) return { status: 403 as const, body: { detail: 'You cannot follow this profile.' } };
+  const wasFollowing = await supabaseIsFollowing(c, follower, following);
+  const nextFollowing = requested === null ? !wasFollowing : requested;
+  if (nextFollowing) {
+    const [followerAuth, followingAuth] = await Promise.all([
+      supabaseAuthUserIdForAppUserId(c, follower),
+      supabaseAuthUserIdForAppUserId(c, following),
+    ]);
+    await supabaseAdminUpsert(c, 'app_follows', [{
+      app_follower_id: follower,
+      app_following_id: following,
+      follower_id: followerAuth || null,
+      following_id: followingAuth || null,
+      status: 'active',
+      metadata: { source: 'cloudflare_worker_primary' },
+      legacy_created_at: now(),
+      updated_at: now(),
+    }], 'app_follower_id,app_following_id');
+  } else {
+    await supabaseAdminDeleteRows(c, 'app_follows', {
+      app_follower_id: postgrestEqFilter(follower),
+      app_following_id: postgrestEqFilter(following),
+    });
+  }
+  const [followerStats, followingStats] = await Promise.all([
+    supabaseFollowStats(c, follower),
+    supabaseFollowStats(c, following),
+  ]);
+  if (nextFollowing && !wasFollowing) {
+    runBackgroundTask(c, 'supabase_follow_notification_failed', async () => {
+      await insertNotificationOnce(c, {
+        userId: following,
+        type: 'follow',
+        title: 'New Connection',
+        body: `${cleanText(followerRow?.full_name || followerRow?.username || 'Someone', 80)} connected with you.`,
+        data: {
+          from_user_id: follower,
+          actor_name: cleanText(followerRow?.full_name || followerRow?.username || 'Someone', 80),
+        },
+        dedupeKey: `follow:${follower}:${following}`,
+        dedupeSeconds: 86400,
+      });
+    });
+  }
+  return {
+    status: 200 as const,
+    body: {
+      following: nextFollowing,
+      following_count: followerStats.following_count,
+      followers_count: followingStats.followers_count,
+    },
+  };
+}
+
+async function supabaseFriendshipExists(c: any, userId: string, friendId: string): Promise<boolean> {
+  const user = publicId(userId, 120);
+  const friend = publicId(friendId, 120);
+  if (!user || !friend || user === friend) return false;
+  const rows = await supabaseAdminQueryRows(c, 'app_friendships', {
+    select: 'user_id',
+    filters: {
+      user_id: postgrestEqFilter(user),
+      friend_id: postgrestEqFilter(friend),
+    },
+    limit: 1,
+  }).catch(() => []);
+  return rows.length > 0;
+}
+
+async function supabaseFriendRequestRows(c: any, filters: Record<string, string>, limit = 1): Promise<any[]> {
+  return supabaseAdminQueryRows(c, 'app_friend_requests', {
+    select: '*',
+    filters,
+    order: 'created_at.desc',
+    limit,
+  }).catch(() => []);
+}
+
+function sanitizeConnectionNote(value: unknown): string {
+  const note = cleanMultilineText(value, 140).trim();
+  if (!note) return '';
+  const compact = note.replace(/\s+/g, ' ');
+  if (compact.length > 120) return compact.slice(0, 120).trim();
+  return compact;
+}
+
+async function markConnectionRequestNotificationRead(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  if (!uid || !rid) return;
+  await supabaseAdminPatchRows(c, 'app_notifications', {
+    user_id: postgrestEqFilter(uid),
+    type: postgrestEqFilter('connection_request'),
+    reference_id: postgrestEqFilter(rid),
+  }, { is_read: true, updated_at: now() }).catch(() => undefined);
+}
+
+async function supabaseCreateFriendRequest(c: any, fromUserId: string, toUserId: string, input: { note?: string } = {}) {
+  const [fromRow, toRow] = await Promise.all([
+    supabaseUserByAnyId(c, fromUserId),
+    supabaseUserByAnyId(c, toUserId),
+  ]);
+  const from = publicId(fromRow?.id || fromUserId, 120);
+  const to = publicId(toRow?.id || toUserId, 120);
+  if (!from || !to || from === to) return { status: 400 as const, body: { detail: 'Cannot connect with yourself' } };
+  if (!fromRow || supabaseUserStatus(fromRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot send connection requests right now.' } };
+  if (!toRow || supabaseUserStatus(toRow) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
+  if (await supabaseBlockPair(c, from, to)) return { status: 403 as const, body: { detail: 'You cannot connect with this profile.' } };
+  if (await supabaseFriendshipExists(c, from, to)) return { status: 200 as const, body: { detail: 'Already connected', status: 'connected' } };
+
+  const [outgoing, incoming] = await Promise.all([
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(from), to_user_id: postgrestEqFilter(to) }, 1),
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(to), to_user_id: postgrestEqFilter(from), status: postgrestEqFilter('pending') }, 1),
+  ]);
+  if (incoming[0]) return { status: 200 as const, body: { detail: 'This profile already sent you a request.', status: 'request_received', request_id: publicId(incoming[0].id, 120) } };
+  const existing = outgoing[0];
+  if (existing?.status === 'pending') return { status: 200 as const, body: { detail: 'Request already sent', status: 'request_sent', request_id: publicId(existing.id, 120) } };
+  if (existing?.status === 'accepted') return { status: 200 as const, body: { detail: 'Already connected', status: 'connected', request_id: publicId(existing.id, 120) } };
+
+  const id = publicId(existing?.id, 120) || uuid();
+  const ts = now();
+  const note = sanitizeConnectionNote(input.note);
+  const actorName = cleanText(fromRow?.full_name || fromRow?.username, 120) || publicUsernameFor({ username: fromRow?.username }) || 'Someone';
+  await supabaseAdminUpsert(c, 'app_friend_requests', [{
+    id,
+    from_user_id: from,
+    to_user_id: to,
+    status: 'pending',
+    note,
+    accepted_at: null,
+    responded_at: null,
+    expired_at: null,
+    cancelled_at: null,
+    metadata: { source: 'cloudflare_worker_primary', connection: true },
+    updated_at: ts,
+    created_at: existing?.created_at || ts,
+  }], 'from_user_id,to_user_id');
+  await insertNotificationOnce(c, {
+    userId: to,
+    type: 'connection_request',
+    title: 'Connection Request',
+    body: `${actorName} wants to connect with you.`,
+    data: {
+      from_user_id: from,
+      actor_name: actorName,
+      connection_id: id,
+      request_id: id,
+      reference_id: id,
+      note,
+    },
+    dedupeKey: `connection_request:${from}:${to}:${id}`,
+    dedupeSeconds: 30 * 86400,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'connection_request_notification_failed', code: getErrorCode(error).slice(0, 180) }));
+  });
+  return { status: 200 as const, body: { id, request_id: id, status: 'request_sent' } };
+}
+
+async function supabaseAcceptFriendRequest(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    id: postgrestEqFilter(rid),
+    to_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 1);
+  const request = rows[0];
+  if (!request) return { status: 404 as const, body: { detail: 'Not found' } };
+  const from = publicId(request.from_user_id, 120);
+  if (!from) return { status: 404 as const, body: { detail: 'Not found' } };
+  const ts = now();
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'accepted', accepted_at: ts, responded_at: ts, updated_at: ts });
+  await supabaseAdminUpsert(c, 'app_friendships', [
+    { user_id: uid, friend_id: from, metadata: { source: 'friend_request', request_id: rid }, created_at: ts, updated_at: ts },
+    { user_id: from, friend_id: uid, metadata: { source: 'friend_request', request_id: rid }, created_at: ts, updated_at: ts },
+  ], 'user_id,friend_id');
+  await markConnectionRequestNotificationRead(c, uid, rid);
+  const accepter = await supabaseUserByAnyId(c, uid).catch(() => null);
+  const actorName = cleanText(accepter?.full_name || accepter?.username, 120) || publicUsernameFor({ username: accepter?.username }) || 'Someone';
+  await insertNotificationOnce(c, {
+    userId: from,
+    type: 'connection_accepted',
+    title: 'Connection Accepted',
+    body: `${actorName} accepted your request.`,
+    data: {
+      from_user_id: uid,
+      actor_name: actorName,
+      connection_id: rid,
+      request_id: rid,
+      reference_id: rid,
+    },
+    dedupeKey: `connection_accepted:${uid}:${from}:${rid}`,
+    dedupeSeconds: 30 * 86400,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'connection_accepted_notification_failed', code: getErrorCode(error).slice(0, 180) }));
+  });
+  return { status: 200 as const, body: { accepted: true, status: 'connected', connection_id: rid } };
+}
+
+async function supabaseRejectFriendRequest(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    id: postgrestEqFilter(rid),
+    to_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 1);
+  if (!rows[0]) return { status: 404 as const, body: { detail: 'Request not found' } };
+  const ts = now();
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'declined', responded_at: ts, updated_at: ts });
+  await markConnectionRequestNotificationRead(c, uid, rid);
+  return { status: 200 as const, body: { declined: true, status: 'declined' } };
+}
+
+async function supabaseCancelFriendRequest(c: any, userId: string, requestId: string) {
+  const uid = publicId(userId, 120);
+  const rid = publicId(requestId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    id: postgrestEqFilter(rid),
+    from_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 1);
+  const request = rows[0];
+  if (!request) return { status: 404 as const, body: { detail: 'Request not found' } };
+  const ts = now();
+  await supabaseAdminPatchRows(c, 'app_friend_requests', { id: postgrestEqFilter(rid) }, { status: 'cancelled', cancelled_at: ts, updated_at: ts });
+  await markConnectionRequestNotificationRead(c, publicId(request.to_user_id, 120), rid);
+  return { status: 200 as const, body: { cancelled: true, status: 'cancelled' } };
+}
+
+async function supabaseFriendRequestsPayload(c: any, userId: string) {
+  const uid = publicId(userId, 120);
+  const rows = await supabaseFriendRequestRows(c, {
+    to_user_id: postgrestEqFilter(uid),
+    status: postgrestEqFilter('pending'),
+  }, 80);
+  const fromIds = Array.from(new Set(rows.map((row) => publicId(row.from_user_id, 120)).filter(Boolean)));
+  const users = await supabaseUsersByAnyIds(c, fromIds);
+  return rows.map((row) => {
+    const sender = users.get(publicId(row.from_user_id, 120)) || {};
+    return {
+      id: publicId(row.id, 120),
+      from_user_id: publicId(row.from_user_id, 120),
+      to_user_id: publicId(row.to_user_id, 120),
+      status: cleanText(row.status, 40) || 'pending',
+      note: sanitizeConnectionNote(row.note),
+      created_at: row.created_at,
+      username: publicUsernameFor({ username: sender?.username }),
+      full_name: cleanText(sender?.full_name, 160),
+      profile_image: safeMediaReference(sender?.avatar_url),
+    };
+  });
+}
+
+async function supabaseFriendsPayload(c: any, userId: string) {
+  const uid = publicId(userId, 120);
+  const rows = await supabaseAdminQueryRows(c, 'app_friendships', {
+    select: 'friend_id,created_at',
+    filters: { user_id: postgrestEqFilter(uid) },
+    order: 'created_at.desc',
+    limit: 200,
+  }).catch(() => []);
+  const friendIds = Array.from(new Set(rows.map((row) => publicId(row.friend_id, 120)).filter(Boolean)));
+  const users = await supabaseUsersByAnyIds(c, friendIds);
+  return friendIds.map((friendId) => {
+    const user = users.get(friendId) || {};
+    return safeUserPayload({
+      id: friendId,
+      username: user?.username,
+      full_name: user?.full_name,
+      profile_image: user?.avatar_url,
+      bio: user?.bio,
+    });
+  });
+}
+
+async function supabaseFriendStatus(c: any, viewerId: string, otherUserId: string) {
+  const viewerRow = await supabaseUserByAnyId(c, viewerId);
+  const otherRow = await supabaseUserByAnyId(c, otherUserId);
+  const viewer = publicId(viewerRow?.id || viewerId, 120);
+  const other = publicId(otherRow?.id || otherUserId, 120);
+  if (!viewer || !other || viewer === other || !otherRow) return { status: viewer === other ? 'self' : 'none' };
+  if (await supabaseBlockPair(c, viewer, other)) return { status: 'blocked' };
+  if (await supabaseFriendshipExists(c, viewer, other)) return { status: 'connected' };
+  const [sent, received] = await Promise.all([
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(viewer), to_user_id: postgrestEqFilter(other), status: postgrestEqFilter('pending') }, 1),
+    supabaseFriendRequestRows(c, { from_user_id: postgrestEqFilter(other), to_user_id: postgrestEqFilter(viewer), status: postgrestEqFilter('pending') }, 1),
+  ]);
+  if (sent[0]) return { status: 'request_sent', request_id: publicId(sent[0].id, 120) };
+  if (received[0]) return { status: 'request_received', request_id: publicId(received[0].id, 120) };
+  return { status: 'none' };
+}
+
+async function supabaseRemoveFriend(c: any, userId: string, otherUserId: string) {
+  const viewerRow = await supabaseUserByAnyId(c, userId);
+  const otherRow = await supabaseUserByAnyId(c, otherUserId);
+  const viewer = publicId(viewerRow?.id || userId, 120);
+  const other = publicId(otherRow?.id || otherUserId, 120);
+  if (!viewer || !other || viewer === other) return { removed: true };
+  await Promise.all([
+    supabaseAdminDeleteRows(c, 'app_friendships', { user_id: postgrestEqFilter(viewer), friend_id: postgrestEqFilter(other) }).catch(() => undefined),
+    supabaseAdminDeleteRows(c, 'app_friendships', { user_id: postgrestEqFilter(other), friend_id: postgrestEqFilter(viewer) }).catch(() => undefined),
+  ]);
+  return { removed: true };
+}
+
+const YEARBOOK_INTENTS = new Set(['friends', 'dating', 'friends_and_dating', 'creative_networking', 'just_browsing']);
+const YEARBOOK_THEMES = new Set(['classic_yearbook', 'notebook', 'y2k', 'film', 'minimal', 'vintage', 'scrapbook']);
+const YEARBOOK_VISIBILITIES = new Set(['public', 'friends', 'private']);
+const YEARBOOK_VISIBLE_FIELDS = [
+  'display_name', 'profile_photo', 'age', 'height_cm', 'city', 'country', 'job', 'school',
+  'short_bio', 'current_mood', 'languages', 'interests', 'hobbies', 'favorites', 'prompts',
+] as const;
+
+function yearbookEnum(value: unknown, allowed: Set<string>, fallback: string): string {
+  const normalized = cleanText(value, 80).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return allowed.has(normalized) ? normalized : fallback;
+}
+
+function yearbookStringList(value: unknown, maxItems: number, maxLength = 60): string[] {
+  const source = Array.isArray(value) ? value : parseJsonArray(value);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of source) {
+    const text = cleanText(item, maxLength).trim();
+    const key = text.toLowerCase();
+    if (!text || seen.has(key)) continue;
+    seen.add(key);
+    result.push(text);
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
+function yearbookVisibilityMap(value: unknown): Record<string, string> {
+  const input = parseJsonObject(value);
+  const defaults: Record<string, string> = {
+    display_name: 'public',
+    profile_photo: 'public',
+    age: 'friends',
+    height_cm: 'friends',
+    city: 'public',
+    country: 'public',
+    job: 'friends',
+    school: 'friends',
+    short_bio: 'public',
+    current_mood: 'public',
+    languages: 'friends',
+    interests: 'public',
+    hobbies: 'public',
+    favorites: 'public',
+    prompts: 'public',
+  };
+  for (const field of YEARBOOK_VISIBLE_FIELDS) {
+    defaults[field] = yearbookEnum((input as any)[field], YEARBOOK_VISIBILITIES, defaults[field]);
+  }
+  return defaults;
+}
+
+function yearbookFavorites(value: unknown): Record<string, string> {
+  const input = parseJsonObject(value);
+  const output: Record<string, string> = {};
+  const keys = ['song', 'movie', 'food', 'place', 'quote', 'dream_job', 'fun_fact', 'most_likely_to'];
+  for (const key of keys) {
+    const text = cleanText((input as any)[key], key === 'quote' || key === 'fun_fact' ? 240 : 140).trim();
+    if (text) output[key] = text;
+  }
+  return output;
+}
+
+function yearbookCanSeeField(visibility: Record<string, string>, field: string, isOwner: boolean, isFriend: boolean): boolean {
+  if (isOwner) return true;
+  const rule = yearbookEnum(visibility[field], YEARBOOK_VISIBILITIES, 'private');
+  return rule === 'public' || (rule === 'friends' && isFriend);
+}
+
+function yearbookRawProfilePayload(row: any) {
+  return {
+    discovery_intent: yearbookEnum(row?.discovery_intent, YEARBOOK_INTENTS, 'friends'),
+    dating_enabled: !!row?.dating_enabled,
+    age: Number(row?.age || 0) || null,
+    height_cm: Number(row?.height_cm || 0) || null,
+    city: cleanText(row?.city, 120),
+    country: cleanText(row?.country, 120),
+    job: cleanText(row?.job, 120),
+    school: cleanText(row?.school, 160),
+    short_bio: cleanMultilineText(row?.short_bio, 320),
+    current_mood: cleanText(row?.current_mood, 80),
+    languages: yearbookStringList(row?.languages, 12),
+    interests: yearbookStringList(row?.interests, 20),
+    hobbies: yearbookStringList(row?.hobbies, 20),
+    favorites: yearbookFavorites(row?.favorites),
+    field_visibility: yearbookVisibilityMap(row?.field_visibility),
+    section_order: yearbookStringList(row?.section_order, 8, 40),
+    theme_id: yearbookEnum(row?.theme_id, YEARBOOK_THEMES, 'classic_yearbook'),
+    status: cleanText(row?.status, 20) === 'hidden' ? 'hidden' : 'active',
+    updated_at: row?.updated_at || row?.created_at || now(),
+  };
+}
+
+async function supabaseYearbookPrompts(c: any, userId: string): Promise<any[]> {
+  return supabaseAdminQueryRows(c, 'yearbook_prompt_answers', {
+    select: 'id,prompt_key,answer,position,created_at,updated_at',
+    filters: { user_id: postgrestEqFilter(userId) },
+    order: 'position.asc,created_at.asc',
+    limit: 5,
+  }).catch(() => []);
+}
+
+async function supabaseYearbookInterestState(c: any, viewerId: string, targetId: string) {
+  if (!viewerId || !targetId || viewerId === targetId) return { sent: false, mutual: false };
+  const [sentRows, reverseRows] = await Promise.all([
+    supabaseAdminQueryRows(c, 'yearbook_interest_signals', {
+      select: 'from_user_id',
+      filters: { from_user_id: postgrestEqFilter(viewerId), to_user_id: postgrestEqFilter(targetId) },
+      limit: 1,
+    }).catch(() => []),
+    supabaseAdminQueryRows(c, 'yearbook_interest_signals', {
+      select: 'from_user_id',
+      filters: { from_user_id: postgrestEqFilter(targetId), to_user_id: postgrestEqFilter(viewerId) },
+      limit: 1,
+    }).catch(() => []),
+  ]);
+  const sent = sentRows.length > 0;
+  return { sent, mutual: sent && reverseRows.length > 0 };
+}
+
+async function supabaseYearbookSignatureSummary(c: any, profileUserId: string) {
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+    select: 'id,signer_user_id,message,created_at,updated_at',
+    filters: { profile_user_id: postgrestEqFilter(profileUserId), status: postgrestEqFilter('visible') },
+    order: 'created_at.desc',
+    limit: 60,
+  }).catch(() => []);
+  const users = await supabaseUsersByAnyIds(c, rows.map((row) => publicId(row?.signer_user_id, 120)).filter(Boolean));
+  return {
+    count: rows.length,
+    signatures: rows.map((row) => {
+      const signerId = publicId(row?.signer_user_id, 120);
+      const user = users.get(signerId) || {};
+      return {
+        id: publicId(row?.id, 120),
+        signer_user_id: signerId,
+        username: publicUsernameFor({ username: user?.username }),
+        display_name: cleanText(user?.full_name, 120),
+        profile_photo: safeMediaReference(user?.avatar_url),
+        message: cleanMultilineText(row?.message, 160),
+        created_at: row?.created_at,
+      };
+    }),
+  };
+}
+
+async function supabaseYearbookProfilePayload(c: any, viewerId: string, targetId: string, includeSignatures = false) {
+  const target = await supabaseUserByAnyId(c, targetId);
+  const targetUserId = publicId(target?.id || targetId, 120);
+  if (!target || !targetUserId || supabaseUserStatus(target) !== 'active') return null;
+  if (viewerId !== targetUserId && await supabaseBlockPair(c, viewerId, targetUserId)) return null;
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+    select: '*',
+    filters: { user_id: postgrestEqFilter(targetUserId) },
+    limit: 1,
+  }).catch(() => []);
+  const row = rows[0];
+  if (!row) return null;
+  const raw = yearbookRawProfilePayload(row);
+  const isOwner = viewerId === targetUserId;
+  if (raw.status !== 'active' && !isOwner) return null;
+  const friendStatus = isOwner ? { status: 'self' } : await supabaseFriendStatus(c, viewerId, targetUserId);
+  const isFriend = cleanText((friendStatus as any)?.status, 40) === 'connected';
+  const visibility = raw.field_visibility;
+  const prompts = await supabaseYearbookPrompts(c, targetUserId);
+  const interest = await supabaseYearbookInterestState(c, viewerId, targetUserId);
+  const signatures = includeSignatures ? await supabaseYearbookSignatureSummary(c, targetUserId) : { count: 0, signatures: [] };
+  let interestAvailable = false;
+  if (!isOwner && raw.dating_enabled && Number(raw.age || 0) >= 18) {
+    const viewerRows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+      select: 'age,dating_enabled,status',
+      filters: { user_id: postgrestEqFilter(viewerId) },
+      limit: 1,
+    }).catch(() => []);
+    const viewerProfile = viewerRows[0];
+    interestAvailable = viewerProfile?.status === 'active'
+      && viewerProfile?.dating_enabled === true
+      && Number(viewerProfile?.age || 0) >= 18;
+  }
+  const safe: any = {
+    user_id: targetUserId,
+    username: publicUsernameFor({ username: target?.username }),
+    discovery_intent: raw.discovery_intent,
+    dating_enabled: raw.dating_enabled && Number(raw.age || 0) >= 18,
+    theme_id: raw.theme_id,
+    status: raw.status,
+    viewer_is_owner: isOwner,
+    connection_status: cleanText((friendStatus as any)?.status, 40) || 'none',
+    connection_request_id: publicId((friendStatus as any)?.request_id, 120) || null,
+    interest_sent: interest.sent,
+    interest_mutual: interest.mutual,
+    interest_available: interestAvailable,
+    signature_count: signatures.count,
+    signatures: signatures.signatures,
+    field_visibility: isOwner ? visibility : undefined,
+    section_order: raw.section_order,
+    updated_at: raw.updated_at,
+  };
+  if (yearbookCanSeeField(visibility, 'display_name', isOwner, isFriend)) safe.display_name = cleanText(target?.full_name, 120);
+  if (yearbookCanSeeField(visibility, 'profile_photo', isOwner, isFriend)) safe.profile_photo = safeMediaReference(target?.avatar_url);
+  const copyIfVisible = (field: string, value: unknown) => {
+    if (yearbookCanSeeField(visibility, field, isOwner, isFriend)) safe[field] = value;
+  };
+  copyIfVisible('age', raw.age);
+  copyIfVisible('height_cm', raw.height_cm);
+  copyIfVisible('city', raw.city);
+  copyIfVisible('country', raw.country);
+  copyIfVisible('job', raw.job);
+  copyIfVisible('school', raw.school);
+  copyIfVisible('short_bio', raw.short_bio);
+  copyIfVisible('current_mood', raw.current_mood);
+  copyIfVisible('languages', raw.languages);
+  copyIfVisible('interests', raw.interests);
+  copyIfVisible('hobbies', raw.hobbies);
+  copyIfVisible('favorites', raw.favorites);
+  copyIfVisible('prompts', prompts.map((prompt) => ({
+    id: publicId(prompt?.id, 120),
+    prompt_key: cleanText(prompt?.prompt_key, 80),
+    answer: cleanMultilineText(prompt?.answer, 240),
+    position: clampNumber(prompt?.position, 0, 4, 0),
+  })));
+  return safe;
+}
+
+function yearbookDiscoverCardPayload(input: {
+  row: any;
+  user: any;
+  prompts: any[];
+  isFriend: boolean;
+  connectionStatus: string;
+  connectionRequestId?: string;
+  interestAvailable: boolean;
+}) {
+  const { row, user, prompts, isFriend, connectionStatus, connectionRequestId, interestAvailable } = input;
+  const raw = yearbookRawProfilePayload(row);
+  const visibility = raw.field_visibility;
+  const safe: any = {
+    user_id: publicId(row?.user_id, 120),
+    username: publicUsernameFor({ username: user?.username }),
+    discovery_intent: raw.discovery_intent,
+    dating_enabled: raw.dating_enabled && Number(raw.age || 0) >= 18,
+    theme_id: raw.theme_id,
+    status: raw.status,
+    viewer_is_owner: false,
+    connection_status: connectionStatus,
+    connection_request_id: connectionRequestId || null,
+    interest_sent: false,
+    interest_mutual: false,
+    interest_available: interestAvailable,
+    signature_count: 0,
+    signatures: [],
+    section_order: raw.section_order,
+    updated_at: raw.updated_at,
+  };
+  if (yearbookCanSeeField(visibility, 'display_name', false, isFriend)) safe.display_name = cleanText(user?.full_name, 120);
+  if (yearbookCanSeeField(visibility, 'profile_photo', false, isFriend)) safe.profile_photo = safeMediaReference(user?.avatar_url);
+  const copyIfVisible = (field: string, value: unknown) => {
+    if (yearbookCanSeeField(visibility, field, false, isFriend)) safe[field] = value;
+  };
+  copyIfVisible('age', raw.age);
+  copyIfVisible('height_cm', raw.height_cm);
+  copyIfVisible('city', raw.city);
+  copyIfVisible('country', raw.country);
+  copyIfVisible('job', raw.job);
+  copyIfVisible('school', raw.school);
+  copyIfVisible('short_bio', raw.short_bio);
+  copyIfVisible('current_mood', raw.current_mood);
+  copyIfVisible('languages', raw.languages);
+  copyIfVisible('interests', raw.interests);
+  copyIfVisible('hobbies', raw.hobbies);
+  copyIfVisible('favorites', raw.favorites);
+  copyIfVisible('prompts', prompts.slice(0, 2).map((prompt) => ({
+    id: publicId(prompt?.id, 120),
+    prompt_key: cleanText(prompt?.prompt_key, 80),
+    answer: cleanMultilineText(prompt?.answer, 240),
+    position: clampNumber(prompt?.position, 0, 4, 0),
+  })));
+  return safe;
+}
+
+async function supabaseYearbookDiscover(c: any, viewerId: string, input: {
+  intent?: string;
+  query?: string;
+  city?: string;
+  language?: string;
+  interest?: string;
+  ageMin?: number;
+  ageMax?: number;
+  limit?: number;
+  offset?: number;
+}) {
+  const limit = clampNumber(input.limit, 1, 40, 24);
+  const offset = Math.max(0, Number(input.offset || 0));
+  const viewerUser = await supabaseUserByAnyId(c, viewerId);
+  const canonicalViewerId = publicId(viewerUser?.id || viewerId, 120);
+  if (!viewerUser || !canonicalViewerId || supabaseUserStatus(viewerUser) !== 'active') {
+    return { profiles: [], has_more: false, next_offset: offset };
+  }
+  const filters: Record<string, string> = { status: postgrestEqFilter('active') };
+  const intent = yearbookEnum(input.intent, YEARBOOK_INTENTS, '');
+  let viewerDatingEligible = false;
+  let viewerYearbookProfile: any = null;
+  if (intent === 'dating') {
+    const viewerRows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+      select: 'age,dating_enabled,status',
+      filters: { user_id: postgrestEqFilter(canonicalViewerId) },
+      limit: 1,
+    }).catch(() => []);
+    viewerYearbookProfile = viewerRows[0];
+    viewerDatingEligible = viewerYearbookProfile?.status === 'active'
+      && viewerYearbookProfile?.dating_enabled === true
+      && Number(viewerYearbookProfile?.age || 0) >= 18;
+  }
+  if (intent === 'dating') {
+    if (!viewerDatingEligible) {
+      return { profiles: [], has_more: false, next_offset: offset, dating_unavailable: true };
+    }
+  }
+  if (intent) filters.discovery_intent = intent === 'dating'
+    ? postgrestInFilter(['dating', 'friends_and_dating'])
+    : postgrestEqFilter(intent);
+  const readLimit = Math.min(120, Math.max((limit + 1) * 4, 48));
+  const candidateRows = await supabaseAdminQueryRows(c, 'yearbook_profiles', {
+    select: '*',
+    filters,
+    order: 'updated_at.desc',
+    limit: readLimit,
+    offset,
+  });
+  const candidateIds = Array.from(new Set(candidateRows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
+  const [blocked, users, friendships, outgoingRequests, incomingRequests, promptRows] = await Promise.all([
+    supabaseBlockedUserIds(c, canonicalViewerId),
+    supabaseUsersByAnyIds(c, candidateIds),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'app_friendships', {
+      select: 'friend_id',
+      filters: { user_id: postgrestEqFilter(canonicalViewerId), friend_id: postgrestInFilter(candidateIds) },
+      limit: candidateIds.length,
+    }).catch(() => []) : Promise.resolve([]),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'app_friend_requests', {
+      select: 'id,to_user_id',
+      filters: { from_user_id: postgrestEqFilter(canonicalViewerId), to_user_id: postgrestInFilter(candidateIds), status: postgrestEqFilter('pending') },
+      limit: candidateIds.length,
+    }).catch(() => []) : Promise.resolve([]),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'app_friend_requests', {
+      select: 'id,from_user_id',
+      filters: { to_user_id: postgrestEqFilter(canonicalViewerId), from_user_id: postgrestInFilter(candidateIds), status: postgrestEqFilter('pending') },
+      limit: candidateIds.length,
+    }).catch(() => []) : Promise.resolve([]),
+    candidateIds.length ? supabaseAdminQueryRows(c, 'yearbook_prompt_answers', {
+      select: 'id,user_id,prompt_key,answer,position',
+      filters: { user_id: postgrestInFilter(candidateIds) },
+      order: 'position.asc',
+      limit: Math.min(600, candidateIds.length * 5),
+    }).catch(() => []) : Promise.resolve([]),
+  ]);
+  const connectedIds = new Set(friendships.map((row) => publicId(row?.friend_id, 120)).filter(Boolean));
+  const outgoingByUser = new Map(outgoingRequests.map((row) => [publicId(row?.to_user_id, 120), publicId(row?.id, 120)]));
+  const incomingByUser = new Map(incomingRequests.map((row) => [publicId(row?.from_user_id, 120), publicId(row?.id, 120)]));
+  const promptsByUser = new Map<string, any[]>();
+  for (const prompt of promptRows) {
+    const uid = publicId(prompt?.user_id, 120);
+    if (!uid) continue;
+    const existing = promptsByUser.get(uid) || [];
+    if (existing.length < 2) existing.push(prompt);
+    promptsByUser.set(uid, existing);
+  }
+  const query = cleanText(input.query, 100).toLowerCase();
+  const city = cleanText(input.city, 100).toLowerCase();
+  const language = cleanText(input.language, 60).toLowerCase();
+  const interest = cleanText(input.interest, 60).toLowerCase();
+  const rawAgeMin = Number(input.ageMin);
+  const rawAgeMax = Number(input.ageMax);
+  const hasAgeMin = Number.isFinite(rawAgeMin) && rawAgeMin > 0;
+  const hasAgeMax = Number.isFinite(rawAgeMax) && rawAgeMax > 0;
+  const hasAgeFilter = hasAgeMin || hasAgeMax;
+  const minAge = hasAgeMin ? clampNumber(rawAgeMin, 16, 120, 16) : 16;
+  const maxAge = hasAgeMax ? clampNumber(rawAgeMax, minAge, 120, 120) : 120;
+  const cards = candidateRows.flatMap((row) => {
+    const uid = publicId(row?.user_id, 120);
+    const user = users.get(uid);
+    if (!uid || uid === canonicalViewerId || blocked.has(uid) || !user || supabaseUserStatus(user) !== 'active') return [];
+    const raw = yearbookRawProfilePayload(row);
+    if (intent === 'dating' && (!raw.dating_enabled || Number(raw.age || 0) < 18)) return [];
+    const isFriend = connectedIds.has(uid);
+    const connectionStatus = isFriend
+      ? 'connected'
+      : outgoingByUser.has(uid)
+        ? 'request_sent'
+        : incomingByUser.has(uid)
+          ? 'request_received'
+          : 'none';
+    const card = yearbookDiscoverCardPayload({
+      row,
+      user,
+      prompts: promptsByUser.get(uid) || [],
+      isFriend,
+      connectionStatus,
+      connectionRequestId: outgoingByUser.get(uid) || incomingByUser.get(uid),
+      interestAvailable: viewerDatingEligible && raw.dating_enabled && Number(raw.age || 0) >= 18,
+    });
+    if (hasAgeFilter && (typeof card.age !== 'number' || card.age < minAge || card.age > maxAge)) return [];
+    if (city && !cleanText(card.city, 120).toLowerCase().includes(city)) return [];
+    if (language && !yearbookStringList(card.languages, 12).some((item) => item.toLowerCase().includes(language))) return [];
+    if (interest && ![...yearbookStringList(card.interests, 20), ...yearbookStringList(card.hobbies, 20)].some((item) => item.toLowerCase().includes(interest))) return [];
+    if (query) {
+      const haystack = [card.display_name, card.username, card.city, card.country, card.job, card.school, card.short_bio,
+        ...yearbookStringList(card.interests, 20), ...yearbookStringList(card.hobbies, 20)].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(query)) return [];
+    }
+    return [card];
+  });
+  return {
+    profiles: cards.slice(0, limit),
+    has_more: cards.length > limit || candidateRows.length === readLimit,
+    next_offset: offset + candidateRows.length,
+  };
+}
+
+async function supabaseUpsertYearbookProfile(c: any, userId: string, input: any) {
+  const user = await supabaseUserByAnyId(c, userId);
+  const uid = publicId(user?.id || userId, 120);
+  if (!user || !uid || supabaseUserStatus(user) !== 'active') throw new Error('YEARBOOK_USER_NOT_ACTIVE');
+  const ageValue = input.age == null || input.age === '' ? null : clampNumber(input.age, 16, 120, 16);
+  const intent = yearbookEnum(input.discoveryIntent ?? input.discovery_intent, YEARBOOK_INTENTS, 'friends');
+  const datingCompatible = intent === 'dating' || intent === 'friends_and_dating';
+  const datingEnabled = optionalBoolean(input.datingEnabled ?? input.dating_enabled) === true && datingCompatible && Number(ageValue || 0) >= 18;
+  const profile = {
+    user_id: uid,
+    discovery_intent: intent,
+    dating_enabled: datingEnabled,
+    age: ageValue,
+    height_cm: input.heightCm == null && input.height_cm == null ? null : clampNumber(input.heightCm ?? input.height_cm, 90, 250, 165),
+    city: cleanText(input.city, 120),
+    country: cleanText(input.country, 120),
+    job: cleanText(input.job, 120),
+    school: cleanText(input.school, 160),
+    short_bio: cleanMultilineText(input.shortBio ?? input.short_bio, 320),
+    current_mood: cleanText(input.currentMood ?? input.current_mood, 80),
+    languages: yearbookStringList(input.languages, 12),
+    interests: yearbookStringList(input.interests, 20),
+    hobbies: yearbookStringList(input.hobbies, 20),
+    favorites: yearbookFavorites(input.favorites),
+    field_visibility: yearbookVisibilityMap(input.fieldVisibility ?? input.field_visibility),
+    section_order: yearbookStringList(input.sectionOrder ?? input.section_order, 8, 40),
+    theme_id: yearbookEnum(input.themeId ?? input.theme_id, YEARBOOK_THEMES, 'classic_yearbook'),
+    status: cleanText(input.status, 20) === 'hidden' ? 'hidden' : 'active',
+    updated_at: now(),
+  };
+  await supabaseAdminUpsert(c, 'yearbook_profiles', [profile], 'user_id');
+
+  const prompts = (Array.isArray(input.prompts) ? input.prompts : []).slice(0, 5).map((prompt: any, index: number) => ({
+    user_id: uid,
+    prompt_key: cleanText(prompt?.promptKey ?? prompt?.prompt_key, 80),
+    answer: cleanMultilineText(prompt?.answer, 240),
+    position: clampNumber(prompt?.position, 0, 4, index),
+    updated_at: now(),
+  })).filter((prompt: any) => prompt.prompt_key && prompt.answer);
+  await supabaseAdminDeleteRows(c, 'yearbook_prompt_answers', { user_id: postgrestEqFilter(uid) }).catch(() => undefined);
+  if (prompts.length) await supabaseAdminUpsert(c, 'yearbook_prompt_answers', prompts, 'user_id,prompt_key');
+  return supabaseYearbookProfilePayload(c, uid, uid, true);
+}
+
+async function supabaseBlockUser(c: any, blockerId: string, blockedId: string) {
+  const inputBlocker = publicId(blockerId, 120);
+  const inputBlocked = publicId(blockedId, 120);
+  if (!inputBlocker || !inputBlocked) return { status: 400 as const, body: { detail: 'You cannot block yourself.' } };
+  const [blockerRow, target] = await Promise.all([
+    supabaseUserByAnyId(c, inputBlocker),
+    supabaseUserByAnyId(c, inputBlocked),
+  ]);
+  const blocker = publicId(blockerRow?.id || inputBlocker, 120);
+  const blocked = publicId(target?.id || inputBlocked, 120);
+  if (!blocker || !blocked || blocker === blocked) return { status: 400 as const, body: { detail: 'You cannot block yourself.' } };
+  if (!blockerRow || supabaseUserStatus(blockerRow) !== 'active') return { status: 403 as const, body: { detail: 'Your account cannot block profiles right now.' } };
+  if (!target) return { status: 404 as const, body: { detail: 'User not found' } };
+  await supabaseAdminUpsert(c, 'app_blocks', [{
+    id: `${blocker}:${blocked}`,
+    blocker_id: blocker,
+    blocked_id: blocked,
+    metadata: { source: 'cloudflare_worker_primary' },
+    legacy_created_at: now(),
+    updated_at: now(),
+  }], 'id');
+  const safetyReportCreatedAt = now();
+  await supabaseAdminUpsert(c, 'app_reports', [{
+    id: `block:${blocker}:${blocked}`,
+    reporter_id: blocker,
+    target_type: 'user',
+    target_id: blocked,
+    target_owner_user_id: blocked,
+    reason: 'blocked_user',
+    details: 'User blocked from an Aura safety control.',
+    status: 'open',
+    priority: 'normal',
+    metadata: {
+      source: 'captro_block_user_flow',
+      block_id: `${blocker}:${blocked}`,
+      reviewer_note: 'Created automatically so developer moderation staff can review block-only abuse signals.',
+    },
+    legacy_created_at: safetyReportCreatedAt,
+    legacy_updated_at: safetyReportCreatedAt,
+    created_at: safetyReportCreatedAt,
+    updated_at: safetyReportCreatedAt,
+  }], 'id').catch((error) => {
+    console.warn(JSON.stringify({ event: 'supabase_block_report_enqueue_failed', code: getErrorCode(error).slice(0, 180) }));
+  });
+  await Promise.all([
+    supabaseAdminDeleteRows(c, 'app_follows', { app_follower_id: postgrestEqFilter(blocker), app_following_id: postgrestEqFilter(blocked) }).catch(() => undefined),
+    supabaseAdminDeleteRows(c, 'app_follows', { app_follower_id: postgrestEqFilter(blocked), app_following_id: postgrestEqFilter(blocker) }).catch(() => undefined),
+  ]);
+  await logSecurityEvent(c, 'user_blocked', blocker, { blocked_id: blocked });
+  return { status: 200 as const, body: { blocked: true } };
+}
+
+async function supabaseUnblockUser(c: any, blockerId: string, blockedId: string) {
+  const blockerRow = await supabaseUserByAnyId(c, blockerId).catch(() => null);
+  const blockedRow = await supabaseUserByAnyId(c, blockedId).catch(() => null);
+  const blocker = publicId(blockerRow?.id || blockerId, 120);
+  const blocked = publicId(blockedRow?.id || blockedId, 120);
+  if (!blocker || !blocked) return { status: 400 as const, body: { detail: 'Invalid user.' } };
+  await supabaseAdminDeleteRows(c, 'app_blocks', {
+    blocker_id: postgrestEqFilter(blocker),
+    blocked_id: postgrestEqFilter(blocked),
+  });
+  return { status: 200 as const, body: { blocked: false } };
+}
+
+async function supabaseListBlocks(c: any, userId: string) {
+  const blocker = publicId(userId, 120);
+  const rows = await supabaseAdminQueryRows(c, 'app_blocks', {
+    select: 'blocked_id,created_at',
+    filters: { blocker_id: postgrestEqFilter(blocker) },
+    order: 'created_at.desc',
+    limit: 100,
+  });
+  const blockedIds = rows.map((row) => publicId(row?.blocked_id, 120)).filter(Boolean);
+  const users = await supabaseUsersByAnyIds(c, blockedIds);
+  return rows.map((row) => {
+    const blockedId = publicId(row?.blocked_id, 120);
+    const user = users.get(blockedId) || {};
+    return {
+      blocked_id: blockedId,
+      created_at: row.created_at,
+      user: safeUserPayload({ id: blockedId, username: user.username, full_name: user.full_name, profile_image: user.avatar_url }),
+    };
+  });
+}
+
+async function supabaseViewerInteractionPostIds(c: any, userId: string, kind: 'like' | 'save', input: {
+  collection?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<string[]> {
+  const aliases = await supabaseRelatedInteractionUserIds(c, userId);
+  const keys = await supabaseInteractionIdentityKeys(c, aliases);
+  const collection = cleanText(input.collection, 80);
+  const rows: any[] = [];
+  const select = 'legacy_post_id,post_id,collection,created_at,legacy_created_at,app_user_id,user_id';
+  const pageLimit = clampNumber(input.limit || 40, 1, 100, 40);
+  const offset = Math.max(0, Math.round(Number(input.offset || 0)));
+  const queryLimit = Math.max(100, pageLimit + offset + 40);
+  const appendRows = async (filters: Record<string, string>) => {
+    if (collection) filters.collection = postgrestEqFilter(collection);
+    rows.push(...await supabaseAdminQueryRows(c, 'app_post_interactions', {
+      select,
+      filters,
+      order: 'created_at.desc.nullslast,legacy_created_at.desc.nullslast',
+      limit: queryLimit,
+    }));
+  };
+
+  if (keys.appUserIds.length) {
+    await appendRows({
+      app_user_id: postgrestInFilter(keys.appUserIds),
+      kind: postgrestEqFilter(kind),
+    });
+  }
+  if (keys.authUserIds.length) {
+    await appendRows({
+      user_id: postgrestInFilter(keys.authUserIds),
+      kind: postgrestEqFilter(kind),
+    });
+  }
+
+  rows.sort((a, b) => {
+    const aTime = Date.parse(String(a?.created_at || a?.legacy_created_at || '')) || 0;
+    const bTime = Date.parse(String(b?.created_at || b?.legacy_created_at || '')) || 0;
+    return bTime - aTime;
+  });
+  const seen = new Set<string>();
+  return rows
+    .map((row) => publicId(row?.legacy_post_id || row?.post_id, 120))
+    .filter((postId) => !!postId && !seen.has(postId) && seen.add(postId))
+    .slice(offset, offset + pageLimit);
+}
+
+async function supabaseViewerSaveCollectionCounts(c: any, userId: string): Promise<Array<{ collection: string; count: number }>> {
+  const aliases = await supabaseRelatedInteractionUserIds(c, userId);
+  const keys = await supabaseInteractionIdentityKeys(c, aliases);
+  const rows: any[] = [];
+  const select = 'legacy_post_id,post_id,collection,app_user_id,user_id';
+  const appendRows = async (filters: Record<string, string>) => {
+    rows.push(...await supabaseAdminQueryRows(c, 'app_post_interactions', {
+      select,
+      filters,
+      order: 'created_at.desc.nullslast,legacy_created_at.desc.nullslast',
+      limit: 10000,
+    }));
+  };
+
+  if (keys.appUserIds.length) {
+    await appendRows({
+      app_user_id: postgrestInFilter(keys.appUserIds),
+      kind: postgrestEqFilter('save'),
+    });
+  }
+  if (keys.authUserIds.length) {
+    await appendRows({
+      user_id: postgrestInFilter(keys.authUserIds),
+      kind: postgrestEqFilter('save'),
+    });
+  }
+
+  const byCollection = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const postId = publicId(row?.legacy_post_id || row?.post_id, 120);
+    if (!postId) continue;
+    const collection = cleanText(row?.collection || 'saved', 80) || 'saved';
+    const posts = byCollection.get(collection) || new Set<string>();
+    posts.add(postId);
+    byCollection.set(collection, posts);
+  }
+
+  return Array.from(byCollection.entries())
+    .map(([collection, posts]) => ({ collection, count: posts.size }))
+    .sort((a, b) => a.collection.localeCompare(b.collection));
+}
+
+function supabaseAppPostMedia(row: any) {
+  const metadata = parseJsonObject(row?.metadata);
+  const fallbackImage = safeMediaReference((metadata as any).image);
+  const mediaRows = parseJsonArray(row?.media);
+  const mediaUrls: string[] = [];
+  const mediaTypes: string[] = [];
+  const mediaDimensions: any[] = [];
+
+  for (const media of mediaRows) {
+    const mediaUrl = safeMediaReference(typeof media === 'string' ? media : media?.url || media?.feedMediaUrl || media?.feed_media_url);
+    if (!mediaUrl) continue;
+    const mediaType = cleanText(typeof media === 'object' ? media?.type || media?.media_type : '', 20).toLowerCase() || (isVideoMediaUrl(mediaUrl) ? 'video' : 'image');
+    mediaUrls.push(mediaUrl);
+    mediaTypes.push(mediaType.includes('video') ? 'video' : 'image');
+    mediaDimensions.push({
+      width: Number((media as any)?.width || 0),
+      height: Number((media as any)?.height || 0),
+      ratio: Number((media as any)?.ratio || (media as any)?.aspect_ratio || 0),
+    });
+  }
+
+  if (!mediaUrls.length && fallbackImage) {
+    mediaUrls.push(fallbackImage);
+    mediaTypes.push(isVideoMediaUrl(fallbackImage) ? 'video' : 'image');
+  }
+
+  const explicitDimensions = parseJsonArray(row?.media_dimensions);
+  return {
+    mediaUrls,
+    mediaTypes,
+    mediaDimensions: explicitDimensions.length ? explicitDimensions : mediaDimensions,
+  };
+}
+
+function supabaseUserStatus(row: any): string {
+  const metadata = parseJsonObject(row?.metadata);
+  const status = (cleanText((metadata as any).status || row?.status || 'active', 40) || 'active').toLowerCase();
+  if (status === 'suspended') {
+    const suspendedUntil = Date.parse(String((metadata as any).suspended_until || row?.suspended_until || ''));
+    if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) return 'active';
+  }
+  return status;
+}
+
+function supabaseAppPostMatchesCategory(row: any, category: DiscoverCategory | 'all' | undefined): boolean {
+  if (!category || category === 'all') return true;
+  const metadata = parseJsonObject(row?.metadata);
+  const discover = parseJsonObject((metadata as any).discover_category);
+  const primary = normalizeDiscoverCategory(row?.category || (discover as any).primary_category || row?.post_type, false);
+  if (primary === category) return true;
+  const terms = discoverCategorySearchTerms(category);
+  const haystack = [
+    row?.category,
+    row?.post_type,
+    row?.title,
+    row?.content,
+    row?.location,
+    ...(sanitizeAutoCategoryTags((discover as any).tags)),
+    ...Object.keys(parseJsonObject((metadata as any).category_scores || (discover as any).category_scores)).filter((key) => Number((metadata as any).category_scores?.[key] || (discover as any).category_scores?.[key] || 0) >= 24),
+  ].join(' ').toLowerCase();
+  return terms.some((term) => haystack.includes(term));
+}
+
+function supabaseAppPostVisibleToViewer(
+  row: any,
+  author: any,
+  viewerIds: Set<string>,
+  followingIds: Set<string>,
+  friendIds: Set<string>,
+  blockedIds: Set<string>,
+): boolean {
+  if (!row || !author) return false;
+  if (cleanText(row?.status || 'active', 40) !== 'active') return false;
+  if (supabaseUserStatus(author) !== 'active') return false;
+  const appUserId = publicId(row?.app_user_id || author?.id, 120);
+  const authUserId = isUuidText(row?.user_id);
+  const isOwner = viewerIds.has(appUserId) || (!!authUserId && viewerIds.has(authUserId));
+  if (!isOwner && (blockedIds.has(appUserId) || (!!authUserId && blockedIds.has(authUserId)))) return false;
+  const visibility = normalizeVisibility(row?.visibility);
+  if (visibility === 'private') return isOwner;
+  if (visibility === 'followers') return isOwner || followingIds.has(appUserId);
+  if (visibility === 'friends') return isOwner || friendIds.has(appUserId);
+  if (author?.is_private && !isOwner && !followingIds.has(appUserId) && !friendIds.has(appUserId)) return false;
+  return true;
+}
+
+function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, commentCount: number, connectionStatus = ''): any {
+  const metadata = parseJsonObject(row?.metadata);
+  const discover = parseJsonObject((metadata as any).discover_category);
+  const raw = parseJsonObject((metadata as any).raw);
+  const place = parseJsonObject((metadata as any).place);
+  const audio = parseJsonObject((metadata as any).audio);
+  const community = parseJsonObject((metadata as any).community);
+  const authorProfile = parseJsonObject(author?.profile);
+  const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
+  const { mediaUrls, mediaTypes, mediaDimensions } = supabaseAppPostMedia(row);
+  const primaryCategory = (normalizeDiscoverCategory(row?.category || (discover as any).primary_category || row?.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
+  const appUserId = publicId(row?.app_user_id || author?.id, 120);
+  return {
+    id: publicId(row?.legacy_post_id || row?.id, 120),
+    supabase_post_id: isUuidText(row?.id),
+    user_id: appUserId,
+    user_username: author?.username,
+    user_full_name: author?.full_name,
+    user_profile_image: author?.avatar_url,
+    user_profile_headline: cleanText(author?.headline || (authorProfile as any).headline || author?.bio, 120),
+    user_looking_for: cleanText(author?.looking_for || (authorProfile as any).looking_for, 120),
+    user_availability_text: cleanText(author?.availability_text || (authorProfile as any).availability_text, 80),
+    user_social_preference: cleanText(author?.social_preference || (authorProfile as any).social_preference, 80),
+    user_interests: parseJsonArray(author?.interests || (authorProfile as any).interests).map((item) => cleanText(item, 60)).filter(Boolean).slice(0, 8),
+    title: cleanText(row?.title, 180),
+    content: cleanMultilineText(row?.content, 4000),
+    image: mediaUrls[0] || '',
+    images: mediaUrls,
+    media_types: mediaTypes,
+    media_asset_ids: parseJsonArray((metadata as any).media_asset_ids || (raw as any).media_asset_ids),
+    media_dimensions: mediaDimensions,
+    editor_overlays: parseJsonArray((row?.editor_data || {}).overlays),
+    tagged_users: parseJsonArray(row?.tagged_users),
+    primary_category: primaryCategory,
+    category: primaryCategory,
+    category_confidence: clampFloat((discover as any).confidence, 0, 1, 0),
+    category_source: normalizeCategorySource((discover as any).source),
+    category_status: normalizeCategoryStatus((discover as any).status),
+    category_signals_json: JSON.stringify({ ...discover, raw }),
+    tags_json: JSON.stringify(sanitizeAutoCategoryTags((discover as any).tags)),
+    category_scores_json: JSON.stringify(parseJsonObject((metadata as any).category_scores || (discover as any).category_scores)),
+    secondary_categories_json: JSON.stringify(sanitizeAutoCategoryTags((metadata as any).secondary_categories || (discover as any).secondary_categories)),
+    detected_objects_json: JSON.stringify(sanitizeAutoCategoryTags((metadata as any).detected_objects || (discover as any).detected_objects)),
+    detected_scene: cleanText((metadata as any).detected_scene || (discover as any).detected_scene, 80),
+    place_type: cleanText((metadata as any).place_type || (discover as any).place_type, 120),
+    user_selected_category: normalizeDiscoverCategory((metadata as any).user_selected_category || (discover as any).user_selected_category, false),
+    caption_keywords_json: JSON.stringify(sanitizeAutoCategoryTags((metadata as any).caption_keywords || (discover as any).caption_keywords)),
+    location: cleanText(row?.location || (place as any).name, 180),
+    display_city: cleanText((raw as any).display_city || (metadata as any).display_city, 80),
+    display_region: cleanText((raw as any).display_region || (metadata as any).display_region, 80),
+    display_country: cleanText((raw as any).display_country || (metadata as any).display_country, 80),
+    display_location_label: cleanText((raw as any).display_location_label || (metadata as any).display_location_label, 120),
+    display_location_source: cleanText((raw as any).display_location_source || (metadata as any).display_location_source, 40),
+    display_location_visibility: cleanText((raw as any).display_location_visibility || (metadata as any).display_location_visibility || 'public', 40),
+    post_type: cleanText(row?.post_type || 'general', 80),
+    community_category: cleanText((community as any).category, 40) || null,
+    community_audience: cleanText((community as any).audience || row?.visibility, 24) || 'public',
+    community_allow_replies: (community as any).allow_replies !== false,
+    meetup_neighborhood: cleanText((community as any).neighborhood, 100) || null,
+    meetup_starts_at: cleanText((community as any).starts_at, 80) || null,
+    meetup_ends_at: cleanText((community as any).ends_at, 80) || null,
+    meetup_entry_type: cleanText((community as any).entry_type, 20) || null,
+    meetup_entry_amount_atoms: normalizeAuraAtomicAmount((community as any).entry_amount_atoms) || null,
+    meetup_max_people: Number.isFinite(Number((community as any).max_people))
+      ? clampNumber((community as any).max_people, 2, 500, 12)
+      : null,
+    place_id: cleanText((place as any).id, 160),
+    place_name: cleanText((place as any).name, 180),
+    place_provider: cleanText((place as any).provider || 'apple_mapkit', 40),
+    place_provider_id: cleanText((place as any).id, 160),
+    place_formatted_address: cleanText((place as any).formatted_address || row?.location, 260),
+    place_category: cleanText((place as any).category, 80),
+    place_city: cleanText((place as any).city, 80),
+    place_region: cleanText((place as any).region, 80),
+    place_country: cleanText((place as any).country, 80),
+    place_lat: (place as any).latitude == null ? null : clampFloat((place as any).latitude, -90, 90, 0),
+    place_lng: (place as any).longitude == null ? null : clampFloat((place as any).longitude, -180, 180, 0),
+    removed_at: cleanText((metadata as any).removed_at, 80) || null,
+    removed_reason: cleanMultilineText((metadata as any).removed_reason, 500),
+    discover_blocked_at: cleanText((metadata as any).discover_blocked_at, 80) || null,
+    discover_blocked_reason: cleanMultilineText((metadata as any).discover_blocked_reason, 500),
+    is_verified_checkin: !!(place as any).verified_checkin,
+    audio_provider: cleanText((audio as any).provider, 40),
+    audio_track_id: cleanText((audio as any).track_id, 120),
+    audio_title: cleanText((audio as any).title, 180),
+    audio_artist: cleanText((audio as any).artist, 180),
+    audio_artwork_url: safeMediaReference((audio as any).artwork_url),
+    audio_stream_url: safeExternalUrl((audio as any).stream_url),
+    audio_start_time: Number((audio as any).start_time || 0),
+    audio_duration: Number((audio as any).duration || 0),
+    visibility: normalizeVisibility(row?.visibility),
+    pinned_at: pinnedAt,
+    is_pinned: !!pinnedAt,
+    moderation_status: 'approved',
+    likes_count: Math.max(0, Number(row?.likes_count || 0)),
+    comments_count: Math.max(0, commentCount || Number(row?.comments_count || 0)),
+    saves_count: Math.max(0, Number(row?.saves_count || 0)),
+    liked_by: [],
+    is_following: isFollowing,
+    connection_status: cleanText(connectionStatus, 40) || (isFollowing ? 'connected' : 'none'),
+    created_at: row?.legacy_created_at || row?.created_at,
+    updated_at: row?.legacy_updated_at || row?.updated_at,
+  };
+}
+
+function supabaseCandidatePostRows(rows: any[], options: SupabasePostReadOptions): any[] {
+  const isDiscoverQuery = options.category !== undefined;
+  return rows.filter((row) => {
+    const hasRenderableContent = isDiscoverQuery
+      ? supabaseAppPostHasRenderablePhotoMedia(row)
+      : supabaseAppPostHasRenderablePhotoMedia(row) || auraCommunityPostHasRenderableContent(row);
+    if (!hasRenderableContent || !supabaseAppPostMatchesCategory(row, options.category)) return false;
+    if (!isDiscoverQuery) return true;
+    const metadata = parseJsonObject(row?.metadata);
+    return !cleanText((metadata as any).discover_blocked_at, 80);
+  });
+}
+
+type SupabaseVisiblePostProjection = {
+  sourceRows: any[];
+  posts: any[];
+};
+
+async function supabaseProjectVisiblePostRows(
+  c: any,
+  viewerId: string,
+  candidateRows: any[],
+  options: SupabasePostReadOptions,
+  visibleOffset: number,
+  visibleLimit: number,
+): Promise<SupabaseVisiblePostProjection> {
+  if (!candidateRows.length || visibleLimit <= 0) return { sourceRows: [], posts: [] };
+  const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
+  const ownerId = publicId(options.ownerId, 120);
+  const authorIds = candidateRows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
+  const [viewerAliases, blockedIds, authorMap, commentCounts] = await Promise.all([
+    supabaseRelatedInteractionUserIds(c, viewerId),
+    supabaseBlockedUserIds(c, viewerId),
+    supabaseUsersByAnyIds(c, authorIds),
+    supabasePostCommentCounts(c, candidateRows),
+  ]);
+  const cleanAuthorIds = Array.from(new Set(authorIds.map((id) => publicId(id, 120)).filter(Boolean)));
+  const [followingIds, friendRows, outgoingRequests, incomingRequests] = cleanAuthorIds.length
+    ? await Promise.all([
+      supabaseFollowingUserIds(c, viewerId, cleanAuthorIds),
+      supabaseAdminQueryRows(c, 'app_friendships', {
+        select: 'friend_id',
+        filters: { user_id: postgrestInFilter(viewerAliases), friend_id: postgrestInFilter(cleanAuthorIds) },
+        limit: Math.max(1, cleanAuthorIds.length * Math.max(1, viewerAliases.length)),
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_friend_requests', {
+        select: 'id,to_user_id',
+        filters: { from_user_id: postgrestEqFilter(publicId(viewerId, 120)), to_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
+        limit: Math.max(1, cleanAuthorIds.length),
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_friend_requests', {
+        select: 'id,from_user_id',
+        filters: { to_user_id: postgrestEqFilter(publicId(viewerId, 120)), from_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
+        limit: Math.max(1, cleanAuthorIds.length),
+      }).catch(() => []),
+    ])
+    : [new Set<string>(), [], [], []];
+  const connectedIds = new Set(friendRows.map((row) => publicId(row.friend_id, 120)).filter(Boolean));
+  const outgoingRequestIds = new Set(outgoingRequests.map((row) => publicId(row.to_user_id, 120)).filter(Boolean));
+  const incomingRequestIds = new Set(incomingRequests.map((row) => publicId(row.from_user_id, 120)).filter(Boolean));
+  const connectedOrFollowingIds = new Set<string>([...Array.from(followingIds), ...Array.from(connectedIds)]);
+  const viewerSet = new Set(viewerAliases);
+  const rowsVisibleToViewer = candidateRows
+    .filter((row) => {
+      const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '');
+      if (!supabaseAppPostVisibleToViewer(row, author, viewerSet, followingIds, connectedIds, blockedIds)) return false;
+      if (!isAuraCommunityPostType(row?.post_type)) return options.socialScope ? false : true;
+      const authorId = publicId(row?.app_user_id || author?.id, 120);
+      const authAuthorId = isUuidText(row?.user_id) || '';
+      if (options.socialScope === 'friends') {
+        // Feed membership is broader than friends-only visibility: public/follower-visible
+        // posts from accounts the viewer follows belong in Friends, while the visibility
+        // guard above still requires an actual friendship for posts marked "friends".
+        return viewerSet.has(authorId)
+          || (!!authAuthorId && viewerSet.has(authAuthorId))
+          || connectedIds.has(authorId)
+          || followingIds.has(authorId)
+          || (!!authAuthorId && followingIds.has(authAuthorId));
+      }
+      if (options.socialScope === 'city') {
+        const requestedCity = normalizeAuraCommunityCity(options.city || 'New York City');
+        return !!requestedCity && auraCommunityPostCity(row, author) === requestedCity;
+      }
+      return true;
+    });
+  if (ownerId) {
+    rowsVisibleToViewer.sort((a, b) => {
+      const aPinned = cleanText((parseJsonObject(a?.metadata) as any).pinned_at, 80);
+      const bPinned = cleanText((parseJsonObject(b?.metadata) as any).pinned_at, 80);
+      if (!!aPinned !== !!bPinned) return aPinned ? -1 : 1;
+      if (aPinned && bPinned) return (Date.parse(bPinned) || 0) - (Date.parse(aPinned) || 0);
+      return 0;
+    });
+  }
+  if (postIds.length) {
+    rowsVisibleToViewer.sort((a, b) => {
+      const aId = publicId(a?.legacy_post_id || a?.id, 120);
+      const bId = publicId(b?.legacy_post_id || b?.id, 120);
+      return postIds.indexOf(aId) - postIds.indexOf(bId);
+    });
+  }
+  const visibleRows = rowsVisibleToViewer
+    .slice(Math.max(0, visibleOffset))
+    .slice(0, Math.max(0, visibleLimit));
+
+  const mapped = visibleRows.map((row) => {
+    const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '');
+    const id = publicId(row?.legacy_post_id || row?.id, 120);
+    const authorId = publicId(row?.app_user_id, 120);
+    const connectionStatus = connectedIds.has(authorId)
+      ? 'connected'
+      : outgoingRequestIds.has(authorId)
+        ? 'request_sent'
+        : incomingRequestIds.has(authorId)
+          ? 'request_received'
+          : 'none';
+    return supabaseAppPostToLegacy(row, author, connectedOrFollowingIds.has(authorId), commentCounts.get(id) || Number(row?.comments_count || 0), connectionStatus);
+  });
+  const engaged = await overlaySupabaseViewerEngagement(c, mapped, viewerId);
+  const posts = await augmentAuraMeetupState(c, visibleRows, engaged, viewerSet);
+  return { sourceRows: visibleRows, posts };
+}
+
+async function supabaseReadVisiblePosts(c: any, viewerId: string, options: SupabasePostReadOptions = {}): Promise<any[]> {
+  const limit = clampNumber(options.limit || 20, 1, 100, 20);
+  const offset = Math.max(0, Math.round(Number(options.offset || 0)));
+  const filters: Record<string, string> = { status: postgrestEqFilter('active') };
+  const postId = publicId(options.postId, 120);
+  const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
+  const ownerId = publicId(options.ownerId, 120);
+  const search = postgrestSearchTerm(options.search || '');
+
+  if (options.socialScope || options.communityOnly) {
+    filters.post_type = postgrestInFilter(Array.from(AURA_COMMUNITY_POST_TYPES));
+  }
+
+  if (postIds.length) {
+    const uuidPostIds = postIds.map((value) => isUuidText(value)).filter((value): value is string => !!value);
+    const orParts = [`legacy_post_id.${postgrestInFilter(postIds)}`];
+    if (uuidPostIds.length) orParts.push(`id.${postgrestInFilter(uuidPostIds)}`);
+    filters.or = `(${orParts.join(',')})`;
+  } else if (postId) {
+    const uuidPostId = isUuidText(postId);
+    filters.or = uuidPostId ? `(legacy_post_id.eq.${postId},id.eq.${postId})` : `(legacy_post_id.eq.${postId})`;
+  } else if (ownerId) {
+    const ownerUuid = isUuidText(ownerId);
+    filters.or = ownerUuid ? `(app_user_id.eq.${ownerId},user_id.eq.${ownerId})` : `(app_user_id.eq.${ownerId})`;
+  } else if (search) {
+    filters.or = `(content.ilike.*${search}*,title.ilike.*${search}*,category.ilike.*${search}*,location.ilike.*${search}*)`;
+  }
+
+  const applyOffsetAfterFiltering = !!(
+    postIds.length
+    || postId
+    || ownerId
+    || search
+    || (options.category && options.category !== 'all')
+    || options.socialScope
+  );
+  const socialCandidateLimit = Math.min(300, Math.max(100, (limit + offset) * 5));
+  const rowLimit = postIds.length
+    ? postIds.length
+    : postId
+      ? 1
+      : options.socialScope
+        ? socialCandidateLimit
+        : Math.min(300, Math.max(limit + offset + 20, options.category && options.category !== 'all' ? (limit + offset) * 4 : limit + offset));
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: SUPABASE_APP_POST_SELECT,
+    filters,
+    order: options.order === 'trending'
+      ? 'likes_count.desc.nullslast,legacy_created_at.desc.nullslast,created_at.desc'
+      : 'legacy_created_at.desc.nullslast,created_at.desc',
+    limit: rowLimit,
+    offset: applyOffsetAfterFiltering ? 0 : offset,
+  });
+  const candidateRows = supabaseCandidatePostRows(rows, options);
+  const projection = await supabaseProjectVisiblePostRows(
+    c,
+    viewerId,
+    candidateRows,
+    options,
+    applyOffsetAfterFiltering ? offset : 0,
+    limit,
+  );
+  return projection.posts;
+}
+
+type AuraCommunityCursorPage = {
+  items: any[];
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
+async function supabaseReadVisibleCommunityCursorPage(
+  c: any,
+  viewerId: string,
+  options: SupabasePostReadOptions,
+  cursor: AuraCommunityFeedCursor | null,
+): Promise<AuraCommunityCursorPage> {
+  const limit = clampNumber(options.limit || 30, 1, 50, 30);
+  const result = await collectAuraCommunityCursorPage<any, any>({
+    limit,
+    chunkSize: 100,
+    cursor,
+    rowCursor: auraCommunityFeedRowCursor,
+    readChunk: async (position, chunkLimit) => {
+      const filters: Record<string, string> = {
+        status: postgrestEqFilter('active'),
+        post_type: postgrestInFilter(Array.from(AURA_COMMUNITY_POST_TYPES)),
+        created_at: 'not.is.null',
+      };
+      if (position) {
+        const cursorFilter = auraCommunityFeedCursorFilter(position);
+        if (!cursorFilter) throw new Error('AURA_COMMUNITY_CURSOR_INVALID');
+        filters.or = cursorFilter;
+      }
+      return supabaseAdminQueryRows(c, 'app_posts', {
+        select: SUPABASE_APP_POST_SELECT,
+        filters,
+        order: 'created_at.desc,id.desc',
+        limit: chunkLimit,
+      });
+    },
+    projectVisible: async (rows) => {
+      const candidates = supabaseCandidatePostRows(rows, options);
+      const projection = await supabaseProjectVisiblePostRows(
+        c,
+        viewerId,
+        candidates,
+        options,
+        0,
+        candidates.length,
+      );
+      return projection.posts.map((item, index) => ({
+        sourceId: String(projection.sourceRows[index]?.id || '').toLowerCase(),
+        item,
+      }));
+    },
+  });
+  return {
+    items: result.items,
+    next_cursor: result.hasMore && result.nextCursor
+      ? encodeAuraCommunityFeedCursor(result.nextCursor)
+      : null,
+    has_more: result.hasMore,
+  };
+}
+
+async function augmentAuraMeetupState(c: any, sourceRows: any[], posts: any[], viewerIds: Set<string>): Promise<any[]> {
+  const meetupRows = sourceRows.filter((row) => cleanText(row?.post_type, 40).toLowerCase() === 'meetup' && isUuidText(row?.id));
+  if (!meetupRows.length) return posts;
+  const meetupIds = meetupRows.map((row) => String(row.id));
+  try {
+    const joins = await supabaseAdminQueryRows(c, 'aura_meetup_joins', {
+      select: 'post_id,app_user_id,status,joined_at',
+      filters: {
+        post_id: postgrestInFilter(meetupIds),
+        status: postgrestEqFilter('confirmed'),
+      },
+      order: 'joined_at.asc',
+      limit: Math.min(5000, Math.max(50, meetupIds.length * 500)),
+    });
+    const counts = new Map<string, number>();
+    const joinedByViewer = new Set<string>();
+    for (const join of joins) {
+      const postId = String(join?.post_id || '');
+      if (!postId) continue;
+      counts.set(postId, (counts.get(postId) || 0) + 1);
+      if (viewerIds.has(publicId(join?.app_user_id, 120))) joinedByViewer.add(postId);
+    }
+    const sourceIdByPostId = new Map<string, string>();
+    for (const row of meetupRows) {
+      sourceIdByPostId.set(publicId(row?.legacy_post_id || row?.id, 120), String(row.id));
+    }
+    return posts.map((post) => {
+      const meetupId = sourceIdByPostId.get(publicId(post?.id, 120));
+      if (!meetupId) return post;
+      return {
+        ...post,
+        meetup_state_available: true,
+        meetup_joined_count: counts.get(meetupId) || 0,
+        meetup_viewer_joined: joinedByViewer.has(meetupId),
+      };
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_state_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return posts.map((post) => cleanText(post?.post_type, 40).toLowerCase() === 'meetup'
+      ? { ...post, meetup_state_available: false, meetup_joined_count: null, meetup_viewer_joined: false }
+      : post);
+  }
+}
+
+async function auraMeetupPostIdentityRow(c: any, postId: string): Promise<any | null> {
+  const cleanPostId = publicId(postId, 120);
+  if (!cleanPostId) return null;
+  const uuidPostId = isUuidText(cleanPostId);
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: 'id,legacy_post_id,app_user_id,user_id,status,post_type,metadata',
+    filters: {
+      or: uuidPostId
+        ? `(legacy_post_id.eq.${cleanPostId},id.eq.${cleanPostId})`
+        : `(legacy_post_id.eq.${cleanPostId})`,
+    },
+    limit: 1,
+  });
+  return rows[0] || null;
+}
+
+async function auraJoinFreeMeetup(c: any, postId: string, userId: string): Promise<{ status: number; body: any }> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/rpc/aura_join_free_meetup`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { ...supabaseAdminAuthHeaders(c), 'content-type': 'application/json' },
+    body: JSON.stringify({ p_post_id: postId, p_app_user_id: userId }),
+  });
+  const payload: any = await response.json().catch(async () => ({ detail: (await response.text().catch(() => '')).slice(0, 240) }));
+  if (response.ok) {
+    const row = Array.isArray(payload) ? payload[0] : payload;
+    return { status: 200, body: { joined: true, join_id: publicId(row?.join_id, 120), joined_at: cleanText(row?.joined_at, 80) } };
+  }
+  const code = getErrorCode(payload).toUpperCase();
+  const message = cleanText(payload?.message || payload?.detail, 240).toUpperCase();
+  if (code.includes('MEETUP_FULL') || message.includes('MEETUP_FULL')) {
+    return { status: 409, body: { detail: 'This meetup is full.', code: 'MEETUP_FULL' } };
+  }
+  if (code.includes('PAID_MEETUP') || message.includes('PAID_MEETUP')) {
+    return {
+      status: 409,
+      body: {
+        detail: 'Paid meetup joining is unavailable until Aura can verify the exact confirmed AUR payment.',
+        code: 'PAID_MEETUP_REQUIRES_CONFIRMED_AUR',
+      },
+    };
+  }
+  if (code.includes('MEETUP_NOT_FOUND') || message.includes('MEETUP_NOT_FOUND')) {
+    return { status: 404, body: { detail: 'Meetup not found.', code: 'MEETUP_NOT_FOUND' } };
+  }
+  console.warn(JSON.stringify({ event: 'aura_meetup_join_rpc_failed', status: response.status, code: code.slice(0, 160) }));
+  return { status: 503, body: { detail: 'Meetup joining is temporarily unavailable.', code: 'MEETUP_JOIN_UNAVAILABLE' } };
 }
 
 function postgrestInFilter(values: string[]): string {
@@ -5121,6 +8075,11 @@ function postgrestEqFilter(value: string): string {
   return `eq.${cleanText(value, 240)}`;
 }
 
+function isSupabaseColumnShapeError(error: any): boolean {
+  const code = getErrorCode(error).toLowerCase();
+  return code.includes('pgrst204') || code.includes('column') || code.includes('schema cache');
+}
+
 function supabaseEngagementConfigured(c: any): boolean {
   return !!String(c.env.SUPABASE_URL || '').trim() && !!String(c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 }
@@ -5131,8 +8090,34 @@ function databasePrimary(c: any): 'supabase_postgres' | 'legacy_d1' {
     : 'legacy_d1';
 }
 
+function supabasePrimaryRequested(c: any): boolean {
+  return databasePrimary(c) === 'supabase_postgres';
+}
+
 function supabasePrimaryConfigured(c: any): boolean {
-  return databasePrimary(c) === 'supabase_postgres' && supabaseEngagementConfigured(c);
+  return supabasePrimaryRequested(c) && supabaseEngagementConfigured(c);
+}
+
+function supabasePrimaryRequestedForEnv(env: Env): boolean {
+  return databasePrimary({ env }) === 'supabase_postgres';
+}
+
+function requireSupabasePrimaryDatabase(c: any, feature = 'app data') {
+  if (supabasePrimaryConfigured(c)) return null;
+  return c.json({
+    detail: 'Aura production database is not configured. Please try again later.',
+    code: 'SUPABASE_PRIMARY_REQUIRED',
+    feature,
+  }, 503);
+}
+
+function rejectLegacyUploadWhenSupabasePrimary(c: any, route: string) {
+  if (!supabasePrimaryRequested(c)) return null;
+  return c.json({
+    detail: 'This upload path has moved. Please update the app and try again.',
+    code: 'LEGACY_UPLOAD_DISABLED',
+    route,
+  }, 410);
 }
 
 async function supabaseAdminSelectRows(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
@@ -5153,9 +8138,35 @@ async function supabaseAdminSelectRows(c: any, table: string, filters: Record<st
   return Array.isArray(data) ? data : [];
 }
 
+async function supabaseAdminQueryRows(c: any, table: string, input: {
+  select?: string;
+  filters?: Record<string, string>;
+  order?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<any[]> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  url.searchParams.set('select', input.select || '*');
+  for (const [key, value] of Object.entries(input.filters || {})) {
+    url.searchParams.set(key, value);
+  }
+  if (input.order) url.searchParams.set('order', input.order);
+  if (typeof input.limit === 'number' && input.limit > 0) url.searchParams.set('limit', String(input.limit));
+  if (typeof input.offset === 'number' && input.offset > 0) url.searchParams.set('offset', String(input.offset));
+  const response = await fetch(url.toString(), {
+    headers: supabaseAdminAuthHeaders(c),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_QUERY_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
+}
+
 async function supabaseAdminCountRows(c: any, table: string, filters: Record<string, string>): Promise<number> {
   const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
-  url.searchParams.set('select', 'legacy_post_id');
+  url.searchParams.set('select', '*');
   url.searchParams.set('limit', '1');
   for (const [key, value] of Object.entries(filters)) {
     url.searchParams.set(key, value);
@@ -5199,185 +8210,822 @@ async function supabaseAdminDeleteRows(c: any, table: string, filters: Record<st
   }
 }
 
+async function supabaseAdminDeleteRowsIfShapeExists(c: any, table: string, filters: Record<string, string>) {
+  try {
+    await supabaseAdminDeleteRows(c, table, filters);
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+  }
+}
+
+async function supabaseAdminPatchRows(c: any, table: string, filters: Record<string, string>, patch: Record<string, unknown>) {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  for (const [key, value] of Object.entries(filters)) {
+    url.searchParams.set(key, value);
+  }
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=minimal',
+    },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_PATCH_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+  }
+}
+
+async function supabaseAdminSelectRowsIfShapeExists(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
+  try {
+    return await supabaseAdminSelectRows(c, table, filters, select, limit);
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+    return [];
+  }
+}
+
 async function supabaseDeletePostInteractionsForUsers(c: any, postId: string, userIds: string[], kind: 'like' | 'save') {
   if (!userIds.length) return;
-  await supabaseAdminDeleteRows(c, 'app_post_interactions', {
-    legacy_post_id: postgrestEqFilter(postId),
-    kind: postgrestEqFilter(kind),
-    app_user_id: postgrestInFilter(userIds),
-  });
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const keys = await supabaseInteractionActorKeys(c, userIds);
+  if (keys.actorKeys.length) {
+    await supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      actor_key: postgrestInFilter(keys.actorKeys),
+    });
+  }
+  if (keys.appUserIds.length) {
+    await supabaseAdminDeleteRows(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      app_user_id: postgrestInFilter(keys.appUserIds),
+    });
+  }
+  if (keys.authUserIds.length) {
+    await supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      user_id: postgrestInFilter(keys.authUserIds),
+    });
+  }
 }
 
 async function supabaseUpsertPostInteraction(c: any, postId: string, userId: string, kind: 'like' | 'save', collection = '') {
-  await supabaseAdminUpsert(c, 'app_post_interactions', [{
-    legacy_post_id: cleanText(postId, 120),
-    app_user_id: cleanText(userId, 120),
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const requestedUserId = cleanText(userId, 120);
+  const keys = await supabaseInteractionActorKeys(c, [requestedUserId]);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, keys.appUserIds);
+  const appToIdentityActors = await supabaseAccountIdentityActorKeysMap(c, keys.appUserIds);
+  const canonicalAppUserId = cleanText(
+    keys.appUserIds.find((id) => appToAuth.has(id)) ||
+      keys.appUserIds[0] ||
+      requestedUserId,
+    120
+  );
+  const authUserId = appToAuth.get(canonicalAppUserId) || keys.authUserIds[0] || '';
+  const preferredIdentityActor = (appToIdentityActors.get(canonicalAppUserId) || [])[0] || '';
+  const actorKey = cleanText(
+    supabaseInteractionActorKey(authUserId || '', preferredIdentityActor, canonicalAppUserId),
+    220
+  );
+  await supabaseDeletePostInteractionsForUsers(c, postId, [requestedUserId, canonicalAppUserId, ...(authUserId ? [authUserId] : []), ...keys.appUserIds, ...keys.authUserIds], kind);
+  const baseRow: any = {
+    legacy_post_id: cleanText(identity.legacyPostId || identity.requestedPostId, 120),
+    app_user_id: canonicalAppUserId,
     kind,
     collection: kind === 'save' ? (cleanText(collection, 120) || 'saved') : null,
     metadata: { source: 'cloudflare_worker_primary' },
     legacy_created_at: now(),
-  }], 'legacy_post_id,app_user_id,kind');
+  };
+  if (identity.postUuid) baseRow.post_id = identity.postUuid;
+  if (authUserId) baseRow.user_id = authUserId;
+  if (actorKey) baseRow.actor_key = actorKey;
+  if (identity.postUuid && authUserId) {
+    await supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', {
+      post_id: postgrestEqFilter(identity.postUuid),
+      user_id: postgrestEqFilter(authUserId),
+      kind: postgrestEqFilter(kind),
+    });
+  }
+  if (actorKey) {
+    try {
+      await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,kind,actor_key');
+      return;
+    } catch (error: any) {
+      if (!isSupabaseColumnShapeError(error) && !getErrorCode(error).includes('42P10')) {
+        throw error;
+      }
+    }
+  }
+  try {
+    await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,app_user_id,kind');
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      throw error;
+    }
+    delete baseRow.actor_key;
+    delete baseRow.user_id;
+    delete baseRow.post_id;
+    await supabaseAdminUpsert(c, 'app_post_interactions', [baseRow], 'legacy_post_id,app_user_id,kind');
+  }
 }
 
 async function supabaseViewerPostInteractionExists(c: any, postId: string, userIds: string[], kind: 'like' | 'save'): Promise<boolean> {
   if (!userIds.length) return false;
-  const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
-    legacy_post_id: postgrestEqFilter(postId),
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const keys = await supabaseInteractionActorKeys(c, userIds);
+  if (keys.actorKeys.length) {
+    const actorRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      actor_key: postgrestInFilter(keys.actorKeys),
+    }, 'legacy_post_id', 1);
+    if (actorRows.length > 0) return true;
+  }
+  if (keys.appUserIds.length) {
+    const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      app_user_id: postgrestInFilter(keys.appUserIds),
+    }, 'legacy_post_id', 1);
+    if (rows.length > 0) return true;
+  }
+  if (!keys.authUserIds.length) return false;
+  try {
+    const legacyAuthRows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+      or: supabasePostIdentityOrFilter(identity),
+      kind: postgrestEqFilter(kind),
+      user_id: postgrestInFilter(keys.authUserIds),
+    }, 'legacy_post_id', 1);
+    if (legacyAuthRows.length > 0) return true;
+    return false;
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+    return false;
+  }
+}
+
+async function supabaseAuthUserIdForAppUserId(c: any, userId: string): Promise<string> {
+  const cleanUserId = publicId(userId, 120);
+  if (!cleanUserId) return '';
+  const [authUserId] = await supabaseAuthUserIdsForAppUserIds(c, [cleanUserId]);
+  return authUserId || '';
+}
+
+async function supabaseAuthUserIdMapForAppUserIds(c: any, userIds: string[]): Promise<Map<string, string>> {
+  const ids = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const map = new Map<string, string>();
+  if (!ids.length) return map;
+  try {
+    const rows = await supabaseAdminSelectRows(c, 'app_users', {
+      id: postgrestInFilter(ids),
+    }, 'id,supabase_user_id', Math.max(1, ids.length));
+    for (const row of rows) {
+      const appUserId = publicId(row?.id, 120);
+      const authUserId = isUuidText(row?.supabase_user_id);
+      if (appUserId && authUserId) map.set(appUserId, authUserId);
+    }
+  } catch {}
+  return map;
+}
+
+async function supabaseAppUserIdsForAuthUserIds(c: any, authUserIds: string[]): Promise<string[]> {
+  const ids = Array.from(new Set(authUserIds.map((value) => isUuidText(value)).filter((value): value is string => !!value)));
+  if (!ids.length) return [];
+  try {
+    const rows = await supabaseAdminSelectRows(c, 'app_users', {
+      supabase_user_id: postgrestInFilter(ids),
+    }, 'id,supabase_user_id', Math.max(1, ids.length * 3));
+    return Array.from(new Set(rows.map((row) => publicId(row?.id, 120)).filter((value): value is string => !!value)));
+  } catch {
+    return [];
+  }
+}
+
+async function legacyD1AuthUserIdsForAppUserIds(c: any, ids: string[]): Promise<string[]> {
+  const authIds = new Set<string>();
+  if (!ids.length) return [];
+  try {
+    const placeholders = inPlaceholders(ids);
+    const rows = await c.env.DB.prepare(`SELECT supabase_user_id FROM users WHERE id IN (${placeholders})`)
+      .bind(...ids)
+      .all();
+    for (const row of rows.results as any[]) {
+      const authId = isUuidText(row?.supabase_user_id);
+      if (authId) authIds.add(authId);
+    }
+  } catch {}
+  return Array.from(authIds);
+}
+
+async function supabaseAuthUserIdsForAppUserIds(c: any, userIds: string[]): Promise<string[]> {
+  const ids = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const authIds = new Set<string>();
+  const payloadSupabaseSub = isUuidText(c.get?.('jwtPayload')?.supabase_sub);
+  if (payloadSupabaseSub) authIds.add(payloadSupabaseSub);
+  if (!ids.length) return Array.from(authIds);
+  try {
+    const rows = await supabaseAdminSelectRows(c, 'app_users', {
+      id: postgrestInFilter(ids),
+    }, 'id,supabase_user_id', Math.max(1, ids.length));
+    for (const row of rows) {
+      const authId = isUuidText(row?.supabase_user_id);
+      if (authId) authIds.add(authId);
+    }
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_auth_alias_read_failed', code: getErrorCode(error).slice(0, 180) }));
+  }
+  return Array.from(authIds);
+}
+
+async function supabaseInteractionIdentityKeys(c: any, userIds: string[]) {
+  const relatedUserIds = new Set<string>();
+  for (const userId of userIds) {
+    const cleanUserId = publicId(userId, 120);
+    if (cleanUserId) relatedUserIds.add(cleanUserId);
+    for (const relatedUserId of await supabaseRelatedInteractionUserIds(c, cleanUserId)) {
+      relatedUserIds.add(relatedUserId);
+    }
+  }
+  const related = Array.from(relatedUserIds);
+  const mappedAuthUserIds = await supabaseAuthUserIdsForAppUserIds(c, related);
+  const authUserIds = Array.from(new Set(mappedAuthUserIds));
+  const appUserIdsFromAuth = await supabaseAppUserIdsForAuthUserIds(c, [...related, ...authUserIds]);
+  return {
+    appUserIds: Array.from(new Set([...related, ...appUserIdsFromAuth])).filter(Boolean),
+    authUserIds,
+  };
+}
+
+function supabaseInteractionActorKey(authUserId: string, identityActor: string, appUserId: string): string {
+  const authId = isUuidText(authUserId);
+  if (authId) return `auth:${authId}`;
+  const identity = cleanText(identityActor, 220);
+  if (identity) return identity;
+  const appId = publicId(appUserId, 120);
+  return appId ? `app:${appId}` : '';
+}
+
+function normalizeLegacyInteractionActorKey(raw: unknown): string {
+  const clean = cleanText(raw, 220);
+  if (!clean) return '';
+  if (clean.startsWith('app:')) {
+    const legacyAppId = isUuidText(clean.slice(4));
+    if (legacyAppId) return `auth:${legacyAppId}`;
+  }
+  return clean;
+}
+
+function canonicalSupabaseInteractionActor(
+  row: any,
+  appToAuth: Map<string, string>,
+  appToIdentityActor: Map<string, string>
+): string {
+  const appUserId = publicId(row?.app_user_id, 120);
+  const authUserId = isUuidText(row?.user_id) || appToAuth.get(appUserId) || '';
+  if (authUserId) return `auth:${authUserId}`;
+  const identityActor = normalizeLegacyInteractionActorKey(appToIdentityActor.get(appUserId) || '');
+  if (identityActor) return identityActor;
+  const storedActor = normalizeLegacyInteractionActorKey(row?.actor_key);
+  if (storedActor) return storedActor;
+  const legacyAuthLikeAppId = isUuidText(appUserId);
+  if (legacyAuthLikeAppId) return `auth:${legacyAuthLikeAppId}`;
+  return supabaseInteractionActorKey('', '', appUserId);
+}
+
+async function supabaseInteractionActorKeys(c: any, userIds: string[]) {
+  const keys = await supabaseInteractionIdentityKeys(c, userIds);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, keys.appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, keys.appUserIds);
+  const appToIdentityActors = await supabaseAccountIdentityActorKeysMap(c, keys.appUserIds);
+  const actorKeys = new Set<string>();
+  for (const authUserId of keys.authUserIds) {
+    const actorKey = supabaseInteractionActorKey(authUserId, '', '');
+    if (actorKey) actorKeys.add(actorKey);
+  }
+  for (const appUserId of keys.appUserIds) {
+    const actorKey = supabaseInteractionActorKey(appToAuth.get(appUserId) || '', appToIdentityActor.get(appUserId) || '', appUserId);
+    if (actorKey) actorKeys.add(actorKey);
+    for (const identityActor of appToIdentityActors.get(appUserId) || []) {
+      const cleanIdentityActor = normalizeLegacyInteractionActorKey(identityActor);
+      if (cleanIdentityActor) actorKeys.add(cleanIdentityActor);
+    }
+    const rawLegacyAppKey = cleanText(`app:${appUserId}`, 220);
+    if (rawLegacyAppKey) actorKeys.add(rawLegacyAppKey);
+  }
+  return {
+    ...keys,
+    actorKeys: Array.from(actorKeys),
+  };
+}
+
+type SupabasePostIdentity = {
+  requestedPostId: string;
+  legacyPostId: string;
+  postUuid: string;
+};
+
+function supabasePostIdentityKeys(identity: SupabasePostIdentity): string[] {
+  return Array.from(new Set([
+    cleanText(identity.requestedPostId, 120),
+    cleanText(identity.legacyPostId, 120),
+    cleanText(identity.postUuid, 120),
+  ].filter(Boolean)));
+}
+
+function supabasePostIdentityOrFilter(identity: SupabasePostIdentity): string {
+  const parts: string[] = [];
+  if (identity.legacyPostId) parts.push(`legacy_post_id.eq.${identity.legacyPostId}`);
+  if (identity.postUuid) parts.push(`post_id.eq.${identity.postUuid}`);
+  if (!parts.length && identity.requestedPostId) parts.push(`legacy_post_id.eq.${identity.requestedPostId}`);
+  return `(${parts.join(',')})`;
+}
+
+function supabaseAppPostIdentityOrFilter(identity: SupabasePostIdentity): string {
+  const parts: string[] = [];
+  if (identity.legacyPostId) parts.push(`legacy_post_id.eq.${identity.legacyPostId}`);
+  if (identity.postUuid) parts.push(`id.eq.${identity.postUuid}`);
+  if (!parts.length && identity.requestedPostId) parts.push(`legacy_post_id.eq.${identity.requestedPostId}`);
+  return `(${parts.join(',')})`;
+}
+
+async function supabaseResolvePostIdentity(c: any, postId: string): Promise<SupabasePostIdentity> {
+  const requestedPostId = publicId(postId, 120);
+  const requestedUuid = isUuidText(requestedPostId);
+  const fallback: SupabasePostIdentity = {
+    requestedPostId,
+    legacyPostId: requestedUuid ? '' : requestedPostId,
+    postUuid: requestedUuid || '',
+  };
+  if (!requestedPostId) return fallback;
+
+  try {
+    const filters: Record<string, string> = requestedUuid
+      ? { or: `(id.eq.${requestedUuid},legacy_post_id.eq.${requestedPostId})` }
+      : { legacy_post_id: postgrestEqFilter(requestedPostId) };
+    const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+      select: 'id,legacy_post_id',
+      filters,
+      limit: 1,
+    });
+    const row = rows[0];
+    if (!row) return fallback;
+    return {
+      requestedPostId,
+      legacyPostId: publicId(row?.legacy_post_id || fallback.legacyPostId, 120),
+      postUuid: isUuidText(row?.id) || fallback.postUuid,
+    };
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_post_identity_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+    return fallback;
+  }
+}
+
+async function supabaseResolvePostIdentities(c: any, postIds: string[]): Promise<Map<string, SupabasePostIdentity>> {
+  const cleanPostIds = Array.from(new Set(postIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const map = new Map<string, SupabasePostIdentity>();
+  for (const postId of cleanPostIds) {
+    const requestedUuid = isUuidText(postId);
+    map.set(postId, {
+      requestedPostId: postId,
+      legacyPostId: requestedUuid ? '' : postId,
+      postUuid: requestedUuid || '',
+    });
+  }
+  if (!cleanPostIds.length) return map;
+
+  try {
+    const uuidPostIds = cleanPostIds.map((value) => isUuidText(value)).filter((value): value is string => !!value);
+    const orParts = [`legacy_post_id.${postgrestInFilter(cleanPostIds)}`];
+    if (uuidPostIds.length) orParts.push(`id.${postgrestInFilter(uuidPostIds)}`);
+    const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+      select: 'id,legacy_post_id',
+      filters: { or: `(${orParts.join(',')})` },
+      limit: Math.max(1, cleanPostIds.length * 2),
+    });
+    for (const row of rows) {
+      const identity: SupabasePostIdentity = {
+        requestedPostId: publicId(row?.legacy_post_id || row?.id, 120),
+        legacyPostId: publicId(row?.legacy_post_id, 120),
+        postUuid: isUuidText(row?.id) || '',
+      };
+      for (const key of supabasePostIdentityKeys(identity)) {
+        if (map.has(key)) map.set(key, { ...identity, requestedPostId: key });
+      }
+    }
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) {
+      console.warn(JSON.stringify({ event: 'supabase_post_identities_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  return map;
+}
+
+async function supabasePostInteractionActorCount(c: any, postId: string, kind: 'like' | 'save'): Promise<number> {
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const filters: Record<string, string> = {
+    or: supabasePostIdentityOrFilter(identity),
     kind: postgrestEqFilter(kind),
-    app_user_id: postgrestInFilter(userIds),
-  }, 'legacy_post_id', 1);
-  return rows.length > 0;
+  };
+  let rows: any[];
+  try {
+    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'app_user_id,user_id,actor_key,legacy_post_id,post_id', 10000);
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+    const fallbackFilters = {
+      legacy_post_id: postgrestEqFilter(identity.legacyPostId || identity.requestedPostId),
+      kind: postgrestEqFilter(kind),
+    };
+    rows = await supabaseAdminSelectRows(c, 'app_post_interactions', fallbackFilters, 'app_user_id', 10000);
+  }
+  const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, appUserIds);
+  const actors = new Set<string>();
+  for (const row of rows) {
+    const actor = canonicalSupabaseInteractionActor(row, appToAuth, appToIdentityActor);
+    if (actor) actors.add(actor);
+  }
+  return actors.size;
+}
+
+async function supabaseOwnedAppPost(c: any, postId: string, userId: string): Promise<{ status: 200; row: any; identity: SupabasePostIdentity } | { status: 403 | 404; body: any }> {
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: SUPABASE_APP_POST_SELECT,
+    filters: { or: supabaseAppPostIdentityOrFilter(identity) },
+    limit: 1,
+  });
+  const row = rows[0];
+  if (!row || cleanText(row?.status || 'active', 40) === 'removed') {
+    return { status: 404, body: { detail: 'Post not found' } };
+  }
+
+  const ownerAliases = new Set(await supabaseRelatedInteractionUserIds(c, userId));
+  ownerAliases.add(publicId(userId, 120));
+  const appOwnerId = publicId(row?.app_user_id, 120);
+  const authOwnerId = isUuidText(row?.user_id) || '';
+  if (!ownerAliases.has(appOwnerId) && (!authOwnerId || !ownerAliases.has(authOwnerId))) {
+    return { status: 403, body: { detail: 'Not your post' } };
+  }
+  return { status: 200, row, identity };
+}
+
+async function supabaseAdminPostForModeration(c: any, postId: string): Promise<{ row: any; identity: SupabasePostIdentity } | null> {
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: SUPABASE_APP_POST_SELECT,
+    filters: { or: supabaseAppPostIdentityOrFilter(identity) },
+    limit: 1,
+  });
+  const row = rows[0];
+  return row ? { row, identity } : null;
+}
+
+function supabasePostModerationTargetUserId(row: any): string {
+  return publicId(row?.app_user_id, 120) || isUuidText(row?.user_id) || '';
+}
+
+async function supabaseAdminPostPayloads(c: any, rows: any[]): Promise<any[]> {
+  const cleanRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!cleanRows.length) return [];
+  const authorIds = cleanRows
+    .flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || ''])
+    .filter(Boolean);
+  const [authorMap, commentCounts] = await Promise.all([
+    supabaseUsersByAnyIds(c, authorIds),
+    supabasePostCommentCounts(c, cleanRows),
+  ]);
+  return cleanRows.map((row) => {
+    const author = authorMap.get(publicId(row?.app_user_id, 120)) || authorMap.get(isUuidText(row?.user_id) || '') || {};
+    const legacyPost = supabaseAppPostToLegacy(
+      row,
+      author,
+      false,
+      commentCounts.get(publicId(row?.legacy_post_id || row?.id, 120)) || Number(row?.comments_count || 0),
+    );
+    return adminPostPayload(legacyPost, c.env);
+  });
+}
+
+async function supabaseAdminPostPayload(c: any, row: any): Promise<any | null> {
+  const payloads = await supabaseAdminPostPayloads(c, row ? [row] : []);
+  return payloads[0] || null;
+}
+
+function supabaseAdminPostPayloadMatchesSearch(payload: any, search: string): boolean {
+  const query = cleanText(search, 120).toLowerCase();
+  if (!query) return true;
+  return [
+    payload?.id,
+    payload?.supabase_post_id,
+    payload?.content,
+    payload?.title,
+    payload?.category,
+    payload?.primary_category,
+    payload?.display_location_label,
+    payload?.exact_place?.name,
+    payload?.author?.id,
+    payload?.author?.username,
+    payload?.author?.full_name,
+  ].some((value) => String(value || '').toLowerCase().includes(query));
+}
+
+async function supabasePostInteractionActorCounts(c: any, postIds: string[]) {
+  const cleanPostIds = Array.from(new Set(postIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const counts = new Map<string, { likes_count: number; saves_count: number }>();
+  for (const postId of cleanPostIds) {
+    counts.set(postId, { likes_count: 0, saves_count: 0 });
+  }
+  if (!cleanPostIds.length) return counts;
+
+  const identityMap = await supabaseResolvePostIdentities(c, cleanPostIds);
+  const identities = Array.from(identityMap.values());
+  const legacyPostIds = Array.from(new Set(identities.map((identity) => identity.legacyPostId).filter(Boolean)));
+  const uuidPostIds = Array.from(new Set(identities.map((identity) => identity.postUuid).filter(Boolean)));
+  const keyAliases = new Map<string, Set<string>>();
+  for (const identity of identities) {
+    const keys = supabasePostIdentityKeys(identity);
+    for (const key of keys) {
+      const aliases = keyAliases.get(key) || new Set<string>();
+      for (const alias of keys) aliases.add(alias);
+      keyAliases.set(key, aliases);
+    }
+  }
+
+  const rows: any[] = [];
+  const filters = {
+    legacy_post_id: postgrestInFilter(legacyPostIds.length ? legacyPostIds : cleanPostIds),
+    kind: postgrestInFilter(['like', 'save']),
+  };
+  try {
+    rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,post_id,kind,app_user_id,user_id,actor_key', Math.max(1000, cleanPostIds.length * 500)));
+  } catch (error: any) {
+    if (!isSupabaseColumnShapeError(error)) throw error;
+    rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', filters, 'legacy_post_id,kind,app_user_id', Math.max(1000, cleanPostIds.length * 500)));
+  }
+  if (uuidPostIds.length) {
+    const nativeRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+      post_id: postgrestInFilter(uuidPostIds),
+      kind: postgrestInFilter(['like', 'save']),
+    }, 'legacy_post_id,post_id,kind,app_user_id,user_id,actor_key', Math.max(1000, uuidPostIds.length * 500));
+    rows.push(...nativeRows);
+  }
+
+  const appUserIds = rows.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, appUserIds);
+  const appToIdentityActor = await supabaseAccountIdentityActorKeyMap(c, appUserIds);
+  const actorsByPostAndKind = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const rowPostKeys = Array.from(new Set([
+      publicId(row?.legacy_post_id, 120),
+      publicId(row?.post_id, 120),
+    ].filter(Boolean)));
+    const kind = cleanText(row?.kind, 20);
+    if (!rowPostKeys.length || (kind !== 'like' && kind !== 'save')) continue;
+    const actor = canonicalSupabaseInteractionActor(row, appToAuth, appToIdentityActor);
+    if (!actor) continue;
+    const targetKeys = new Set<string>();
+    for (const rowPostKey of rowPostKeys) {
+      const aliases = keyAliases.get(rowPostKey);
+      if (aliases?.size) {
+        for (const alias of aliases) targetKeys.add(alias);
+      } else {
+        targetKeys.add(rowPostKey);
+      }
+    }
+    for (const targetKey of targetKeys) {
+      const key = `${targetKey}:${kind}`;
+      const actors = actorsByPostAndKind.get(key) || new Set<string>();
+      actors.add(actor);
+      actorsByPostAndKind.set(key, actors);
+    }
+  }
+
+  for (const postId of cleanPostIds) {
+    counts.set(postId, {
+      likes_count: actorsByPostAndKind.get(`${postId}:like`)?.size || 0,
+      saves_count: actorsByPostAndKind.get(`${postId}:save`)?.size || 0,
+    });
+  }
+  return counts;
+}
+
+async function d1PostCommentCount(db: D1Database, postId: string): Promise<number> {
+  try {
+    const row: any = await db.prepare(
+      "SELECT COUNT(*) AS count FROM comments WHERE post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')"
+    ).bind(postId).first();
+    return Math.max(0, Number(row?.count || 0));
+  } catch {
+    return 0;
+  }
 }
 
 async function getSupabasePostEngagementState(c: any, postId: string, userId: string) {
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const d1State = await getPostEngagementState(c.env.DB, postId, userId);
-  let liked = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like');
-  let saved = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save');
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const legacyPostId = identity.legacyPostId || identity.requestedPostId;
+  const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+  const commentsCount = await supabasePostCommentCount(c, legacyPostId);
+  let liked = await supabaseViewerPostInteractionExists(c, legacyPostId || postId, relatedUserIds, 'like');
+  let saved = await supabaseViewerPostInteractionExists(c, legacyPostId || postId, relatedUserIds, 'save');
   const [supabaseLikesCount, supabaseSavesCount] = await Promise.all([
-    supabaseAdminCountRows(c, 'app_post_interactions', {
-      legacy_post_id: postgrestEqFilter(postId),
-      kind: postgrestEqFilter('like'),
-    }),
-    supabaseAdminCountRows(c, 'app_post_interactions', {
-      legacy_post_id: postgrestEqFilter(postId),
-      kind: postgrestEqFilter('save'),
-    }),
+    supabasePostInteractionActorCount(c, legacyPostId || postId, 'like'),
+    supabasePostInteractionActorCount(c, legacyPostId || postId, 'save'),
   ]);
   const state = {
     // Supabase app_post_interactions is the canonical engagement table.
     // D1 counters are legacy/cache only and must not inflate counts after
     // refreshes or app restarts.
     likes_count: Math.max(0, supabaseLikesCount),
-    comments_count: Math.max(0, Number(d1State.comments_count || 0)),
+    comments_count: commentsCount,
     saves_count: Math.max(0, supabaseSavesCount),
     liked,
     saved,
     engagement_source: 'supabase',
   };
   try {
-    await c.env.DB.prepare(
-      `UPDATE posts
-       SET likes_count = ?,
-           comments_count = ?,
-           saves_count = ?
-       WHERE id = ?`
-    ).bind(state.likes_count, state.comments_count, state.saves_count, postId).run();
-    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
-      .bind(state.likes_count, postId)
-      .run()
-      .catch(() => {});
-  } catch {}
+    const patch = {
+      likes_count: state.likes_count,
+      comments_count: state.comments_count,
+      saves_count: state.saves_count,
+      updated_at: now(),
+    };
+    if (legacyPostId) await supabaseAdminPatchRows(c, 'app_posts', { legacy_post_id: postgrestEqFilter(legacyPostId) }, patch);
+    if (identity.postUuid) await supabaseAdminPatchRows(c, 'app_posts', { id: postgrestEqFilter(identity.postUuid) }, patch);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_counter_repair_failed', code: getErrorCode(error).slice(0, 180) }));
+  }
   return state;
 }
 
 async function getCanonicalPostEngagementState(c: any, postId: string, userId: string) {
-  if (supabaseEngagementConfigured(c)) {
-    try {
-      return await getSupabasePostEngagementState(c, postId, userId);
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_engagement_state_failed', code: getErrorCode(error).slice(0, 180) }));
-    }
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED:engagement_state');
+  try {
+    return await getSupabasePostEngagementState(c, postId, userId);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_engagement_state_failed', code: getErrorCode(error).slice(0, 180) }));
+    throw error;
   }
-  return getPostEngagementState(c.env.DB, postId, userId);
 }
 
 async function setCanonicalPostLikeState(c: any, postId: string, userId: string, requested: boolean | null) {
-  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  const placeholders = inPlaceholders(relatedUserIds);
-  const d1LikedRow = await c.env.DB.prepare(
-    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-  ).bind(postId, ...relatedUserIds).first();
-  const d1WasLiked = !!d1LikedRow;
-  const wasLiked = supabaseEngagementConfigured(c)
-    ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'like')
-    : d1WasLiked;
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED:engagement_like');
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const canonicalPostId = identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId;
+  const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+  const wasLiked = await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'like');
   const nextLiked = requested === null ? !wasLiked : requested;
 
-  if (supabaseEngagementConfigured(c)) {
-    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'like');
-    if (nextLiked) {
-      await supabaseUpsertPostInteraction(c, postId, userId, 'like');
-    }
-  }
-
-  await deletePostLikesForUsers(c.env.DB, postId, relatedUserIds);
+  await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'like');
   if (nextLiked) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-    await c.env.DB.prepare(
-      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
-       SELECT ?, ?, ?
-       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
-    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
+    await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'like');
   }
 
-  const state = await getCanonicalPostEngagementState(c, postId, userId);
-  const changed = state.liked !== wasLiked;
+  const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
+  state.liked = nextLiked;
+  const changed = nextLiked !== wasLiked;
   return { state, wasLiked, changed };
 }
 
 async function setCanonicalPostSaveState(c: any, postId: string, userId: string, saved: boolean, collection = 'saved') {
   const collectionName = cleanText(collection, 80) || 'saved';
-  const relatedUserIds = await coalesceViewerPostInteractions(c.env.DB, postId, userId);
-  const placeholders = inPlaceholders(relatedUserIds);
-  const d1SavedRow = await c.env.DB.prepare(
-    `SELECT 1 AS found FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-  ).bind(postId, ...relatedUserIds).first();
-  const d1WasSaved = !!d1SavedRow;
-  const wasSaved = supabaseEngagementConfigured(c)
-    ? await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save')
-    : d1WasSaved;
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED:engagement_save');
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const canonicalPostId = identity.legacyPostId || identity.postUuid || identity.requestedPostId || postId;
+  const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+  const wasSaved = await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'save');
 
-  if (supabaseEngagementConfigured(c)) {
-    await supabaseDeletePostInteractionsForUsers(c, postId, relatedUserIds, 'save');
-    if (saved) {
-      await supabaseUpsertPostInteraction(c, postId, userId, 'save', collectionName);
-    }
-  }
-
-  await deletePostSavesForUsers(c.env.DB, postId, relatedUserIds);
+  await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'save');
   if (saved) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), userId, postId, collectionName)
-      .run();
-    await c.env.DB.prepare(
-      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
-    ).bind(uuid(), userId, postId, collectionName, collectionName).run().catch(() => {});
+    await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'save', collectionName);
   }
 
-  const state = await getCanonicalPostEngagementState(c, postId, userId);
-  const changed = state.saved !== wasSaved;
+  const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
+  state.saved = saved;
+  const changed = saved !== wasSaved;
   return { state, wasSaved, changed, collection: collectionName };
 }
 
 async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: string): Promise<any[]> {
-  if (!posts.length || !supabaseEngagementConfigured(c)) return posts;
-  const postIds = Array.from(new Set(posts.map((post) => cleanText(post?.id || post?.legacy_post_id, 120)).filter(Boolean)));
+  if (!posts.length || !supabaseEngagementConfigured(c) || !publicId(userId, 120)) return posts;
+  const postIds = Array.from(new Set(posts.flatMap((post) => [
+    cleanText(post?.id, 120),
+    cleanText(post?.legacy_post_id, 120),
+    cleanText(post?.supabase_post_id, 120),
+  ]).filter(Boolean)));
   if (!postIds.length) return posts;
   try {
-    const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-    const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
-      legacy_post_id: postgrestInFilter(postIds),
-      app_user_id: postgrestInFilter(relatedUserIds),
-      kind: postgrestInFilter(['like', 'save']),
-    }, 'legacy_post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length)));
+    const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+    const keys = await supabaseInteractionActorKeys(c, relatedUserIds);
+    const identityMap = await supabaseResolvePostIdentities(c, postIds);
+    const identities = Array.from(identityMap.values());
+    const legacyPostIds = Array.from(new Set(identities.map((identity) => identity.legacyPostId).filter(Boolean)));
+    const uuidPostIds = Array.from(new Set(identities.map((identity) => identity.postUuid).filter(Boolean)));
+    const keyAliases = new Map<string, Set<string>>();
+    for (const identity of identities) {
+      const aliasKeys = supabasePostIdentityKeys(identity);
+      for (const key of aliasKeys) {
+        const aliases = keyAliases.get(key) || new Set<string>();
+        for (const alias of aliasKeys) aliases.add(alias);
+        keyAliases.set(key, aliases);
+      }
+    }
+    const [counts, appRows] = await Promise.all([
+      supabasePostInteractionActorCounts(c, postIds),
+      keys.appUserIds.length
+        ? supabaseAdminSelectRows(c, 'app_post_interactions', {
+        legacy_post_id: postgrestInFilter(legacyPostIds.length ? legacyPostIds : postIds),
+        app_user_id: postgrestInFilter(keys.appUserIds),
+        kind: postgrestInFilter(['like', 'save']),
+          }, 'legacy_post_id,post_id,kind', Math.max(1, postIds.length * 2 * Math.max(1, relatedUserIds.length)))
+        : Promise.resolve([] as any[]),
+    ]);
+    const rows: any[] = [...appRows];
+    if (keys.actorKeys.length) {
+      const actorRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+        legacy_post_id: postgrestInFilter(legacyPostIds.length ? legacyPostIds : postIds),
+        actor_key: postgrestInFilter(keys.actorKeys),
+        kind: postgrestInFilter(['like', 'save']),
+      }, 'legacy_post_id,post_id,kind', Math.max(1, postIds.length * 2 * keys.actorKeys.length));
+      rows.push(...actorRows);
+      if (uuidPostIds.length) {
+        const nativeActorRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+          post_id: postgrestInFilter(uuidPostIds),
+          actor_key: postgrestInFilter(keys.actorKeys),
+          kind: postgrestInFilter(['like', 'save']),
+        }, 'legacy_post_id,post_id,kind', Math.max(1, uuidPostIds.length * 2 * keys.actorKeys.length));
+        rows.push(...nativeActorRows);
+      }
+    }
+    if (uuidPostIds.length && keys.appUserIds.length) {
+      const nativeAppRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+        post_id: postgrestInFilter(uuidPostIds),
+        app_user_id: postgrestInFilter(keys.appUserIds),
+        kind: postgrestInFilter(['like', 'save']),
+      }, 'legacy_post_id,post_id,kind', Math.max(1, uuidPostIds.length * 2 * Math.max(1, relatedUserIds.length)));
+      rows.push(...nativeAppRows);
+    }
+    if (keys.authUserIds.length) {
+      try {
+        const legacyAuthRows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
+          legacy_post_id: postgrestInFilter(legacyPostIds.length ? legacyPostIds : postIds),
+          user_id: postgrestInFilter(keys.authUserIds),
+          kind: postgrestInFilter(['like', 'save']),
+        }, 'legacy_post_id,post_id,kind', Math.max(1, postIds.length * 2 * keys.authUserIds.length));
+        rows.push(...legacyAuthRows);
+        if (uuidPostIds.length) {
+          const nativeAuthRows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+            post_id: postgrestInFilter(uuidPostIds),
+            user_id: postgrestInFilter(keys.authUserIds),
+            kind: postgrestInFilter(['like', 'save']),
+          }, 'legacy_post_id,post_id,kind', Math.max(1, uuidPostIds.length * 2 * keys.authUserIds.length));
+          rows.push(...nativeAuthRows);
+        }
+      } catch (error: any) {
+        if (!isSupabaseColumnShapeError(error)) throw error;
+      }
+    }
     const liked = new Set<string>();
     const saved = new Set<string>();
     for (const row of rows) {
-      const postId = cleanText(row?.legacy_post_id, 120);
+      const rowPostIds = Array.from(new Set([
+        cleanText(row?.legacy_post_id, 120),
+        cleanText(row?.post_id, 120),
+      ].filter(Boolean)));
       const kind = cleanText(row?.kind, 20);
-      if (postId && kind === 'like') liked.add(postId);
-      if (postId && kind === 'save') saved.add(postId);
+      for (const rowPostId of rowPostIds) {
+        const aliases = keyAliases.get(rowPostId) || new Set([rowPostId]);
+        for (const alias of aliases) {
+          if (kind === 'like') liked.add(alias);
+          if (kind === 'save') saved.add(alias);
+        }
+      }
     }
     return posts.map((post) => {
-      const postId = cleanText(post?.id || post?.legacy_post_id, 120);
-      if (!postId) return post;
-      const viewerLiked = liked.has(postId);
-      const viewerSaved = saved.has(postId);
+      const postKeys = Array.from(new Set([
+        cleanText(post?.id, 120),
+        cleanText(post?.legacy_post_id, 120),
+        cleanText(post?.supabase_post_id, 120),
+      ].filter(Boolean)));
+      if (!postKeys.length) return post;
+      const postId = postKeys[0];
+      const viewerLiked = postKeys.some((key) => liked.has(key));
+      const viewerSaved = postKeys.some((key) => saved.has(key));
+      const countState = postKeys.map((key) => counts.get(key)).find(Boolean);
       return {
         ...post,
+        likes_count: countState?.likes_count ?? Math.max(0, Number(post?.likes_count || 0)),
+        saves_count: countState?.saves_count ?? Math.max(0, Number(post?.saves_count || 0)),
         is_liked: viewerLiked ? 1 : 0,
         viewer_liked: viewerLiked,
         liked_by_me: viewerLiked,
@@ -5416,125 +9064,8 @@ function postEngagementResponse(state: any, extra: Record<string, unknown> = {})
   };
 }
 
-async function relatedInteractionUserIds(db: D1Database, userId: string): Promise<string[]> {
-  const cleanUserId = publicId(userId, 120);
-  if (!cleanUserId) return [];
-  const ids = new Set<string>([cleanUserId]);
-
-  try {
-    const user: any = await db.prepare(
-      'SELECT id, email, supabase_user_id, oauth_provider, oauth_subject FROM users WHERE id = ?'
-    ).bind(cleanUserId).first();
-    const email = normalizeOptionalEmail(user?.email);
-    const supabaseUserId = cleanText(user?.supabase_user_id, 120);
-    const oauthProvider = normalizeAuthProvider(user?.oauth_provider);
-    const oauthSubject = cleanText(user?.oauth_subject, 240);
-    const conditions = ['id = ?'];
-    const binds: any[] = [cleanUserId];
-    if (supabaseUserId) {
-      conditions.push('supabase_user_id = ?');
-      binds.push(supabaseUserId);
-    }
-    if (email && !isInternalOAuthEmail(email)) {
-      conditions.push('LOWER(email) = ?');
-      binds.push(email);
-    }
-    if (oauthSubject) {
-      conditions.push('(oauth_provider = ? AND oauth_subject = ?)');
-      binds.push(oauthProvider, oauthSubject);
-    }
-    const rows = await db.prepare(`SELECT id FROM users WHERE ${conditions.join(' OR ')} LIMIT 20`)
-      .bind(...binds)
-      .all();
-    for (const row of rows.results as any[]) {
-      const id = publicId(row?.id, 120);
-      if (id) ids.add(id);
-    }
-  } catch {}
-
-  try {
-    const rows = await db.prepare(
-      `SELECT DISTINCT ai2.user_id
-       FROM account_identities ai1
-       JOIN account_identities ai2
-         ON ai2.provider = ai1.provider
-        AND ai2.provider_user_id = ai1.provider_user_id
-       WHERE ai1.user_id = ?
-       LIMIT 20`
-    ).bind(cleanUserId).all();
-    for (const row of rows.results as any[]) {
-      const id = publicId(row?.user_id, 120);
-      if (id) ids.add(id);
-    }
-  } catch {}
-
-  return Array.from(ids).slice(0, 20);
-}
-
 function inPlaceholders(values: unknown[]): string {
   return values.map(() => '?').join(', ');
-}
-
-async function deletePostLikesForUsers(db: D1Database, postId: string, userIds: string[]) {
-  if (!userIds.length) return;
-  const placeholders = inPlaceholders(userIds);
-  await db.batch([
-    db.prepare(`DELETE FROM likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
-    db.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${placeholders})`).bind(postId, ...userIds),
-  ]);
-}
-
-async function deletePostSavesForUsers(db: D1Database, postId: string, userIds: string[]) {
-  if (!userIds.length) return;
-  const placeholders = inPlaceholders(userIds);
-  await db.prepare(`DELETE FROM saved_posts WHERE post_id = ? AND user_id IN (${placeholders})`)
-    .bind(postId, ...userIds)
-    .run();
-  try {
-    await db.prepare(`DELETE FROM bookmarks WHERE post_id = ? AND user_id IN (${placeholders})`)
-      .bind(postId, ...userIds)
-      .run();
-  } catch {}
-}
-
-async function coalesceViewerPostInteractions(db: D1Database, postId: string, userId: string): Promise<string[]> {
-  const userIds = await relatedInteractionUserIds(db, userId);
-  if (userIds.length <= 1) return userIds;
-  const placeholders = inPlaceholders(userIds);
-
-  const likeRow: any = await db.prepare(
-    `SELECT 1 AS found FROM likes WHERE post_id = ? AND user_id IN (${placeholders}) LIMIT 1`
-  ).bind(postId, ...userIds).first();
-  if (likeRow) {
-    await deletePostLikesForUsers(db, postId, userIds);
-    await db.prepare('INSERT OR IGNORE INTO likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-    await db.prepare(
-      `INSERT OR IGNORE INTO discover_likes (id, user_id, post_id)
-       SELECT ?, ?, ?
-       WHERE EXISTS (SELECT 1 FROM discover_posts WHERE id = ?)`
-    ).bind(uuid(), userId, postId, postId).run().catch(() => {});
-  }
-
-  const saveRow: any = await db.prepare(
-    `SELECT collection FROM saved_posts
-     WHERE post_id = ? AND user_id IN (${placeholders})
-     ORDER BY COALESCE(created_at, '') DESC
-     LIMIT 1`
-  ).bind(postId, ...userIds).first();
-  if (saveRow) {
-    const collection = cleanText(saveRow.collection || 'saved', 80) || 'saved';
-    await deletePostSavesForUsers(db, postId, userIds);
-    await db.prepare('INSERT OR IGNORE INTO saved_posts (id, user_id, post_id, collection) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), userId, postId, collection)
-      .run();
-    await db.prepare(
-      'INSERT INTO bookmarks (id, user_id, post_id, collection) VALUES (?, ?, ?, ?) ON CONFLICT(user_id, post_id) DO UPDATE SET collection = ?'
-    ).bind(uuid(), userId, postId, collection, collection).run().catch(() => {});
-  }
-
-  return userIds;
 }
 
 async function isFriend(db: D1Database, userId: string, targetId: string): Promise<boolean> {
@@ -5571,6 +9102,10 @@ function safeUserPayload(user: any, opts: { includePrivate?: boolean } = {}) {
     social_website: safeExternalUrl(user.social_website),
     social_tiktok: cleanText(user.social_tiktok, 120),
     social_instagram: cleanText(user.social_instagram, 120),
+    interests: parseJsonArray(user.interests)
+      .map((item) => cleanText(item, 60))
+      .filter(Boolean)
+      .slice(0, 3),
     followers_count: Number(user.followers_count || 0),
     following_count: Number(user.following_count || 0),
     posts_count: Number(user.posts_count || 0),
@@ -5635,11 +9170,12 @@ function normalizeOptionalName(value: unknown): string {
 
 function internalOAuthEmail(provider: 'google' | 'apple', subject: string): string {
   const safeSubject = subject.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 48) || 'user';
-  return `${provider}_${safeSubject}@oauth.flames-up.local`;
+  return `${provider}_${safeSubject}@oauth.flames-up.com`;
 }
 
 function isInternalOAuthEmail(email: unknown): boolean {
-  return String(email || '').toLowerCase().endsWith('@oauth.flames-up.local');
+  const clean = String(email || '').toLowerCase();
+  return clean.endsWith('@oauth.flames-up.com') || clean.endsWith('@oauth.flames-up.local');
 }
 
 function isApplePrivateRelayEmail(email: unknown): boolean {
@@ -5681,9 +9217,21 @@ async function upsertAccountIdentity(
   const fallbackProviderId = provider === 'email' && email ? await privacyHash(c, email) : '';
   const providerUserId = cleanText(input.providerUserId || fallbackProviderId, 240);
   if (!userId || !providerUserId) return;
-  await ensureAccountDeletionSchema(c.env.DB);
   const emailHash = email ? await privacyHash(c, email) : '';
   const ts = now();
+  if (supabasePrimaryConfigured(c)) {
+    await supabaseAdminUpsert(c, 'app_account_identities', [{
+      id: uuid(),
+      user_id: userId,
+      provider,
+      provider_user_id: providerUserId,
+      email_hash: emailHash || null,
+      created_at: ts,
+      updated_at: ts,
+    }], 'provider,provider_user_id');
+    return;
+  }
+  await ensureAccountDeletionSchema(c.env.DB);
   await c.env.DB.prepare(
     `INSERT INTO account_identities (id, user_id, provider, provider_user_id, email_hash, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -5695,6 +9243,19 @@ async function upsertAccountIdentity(
 }
 
 async function writeAccountDeletionEvent(c: any, userId: string, eventType: string, metadata: Record<string, unknown> = {}, actorUserId = userId) {
+  if (supabasePrimaryConfigured(c)) {
+    await writeSupabaseAuditLog(c, {
+      actionType: `account_${cleanText(eventType, 70) || 'event'}`,
+      actorUserId: actorUserId || userId,
+      actorRole: 'user',
+      targetType: 'user',
+      targetId: userId,
+      targetUserId: userId,
+      reason: cleanText((metadata.reason as any) || '', 180),
+      metadata,
+    });
+    return;
+  }
   await ensureAccountDeletionSchema(c.env.DB);
   await c.env.DB.prepare(
     `INSERT INTO account_deletion_events (id, user_id, event_type, actor_user_id, reason, metadata, request_id, created_at)
@@ -5727,15 +9288,6 @@ function getJwtSecret(c: any): string {
     throw new Error('JWT_SECRET_MISSING');
   }
   return secret;
-}
-
-function getAgoraConfig(c: any) {
-  const appId = String(c.env.AGORA_APP_ID || '').trim();
-  const appCertificate = String(c.env.AGORA_APP_CERTIFICATE || '').trim();
-  if (!appId || !appCertificate) {
-    throw new Error('AGORA_NOT_CONFIGURED');
-  }
-  return { appId, appCertificate };
 }
 
 function getStripeConfig(c: any) {
@@ -5814,7 +9366,7 @@ async function stripeApiGet(c: any, path: string) {
 
 const PREMIUM_PLAN = {
   id: 'monthly',
-  label: 'Captro Premium',
+  label: 'Aura Premium',
   amount_cents: 499,
   currency: 'usd',
   interval: 'month',
@@ -6399,105 +9951,11 @@ async function refundCoinPurchase(c: any, payload: any) {
   return { processed: true, result };
 }
 
-function normalizeAgoraChannel(value: unknown): string {
-  const channel = String(value || '')
-    .trim()
-    .replace(/[^a-zA-Z0-9_ -]/g, '_')
-    .replace(/\s+/g, '_')
-    .slice(0, 63);
-
-  if (!channel || new TextEncoder().encode(channel).length >= 64) {
-    throw new Error('AGORA_INVALID_CHANNEL');
-  }
-  return channel;
-}
-
-function normalizeAgoraRole(value: unknown): { label: 'host' | 'audience'; rtcRole: number } {
-  const role = String(value || '').trim().toLowerCase();
-  if (role === 'audience' || role === 'subscriber') {
-    return { label: 'audience', rtcRole: RtcRole.SUBSCRIBER };
-  }
-  return { label: 'host', rtcRole: RtcRole.PUBLISHER };
-}
-
-function getAgoraTokenTtl(c: any): number {
-  const raw = Number.parseInt(String(c.env.AGORA_TOKEN_TTL_SECONDS || '3600'), 10);
-  if (!Number.isFinite(raw)) return 3600;
-  return Math.min(Math.max(raw, 60), 24 * 60 * 60);
-}
-
-async function numericAgoraUid(userId: string): Promise<number> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(userId));
-  const view = new DataView(digest);
-  return (view.getUint32(0) % 2147483646) + 1;
-}
-
-const ACTIVE_CALL_STATUSES = ['ringing', 'accepted', 'connecting', 'active'];
-
-function buildCaptroCallChannel(callId: string): string {
-  return normalizeAgoraChannel(`captro_${callId.replace(/-/g, '_').slice(0, 48)}`);
-}
-
-function callTimeoutAt(seconds = 42): string {
-  return new Date(Date.now() + seconds * 1000).toISOString();
-}
-
-function safeCallPayload(row: any) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    call_id: row.id,
-    caller_user_id: row.caller_id,
-    callee_user_id: row.callee_id,
-    caller_name: row.caller_name || '',
-    caller_avatar: row.caller_avatar || '',
-    callee_name: row.callee_name || '',
-    callee_avatar: row.callee_avatar || '',
-    call_type: row.call_type || 'video',
-    status: row.status || 'failed',
-    room_id: row.room_id || row.channel_name || row.id,
-    channel_name: row.channel_name || row.room_id || row.id,
-    push_delivery_status: row.push_delivery_status || '',
-    created_at: row.created_at || '',
-    answered_at: row.answered_at || '',
-    ended_at: row.ended_at || '',
-    timeout_at: row.timeout_at || '',
-  };
-}
-
-async function expireRingingCalls(db: D1Database) {
-  const timestamp = now();
-  await db.prepare(
-    `UPDATE call_sessions
-     SET status = 'missed', ended_at = ?, updated_at = ?
-     WHERE status = 'ringing' AND timeout_at <= ?`
-  ).bind(timestamp, timestamp, timestamp).run();
-}
-
-async function getVisibleCallForUser(db: D1Database, callId: string, userId: string) {
-  await expireRingingCalls(db);
-  return db.prepare('SELECT * FROM call_sessions WHERE id = ? AND (caller_id = ? OR callee_id = ?) LIMIT 1')
-    .bind(publicId(callId, 120), userId, userId)
-    .first();
-}
-
-async function hasActiveCallForUser(db: D1Database, userId: string): Promise<boolean> {
-  await expireRingingCalls(db);
-  const placeholders = ACTIVE_CALL_STATUSES.map(() => '?').join(', ');
-  const activeCallSql = [
-    'SELECT id FROM call_sessions',
-    `WHERE (caller_id = ? OR callee_id = ?) AND status IN (${placeholders})`,
-    'LIMIT 1',
-  ].join(' ');
-  const row: any = await db.prepare(activeCallSql).bind(userId, userId, ...ACTIVE_CALL_STATUSES).first();
-  return !!row;
-}
-
 function getApnsConfig(c: any) {
   const teamId = String(c.env.APNS_TEAM_ID || '').trim();
   const keyId = String(c.env.APNS_KEY_ID || '').trim();
   const bundleId = String(c.env.APNS_BUNDLE_ID || '').trim();
-  const privateKey = String(c.env.APNS_PRIVATE_KEY || c.env.APNS_VOIP_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
+  const privateKey = String(c.env.APNS_PRIVATE_KEY || '').replace(/\\n/g, '\n').trim();
   const environment = String(c.env.APNS_ENVIRONMENT || c.env.ENVIRONMENT || 'production').toLowerCase();
   if (!teamId || !keyId || !bundleId || !privateKey) return null;
   return { teamId, keyId, bundleId, privateKey, environment };
@@ -6513,69 +9971,6 @@ async function signApnsJwt(config: { teamId: string; keyId: string; privateKey: 
     .sign(key);
 }
 
-async function sendVoipPushForCall(c: any, call: any): Promise<string> {
-  const config = getApnsConfig(c);
-  if (!config) return 'voip_not_configured';
-
-  const tokens = await c.env.DB.prepare(
-    `SELECT token, bundle_id, environment
-     FROM voip_push_tokens
-     WHERE user_id = ? AND is_active = 1
-     ORDER BY last_seen_at DESC
-     LIMIT 8`
-  ).bind(call.callee_id).all();
-  const rows = (tokens.results || []) as any[];
-  if (!rows.length) return 'no_voip_tokens';
-
-  const jwt = await signApnsJwt(config);
-  const isSandbox = config.environment === 'development' || config.environment === 'sandbox';
-  const baseURL = isSandbox ? 'https://api.sandbox.push.apple.com' : 'https://api.push.apple.com';
-  const payloadCall = safeCallPayload(call) || {};
-  const isRinging = String(call.status || 'ringing') === 'ringing';
-  const payload = {
-    aps: {
-      alert: {
-        title: isRinging ? 'Captro Video Call' : 'Captro Call Update',
-        body: isRinging ? `${call.caller_name || 'Someone'} is calling you` : 'Call ended',
-      },
-      sound: 'default',
-    },
-    ...payloadCall,
-  };
-
-  let sent = 0;
-  let failed = 0;
-  for (const row of rows) {
-    const token = String(row.token || '').trim();
-    if (!token) continue;
-    const topic = String(row.bundle_id || config.bundleId).trim() || config.bundleId;
-    const response = await fetch(`${baseURL}/3/device/${token}`, {
-      method: 'POST',
-      headers: {
-        authorization: `bearer ${jwt}`,
-        'apns-topic': `${topic}.voip`,
-        'apns-push-type': 'voip',
-        'apns-priority': '10',
-        'apns-expiration': '0',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-    if (response.ok) {
-      sent += 1;
-    } else {
-      failed += 1;
-      if (response.status === 400 || response.status === 410) {
-        await c.env.DB.prepare('UPDATE voip_push_tokens SET is_active = 0 WHERE token = ?').bind(token).run();
-      }
-    }
-  }
-
-  if (sent > 0 && failed === 0) return `voip_sent:${sent}`;
-  if (sent > 0) return `voip_partial:${sent}/${sent + failed}`;
-  return 'voip_failed';
-}
-
 async function sendAlertPushForNotification(c: any, input: {
   userId: string;
   type: string;
@@ -6585,16 +9980,32 @@ async function sendAlertPushForNotification(c: any, input: {
 }): Promise<string> {
   const config = getApnsConfig(c);
   if (!config) return 'apns_not_configured';
-  await ensureProductionReadinessSchema(c.env.DB);
 
-  const tokens = await c.env.DB.prepare(
-    `SELECT token, bundle_id, environment
-     FROM push_tokens
-     WHERE user_id = ? AND is_active = 1
-     ORDER BY last_seen_at DESC
-     LIMIT 8`
-  ).bind(input.userId).all();
-  const rows = (tokens.results || []) as any[];
+  let rows: any[] = [];
+  if (supabasePrimaryConfigured(c)) {
+    rows = await supabaseAdminQueryRows(c, 'app_push_tokens', {
+      select: 'id,token,bundle_id,environment',
+      filters: {
+        user_id: postgrestEqFilter(input.userId),
+        is_active: 'eq.true',
+      },
+      order: 'last_seen_at.desc',
+      limit: 8,
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_push_token_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    });
+  } else {
+    await ensureProductionReadinessSchema(c.env.DB);
+    const tokens = await c.env.DB.prepare(
+      `SELECT token, bundle_id, environment
+       FROM push_tokens
+       WHERE user_id = ? AND is_active = 1
+       ORDER BY last_seen_at DESC
+       LIMIT 8`
+    ).bind(input.userId).all();
+    rows = (tokens.results || []) as any[];
+  }
   if (!rows.length) return 'no_push_tokens';
 
   const jwt = await signApnsJwt(config);
@@ -6634,9 +10045,14 @@ async function sendAlertPushForNotification(c: any, input: {
     } else {
       failed += 1;
       if (response.status === 400 || response.status === 410) {
-        await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE token = ?')
-          .bind(now(), token)
-          .run();
+        if (supabasePrimaryConfigured(c)) {
+          await supabaseAdminPatchRows(c, 'app_push_tokens', { id: postgrestEqFilter(cleanText(row.id, 120)) }, { is_active: false, updated_at: now() })
+            .catch((error: any) => console.warn(JSON.stringify({ event: 'supabase_push_token_deactivate_failed', code: getErrorCode(error).slice(0, 180) })));
+        } else {
+          await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE token = ?')
+            .bind(now(), token)
+            .run();
+        }
       }
     }
   }
@@ -6978,12 +10394,12 @@ async function sendEmailVerificationLink(c: any, email: string, link: string): P
     body: JSON.stringify({
       from,
       to: [email],
-      subject: 'Verify your Captro email',
-      text: `Tap this link to verify your Captro email:\n\n${link}\n\nThis link expires in 30 minutes. If you did not request it, you can ignore this email.`,
+      subject: 'Verify your Aura email',
+      text: `Tap this link to verify your Aura email:\n\n${link}\n\nThis link expires in 30 minutes. If you did not request it, you can ignore this email.`,
       html: `
         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.55;color:#111;padding:24px">
-          <h1 style="font-size:24px;margin:0 0 12px">Verify your Captro email</h1>
-          <p>Tap the button below to verify your Captro account email.</p>
+          <h1 style="font-size:24px;margin:0 0 12px">Verify your Aura email</h1>
+          <p>Tap the button below to verify your Aura account email.</p>
           <p style="margin:24px 0">
             <a href="${link}" style="display:inline-block;background:#0f2d18;color:#fff;text-decoration:none;padding:13px 20px;border-radius:999px;font-weight:700">Verify email</a>
           </p>
@@ -7084,7 +10500,7 @@ async function sendLegacyPhoneCode(c: any, phone: string, code: string): Promise
   const body = new URLSearchParams({
     To: phone,
     From: from,
-    Body: `Your Flames-Up sign-in code is ${code}. It expires in 10 minutes.`,
+    Body: `Your Aura sign-in code is ${code}. It expires in 10 minutes.`,
   });
 
   const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
@@ -7413,9 +10829,38 @@ async function verifySupabaseAccessToken(c: any, accessToken: string) {
   const supabaseUrl = getSupabaseUrl(c);
   const issuer = String(c.env.SUPABASE_JWT_ISSUER || `${supabaseUrl}/auth/v1`).replace(/\/+$/, '');
   const jwks = createRemoteJWKSet(new URL(`${supabaseUrl}/auth/v1/.well-known/jwks.json`));
-  const { payload } = await jwtVerify(token, jwks, { issuer });
-  if (!payload.sub) throw new Error('SUPABASE_SUBJECT_MISSING');
-  return payload as any;
+  try {
+    const { payload } = await jwtVerify(token, jwks, { issuer });
+    if (!payload.sub) throw new Error('SUPABASE_SUBJECT_MISSING');
+    return payload as any;
+  } catch (localVerifyError: any) {
+    const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+      headers: {
+        apikey: getSupabaseAuthClientKey(c),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`SUPABASE_TOKEN_USER_LOOKUP_FAILED:${response.status}:${text.slice(0, 160)}:${getErrorCode(localVerifyError).slice(0, 120)}`);
+    }
+    const user: any = await response.json().catch(() => ({}));
+    const userId = isUuidText(user?.id);
+    if (!userId) throw new Error('SUPABASE_SUBJECT_MISSING');
+    const unsafePayload = decodeJwtPayloadUnsafe(token);
+    return {
+      ...unsafePayload,
+      sub: userId,
+      email: normalizeOptionalEmail(user?.email || unsafePayload?.email),
+      phone: normalizeOptionalPhone(user?.phone || unsafePayload?.phone),
+      app_metadata: user?.app_metadata && typeof user.app_metadata === 'object'
+        ? user.app_metadata
+        : (unsafePayload?.app_metadata || {}),
+      user_metadata: user?.user_metadata && typeof user.user_metadata === 'object'
+        ? user.user_metadata
+        : (unsafePayload?.user_metadata || {}),
+    };
+  }
 }
 
 async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) {
@@ -7478,11 +10923,226 @@ async function findOrCreateSupabaseUser(c: any, payload: any, extras: any = {}) 
   return c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
 }
 
+const SUPABASE_APP_USER_SELECT = 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at';
+
+function supabaseAppUserToLegacyUser(row: any): any {
+  const metadata = parseJsonObject(row?.metadata);
+  const profile = parseJsonObject(row?.profile);
+  const counts = parseJsonObject(row?.counts);
+  const status = cleanText((metadata as any).status || 'active', 40) || 'active';
+  return {
+    id: publicId(row?.id, 120),
+    supabase_user_id: isUuidText(row?.supabase_user_id),
+    email: normalizeOptionalEmail(row?.email),
+    username: cleanText(row?.username, 80),
+    full_name: cleanText(row?.full_name, 160),
+    profile_image: safeMediaReference(row?.avatar_url),
+    cover_image: safeMediaReference(row?.cover_url),
+    bio: cleanText(row?.bio, 800),
+    city: cleanText(row?.city, 160),
+    social_website: safeExternalUrl((profile as any).social_website),
+    social_tiktok: cleanText((profile as any).social_tiktok, 120),
+    social_instagram: cleanText((profile as any).social_instagram, 120),
+    age: clampNumber((profile as any).age, 13, 120, 0),
+    looking_for: cleanText((profile as any).looking_for, 120),
+    interests: Array.isArray((profile as any).interests)
+      ? JSON.stringify((profile as any).interests.map((item: unknown) => cleanText(item, 60)).filter(Boolean).slice(0, 24))
+      : cleanText((profile as any).interests, 1000),
+    profile_background_image: safeMediaReference((profile as any).profile_background_image || row?.cover_url),
+    followers_count: Math.max(0, Number((counts as any).followers_count || 0)),
+    following_count: Math.max(0, Number((counts as any).following_count || 0)),
+    posts_count: Math.max(0, Number((counts as any).posts_count || 0)),
+    is_private: row?.is_private ? 1 : 0,
+    is_verified: row?.is_verified ? 1 : 0,
+    phone: normalizeOptionalPhone(row?.phone),
+    phone_verified: row?.phone_verified ? 1 : 0,
+    email_verified: row?.email_verified ? 1 : 0,
+    language: normalizeLanguage((profile as any).language),
+    status,
+    deletion_requested_at: cleanText((metadata as any).deletion_requested_at, 80),
+    deletion_scheduled_at: cleanText((metadata as any).deletion_scheduled_at, 80),
+    suspended_until: cleanText((metadata as any).suspended_until, 80),
+    session_revoked_at: cleanText((metadata as any).session_revoked_at, 80),
+    banned_at: cleanText((metadata as any).banned_at, 80),
+    ban_reason: cleanText((metadata as any).ban_reason, 240),
+    oauth_provider: cleanText((metadata as any).oauth_provider, 40),
+    oauth_subject: cleanText((metadata as any).oauth_subject, 240),
+    created_at: row?.legacy_created_at || row?.created_at,
+    updated_at: row?.legacy_updated_at || row?.updated_at,
+    source: 'supabase_postgres',
+  };
+}
+
+async function getSupabaseSessionUserByAnyId(c: any, inputId: string): Promise<any | null> {
+  const row = await getSupabaseAppUserRowByAnyId(c, inputId);
+  return row ? supabaseAppUserToLegacyUser(row) : null;
+}
+
+async function supabaseClearExpiredSuspension(c: any, userId: string) {
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!row) return;
+  const metadata = parseJsonObject(row.metadata);
+  metadata.status = 'active';
+  delete metadata.suspended_until;
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(row.id, 120)) }, {
+    metadata,
+    updated_at: now(),
+  });
+}
+
+async function getSupabaseAppUserRowByAnyId(c: any, inputId: string): Promise<any | null> {
+  const cleanId = publicId(inputId, 120);
+  if (!cleanId || !supabasePrimaryConfigured(c)) return null;
+  const filters: Record<string, string> = isUuidText(cleanId)
+    ? { or: `(id.eq.${cleanId},supabase_user_id.eq.${cleanId})` }
+    : { id: postgrestEqFilter(cleanId) };
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: SUPABASE_APP_USER_SELECT,
+    filters,
+    limit: 1,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_session_user_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  return rows[0] || null;
+}
+
+async function supabasePhoneOwnerId(c: any, phone: string): Promise<string> {
+  if (!supabasePrimaryConfigured(c)) return '';
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: 'id',
+    filters: { phone: postgrestEqFilter(phone) },
+    limit: 2,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_phone_owner_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  return cleanText(rows[0]?.id || '', 120);
+}
+
+async function supabaseExpireAccountVerificationTokens(c: any, userId: string, tokenType: string, target: string) {
+  await supabaseAdminPatchRows(c, 'app_account_verification_tokens', {
+    user_id: postgrestEqFilter(userId),
+    token_type: postgrestEqFilter(tokenType),
+    target: postgrestEqFilter(target),
+    used_at: 'is.null',
+  }, { used_at: now(), updated_at: now() });
+}
+
+async function supabaseCreateAccountVerificationToken(c: any, input: {
+  userId: string;
+  tokenType: string;
+  target: string;
+  tokenHash: string;
+  expiresAt: string;
+}) {
+  await supabaseAdminUpsert(c, 'app_account_verification_tokens', [{
+    id: uuid(),
+    user_id: input.userId,
+    token_type: input.tokenType,
+    target: input.target,
+    token_hash: input.tokenHash,
+    attempts: 0,
+    expires_at: input.expiresAt,
+    created_at: now(),
+    updated_at: now(),
+  }], 'id');
+}
+
+async function supabaseLatestAccountVerificationToken(c: any, tokenType: string, target: string): Promise<any | null> {
+  const rows = await supabaseAdminQueryRows(c, 'app_account_verification_tokens', {
+    select: 'id,user_id,target,token_hash,attempts,expires_at,used_at,created_at',
+    filters: {
+      token_type: postgrestEqFilter(tokenType),
+      target: postgrestEqFilter(target),
+      used_at: 'is.null',
+    },
+    order: 'created_at.desc',
+    limit: 1,
+  });
+  return rows[0] || null;
+}
+
+async function supabaseAccountVerificationTokenByHash(c: any, tokenType: string, tokenHash: string): Promise<any | null> {
+  const rows = await supabaseAdminQueryRows(c, 'app_account_verification_tokens', {
+    select: 'id,user_id,target,token_hash,attempts,expires_at,used_at,created_at',
+    filters: {
+      token_type: postgrestEqFilter(tokenType),
+      token_hash: postgrestEqFilter(tokenHash),
+      used_at: 'is.null',
+    },
+    limit: 1,
+  });
+  return rows[0] || null;
+}
+
+async function findOrCreateSupabaseAppUser(c: any, payload: any, extras: any = {}) {
+  const supabaseUserId = isUuidText(payload?.sub);
+  if (!supabaseUserId) throw new Error('SUPABASE_SUBJECT_MISSING');
+  const email = normalizeOptionalEmail(payload.email || extras.email);
+  const metadata = payload.user_metadata && typeof payload.user_metadata === 'object' ? payload.user_metadata : {};
+  const safeFullName = normalizeOptionalName(extras.full_name || (metadata as any).full_name || (metadata as any).name || (email ? email.split('@')[0] : '') || 'Aura User');
+  const requestedUsername = normalizeOptionalName(extras.username || (metadata as any).username || '');
+  const requestedUsernameCheck = requestedUsername ? validateUsernameForAccount(requestedUsername) : { ok: false, username: '' };
+  const profileImage = cleanText((metadata as any).avatar_url || (metadata as any).picture || extras.profile_image || '', 1000);
+  const authProvider = normalizeAuthProvider(extras.auth_provider || extras.provider || payload.app_metadata?.provider || payload.app_metadata?.providers?.[0] || (metadata as any).provider || 'supabase');
+  const providerSubject = cleanText(extras.oauth_subject || extras.provider_user_id || supabaseUserId, 240);
+  const select = 'id,supabase_user_id,email,username,full_name,avatar_url,cover_url,bio,city,is_private,is_verified,counts,profile,metadata,phone,phone_verified,email_verified,legacy_created_at,legacy_updated_at,created_at,updated_at';
+
+  let rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select,
+    filters: { supabase_user_id: postgrestEqFilter(supabaseUserId) },
+    limit: 1,
+  });
+  if (!rows.length && email) {
+    rows = await supabaseAdminQueryRows(c, 'app_users', {
+      select,
+      filters: { email: postgrestEqFilter(email) },
+      limit: 1,
+    });
+    if (rows[0] && !isUuidText(rows[0].supabase_user_id)) {
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(rows[0].id, 120)) }, {
+        supabase_user_id: supabaseUserId,
+        updated_at: now(),
+      });
+      rows[0].supabase_user_id = supabaseUserId;
+    }
+  }
+  if (rows[0]) return supabaseAppUserToLegacyUser(rows[0]);
+
+  const appUserId = supabaseUserId;
+  const desiredUsername = requestedUsernameCheck.ok ? requestedUsernameCheck.username : pendingUsernameForUser(appUserId);
+  const username = await ensureUniqueSupabaseUsername(c, desiredUsername, appUserId);
+  const row = {
+    id: appUserId,
+    supabase_user_id: supabaseUserId,
+    email: email || null,
+    username,
+    full_name: safeFullName || username,
+    avatar_url: profileImage || null,
+    cover_url: null,
+    bio: '',
+    city: '',
+    is_private: false,
+    is_verified: false,
+    counts: { followers_count: 0, following_count: 0, posts_count: 0 },
+    profile: { language: normalizeLanguage(extras.language), phone_verified: false },
+    metadata: {
+      source: 'supabase_auth_primary',
+      status: 'active',
+      oauth_provider: authProvider,
+      oauth_subject: providerSubject,
+    },
+    created_at: now(),
+    updated_at: now(),
+  };
+  await supabaseAdminUpsert(c, 'app_users', [row], 'id');
+  return supabaseAppUserToLegacyUser(row);
+}
+
 async function resolveSupabaseSessionUser(c: any, token: string) {
   const supabasePayload = await verifySupabaseAccessToken(c, token);
-  const user = await findOrCreateSupabaseUser(c, supabasePayload, {
-    email: supabasePayload.email,
-  });
+  const user = await findOrCreateSupabaseAppUser(c, supabasePayload, { email: supabasePayload.email });
   const userId = String(user?.id || '');
   if (!userId) throw new Error('USER_NOT_FOUND');
 
@@ -7507,7 +11167,7 @@ function getSupabaseServiceRoleKey(c: any): string {
 }
 
 function getSupabaseAuthClientKey(c: any): string {
-  const key = String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const key = String(c.env.SUPABASE_AUTH_ANON_KEY || c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_PUBLISHABLE_KEY || '').trim();
   if (!key) throw new Error('SUPABASE_AUTH_KEY_MISSING');
   return key;
 }
@@ -7542,6 +11202,43 @@ function supabaseAuthUserFromResponse(data: any): any {
   return null;
 }
 
+function decodeJwtPayloadUnsafe(token: unknown): any {
+  const raw = String(token || '').trim();
+  const payload = raw.split('.')[1] || '';
+  if (!payload) return {};
+  try {
+    const padded = payload.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payload.length / 4) * 4, '=');
+    return JSON.parse(atob(padded));
+  } catch {
+    return {};
+  }
+}
+
+function supabaseOAuthSubjectFromSession(session: any, provider: 'google' | 'apple', idToken: unknown): string {
+  const user = session?.user || {};
+  const identities = Array.isArray(user?.identities) ? user.identities : [];
+  for (const identity of identities) {
+    if (String(identity?.provider || '').toLowerCase() !== provider) continue;
+    const data = identity?.identity_data && typeof identity.identity_data === 'object' ? identity.identity_data : {};
+    const subject = cleanText(data.sub || identity?.id || identity?.identity_id || '', 240);
+    if (subject) return subject;
+  }
+  const payload = decodeJwtPayloadUnsafe(idToken);
+  return cleanText(payload?.sub || user?.id || '', 240);
+}
+
+function supabaseOAuthProfileFromSession(session: any, idToken: unknown): { email: string; fullName: string; profileImage: string } {
+  const user = session?.user || {};
+  const metadata = user?.user_metadata && typeof user.user_metadata === 'object' ? user.user_metadata : {};
+  const payload = decodeJwtPayloadUnsafe(idToken);
+  const email = normalizeOptionalEmail(user?.email || payload?.email);
+  return {
+    email,
+    fullName: normalizeOptionalName(metadata.full_name || metadata.name || metadata.display_name || payload?.name || safeDisplayNameFromEmail(email)),
+    profileImage: safeMediaReference(metadata.avatar_url || metadata.picture || payload?.picture || ''),
+  };
+}
+
 function supabaseProfileMetadata(input: {
   appUserId?: unknown;
   username?: unknown;
@@ -7550,6 +11247,8 @@ function supabaseProfileMetadata(input: {
   language?: unknown;
   phone?: unknown;
   emailVerified?: unknown;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
 }) {
   const metadata: Record<string, string> = {};
   const appUserId = cleanText(input.appUserId, 120);
@@ -7578,6 +11277,11 @@ function supabaseProfileMetadata(input: {
   if (input.emailVerified === true || input.emailVerified === 1 || input.emailVerified === '1') {
     metadata.email_verified = 'true';
   }
+  const terms = termsAcceptanceFromBody({
+    termsVersion: input.termsVersion,
+    termsAcceptedAt: input.termsAcceptedAt,
+  });
+  Object.assign(metadata, termsAcceptanceMetadata(terms));
   return metadata;
 }
 
@@ -7605,6 +11309,8 @@ function supabaseAuthCreatePayload(input: {
   provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
   oauthSubject?: unknown;
   appUserId?: unknown;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
 }) {
   const provider = supabaseAuthProvider(input.provider);
   const email = normalizeOptionalEmail(input.email);
@@ -7617,11 +11323,13 @@ function supabaseAuthCreatePayload(input: {
       fullName: input.fullName,
       profileImage: input.profileImage,
       phone,
+      termsVersion: input.termsVersion,
+      termsAcceptedAt: input.termsAcceptedAt,
     }),
     app_metadata: supabaseProviderMetadata(provider, input.appUserId, input.oauthSubject),
   };
 
-  if (email && !isInternalOAuthEmail(email)) {
+  if (email && (!isInternalOAuthEmail(email) || provider === 'google' || provider === 'apple')) {
     body.email = email;
     body.email_confirm = true;
   }
@@ -7677,6 +11385,8 @@ async function createOrFindSupabaseAuthUser(c: any, input: {
   provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
   oauthSubject?: unknown;
   appUserId?: unknown;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
 }) {
   const body = supabaseAuthCreatePayload(input);
   const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users`, {
@@ -7700,7 +11410,10 @@ async function createOrFindSupabaseAuthUser(c: any, input: {
           fullName: input.fullName,
           profileImage: input.profileImage,
           phone: input.phone,
+          termsVersion: input.termsVersion,
+          termsAcceptedAt: input.termsAcceptedAt,
         }),
+        app_metadata: supabaseProviderMetadata(input.provider, input.appUserId, input.oauthSubject),
       };
       if (input.password) updatePayload.password = String(input.password);
       await updateSupabaseAuthUser(c, existing.id, updatePayload);
@@ -7740,15 +11453,20 @@ async function linkSupabaseAuthUser(c: any, appUserId: string, supabaseUserId: u
 
 async function syncSupabaseAuthMetadataForUser(c: any, user: any) {
   if (!user?.supabase_user_id) return;
+  const existing = await findSupabaseAuthUser(c, { id: user.supabase_user_id }).catch(() => null);
+  const currentMetadata = existing?.user_metadata && typeof existing.user_metadata === 'object' ? existing.user_metadata : {};
   await updateSupabaseAuthUser(c, user.supabase_user_id, {
-    user_metadata: supabaseProfileMetadata({
-      appUserId: user.id,
-      username: publicUsernameFor(user),
-      fullName: user.full_name,
-      profileImage: user.profile_image,
-      language: user.language,
-      phone: user.phone,
-    }),
+    user_metadata: {
+      ...currentMetadata,
+      ...supabaseProfileMetadata({
+        appUserId: user.id,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
+        language: user.language,
+        phone: user.phone,
+      }),
+    },
   });
 }
 
@@ -7767,9 +11485,86 @@ async function signInSupabasePassword(c: any, email: string, password: string) {
   return data;
 }
 
-async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, nonce?: string) {
+async function refreshSupabaseSession(c: any, refreshToken: string) {
+  const token = cleanText(refreshToken, 4096);
+  if (!token) throw new Error('SUPABASE_REFRESH_TOKEN_REQUIRED');
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=refresh_token`, {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify({ refresh_token: token }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_REFRESH_FAILED:${response.status}:${text.slice(0, 180)}`);
+  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!data?.access_token) throw new Error('SUPABASE_REFRESH_SESSION_MISSING');
+  return data;
+}
+
+function passwordResetRedirectTarget(rawValue: unknown): string {
+  const fallback = 'https://captro-site.pages.dev/auth/reset-password/';
+  const clean = cleanText(rawValue, 2048);
+  if (!clean) return fallback;
+  try {
+    const url = new URL(clean);
+    const scheme = String(url.protocol || '').toLowerCase();
+    const host = String(url.hostname || '').toLowerCase();
+    const path = String(url.pathname || '');
+    if (scheme === 'captro:' && host === 'auth' && path === '/reset-password') return clean;
+    if (scheme === 'https:' && host === 'captro-site.pages.dev' && (path === '/auth/reset-password' || path === '/auth/reset-password/')) return clean;
+    if (scheme === 'https:' && (host === 'captro.app' || host === 'www.captro.app') && path === '/auth/reset-password') {
+      const canonical = new URL(fallback);
+      canonical.search = url.search;
+      canonical.hash = url.hash;
+      return canonical.toString();
+    }
+  } catch {}
+  return fallback;
+}
+
+async function sendSupabasePasswordRecovery(c: any, email: string, redirectTo: string) {
+  const url = new URL(`${getSupabaseUrl(c)}/auth/v1/recover`);
+  url.searchParams.set('redirect_to', redirectTo);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: supabasePublicAuthHeaders(c),
+    body: JSON.stringify({ email }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_PASSWORD_RECOVERY_FAILED:${response.status}:${text.slice(0, 180)}`);
+  }
+  return await response.json().catch(() => ({}));
+}
+
+async function updateSupabasePassword(c: any, accessToken: string, password: string) {
+  const token = cleanText(accessToken, 8192);
+  if (!token) throw new Error('SUPABASE_PASSWORD_RESET_TOKEN_REQUIRED');
+  const nextPassword = String(password || '');
+  if (nextPassword.length < 6) throw new Error('SUPABASE_PASSWORD_RESET_PASSWORD_TOO_SHORT');
+  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/user`, {
+    method: 'PUT',
+    headers: {
+      apikey: getSupabaseAuthClientKey(c),
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ password: nextPassword }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_PASSWORD_UPDATE_FAILED:${response.status}:${text.slice(0, 180)}`);
+  }
+  return await response.json().catch(() => ({}));
+}
+
+async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, options: { nonce?: string; accessToken?: string } = {}) {
   const body: any = { provider, token: idToken };
+  const nonce = cleanText(options.nonce, 512);
+  const accessToken = cleanText(options.accessToken, 4096);
   if (nonce) body.nonce = nonce;
+  if (provider === 'google' && accessToken) body.access_token = accessToken;
   const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=id_token`, {
     method: 'POST',
     headers: supabasePublicAuthHeaders(c),
@@ -7784,9 +11579,58 @@ async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idTok
   return data;
 }
 
+async function oauthFallbackPassword(c: any, provider: 'google' | 'apple', subject: string): Promise<string> {
+  const cleanSubject = cleanText(subject, 240);
+  if (!cleanSubject) throw new Error('OAUTH_SUBJECT_REQUIRED');
+  const secret = String(c.env.OAUTH_FALLBACK_SECRET || c.env.JWT_SECRET || c.env.ABUSE_SIGNAL_SECRET || '').trim();
+  if (!secret) throw new Error('OAUTH_FALLBACK_SECRET_MISSING');
+  const digest = await sha256Hex(`${secret}:${provider}:${cleanSubject}:captro_supabase_oauth_v1`);
+  return `Captro-${provider}-${digest.slice(0, 48)}!`;
+}
+
+async function signInSupabaseVerifiedOAuth(c: any, input: {
+  provider: 'google' | 'apple';
+  subject: string;
+  email?: string;
+  fullName?: string;
+  profileImage?: string;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
+}) {
+  const subject = cleanText(input.subject, 240);
+  if (!subject) throw new Error('OAUTH_SUBJECT_REQUIRED');
+  const email = normalizeOptionalEmail(input.email) || internalOAuthEmail(input.provider, subject);
+  const fullName = normalizeOptionalName(input.fullName) || safeDisplayNameFromEmail(email) || (input.provider === 'apple' ? 'Apple User' : 'Google User');
+  const profileImage = safeMediaReference(input.profileImage || '');
+  const password = await oauthFallbackPassword(c, input.provider, subject);
+
+  const authResult = await createOrFindSupabaseAuthUser(c, {
+    email,
+    password,
+    fullName,
+    profileImage,
+    provider: input.provider,
+    oauthSubject: subject,
+    termsVersion: input.termsVersion,
+    termsAcceptedAt: input.termsAcceptedAt,
+  });
+  if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
+
+  const supabaseSession = await signInSupabasePassword(c, email, password);
+  const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+    email,
+    full_name: fullName,
+    profile_image: profileImage,
+    auth_provider: input.provider,
+    oauth_subject: subject,
+  });
+  await recordTermsAcceptance(c, session.user, authResult.user.id, termsAcceptanceFromBody(input), `${input.provider}_oauth_fallback`);
+  return { supabaseSession, user: session.user };
+}
+
 async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToken: string, extras: any = {}) {
   const payload = await verifySupabaseAccessToken(c, supabaseAccessToken);
-  const user = await findOrCreateSupabaseUser(c, payload, extras);
+  const user = await findOrCreateSupabaseAppUser(c, payload, extras);
   if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
     await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'supabase' });
     throw new Error('ACCOUNT_DISABLED');
@@ -7797,12 +11641,25 @@ async function issueCaptroTokenForSupabaseAccessToken(c: any, supabaseAccessToke
     providerUserId: extras.oauth_subject || extras.provider_user_id || user.oauth_subject || payload.sub,
     email: payload.email || user.email,
   });
-  const token = await createToken(user.id, getJwtSecret(c));
   runBackgroundTask(c, 'supabase_login_profile_write_through_failed', async () => {
     await syncSupabaseAuthMetadataForUser(c, user);
-    await mirrorLegacyUserToSupabase(c, user.id);
   });
-  return { token, user };
+  return { token: supabaseAccessToken, user };
+}
+
+function supabaseAuthSessionResponse(session: any, user: any) {
+  const accessToken = String(session?.access_token || session?.token || '').trim();
+  const refreshToken = String(session?.refresh_token || '').trim();
+  const response: Record<string, unknown> = {
+    access_token: accessToken,
+    token: accessToken,
+    token_type: String(session?.token_type || 'bearer').toLowerCase(),
+    user: authUserPayload(user),
+  };
+  if (refreshToken) response.refresh_token = refreshToken;
+  if (Number.isFinite(Number(session?.expires_in))) response.expires_in = Number(session.expires_in);
+  if (Number.isFinite(Number(session?.expires_at))) response.expires_at = Number(session.expires_at);
+  return response;
 }
 
 async function updateSupabaseAuthUser(c: any, supabaseUserId: unknown, payload: { email?: string; password?: string; phone?: string; user_metadata?: Record<string, unknown>; app_metadata?: Record<string, unknown> }) {
@@ -7836,6 +11693,22 @@ function toPgTime(value: unknown): string | null {
   if (!text) return null;
   const parsed = new Date(text.replace(' ', 'T'));
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function termsAcceptanceFromBody(body: any): { version: string; acceptedAt: string } | null {
+  const version = cleanText(body?.terms_version || body?.termsVersion, 60);
+  const acceptedAt = toPgTime(body?.terms_accepted_at || body?.termsAcceptedAt);
+  if (!version || !acceptedAt) return null;
+  return { version, acceptedAt };
+}
+
+function termsAcceptanceMetadata(acceptance: { version: string; acceptedAt: string } | null): Record<string, string> {
+  if (!acceptance) return {};
+  return {
+    captro_terms_version: acceptance.version,
+    captro_terms_accepted_at: acceptance.acceptedAt,
+    captro_terms_source: 'ios_auth_gate',
+  };
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
@@ -7967,6 +11840,231 @@ function legacyPostTransferPayload(row: any) {
   };
 }
 
+function supabasePrimaryPostCreatePayload(input: any) {
+  const mediaUrls = sanitizeMediaReferences(input.imageUrls, input.primaryImage);
+  const mediaTypes = sanitizeMediaTypes(input.mediaTypes, mediaUrls.length || 1);
+  const mediaDimensions = feedMediaDimensions(mediaUrls, mediaTypes, input.mediaDimensions || []);
+  const autoCategory = input.autoCategory || {};
+  const primaryCategory = (normalizeDiscoverCategory(autoCategory.primary_category || input.postType, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
+  const editorOverlays = parseJsonArray(input.editorOverlays);
+  const place = {
+    id: cleanText(input.placeProviderId, 160),
+    provider: cleanText(input.placeProvider || 'apple_mapkit', 40),
+    name: cleanText(input.placeName, 180),
+    formatted_address: cleanText(input.placeFormattedAddress, 260),
+    category: cleanText(input.placeCategory, 80),
+    city: cleanText(input.placeCity, 80),
+    region: cleanText(input.placeRegion, 80),
+    country: cleanText(input.placeCountry, 80),
+    lat: input.placeLat ?? null,
+    lng: input.placeLng ?? null,
+    verified_checkin: !!input.isCheckin,
+  };
+  const audio = {
+    provider: cleanText(input.audioProvider, 40),
+    track_id: cleanText(input.audioTrackId, 120),
+    title: cleanText(input.audioTitle, 180),
+    artist: cleanText(input.audioArtist, 180),
+    artwork_url: cleanText(input.audioArtworkUrl, 1200),
+    stream_url: cleanText(input.audioStreamUrl, 2200),
+    start_time: Number(input.audioStartTime || 0),
+    duration: Number(input.audioDuration || 0),
+  };
+  const discoverCategory = {
+    primary_category: primaryCategory,
+    confidence: clampFloat(autoCategory.category_confidence, 0, 1, 0),
+    source: normalizeCategorySource(autoCategory.category_source),
+    status: normalizeCategoryStatus(autoCategory.category_status),
+    tags: sanitizeAutoCategoryTags(autoCategory.tags),
+    signals: parseJsonObject(autoCategory.signals),
+    secondary_categories: sanitizeAutoCategoryTags(autoCategory.secondary_categories),
+    category_scores: normalizeCategoryScoresPayload(autoCategory.category_scores),
+    detected_objects: sanitizeAutoCategoryTags(autoCategory.detected_objects),
+    detected_scene: cleanText(autoCategory.detected_scene, 80),
+    place_type: cleanText(autoCategory.place_type || input.placeCategory, 120),
+    user_selected_category: normalizeDiscoverCategory(autoCategory.user_selected_category, false),
+    caption_keywords: sanitizeAutoCategoryTags(autoCategory.caption_keywords),
+  };
+  const raw = {
+    image: mediaUrls[0] || '',
+    images: mediaUrls,
+    media_types: mediaTypes,
+    media_backup_ids: parseJsonArray(input.backupIds),
+    media_asset_ids: parseJsonArray(input.mediaAssetIds),
+    display_city: cleanText(input.displayCity, 80),
+    display_region: cleanText(input.displayRegion, 80),
+    display_country: cleanText(input.displayCountry, 80),
+    display_location_label: cleanText(input.displayLocationLabel, 120),
+    display_location_source: cleanText(input.displayLocationSource, 40),
+    display_location_visibility: cleanText(input.displayLocationVisibility, 40),
+    client_request_id: cleanText(input.clientRequestId, 120),
+  };
+  return {
+    id: isUuidText(input.id) || uuid(),
+    legacy_post_id: cleanText(input.id, 120),
+    user_id: isUuidText(input.authUserId || input.userId),
+    app_user_id: cleanText(input.userId, 120) || null,
+    title: cleanText(input.postTitle, 180) || null,
+    content: cleanMultilineText(input.postContent, 4000),
+    visibility: normalizeVisibility(input.visibility),
+    status: 'active',
+    post_type: cleanText(input.postType || 'general', 80),
+    category: primaryCategory,
+    location: cleanText(input.location || input.placeName, 180) || null,
+    media: mediaUrls.map((url, index) => ({
+      url,
+      type: mediaTypes[index] || (isVideoMediaUrl(url) ? 'video' : 'image'),
+      width: Number(mediaDimensions[index]?.width || mediaDimensions[index]?.feed_width || 0),
+      height: Number(mediaDimensions[index]?.height || mediaDimensions[index]?.feed_height || 0),
+      ratio: Number(mediaDimensions[index]?.ratio || mediaDimensions[index]?.feed_aspect_ratio || 0),
+      feed_width: Number(mediaDimensions[index]?.feed_width || 0),
+      feed_height: Number(mediaDimensions[index]?.feed_height || 0),
+      feed_aspect_ratio: Number(mediaDimensions[index]?.feed_aspect_ratio || 0),
+      display_aspect_ratio: Number(mediaDimensions[index]?.display_aspect_ratio || 0),
+      crop_mode: cleanText(mediaDimensions[index]?.crop_mode || 'center_crop', 40),
+    })),
+    media_dimensions: mediaDimensions,
+    editor_data: {
+      overlays: editorOverlays,
+      filterData: editorOverlays.find((item: any) => item?.type === 'filter') || null,
+      textOverlays: editorOverlays.filter((item: any) => item?.type === 'text'),
+      moderation: {
+        status: 'approved',
+        media_ids: parseJsonArray(input.mediaAssetIds),
+        checked_at: input.createdAt,
+      },
+    },
+    product_tags: editorOverlays.filter((item: any) => item?.type === 'product'),
+    tagged_users: parseJsonArray(input.taggedUsers),
+    metadata: {
+      source: 'cloudflare_worker_supabase_primary',
+      image: mediaUrls[0] || '',
+      client_request_id: cleanText(input.clientRequestId, 120),
+      media_backup_ids: parseJsonArray(input.backupIds),
+      media_asset_ids: parseJsonArray(input.mediaAssetIds),
+      discover_category: discoverCategory,
+      category_scores: discoverCategory.category_scores,
+      secondary_categories: discoverCategory.secondary_categories,
+      detected_objects: discoverCategory.detected_objects,
+      detected_scene: discoverCategory.detected_scene,
+      place_type: discoverCategory.place_type,
+      user_selected_category: discoverCategory.user_selected_category,
+      caption_keywords: discoverCategory.caption_keywords,
+      display_city: raw.display_city,
+      display_region: raw.display_region,
+      display_country: raw.display_country,
+      display_location_label: raw.display_location_label,
+      display_location_source: raw.display_location_source,
+      display_location_visibility: raw.display_location_visibility,
+      moderation_status: 'approved',
+      place,
+      audio,
+      community: parseJsonObject(input.community),
+      raw,
+    },
+    likes_count: 0,
+    comments_count: 0,
+    saves_count: 0,
+    legacy_created_at: toPgTime(input.createdAt),
+    legacy_updated_at: toPgTime(input.createdAt),
+    created_at: toPgTime(input.createdAt),
+    updated_at: toPgTime(input.createdAt),
+  };
+}
+
+async function supabaseExistingPostByClientRequest(c: any, userId: string, clientRequestId: string, authorRow: any): Promise<any | null> {
+  const cleanRequestId = cleanText(clientRequestId, 120);
+  if (!cleanRequestId) return null;
+  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: '*',
+    filters: {
+      app_user_id: postgrestEqFilter(userId),
+      'metadata->>client_request_id': postgrestEqFilter(cleanRequestId),
+    },
+    order: 'created_at.desc',
+    limit: 1,
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_post_idempotency_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  if (!rows[0]) return null;
+  const commentCount = await supabasePostCommentCount(c, cleanText(rows[0].legacy_post_id || rows[0].id, 120)).catch(() => Number(rows[0].comments_count || 0));
+  return supabaseAppPostToLegacy(rows[0], authorRow, false, commentCount);
+}
+
+async function supabaseIncrementAppUserPostCount(c: any, userId: string) {
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!row?.id) return;
+  const counts = parseJsonObject(row.counts);
+  const current = Math.max(0, Number((counts as any).posts_count ?? (counts as any).posts ?? 0));
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(cleanText(row.id, 120)) }, {
+    counts: {
+      ...counts,
+      posts_count: current + 1,
+      posts: current + 1,
+    },
+    updated_at: now(),
+  });
+}
+
+async function writeSupabasePrimaryPostPlace(c: any, input: any) {
+  if (!input.placeName && !input.placeFormattedAddress && !input.placeProviderId) return;
+  await supabaseAdminUpsert(c, 'app_post_places', [{
+    id: uuid(),
+    legacy_post_id: cleanText(input.id, 120),
+    provider: cleanText(input.placeProvider || 'apple_mapkit', 40) || 'apple_mapkit',
+    provider_place_id: cleanText(input.placeProviderId, 160) || null,
+    name: cleanText(input.placeName, 180),
+    formatted_address: cleanText(input.placeFormattedAddress, 260),
+    latitude: input.placeLat ?? null,
+    longitude: input.placeLng ?? null,
+    category: cleanText(input.placeCategory, 80) || null,
+    city: cleanText(input.placeCity, 80) || null,
+    region: cleanText(input.placeRegion, 80) || null,
+    country: cleanText(input.placeCountry, 80) || null,
+    metadata: { source: 'cloudflare_worker_supabase_primary' },
+    legacy_created_at: toPgTime(input.createdAt),
+    updated_at: toPgTime(input.createdAt),
+  }], 'legacy_post_id,provider');
+}
+
+async function notifySupabaseFollowersOfNewPost(c: any, input: {
+  userId: string;
+  postId: string;
+  visibility: string;
+  authorName: string;
+  body: string;
+}) {
+  if (!(input.visibility === 'public' || input.visibility === 'followers')) return;
+  const followers = await supabaseAdminQueryRows(c, 'app_follows', {
+    select: 'app_follower_id',
+    filters: {
+      app_following_id: postgrestEqFilter(input.userId),
+      status: postgrestEqFilter('active'),
+    },
+    order: 'created_at.desc',
+    limit: 250,
+  }).catch(() => []);
+  const ts = now();
+  await Promise.allSettled(followers
+    .map((row) => cleanText(row?.app_follower_id, 120))
+    .filter((id) => id && id !== input.userId)
+    .map((followerId) => supabaseAdminUpsertSafe(c, 'app_notifications', [{
+      id: `new_post:${input.postId}:${followerId}`,
+      user_id: followerId,
+      from_user_id: input.userId,
+      type: 'new_post',
+      title: `${cleanText(input.authorName, 80) || 'Someone you follow'} posted`,
+      body: cleanText(input.body, 120) || 'Shared a new post',
+      content: cleanText(input.body, 120) || 'Shared a new post',
+      reference_id: input.postId,
+      data: { post_id: input.postId, from_user_id: input.userId },
+      is_read: false,
+      legacy_created_at: ts,
+      updated_at: ts,
+    }], 'id')));
+}
+
 async function supabaseAdminUpsert(c: any, table: string, rows: any[], onConflict: string) {
   if (!rows.length) return { table, count: 0 };
   const url = `${getSupabaseUrl(c)}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`;
@@ -7986,6 +12084,29 @@ async function supabaseAdminUpsert(c: any, table: string, rows: any[], onConflic
     throw new Error(`SUPABASE_UPSERT_FAILED:${table}:${response.status}:${text.slice(0, 500)}`);
   }
   return { table, count: rows.length };
+}
+
+async function supabaseAdminInsertRows(c: any, table: string, rows: any[], select = '*'): Promise<any[]> {
+  if (!rows.length) return [];
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
+  if (select) url.searchParams.set('select', select);
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(rows),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_INSERT_FAILED:${table}:${response.status}:${text.slice(0, 500)}`);
+  }
+  const data = await response.json().catch(() => []);
+  return Array.isArray(data) ? data : [];
 }
 
 async function supabaseAdminUpsertSafe(c: any, table: string, rows: any[], onConflict: string) {
@@ -8048,6 +12169,15 @@ type CaptroMediaType = 'image' | 'video';
 type MediaModerationStatus = 'uploading' | 'pending_moderation' | 'approved' | 'review_required' | 'rejected' | 'failed';
 type MalwareStatus = 'clean' | 'malicious' | 'unknown' | 'not_scanned';
 type ModerationDecision = 'approved' | 'review_required' | 'rejected';
+type MediaOriginStatus =
+  | 'not_checked'
+  | 'not_applicable'
+  | 'missing_credentials'
+  | 'verified_original'
+  | 'verified_edited'
+  | 'ai_generated'
+  | 'invalid'
+  | 'verifier_unavailable';
 
 type MediaModerationScores = {
   adult_explicit_score: number;
@@ -8064,6 +12194,17 @@ type MediaModerationScores = {
   malware_status: MalwareStatus;
   link_risk_score: number;
   confidence: number;
+};
+
+type C2paContentCredentialsSummary = {
+  hasContentCredentials: boolean;
+  verified: boolean;
+  creator: string;
+  createdAt: string | null;
+  aiUsed: boolean;
+  editHistorySummary: string;
+  mediaOriginStatus: MediaOriginStatus;
+  metadata: Record<string, unknown>;
 };
 
 const MEDIA_MODERATION_STATUS_VALUES = new Set<MediaModerationStatus>([
@@ -8085,10 +12226,15 @@ function normalizeMediaAssetType(value: unknown): CaptroMediaType | '' {
   return mediaType === 'image' || mediaType === 'video' ? mediaType : '';
 }
 
+const CLOUDFLARE_IMAGES_MAX_BYTES = 10_000_000;
+const CLOUDFLARE_IMAGES_VERIFICATION_MAX_BYTES = 16_000_000;
+const CLOUDFLARE_STREAM_BASIC_UPLOAD_MAX_BYTES = 200_000_000;
+
 function mediaModerationMaxBytes(env: Env, mediaType: CaptroMediaType): number {
   const raw = Number(mediaType === 'video' ? env.MEDIA_MAX_VIDEO_BYTES : env.MEDIA_MAX_IMAGE_BYTES);
-  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, mediaType === 'video' ? 500_000_000 : 50_000_000);
-  return mediaType === 'video' ? 250_000_000 : 25_000_000;
+  const providerCap = mediaType === 'video' ? CLOUDFLARE_STREAM_BASIC_UPLOAD_MAX_BYTES : CLOUDFLARE_IMAGES_MAX_BYTES;
+  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, providerCap);
+  return providerCap;
 }
 
 function isUnsafeUploadExtension(filename: unknown): boolean {
@@ -8100,7 +12246,7 @@ function validatePrePublishUploadInput(env: Env, body: any): { ok: true; mediaTy
   const mediaType = normalizeMediaAssetType(body.media_type || body.mediaType || body.type);
   if (!mediaType) return { ok: false, detail: 'Upload must be an image or video.', code: 'invalid_media_type', status: 400 };
 
-  const filename = cleanText(body.filename || body.file_name || (mediaType === 'video' ? 'captro-video.mp4' : 'captro-image.jpg'), 180);
+  const filename = cleanText(body.filename || body.file_name || (mediaType === 'video' ? 'aura-video.mp4' : 'aura-image.jpg'), 180);
   if (isUnsafeUploadExtension(filename)) return { ok: false, detail: 'This file type cannot be uploaded.', code: 'unsafe_extension', status: 400 };
 
   const mimeType = normalizedContentType(body.mime_type || body.mimeType || body.content_type || body.contentType);
@@ -8116,6 +12262,9 @@ function validatePrePublishUploadInput(env: Env, body: any): { ok: true; mediaTy
   }
 
   const fileSize = Math.max(0, Math.round(Number(body.file_size || body.fileSize || body.size || 0)));
+  if (fileSize <= 0) {
+    return { ok: false, detail: 'The upload is empty.', code: 'empty_upload', status: 400 };
+  }
   const maxBytes = mediaModerationMaxBytes(env, mediaType);
   if (fileSize > maxBytes) {
     return { ok: false, detail: 'This upload is too large.', code: 'file_too_large', status: 413 };
@@ -8142,6 +12291,112 @@ function defaultModerationScores(overrides: Partial<MediaModerationScores> = {})
     confidence: 0.7,
     ...overrides,
   };
+}
+
+function normalizeMediaOriginStatus(value: unknown): MediaOriginStatus {
+  const status = cleanText(value, 60).toLowerCase();
+  const allowed = new Set<MediaOriginStatus>([
+    'not_checked',
+    'not_applicable',
+    'missing_credentials',
+    'verified_original',
+    'verified_edited',
+    'ai_generated',
+    'invalid',
+    'verifier_unavailable',
+  ]);
+  return allowed.has(status as MediaOriginStatus) ? status as MediaOriginStatus : 'not_checked';
+}
+
+function defaultC2paSummary(mediaOriginStatus: MediaOriginStatus): C2paContentCredentialsSummary {
+  return {
+    hasContentCredentials: false,
+    verified: false,
+    creator: '',
+    createdAt: null,
+    aiUsed: false,
+    editHistorySummary: '',
+    mediaOriginStatus,
+    metadata: {},
+  };
+}
+
+function sanitizeC2paSummary(raw: any): C2paContentCredentialsSummary {
+  const metadata = parseJsonObject(raw?.metadata || raw?.summary || raw);
+  const aiUsed = raw?.ai_used === true
+    || raw?.aiUsed === true
+    || raw?.generated_by_ai === true
+    || raw?.synthetic_media === true
+    || /(^|[_ -])(ai|synthetic|generated)([_ -]|$)/i.test(String(raw?.media_origin_status || raw?.origin_status || ''));
+  const verified = raw?.verified === true || raw?.c2pa_verified === true;
+  const hasContentCredentials = raw?.has_content_credentials === true
+    || raw?.hasContentCredentials === true
+    || raw?.manifest_present === true
+    || verified;
+  const createdAt = cleanText(raw?.created_at || raw?.createdAt || raw?.claim_created_at || '', 80);
+  const mediaOriginStatus = aiUsed
+    ? 'ai_generated'
+    : normalizeMediaOriginStatus(raw?.media_origin_status || raw?.origin_status || (verified ? 'verified_original' : hasContentCredentials ? 'invalid' : 'missing_credentials'));
+  return {
+    hasContentCredentials,
+    verified,
+    creator: cleanText(raw?.creator || raw?.c2pa_creator || raw?.claim_generator || '', 180),
+    createdAt: createdAt && !Number.isNaN(Date.parse(createdAt)) ? new Date(createdAt).toISOString() : null,
+    aiUsed,
+    editHistorySummary: cleanMultilineText(raw?.edit_history_summary || raw?.editHistorySummary || raw?.history || '', 500),
+    mediaOriginStatus,
+    metadata: scrubLogMetadata({
+      claim_generator: cleanText(raw?.claim_generator || raw?.claimGenerator || '', 160),
+      ingredients_count: Math.max(0, Math.min(200, Number(raw?.ingredients_count || raw?.ingredientsCount || 0))),
+      assertions: Array.isArray(raw?.assertions) ? raw.assertions.slice(0, 20).map((item: any) => cleanText(item, 120)) : [],
+      raw_status: cleanText(raw?.status || raw?.verification_status || '', 80),
+      ...metadata,
+    }),
+  };
+}
+
+async function fetchCloudflareImageBlobForVerification(env: Env, imageId: string): Promise<Blob | null> {
+  const accountId = cloudflareAccountId(env);
+  const token = cloudflareImagesToken(env);
+  if (!accountId || !token || !imageId) return null;
+  const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(imageId)}/blob`, {
+    headers: { Authorization: `Bearer ${token}`, accept: 'image/*' },
+  });
+  if (!response.ok) return null;
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > 16_000_000) return null;
+  const buffer = await response.arrayBuffer();
+  if (!buffer.byteLength || buffer.byteLength > 16_000_000) return null;
+  const type = response.headers.get('content-type') || 'application/octet-stream';
+  return new Blob([buffer], { type });
+}
+
+async function inspectC2paContentCredentials(env: Env, asset: any): Promise<C2paContentCredentialsSummary> {
+  if (normalizeMediaAssetType(asset?.media_type) !== 'image') return defaultC2paSummary('not_applicable');
+  if (cleanText(asset?.storage_provider, 40) !== 'images') return defaultC2paSummary('not_applicable');
+  const verifierUrl = cleanText(env.C2PA_VERIFIER_URL || '', 500);
+  if (!verifierUrl || !/^https:\/\//i.test(verifierUrl)) return defaultC2paSummary('not_checked');
+  try {
+    const imageId = cleanText(asset?.storage_key, 220);
+    const blob = await fetchCloudflareImageBlobForVerification(env, imageId);
+    if (!blob) return defaultC2paSummary('verifier_unavailable');
+    const formData = new FormData();
+    formData.append('file', blob, `${imageId || 'captro-image'}.jpg`);
+    formData.append('media_id', cleanText(asset?.id, 160));
+    formData.append('storage_provider', 'cloudflare_images');
+    const response = await fetch(verifierUrl, {
+      method: 'POST',
+      headers: {
+        ...(env.C2PA_VERIFIER_TOKEN ? { Authorization: `Bearer ${env.C2PA_VERIFIER_TOKEN}` } : {}),
+      },
+      body: formData,
+    });
+    if (!response.ok) return defaultC2paSummary(response.status === 404 ? 'missing_credentials' : 'verifier_unavailable');
+    const raw = await response.json().catch(() => ({}));
+    return sanitizeC2paSummary(raw);
+  } catch {
+    return defaultC2paSummary('verifier_unavailable');
+  }
 }
 
 function moderationDelay(ms: number): Promise<void> {
@@ -8190,7 +12445,7 @@ function decideMediaModeration(scores: MediaModerationScores, mediaType: CaptroM
       decision: 'rejected',
       reasons,
       rejectionCode: reasons[0],
-      userMessage: "This upload can't be posted because it may break Captro's safety rules.",
+      userMessage: "This upload can't be posted because it may break Aura's safety rules.",
     };
   }
 
@@ -8284,12 +12539,84 @@ function sanitizeModerationScores(raw: any, fallback: MediaModerationScores): Me
   });
 }
 
+type WallVoiceModerationResult =
+  | {
+    ok: true;
+    modelName: string;
+    scores: MediaModerationScores;
+    reasons: string[];
+    transcriptHash: string;
+    transcriptLength: number;
+  }
+  | { ok: false; status: number; code: string; detail: string };
+
+async function moderateWallVoiceUpload(env: Env, bytes: Uint8Array): Promise<WallVoiceModerationResult> {
+  if (!env.AI) {
+    return { ok: false, status: 503, code: 'VOICE_SAFETY_UNAVAILABLE', detail: 'Voice safety checks are unavailable right now. Please try again.' };
+  }
+
+  try {
+    const transcription = await env.AI.run('@cf/openai/whisper', { audio: Array.from(bytes) });
+    const transcript = cleanMultilineText(workersAiText(transcription), 3000);
+    if (!transcript) {
+      return { ok: false, status: 422, code: 'VOICE_SPEECH_NOT_FOUND', detail: 'We could not hear enough speech in this recording. Please record it again.' };
+    }
+
+    const localModeration = moderateCommunityText(transcript);
+    if (!localModeration.ok) {
+      return { ok: false, status: 400, code: 'VOICE_SAFETY_REJECTED', detail: "This voice note can't be posted because it may break Aura's safety rules." };
+    }
+
+    const fallback = textSafetyHeuristics(transcript);
+    const modelName = cleanText(env.AI_TEXT_MODERATION_MODEL || postAssistModel(env), 160);
+    const classification = await env.AI.run(modelName, {
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are Aura voice-note safety classification.',
+            'Return strict JSON only with numbers from 0 to 1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, and malware_status set to not_scanned.',
+            'Assess only safety risk in the supplied transcript. Do not repeat or quote the transcript.',
+          ].join(' '),
+        },
+        { role: 'user', content: JSON.stringify({ transcript }) },
+      ],
+      max_tokens: 380,
+      response_format: { type: 'json_object' },
+    });
+    const raw = parseJsonObjectFromAi(classification);
+    if (!Object.keys(raw).length) {
+      return { ok: false, status: 503, code: 'VOICE_SAFETY_UNAVAILABLE', detail: 'Voice safety checks are unavailable right now. Please try again.' };
+    }
+    const scores = sanitizeModerationScores(raw, fallback);
+    const decision = decideMediaModeration(scores, 'image', '');
+    if (decision.decision !== 'approved') {
+      return {
+        ok: false,
+        status: decision.decision === 'review_required' ? 409 : 400,
+        code: decision.decision === 'review_required' ? 'VOICE_REVIEW_REQUIRED' : 'VOICE_SAFETY_REJECTED',
+        detail: decision.userMessage || "This voice note can't be posted because it may break Aura's safety rules.",
+      };
+    }
+    return {
+      ok: true,
+      modelName: `@cf/openai/whisper + ${modelName}`,
+      scores,
+      reasons: decision.reasons,
+      transcriptHash: await sha256Hex(transcript),
+      transcriptLength: transcript.length,
+    };
+  } catch {
+    return { ok: false, status: 503, code: 'VOICE_SAFETY_UNAVAILABLE', detail: 'Voice safety checks are unavailable right now. Please try again.' };
+  }
+}
+
 function mediaAssetPublicUrl(env: Env, asset: any): string {
   const provider = cleanText(asset?.storage_provider, 40);
   const key = cleanText(asset?.storage_key, 220);
   if (!key) return '';
   if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_FEED_VARIANT || 'public');
-  if (provider === 'stream') return `https://videodelivery.net/${key}/manifest/video.m3u8`;
+  if (provider === 'stream') return `cfstream:${key}`;
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
 }
 
@@ -8300,6 +12627,134 @@ function mediaAssetPreviewUrl(env: Env, asset: any): string {
   if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'public');
   if (provider === 'stream') return streamThumbnailUrl(`cfstream:${key}`);
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
+}
+
+type VerifiedProviderUpload =
+  | {
+      ok: true;
+      fileSize: number;
+      mimeType: string;
+      sha256Hash: string;
+      width: number | null;
+      height: number | null;
+      durationSeconds: number | null;
+    }
+  | { ok: false; status: number; code: string; detail: string };
+
+function verifiedUploadFailure(status: number, code: string, detail: string): VerifiedProviderUpload {
+  return { ok: false, status, code, detail };
+}
+
+function providerMetadataMatchesAsset(raw: any, asset: any, userId: string): boolean {
+  const metadata = parseJsonObject(raw);
+  return cleanText(metadata.userId || metadata.user_id, 160) === userId
+    && cleanText(metadata.mediaId || metadata.media_id, 160) === cleanText(asset?.id, 160);
+}
+
+async function verifyCloudflareProviderUpload(env: Env, asset: any, userId: string): Promise<VerifiedProviderUpload> {
+  const provider = cleanText(asset?.storage_provider, 40);
+  const storageKey = cleanText(asset?.storage_key, 220);
+  const mediaType = normalizeMediaAssetType(asset?.media_type);
+  const accountId = cloudflareAccountId(env);
+  const expectedSize = Math.max(0, Math.round(Number(asset?.file_size || 0)));
+  const expectedChecksum = cleanText(asset?.sha256_hash, 80).toLowerCase();
+  if (!storageKey || !mediaType || !accountId || expectedSize <= 0 || !/^[a-f0-9]{64}$/.test(expectedChecksum)) {
+    return verifiedUploadFailure(409, 'upload_intent_invalid', 'Upload validation could not be completed. Please upload again.');
+  }
+
+  if (provider === 'images' && mediaType === 'image') {
+    const token = cloudflareImagesToken(env);
+    if (!token) return verifiedUploadFailure(503, 'image_upload_not_configured', 'Image upload is not configured.');
+    const headers = { Authorization: `Bearer ${token}` };
+    const detailResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(storageKey)}`,
+      { headers },
+    );
+    const detailData: any = await detailResponse.json().catch(() => ({}));
+    if (!detailResponse.ok || !detailData.success || cleanText(detailData.result?.id, 220) !== storageKey) {
+      return verifiedUploadFailure(425, 'image_upload_pending', 'The image upload is not available yet. Please try again.');
+    }
+    const image = detailData.result || {};
+    if (image.draft === true || !image.uploaded) {
+      return verifiedUploadFailure(425, 'image_upload_pending', 'The image upload has not finished yet. Please try again.');
+    }
+    if (!providerMetadataMatchesAsset(image.meta || image.metadata, asset, userId)) {
+      return verifiedUploadFailure(403, 'media_ownership_mismatch', 'This upload does not belong to the signed-in account.');
+    }
+
+    const blobResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v1/${encodeURIComponent(storageKey)}/blob`,
+      { headers: { ...headers, accept: 'image/*' } },
+    );
+    const contentLength = Math.max(0, Number(blobResponse.headers.get('content-length') || 0));
+    if (!blobResponse.ok || contentLength > CLOUDFLARE_IMAGES_VERIFICATION_MAX_BYTES) {
+      return verifiedUploadFailure(blobResponse.ok ? 413 : 425, 'image_bytes_unavailable', 'The uploaded image could not be validated.');
+    }
+    const bytes = new Uint8Array(await blobResponse.arrayBuffer());
+    if (!bytes.byteLength || bytes.byteLength > CLOUDFLARE_IMAGES_VERIFICATION_MAX_BYTES) {
+      return verifiedUploadFailure(bytes.byteLength ? 413 : 400, bytes.byteLength ? 'file_too_large' : 'empty_upload', 'The uploaded image is invalid.');
+    }
+    const detectedMimeType = detectImageContentType(bytes);
+    if (!detectedMimeType || !ALLOWED_IMAGE_TYPES.has(detectedMimeType)) {
+      return verifiedUploadFailure(400, 'media_type_mismatch', 'The uploaded object is not a supported image.');
+    }
+    const actualChecksum = await sha256BinaryHex(bytes);
+    // Cloudflare Images may return a near-lossless provider representation from /blob,
+    // so its observed bytes are validated and recorded but are not compared byte-for-byte
+    // with the client intent. The signed-in client must still repeat the exact intent hash
+    // and size at completion, and provider metadata binds this object to that intent.
+    return {
+      ok: true,
+      fileSize: bytes.byteLength,
+      mimeType: detectedMimeType,
+      sha256Hash: actualChecksum,
+      width: Number(asset?.width || 0) > 0 ? Number(asset.width) : null,
+      height: Number(asset?.height || 0) > 0 ? Number(asset.height) : null,
+      durationSeconds: null,
+    };
+  }
+
+  if (provider === 'stream' && mediaType === 'video') {
+    const token = cloudflareStreamToken(env);
+    if (!token) return verifiedUploadFailure(503, 'video_upload_not_configured', 'Video upload is not configured.');
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${encodeURIComponent(storageKey)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const data: any = await response.json().catch(() => ({}));
+    const video = data.result || {};
+    if (!response.ok || !data.success || cleanText(video.uid, 220) !== storageKey) {
+      return verifiedUploadFailure(425, 'video_upload_pending', 'The video upload is not available yet. Please try again.');
+    }
+    const state = cleanText(video.status?.state, 60).toLowerCase();
+    if (!state || state === 'pendingupload' || state === 'error') {
+      return verifiedUploadFailure(state === 'error' ? 400 : 425, state === 'error' ? 'video_upload_failed' : 'video_upload_pending', 'The video upload has not finished yet. Please try again.');
+    }
+    if (cleanText(video.creator, 160) !== userId || !providerMetadataMatchesAsset(video.meta, asset, userId)) {
+      return verifiedUploadFailure(403, 'media_ownership_mismatch', 'This upload does not belong to the signed-in account.');
+    }
+    const actualSize = Math.max(0, Math.round(Number(video.size || 0)));
+    if (!actualSize) return verifiedUploadFailure(425, 'video_upload_pending', 'The video upload has not finished yet. Please try again.');
+    if (actualSize > CLOUDFLARE_STREAM_BASIC_UPLOAD_MAX_BYTES) {
+      return verifiedUploadFailure(413, 'file_too_large', 'This video is too large.');
+    }
+    if (actualSize !== expectedSize) {
+      return verifiedUploadFailure(409, 'upload_integrity_mismatch', 'The uploaded video does not match the authorized upload.');
+    }
+    const durationSeconds = Number(video.duration || 0);
+    if (durationSeconds > 60.5) return verifiedUploadFailure(400, 'video_too_long', 'Videos must be 60 seconds or shorter.');
+    return {
+      ok: true,
+      fileSize: actualSize,
+      mimeType: normalizedContentType(asset?.mime_type),
+      sha256Hash: expectedChecksum,
+      width: Number(video.input?.width || asset?.width || 0) > 0 ? Number(video.input?.width || asset.width) : null,
+      height: Number(video.input?.height || asset?.height || 0) > 0 ? Number(video.input?.height || asset.height) : null,
+      durationSeconds: durationSeconds > 0 ? durationSeconds : null,
+    };
+  }
+
+  return verifiedUploadFailure(409, 'media_provider_mismatch', 'The upload provider does not match the media type.');
 }
 
 function moderationSampleUrls(env: Env, asset: any): string[] {
@@ -8336,7 +12791,7 @@ async function runWorkersAiImageModeration(env: Env, imageUrl: string, caption: 
     if (!response?.ok) throw new Error(`IMAGE_SAMPLE_FETCH_FAILED:${response?.status || 0}`);
     const imageBytes = await response.arrayBuffer();
     if (!imageBytes.byteLength || imageBytes.byteLength > 4_000_000) throw new Error('IMAGE_SAMPLE_TOO_LARGE');
-    const prompt = `You are Captro's pre-publish media safety classifier. Return strict JSON only with numbers 0..1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, malware_status as "not_scanned", and reasons as an array. Check nudity, explicit sexual content, sexual solicitation, sexualized minors, violence/gore, weapons, hate symbols, scams/spam, unsafe links in caption, and AI-generated likelihood. Caption: ${caption || '(none)'}`;
+    const prompt = `You are Aura's pre-publish media safety classifier. Return strict JSON only with numbers 0..1 for adult_explicit_score, nudity_score, sexual_context_score, sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score, hate_symbol_score, ai_generated_likelihood, spam_scam_score, link_risk_score, confidence, malware_status as "not_scanned", and reasons as an array. Check nudity, explicit sexual content, sexual solicitation, sexualized minors, violence/gore, weapons, hate symbols, scams/spam, unsafe links in caption, and AI-generated likelihood. Caption: ${caption || '(none)'}`;
     const result = await env.AI.run(modelName, {
       messages: [{ role: 'user', content: prompt }],
       image: Array.from(new Uint8Array(imageBytes)),
@@ -8400,27 +12855,217 @@ async function insertModerationEvent(db: D1Database, mediaId: string, eventType:
   ).run();
 }
 
-async function processMediaModerationJob(env: Env, message: MediaModerationJobMessage, requestId = '') {
-  await ensureMediaModerationSchema(env.DB);
+function supabaseCtxFromEnv(env: Env): any {
+  return { env };
+}
+
+function supabasePrimaryConfiguredForEnv(env: Env): boolean {
+  return supabasePrimaryRequestedForEnv(env)
+    && !!String(env.SUPABASE_URL || '').trim()
+    && !!String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+}
+
+function supabaseMediaAssetToLegacy(row: any): any {
+  return {
+    ...row,
+    post_id: row?.post_id || row?.legacy_post_id || null,
+    created_at: row?.created_at || row?.legacy_created_at || '',
+    updated_at: row?.updated_at || '',
+  };
+}
+
+async function supabaseReadMediaAsset(c: any, mediaId: string, userId = ''): Promise<any | null> {
+  const filters: Record<string, string> = { id: postgrestEqFilter(mediaId) };
+  if (userId) filters.user_id = postgrestEqFilter(userId);
+  const rows = await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: '*',
+    filters,
+    limit: 1,
+  });
+  return rows[0] ? supabaseMediaAssetToLegacy(rows[0]) : null;
+}
+
+async function supabaseInsertMediaAsset(c: any, input: {
+  id: string;
+  userId: string;
+  mediaType: CaptroMediaType;
+  storageProvider: 'images' | 'stream';
+  storageKey: string;
+  privateUrl: string;
+  mimeType: string;
+  fileSize?: number;
+  sha256Hash?: string;
+  width?: number | null;
+  height?: number | null;
+  durationSeconds?: number | null;
+  metadata?: Record<string, unknown>;
+}) {
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_media_assets', [{
+    id: input.id,
+    user_id: input.userId,
+    legacy_post_id: null,
+    media_type: input.mediaType,
+    storage_provider: input.storageProvider,
+    storage_key: input.storageKey,
+    public_url: null,
+    private_url: input.privateUrl,
+    mime_type: input.mimeType,
+    file_size: Math.max(0, Math.round(Number(input.fileSize || 0))),
+    sha256_hash: cleanText(input.sha256Hash || '', 80).toLowerCase(),
+    width: input.width ?? null,
+    height: input.height ?? null,
+    duration_seconds: input.durationSeconds ?? null,
+    upload_status: 'uploading',
+    moderation_status: 'uploading',
+    rejection_code: null,
+    rejection_message: null,
+    has_content_credentials: false,
+    c2pa_verified: false,
+    c2pa_creator: null,
+    c2pa_created_at: null,
+    c2pa_ai_used: false,
+    c2pa_edit_history_summary: null,
+    media_origin_status: input.mediaType === 'image' && input.storageProvider === 'images' ? 'not_checked' : 'not_applicable',
+    c2pa_metadata: {},
+    metadata: input.metadata || {},
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+}
+
+async function supabaseInsertStoredAudioAsset(c: any, input: {
+  id: string;
+  userId: string;
+  storageKey: string;
+  publicUrl: string;
+  mimeType: string;
+  fileSize: number;
+  sha256Hash: string;
+  originalFilename: string;
+  moderation: Extract<WallVoiceModerationResult, { ok: true }>;
+}) {
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_media_assets', [{
+    id: input.id,
+    user_id: input.userId,
+    legacy_post_id: null,
+    media_type: 'audio',
+    storage_provider: 'r2_audio',
+    storage_key: input.storageKey,
+    public_url: input.publicUrl,
+    private_url: null,
+    mime_type: input.mimeType,
+    file_size: Math.max(0, Math.round(input.fileSize)),
+    sha256_hash: cleanText(input.sha256Hash, 80).toLowerCase(),
+    width: null,
+    height: null,
+    duration_seconds: null,
+    upload_status: 'uploaded',
+    moderation_status: 'approved',
+    rejection_code: null,
+    rejection_message: null,
+    has_content_credentials: false,
+    c2pa_verified: false,
+    c2pa_creator: null,
+    c2pa_created_at: null,
+    c2pa_ai_used: false,
+    c2pa_edit_history_summary: null,
+    media_origin_status: 'not_applicable',
+    c2pa_metadata: {},
+    metadata: {
+      usage: 'wall_voice_candidate',
+      original_filename: input.originalFilename,
+      delivery_url: input.publicUrl,
+    },
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await supabaseAdminUpsert(c, 'app_moderation_results', [{
+    id: uuid(),
+    media_id: input.id,
+    model_name: input.moderation.modelName,
+    adult_explicit_score: input.moderation.scores.adult_explicit_score,
+    nudity_score: input.moderation.scores.nudity_score,
+    sexual_context_score: input.moderation.scores.sexual_context_score,
+    sexual_solicitation_score: input.moderation.scores.sexual_solicitation_score,
+    minor_safety_risk_score: input.moderation.scores.minor_safety_risk_score,
+    violence_score: input.moderation.scores.violence_score,
+    gore_score: input.moderation.scores.gore_score,
+    weapon_score: input.moderation.scores.weapon_score,
+    hate_symbol_score: input.moderation.scores.hate_symbol_score,
+    ai_generated_likelihood: 0,
+    spam_scam_score: input.moderation.scores.spam_scam_score,
+    malware_status: 'not_scanned',
+    link_risk_score: input.moderation.scores.link_risk_score,
+    confidence: input.moderation.scores.confidence,
+    decision: 'approved',
+    reasons: input.moderation.reasons,
+    raw_result: {
+      transcript_sha256: input.moderation.transcriptHash,
+      transcript_length: input.moderation.transcriptLength,
+      transcript_retained: false,
+    },
+    created_at: ts,
+  }], 'id');
+  await supabaseInsertModerationEvent(c, input.id, 'voice_moderation_completed', {
+    actorRole: 'system',
+    decision: 'approved',
+    reason: 'voice_transcript_safety_passed',
+    afterState: { transcript_retained: false, model_name: input.moderation.modelName },
+  });
+}
+
+async function supabaseInsertModerationEvent(cOrEnv: any, mediaId: string, eventType: string, input: { actorUserId?: string; actorRole?: string; decision?: string; reason?: string; note?: string; beforeState?: any; afterState?: any; requestId?: string } = {}) {
+  const c = cOrEnv?.env ? cOrEnv : supabaseCtxFromEnv(cOrEnv as Env);
+  await supabaseAdminUpsert(c, 'app_moderation_events', [{
+    id: uuid(),
+    media_id: mediaId,
+    actor_user_id: publicId(input.actorUserId || '', 120) || null,
+    actor_role: cleanText(input.actorRole || '', 40) || null,
+    event_type: cleanText(eventType, 80),
+    decision: cleanText(input.decision || '', 40) || null,
+    reason: cleanText(input.reason || '', 180) || null,
+    note: cleanMultilineText(input.note || '', 1000) || null,
+    before_state: parseJsonObject(safeJsonState(input.beforeState)),
+    after_state: parseJsonObject(safeJsonState(input.afterState)),
+    request_id: cleanText(input.requestId || '', 120) || null,
+    created_at: now(),
+  }], 'id');
+}
+
+async function processSupabaseMediaModerationJob(env: Env, message: MediaModerationJobMessage, requestId = '') {
+  const c = supabaseCtxFromEnv(env);
   const mediaId = publicId(message.mediaId, 160);
   const jobId = publicId(message.jobId, 160);
   const startedAt = now();
-  await env.DB.prepare("UPDATE moderation_jobs SET status = 'running', attempts = attempts + 1, started_at = ?, updated_at = ? WHERE id = ?")
-    .bind(startedAt, startedAt, jobId)
-    .run();
+  const jobRows = await supabaseAdminQueryRows(c, 'app_moderation_jobs', {
+    select: 'id,attempts',
+    filters: { id: postgrestEqFilter(jobId) },
+    limit: 1,
+  });
+  await supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+    status: 'running',
+    attempts: Math.max(0, Number(jobRows[0]?.attempts || 0)) + 1,
+    started_at: startedAt,
+    updated_at: startedAt,
+  });
 
-  const asset: any = await env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
+  const asset = await supabaseReadMediaAsset(c, mediaId);
   if (!asset) throw new Error('MEDIA_ASSET_NOT_FOUND');
   const existingStatus = normalizeMediaModerationStatus(asset.moderation_status);
   if (['approved', 'review_required', 'rejected'].includes(existingStatus) && cleanText(asset.upload_status, 40) === 'uploaded') {
     const ts = now();
-    await env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = COALESCE(completed_at, ?), updated_at = ? WHERE id = ?")
-      .bind(ts, ts, jobId)
-      .run();
+    await supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+      status: 'completed',
+      completed_at: ts,
+      updated_at: ts,
+    });
     return;
   }
 
   try {
+    const c2paSummary = await inspectC2paContentCredentials(env, asset);
     const malwareStatus = await scanMalwareInterface(env, asset);
     const caption = cleanMultilineText(message.caption || '', 1000);
     const sampleScores: MediaModerationScores[] = [];
@@ -8438,35 +13083,57 @@ async function processMediaModerationJob(env: Env, message: MediaModerationJobMe
     }
     const scores = maxModerationScores(sampleScores);
     scores.malware_status = malwareStatus === 'clean' || malwareStatus === 'malicious' ? malwareStatus : scores.malware_status;
+    if (c2paSummary.aiUsed) {
+      scores.ai_generated_likelihood = Math.max(scores.ai_generated_likelihood, 0.9);
+      scores.confidence = Math.max(scores.confidence, 0.82);
+    }
     const decision = decideMediaModeration(scores, normalizeMediaAssetType(asset.media_type) || 'image', env.AI_GENERATED_MEDIA_POLICY || '');
     const publicUrl = decision.decision === 'approved' ? mediaAssetPublicUrl(env, asset) : '';
     const ts = now();
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO moderation_results (
-          id, media_id, model_name, adult_explicit_score, nudity_score, sexual_context_score,
-          sexual_solicitation_score, minor_safety_risk_score, violence_score, gore_score, weapon_score,
-          hate_symbol_score, ai_generated_likelihood, spam_scam_score, malware_status, link_risk_score,
-          confidence, decision, reasons, raw_result, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        uuid(), mediaId, modelName,
-        scores.adult_explicit_score, scores.nudity_score, scores.sexual_context_score,
-        scores.sexual_solicitation_score, scores.minor_safety_risk_score, scores.violence_score,
-        scores.gore_score, scores.weapon_score, scores.hate_symbol_score, scores.ai_generated_likelihood,
-        scores.spam_scam_score, scores.malware_status, scores.link_risk_score, scores.confidence,
-        decision.decision, JSON.stringify(decision.reasons), JSON.stringify({ samples: rawSamples }), ts,
-      ),
-      env.DB.prepare(
-        `UPDATE media_assets
-         SET moderation_status = ?, public_url = COALESCE(NULLIF(?, ''), public_url),
-             rejection_code = ?, rejection_message = ?, updated_at = ?
-         WHERE id = ?`
-      ).bind(decision.decision, publicUrl, decision.rejectionCode, decision.userMessage, ts, mediaId),
-      env.DB.prepare("UPDATE moderation_jobs SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?")
-        .bind(ts, ts, jobId),
-    ]);
-    await insertModerationEvent(env.DB, mediaId, `moderation_${decision.decision}`, {
+    await supabaseAdminUpsert(c, 'app_moderation_results', [{
+      id: uuid(),
+      media_id: mediaId,
+      model_name: modelName,
+      adult_explicit_score: scores.adult_explicit_score,
+      nudity_score: scores.nudity_score,
+      sexual_context_score: scores.sexual_context_score,
+      sexual_solicitation_score: scores.sexual_solicitation_score,
+      minor_safety_risk_score: scores.minor_safety_risk_score,
+      violence_score: scores.violence_score,
+      gore_score: scores.gore_score,
+      weapon_score: scores.weapon_score,
+      hate_symbol_score: scores.hate_symbol_score,
+      ai_generated_likelihood: scores.ai_generated_likelihood,
+      spam_scam_score: scores.spam_scam_score,
+      malware_status: scores.malware_status,
+      link_risk_score: scores.link_risk_score,
+      confidence: scores.confidence,
+      decision: decision.decision,
+      reasons: decision.reasons,
+      raw_result: { samples: rawSamples, content_credentials: c2paSummary },
+      created_at: ts,
+    }], 'id');
+    await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+      moderation_status: decision.decision,
+      ...(publicUrl ? { public_url: publicUrl } : {}),
+      rejection_code: decision.rejectionCode || null,
+      rejection_message: decision.userMessage || null,
+      has_content_credentials: c2paSummary.hasContentCredentials,
+      c2pa_verified: c2paSummary.verified,
+      c2pa_creator: c2paSummary.creator || null,
+      c2pa_created_at: c2paSummary.createdAt,
+      c2pa_ai_used: c2paSummary.aiUsed,
+      c2pa_edit_history_summary: c2paSummary.editHistorySummary || null,
+      media_origin_status: c2paSummary.mediaOriginStatus,
+      c2pa_metadata: c2paSummary.metadata,
+      updated_at: ts,
+    });
+    await supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+      status: 'completed',
+      completed_at: ts,
+      updated_at: ts,
+    });
+    await supabaseInsertModerationEvent(c, mediaId, `moderation_${decision.decision}`, {
       decision: decision.decision,
       reason: decision.reasons.join(','),
       afterState: { moderation_status: decision.decision, scores },
@@ -8475,35 +13142,61 @@ async function processMediaModerationJob(env: Env, message: MediaModerationJobMe
   } catch (error: any) {
     const ts = now();
     const code = getErrorCode(error).slice(0, 180);
-    await env.DB.batch([
-      env.DB.prepare("UPDATE moderation_jobs SET status = 'failed', last_error = ?, completed_at = ?, updated_at = ? WHERE id = ?")
-        .bind(code, ts, ts, jobId),
-      env.DB.prepare("UPDATE media_assets SET moderation_status = 'failed', rejection_code = 'moderation_failed', rejection_message = 'This upload could not be checked. Please try again.', updated_at = ? WHERE id = ?")
-        .bind(ts, mediaId),
+    await Promise.allSettled([
+      supabaseAdminPatchRows(c, 'app_moderation_jobs', { id: postgrestEqFilter(jobId) }, {
+        status: 'failed',
+        last_error: code,
+        completed_at: ts,
+        updated_at: ts,
+      }),
+      supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+        moderation_status: 'failed',
+        rejection_code: 'moderation_failed',
+        rejection_message: 'This upload could not be checked. Please try again.',
+        updated_at: ts,
+      }),
     ]);
-    await insertModerationEvent(env.DB, mediaId, 'moderation_failed', { reason: code, requestId });
+    await supabaseInsertModerationEvent(c, mediaId, 'moderation_failed', { reason: code, requestId });
     throw error;
   }
 }
 
-async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = '', options: { enqueue?: boolean } = {}): Promise<string> {
-  await ensureMediaModerationSchema(c.env.DB);
-  const jobId = uuid();
-  const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO moderation_jobs (id, media_id, user_id, job_type, status, queued_at, created_at, updated_at)
-     VALUES (?, ?, ?, 'media_pre_publish', 'pending', ?, ?, ?)`
-  ).bind(jobId, mediaId, userId, ts, ts, ts).run();
-  const body: MediaModerationJobMessage = { jobId, mediaId, userId, reason: 'upload_complete', caption: cleanMultilineText(caption, 1000) };
-  const shouldEnqueue = options.enqueue !== false;
-  if (shouldEnqueue && c.env.MEDIA_MODERATION_QUEUE) {
-    await c.env.MEDIA_MODERATION_QUEUE.send(body);
-  } else if (shouldEnqueue) {
-    runBackgroundTask(c, 'media_moderation_inline_failed', async () => {
-      await processMediaModerationJob(c.env, body, c.get?.('requestId') || '');
-    });
+async function processMediaModerationJob(env: Env, message: MediaModerationJobMessage, requestId = '') {
+  if (supabasePrimaryConfiguredForEnv(env)) {
+    await processSupabaseMediaModerationJob(env, message, requestId);
+    return;
   }
-  return jobId;
+  throw new Error('SUPABASE_PRIMARY_REQUIRED:media_moderation');
+}
+
+async function createMediaModerationJob(c: any, mediaId: string, userId: string, caption = '', options: { enqueue?: boolean } = {}): Promise<string> {
+  if (supabasePrimaryConfigured(c)) {
+    const jobId = uuid();
+    const ts = now();
+    await supabaseAdminUpsert(c, 'app_moderation_jobs', [{
+      id: jobId,
+      media_id: mediaId,
+      user_id: userId,
+      job_type: 'media_pre_publish',
+      status: 'pending',
+      attempts: 0,
+      queued_at: ts,
+      created_at: ts,
+      updated_at: ts,
+      metadata: { reason: 'upload_complete' },
+    }], 'id');
+    const body: MediaModerationJobMessage = { jobId, mediaId, userId, reason: 'upload_complete', caption: cleanMultilineText(caption, 1000) };
+    const shouldEnqueue = options.enqueue !== false;
+    if (shouldEnqueue && c.env.MEDIA_MODERATION_QUEUE) {
+      await c.env.MEDIA_MODERATION_QUEUE.send(body);
+    } else if (shouldEnqueue) {
+      runBackgroundTask(c, 'supabase_media_moderation_inline_failed', async () => {
+        await processMediaModerationJob(c.env, body, c.get?.('requestId') || '');
+      });
+    }
+    return jobId;
+  }
+  throw new Error('SUPABASE_PRIMARY_REQUIRED:media_moderation_job');
 }
 
 function parseMediaAssetIds(body: any): string[] {
@@ -8514,131 +13207,96 @@ function parseMediaAssetIds(body: any): string[] {
     ...parseJsonArray(body.mediaIds),
     body.media_asset_id,
     body.mediaAssetId,
-  ].flat().map((value) => publicId(value, 160)).filter(Boolean)));
+  ].flat().map((value) => publicId(value, 160)).filter(Boolean))).slice(0, 12);
 }
 
 async function approvedMediaAssetsForPost(c: any, userId: string, requestedMediaIds: string[], imageUrls: string[]) {
-  await ensureMediaModerationSchema(c.env.DB);
-  if (!requestedMediaIds.length && imageUrls.length) {
-    return {
-      ok: false,
-      status: 409,
-      detail: 'Checking your upload before posting...',
-      code: 'MEDIA_MODERATION_REQUIRED',
-      assets: [] as any[],
-    };
+  if (supabasePrimaryConfigured(c)) {
+    let assets: any[] = [];
+    if (requestedMediaIds.length) {
+      const rows = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+        select: '*',
+        filters: {
+          user_id: postgrestEqFilter(userId),
+          id: postgrestInFilter(requestedMediaIds),
+        },
+        limit: requestedMediaIds.length,
+      })).map(supabaseMediaAssetToLegacy);
+      const byId = new Map(rows.map((row: any) => [publicId(row?.id, 160), row]));
+      assets = requestedMediaIds.map((mediaId) => byId.get(mediaId)).filter(Boolean);
+      if (assets.length !== requestedMediaIds.length) {
+        return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
+      }
+    } else if (imageUrls.length) {
+      const imageIds = imageUrls
+        .map((url) => cloudflareImageIdFromDeliveryUrl(c.env, safeMediaReference(url)))
+        .filter(Boolean);
+      const uniqueImageIds = Array.from(new Set(imageIds));
+      if (imageIds.length !== imageUrls.length) {
+        return {
+          ok: false,
+          status: 409,
+          detail: 'Checking your upload before posting...',
+          code: 'MEDIA_MODERATION_REQUIRED',
+          assets: [] as any[],
+        };
+      }
+      const rows = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+        select: '*',
+        filters: {
+          user_id: postgrestEqFilter(userId),
+          storage_provider: postgrestEqFilter('images'),
+          storage_key: postgrestInFilter(uniqueImageIds),
+        },
+        limit: uniqueImageIds.length,
+      })).map(supabaseMediaAssetToLegacy);
+      const byStorageKey = new Map(rows.map((row: any) => [cleanText(row?.storage_key, 220), row]));
+      assets = imageIds.map((imageId) => byStorageKey.get(imageId)).filter(Boolean);
+      if (rows.length !== uniqueImageIds.length || assets.length !== imageIds.length) {
+        return {
+          ok: false,
+          status: 409,
+          detail: 'Checking your upload before posting...',
+          code: 'MEDIA_MODERATION_REQUIRED',
+          assets,
+        };
+      }
+    } else {
+      return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
+    }
+
+    const blocking = assets.find((asset) => normalizeMediaModerationStatus(asset.moderation_status) !== 'approved' || cleanText(asset.upload_status, 40) !== 'uploaded');
+    if (blocking) {
+      const status = normalizeMediaModerationStatus(blocking.moderation_status);
+      const detail = status === 'rejected'
+        ? "This upload can't be posted because it may break Aura's safety rules."
+        : status === 'review_required'
+          ? 'This upload needs a quick safety review before it can be posted.'
+          : 'Checking your upload before posting...';
+      return { ok: false, status: 409, detail, code: `MEDIA_${status.toUpperCase()}`, assets };
+    }
+    if (assets.some((asset) => publicId(asset?.legacy_post_id || asset?.post_id, 160))) {
+      return { ok: false, status: 409, detail: 'One upload is already attached to another post.', code: 'MEDIA_ALREADY_ATTACHED', assets };
+    }
+    const invalid = assets.find((asset) => {
+      const type = normalizeMediaAssetType(asset?.media_type);
+      const provider = cleanText(asset?.storage_provider, 40);
+      const reference = safeMediaReference(asset?.public_url) || mediaAssetPublicUrl(c.env, asset);
+      return !type || !reference || (type === 'image' ? provider !== 'images' : provider !== 'stream');
+    });
+    if (invalid) {
+      return { ok: false, status: 409, detail: 'One upload is not ready to attach. Please upload again.', code: 'MEDIA_PROVIDER_MISMATCH', assets };
+    }
+    return { ok: true, status: 200, detail: '', code: '', assets };
   }
-  if (!requestedMediaIds.length) return { ok: true, status: 200, detail: '', code: '', assets: [] as any[] };
 
-  const placeholders = requestedMediaIds.map(() => '?').join(', ');
-  const rows = await c.env.DB.prepare(`SELECT * FROM media_assets WHERE user_id = ? AND id IN (${placeholders})`)
-    .bind(userId, ...requestedMediaIds)
-    .all();
-  const assets = rows.results as any[];
-  if (assets.length !== requestedMediaIds.length) {
-    return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
-  }
-  const blocking = assets.find((asset) => normalizeMediaModerationStatus(asset.moderation_status) !== 'approved' || cleanText(asset.upload_status, 40) !== 'uploaded');
-  if (blocking) {
-    const status = normalizeMediaModerationStatus(blocking.moderation_status);
-    const detail = status === 'rejected'
-      ? "This upload can't be posted because it may break Captro's safety rules."
-      : status === 'review_required'
-        ? 'This upload needs a quick safety review before it can be posted.'
-        : 'Checking your upload before posting...';
-    return { ok: false, status: 409, detail, code: `MEDIA_${status.toUpperCase()}`, assets };
-  }
-  return { ok: true, status: 200, detail: '', code: '', assets };
-}
-
-async function refinePostCategoryWithBackendAi(c: any, postId: string) {
-  if (!c.env.AI) return;
-  await ensureAutoCategorySchema(c.env.DB);
-  const row: any = await c.env.DB.prepare(
-    `SELECT id, content, title, image, images, media_types, media_dimensions, location, place_name, place_category, post_type,
-            primary_category, category_confidence, category_source, category_signals_json, tags_json,
-            user_selected_category, detected_objects_json, detected_scene, place_type, caption_keywords_json
-     FROM posts
-     WHERE id = ?
-     LIMIT 1`
-  ).bind(postId).first();
-  if (!row) return;
-
-  const currentSource = normalizeCategorySource(row.category_source);
-  if (currentSource === 'user_changed_optional' || currentSource === 'admin_changed') {
-    return;
-  }
-
-  const currentConfidence = clampFloat(row.category_confidence, 0, 1, 0);
-  const mediaUrls = sanitizeMediaReferences(row.images, row.image);
-  const mediaTypes = sanitizeMediaTypes(row.media_types, mediaUrls.length || 1);
-  const primaryUrl = mediaUrls[0] || safeMediaReference(row.image);
-  const primaryType = mediaTypes[0] || (isVideoMediaUrl(primaryUrl) ? 'video' : 'image');
-  if (currentConfidence >= 0.75 && primaryType !== 'video') return;
-
-  const thumbnailVariant = c.env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
-  const feedVariant = c.env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
-  const mediaPreviewUrl = primaryType === 'video'
-    ? streamThumbnailUrl(primaryUrl)
-    : posterDeliveryUrl(primaryUrl, primaryType, thumbnailVariant, c.env) || feedDeliveryUrl(primaryUrl, primaryType, feedVariant, c.env);
-  const backendLabels = await classifyImageWithWorkersAi(c.env, mediaPreviewUrl);
-  const currentSignals = parseJsonObject(row.category_signals_json);
-  const aiInput: AutoCategoryInput = {
-    caption: [row.title, row.content].filter(Boolean).join('\n\n'),
-    mediaType: primaryType,
-    postType: row.post_type,
-    hashtags: sanitizeAutoCategoryTags(row.tags_json),
-    location: row.location,
-    placeName: row.place_name,
-    placeType: row.place_type || row.place_category,
-    userSelectedCategory: row.user_selected_category || (currentSignals as any).user_selected_category,
-    detectedObjects: sanitizeAutoCategoryTags(row.detected_objects_json),
-    detectedScene: cleanText(row.detected_scene, 80),
-    captionKeywords: sanitizeAutoCategoryTags(row.caption_keywords_json),
-    appleLabels: sanitizeAutoCategoryLabels((currentSignals as any).apple_labels),
-    appleCategoryGuess: cleanText((currentSignals as any).apple_category_guess, 40),
-    appleConfidence: clampFloat((currentSignals as any).apple_confidence, 0, 1, 0),
+  return {
+    ok: false,
+    status: 503,
+    detail: 'Aura production database is not configured. Please try again later.',
+    code: 'SUPABASE_PRIMARY_REQUIRED',
+    assets: [] as any[],
   };
-  const backendCategory = categoryFromLabels(backendLabels);
-  let textAiCategory: { category: DiscoverCategory | ''; confidence: number; labels: AutoCategoryLabel[] } = { category: '', confidence: 0, labels: [] };
-  try {
-    textAiCategory = await classifyPostMetadataWithWorkersAi(c.env, { ...aiInput, backendLabels, backendCategoryGuess: backendCategory.category, backendConfidence: backendCategory.confidence });
-  } catch (error: any) {
-    console.warn(JSON.stringify({ event: 'post_category_text_ai_failed', code: getErrorCode(error).slice(0, 160) }));
-  }
-  const combinedBackendLabels = [...backendLabels, ...textAiCategory.labels].slice(0, 24);
-  if (!combinedBackendLabels.length && !backendCategory.category && !textAiCategory.category) return;
-
-  const result = autoCategoryEngine({
-    ...aiInput,
-    backendLabels: combinedBackendLabels,
-    backendCategoryGuess: textAiCategory.category || backendCategory.category,
-    backendConfidence: Math.max(textAiCategory.confidence, backendCategory.confidence),
-  });
-  await c.env.DB.prepare(
-    `UPDATE posts
-     SET primary_category = ?, category_confidence = ?, category_source = ?, category_status = ?,
-         category_signals_json = ?, tags_json = ?,
-         secondary_categories_json = ?, category_scores_json = ?, detected_objects_json = ?,
-         detected_scene = ?, place_type = ?, user_selected_category = ?, caption_keywords_json = ?,
-         updated_at = datetime('now')
-     WHERE id = ?`
-  ).bind(
-    result.primary_category,
-    result.category_confidence,
-    result.category_source,
-    result.category_status,
-    JSON.stringify(result.signals),
-    JSON.stringify(result.tags),
-    JSON.stringify(result.secondary_categories),
-    JSON.stringify(result.category_scores),
-    JSON.stringify(result.detected_objects),
-    result.detected_scene,
-    result.place_type,
-    result.user_selected_category,
-    JSON.stringify(result.caption_keywords),
-    postId
-  ).run();
 }
 
 async function supabaseAdminDeleteSafe(c: any, table: string, filters: Record<string, string>) {
@@ -9132,13 +13790,14 @@ api.post('/auth/supabase', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 140_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_supabase');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'auth_supabase', clientIp(c), 60, 300);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
-    const session = await issueCaptroTokenForSupabaseAccessToken(c, body.access_token || body.token, body);
-    const token = session.token;
-    const user = session.user;
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+    const rawAccessToken = body.access_token || body.token;
+    const session = await issueCaptroTokenForSupabaseAccessToken(c, rawAccessToken, body);
+    return c.json(supabaseAuthSessionResponse({ access_token: rawAccessToken, token_type: 'bearer' }, session.user));
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'Supabase auth is not configured on the backend.' }, 503);
@@ -9158,14 +13817,16 @@ api.post('/auth/register', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 80_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_register');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'auth_register', clientIp(c), 8, 300);
     if (limited) return limited;
     const dailyLimited = await enforceRateLimit(c, 'auth_register_daily', clientIp(c), 20, 86400);
     if (dailyLimited) return dailyLimited;
-    const jwtSecret = getJwtSecret(c);
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['email', 'password', 'username', 'full_name', 'fullName']);
+    const unknown = rejectUnknownFields(c, body, ['email', 'password', 'username', 'full_name', 'fullName', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const email = normalizeOptionalEmail(body.email);
     const password = String(body.password || '');
     const username = normalizeOptionalName(body.username);
@@ -9178,59 +13839,84 @@ api.post('/auth/register', async (c) => {
     const usernameCheck = validateUsernameForAccount(username);
     if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
     const safeUsername = usernameCheck.username;
-    await ensureAccountDeletionSchema(c.env.DB);
-    const existing: any = await c.env.DB.prepare('SELECT id, status, deletion_scheduled_at FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?')
-      .bind(email, safeUsername.toLowerCase()).first();
+    const [emailMatches, usernameMatches] = await Promise.all([
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: SUPABASE_APP_USER_SELECT,
+        filters: { email: postgrestEqFilter(email) },
+        limit: 1,
+      }),
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: SUPABASE_APP_USER_SELECT,
+        filters: { username: postgrestEqFilter(safeUsername) },
+        limit: 1,
+      }),
+    ]);
+    const existing = emailMatches[0] || usernameMatches[0];
     if (existing) {
+      const existingUser = supabaseAppUserToLegacyUser(existing);
       await logSecurityEvent(c, 'signup_duplicate_blocked', '', { username: safeUsername });
-      if (String(existing.status || 'active') === 'deletion_pending') {
+      if (String(existingUser.status || 'active') === 'deletion_pending') {
         return c.json({
           detail: 'This account is scheduled for deletion. Sign in to restore it.',
           code: 'ACCOUNT_DELETION_PENDING',
-          deletion_scheduled_at: existing.deletion_scheduled_at || null,
+          deletion_scheduled_at: existingUser.deletion_scheduled_at || null,
         }, 409);
       }
       return c.json({ detail: 'Email or username already exists' }, 400);
     }
 
-    await ensureOAuthSchema(c.env.DB);
-    await ensureSupabaseAuthSchema(c.env.DB);
     const authResult = await createOrFindSupabaseAuthUser(c, {
       email,
       password,
       username: safeUsername,
       fullName,
       provider: 'email',
+      termsVersion: termsAcceptance?.version,
+      termsAcceptedAt: termsAcceptance?.acceptedAt,
     });
     if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
-    const preferredId = isUuidText(authResult.user.id);
-    const idOwner = preferredId ? await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(preferredId).first() : null;
-    const id = preferredId && !idOwner ? preferredId : uuid();
-    const hash = await hashPassword(password);
+    let appUser: any;
     try {
-      await c.env.DB.prepare(
-        'INSERT INTO users (id, email, username, full_name, password_hash, supabase_user_id, oauth_provider, oauth_subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).bind(id, email, safeUsername, fullName, hash, authResult.user.id, 'supabase', authResult.user.id).run();
+      appUser = await findOrCreateSupabaseAppUser(c, {
+        sub: authResult.user.id,
+        email,
+        user_metadata: {
+          username: safeUsername,
+          full_name: fullName,
+          ...termsAcceptanceMetadata(termsAcceptance),
+        },
+        app_metadata: {
+          provider: 'email',
+        },
+      }, {
+        email,
+        username: safeUsername,
+        full_name: fullName,
+        provider: 'email',
+        provider_user_id: authResult.user.id,
+      });
     } catch (insertError) {
       if (authResult.created) await deleteSupabaseAuthUser(c, authResult.user.id);
       throw insertError;
     }
-    // Security-sensitive: store only hashed abuse signals for admin review of possible ban evasion.
-    await recordAbuseSignals(c, id, 'signup', { username: safeUsername, display_name: fullName });
-    await upsertAccountIdentity(c, { userId: id, provider: 'email', email });
-    await logSecurityEvent(c, 'signup_created', id, { username: safeUsername });
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+
+    await recordAbuseSignals(c, appUser.id, 'signup', { username: safeUsername, display_name: fullName });
+    await upsertAccountIdentity(c, { userId: appUser.id, provider: 'email', providerUserId: authResult.user.id, email });
+    await recordTermsAcceptance(c, appUser, authResult.user.id, termsAcceptance, 'email_register');
+    await logSecurityEvent(c, 'signup_created', appUser.id, { username: safeUsername });
     runBackgroundTask(c, 'supabase_signup_metadata_sync_failed', async () => {
-      await syncSupabaseAuthMetadataForUser(c, user);
-      await mirrorLegacyUserToSupabase(c, user.id);
+      await syncSupabaseAuthMetadataForUser(c, appUser);
     });
-    const token = await createToken(id, jwtSecret);
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+    const supabaseSession = await signInSupabasePassword(c, email, password);
+    return c.json(supabaseAuthSessionResponse(supabaseSession, appUser));
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     if (code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
       return c.json({ detail: 'Supabase Authentication is not configured for account creation.' }, 503);
+    }
+    if (code.includes('23505') || code.toLowerCase().includes('duplicate key') || code.includes('app_users_username_lower_idx')) {
+      return c.json({ detail: 'Email or username already exists' }, 400);
     }
     if (code.startsWith('SUPABASE_AUTH_CREATE_FAILED')) {
       return c.json({ detail: 'Could not create the Supabase Auth account.' }, 502);
@@ -9244,9 +13930,12 @@ api.post('/auth/login', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 60_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_login');
+    if (supabaseRequired) return supabaseRequired;
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['email', 'password']);
+    const unknown = rejectUnknownFields(c, body, ['email', 'password', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const email = normalizeOptionalEmail(body.email);
     const password = String(body.password || '');
     if (!email || !password) return c.json({ detail: 'Invalid email or password.' }, 401);
@@ -9255,7 +13944,6 @@ api.post('/auth/login', async (c) => {
     const ipLimited = await enforceRateLimit(c, 'auth_login_ip', clientIp(c), 80, 300);
     if (ipLimited) return ipLimited;
 
-    const jwtSecret = getJwtSecret(c);
     try {
       const supabaseSession = await signInSupabasePassword(c, email, password);
       const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
@@ -9263,55 +13951,21 @@ api.post('/auth/login', async (c) => {
         full_name: supabaseSession.user?.user_metadata?.full_name || supabaseSession.user?.user_metadata?.name || '',
         profile_image: supabaseSession.user?.user_metadata?.avatar_url || supabaseSession.user?.user_metadata?.picture || '',
       });
-      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'email_login');
+      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
-      if (!code.startsWith('SUPABASE_PASSWORD_SIGN_IN_FAILED') && code !== 'SUPABASE_AUTH_KEY_MISSING' && code !== 'SUPABASE_NOT_CONFIGURED' && code !== 'SUPABASE_SERVICE_ROLE_MISSING') {
-        console.warn(JSON.stringify({ event: 'supabase_password_login_bridge_failed', code: code.slice(0, 160) }));
+      await logSecurityEvent(c, 'login_failed', '', { reason: 'supabase_password' });
+      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+        return c.json({ detail: 'Auth service is not configured.' }, 503);
       }
-    }
-
-    let user: any = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-    if (!user || !(await verifyPassword(password, user.password_hash))) {
-      if (user?.id) await recordAbuseSignals(c, user.id, 'failed_login', {});
-      await logSecurityEvent(c, 'login_failed', user?.id || '', { reason: user ? 'password' : 'credentials' });
-      return c.json({ detail: 'Invalid email or password.' }, 401);
-    }
-    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
-      await recordAbuseSignals(c, user.id, 'banned_login', {});
-      await logSecurityEvent(c, 'login_banned_blocked', user.id, {});
-      return c.json({ detail: 'This account cannot be used.' }, 403);
-    }
-    await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email });
-    // Auto-migrate legacy SHA-256 hash to bcrypt on successful login
-    if (user.password_hash && !user.password_hash.startsWith('$2')) {
-      try {
-        const bcryptHash = await hashPassword(password);
-        await c.env.DB.prepare('UPDATE users SET password_hash = ? WHERE id = ?').bind(bcryptHash, user.id).run();
-      } catch {}
-    }
-    if (!user.supabase_user_id) {
-      try {
-        const authResult = await createOrFindSupabaseAuthUser(c, {
-          email,
-          password,
-          username: publicUsernameFor(user),
-          fullName: user.full_name,
-          profileImage: user.profile_image,
-          provider: 'email',
-          appUserId: user.id,
-        });
-        if (authResult.user?.id) {
-          await linkSupabaseAuthUser(c, user.id, authResult.user.id);
-          user = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
-        }
-      } catch (error: any) {
-        console.warn(JSON.stringify({ event: 'legacy_user_supabase_auth_link_failed', user_id: user.id, code: getErrorCode(error).slice(0, 160) }));
+      if (code.startsWith('SUPABASE_PASSWORD_SIGN_IN_FAILED')) {
+        return c.json({ detail: 'Invalid email or password.' }, 401);
       }
+      console.warn(JSON.stringify({ event: 'supabase_password_login_failed', code: code.slice(0, 160) }));
+      return c.json({ detail: 'Could not sign in right now.' }, 502);
     }
-    const token = await createToken(user.id, jwtSecret);
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     if (getErrorCode(error) === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
     return c.json({ detail: 'Could not log in' }, 500);
@@ -9320,51 +13974,14 @@ api.post('/auth/login', async (c) => {
 
 api.post('/auth/phone/start', async (c) => {
   try {
-    const bodyTooLarge = rejectLargeRequest(c, 40_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const body: any = await c.req.json().catch(() => ({}));
-    const normalizedPhone = normalizePhone(body.phone);
-    if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    const limited = await enforceRateLimit(c, 'phone_start', `${clientIp(c)}:${normalizedPhone}`, 5, 600);
-    if (limited) return limited;
-    await ensurePhoneAuthSchema(c.env.DB);
-
-    const startedWithVerify = await startTwilioVerification(c, normalizedPhone);
-    if (startedWithVerify) {
-      return c.json({
-        detail: 'We sent a sign-in code to your phone.',
-        delivery: 'twilio_verify',
-      });
-    }
-
-    const code = createPhoneCode();
-    const jwtSecret = getJwtSecret(c);
-    const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-    await c.env.DB.prepare(
-      'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
-    ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
-
-    const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
-    const payload: any = {
-      detail: delivery === 'legacy_sms'
-        ? 'We sent a sign-in code to your phone.'
-        : 'Twilio Verify is not configured yet, so use the development code shown here.',
-      delivery,
-    };
-
-    if (delivery === 'development') {
-      payload.dev_code = code;
-    }
-
-    return c.json(payload);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'phone_sign_in_start');
+    if (supabaseRequired) return supabaseRequired;
+    return c.json({
+      detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
+      code: 'PHONE_SIGN_IN_DISABLED',
+    }, 410);
   } catch (error: any) {
     const code = String(error?.message || '');
-    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    if (code.startsWith('PHONE_VERIFY_START_FAILED')) return twilioVerifyStartErrorResponse(c, code);
-    if (code === 'PHONE_SMS_FAILED') return c.json({ detail: 'Could not send SMS code. Check Twilio settings.' }, 502);
     console.error(JSON.stringify({ event: 'phone_login_start_failed', error: code.slice(0, 180) }));
     return c.json({ detail: 'Could not start phone sign in. Please try again in a moment.', code: 'PHONE_START_FAILED' }, 500);
   }
@@ -9372,57 +13989,14 @@ api.post('/auth/phone/start', async (c) => {
 
 api.post('/auth/phone/verify', async (c) => {
   try {
-    const bodyTooLarge = rejectLargeRequest(c, 40_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const body: any = await c.req.json().catch(() => ({}));
-    const normalizedPhone = normalizePhone(body.phone);
-    if (!normalizedPhone) return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    const limited = await enforceRateLimit(c, 'phone_verify', `${clientIp(c)}:${normalizedPhone}`, 12, 600);
-    if (limited) return limited;
-    const code = body.code;
-    const normalizedCode = String(code || '').replace(/\D/g, '');
-    if (normalizedCode.length !== 6) {
-      return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
-    }
-    await ensurePhoneAuthSchema(c.env.DB);
-
-    if (getTwilioVerifyConfig(c)) {
-      const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
-      if (!verified) {
-        return c.json({ detail: 'Invalid or expired verification code.' }, 401);
-      }
-
-      const user = await findOrCreatePhoneUser(c, normalizedPhone, body.full_name);
-      const token = await createToken(user.id, getJwtSecret(c));
-      return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
-    }
-
-    const phoneCode: any = await c.env.DB.prepare(
-      'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
-    ).bind(normalizedPhone).first();
-
-    if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
-    if ((phoneCode.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
-    if (Date.parse(phoneCode.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
-
-    const jwtSecret = getJwtSecret(c);
-    const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
-    if (expectedHash !== phoneCode.code_hash) {
-      await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(phoneCode.id).run();
-      return c.json({ detail: 'Invalid verification code.' }, 401);
-    }
-
-    await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
-
-    const user = await findOrCreatePhoneUser(c, normalizedPhone, body.full_name);
-
-    const token = await createToken(user.id, jwtSecret);
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'phone_sign_in_verify');
+    if (supabaseRequired) return supabaseRequired;
+    return c.json({
+      detail: 'Phone sign in is not available. Use email, Google, or Apple sign in.',
+      code: 'PHONE_SIGN_IN_DISABLED',
+    }, 410);
   } catch (error: any) {
     const code = String(error?.message || '');
-    if (code === 'PHONE_INVALID') return c.json({ detail: 'Enter a valid phone number with country code.' }, 400);
-    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    if (code.startsWith('PHONE_VERIFY_CHECK_FAILED')) return c.json({ detail: 'Could not check verification code. Try again.', code }, 502);
     return c.json({ detail: 'Could not verify phone sign in.' }, 500);
   }
 });
@@ -9442,54 +14016,177 @@ api.get('/auth/oauth/config', async (c) => {
   });
 });
 
+api.post('/auth/refresh', async (c) => {
+  try {
+    const bodyTooLarge = rejectLargeRequest(c, 40_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_refresh');
+    if (supabaseRequired) return supabaseRequired;
+    const limited = await enforceRateLimit(c, 'auth_refresh', clientIp(c), 60, 300);
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const refreshToken = cleanText(body.refresh_token || body.refreshToken || '', 4096);
+    if (!refreshToken) return c.json({ detail: 'refresh_token is required' }, 400);
+
+    const session = await refreshSupabaseSession(c, refreshToken);
+    const issued = await issueCaptroTokenForSupabaseAccessToken(c, session.access_token);
+    return c.json(supabaseAuthSessionResponse(session, issued.user));
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_REFRESH_TOKEN_REQUIRED') return c.json({ detail: 'refresh_token is required' }, 400);
+    if (code.startsWith('SUPABASE_REFRESH_FAILED:400') || code.startsWith('SUPABASE_REFRESH_FAILED:401') || code.startsWith('SUPABASE_REFRESH_FAILED:403')) {
+      return c.json({ detail: 'Invalid session. Please sign in again.', code: 'INVALID_TOKEN' }, 401);
+    }
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
+    return c.json({ detail: 'Session refresh failed. Please sign in again.', code: 'SESSION_REFRESH_FAILED' }, 401);
+  }
+});
+
+api.post('/auth/password/reset/request', async (c) => {
+  try {
+    const bodyTooLarge = rejectLargeRequest(c, 20_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'password_reset_request');
+    if (supabaseRequired) return supabaseRequired;
+    const limited = await enforceRateLimit(c, 'password_reset_request', clientIp(c), 12, 600);
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['email', 'redirect_to', 'redirectTo']);
+    if (unknown) return unknown;
+    const email = normalizeOptionalEmail(body.email);
+    if (!email) return c.json({ detail: 'A valid email is required.', code: 'EMAIL_REQUIRED' }, 400);
+    const redirectTo = passwordResetRedirectTarget(body.redirect_to || body.redirectTo);
+    await sendSupabasePasswordRecovery(c, email, redirectTo);
+    await logSecurityEvent(c, 'password_reset_requested', '', { email_hash_hint: (await sha256Hex(email)).slice(0, 16), redirect_to: redirectTo.slice(0, 120) });
+    return c.json({
+      sent: true,
+      detail: 'If that email belongs to an Aura account, we sent a password reset link.',
+      redirect_to: redirectTo,
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED') {
+      return c.json({ detail: 'Password reset is not configured right now.' }, 503);
+    }
+    if (code.startsWith('SUPABASE_PASSWORD_RECOVERY_FAILED:429')) {
+      return c.json({ detail: 'Too many reset attempts. Please wait a bit and try again.', code: 'RATE_LIMITED' }, 429);
+    }
+    console.warn(JSON.stringify({ event: 'password_reset_request_failed', code: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not send the reset email right now. Please try again later.', code: 'PASSWORD_RESET_REQUEST_FAILED' }, 502);
+  }
+});
+
+api.post('/auth/password/reset/confirm', async (c) => {
+  try {
+    const bodyTooLarge = rejectLargeRequest(c, 40_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'password_reset_confirm');
+    if (supabaseRequired) return supabaseRequired;
+    const limited = await enforceRateLimit(c, 'password_reset_confirm', clientIp(c), 12, 600);
+    if (limited) return limited;
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['access_token', 'accessToken', 'refresh_token', 'refreshToken', 'password']);
+    if (unknown) return unknown;
+    const accessToken = cleanText(body.access_token || body.accessToken || '', 8192);
+    const refreshToken = cleanText(body.refresh_token || body.refreshToken || '', 8192);
+    const password = String(body.password || '');
+    if (!accessToken) return c.json({ detail: 'Reset session is missing. Open the email link again.', code: 'RESET_TOKEN_REQUIRED' }, 400);
+    if (password.length < 6) return c.json({ detail: 'Password must be at least 6 characters.', code: 'PASSWORD_TOO_SHORT' }, 400);
+
+    await updateSupabasePassword(c, accessToken, password);
+    let supabaseSession: any = { access_token: accessToken, refresh_token: refreshToken || undefined, token_type: 'bearer' };
+    if (refreshToken) {
+      try {
+        supabaseSession = await refreshSupabaseSession(c, refreshToken);
+      } catch (error: any) {
+        console.warn(JSON.stringify({ event: 'password_reset_refresh_after_update_failed', code: getErrorCode(error).slice(0, 180) }));
+      }
+    }
+    const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+      password_reset_completed: true,
+    });
+    await logSecurityEvent(c, 'password_reset_completed', session.user.id, {});
+    return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
+  } catch (error: any) {
+    const code = getErrorCode(error);
+    if (code === 'SUPABASE_PASSWORD_RESET_TOKEN_REQUIRED') {
+      return c.json({ detail: 'Reset session is missing. Open the email link again.', code: 'RESET_TOKEN_REQUIRED' }, 400);
+    }
+    if (code === 'SUPABASE_PASSWORD_RESET_PASSWORD_TOO_SHORT') {
+      return c.json({ detail: 'Password must be at least 6 characters.', code: 'PASSWORD_TOO_SHORT' }, 400);
+    }
+    if (code.startsWith('SUPABASE_PASSWORD_UPDATE_FAILED:400') || code.startsWith('SUPABASE_PASSWORD_UPDATE_FAILED:401') || code.startsWith('SUPABASE_PASSWORD_UPDATE_FAILED:403')) {
+      return c.json({ detail: 'This reset link is no longer valid. Request a new one and try again.', code: 'RESET_LINK_INVALID' }, 401);
+    }
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
+    console.warn(JSON.stringify({ event: 'password_reset_confirm_failed', code: code.slice(0, 180) }));
+    return c.json({ detail: 'Could not reset the password right now. Please try again later.', code: 'PASSWORD_RESET_CONFIRM_FAILED' }, 502);
+  }
+});
+
 api.post('/auth/oauth/google', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 120_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'oauth_google');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'oauth_google', clientIp(c), 30, 300);
     if (limited) return limited;
-    await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'nonce', 'raw_nonce', 'rawNonce']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'access_token', 'accessToken', 'nonce', 'raw_nonce', 'rawNonce', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const id_token = String(body.id_token || body.idToken || '');
     if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
 
-    const googleProfile = await verifyGoogleIdToken(c, id_token);
     try {
-      const supabaseSession = await signInSupabaseIdToken(c, 'google', id_token, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
-      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
-        email: googleProfile.email,
-        full_name: googleProfile.fullName,
-        profile_image: googleProfile.profileImage,
-        auth_provider: 'google',
-        oauth_subject: googleProfile.subject,
+      const accessToken = cleanText(body.access_token || body.accessToken, 4096);
+      const supabaseSession = await signInSupabaseIdToken(c, 'google', id_token, {
+        accessToken,
+        nonce: String(body.nonce || body.raw_nonce || body.rawNonce || ''),
       });
-      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+      const sessionProfile = supabaseOAuthProfileFromSession(supabaseSession, id_token);
+      const oauthSubject = supabaseOAuthSubjectFromSession(supabaseSession, 'google', id_token);
+      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
+        email: sessionProfile.email,
+        full_name: sessionProfile.fullName,
+        profile_image: sessionProfile.profileImage,
+        auth_provider: 'google',
+        oauth_subject: oauthSubject,
+      });
+      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'google_oauth');
+      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
-      if (getErrorCode(error) === 'ACCOUNT_DISABLED') throw error;
-      console.warn(JSON.stringify({ event: 'supabase_google_id_token_failed', code: getErrorCode(error).slice(0, 160) }));
+      const code = getErrorCode(error);
+      if (code === 'ACCOUNT_DISABLED') throw error;
+      console.warn(JSON.stringify({ event: 'supabase_google_id_token_failed', code: code.slice(0, 160) }));
+      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+        return c.json({ detail: 'Google sign in is not configured.' }, 503);
+      }
+      try {
+        const profile = await verifyGoogleIdToken(c, id_token);
+        const fallback = await signInSupabaseVerifiedOAuth(c, {
+          provider: 'google',
+          subject: profile.subject,
+          email: profile.email,
+          fullName: profile.fullName,
+          profileImage: profile.profileImage,
+          termsVersion: termsAcceptance?.version,
+          termsAcceptedAt: termsAcceptance?.acceptedAt,
+        });
+        await logSecurityEvent(c, 'google_supabase_oauth_fallback_used', fallback.user.id, {
+          provider: 'google',
+          source_error: code.slice(0, 120),
+        });
+        return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
+      } catch (fallbackError: any) {
+        console.warn(JSON.stringify({ event: 'google_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
+          return c.json({ detail: 'Google sign in could not be completed. Please try again.' }, 401);
+        }
+      }
+      return c.json({ detail: 'Could not finish Google sign in right now.' }, 502);
     }
-
-    let user = await findOrCreateOAuthUser(
-      c,
-      'google',
-      googleProfile.subject,
-      googleProfile.email,
-      googleProfile.fullName,
-      googleProfile.profileImage
-    );
-    try {
-      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'google', googleProfile.subject);
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_google_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
-    }
-    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
-      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'google' });
-      return c.json({ detail: 'This account cannot be used.' }, 403);
-    }
-    const token = await createToken(user.id, getJwtSecret(c));
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = String(error?.message || '');
     if (code === 'GOOGLE_OAUTH_NOT_CONFIGURED') {
@@ -9509,52 +14206,65 @@ api.post('/auth/oauth/apple', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 120_000);
     if (bodyTooLarge) return bodyTooLarge;
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'oauth_apple');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'oauth_apple', clientIp(c), 30, 300);
     if (limited) return limited;
-    await ensureOAuthSchema(c.env.DB);
     const body: any = await c.req.json().catch(() => ({}));
-    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser', 'nonce', 'raw_nonce', 'rawNonce']);
+    const unknown = rejectUnknownFields(c, body, ['id_token', 'idToken', 'email', 'full_name', 'fullName', 'apple_user', 'appleUser', 'nonce', 'raw_nonce', 'rawNonce', 'terms_version', 'termsVersion', 'terms_accepted_at', 'termsAcceptedAt']);
     if (unknown) return unknown;
+    const termsAcceptance = termsAcceptanceFromBody(body);
     const idToken = String(body.id_token || body.idToken || '');
     if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
 
-    const appleProfile = await verifyAppleIdToken(c, idToken);
     const clientEmail = normalizeOptionalEmail(body.email);
     const clientFullName = normalizeOptionalName(body.full_name || body.fullName);
-    const appleSubject = String(appleProfile.subject || body.apple_user || body.appleUser || '').trim();
     try {
-      const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, String(body.nonce || body.raw_nonce || body.rawNonce || ''));
+      const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, {
+        nonce: String(body.nonce || body.raw_nonce || body.rawNonce || ''),
+      });
+      const sessionProfile = supabaseOAuthProfileFromSession(supabaseSession, idToken);
+      const appleSubject = supabaseOAuthSubjectFromSession(supabaseSession, 'apple', idToken) || cleanText(body.apple_user || body.appleUser, 240);
       const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
-        email: appleProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
-        full_name: clientFullName || appleProfile.fullName || 'Apple User',
+        email: sessionProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
+        full_name: clientFullName || sessionProfile.fullName || 'Apple User',
         auth_provider: 'apple',
         oauth_subject: appleSubject,
       });
-      return c.json({ access_token: session.token, token_type: 'bearer', user: authUserPayload(session.user) });
+      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'apple_oauth');
+      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
-      if (getErrorCode(error) === 'ACCOUNT_DISABLED') throw error;
-      console.warn(JSON.stringify({ event: 'supabase_apple_id_token_failed', code: getErrorCode(error).slice(0, 160) }));
+      const code = getErrorCode(error);
+      if (code === 'ACCOUNT_DISABLED') throw error;
+      console.warn(JSON.stringify({ event: 'supabase_apple_id_token_failed', code: code.slice(0, 160) }));
+      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+        return c.json({ detail: 'Apple sign in is not configured.' }, 503);
+      }
+      try {
+        const profile = await verifyAppleIdToken(c, idToken);
+        const appleSubject = profile.subject || cleanText(body.apple_user || body.appleUser, 240);
+        const fallback = await signInSupabaseVerifiedOAuth(c, {
+          provider: 'apple',
+          subject: appleSubject,
+          email: profile.email || clientEmail || undefined,
+          fullName: clientFullName || profile.fullName || 'Apple User',
+          profileImage: profile.profileImage,
+          termsVersion: termsAcceptance?.version,
+          termsAcceptedAt: termsAcceptance?.acceptedAt,
+        });
+        await logSecurityEvent(c, 'apple_supabase_oauth_fallback_used', fallback.user.id, {
+          provider: 'apple',
+          source_error: code.slice(0, 120),
+        });
+        return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
+      } catch (fallbackError: any) {
+        console.warn(JSON.stringify({ event: 'apple_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
+        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
+          return c.json({ detail: 'Apple sign in could not be completed. Please try again.' }, 401);
+        }
+      }
+      return c.json({ detail: 'Could not finish Apple sign in right now.' }, 502);
     }
-
-    let user = await findOrCreateOAuthUser(
-      c,
-      'apple',
-      appleSubject,
-      appleProfile.email || clientEmail,
-      clientFullName || appleProfile.fullName || 'Apple User',
-      appleProfile.profileImage
-    );
-    try {
-      user = await mirrorOAuthUserToSupabaseAuth(c, user, 'apple', appleSubject);
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_apple_auth_mirror_failed', code: getErrorCode(error).slice(0, 160) }));
-    }
-    if (['banned', 'suspended', 'deleted'].includes(String(user.status || 'active'))) {
-      await logSecurityEvent(c, 'login_banned_blocked', user.id, { provider: 'apple' });
-      return c.json({ detail: 'This account cannot be used.' }, 403);
-    }
-    const token = await createToken(user.id, getJwtSecret(c));
-    return c.json({ access_token: token, token_type: 'bearer', user: authUserPayload(user) });
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
@@ -9575,8 +14285,9 @@ api.post('/auth/oauth/apple', async (c) => {
 
 api.get('/auth/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensurePremiumSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_me');
+  if (supabaseRequired) return supabaseRequired;
+  const user = await getSupabaseSessionUserByAnyId(c, userId);
   if (!user) return c.json({ detail: 'User not found' }, 404);
   return c.json(authUserPayload(user));
 });
@@ -9586,11 +14297,16 @@ async function accountIdentityMatches(c: any, user: any, provider: string, provi
   const cleanProviderUserId = cleanText(providerUserId, 240);
   if (!cleanProviderUserId) return false;
   if (normalizeAuthProvider(user.oauth_provider) === cleanProvider && cleanText(user.oauth_subject, 240) === cleanProviderUserId) return true;
-  await ensureAccountDeletionSchema(c.env.DB);
-  const identity: any = await c.env.DB.prepare(
-    'SELECT id FROM account_identities WHERE user_id = ? AND provider = ? AND provider_user_id = ? LIMIT 1'
-  ).bind(user.id, cleanProvider, cleanProviderUserId).first();
-  return !!identity;
+  const rows = await supabaseAdminQueryRows(c, 'app_account_identities', {
+    select: 'id',
+    filters: {
+      user_id: postgrestEqFilter(publicId(user.id, 120)),
+      provider: postgrestEqFilter(cleanProvider),
+      provider_user_id: postgrestEqFilter(cleanProviderUserId),
+    },
+    limit: 1,
+  });
+  return rows.length > 0;
 }
 
 async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promise<{ ok: boolean; detail?: string; provider: string }> {
@@ -9602,7 +14318,7 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
     if (!idToken) return { ok: false, detail: 'Re-authenticate with Google before deleting this account.', provider };
     const profile = await verifyGoogleIdToken(c, idToken);
     if (!(await accountIdentityMatches(c, user, 'google', profile.subject))) {
-      return { ok: false, detail: 'Google account did not match this Captro account.', provider };
+      return { ok: false, detail: 'Google account did not match this Aura account.', provider };
     }
     await upsertAccountIdentity(c, { userId: user.id, provider: 'google', providerUserId: profile.subject, email: profile.email || user.email });
     return { ok: true, provider };
@@ -9612,17 +14328,28 @@ async function verifyAccountDeletionReauth(c: any, user: any, body: any): Promis
     if (!idToken) return { ok: false, detail: 'Re-authenticate with Apple before deleting this account.', provider };
     const profile = await verifyAppleIdToken(c, idToken);
     if (!(await accountIdentityMatches(c, user, 'apple', profile.subject))) {
-      return { ok: false, detail: 'Apple account did not match this Captro account.', provider };
+      return { ok: false, detail: 'Apple account did not match this Aura account.', provider };
     }
     await upsertAccountIdentity(c, { userId: user.id, provider: 'apple', providerUserId: profile.subject, email: profile.email || user.email });
     return { ok: true, provider };
   }
 
   if (!password) return { ok: false, detail: 'Enter your password to delete this account.', provider: 'email' };
-  const verified = await verifyPassword(password, String(user.password_hash || ''));
-  if (!verified) return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
-  await upsertAccountIdentity(c, { userId: user.id, provider: 'email', email: user.email });
-  return { ok: true, provider: 'email' };
+  if (user.supabase_user_id) {
+    const email = normalizeOptionalEmail(user.email);
+    if (!email || isInternalOAuthEmail(email)) return { ok: false, detail: 'Add a real email address before deleting this account.', provider: 'email' };
+    try {
+      const session = await signInSupabasePassword(c, email, password);
+      const sessionUserId = isUuidText(session?.user?.id || session?.user?.sub);
+      if (sessionUserId && sessionUserId !== user.supabase_user_id) {
+        return { ok: false, detail: 'Password confirmation did not match this Aura account.', provider: 'email' };
+      }
+      return { ok: true, provider: 'email' };
+    } catch {
+      return { ok: false, detail: 'Password confirmation failed.', provider: 'email' };
+    }
+  }
+  return { ok: false, detail: 'Supabase Auth identity is required before deleting this account.', provider: 'email' };
 }
 
 async function revokeProviderAccessBestEffort(c: any, user: any, provider: string, body: any) {
@@ -9670,20 +14397,21 @@ async function revokeProviderAccessBestEffort(c: any, user: any, provider: strin
 
 async function requestAccountDeletion(c: any) {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_delete');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'account_delete', userId, 5, 86400);
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 80_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureAccountDeletionSchema(c.env.DB);
-  await ensurePremiumSchema(c.env.DB);
-  await ensureCommentSchema(c.env.DB);
   const body: any = await c.req.json().catch(() => ({}));
   if (String(body.confirmation || '').trim() !== 'DELETE') {
     return c.json({ detail: 'Type DELETE to confirm account deletion.', code: 'confirmation_required' }, 400);
   }
 
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
+  const user = supabaseAppUserToLegacyUser(currentRow);
+  const appUserId = publicId(user.id, 120);
   if (user.is_admin) return c.json({ detail: 'Admin accounts must be removed by another admin.' }, 403);
   if (String(user.status || 'active') === 'deletion_pending') {
     return c.json({
@@ -9701,35 +14429,35 @@ async function requestAccountDeletion(c: any) {
 
   const requestedAt = now();
   const scheduledAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `UPDATE users SET
-         status = 'deletion_pending',
-         deletion_requested_at = ?,
-         deletion_scheduled_at = ?,
-         session_revoked_at = ?,
-         updated_at = datetime('now')
-       WHERE id = ?`
-    ).bind(requestedAt, scheduledAt, requestedAt, userId),
-    c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ?').bind(requestedAt, userId),
-    c.env.DB.prepare('DELETE FROM notifications WHERE user_id = ? OR from_user_id = ?').bind(userId, userId),
-    c.env.DB.prepare('DELETE FROM likes WHERE user_id = ?').bind(userId),
-    c.env.DB.prepare('DELETE FROM saved_posts WHERE user_id = ?').bind(userId),
-    c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? OR following_id = ?').bind(userId, userId),
-    c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ?').bind(userId),
-    c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Account deletion pending' WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')")
-      .bind(requestedAt, userId, userId),
-  ]);
-  await Promise.all([
-    runDeletionStatement(c.env, 'DELETE FROM note_interactions WHERE user_id = ?', [userId]),
-    runDeletionStatement(c.env, 'DELETE FROM note_comment_likes WHERE user_id = ?', [userId]),
-    runDeletionStatement(c.env, "UPDATE notes SET status = 'hidden', updated_at = ? WHERE user_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')", [requestedAt, userId]),
-  ]);
-  await writeAccountDeletionEvent(c, userId, 'deletion_requested', {
-    provider: reauth.provider,
-    deletion_scheduled_at: scheduledAt,
+  const metadata = parseJsonObject(currentRow.metadata);
+  metadata.status = 'deletion_pending';
+  metadata.deletion_requested_at = requestedAt;
+  metadata.deletion_scheduled_at = scheduledAt;
+  metadata.session_revoked_at = requestedAt;
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+    metadata,
+    updated_at: requestedAt,
   });
-  await logSecurityEvent(c, 'account_deletion_requested', userId, { provider: reauth.provider });
+  await Promise.all([
+    supabaseAdminPatchRows(c, 'app_push_tokens', { user_id: postgrestEqFilter(appUserId) }, { is_active: false, updated_at: requestedAt }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_notifications', { from_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_post_interactions', { app_user_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_follower_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminDeleteRowsIfShapeExists(c, 'app_follows', { app_following_id: postgrestEqFilter(appUserId) }).catch(() => undefined),
+    supabaseAdminPatchRows(c, 'post_comments', { app_user_id: postgrestEqFilter(appUserId) }, { status: 'hidden', updated_at: requestedAt }).catch(() => undefined),
+  ]);
+  await updateSupabaseAuthUser(c, user.supabase_user_id, {
+    user_metadata: { captro_user_id: appUserId, account_status: 'deletion_pending' },
+    app_metadata: { captro_account_status: 'deletion_pending' },
+  }).catch(() => {});
+  runBackgroundTask(c, 'account_deletion_audit_failed', async () => {
+    await writeAccountDeletionEvent(c, appUserId, 'deletion_requested', {
+      provider: reauth.provider,
+      deletion_scheduled_at: scheduledAt,
+    });
+    await logSecurityEvent(c, 'account_deletion_requested', appUserId, { provider: reauth.provider });
+  });
   runBackgroundTask(c, 'provider_revoke_best_effort_failed', async () => {
     await revokeProviderAccessBestEffort(c, user, reauth.provider, body);
   });
@@ -9743,36 +14471,47 @@ async function requestAccountDeletion(c: any) {
 
 async function restorePendingAccount(c: any) {
   const userId = getUserId(c);
-  await ensureAccountDeletionSchema(c.env.DB);
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_restore');
+  if (supabaseRequired) return supabaseRequired;
+  const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!currentRow) return c.json({ detail: 'User not found.' }, 404);
+  const user = supabaseAppUserToLegacyUser(currentRow);
   if (String(user.status || 'active') !== 'deletion_pending') {
     return c.json({ restored: false, user: authUserPayload(user) });
   }
-  await c.env.DB.prepare(
-    `UPDATE users SET
-       status = 'active',
-       deletion_requested_at = NULL,
-       deletion_scheduled_at = NULL,
-       session_revoked_at = NULL,
-       updated_at = datetime('now')
-     WHERE id = ? AND status = 'deletion_pending'`
-  ).bind(userId).run();
-  const restored: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  await writeAccountDeletionEvent(c, userId, 'deletion_restored', {});
-  await logSecurityEvent(c, 'account_deletion_restored', userId, {});
+  const metadata = parseJsonObject(currentRow.metadata);
+  metadata.status = 'active';
+  delete metadata.deletion_requested_at;
+  delete metadata.deletion_scheduled_at;
+  delete metadata.session_revoked_at;
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(user.id, 120)) }, {
+    metadata,
+    updated_at: now(),
+  });
+  await updateSupabaseAuthUser(c, user.supabase_user_id, {
+    user_metadata: { captro_user_id: user.id, account_status: 'active' },
+    app_metadata: { captro_account_status: 'active' },
+  }).catch(() => {});
+  const refreshed = await getSupabaseAppUserRowByAnyId(c, user.id);
+  const restored = refreshed ? supabaseAppUserToLegacyUser(refreshed) : { ...user, status: 'active', deletion_requested_at: null, deletion_scheduled_at: null };
+  runBackgroundTask(c, 'account_restore_audit_failed', async () => {
+    await writeAccountDeletionEvent(c, user.id, 'deletion_restored', {});
+    await logSecurityEvent(c, 'account_deletion_restored', user.id, {});
+  });
   return c.json({ restored: true, user: authUserPayload(restored) });
 }
 
 api.get('/account/deletion-status', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureAccountDeletionSchema(c.env.DB);
-  const row: any = await c.env.DB.prepare('SELECT status, deletion_requested_at, deletion_scheduled_at FROM users WHERE id = ?').bind(userId).first();
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_deletion_status');
+  if (supabaseRequired) return supabaseRequired;
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  const user = row ? supabaseAppUserToLegacyUser(row) : null;
   return c.json({
-    status: row?.status || 'active',
-    deletion_pending: row?.status === 'deletion_pending',
-    deletion_requested_at: row?.deletion_requested_at || null,
-    deletion_scheduled_at: row?.deletion_scheduled_at || null,
+    status: user?.status || 'active',
+    deletion_pending: user?.status === 'deletion_pending',
+    deletion_requested_at: user?.deletion_requested_at || null,
+    deletion_scheduled_at: user?.deletion_scheduled_at || null,
   });
 });
 
@@ -9784,11 +14523,12 @@ api.post('/account/restore', authMiddleware, restorePendingAccount);
 // ═══════════════════════════════════════════════════════════════════════════════
 api.put('/users/me', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'profile_update');
+  if (supabaseRequired) return supabaseRequired;
   const bodyTooLarge = rejectLargeRequest(c, 200_000);
   if (bodyTooLarge) return bodyTooLarge;
   const limited = await enforceRateLimit(c, 'account_update', userId, 60, 60);
   if (limited) return limited;
-  await ensurePremiumSchema(c.env.DB);
   const body = await c.req.json();
   const unknown = rejectUnknownFields(c, body, ['full_name', 'fullName', 'bio', 'profile_image', 'profileImage', 'cover_image', 'coverImage', 'profile_background_image', 'profileBackgroundImage', 'city', 'username', 'age', 'looking_for', 'lookingFor', 'interests', 'social_website', 'socialWebsite', 'social_tiktok', 'socialTiktok', 'social_instagram', 'socialInstagram', 'is_private', 'isPrivate', 'language']);
   if (unknown) return unknown;
@@ -9801,47 +14541,82 @@ api.put('/users/me', authMiddleware, async (c) => {
   if (body.socialTiktok !== undefined && body.social_tiktok === undefined) body.social_tiktok = body.socialTiktok;
   if (body.socialInstagram !== undefined && body.social_instagram === undefined) body.social_instagram = body.socialInstagram;
   if (body.isPrivate !== undefined && body.is_private === undefined) body.is_private = body.isPrivate;
-  const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  const wantsCustomBackground = body.profile_background_image !== undefined || body.cover_image !== undefined;
-  if (wantsCustomBackground && !userHasActivePremium(currentUser)) {
-    return c.json({ detail: 'Custom profile background is a Premium feature.', code: 'PREMIUM_REQUIRED' }, 403);
+
+  const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+
+  const appUserId = publicId(currentRow.id, 120);
+  const profile = parseJsonObject(currentRow.profile);
+  const patch: Record<string, unknown> = {};
+  let usernameChanged = false;
+
+  if (body.full_name !== undefined) patch.full_name = cleanText(body.full_name, 160);
+  if (body.bio !== undefined) patch.bio = cleanMultilineText(body.bio, 500);
+  if (body.profile_image !== undefined) patch.avatar_url = safeMediaReference(body.profile_image) || null;
+  if (body.cover_image !== undefined) patch.cover_url = safeMediaReference(body.cover_image) || null;
+  if (body.city !== undefined) patch.city = cleanText(body.city, 160);
+  if (body.is_private !== undefined) patch.is_private = normalizeSqlBoolean(body.is_private) === 1;
+
+  if (body.username !== undefined) {
+    const usernameCheck = validateUsernameForAccount(body.username);
+    if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
+    const existing = await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id',
+      filters: {
+        username: postgrestEqFilter(usernameCheck.username),
+        id: `neq.${cleanText(appUserId, 120)}`,
+      },
+      limit: 1,
+    });
+    if (existing.length) return c.json({ detail: 'Username is not available.' }, 409);
+    patch.username = usernameCheck.username;
+    usernameChanged = strictUsernameSlug(currentRow.username) !== strictUsernameSlug(usernameCheck.username);
   }
-  const fields = ['full_name', 'bio', 'profile_image', 'cover_image', 'profile_background_image', 'city', 'username', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'is_private', 'language'];
-  const updates: string[] = []; const values: any[] = [];
-  for (const f of fields) {
-    if (body[f] !== undefined) {
-      updates.push(`${f} = ?`);
-      if (f === 'is_private') values.push(normalizeSqlBoolean(body[f]));
-      else if (f === 'language') values.push(normalizeLanguage(body[f]));
-      else if (f === 'profile_image' || f === 'cover_image' || f === 'profile_background_image') values.push(safeMediaReference(body[f]));
-      else if (f === 'social_website') values.push(safeExternalUrl(body[f]));
-      else if (f === 'bio') values.push(cleanMultilineText(body[f], 500));
-      else if (f === 'age') values.push(clampNumber(body[f], 13, 120, 0));
-      else if (f === 'username') {
-        const usernameCheck = validateUsernameForAccount(body[f]);
-        if (!usernameCheck.ok) return c.json({ detail: usernameCheck.detail }, 400);
-        const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
-          .bind(usernameCheck.username.toLowerCase(), userId)
-          .first();
-        if (existing) return c.json({ detail: 'Username is not available.' }, 409);
-        values.push(usernameCheck.username);
-      }
-      else values.push(cleanText(body[f], 240));
-    }
+
+  if (body.language !== undefined) profile.language = normalizeLanguage(body.language);
+  if (body.age !== undefined) profile.age = clampNumber(body.age, 13, 120, 0);
+  if (body.looking_for !== undefined) profile.looking_for = cleanText(body.looking_for, 120);
+  if (body.interests !== undefined) {
+    const rawInterests = Array.isArray(body.interests)
+      ? body.interests
+      : String(body.interests || '').split(',');
+    profile.interests = rawInterests
+      .map((item: unknown) => cleanText(item, 60))
+      .filter(Boolean)
+      .slice(0, 24);
   }
-  if (updates.length === 0) return c.json({ detail: 'Nothing to update' }, 400);
-  values.push(userId);
-  const updateUserSql = `UPDATE users SET ${updates.join(', ')}, updated_at = datetime('now') WHERE id = ?`;
-  await c.env.DB.prepare(updateUserSql).bind(...values).run();
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (body.username !== undefined && strictUsernameSlug(currentUser?.username) !== strictUsernameSlug(user?.username)) {
-    await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: user?.username || '' });
+  if (body.social_website !== undefined) profile.social_website = safeExternalUrl(body.social_website);
+  if (body.social_tiktok !== undefined) profile.social_tiktok = cleanText(body.social_tiktok, 120);
+  if (body.social_instagram !== undefined) profile.social_instagram = cleanText(body.social_instagram, 120);
+  if (body.profile_background_image !== undefined) {
+    profile.profile_background_image = safeMediaReference(body.profile_background_image);
   }
-  await recordAbuseSignals(c, userId, 'profile_update', {
-    username: user.username,
-    display_name: user.full_name,
-    bio: user.bio,
-    links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
+
+  const profileFields = ['language', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'profile_background_image'];
+  const profileChanged = profileFields.some((field) => body[field] !== undefined);
+  if (profileChanged) patch.profile = profile;
+  if (Object.keys(patch).length === 0) return c.json({ detail: 'Nothing to update' }, 400);
+  patch.updated_at = now();
+
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, patch);
+  const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: SUPABASE_APP_USER_SELECT,
+    filters: { id: postgrestEqFilter(appUserId) },
+    limit: 1,
+  });
+  const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, ...patch });
+  if (usernameChanged) {
+    runBackgroundTask(c, 'username_change_security_log_failed', async () => {
+      await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow.username || '', new_username: user.username || '' });
+    });
+  }
+  runBackgroundTask(c, 'profile_update_abuse_signal_failed', async () => {
+    await recordAbuseSignals(c, appUserId, 'profile_update', {
+      username: user.username,
+      display_name: user.full_name,
+      bio: user.bio,
+      links: [user.social_website, user.social_tiktok, user.social_instagram].filter(Boolean),
+    });
   });
   runBackgroundTask(c, 'supabase_profile_metadata_sync_failed', async () => {
     await syncSupabaseAuthMetadataForUser(c, user);
@@ -9859,6 +14634,8 @@ api.delete('/users/me', authMiddleware, async (c) => {
 api.put('/users/me/email', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_update');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 60_000);
     if (bodyTooLarge) return bodyTooLarge;
     const limited = await enforceRateLimit(c, 'account_email', userId, 10, 600);
@@ -9868,33 +14645,50 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 
     if (!email) return c.json({ detail: 'Enter a valid email address.' }, 400);
 
-    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    if (!currentUser) return c.json({ detail: 'User not found' }, 404);
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+    const appUserId = publicId(currentRow.id, 120);
+    const owner = await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id',
+      filters: {
+        email: postgrestEqFilter(email),
+        id: `neq.${cleanText(appUserId, 120)}`,
+      },
+      limit: 1,
+    });
+    if (owner.length) return c.json({ detail: 'That email is already used by another account.' }, 409);
 
-    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id != ?')
-      .bind(email, userId)
-      .first();
-    if (owner) return c.json({ detail: 'That email is already used by another account.' }, 409);
-
-    if (currentUser.supabase_user_id) {
-      await updateSupabaseAuthUser(c, currentUser.supabase_user_id, { email });
+    let supabaseUserId = isUuidText(currentRow.supabase_user_id);
+    if (supabaseUserId) {
+      await updateSupabaseAuthUser(c, supabaseUserId, { email });
     } else {
+      const user = supabaseAppUserToLegacyUser(currentRow);
       const result = await createOrFindSupabaseAuthUser(c, {
         email,
-        username: publicUsernameFor(currentUser),
-        fullName: currentUser.full_name,
-        profileImage: currentUser.profile_image,
+        username: publicUsernameFor(user),
+        fullName: user.full_name,
+        profileImage: user.profile_image,
         provider: 'email',
-        appUserId: currentUser.id,
+        appUserId,
       });
-      if (result.user?.id) await linkSupabaseAuthUser(c, currentUser.id, result.user.id);
+      supabaseUserId = isUuidText(result.user?.id);
     }
 
-    await c.env.DB.prepare('UPDATE users SET email = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(email, userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    await logSecurityEvent(c, 'email_updated', userId, {});
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      email,
+      email_verified: false,
+      ...(supabaseUserId ? { supabase_user_id: supabaseUserId } : {}),
+      updated_at: now(),
+    });
+    const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
+      select: SUPABASE_APP_USER_SELECT,
+      filters: { id: postgrestEqFilter(appUserId) },
+      limit: 1,
+    });
+    const user = refreshedRows[0] ? supabaseAppUserToLegacyUser(refreshedRows[0]) : supabaseAppUserToLegacyUser({ ...currentRow, email, supabase_user_id: supabaseUserId });
+    runBackgroundTask(c, 'email_update_security_log_failed', async () => {
+      await logSecurityEvent(c, 'email_updated', appUserId, {});
+    });
     return c.json(authUserPayload(user));
   } catch (error: any) {
     const code = getErrorCode(error);
@@ -9908,6 +14702,8 @@ api.put('/users/me/email', authMiddleware, async (c) => {
 api.put('/users/me/password', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_password_update');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 60_000);
     if (bodyTooLarge) return bodyTooLarge;
     const limited = await enforceRateLimit(c, 'account_password', userId, 8, 600);
@@ -9918,29 +14714,40 @@ api.put('/users/me/password', authMiddleware, async (c) => {
     if (!newPassword) return c.json({ detail: 'New password is required.' }, 400);
     if (newPassword.length < 8) return c.json({ detail: 'New password must be at least 8 characters.' }, 400);
 
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    if (!user) return c.json({ detail: 'User not found' }, 404);
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+    const appUserId = publicId(currentRow.id, 120);
+    let supabaseUserId = isUuidText(currentRow.supabase_user_id);
 
-    if (user.supabase_user_id) {
-      await updateSupabaseAuthUser(c, user.supabase_user_id, { password: newPassword });
-    } else if (normalizeOptionalEmail(user.email) && !isInternalOAuthEmail(user.email)) {
+    if (!supabaseUserId) {
+      const user = supabaseAppUserToLegacyUser(currentRow);
+      const email = normalizeOptionalEmail(user.email);
+      if (!email || isInternalOAuthEmail(email)) {
+        return c.json({ detail: 'Add a real email address before setting a password.', code: 'EMAIL_REQUIRED' }, 400);
+      }
       const result = await createOrFindSupabaseAuthUser(c, {
-        email: user.email,
+        email,
         password: newPassword,
         username: publicUsernameFor(user),
         fullName: user.full_name,
         profileImage: user.profile_image,
         provider: 'email',
-        appUserId: user.id,
+        appUserId,
       });
-      if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
+      supabaseUserId = isUuidText(result.user?.id);
+      if (supabaseUserId) {
+        await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+          supabase_user_id: supabaseUserId,
+          updated_at: now(),
+        });
+      }
     }
 
-    const newHash = await hashPassword(newPassword);
-    await c.env.DB.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(newHash, userId)
-      .run();
-    await logSecurityEvent(c, 'password_updated', userId, {});
+    if (!supabaseUserId) return c.json({ detail: 'Could not update the login password right now.' }, 503);
+    await updateSupabaseAuthUser(c, supabaseUserId, { password: newPassword });
+    runBackgroundTask(c, 'password_update_security_log_failed', async () => {
+      await logSecurityEvent(c, 'password_updated', appUserId, {});
+    });
     return c.json({ detail: 'Password updated.' });
   } catch (error: any) {
     const code = getErrorCode(error);
@@ -9954,18 +14761,17 @@ api.put('/users/me/password', authMiddleware, async (c) => {
 api.post('/users/me/phone/start', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_phone_start');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 40_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
     const normalizedPhone = normalizePhone(body.phone);
     const limited = await enforceRateLimit(c, 'account_phone_start', `${userId}:${normalizedPhone || clientIp(c)}`, 5, 600);
     if (limited) return limited;
-    await ensurePhoneAuthSchema(c.env.DB);
 
-    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
-      .bind(normalizedPhone, userId)
-      .first();
-    if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
+    if (ownerId && ownerId !== userId) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
 
     const startedWithVerify = await startTwilioVerification(c, normalizedPhone);
     if (startedWithVerify) {
@@ -9980,9 +14786,14 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
     const codeHash = await sha256Hex(`${normalizedPhone}:${code}:${jwtSecret}`);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-    await c.env.DB.prepare(
-      'INSERT INTO phone_login_codes (id, phone, code_hash, expires_at) VALUES (?, ?, ?, ?)'
-    ).bind(uuid(), normalizedPhone, codeHash, expiresAt).run();
+    await supabaseExpireAccountVerificationTokens(c, userId, 'phone', normalizedPhone).catch(() => undefined);
+    await supabaseCreateAccountVerificationToken(c, {
+      userId,
+      tokenType: 'phone',
+      target: normalizedPhone,
+      tokenHash: codeHash,
+      expiresAt,
+    });
 
     const delivery = await sendLegacyPhoneCode(c, normalizedPhone, code);
     if (delivery === 'development') {
@@ -10008,6 +14819,8 @@ api.post('/users/me/phone/start', authMiddleware, async (c) => {
 api.post('/users/me/phone/verify', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_phone_verify');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 40_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
@@ -10018,48 +14831,55 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
     if (normalizedCode.length !== 6) {
       return c.json({ detail: 'Enter the 6-digit verification code.' }, 400);
     }
-    await ensurePhoneAuthSchema(c.env.DB);
 
-    const owner: any = await c.env.DB.prepare('SELECT id FROM users WHERE phone = ? AND id != ?')
-      .bind(normalizedPhone, userId)
-      .first();
-    if (owner) return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentSupabaseRow) return c.json({ detail: 'User not found' }, 404);
+    const ownerId = await supabasePhoneOwnerId(c, normalizedPhone);
+    if (ownerId && ownerId !== publicId(currentSupabaseRow.id, 120)) {
+      return c.json({ detail: 'That phone number is already verified on another account.' }, 409);
+    }
 
     if (getTwilioVerifyConfig(c)) {
       const verified = await checkTwilioVerification(c, normalizedPhone, normalizedCode);
       if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
     } else {
-      const phoneCode: any = await c.env.DB.prepare(
-        'SELECT * FROM phone_login_codes WHERE phone = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
-      ).bind(normalizedPhone).first();
-
+      const phoneCode = await supabaseLatestAccountVerificationToken(c, 'phone', normalizedPhone);
       if (!phoneCode) return c.json({ detail: 'No active code for this phone number.' }, 401);
-      if ((phoneCode.attempts || 0) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
+      if (publicId(phoneCode.user_id, 120) !== publicId(currentSupabaseRow?.id, 120)) return c.json({ detail: 'Invalid verification code.' }, 401);
+      if ((Number(phoneCode.attempts || 0)) >= 5) return c.json({ detail: 'Too many attempts. Request a new code.' }, 429);
       if (Date.parse(phoneCode.expires_at) < Date.now()) return c.json({ detail: 'Code expired. Request a new code.' }, 401);
 
       const jwtSecret = getJwtSecret(c);
       const expectedHash = await sha256Hex(`${normalizedPhone}:${normalizedCode}:${jwtSecret}`);
-      if (expectedHash !== phoneCode.code_hash) {
-        await c.env.DB.prepare('UPDATE phone_login_codes SET attempts = attempts + 1 WHERE id = ?').bind(phoneCode.id).run();
+      if (expectedHash !== phoneCode.token_hash) {
+        await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(phoneCode.id, 120)) }, {
+          attempts: Number(phoneCode.attempts || 0) + 1,
+          updated_at: now(),
+        });
         return c.json({ detail: 'Invalid verification code.' }, 401);
       }
 
-      await c.env.DB.prepare('UPDATE phone_login_codes SET consumed_at = datetime(\'now\') WHERE id = ?').bind(phoneCode.id).run();
+      await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(phoneCode.id, 120)) }, {
+        used_at: now(),
+        updated_at: now(),
+      });
     }
 
-    await ensureSupabaseAuthSchema(c.env.DB);
-    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-
-    await c.env.DB.prepare('UPDATE users SET phone = ?, phone_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(normalizedPhone, userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    runBackgroundTask(c, 'supabase_phone_update_sync_failed', async () => {
-      if (currentUser?.supabase_user_id) {
-        await updateSupabaseAuthUser(c, currentUser.supabase_user_id, {
+    const appUserId = publicId(currentSupabaseRow.id, 120);
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      phone: normalizedPhone,
+      phone_verified: true,
+      updated_at: now(),
+    });
+    const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+    const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, phone: normalizedPhone, phone_verified: true });
+    runBackgroundTask(c, 'supabase_phone_auth_metadata_update_failed', async () => {
+      const supabaseUserId = isUuidText(currentSupabaseRow.supabase_user_id);
+      if (supabaseUserId) {
+        await updateSupabaseAuthUser(c, supabaseUserId, {
           phone: normalizedPhone,
           user_metadata: supabaseProfileMetadata({
-            appUserId: user.id,
+            appUserId,
             username: publicUsernameFor(user),
             fullName: user.full_name,
             profileImage: user.profile_image,
@@ -10074,9 +14894,9 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
           fullName: user.full_name,
           profileImage: user.profile_image,
           provider: 'phone',
-          appUserId: user.id,
+          appUserId,
         });
-        if (result.user?.id) await linkSupabaseAuthUser(c, user.id, result.user.id);
+        if (result.user?.id) await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, { supabase_user_id: result.user.id, updated_at: now() });
       }
     });
     return c.json(authUserPayload(user));
@@ -10091,15 +14911,15 @@ api.post('/users/me/phone/verify', authMiddleware, async (c) => {
 
 api.post('/users/me/email/link/start', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureAccountVerificationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_link_start');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'email_verify_link', userId, 8, 60);
   if (limited) return limited;
 
   try {
     const body: any = await c.req.json().catch(() => ({}));
-    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
-      .bind(userId)
-      .first();
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    const currentUser: any = currentSupabaseRow ? supabaseAppUserToLegacyUser(currentSupabaseRow) : null;
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email);
     if (!accountEmail) {
@@ -10115,14 +14935,14 @@ api.post('/users/me/email/link/start', authMiddleware, async (c) => {
     const token = randomUrlToken(32);
     const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
     const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-    await c.env.DB.batch([
-      c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE user_id = ? AND used_at IS NULL')
-        .bind(userId),
-      c.env.DB.prepare(
-        `INSERT INTO email_verification_links (id, user_id, email, token_hash, expires_at)
-         VALUES (?, ?, ?, ?, ?)`
-      ).bind(uuid(), userId, accountEmail, tokenHash, expiresAt),
-    ]);
+    await supabaseExpireAccountVerificationTokens(c, publicId(currentUser.id, 120), 'email_link', accountEmail).catch(() => undefined);
+    await supabaseCreateAccountVerificationToken(c, {
+      userId: publicId(currentUser.id, 120),
+      tokenType: 'email_link',
+      target: accountEmail,
+      tokenHash,
+      expiresAt,
+    });
 
     const sent = await sendEmailVerificationLink(c, accountEmail, emailVerificationLink(c, token));
     if (!sent) {
@@ -10148,50 +14968,60 @@ api.post('/users/me/email/link/start', authMiddleware, async (c) => {
 });
 
 api.get('/users/me/email/verify-link', async (c) => {
-  await ensureAccountVerificationSchema(c.env.DB);
   const token = cleanText(c.req.query('token'), 512);
   const fail = (message = 'This email verification link is invalid or expired.') => c.html(
-    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verification</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email not verified</h1><p style="font-size:16px;line-height:1.55;color:#555">${message}</p></section></main></body></html>`,
+    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aura Email Verification</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email not verified</h1><p style="font-size:16px;line-height:1.55;color:#555">${message}</p></section></main></body></html>`,
     400
   );
   if (!token || token.length < 24) return fail();
 
   const tokenHash = await sha256Hex(`${token}:${c.env.JWT_SECRET}`);
-  const row: any = await c.env.DB.prepare(
-    `SELECT id, user_id, email, expires_at, used_at
-     FROM email_verification_links
-     WHERE token_hash = ?
-     LIMIT 1`
-  ).bind(tokenHash).first();
-  if (!row || row.used_at) return fail();
-  if (!row.expires_at || Date.parse(row.expires_at) < Date.now()) {
-    await c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?').bind(row.id).run().catch(() => {});
-    return fail();
+  if (supabasePrimaryConfigured(c)) {
+    const row = await supabaseAccountVerificationTokenByHash(c, 'email_link', tokenHash).catch(() => null);
+    if (!row || row.used_at) return fail();
+    if (!row.expires_at || Date.parse(row.expires_at) < Date.now()) {
+      if (row?.id) await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(row.id, 120)) }, { used_at: now(), updated_at: now() }).catch(() => undefined);
+      return fail();
+    }
+    const appUser = await getSupabaseAppUserRowByAnyId(c, row.user_id);
+    const accountEmail = normalizeOptionalEmail(appUser?.email);
+    const tokenEmail = normalizeOptionalEmail(row.target);
+    if (!appUser || !accountEmail || accountEmail !== tokenEmail) return fail();
+
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(appUser.id, 120)) }, {
+      email_verified: true,
+      updated_at: now(),
+    });
+    await supabaseAdminPatchRows(c, 'app_account_verification_tokens', { id: postgrestEqFilter(cleanText(row.id, 120)) }, {
+      used_at: now(),
+      updated_at: now(),
+    });
+    runBackgroundTask(c, 'supabase_email_auth_metadata_update_failed', async () => {
+      const supabaseUserId = isUuidText(appUser.supabase_user_id);
+      if (supabaseUserId) {
+        await updateSupabaseAuthUser(c, supabaseUserId, {
+          user_metadata: { email_verified: true },
+        });
+      }
+    });
+    return c.html(
+      `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aura Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Aura email is verified. You can return to the app.</p></section></main></body></html>`
+    );
   }
-
-  await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ? AND LOWER(email) = LOWER(?)')
-      .bind(row.user_id, row.email),
-    c.env.DB.prepare('UPDATE email_verification_links SET used_at = datetime(\'now\') WHERE id = ?')
-      .bind(row.id),
-  ]);
-
-  return c.html(
-    `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Captro Email Verified</title></head><body style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f6f4f1;color:#111"><main style="min-height:100vh;display:grid;place-items:center;padding:24px"><section style="max-width:520px;background:#fff;border-radius:28px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.08)"><h1 style="margin:0 0 10px;font-size:26px">Email verified</h1><p style="font-size:16px;line-height:1.55;color:#555">Your Captro email is verified. You can return to the app.</p></section></main></body></html>`
-  );
+  return fail('Email verification is temporarily unavailable. Please try again later.');
 });
 
 api.post('/users/me/email/start', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_start');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
-    await ensureAccountVerificationSchema(c.env.DB);
 
-    const currentUser: any = await c.env.DB.prepare('SELECT id, email, email_verified FROM users WHERE id = ?')
-      .bind(userId)
-      .first();
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    const currentUser: any = currentSupabaseRow ? supabaseAppUserToLegacyUser(currentSupabaseRow) : null;
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
     if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
@@ -10226,14 +15056,14 @@ api.post('/users/me/email/start', authMiddleware, async (c) => {
 api.post('/users/me/email/verify', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'account_email_verify');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const body: any = await c.req.json().catch(() => ({}));
-    await ensureAccountVerificationSchema(c.env.DB);
 
-    const currentUser: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?')
-      .bind(userId)
-      .first();
+    const currentSupabaseRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    const currentUser: any = currentSupabaseRow ? supabaseAppUserToLegacyUser(currentSupabaseRow) : null;
     const accountEmail = normalizeOptionalEmail(currentUser?.email);
     const requestedEmail = normalizeOptionalEmail(body.email || accountEmail);
     if (!accountEmail || isInternalOAuthEmail(accountEmail)) {
@@ -10256,23 +15086,16 @@ api.post('/users/me/email/verify', authMiddleware, async (c) => {
     const verified = await checkTwilioChannelVerification(c, accountEmail, normalizedCode);
     if (!verified) return c.json({ detail: 'Invalid or expired verification code.' }, 401);
 
-    await c.env.DB.prepare('UPDATE users SET email_verified = 1, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
+    const appUserId = publicId(currentUser.id, 120);
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      email_verified: true,
+      updated_at: now(),
+    });
+    const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+    const user = supabaseAppUserToLegacyUser(refreshed || { ...currentSupabaseRow, email_verified: true });
     runBackgroundTask(c, 'supabase_email_verify_metadata_sync_failed', async () => {
-      if (user?.supabase_user_id) {
-        await updateSupabaseAuthUser(c, user.supabase_user_id, {
-          user_metadata: supabaseProfileMetadata({
-            appUserId: user.id,
-            username: publicUsernameFor(user),
-            fullName: user.full_name,
-            profileImage: user.profile_image,
-            language: user.language,
-            emailVerified: true,
-          }),
-        });
-      }
+      const supabaseUserId = isUuidText(currentSupabaseRow?.supabase_user_id);
+      if (supabaseUserId) await updateSupabaseAuthUser(c, supabaseUserId, { user_metadata: { email_verified: true } });
     });
     return c.json(authUserPayload(user));
   } catch (error: any) {
@@ -10285,6 +15108,8 @@ api.post('/users/me/email/verify', authMiddleware, async (c) => {
 api.put('/users/me/username', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'username_claim');
+    if (supabaseRequired) return supabaseRequired;
     const bodyTooLarge = rejectLargeRequest(c, 20_000);
     if (bodyTooLarge) return bodyTooLarge;
     const limited = await enforceRateLimit(c, 'username_claim', userId, 30, 300);
@@ -10301,11 +15126,15 @@ api.put('/users/me/username', authMiddleware, async (c) => {
         reason: usernameCheck.detail,
       }, 400);
     }
-    const currentUser: any = await c.env.DB.prepare('SELECT username FROM users WHERE id = ?').bind(userId).first();
-    const existing: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ? AND id != ?')
-      .bind(usernameCheck.username.toLowerCase(), userId)
-      .first();
-    if (existing) {
+    const currentRow = await getSupabaseAppUserRowByAnyId(c, userId);
+    if (!currentRow) return c.json({ detail: 'User not found' }, 404);
+    const appUserId = publicId(currentRow.id, 120);
+    const existing = await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id',
+      filters: { username: postgrestEqFilter(usernameCheck.username) },
+      limit: 2,
+    });
+    if (existing.some((row) => publicId(row.id, 120) !== appUserId)) {
       return c.json({
         available: false,
         username: usernameCheck.username,
@@ -10314,13 +15143,15 @@ api.put('/users/me/username', authMiddleware, async (c) => {
       }, 409);
     }
 
-    await c.env.DB.prepare('UPDATE users SET username = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(usernameCheck.username, userId)
-      .run();
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    await recordAbuseSignals(c, userId, 'username_claim', { username: usernameCheck.username });
-    await logSecurityEvent(c, 'username_changed', userId, { previous_username: currentUser?.username || '', new_username: usernameCheck.username });
-    runBackgroundTask(c, 'supabase_username_metadata_sync_failed', async () => {
+    await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, {
+      username: usernameCheck.username,
+      updated_at: now(),
+    });
+    const refreshed = await getSupabaseAppUserRowByAnyId(c, appUserId);
+    const user = supabaseAppUserToLegacyUser(refreshed || { ...currentRow, username: usernameCheck.username });
+    runBackgroundTask(c, 'username_security_log_failed', async () => {
+      await recordAbuseSignals(c, appUserId, 'username_claim', { username: usernameCheck.username });
+      await logSecurityEvent(c, 'username_changed', appUserId, { previous_username: currentRow?.username || '', new_username: usernameCheck.username });
       await syncSupabaseAuthMetadataForUser(c, user);
     });
     return c.json(authUserPayload(user));
@@ -10331,18 +15162,29 @@ api.put('/users/me/username', authMiddleware, async (c) => {
 });
 
 api.get('/users/search/:query', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'user_search');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'user_search', getUserId(c), 120, 60);
   if (limited) return limited;
   const q = cleanText(c.req.param('query'), 80);
   if (q.length < 2) return c.json([]);
-  const r = await c.env.DB.prepare(
-    "SELECT id, username, full_name, profile_image, bio FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 20"
-  ).bind(`%${q}%`, `%${q}%`).all();
-  return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
+  const search = q.replace(/[%*,()]/g, '').slice(0, 80);
+  if (search.length < 2) return c.json([]);
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: SUPABASE_APP_USER_SELECT,
+    filters: { or: `(username.ilike.*${search}*,full_name.ilike.*${search}*)` },
+    limit: 20,
+  });
+  return c.json(rows
+    .map(supabaseAppUserToLegacyUser)
+    .filter((user) => String(user.status || 'active') === 'active')
+    .map((user) => safeUserPayload(user)));
 });
 
 // Exact username check (no auth required for registration flow)
 api.get('/users/check-username/:username', async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'username_check');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'username_check', clientIp(c), 80, 60);
   if (limited) return limited;
   const usernameCheck = validateUsernameForAccount(c.req.param('username'));
@@ -10355,7 +15197,11 @@ api.get('/users/check-username/:username', async (c) => {
       reason: usernameCheck.detail,
     });
   }
-  const user: any = await c.env.DB.prepare('SELECT id FROM users WHERE LOWER(username) = ?').bind(username.toLowerCase()).first();
+  const user: any = (await supabaseAdminQueryRows(c, 'app_users', {
+    select: 'id',
+    filters: { username: postgrestEqFilter(username) },
+    limit: 1,
+  }))[0];
   return c.json({
     available: !user,
     username,
@@ -10366,167 +15212,103 @@ api.get('/users/check-username/:username', async (c) => {
 
 api.get('/users/:userId', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
-  await ensurePremiumSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'profile_read');
+  if (supabaseRequired) return supabaseRequired;
   const targetUserId = c.req.param('userId');
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(targetUserId).first();
-  if (!user) return c.json({ detail: 'User not found' }, 404);
-  if (String(user.status || 'active') !== 'active') return c.json({ detail: 'User not found' }, 404);
-  const safe = safeUserPayload(user);
-  const follow: any = viewerId && viewerId !== targetUserId
-    ? await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ? LIMIT 1').bind(viewerId, targetUserId).first()
-    : null;
-  const block: any = viewerId && viewerId !== targetUserId
-    ? await c.env.DB.prepare('SELECT blocker_id, blocked_id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
-      .bind(viewerId, targetUserId, targetUserId, viewerId)
-      .first()
-    : null;
-  const viewerHasBlocked = block?.blocker_id === viewerId && block?.blocked_id === targetUserId;
-  const viewerBlockedBy = block?.blocker_id === targetUserId && block?.blocked_id === viewerId;
-  const canView = await canViewUserContent(c.env.DB, viewerId, user);
-  if (!canView) {
-    return c.json({
-      id: safe.id,
-      username: safe.username,
-      full_name: safe.full_name,
-      profile_image: safe.profile_image,
-      followers_count: safe.followers_count,
-      following_count: safe.following_count,
-      posts_count: safe.posts_count,
-      is_following: !!follow,
-      viewer_has_blocked: viewerHasBlocked,
-      viewer_blocked_by: viewerBlockedBy,
-      is_private: true,
-      privacy_locked: true,
-    });
-  }
-  return c.json({ ...safe, is_following: !!follow, viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy });
+  const result = await supabasePublicUserPayload(c, viewerId, targetUserId);
+  return c.json(result.body, result.status);
 });
 
 api.post('/users/:userId/follow', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const targetId = c.req.param('userId');
   if (userId === targetId) return c.json({ detail: 'Cannot follow yourself' }, 400);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'follow');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'follow', userId, 120, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.following ?? body.followed ?? body.value);
-  const target: any = await c.env.DB.prepare("SELECT id FROM users WHERE id = ? AND COALESCE(status, 'active') = 'active'").bind(targetId).first();
-  if (!target) return c.json({ detail: 'User not found' }, 404);
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const block: any = await c.env.DB.prepare('SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1')
-    .bind(userId, targetId, targetId, userId)
-    .first();
-  if (block) return c.json({ detail: 'You cannot follow this profile.' }, 403);
-
-  let nextFollowing = requested;
-  if (nextFollowing === null) {
-    const ex = await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId).first();
-    nextFollowing = !ex;
-  }
-
-  let changed = false;
-  if (nextFollowing) {
-    const results = await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO follows (id, follower_id, following_id) VALUES (?, ?, ?)').bind(uuid(), userId, targetId),
-      c.env.DB.prepare('UPDATE users SET following_count = COALESCE(following_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
-      c.env.DB.prepare('UPDATE users SET followers_count = COALESCE(followers_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(targetId),
-    ]);
-    changed = d1Changes(results?.[0]) > 0;
-  } else {
-    const results = await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId),
-      c.env.DB.prepare('UPDATE users SET following_count = MAX(0, COALESCE(following_count, 0) - 1) WHERE id = ? AND changes() > 0').bind(userId),
-      c.env.DB.prepare('UPDATE users SET followers_count = MAX(0, COALESCE(followers_count, 0) - 1) WHERE id = ? AND changes() > 0').bind(targetId),
-    ]);
-    changed = d1Changes(results?.[0]) > 0;
-  }
-
-  if (nextFollowing && changed) {
-    try {
-      const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
-      await insertNotificationOnce(c, {
-        userId: targetId,
-        type: 'follow',
-        title: 'New Follower',
-        body: `${me?.full_name || 'Someone'} started following you`,
-        data: { from_user_id: userId },
-        dedupeKey: `follow:${userId}:${targetId}`,
-        dedupeSeconds: 86400,
-      });
-    } catch {}
-  }
-  if (changed) {
-    runBackgroundTask(c, 'supabase_follow_write_through_failed', async () => {
-      await mirrorLegacyUserToSupabase(c, userId);
-      await mirrorLegacyUserToSupabase(c, targetId);
-      await mirrorLegacyFollowToSupabase(c, userId, targetId, !!nextFollowing);
-    });
-  }
-
-  const counts: any = await c.env.DB.prepare(
-    `SELECT
-       (SELECT following_count FROM users WHERE id = ?) AS following_count,
-       (SELECT followers_count FROM users WHERE id = ?) AS followers_count`
-  ).bind(userId, targetId).first();
-  return c.json({
-    following: !!nextFollowing,
-    following_count: Number(counts?.following_count || 0),
-    followers_count: Number(counts?.followers_count || 0),
-  });
+  const result = await supabaseSetFollowState(c, userId, targetId, requested);
+  return c.json(result.body, result.status);
 });
 
 api.post('/users/:userId/block', authMiddleware, async (c) => {
   const blockerId = getUserId(c);
   const blockedId = c.req.param('userId');
   if (blockerId === blockedId) return c.json({ detail: 'You cannot block yourself.' }, 400);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'block_user');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'block_user', blockerId, 40, 60);
   if (limited) return limited;
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const target: any = await c.env.DB.prepare('SELECT id FROM users WHERE id = ? LIMIT 1').bind(blockedId).first();
-  if (!target) return c.json({ detail: 'User not found' }, 404);
-  await c.env.DB.batch([
-    c.env.DB.prepare('INSERT OR IGNORE INTO blocks (id, blocker_id, blocked_id, created_at) VALUES (?, ?, ?, datetime(\'now\'))').bind(uuid(), blockerId, blockedId),
-    c.env.DB.prepare('DELETE FROM follows WHERE (follower_id = ? AND following_id = ?) OR (follower_id = ? AND following_id = ?)').bind(blockerId, blockedId, blockedId, blockerId),
-  ]);
-  await logSecurityEvent(c, 'user_blocked', blockerId, { blocked_id: blockedId });
-  return c.json({ blocked: true });
+  const result = await supabaseBlockUser(c, blockerId, blockedId);
+  return c.json(result.body, result.status);
 });
 
 api.delete('/users/:userId/block', authMiddleware, async (c) => {
   const blockerId = getUserId(c);
   const blockedId = c.req.param('userId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'unblock_user');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'unblock_user', blockerId, 40, 60);
   if (limited) return limited;
-  await ensureAbuseProtectionSchema(c.env.DB);
-  await c.env.DB.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?').bind(blockerId, blockedId).run();
-  return c.json({ blocked: false });
+  const result = await supabaseUnblockUser(c, blockerId, blockedId);
+  return c.json(result.body, result.status);
 });
 
 api.get('/blocks', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'blocks_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'blocks_read', userId, 60, 60);
   if (limited) return limited;
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const rows = await c.env.DB.prepare(
-    `SELECT b.blocked_id, b.created_at, u.username, u.full_name, u.profile_image
-     FROM blocks b JOIN users u ON u.id = b.blocked_id
-     WHERE b.blocker_id = ?
-     ORDER BY b.created_at DESC LIMIT 100`
-  ).bind(userId).all();
-  return c.json((rows.results as any[]).map((row) => ({
-    blocked_id: row.blocked_id,
-    created_at: row.created_at,
-    user: safeUserPayload({ id: row.blocked_id, username: row.username, full_name: row.full_name, profile_image: row.profile_image }),
-  })));
+  return c.json(await supabaseListBlocks(c, userId));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // POSTS (with Check-In support)
 // ═══════════════════════════════════════════════════════════════════════════════
+async function supabaseAudiusHiddenTrackIds(c: any, trackIds: string[] = []): Promise<Set<string>> {
+  const filters: Record<string, string> = { provider: postgrestEqFilter('audius') };
+  const cleanIds = Array.from(new Set(trackIds.map((id) => cleanText(id, 80)).filter(Boolean)));
+  if (cleanIds.length) filters.track_id = postgrestInFilter(cleanIds);
+  const rows = await supabaseAdminQueryRows(c, 'app_hidden_sounds', {
+    select: 'track_id',
+    filters,
+    limit: cleanIds.length || 1000,
+  });
+  return new Set(rows.map((row) => cleanText(row?.track_id, 80)).filter(Boolean));
+}
+
+async function supabaseAudiusTrackIsHidden(c: any, trackId: string): Promise<boolean> {
+  if (!trackId) return false;
+  const hidden = await supabaseAudiusHiddenTrackIds(c, [trackId]);
+  return hidden.has(trackId);
+}
+
+function audiusFavoriteTrackPayload(row: any) {
+  const trackId = String(row?.track_id || '');
+  return {
+    id: trackId,
+    track_id: trackId,
+    title: String(row?.title || 'Untitled track'),
+    artist: String(row?.artist || 'Audius artist'),
+    artist_id: String(row?.artist_id || ''),
+    artist_handle: String(row?.artist_handle || ''),
+    artist_profile_image: String(row?.artist_profile_image || ''),
+    artwork_url: String(row?.artwork_url || ''),
+    duration: Number(row?.duration || 0),
+    genre: String(row?.genre || ''),
+    play_count: Number(row?.play_count || 0),
+    favorite_count: Number(row?.favorite_count || 0),
+  };
+}
+
 // Music proxy: Audius powers the post creation sound picker without exposing provider internals.
 api.get('/music/audius/trending', async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_trending');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'audius_trending', (await getOptionalUserId(c)) || clientIp(c), 120, 60);
     if (limited) return limited;
     const limit = clampNumber(c.req.query('limit'), 1, 50, 50);
@@ -10539,8 +15321,7 @@ api.get('/music/audius/trending', async (c) => {
       600,
       () => fetchAudiusTracks('/tracks/trending', { time, limit })
     );
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all();
-    const hiddenIds = new Set((hidden.results as any[]).map((row) => String(row.track_id)));
+    const hiddenIds = await supabaseAudiusHiddenTrackIds(c);
     return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
   } catch (error: any) {
     console.log('Audius trending failed:', error?.message || error);
@@ -10550,7 +15331,8 @@ api.get('/music/audius/trending', async (c) => {
 
 api.get('/music/audius/search', async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_search');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'audius_search', (await getOptionalUserId(c)) || clientIp(c), 90, 60);
     if (limited) return limited;
     const q = cleanText(c.req.query('q') || c.req.query('query'), 90);
@@ -10563,8 +15345,7 @@ api.get('/music/audius/search', async (c) => {
       300,
       () => fetchAudiusTracks('/tracks/search', { query: q, limit })
     );
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius'").all();
-    const hiddenIds = new Set((hidden.results as any[]).map((row) => String(row.track_id)));
+    const hiddenIds = await supabaseAudiusHiddenTrackIds(c);
     return c.json({ tracks: (tracks as any[]).filter((track) => !hiddenIds.has(String(track.track_id))) });
   } catch (error: any) {
     console.log('Audius search failed:', error?.message || error);
@@ -10574,14 +15355,13 @@ api.get('/music/audius/search', async (c) => {
 
 api.get('/music/audius/stream/:trackId', async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_stream');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'audius_stream_lookup', (await getOptionalUserId(c)) || clientIp(c), 180, 60);
     if (limited) return limited;
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(trackId)
-      .first();
+    const hidden = await supabaseAudiusTrackIsHidden(c, trackId);
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 404);
 
     const response = await fetch(audiusUrl(`/tracks/${encodeURIComponent(trackId)}`, {}), {
@@ -10600,32 +15380,17 @@ api.get('/music/audius/stream/:trackId', async (c) => {
 
 api.get('/music/audius/favorites', authMiddleware, async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_favorites_read');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
-    const rows = await c.env.DB.prepare(
-      `SELECT fs.track_id, fs.title, fs.artist, fs.artist_id, fs.artist_handle, fs.artist_profile_image,
-              fs.artwork_url, fs.duration, fs.genre, fs.play_count, fs.favorite_count
-       FROM favorite_sounds fs
-       LEFT JOIN hidden_sounds hs ON hs.provider = fs.provider AND hs.track_id = fs.track_id
-       WHERE fs.user_id = ? AND fs.provider = 'audius' AND hs.track_id IS NULL
-       ORDER BY fs.created_at DESC
-       LIMIT 100`
-    ).bind(userId).all();
-    const tracks = (rows.results as any[]).map((row) => ({
-      id: String(row.track_id || ''),
-      track_id: String(row.track_id || ''),
-      title: String(row.title || 'Untitled track'),
-      artist: String(row.artist || 'Audius artist'),
-      artist_id: String(row.artist_id || ''),
-      artist_handle: String(row.artist_handle || ''),
-      artist_profile_image: String(row.artist_profile_image || ''),
-      artwork_url: String(row.artwork_url || ''),
-      duration: Number(row.duration || 0),
-      genre: String(row.genre || ''),
-      play_count: Number(row.play_count || 0),
-      favorite_count: Number(row.favorite_count || 0),
-    })).filter((track) => track.id);
-    return c.json({ tracks });
+    const rows = await supabaseAdminQueryRows(c, 'app_favorite_sounds', {
+      select: 'track_id,title,artist,artist_id,artist_handle,artist_profile_image,artwork_url,duration,genre,play_count,favorite_count',
+      filters: { user_id: postgrestEqFilter(userId), provider: postgrestEqFilter('audius') },
+      order: 'created_at.desc',
+      limit: 100,
+    });
+    const hiddenIds = await supabaseAudiusHiddenTrackIds(c, rows.map((row) => String(row.track_id || '')));
+    return c.json({ tracks: rows.map(audiusFavoriteTrackPayload).filter((track) => track.id && !hiddenIds.has(track.id)) });
   } catch (error: any) {
     console.log('Audius favorites failed:', error?.message || error);
     return c.json({ detail: 'Could not load favorite sounds.', tracks: [] }, 500);
@@ -10634,16 +15399,12 @@ api.get('/music/audius/favorites', authMiddleware, async (c) => {
 
 api.post('/music/audius/favorites', authMiddleware, async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_favorite_write');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
     const body: any = await c.req.json().catch(() => ({}));
     const trackId = cleanText(body.track_id || body.id || body.audio_track_id, 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(trackId)
-      .first();
-    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
 
     const title = cleanText(body.title || body.audio_title || 'Untitled track', 180);
     const artist = cleanText(body.artist || body.audio_artist || 'Audius artist', 120);
@@ -10657,28 +15418,26 @@ api.post('/music/audius/favorites', authMiddleware, async (c) => {
     const favoriteCount = clampNumber(body.favorite_count, 0, 1000000000, 0);
     const ts = now();
 
-    await c.env.DB.prepare(
-      `INSERT INTO favorite_sounds (
-         id, user_id, provider, track_id, title, artist, artist_id, artist_handle, artist_profile_image,
-         artwork_url, duration, genre, play_count, favorite_count, created_at, updated_at
-       )
-       VALUES (?, ?, 'audius', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(user_id, provider, track_id) DO UPDATE SET
-         title = excluded.title,
-         artist = excluded.artist,
-         artist_id = excluded.artist_id,
-         artist_handle = excluded.artist_handle,
-         artist_profile_image = excluded.artist_profile_image,
-         artwork_url = excluded.artwork_url,
-         duration = excluded.duration,
-         genre = excluded.genre,
-         play_count = excluded.play_count,
-         favorite_count = excluded.favorite_count,
-         updated_at = excluded.updated_at`
-    ).bind(
-      uuid(), userId, trackId, title, artist, artistId, artistHandle, artistProfileImage,
-      artworkUrl, duration, genre, playCount, favoriteCount, ts, ts
-    ).run();
+    if (await supabaseAudiusTrackIsHidden(c, trackId)) return c.json({ detail: 'This sound is unavailable.' }, 400);
+    await supabaseAdminUpsert(c, 'app_favorite_sounds', [{
+      id: uuid(),
+      user_id: userId,
+      provider: 'audius',
+      track_id: trackId,
+      title,
+      artist,
+      artist_id: artistId,
+      artist_handle: artistHandle,
+      artist_profile_image: artistProfileImage,
+      artwork_url: artworkUrl,
+      duration,
+      genre,
+      play_count: playCount,
+      favorite_count: favoriteCount,
+      metadata: { source: 'worker_audius_favorite' },
+      created_at: ts,
+      updated_at: ts,
+    }], 'user_id,provider,track_id');
 
     return c.json({
       favorite: true,
@@ -10696,431 +15455,20 @@ api.post('/music/audius/favorites', authMiddleware, async (c) => {
 
 api.delete('/music/audius/favorites/:trackId', authMiddleware, async (c) => {
   try {
-    await ensureAudioSchema(c.env.DB);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'music_audius_favorite_delete');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
     const trackId = cleanText(c.req.param('trackId'), 80);
     if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-    await c.env.DB.prepare("DELETE FROM favorite_sounds WHERE user_id = ? AND provider = 'audius' AND track_id = ?")
-      .bind(userId, trackId)
-      .run();
+    await supabaseAdminDeleteRows(c, 'app_favorite_sounds', {
+      user_id: postgrestEqFilter(userId),
+      provider: postgrestEqFilter('audius'),
+      track_id: postgrestEqFilter(trackId),
+    });
     return c.json({ favorite: false, track_id: trackId });
   } catch (error: any) {
     console.log('Audius favorite remove failed:', error?.message || error);
     return c.json({ detail: 'Could not remove this sound.' }, 500);
-  }
-});
-
-api.get('/music/feed', authMiddleware, async (c) => {
-  try {
-    await ensureAiMusicSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limit = clampNumber(c.req.query('limit'), 1, 60, 30);
-    const rows = await c.env.DB.prepare(`
-      SELECT m.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'like') AS liked,
-        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'save') AS saved,
-        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'repost') AS reposted
-      FROM ai_music_posts m
-      LEFT JOIN users u ON u.id = m.user_id
-      WHERE COALESCE(m.status, 'pending') = 'generated' AND COALESCE(m.is_public, 0) = 1
-      ORDER BY m.created_at DESC
-      LIMIT ?
-    `).bind(userId, userId, userId, limit).all();
-    return c.json({ posts: (rows.results as any[]).map((row) => publicAiMusicPayload(row, row)) });
-  } catch (error: any) {
-    console.log('AI music feed failed:', error?.message || error);
-    return c.json({ detail: 'Could not load music posts.', posts: [] }, 500);
-  }
-});
-
-async function serveAiMusicAudio(c: any) {
-  if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'Music storage is not configured.' }, 503);
-  try {
-    await ensureAiMusicSchema(c.env.DB);
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const music: any = await c.env.DB.prepare(
-      "SELECT * FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'"
-    ).bind(musicId).first();
-    if (!music || !music.audio_r2_key) return c.json({ detail: 'Music not found.' }, 404);
-
-    const head = await c.env.MEDIA_BACKUP.head(music.audio_r2_key);
-    if (!head) return c.json({ detail: 'Music file not found.' }, 404);
-
-    const range = parseByteRange(c.req.header('range'), head.size || 0);
-    if (range === 'invalid') {
-      return new Response(null, {
-        status: 416,
-        headers: {
-          'accept-ranges': 'bytes',
-          'content-range': `bytes */${head.size || 0}`,
-        },
-      });
-    }
-
-    const object = range
-      ? await c.env.MEDIA_BACKUP.get(music.audio_r2_key, { range: { offset: range.offset, length: range.length } })
-      : await c.env.MEDIA_BACKUP.get(music.audio_r2_key);
-    if (!object) return c.json({ detail: 'Music file not found.' }, 404);
-
-    const headers = new Headers();
-    object.writeHttpMetadata(headers);
-    headers.set('content-type', headers.get('content-type') || 'audio/mpeg');
-    headers.set('etag', head.httpEtag || object.httpEtag);
-    headers.set('accept-ranges', 'bytes');
-    headers.set('cache-control', 'public, max-age=86400');
-    headers.set('x-content-type-options', 'nosniff');
-    headers.set('content-length', String(range ? range.length : head.size || object.size || 0));
-    if (range) headers.set('content-range', `bytes ${range.offset}-${range.end}/${head.size}`);
-
-    return new Response(c.req.method === 'HEAD' ? null : object.body, { status: range ? 206 : 200, headers });
-  } catch (error: any) {
-    console.log('AI music audio failed:', error?.message || error);
-    return c.json({ detail: 'Could not load audio.' }, 500);
-  }
-}
-
-api.get('/music/audio/:musicId', serveAiMusicAudio);
-api.on('HEAD', '/music/audio/:musicId', serveAiMusicAudio);
-
-api.post('/music/generate', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 60_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    await ensureAiMusicSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'music_generate', userId, 10, 60);
-    if (limited) return limited;
-    const dailyLimited = await enforceRateLimit(c, 'music_generate_daily', userId, 35, 86400);
-    if (dailyLimited) return dailyLimited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const { text: promptText, lines } = normalizeAiMusicPrompt(body.prompt_text || body.lyrics_text || body.text || body.prompt);
-    const mood = normalizeAiMusicMood(body.mood);
-    const style = normalizeAiMusicStyle(body.style);
-
-    if (lines.length < 1) return c.json({ detail: 'Write 1 to 6 original lines first.' }, 400);
-    if (lines.length > 6) return c.json({ detail: 'Keep it short: 1 to 6 lines.' }, 400);
-    const moderation = moderateAiMusicPrompt(promptText);
-    if (!moderation.ok) return c.json({ detail: moderation.detail || 'That text cannot be generated right now.' }, 400);
-    if (!c.env.ELEVENLABS_API_KEY) return c.json({ detail: 'Music generation is not configured yet.' }, 503);
-    if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'Music storage is not configured yet.' }, 503);
-
-    const dailyLimit = await aiMusicSettingNumber(c.env.DB, 'music_daily_generation_limit', c.env.MUSIC_DAILY_GENERATION_LIMIT, 1, 50, 5);
-    const cooldownSeconds = await aiMusicSettingNumber(c.env.DB, 'music_generation_cooldown_seconds', c.env.MUSIC_GENERATION_COOLDOWN_SECONDS, 0, 3600, 60);
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const generatedToday: any = await c.env.DB.prepare(
-      'SELECT COUNT(*) AS count FROM ai_music_posts WHERE user_id = ? AND created_at >= ?'
-    ).bind(userId, cutoff).first();
-    if (Number(generatedToday?.count || 0) >= dailyLimit) {
-      return c.json({ detail: `Daily music limit reached. Try again tomorrow.` }, 429);
-    }
-
-    const latest: any = await c.env.DB.prepare(
-      'SELECT created_at FROM ai_music_posts WHERE user_id = ? ORDER BY created_at DESC LIMIT 1'
-    ).bind(userId).first();
-    const latestTime = latest?.created_at ? Date.parse(latest.created_at) : 0;
-    if (cooldownSeconds > 0 && latestTime && Date.now() - latestTime < cooldownSeconds * 1000) {
-      const wait = Math.ceil((cooldownSeconds * 1000 - (Date.now() - latestTime)) / 1000);
-      return c.json({ detail: `Wait ${wait}s before generating another music post.` }, 429);
-    }
-
-    const id = uuid();
-    const ts = now();
-    await c.env.DB.prepare(
-      `INSERT INTO ai_music_posts
-       (id, user_id, provider, prompt_text, lyrics_text, mood, style, audio_duration, waveform_data, status, is_public, created_at, updated_at)
-       VALUES (?, ?, 'elevenlabs', ?, ?, ?, ?, 20, ?, 'pending', 0, ?, ?)`
-    ).bind(id, userId, promptText, promptText, mood, style, JSON.stringify(buildWaveformData(promptText)), ts, ts).run();
-
-    const prompt = buildAiMusicPrompt(promptText, mood, style);
-    const response = await fetch('https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128', {
-      method: 'POST',
-      headers: {
-        'xi-api-key': c.env.ELEVENLABS_API_KEY,
-        'Content-Type': 'application/json',
-        'Accept': 'audio/mpeg',
-      },
-      body: JSON.stringify({
-        model_id: 'music_v1',
-        prompt,
-        music_length_ms: 20000,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      await c.env.DB.prepare("UPDATE ai_music_posts SET status = 'failed', updated_at = ? WHERE id = ?")
-        .bind(now(), id)
-        .run();
-      const providerError = errorText.toLowerCase();
-      let safeDetail = `Music generation failed at ElevenLabs (HTTP ${response.status}).`;
-      let clientStatus: 400 | 429 | 502 | 503 = 502;
-      if (response.status === 401) {
-        safeDetail = 'ElevenLabs API key was rejected. Re-save ELEVENLABS_API_KEY in Cloudflare.';
-        clientStatus = 503;
-      } else if (response.status === 403) {
-        safeDetail = 'ElevenLabs Music API is not enabled for this key or workspace.';
-        clientStatus = 503;
-      } else if (response.status === 402) {
-        safeDetail = 'ElevenLabs needs enough credits or a plan that supports music generation.';
-        clientStatus = 503;
-      } else if (response.status === 422 || providerError.includes('bad_prompt')) {
-        safeDetail = 'That text could not be generated. Use safer original words and avoid copied lyrics or real-artist imitation.';
-        clientStatus = 400;
-      } else if (response.status === 429) {
-        safeDetail = 'ElevenLabs is rate limiting music generation. Try again in a moment.';
-        clientStatus = 429;
-      }
-      console.log('ElevenLabs music failed:', response.status, errorText.slice(0, 280));
-      return c.json({ detail: safeDetail }, clientStatus);
-    }
-
-    const audioBuffer = await response.arrayBuffer();
-    if (!audioBuffer.byteLength) {
-      await c.env.DB.prepare("UPDATE ai_music_posts SET status = 'failed', updated_at = ? WHERE id = ?")
-        .bind(now(), id)
-        .run();
-      return c.json({ detail: 'Music generation returned an empty file.' }, 502);
-    }
-
-    const key = `ai-music/${userId}/${id}.mp3`;
-    await c.env.MEDIA_BACKUP.put(key, audioBuffer, {
-      httpMetadata: { contentType: 'audio/mpeg' },
-      customMetadata: {
-        userId,
-        provider: 'elevenlabs',
-        mood,
-        style,
-      },
-    });
-
-    const audioUrl = aiMusicAudioUrl(c, id);
-    const updatedAt = now();
-    await c.env.DB.prepare(
-      "UPDATE ai_music_posts SET audio_url = ?, audio_r2_key = ?, status = 'generated', updated_at = ? WHERE id = ?"
-    ).bind(audioUrl, key, updatedAt, id).run();
-
-    const row: any = await c.env.DB.prepare(`
-      SELECT m.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM ai_music_posts m
-      LEFT JOIN users u ON u.id = m.user_id
-      WHERE m.id = ?
-    `).bind(id).first();
-    return c.json({ post: publicAiMusicPayload(row) }, 201);
-  } catch (error: any) {
-    console.log('AI music generate failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not generate music right now.' }, 500);
-  }
-});
-
-api.post('/music/:musicId/publish', authMiddleware, async (c) => {
-  try {
-    await ensureAiMusicSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'music_publish', userId, 60, 60);
-    if (limited) return limited;
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const row: any = await c.env.DB.prepare('SELECT * FROM ai_music_posts WHERE id = ?').bind(musicId).first();
-    if (!row) return c.json({ detail: 'Music post not found.' }, 404);
-    if (row.user_id !== userId) return c.json({ detail: 'You can only publish your own music.' }, 403);
-    if (row.status !== 'generated') return c.json({ detail: 'Music is not ready yet.' }, 400);
-    await c.env.DB.prepare('UPDATE ai_music_posts SET is_public = 1, updated_at = ? WHERE id = ?')
-      .bind(now(), musicId)
-      .run();
-    return c.json({ published: true, id: musicId });
-  } catch (error: any) {
-    console.log('AI music publish failed:', error?.message || error);
-    return c.json({ detail: 'Could not publish music post.' }, 500);
-  }
-});
-
-api.post('/music/:musicId/interactions', authMiddleware, async (c) => {
-  try {
-    await ensureAiMusicSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'music_interaction', userId, 300, 60);
-    if (limited) return limited;
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const kind = ['like', 'save', 'repost', 'use_sound'].includes(String(body.kind)) ? String(body.kind) : 'like';
-    const music: any = await c.env.DB.prepare("SELECT id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'")
-      .bind(musicId)
-      .first();
-    if (!music) return c.json({ detail: 'Music post not found.' }, 404);
-
-    const existing: any = await c.env.DB.prepare('SELECT id FROM ai_music_interactions WHERE music_id = ? AND user_id = ? AND kind = ?')
-      .bind(musicId, userId, kind)
-      .first();
-    const ts = now();
-    let active = true;
-    if (existing && kind !== 'use_sound') {
-      await c.env.DB.prepare('DELETE FROM ai_music_interactions WHERE id = ?').bind(existing.id).run();
-      active = false;
-    } else if (!existing) {
-      await c.env.DB.prepare('INSERT INTO ai_music_interactions (id, music_id, user_id, kind, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind(uuid(), musicId, userId, kind, ts)
-        .run();
-    }
-
-    const column = kind === 'save' ? 'saves_count' : kind === 'repost' ? 'reposts_count' : kind === 'like' ? 'likes_count' : '';
-    if (column) {
-      const delta = active ? 1 : -1;
-      const updateMusicSql = `UPDATE ai_music_posts SET ${column} = MAX(0, COALESCE(${column}, 0) + ?), updated_at = ? WHERE id = ?`;
-      await c.env.DB.prepare(updateMusicSql)
-        .bind(delta, ts, musicId)
-        .run();
-    }
-    return c.json({ active, kind, id: musicId });
-  } catch (error: any) {
-    console.log('AI music interaction failed:', error?.message || error);
-    return c.json({ detail: 'Could not update this music post.' }, 500);
-  }
-});
-
-api.post('/music/:musicId/report', authMiddleware, async (c) => {
-  try {
-    await ensureAiMusicSchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'music_report', userId, 12, 60);
-    if (limited) return limited;
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const music: any = await c.env.DB.prepare('SELECT * FROM ai_music_posts WHERE id = ?').bind(musicId).first();
-    if (!music) return c.json({ detail: 'Music post not found.' }, 404);
-    if (music.user_id === userId) return c.json({ detail: 'You cannot report your own music post.' }, 400);
-    const reason = normalizeReportReason(body.reason || 'other');
-    const ts = now();
-    const reportResults = await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO ai_music_reports (id, music_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind(uuid(), musicId, userId, reason, ts),
-      c.env.DB.prepare('UPDATE ai_music_posts SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ? AND changes() > 0')
-        .bind(ts, musicId),
-    ]);
-    if (d1Changes(reportResults?.[0]) > 0) {
-      await c.env.DB.prepare(
-        `INSERT INTO reports
-         (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'sound', 'ai_music', ?, ?, ?, 'pending', ?, ?)`
-      ).bind(uuid(), userId, music.user_id, reason, cleanMultilineText(body.details || music.prompt_text || '', 1000), musicId, ts, ts).run();
-    }
-    return c.json({ reported: true });
-  } catch (error: any) {
-    console.log('AI music report failed:', error?.message || error);
-    return c.json({ detail: 'Could not report music post.' }, 500);
-  }
-});
-
-api.get('/music/:musicId/comments', authMiddleware, async (c) => {
-  try {
-    await ensureAiMusicSchema(c.env.DB);
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const exists = await c.env.DB.prepare("SELECT id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'")
-      .bind(musicId)
-      .first();
-    if (!exists) return c.json({ detail: 'Music post not found.' }, 404);
-    const rows = await c.env.DB.prepare(`
-      SELECT ac.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM ai_music_comments ac
-      LEFT JOIN users u ON u.id = ac.user_id
-      WHERE ac.music_id = ? AND COALESCE(ac.status, 'active') = 'active'
-      ORDER BY ac.created_at ASC
-      LIMIT 120
-    `).bind(musicId).all();
-    return c.json({
-      comments: (rows.results as any[]).map((row) => ({
-        id: row.id,
-        music_id: row.music_id,
-        user_id: row.user_id,
-        parent_id: row.parent_id || '',
-        body: row.body || '',
-        likes_count: Number(row.likes_count || 0),
-        created_at: row.created_at,
-        user: {
-          id: row.user_id,
-          username: row.user_username || '',
-          full_name: row.user_full_name || '',
-          profile_image: row.user_profile_image || '',
-        },
-      })),
-    });
-  } catch (error: any) {
-    console.log('AI music comments failed:', error?.message || error);
-    return c.json({ detail: 'Could not load comments.', comments: [] }, 500);
-  }
-});
-
-api.post('/music/:musicId/comments', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 80_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    await ensureAiMusicSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'music_comment', userId, 90, 60);
-    if (limited) return limited;
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const body: any = await c.req.json().catch(() => ({}));
-    const text = cleanText(body.body || body.text || body.comment, 500);
-    if (text.length < 1) return c.json({ detail: 'Write a comment first.' }, 400);
-    const exists = await c.env.DB.prepare("SELECT id FROM ai_music_posts WHERE id = ? AND COALESCE(status, 'pending') = 'generated'")
-      .bind(musicId)
-      .first();
-    if (!exists) return c.json({ detail: 'Music post not found.' }, 404);
-    const id = uuid();
-    const ts = now();
-    await c.env.DB.prepare(
-      "INSERT INTO ai_music_comments (id, music_id, user_id, parent_id, body, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)"
-    ).bind(id, musicId, userId, cleanText(body.parent_id, 80), text, ts, ts).run();
-    await c.env.DB.prepare('UPDATE ai_music_posts SET comments_count = COALESCE(comments_count, 0) + 1, updated_at = ? WHERE id = ?')
-      .bind(ts, musicId)
-      .run();
-    const row: any = await c.env.DB.prepare(`
-      SELECT ac.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM ai_music_comments ac
-      LEFT JOIN users u ON u.id = ac.user_id
-      WHERE ac.id = ?
-    `).bind(id).first();
-    return c.json({
-      comment: {
-        id: row.id,
-        music_id: row.music_id,
-        user_id: row.user_id,
-        parent_id: row.parent_id || '',
-        body: row.body || '',
-        likes_count: Number(row.likes_count || 0),
-        created_at: row.created_at,
-        user: {
-          id: row.user_id,
-          username: row.user_username || '',
-          full_name: row.user_full_name || '',
-          profile_image: row.user_profile_image || '',
-        },
-      },
-    }, 201);
-  } catch (error: any) {
-    console.log('AI music comment create failed:', error?.message || error);
-    return c.json({ detail: 'Could not post comment.' }, 500);
-  }
-});
-
-api.get('/music/:musicId', authMiddleware, async (c) => {
-  try {
-    await ensureAiMusicSchema(c.env.DB);
-    const userId = getUserId(c);
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const row: any = await c.env.DB.prepare(`
-      SELECT m.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'like') AS liked,
-        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'save') AS saved,
-        EXISTS(SELECT 1 FROM ai_music_interactions i WHERE i.music_id = m.id AND i.user_id = ? AND i.kind = 'repost') AS reposted
-      FROM ai_music_posts m
-      LEFT JOIN users u ON u.id = m.user_id
-      WHERE m.id = ? AND (COALESCE(m.is_public, 0) = 1 OR m.user_id = ?)
-    `).bind(userId, userId, userId, musicId, userId).first();
-    if (!row) return c.json({ detail: 'Music post not found.' }, 404);
-    return c.json({ post: publicAiMusicPayload(row, row) });
-  } catch (error: any) {
-    console.log('AI music detail failed:', error?.message || error);
-    return c.json({ detail: 'Could not load music post.' }, 500);
   }
 });
 
@@ -11184,29 +15532,20 @@ api.post('/posts', authMiddleware, async (c) => {
   if (phoneGate) return phoneGate;
   const bodyTooLarge = rejectLargeRequest(c, 1_500_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureMediaBackupSchema(c.env.DB);
-  await ensureAudioSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureReliabilitySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureAutoCategorySchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_create');
+  if (supabaseRequired) return supabaseRequired;
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'post_create', userId, 30, 60);
   if (limited) return limited;
   const restricted = await enforceUserRestriction(c, userId, 'posting');
   if (restricted) return restricted;
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
   const b = await c.req.json().catch(() => ({}));
+  const supabaseAuthorRow = await getSupabaseAppUserRowByAnyId(c, userId);
+  const user: any = supabaseAuthorRow ? supabaseAppUserToLegacyUser(supabaseAuthorRow) : null;
+  if (!user) return c.json({ detail: 'User not found.' }, 404);
   const clientRequestId = getClientRequestId(c, b);
   if (clientRequestId) {
-    const existing: any = await c.env.DB.prepare(
-      `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-       FROM posts p JOIN users u ON p.user_id = u.id
-       WHERE p.user_id = ? AND p.client_request_id = ?
-       LIMIT 1`
-    ).bind(userId, clientRequestId).first();
+    const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
   const id = uuid();
@@ -11238,38 +15577,42 @@ api.post('/posts', authMiddleware, async (c) => {
     displayLocationLabel = normalizeDisplayLocationLabel(cleanText(user?.city, 120), '', '', '');
   }
   if (!displayLocationLabel) displayLocationVisibility = 'hidden';
-  const visibility = normalizeVisibility(b.visibility);
+  let visibility = normalizeVisibility(b.visibility);
   let postTitle = cleanText(b.title || b.headline, 180);
   let postContent = cleanMultilineText(b.content || b.text, 5000);
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
   let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
-  const requestedPostType = String(b.post_type || b.postType || b.media_type || b.mediaType || '').toLowerCase();
-  const hasVideoMedia = requestedPostType.includes('video') || mediaTypes.includes('video') || imageUrls.some(isVideoMediaUrl);
-  if (hasVideoMedia) {
+  const mediaAssetIds = parseMediaAssetIds(b);
+  const communityResult = auraCommunityMetadataFromBody(b, postType);
+  if (communityResult.error) return c.json({ detail: communityResult.error, code: 'INVALID_AURA_COMMUNITY_POST' }, 400);
+  if (isAuraCommunityPostType(postType)) {
+    visibility = normalizeVisibility(communityResult.value?.audience);
+  }
+  if (postType === 'small_post' && !postTitle && !postContent && !primaryImage && !mediaAssetIds.length) {
+    return c.json({ detail: 'Small Post needs a title, text, photo, or video.', code: 'EMPTY_SMALL_POST' }, 400);
+  }
+  if (postType === 'meetup' && (!postTitle || !postContent || (!primaryImage && !mediaAssetIds.length) || !placeName)) {
     return c.json({
-      detail: 'Feed posts support photos only. Share videos to Stories instead.',
-      code: 'FEED_POSTS_PHOTO_ONLY',
+      detail: 'Meetup needs cover media, a title, place, and description.',
+      code: 'INCOMPLETE_MEETUP',
     }, 400);
   }
-  const mediaAssetIds = parseMediaAssetIds(b);
   const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, imageUrls);
   if (!mediaApproval.ok) {
     return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
   }
-  if (mediaApproval.assets.some((asset: any) => normalizeMediaAssetType(asset.media_type) === 'video')) {
-    return c.json({
-      detail: 'Feed posts support photos only. Share videos to Stories instead.',
-      code: 'FEED_POSTS_PHOTO_ONLY',
-    }, 400);
-  }
-  const moderatedImageUrls = mediaApproval.assets
+  const approvedMediaAssetIds = Array.from(new Set([
+    ...mediaAssetIds,
+    ...mediaApproval.assets.map((asset: any) => publicId(asset?.id, 160)).filter(Boolean),
+  ]));
+  const moderatedMediaUrls = mediaApproval.assets
     .map((asset: any) => safeMediaReference(asset.public_url) || mediaAssetPublicUrl(c.env, asset))
     .filter(Boolean);
-  if (moderatedImageUrls.length) {
-    imageUrls = moderatedImageUrls;
+  if (moderatedMediaUrls.length) {
+    imageUrls = moderatedMediaUrls;
     primaryImage = imageUrls[0] || null;
-    mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+    mediaTypes = mediaApproval.assets.map((asset: any) => normalizeMediaAssetType(asset.media_type) || 'image');
   }
   const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
   const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
@@ -11312,202 +15655,251 @@ api.post('/posts', authMiddleware, async (c) => {
     return c.json({ detail: 'Audio track id is required.' }, 400);
   }
   if (audioProvider) {
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(audioTrackId)
-      .first();
+    const hidden = await supabaseAudiusTrackIsHidden(c, audioTrackId);
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
-  const insertResults = await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT OR IGNORE INTO posts (
-       id, user_id, title, content, image, images, media_types, media_backup_ids, media_dimensions, location,
-       display_city, display_region, display_country, display_location_label, display_location_source, display_location_visibility,
-       post_type,
-       place_id, place_name, place_provider, place_provider_id, place_formatted_address, place_category, place_city, place_region, place_country,
-       place_lat, place_lng, is_verified_checkin, visibility, moderation_status, moderation_media_ids, moderation_checked_at,
-       editor_overlays, tagged_users,
-       primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json,
-       secondary_categories_json, category_scores_json, detected_objects_json, detected_scene, place_type, user_selected_category, caption_keywords_json,
-       audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
-       audio_start_time, audio_duration, client_request_id
-     )
-     VALUES (${Array(57).fill('?').join(', ')})`
-    ).bind(id, userId, postTitle, postContent, primaryImage, JSON.stringify(imageUrls), JSON.stringify(mediaTypes),
-    JSON.stringify(backupIds), JSON.stringify(mediaDimensions), location,
-    displayCity, displayRegion, displayCountry, displayLocationLabel, displayLocationSource, displayLocationVisibility,
-    postType,
-    placeProviderId || null, placeName || null, placeProvider, placeProviderId, placeFormattedAddress, placeCategory, placeCity, placeRegion, placeCountry,
-    placeLat, placeLng, isCheckin, visibility, 'approved', JSON.stringify(mediaAssetIds), now(),
-    JSON.stringify(editorOverlays), JSON.stringify(taggedUsers),
-    autoCategory.primary_category, autoCategory.category_confidence, autoCategory.category_source, autoCategory.category_status, JSON.stringify(autoCategory.signals), JSON.stringify(autoCategory.tags),
-    JSON.stringify(autoCategory.secondary_categories), JSON.stringify(autoCategory.category_scores), JSON.stringify(autoCategory.detected_objects),
-    autoCategory.detected_scene, autoCategory.place_type, autoCategory.user_selected_category, JSON.stringify(autoCategory.caption_keywords),
-    audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration, clientRequestId),
-    c.env.DB.prepare('UPDATE users SET posts_count = COALESCE(posts_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
-  ]);
-  const inserted = d1Changes(insertResults?.[0]) > 0;
-  if (!inserted && clientRequestId) {
-    const existing: any = await c.env.DB.prepare(
-      `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-       FROM posts p JOIN users u ON p.user_id = u.id
-       WHERE p.user_id = ? AND p.client_request_id = ?
-       LIMIT 1`
-    ).bind(userId, clientRequestId).first();
-    if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
-  }
-  if (!inserted) return c.json({ detail: 'Could not create post. Please retry.' }, 409);
-  if (mediaAssetIds.length) {
-    const placeholders = mediaAssetIds.map(() => '?').join(', ');
-    await c.env.DB.prepare(`UPDATE media_assets SET post_id = ?, updated_at = ? WHERE user_id = ? AND id IN (${placeholders})`)
-      .bind(id, now(), userId, ...mediaAssetIds)
-      .run();
-  }
-  if (placeName || placeFormattedAddress || placeProviderId) {
-    await c.env.DB.prepare(
-      `INSERT OR REPLACE INTO post_places
-       (id, post_id, provider, provider_place_id, name, formatted_address, latitude, longitude, category, city, region, country, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      uuid(), id, placeProvider || 'apple_mapkit', placeProviderId, placeName, placeFormattedAddress,
-      placeLat, placeLng, placeCategory, placeCity, placeRegion, placeCountry, now()
-    ).run();
-  }
-  await attachMediaBackupsToPost(c.env.DB, userId, id, backupIds);
-  await recordAbuseSignals(c, userId, 'post_create', {
-    product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
-  });
-  if (supabasePrimaryConfigured(c)) {
-    try {
-      await writeLegacyUserToSupabaseCanonical(c, userId);
-      await writeLegacyPostToSupabaseCanonical(c, id);
-    } catch (error: any) {
-      const code = getErrorCode(error).slice(0, 180);
-      await removeLegacyPostCacheAfterCanonicalFailure(c, id, userId, code);
-      console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
-      return c.json({
-        detail: 'Could not save this post to the production database. Please retry.',
-        code: 'SUPABASE_PRIMARY_WRITE_FAILED',
-      }, 503);
-    }
-  } else {
-    runBackgroundTask(c, 'supabase_post_write_through_failed', async () => {
-      await mirrorLegacyUserToSupabase(c, userId);
-      await mirrorLegacyPostToSupabase(c, id);
-    });
-  }
-  runBackgroundTask(c, 'post_category_refinement_failed', async () => {
-    await refinePostCategoryWithBackendAi(c, id);
-  });
-  if (visibility === 'public' || visibility === 'followers') {
-    runBackgroundTask(c, 'post_follower_notifications_failed', async () => {
-      const followers = await c.env.DB.prepare(
-        `SELECT follower_id
-         FROM follows
-         WHERE following_id = ? AND follower_id != ?
-         ORDER BY created_at DESC
-         LIMIT 250`
-      ).bind(userId, userId).all();
-      const authorName = cleanText(user?.full_name || user?.username || 'Someone you follow', 80);
-      const body = cleanText(postTitle || postContent || 'Shared a new post', 120);
-      await Promise.allSettled((followers.results as any[]).map((row) => insertNotificationOnce(c, {
-        userId: cleanText(row.follower_id, 120),
-        type: 'new_post',
-        title: `${authorName} posted`,
-        body,
-        data: { post_id: id, from_user_id: userId },
-        dedupeKey: `new_post:${id}:${row.follower_id}`,
-        dedupeSeconds: 604800,
-      })));
-    });
-  }
-  const createdPost = { id, user_id: userId, user_username: user?.username, user_full_name: user?.full_name,
-    user_profile_image: user?.profile_image, title: postTitle, content: postContent, image: primaryImage, images: imageUrls,
-    media_types: mediaTypes, media_backup_ids: backupIds, media_dimensions: mediaDimensions, editor_overlays: editorOverlays, tagged_users: taggedUsers,
-    primary_category: autoCategory.primary_category, category_confidence: autoCategory.category_confidence,
-    category_source: autoCategory.category_source, category_status: autoCategory.category_status,
-    category_signals_json: JSON.stringify(autoCategory.signals), tags_json: JSON.stringify(autoCategory.tags),
-    secondary_categories_json: JSON.stringify(autoCategory.secondary_categories),
-    category_scores_json: JSON.stringify(autoCategory.category_scores),
-    detected_objects_json: JSON.stringify(autoCategory.detected_objects),
-    detected_scene: autoCategory.detected_scene,
-    place_type: autoCategory.place_type,
-    user_selected_category: autoCategory.user_selected_category,
-    caption_keywords_json: JSON.stringify(autoCategory.caption_keywords),
+
+  const createdAt = now();
+  const supabaseInput = {
+    id,
+    userId,
+    authUserId: supabaseAuthorRow?.supabase_user_id || userId,
+    postTitle,
+    postContent,
+    primaryImage,
+    imageUrls,
+    mediaTypes,
+    backupIds,
+    mediaDimensions,
     location,
-    display_city: displayCity, display_region: displayRegion, display_country: displayCountry,
-    display_location_label: displayLocationLabel, display_location_source: displayLocationSource,
-    display_location_visibility: displayLocationVisibility,
-    post_type: postType,
-    place_id: placeProviderId, place_name: placeName,
-    place_provider: placeProvider, place_provider_id: placeProviderId, place_formatted_address: placeFormattedAddress,
-    place_category: placeCategory, place_city: placeCity, place_region: placeRegion, place_country: placeCountry,
-    place_lat: placeLat, place_lng: placeLng, is_verified_checkin: !!isCheckin,
-    audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
-    audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    client_request_id: clientRequestId, visibility, moderation_status: 'approved', moderation_media_ids: JSON.stringify(mediaAssetIds),
-    likes_count: 0, comments_count: 0, liked_by: [], created_at: now() };
+    displayCity,
+    displayRegion,
+    displayCountry,
+    displayLocationLabel,
+    displayLocationSource,
+    displayLocationVisibility,
+    postType,
+    placeProvider,
+    placeProviderId,
+    placeName,
+    placeFormattedAddress,
+    placeCategory,
+    placeCity,
+    placeRegion,
+    placeCountry,
+    placeLat,
+    placeLng,
+    isCheckin,
+    visibility,
+    mediaAssetIds: approvedMediaAssetIds,
+    editorOverlays,
+    taggedUsers,
+    autoCategory,
+    audioProvider,
+    audioTrackId,
+    audioTitle,
+    audioArtist,
+    audioArtworkUrl,
+    audioStreamUrl,
+    audioStartTime,
+    audioDuration,
+    community: communityResult.value,
+    clientRequestId,
+    createdAt,
+  };
+  const supabasePostRow = supabasePrimaryPostCreatePayload(supabaseInput);
+  let insertedPostRow = supabasePostRow;
+  try {
+    const insertedRows = await supabaseAdminInsertRows(c, 'app_posts', [supabasePostRow], SUPABASE_APP_POST_SELECT);
+    insertedPostRow = insertedRows[0] || supabasePostRow;
+    if (approvedMediaAssetIds.length) {
+      await supabaseAdminPatchRows(c, 'app_media_assets', {
+        user_id: postgrestEqFilter(userId),
+        id: postgrestInFilter(approvedMediaAssetIds),
+      }, {
+        legacy_post_id: id,
+        updated_at: createdAt,
+      });
+    }
+    await writeSupabasePrimaryPostPlace(c, supabaseInput);
+    await recordAbuseSignals(c, userId, 'post_create', {
+      product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
+    });
+    await supabaseIncrementAppUserPostCount(c, userId).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_post_count_increment_failed', code: getErrorCode(error).slice(0, 180) }));
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180);
+    if (clientRequestId && code.includes('23505')) {
+      const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
+      if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
+    }
+    console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
+    return c.json({
+      detail: 'Could not save this post to the production database. Please retry.',
+      code: 'SUPABASE_PRIMARY_WRITE_FAILED',
+    }, 503);
+  }
+
+  runBackgroundTask(c, 'supabase_post_follower_notifications_failed', async () => {
+    await notifySupabaseFollowersOfNewPost(c, {
+      userId,
+      postId: id,
+      visibility,
+      authorName: cleanText(user?.full_name || user?.username || 'Someone you follow', 80),
+      body: cleanText(postTitle || postContent || 'Shared a new post', 120),
+    });
+  });
+
+  const createdPost = {
+    ...supabaseAppPostToLegacy(insertedPostRow, supabaseAuthorRow, false, 0),
+    client_request_id: clientRequestId,
+    moderation_status: 'approved',
+    moderation_media_ids: JSON.stringify(approvedMediaAssetIds),
+  };
   return c.json(postPayload(createdPost, [], c.env));
 });
 
 api.get('/posts/feed', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'feed_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'feed_read', userId, 240, 60);
   if (limited) return limited;
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
-  const feedSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const posts = await c.env.DB.prepare(feedSql).bind(userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
-  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
-  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
-  response.headers.set('cache-control', 'private, max-age=6');
-  return response;
+  try {
+    const feedRows = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
+    const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load feed.' }, 500);
+  }
+});
+
+api.get('/posts/community-feed', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_community_feed_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_community_feed_read', userId, 180, 60);
+  if (limited) return limited;
+  const scope = cleanText(c.req.query('scope') || 'city', 20).toLowerCase();
+  if (scope !== 'friends' && scope !== 'city') return c.json({ detail: 'Feed scope must be friends or city.' }, 400);
+  const city = cleanText(c.req.query('city') || 'New York City', 100);
+  const pagination = cleanText(c.req.query('pagination') || 'legacy', 20).toLowerCase();
+  if (pagination !== 'legacy' && pagination !== 'cursor') {
+    return c.json({ detail: 'Feed pagination must be legacy or cursor.' }, 400);
+  }
+  const encodedCursor = cleanText(c.req.query('cursor'), 512);
+  const decodedCursor = encodedCursor ? decodeAuraCommunityFeedCursor(encodedCursor) : null;
+  if (pagination === 'cursor' && encodedCursor && !decodedCursor) {
+    return c.json({ detail: 'Feed cursor is invalid.', code: 'INVALID_FEED_CURSOR' }, 400);
+  }
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '30', 1, 50, 30);
+  try {
+    if (pagination === 'cursor') {
+      const page = await supabaseReadVisibleCommunityCursorPage(c, userId, {
+        socialScope: scope,
+        city,
+        limit,
+        order: 'newest',
+      }, decodedCursor);
+      console.log(JSON.stringify({
+        event: 'aura_community_feed_cursor_read',
+        scope,
+        city: scope === 'city' ? normalizeAuraCommunityCity(city) : '',
+        limit,
+        returned_count: page.items.length,
+        has_more: page.has_more,
+      }));
+      const response = c.json({
+        items: page.items.map((post) => feedPostPayload(post, [], c.env)),
+        next_cursor: page.next_cursor,
+        has_more: page.has_more,
+      });
+      response.headers.set('cache-control', 'no-store');
+      return response;
+    }
+    const rows = await supabaseReadVisiblePosts(c, userId, {
+      socialScope: scope,
+      city,
+      limit,
+      offset: skip,
+      order: 'newest',
+    });
+    console.log(JSON.stringify({
+      event: 'aura_community_feed_read',
+      scope,
+      city: scope === 'city' ? normalizeAuraCommunityCity(city) : '',
+      offset: skip,
+      limit,
+      returned_count: rows.length,
+      has_more_candidate: rows.length === limit,
+    }));
+    const response = c.json(rows.map((post) => feedPostPayload(post, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_community_feed_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load the community feed.' }, 500);
+  }
+});
+
+api.get('/posts/community-mine', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_community_mine_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_community_mine_read', userId, 120, 60);
+  if (limited) return limited;
+  const scope = cleanText(c.req.query('scope') || 'created', 20).toLowerCase();
+  if (scope !== 'created' && scope !== 'joined') return c.json({ detail: 'List scope must be created or joined.' }, 400);
+  try {
+    let rows: any[] = [];
+    if (scope === 'created') {
+      rows = await supabaseReadVisiblePosts(c, userId, {
+        ownerId: userId,
+        communityOnly: true,
+        limit: 100,
+        order: 'newest',
+      });
+      rows = rows.filter((post) => isAuraCommunityPostType(post?.post_type));
+    } else {
+      const joins = await supabaseAdminQueryRows(c, 'aura_meetup_joins', {
+        select: 'post_id,joined_at',
+        filters: { app_user_id: postgrestEqFilter(userId), status: postgrestEqFilter('confirmed') },
+        order: 'joined_at.desc',
+        limit: 100,
+      });
+      const postIds = joins.map((join) => String(join?.post_id || '')).filter((value) => !!isUuidText(value));
+      rows = postIds.length
+        ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: Math.min(100, postIds.length), order: 'newest' })
+        : [];
+      rows = rows.filter((post) => cleanText(post?.post_type, 40).toLowerCase() === 'meetup');
+    }
+    const response = c.json(rows.map((post) => feedPostPayload(post, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_community_mine_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load your community activity.' }, 500);
+  }
 });
 
 api.get('/posts/world-board', async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensurePostEditorSchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'world_board_read');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
-    const payload = await cachedJson(c, `posts:world-board:v9:${skip}:${limit}`, 8, async () => {
-      const worldBoardSql = [
-        `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-           (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-           MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-           MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-         FROM posts p JOIN users u ON p.user_id = u.id`,
-        `WHERE ${publicPostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-        'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-      ].join(' ');
-      const posts = await c.env.DB.prepare(worldBoardSql).bind(limit, skip).all();
-      return feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env));
-    });
-    const response = c.json(payload);
-    response.headers.set('cache-control', 'public, max-age=4, s-maxage=8');
+    const viewerId = await getOptionalUserId(c);
+    const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest' });
+    const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
     return response;
   } catch {
     return c.json({ detail: 'Could not load world board.' }, 500);
@@ -11516,120 +15908,185 @@ api.get('/posts/world-board', async (c) => {
 
 api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'nearby_feed_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'nearby_feed_read', userId, 180, 60);
   if (limited) return limited;
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
-  const nearbyFeedSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const posts = await c.env.DB.prepare(nearbyFeedSql).bind(...visiblePostBindValues(userId), limit, skip).all();
-  const feedRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), userId);
-  const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
-  response.headers.set('cache-control', 'private, max-age=6');
-  return response;
+  try {
+    const posts = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
+    const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_nearby_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load nearby posts.' }, 500);
+  }
+});
+
+api.get('/posts/:postId/meetup/participants', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_meetup_participants_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_meetup_participants_read', viewerId, 180, 60);
+  if (limited) return limited;
+  const postId = c.req.param('postId');
+  try {
+    const [visiblePost] = await supabaseReadVisiblePosts(c, viewerId, { postId, limit: 1 });
+    if (!visiblePost || cleanText(visiblePost?.post_type, 40).toLowerCase() !== 'meetup') {
+      return c.json({ detail: 'Meetup not found.' }, 404);
+    }
+    const identity = await auraMeetupPostIdentityRow(c, postId);
+    if (!identity?.id) return c.json({ detail: 'Meetup not found.' }, 404);
+    const joins = await supabaseAdminQueryRows(c, 'aura_meetup_joins', {
+      select: 'app_user_id,joined_at',
+      filters: { post_id: postgrestEqFilter(String(identity.id)), status: postgrestEqFilter('confirmed') },
+      order: 'joined_at.asc',
+      limit: 500,
+    });
+    const participantResults = await Promise.all(joins.slice(0, 24).map((join) =>
+      supabasePublicUserPayload(c, viewerId, publicId(join?.app_user_id, 120))
+    ));
+    const participants = participantResults
+      .filter((result) => result.status === 200 && !(result.body as any)?.viewer_blocked_by)
+      .map((result) => result.body);
+    return c.json({
+      joined_count: joins.length,
+      viewer_joined: joins.some((join) => publicId(join?.app_user_id, 120) === viewerId),
+      participants,
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_participants_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load meetup participants.' }, 500);
+  }
+});
+
+api.post('/posts/:postId/meetup/join', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_meetup_join');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_meetup_join', userId, 30, 60);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'posting');
+  if (restricted) return restricted;
+  const postId = c.req.param('postId');
+  try {
+    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!visiblePost || cleanText(visiblePost?.post_type, 40).toLowerCase() !== 'meetup') {
+      return c.json({ detail: 'Meetup not found.' }, 404);
+    }
+    const result = await auraJoinFreeMeetup(c, postId, userId);
+    return c.json(result.body, result.status as any);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_join_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Meetup joining is temporarily unavailable.' }, 500);
+  }
+});
+
+api.delete('/posts/:postId/meetup/join', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'aura_meetup_leave');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'aura_meetup_leave', userId, 30, 60);
+  if (limited) return limited;
+  const postId = c.req.param('postId');
+  try {
+    const identity = await auraMeetupPostIdentityRow(c, postId);
+    if (!identity?.id || cleanText(identity?.post_type, 40).toLowerCase() !== 'meetup') {
+      return c.json({ detail: 'Meetup not found.' }, 404);
+    }
+    await supabaseAdminPatchRows(c, 'aura_meetup_joins', {
+      post_id: postgrestEqFilter(String(identity.id)),
+      app_user_id: postgrestEqFilter(userId),
+    }, { status: 'cancelled', updated_at: now() });
+    return c.json({ joined: false });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'aura_meetup_leave_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not leave this meetup.' }, 500);
+  }
 });
 
 api.get('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_read');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const postByIdSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-  ].join(' ');
-  const p: any = await c.env.DB.prepare(postByIdSql).bind(userId, ...relatedUserIds, ...relatedUserIds, postId, ...visiblePostBindValues(userId)).first();
-  if (!p) return c.json({ detail: 'Post not found' }, 404);
-  const [postWithViewerState] = await overlaySupabaseViewerEngagement(c, [p], userId);
-  const likes = await c.env.DB.prepare('SELECT user_id FROM likes WHERE post_id = ?').bind(postId).all();
-  return c.json(postPayload(postWithViewerState || p, likes.results.map((l: any) => l.user_id), c.env));
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found' }, 404);
+    const response = c.json(postPayload(post, [], c.env));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load post.' }, 500);
+  }
 });
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_like');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'post_like', userId, 300, 60);
   if (limited) return limited;
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
-  const likeVisiblePostSql = [
-    `SELECT p.id, p.user_id,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS saves_count,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-  ].join(' ');
-  const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql).bind(userId, userId, postId, ...visiblePostBindValues(userId)).first();
-  if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-
-  const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
-  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
-    .bind(state.likes_count, postId)
-    .run()
-    .catch(() => {});
-
-  if (state.liked && changed && (visiblePost as any).user_id !== userId) {
-    try {
-      const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
-      await insertNotificationOnce(c, {
-        userId: (visiblePost as any).user_id,
-        type: 'like',
-        title: 'New Like',
-        body: `${me?.full_name || 'Someone'} liked your post`,
-        data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
-        dedupeKey: `like:${userId}:${postId}`,
-        dedupeSeconds: 86400,
+  try {
+    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
+    const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
+    if (state.liked && changed && publicId((visiblePost as any).user_id, 120) !== userId) {
+      runBackgroundTask(c, 'supabase_like_notification_failed', async () => {
+        const me = await supabaseUserByAnyId(c, userId).catch(() => null);
+        await insertNotificationOnce(c, {
+          userId: publicId((visiblePost as any).user_id, 120),
+          type: 'like',
+          title: 'New Like',
+          body: `${cleanText(me?.full_name || me?.username || 'Someone', 80)} liked your post`,
+          data: { post_id: postId, from_user_id: userId, actor_name: cleanText(me?.full_name || me?.username || 'Someone', 80) },
+          dedupeKey: `like:${userId}:${postId}`,
+          dedupeSeconds: 86400,
+        });
       });
-    } catch {}
+    }
+    return c.json(postEngagementResponse(state));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_like_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not update like.' }, 500);
   }
-
-  return c.json(postEngagementResponse(state));
 });
 
 api.delete('/posts/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c); const postId = c.req.param('postId');
-  await ensureGovernanceSchema(c.env.DB);
-  const post: any = await c.env.DB.prepare('SELECT user_id FROM posts WHERE id = ?').bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
-  await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Deleted by creator' WHERE id = ?")
-    .bind(now(), postId).run();
-  await c.env.DB.prepare('UPDATE users SET posts_count = MAX(0, posts_count - 1) WHERE id = ?').bind(userId).run();
-  await logSecurityEvent(c, 'post_soft_deleted', userId, { post_id: postId });
-  return c.json({ deleted: true, soft_deleted: true });
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_delete');
+  if (supabaseRequired) return supabaseRequired;
+  try {
+    const owned = await supabaseOwnedAppPost(c, postId, userId);
+    if (owned.status !== 200) return c.json(owned.body, owned.status);
+    const metadata = parseJsonObject(owned.row?.metadata);
+    await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+      status: 'removed',
+      metadata: {
+        ...metadata,
+        removed_at: now(),
+        removed_reason: 'Deleted by creator',
+      },
+      updated_at: now(),
+    });
+    await logSecurityEvent(c, 'post_soft_deleted', userId, { post_id: postId });
+    return c.json({ deleted: true, soft_deleted: true });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_delete_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not delete post.' }, 500);
+  }
 });
 
 api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_visibility');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
-  await ensurePrivacySchema(c.env.DB);
   const body: any = await c.req.json().catch(() => ({}));
   const requestedVisibility = typeof body.visibility === 'string' ? body.visibility.trim().toLowerCase() : '';
   if (!['public', 'followers', 'friends', 'private'].includes(requestedVisibility)) {
@@ -11637,102 +16094,70 @@ api.put('/posts/:postId/visibility', authMiddleware, async (c) => {
   }
   const visibility = normalizeVisibility(requestedVisibility);
 
-  const post: any = await c.env.DB.prepare(
-    "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
-  ).bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
-
-  await c.env.DB.prepare('UPDATE posts SET visibility = ? WHERE id = ?').bind(visibility, postId).run();
-  await logSecurityEvent(c, 'post_visibility_updated', userId, { post_id: postId, visibility });
-
-  const updated: any = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.id = ?`
-  ).bind(userId, userId, userId, postId).first();
-  if (!updated) return c.json({ detail: 'Post not found' }, 404);
-
-  return c.json(postPayload(updated, [], c.env));
+  try {
+    const owned = await supabaseOwnedAppPost(c, postId, userId);
+    if (owned.status !== 200) return c.json(owned.body, owned.status);
+    await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+      visibility,
+      updated_at: now(),
+    });
+    await logSecurityEvent(c, 'post_visibility_updated', userId, { post_id: postId, visibility });
+    const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!updated) return c.json({ detail: 'Post not found' }, 404);
+    return c.json(postPayload(updated, [], c.env));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_visibility_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not update post visibility.' }, 500);
+  }
 });
 
 api.put('/posts/:postId/pin', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'post_pin');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
-  await ensurePrivacySchema(c.env.DB);
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
   const shouldPin = requested === null ? true : requested;
 
-  const post: any = await c.env.DB.prepare(
-    "SELECT id, user_id FROM posts WHERE id = ? AND COALESCE(status, 'active') != 'removed'"
-  ).bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (post.user_id !== userId) return c.json({ detail: 'Not your post' }, 403);
-
-  const pinnedAt = shouldPin ? now() : null;
-  await c.env.DB.prepare('UPDATE posts SET pinned_at = ? WHERE id = ? AND user_id = ?')
-    .bind(pinnedAt, postId, userId)
-    .run();
-  await logSecurityEvent(c, shouldPin ? 'post_pinned' : 'post_unpinned', userId, { post_id: postId });
-
-  const updated: any = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.id = ?`
-  ).bind(userId, userId, userId, postId).first();
-  if (!updated) return c.json({ detail: 'Post not found' }, 404);
-
-  return c.json(postPayload(updated, [], c.env));
+  try {
+    const owned = await supabaseOwnedAppPost(c, postId, userId);
+    if (owned.status !== 200) return c.json(owned.body, owned.status);
+    const pinnedAt = shouldPin ? now() : null;
+    const metadata = parseJsonObject(owned.row?.metadata);
+    await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(owned.identity) }, {
+      metadata: {
+        ...metadata,
+        pinned_at: pinnedAt,
+      },
+      updated_at: now(),
+    });
+    await logSecurityEvent(c, shouldPin ? 'post_pinned' : 'post_unpinned', userId, { post_id: postId });
+    const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!updated) return c.json({ detail: 'Post not found' }, 404);
+    return c.json(postPayload(updated, [], c.env));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_post_pin_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not update pinned post.' }, 500);
+  }
 });
 
 api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'profile_posts_read');
+  if (supabaseRequired) return supabaseRequired;
   const targetId = c.req.param('userId');
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
-  const owner: any = await c.env.DB.prepare('SELECT id, is_private FROM users WHERE id = ?').bind(targetId).first();
-  if (!owner) return c.json({ detail: 'User not found' }, 404);
-  if (!(await canViewUserContent(c.env.DB, viewerId, owner))) return c.json([]);
-  const posts = await c.env.DB.prepare(
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id
-     WHERE p.user_id = ? AND COALESCE(p.status, 'active') != 'removed' AND ${approvedPostModerationWhere('p')} AND ${feedPhotoPostWhere('p')} AND (
-       COALESCE(p.visibility, 'public') = 'public'
-       OR p.user_id = ?
-       OR (COALESCE(p.visibility, 'public') = 'followers' AND (
-         EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id)
-         OR EXISTS (SELECT 1 FROM friendships f2 WHERE f2.user_id = ? AND f2.friend_id = p.user_id)
-       ))
-       OR (COALESCE(p.visibility, 'public') = 'friends' AND EXISTS (SELECT 1 FROM friendships f3 WHERE f3.user_id = ? AND f3.friend_id = p.user_id))
-     )
-      ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, p.created_at DESC
-      LIMIT ? OFFSET ?`
-  ).bind(viewerId, viewerId, targetId, viewerId, viewerId, viewerId, viewerId, limit, skip).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(posts.results as any[]), viewerId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  try {
+    const rows = await supabaseReadVisiblePosts(c, viewerId, { ownerId: targetId, limit, offset: skip, order: 'newest' });
+    const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_user_posts_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load profile posts.' }, 500);
+  }
 });
 
 // Comments
@@ -11740,12 +16165,9 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 100_000);
     if (bodyTooLarge) return bodyTooLarge;
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    await ensureReliabilitySchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_create');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'comment_create', userId, 40, 60);
     if (limited) return limited;
     const restricted = await enforceUserRestriction(c, userId, 'commenting');
@@ -11757,96 +16179,13 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const clientRequestId = getClientRequestId(c, body);
     if (!content) return c.json({ detail: 'Comment cannot be empty.' }, 400);
     if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
-
-    const commentVisiblePostSql = [
-      'SELECT p.id, p.user_id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    ].join(' ');
-    const visiblePost: any = await c.env.DB.prepare(commentVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
-    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-
-    let parent: any = null;
-    if (parentId) {
-      parent = await c.env.DB.prepare("SELECT id, user_id FROM comments WHERE id = ? AND post_id = ? AND COALESCE(status, 'active') NOT IN ('removed', 'hidden')")
-        .bind(parentId, postId)
-        .first();
-      if (!parent) return c.json({ detail: 'Comment to reply to was not found.' }, 404);
+    const [visiblePost] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!visiblePost) return c.json({ detail: 'Post not found.' }, 404);
+    if (isAuraCommunityPostType(visiblePost?.post_type) && visiblePost?.community_allow_replies === false) {
+      return c.json({ detail: 'Replies are disabled for this post.', code: 'REPLIES_DISABLED' }, 403);
     }
-
-    const recentDuplicate: any = await c.env.DB.prepare(
-      "SELECT id FROM comments WHERE user_id = ? AND post_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
-    ).bind(userId, postId, content).first();
-    if (recentDuplicate) {
-      await logSecurityEvent(c, 'duplicate_comment_blocked', userId, { post_id: postId });
-      return c.json({ detail: 'You already posted that comment. Try again in a moment.' }, 429);
-    }
-
-    const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
-    const id = uuid();
-    const createdAt = now();
-    const insertResult = await c.env.DB.prepare('INSERT OR IGNORE INTO comments (id, user_id, post_id, parent_id, content, client_request_id) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(id, userId, postId, parentId, content, clientRequestId)
-      .run();
-    const inserted = d1Changes(insertResult) > 0;
-    if (!inserted && clientRequestId) {
-      const existing: any = await c.env.DB.prepare(
-        `SELECT c.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-                CASE WHEN cl.id IS NULL THEN 0 ELSE 1 END AS liked_by_me
-         FROM comments c
-         JOIN users u ON c.user_id = u.id
-         LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
-         WHERE c.user_id = ? AND c.client_request_id = ?
-         LIMIT 1`
-      ).bind(userId, userId, clientRequestId).first();
-      if (existing) return c.json({
-        ...existing,
-        user_username: publicUsernameFor({ username: existing.user_username }),
-        user_profile_image: safeMediaReference(existing.user_profile_image),
-        liked_by_me: !!existing.liked_by_me,
-        idempotent_replay: true,
-      });
-    }
-    if (!inserted) return c.json({ detail: 'Could not post comment. Please retry.' }, 409);
-    const engagement = await getCanonicalPostEngagementState(c, postId, userId);
-
-    try {
-      const notifyUserId = parent?.user_id && parent.user_id !== userId ? parent.user_id : visiblePost.user_id;
-      if (notifyUserId && notifyUserId !== userId) {
-        await insertNotificationOnce(c, {
-          userId: notifyUserId,
-          type: parentId ? 'comment_reply' : 'comment',
-          title: parentId ? 'New Reply' : 'New Comment',
-          body: `${user?.full_name || 'Someone'} ${parentId ? 'replied to your comment' : 'commented on your post'}`,
-          data: { post_id: postId, comment_id: id, parent_id: parentId, from_user_id: userId, actor_name: user?.full_name || 'Someone' },
-          dedupeKey: `comment:${userId}:${postId}:${parentId || 'root'}:${content.slice(0, 80)}`,
-          dedupeSeconds: 300,
-        });
-      }
-    } catch {}
-
-    runBackgroundTask(c, 'supabase_comment_write_through_failed', async () => {
-      await mirrorLegacyCommentToSupabase(c, id);
-      await mirrorLegacyPostToSupabase(c, postId);
-    });
-
-    return c.json({
-      id,
-      user_id: userId,
-      post_id: postId,
-      post_user_id: visiblePost.user_id,
-      parent_id: parentId,
-      content,
-      client_request_id: clientRequestId,
-      likes_count: 0,
-      post_comments_count: engagement.comments_count,
-      liked_by_me: false,
-      pinned_at: null,
-      is_pinned: false,
-      user_username: publicUsernameFor(user),
-      user_full_name: user?.full_name,
-      user_profile_image: safeMediaReference(user?.profile_image),
-      created_at: createdAt,
-    });
+    const result = await supabaseCreatePostComment(c, { postId, userId, content, parentId, clientRequestId: clientRequestId || undefined });
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment create failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not post comment.', code: 'COMMENT_CREATE_FAILED' }, 500);
@@ -11855,36 +16194,12 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
 
 api.get('/posts/:postId/comments', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
-    await ensureLikeUniquenessSchema(c.env.DB);
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comments_read');
+    if (supabaseRequired) return supabaseRequired;
     const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
-    const commentsSql = [
-      `SELECT c.*, p.user_id AS post_user_id, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-              CASE WHEN c.pinned_at IS NULL THEN 0 ELSE 1 END AS is_pinned,
-              CASE WHEN cl.id IS NULL THEN 0 ELSE 1 END AS liked_by_me
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       JOIN users owner ON p.user_id = owner.id
-       JOIN users u ON c.user_id = u.id
-       LEFT JOIN comment_likes cl ON cl.comment_id = c.id AND cl.user_id = ?
-       WHERE c.post_id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden') AND ${visibleAuthorWhere('u')}`,
-      `AND ${visiblePostWhere('owner', 'p')}`,
-      'ORDER BY c.pinned_at IS NULL, c.pinned_at DESC, COALESCE(c.parent_id, c.id), c.parent_id IS NOT NULL, c.created_at ASC',
-      'LIMIT ?',
-    ].join(' ');
-    const r = await c.env.DB.prepare(commentsSql).bind(userId, c.req.param('postId'), ...visiblePostBindValues(userId), limit).all();
-
-    return c.json((r.results as any[]).map((comment) => ({
-      ...comment,
-      user_username: publicUsernameFor({ username: comment.user_username }),
-      user_profile_image: safeMediaReference(comment.user_profile_image),
-      likes_count: Number(comment.likes_count || 0),
-      is_pinned: !!comment.is_pinned,
-      liked_by_me: !!comment.liked_by_me,
-    })));
+    const result = await supabaseReadPostComments(c, c.req.param('postId'), userId, limit);
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment load failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not load comments.' }, 500);
@@ -11893,54 +16208,16 @@ api.get('/posts/:postId/comments', authMiddleware, async (c) => {
 
 api.post('/comments/:commentId/like', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_like');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'comment_like', userId, 300, 60);
     if (limited) return limited;
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
     const commentId = c.req.param('commentId');
-    const visibleCommentSql = [
-      `SELECT c.id, c.likes_count
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       JOIN users owner ON p.user_id = owner.id
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`,
-      `AND ${visiblePostWhere('owner', 'p')}`,
-    ].join(' ');
-    const comment: any = await c.env.DB.prepare(visibleCommentSql).bind(commentId, ...visiblePostBindValues(userId)).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-
-    let nextLiked = requested;
-    if (nextLiked === null) {
-      const existing: any = await c.env.DB.prepare('SELECT id FROM comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .first();
-      nextLiked = !existing;
-    }
-
-    if (nextLiked) {
-      await c.env.DB.prepare('INSERT OR IGNORE INTO comment_likes (id, user_id, comment_id) VALUES (?, ?, ?)')
-        .bind(uuid(), userId, commentId)
-        .run();
-    } else {
-      await c.env.DB.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?')
-        .bind(userId, commentId)
-        .run();
-    }
-
-    const likeRow: any = await c.env.DB.prepare(
-      `SELECT COUNT(*) AS likes_count,
-        EXISTS (SELECT 1 FROM comment_likes WHERE user_id = ? AND comment_id = ?) AS liked
-       FROM comment_likes WHERE comment_id = ?`
-    ).bind(userId, commentId, commentId).first();
-    const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
-    const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
-    await c.env.DB.prepare('UPDATE comments SET likes_count = ? WHERE id = ?').bind(likesCount, commentId).run();
-
-    return c.json({ liked, likes_count: likesCount });
+    const result = await supabaseSetCommentLike(c, commentId, userId, requested);
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment like failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not update comment like.' }, 500);
@@ -11949,34 +16226,18 @@ api.post('/comments/:commentId/like', authMiddleware, async (c) => {
 
 api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_pin');
+    if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
     const body: any = await c.req.json().catch(() => ({}));
     const requested = optionalBoolean(body.pinned ?? body.pin ?? body.value);
     const shouldPin = requested === null ? true : requested;
-    const comment: any = await c.env.DB.prepare(
-      `SELECT c.id, c.post_id, c.pinned_at, p.user_id AS post_user_id
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-    if (comment.post_user_id !== userId) return c.json({ detail: 'Only the creator can pin comments.' }, 403);
-
-    const pinnedAt = shouldPin ? now() : null;
-    if (shouldPin) {
-      await c.env.DB.batch([
-        c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE post_id = ?').bind(comment.post_id),
-        c.env.DB.prepare('UPDATE comments SET pinned_at = ? WHERE id = ?').bind(pinnedAt, commentId),
-      ]);
-    } else {
-      await c.env.DB.prepare('UPDATE comments SET pinned_at = NULL WHERE id = ?').bind(commentId).run();
+    const result = await supabaseSetCommentPinned(c, commentId, userId, requested);
+    if (result.status === 200) {
+      await logSecurityEvent(c, shouldPin ? 'comment_pinned' : 'comment_unpinned', userId, { comment_id: commentId });
     }
-    await logSecurityEvent(c, shouldPin ? 'comment_pinned' : 'comment_unpinned', userId, { comment_id: commentId, post_id: comment.post_id });
-    return c.json({ pinned: shouldPin, pinned_at: pinnedAt });
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment pin failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not update pinned comment.' }, 500);
@@ -11985,25 +16246,12 @@ api.post('/comments/:commentId/pin', authMiddleware, async (c) => {
 
 api.delete('/comments/:commentId', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_delete');
+    if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
-    const comment: any = await c.env.DB.prepare(
-      `SELECT c.id, c.user_id, c.post_id
-       FROM comments c
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-    if (comment.user_id !== userId) return c.json({ detail: 'Not your comment' }, 403);
-
-    await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = 'Deleted by commenter', pinned_at = NULL WHERE id = ?")
-      .bind(now(), commentId)
-      .run();
-    const engagement = await getPostEngagementState(c.env.DB, comment.post_id, userId);
-    await logSecurityEvent(c, 'comment_deleted', userId, { comment_id: commentId, post_id: comment.post_id });
-    return c.json({ deleted: true, comments_count: engagement.comments_count });
+    const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'removed');
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment delete failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not delete comment.' }, 500);
@@ -12012,26 +16260,12 @@ api.delete('/comments/:commentId', authMiddleware, async (c) => {
 
 api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
   try {
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensureCommentSchema(c.env.DB);
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'comment_hide');
+    if (supabaseRequired) return supabaseRequired;
     const commentId = c.req.param('commentId');
-    const comment: any = await c.env.DB.prepare(
-      `SELECT c.id, c.post_id, p.user_id AS post_user_id
-       FROM comments c
-       JOIN posts p ON c.post_id = p.id
-       WHERE c.id = ? AND COALESCE(c.status, 'active') NOT IN ('removed', 'hidden')`
-    ).bind(commentId).first();
-    if (!comment) return c.json({ detail: 'Comment not found' }, 404);
-    if (comment.post_user_id !== userId) return c.json({ detail: 'Only the creator can hide comments.' }, 403);
-
-    await c.env.DB.prepare("UPDATE comments SET status = 'hidden', hidden_at = ?, hidden_by_user_id = ?, removed_reason = 'Hidden by creator', pinned_at = NULL WHERE id = ?")
-      .bind(now(), userId, commentId)
-      .run();
-    const engagement = await getPostEngagementState(c.env.DB, comment.post_id, userId);
-    await logSecurityEvent(c, 'comment_hidden', userId, { comment_id: commentId, post_id: comment.post_id });
-    return c.json({ hidden: true, comments_count: engagement.comments_count });
+    const result = await supabaseUpdateCommentStatus(c, commentId, userId, 'hidden');
+    return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment hide failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not hide comment.' }, 500);
@@ -12085,13 +16319,152 @@ function statusThoughtPayload(row: any) {
   };
 }
 
+function supabaseUserIsActive(row: any): boolean {
+  const metadata = parseJsonObject(row?.metadata);
+  return cleanText((metadata as any).status || 'active', 40) === 'active';
+}
+
+function supabaseStoryToStatusRow(row: any, user: any, likesCount = 0, likedByMe = false, viewedByMe = false) {
+  const audio = parseJsonObject(row?.audio);
+  const metadata = parseJsonObject(row?.metadata);
+  const createdAt = row?.legacy_created_at || row?.created_at || now();
+  return {
+    id: publicId(row?.id, 120),
+    user_id: publicId(row?.user_id, 120),
+    content: cleanMultilineText(row?.content || '', 2000),
+    image: safeMediaReference(row?.media_url || ''),
+    media_type: cleanText(row?.media_type || (metadata as any).media_type || '', 80),
+    background_color: cleanText(row?.background_color || '#1B4332', 40),
+    text_color: cleanText(row?.text_color || '#FFFFFF', 40),
+    visibility: normalizeVisibility(row?.visibility),
+    status: cleanText(row?.status || 'active', 40),
+    duration_seconds: clampNumber(row?.duration_seconds, 0, 60, 0),
+    expires_at: row?.expires_at || '',
+    created_at: createdAt,
+    updated_at: row?.updated_at || createdAt,
+    viewed_by: JSON.stringify(viewedByMe ? [publicId(row?.viewer_id || '', 120)].filter(Boolean) : []),
+    likes_count: Math.max(0, Number(likesCount || 0)),
+    liked_by_me: !!likedByMe,
+    user_username: publicUsernameFor({ username: user?.username }),
+    user_full_name: cleanText(user?.full_name, 120),
+    user_profile_image: safeMediaReference(user?.avatar_url || user?.profile_image || ''),
+    audio_provider: cleanText((audio as any).provider, 40),
+    audio_track_id: cleanText((audio as any).track_id, 120),
+    audio_title: cleanText((audio as any).title, 180),
+    audio_artist: cleanText((audio as any).artist, 180),
+    audio_artwork_url: safeMediaReference((audio as any).artwork_url || ''),
+    audio_stream_url: safeMediaReference((audio as any).stream_url || ''),
+    audio_start_time: clampNumber((audio as any).start_time, 0, 60 * 60 * 6, 0),
+    audio_duration: clampNumber((audio as any).duration, 0, 60, 0),
+  };
+}
+
+function supabaseStoryIsVisibleToViewer(row: any, user: any, viewerId: string, blockedIds: Set<string>, followingIds: Set<string>, friendsOnly = false): boolean {
+  const storyUserId = publicId(row?.user_id, 120);
+  if (!storyUserId) return false;
+  const viewerOwnStory = storyUserId === viewerId;
+  if (!viewerOwnStory && blockedIds.has(storyUserId)) return false;
+  if (!viewerOwnStory && !supabaseUserIsActive(user)) return false;
+  if (cleanText(row?.status || 'active', 40) !== 'active') return false;
+  const expiresAt = Date.parse(String(row?.expires_at || ''));
+  if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return false;
+  if (viewerOwnStory) return !friendsOnly;
+  const visibility = normalizeVisibility(row?.visibility);
+  if (visibility === 'private') return false;
+  const followsAuthor = followingIds.has(storyUserId);
+  if (friendsOnly) return followsAuthor;
+  if (visibility === 'followers' || visibility === 'friends') return followsAuthor;
+  return !user?.is_private;
+}
+
+async function supabaseReadVisibleStories(c: any, viewerId: string, friendsOnly = false): Promise<any[]> {
+  const rows = await supabaseAdminQueryRows(c, 'app_stories', {
+    select: '*',
+    filters: {
+      status: postgrestEqFilter('active'),
+      expires_at: `gt.${now()}`,
+    },
+    order: 'created_at.desc',
+    limit: 120,
+  });
+  if (!rows.length) return [];
+
+  const authorIds = Array.from(new Set(rows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
+  const [users, blockedIds, followingIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, authorIds),
+    supabaseBlockedUserIds(c, viewerId),
+    supabaseFollowingUserIds(c, viewerId, authorIds),
+  ]);
+  const visible = rows.filter((row) => supabaseStoryIsVisibleToViewer(row, users.get(publicId(row?.user_id, 120)), viewerId, blockedIds, followingIds, friendsOnly));
+  if (!visible.length) return [];
+
+  const storyIds = visible.map((row) => publicId(row?.id, 120)).filter(Boolean);
+  const [likeRows, viewRows] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_story_likes', {
+      select: 'story_id,user_id',
+      filters: { story_id: postgrestInFilter(storyIds) },
+      limit: Math.max(1000, storyIds.length * 200),
+    }),
+    supabaseAdminQueryRows(c, 'app_story_views', {
+      select: 'story_id,user_id',
+      filters: {
+        story_id: postgrestInFilter(storyIds),
+        user_id: postgrestEqFilter(viewerId),
+      },
+      limit: Math.max(50, storyIds.length),
+    }),
+  ]);
+
+  const counts = new Map<string, number>();
+  const likedByMe = new Set<string>();
+  for (const row of likeRows) {
+    const storyId = publicId(row?.story_id, 120);
+    if (!storyId) continue;
+    counts.set(storyId, (counts.get(storyId) || 0) + 1);
+    if (publicId(row?.user_id, 120) === viewerId) likedByMe.add(storyId);
+  }
+  const viewedByMe = new Set(viewRows.map((row) => publicId(row?.story_id, 120)).filter(Boolean));
+
+  return visible.map((row) => {
+    const storyId = publicId(row?.id, 120);
+    const user = users.get(publicId(row?.user_id, 120));
+    return {
+      ...supabaseStoryToStatusRow(row, user, counts.get(storyId) || 0, likedByMe.has(storyId), viewedByMe.has(storyId)),
+      viewer_id: viewerId,
+      viewed_by: JSON.stringify(viewedByMe.has(storyId) ? [viewerId] : []),
+    };
+  });
+}
+
+async function supabaseGetVisibleStory(c: any, storyId: string, viewerId: string): Promise<any | null> {
+  const rows = await supabaseAdminQueryRows(c, 'app_stories', {
+    select: '*',
+    filters: {
+      id: postgrestEqFilter(storyId),
+      status: postgrestEqFilter('active'),
+      expires_at: `gt.${now()}`,
+    },
+    limit: 1,
+  });
+  const row = rows[0];
+  if (!row) return null;
+  const userId = publicId(row?.user_id, 120);
+  const [users, blockedIds, followingIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, [userId]),
+    supabaseBlockedUserIds(c, viewerId),
+    supabaseFollowingUserIds(c, viewerId, [userId]),
+  ]);
+  const user = users.get(userId);
+  return supabaseStoryIsVisibleToViewer(row, user, viewerId, blockedIds, followingIds) ? row : null;
+}
+
 api.post('/statuses', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'share stories');
   if (phoneGate) return phoneGate;
-  await ensureAudioSchema(c.env.DB);
   const userId = getUserId(c); const b = await c.req.json();
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, city FROM users WHERE id = ?').bind(userId).first();
-  const storyLifetimeMs = 7 * 24 * 60 * 60 * 1000;
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_create');
+  if (supabaseRequired) return supabaseRequired;
+  const storyLifetimeMs = 14 * 24 * 60 * 60 * 1000;
   const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
   const visibility = normalizeVisibility(b.visibility);
   const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';
@@ -12111,162 +16484,188 @@ api.post('/statuses', authMiddleware, async (c) => {
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
   }
-  if (audioProvider) {
-    const hidden = await c.env.DB.prepare("SELECT track_id FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(audioTrackId)
-      .first();
-    if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
+  if (audioProvider && await supabaseAudiusTrackIsHidden(c, audioTrackId)) {
+    return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
-  await c.env.DB.prepare(
-    `INSERT INTO statuses (
-      id, user_id, content, image, background_color, text_color, visibility, expires_at,
-      audio_provider, audio_track_id, audio_title, audio_artist, audio_artwork_url, audio_stream_url,
-      audio_start_time, audio_duration
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      id, userId, b.content || '', b.image || null, b.background_color || '#1B4332', b.text_color || '#FFFFFF', visibility, expiresAt,
-      audioProvider, audioTrackId, audioTitle, audioArtist, audioArtworkUrl, audioStreamUrl, audioStartTime, audioDuration
-    ).run();
+
+  const users = await supabaseUsersByAnyIds(c, [userId]);
+  const user = users.get(userId) || {};
+  const createdAt = now();
+  const mediaUrl = String(b.image || '').startsWith('cfstream:')
+    ? String(b.image || '')
+    : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || ''));
+  const audio = {
+    provider: audioProvider,
+    track_id: audioTrackId,
+    title: audioTitle,
+    artist: audioArtist,
+    artwork_url: audioArtworkUrl,
+    stream_url: audioStreamUrl,
+    start_time: audioStartTime,
+    duration: audioDuration,
+  };
+  await supabaseAdminUpsert(c, 'app_stories', [{
+    id,
+    user_id: userId,
+    content: cleanMultilineText(b.content || '', 2000),
+    media_url: mediaUrl || null,
+    media_type: storyIsVideo ? 'video' : cleanText(storyMediaType || 'image', 40),
+    background_color: cleanText(b.background_color || '#1B4332', 40),
+    text_color: cleanText(b.text_color || '#FFFFFF', 40),
+    visibility,
+    status: 'active',
+    duration_seconds: storyDurationSeconds || null,
+    audio,
+    metadata: {
+      source: 'worker_status_create',
+      original_media_url: cleanText(b.image || '', 2200),
+    },
+    legacy_created_at: createdAt,
+    created_at: createdAt,
+    updated_at: createdAt,
+    expires_at: expiresAt,
+  }], 'id');
+
   return c.json({
-    id, user_id: userId, content: b.content,
-    image: String(b.image || '').startsWith('cfstream:')
-      ? String(b.image || '')
-      : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || '')),
+    id, user_id: userId, content: cleanMultilineText(b.content || '', 2000),
+    image: mediaUrl,
     background_color: b.background_color, text_color: b.text_color,
-    visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.profile_image,
+    visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.avatar_url || user?.profile_image,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
     audio_artwork_url: audioArtworkUrl, audio_stream_url: audioStreamUrl, audio_start_time: audioStartTime, audio_duration: audioDuration,
-    viewed_by: [], likes_count: 0, liked_by_me: false, created_at: now(), expires_at: expiresAt,
+    viewed_by: [], likes_count: 0, liked_by_me: false, created_at: createdAt, expires_at: expiresAt,
   });
 });
 
 api.get('/statuses', authMiddleware, async (c) => {
-  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
-  const statusesSql = [
-    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
-       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me`,
-    'FROM statuses s JOIN users u ON s.user_id = u.id',
-    `WHERE s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-    'ORDER BY s.created_at DESC',
-  ].join(' ');
-  const r = await c.env.DB.prepare(statusesSql).bind(userId, userId, userId).all();
-  return c.json(groupStatusRows(r.results as any[], userId));
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'stories_read');
+  if (supabaseRequired) return supabaseRequired;
+  const rows = await supabaseReadVisibleStories(c, userId);
+  return c.json(groupStatusRows(rows, userId));
 });
 
 api.get('/statuses/friends', authMiddleware, async (c) => {
-  await ensureStatusLikeSchema(c.env.DB);
   const userId = getUserId(c);
-  const r = await c.env.DB.prepare(
-    `SELECT s.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM status_likes sl_count WHERE sl_count.status_id = s.id) AS likes_count,
-       EXISTS(SELECT 1 FROM status_likes sl WHERE sl.status_id = s.id AND sl.user_id = ?) AS liked_by_me
-     FROM statuses s JOIN users u ON s.user_id = u.id
-     WHERE s.created_at >= datetime('now', '-7 days')
-       AND s.user_id != ?
-       AND COALESCE(s.visibility, 'public') != 'private'
-       AND EXISTS (SELECT 1 FROM friendships f WHERE f.user_id = ? AND f.friend_id = s.user_id)
-     ORDER BY s.created_at DESC`
-  ).bind(userId, userId, userId).all();
-  return c.json(groupStatusRows(r.results as any[], userId));
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friends_stories_read');
+  if (supabaseRequired) return supabaseRequired;
+  const rows = await supabaseReadVisibleStories(c, userId, true);
+  return c.json(groupStatusRows(rows, userId));
 });
 
 api.post('/statuses/:statusId/like', authMiddleware, async (c) => {
-  await ensureStatusLikeSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_like');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'story_like', userId, 300, 60);
   if (limited) return limited;
   const statusId = publicId(c.req.param('statusId'), 120);
   const body: any = await c.req.json().catch(() => ({}));
   const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
 
-  const story: any = await c.env.DB.prepare(
-    [
-      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-      'LIMIT 1',
-    ].join(' ')
-  ).bind(statusId, userId, userId).first();
+  const story = await supabaseGetVisibleStory(c, statusId, userId);
   if (!story) return c.json({ detail: 'Story not found' }, 404);
-  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
-    return c.json({ detail: 'You cannot like this story.' }, 403);
+  if (publicId(story?.user_id, 120) === userId) {
+    return c.json({ detail: 'You cannot like your own story.' }, 400);
   }
-
-  const existing: any = await c.env.DB.prepare('SELECT id FROM status_likes WHERE status_id = ? AND user_id = ?')
-    .bind(statusId, userId)
-    .first();
-  const nextLiked = requested ?? !existing;
+  const existingRows = await supabaseAdminQueryRows(c, 'app_story_likes', {
+    select: 'story_id',
+    filters: {
+      story_id: postgrestEqFilter(statusId),
+      user_id: postgrestEqFilter(userId),
+    },
+    limit: 1,
+  });
+  const nextLiked = requested ?? !existingRows[0];
   if (nextLiked) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO status_likes (id, status_id, user_id, created_at) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), statusId, userId, now())
-      .run();
+    await supabaseAdminUpsert(c, 'app_story_likes', [{
+      story_id: statusId,
+      user_id: userId,
+      created_at: now(),
+    }], 'story_id,user_id');
   } else {
-    await c.env.DB.prepare('DELETE FROM status_likes WHERE status_id = ? AND user_id = ?')
-      .bind(statusId, userId)
-      .run();
+    await supabaseAdminDeleteRows(c, 'app_story_likes', {
+      story_id: postgrestEqFilter(statusId),
+      user_id: postgrestEqFilter(userId),
+    });
   }
-
-  const row: any = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS likes_count,
-      EXISTS(SELECT 1 FROM status_likes WHERE status_id = ? AND user_id = ?) AS liked_by_me
-     FROM status_likes WHERE status_id = ?`
-  ).bind(statusId, userId, statusId).first();
+  const [count, likedRows] = await Promise.all([
+    supabaseAdminCountRows(c, 'app_story_likes', { story_id: postgrestEqFilter(statusId) }),
+    supabaseAdminQueryRows(c, 'app_story_likes', {
+      select: 'story_id',
+      filters: {
+        story_id: postgrestEqFilter(statusId),
+        user_id: postgrestEqFilter(userId),
+      },
+      limit: 1,
+    }),
+  ]);
   return c.json({
-    liked: row?.liked_by_me === true || row?.liked_by_me === 1 || row?.liked_by_me === '1',
-    likes_count: Math.max(0, Number(row?.likes_count || 0)),
+    liked: !!likedRows[0],
+    likes_count: Math.max(0, Number(count || 0)),
   });
 });
 
 api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
-  const statusViewSql = [
-    'SELECT s.viewed_by FROM statuses s JOIN users u ON s.user_id = u.id',
-    `WHERE s.id = ? AND ${visibleStatusWhere('u', 's')}`,
-  ].join(' ');
-  const s: any = await c.env.DB.prepare(statusViewSql).bind(statusId, userId, userId).first();
-  if (!s) return c.json({ detail: 'Not found' }, 404);
-  const vb: string[] = JSON.parse(s.viewed_by || '[]');
-  if (!vb.includes(userId)) { vb.push(userId); await c.env.DB.prepare('UPDATE statuses SET viewed_by = ? WHERE id = ?').bind(JSON.stringify(vb), statusId).run(); }
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_view');
+  if (supabaseRequired) return supabaseRequired;
+  const cleanStatusId = publicId(statusId, 120);
+  const story = await supabaseGetVisibleStory(c, cleanStatusId, userId);
+  if (!story) return c.json({ detail: 'Not found' }, 404);
+  await supabaseAdminUpsert(c, 'app_story_views', [{
+    story_id: cleanStatusId,
+    user_id: userId,
+    created_at: now(),
+  }], 'story_id,user_id');
   return c.json({ viewed: true });
 });
 
 api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
-  await ensureStatusThoughtSchema(c.env.DB);
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_thoughts_read');
+  if (supabaseRequired) return supabaseRequired;
   const statusId = publicId(c.req.param('statusId'), 120);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 40, 24);
-  const story: any = await c.env.DB.prepare(
-    [
-      'SELECT s.id FROM statuses s JOIN users u ON s.user_id = u.id',
-      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-      'LIMIT 1',
-    ].join(' ')
-  ).bind(statusId, userId, userId).first();
+  const story = await supabaseGetVisibleStory(c, statusId, userId);
   if (!story) return c.json({ detail: 'Story not found' }, 404);
-
-  const rows = await c.env.DB.prepare(
-    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM status_thoughts st
-     JOIN users u ON u.id = st.user_id
-     WHERE st.status_id = ?
-       AND COALESCE(st.status, 'active') = 'active'
-       AND NOT EXISTS (
-         SELECT 1 FROM blocks b
-         WHERE (b.blocker_id = ? AND b.blocked_id = st.user_id)
-            OR (b.blocker_id = st.user_id AND b.blocked_id = ?)
-       )
-     ORDER BY datetime(st.created_at) DESC
-     LIMIT ?`
-  ).bind(statusId, userId, userId, limit).all();
-  return c.json((rows.results as any[]).reverse().map(statusThoughtPayload));
+  const rows = await supabaseAdminQueryRows(c, 'app_story_thoughts', {
+    select: '*',
+    filters: {
+      story_id: postgrestEqFilter(statusId),
+      status: postgrestEqFilter('active'),
+    },
+    order: 'created_at.desc',
+    limit,
+  });
+  const senderIds = Array.from(new Set(rows.map((row) => publicId(row?.user_id, 120)).filter(Boolean)));
+  const [users, blockedIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, senderIds),
+    supabaseBlockedUserIds(c, userId),
+  ]);
+  const payload = rows
+    .filter((row) => {
+      const thoughtUserId = publicId(row?.user_id, 120);
+      return thoughtUserId && !blockedIds.has(thoughtUserId) && supabaseUserIsActive(users.get(thoughtUserId));
+    })
+    .reverse()
+    .map((row) => {
+      const user = users.get(publicId(row?.user_id, 120)) || {};
+      return statusThoughtPayload({
+        ...row,
+        status_id: row.story_id,
+        user_username: user.username,
+        user_full_name: user.full_name,
+        user_profile_image: user.avatar_url,
+      });
+    });
+  return c.json(payload);
 });
 
 api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
-  await ensureStatusThoughtSchema(c.env.DB);
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_thought_create');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'story_thought_create', userId, 40, 60);
   if (limited) return limited;
   const statusId = publicId(c.req.param('statusId'), 120);
@@ -12274,191 +16673,291 @@ api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
   const text = cleanText(body.body || body.text || body.thought || '', 180);
   if (!text) return c.json({ detail: 'Thought is required.' }, 400);
 
-  const story: any = await c.env.DB.prepare(
-    [
-      'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-      `WHERE s.id = ? AND s.created_at >= datetime('now', '-7 days') AND ${visibleStatusWhere('u', 's')}`,
-      'LIMIT 1',
-    ].join(' ')
-  ).bind(statusId, userId, userId).first();
+  const story = await supabaseGetVisibleStory(c, statusId, userId);
   if (!story) return c.json({ detail: 'Story not found' }, 404);
-  if (await usersAreBlocked(c.env.DB, userId, story.user_id)) {
+  const storyOwnerId = publicId(story?.user_id, 120);
+  if (storyOwnerId && (await supabaseUserIdsAreBlocked(c, userId, storyOwnerId))) {
     return c.json({ detail: 'You cannot share a thought on this story.' }, 403);
   }
-
   const id = uuid();
   const createdAt = now();
-  await c.env.DB.prepare(
-    `INSERT INTO status_thoughts (id, status_id, user_id, body, status, created_at)
-     VALUES (?, ?, ?, ?, 'active', ?)`
-  ).bind(id, statusId, userId, text, createdAt).run();
+  await supabaseAdminUpsert(c, 'app_story_thoughts', [{
+    id,
+    story_id: statusId,
+    user_id: userId,
+    body: text,
+    status: 'active',
+    created_at: createdAt,
+    updated_at: createdAt,
+  }], 'id');
   await logSecurityEvent(c, 'story_thought_created', userId, { status_id: statusId });
 
-  const row: any = await c.env.DB.prepare(
-    `SELECT st.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-     FROM status_thoughts st
-     JOIN users u ON u.id = st.user_id
-     WHERE st.id = ?`
-  ).bind(id).first();
-  return c.json(statusThoughtPayload(row));
+  const users = await supabaseUsersByAnyIds(c, [userId]);
+  const user = users.get(userId) || {};
+  return c.json(statusThoughtPayload({
+    id,
+    status_id: statusId,
+    user_id: userId,
+    body: text,
+    created_at: createdAt,
+    user_username: user.username,
+    user_full_name: user.full_name,
+    user_profile_image: user.avatar_url,
+  }));
 });
 
 api.delete('/statuses/:statusId', authMiddleware, async (c) => {
   const userId = getUserId(c); const statusId = c.req.param('statusId');
-  const story: any = await c.env.DB.prepare('SELECT user_id FROM statuses WHERE id = ?').bind(statusId).first();
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_delete');
+  if (supabaseRequired) return supabaseRequired;
+  const cleanStatusId = publicId(statusId, 120);
+  const rows = await supabaseAdminQueryRows(c, 'app_stories', {
+    select: 'id,user_id',
+    filters: { id: postgrestEqFilter(cleanStatusId) },
+    limit: 1,
+  });
+  const story = rows[0];
   if (!story) return c.json({ detail: 'Story not found' }, 404);
-  if (story.user_id !== userId) return c.json({ detail: 'Not your story' }, 403);
-  await c.env.DB.prepare('DELETE FROM statuses WHERE id = ? AND user_id = ?').bind(statusId, userId).run();
-  await logSecurityEvent(c, 'story_deleted', userId, { status_id: statusId });
+  if (publicId(story?.user_id, 120) !== userId) return c.json({ detail: 'Not your story' }, 403);
+  await supabaseAdminPatchRows(c, 'app_stories', { id: postgrestEqFilter(cleanStatusId) }, {
+    status: 'removed',
+    updated_at: now(),
+  });
+  await logSecurityEvent(c, 'story_deleted', userId, { status_id: cleanStatusId });
   return c.json({ deleted: true });
 });
 
 // Messages (with media support)
 async function requireGroupMember(c: any, groupId: string, userId: string) {
-  await ensureGroupChatSchema(c.env.DB);
-  const member = await c.env.DB.prepare('SELECT id FROM group_chat_members WHERE group_id = ? AND user_id = ?')
-    .bind(groupId, userId)
-    .first();
-  return !!member;
+  const rows = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
+    select: 'id',
+    filters: {
+      group_id: postgrestEqFilter(groupId),
+      user_id: postgrestEqFilter(userId),
+    },
+    limit: 1,
+  });
+  return !!rows[0];
+}
+
+function supabaseMessageToLegacy(row: any): any {
+  const media = parseJsonObject(row?.media);
+  return {
+    ...row,
+    content: cleanMultilineText(row?.content || row?.body, 2000),
+    media_url: safeMediaReference(row?.media_url || (media as any).url || (media as any).playback_url || ''),
+    media_type: cleanText(row?.media_type || (media as any).type, 40),
+    thumbnail_url: safeMediaReference((media as any).thumbnail_url || (media as any).thumbnailUrl || ''),
+    poster_url: safeMediaReference((media as any).poster_url || (media as any).posterUrl || ''),
+    is_read: row?.is_read === true || row?.is_read === 1 || row?.is_read === '1' ? 1 : 0,
+    created_at: row?.legacy_created_at || row?.created_at,
+    updated_at: row?.updated_at || row?.created_at,
+  };
+}
+
+async function supabaseValidateDirectMessagePeer(c: any, currentUserId: string, peerId: string) {
+  if (!peerId || peerId === currentUserId) {
+    return c.json({ detail: 'Choose a valid recipient.' }, 400);
+  }
+  const peer = await supabaseUserByAnyId(c, peerId);
+  const peerStatus = cleanText(parseJsonObject(peer?.metadata).status || peer?.status || 'active', 40);
+  if (!peer || peerStatus !== 'active') return c.json({ detail: 'Recipient not found.' }, 404);
+  if (await supabaseBlockPair(c, currentUserId, peerId)) {
+    await logSecurityEvent(c, 'blocked_message_access_denied', currentUserId, { peer_id: peerId });
+    return c.json({ detail: 'You cannot message this profile.' }, 403);
+  }
+  if (!(await supabaseFriendshipExists(c, currentUserId, peerId))) {
+    return c.json({ detail: 'You can message this profile after they accept your connection request.' }, 403);
+  }
+  return null;
+}
+
+async function supabaseDirectMessageRows(c: any, firstUserId: string, secondUserId: string, input: { limit: number; before?: string; after?: string }) {
+  const first = publicId(firstUserId, 120);
+  const second = publicId(secondUserId, 120);
+  const limit = clampNumber(input.limit, 1, 100, 80);
+  const baseFilters: Record<string, string> = {
+    or: `(and(sender_id.eq.${first},receiver_id.eq.${second}),and(sender_id.eq.${second},receiver_id.eq.${first}))`,
+  };
+  const after = cleanText(input.after || '', 80);
+  const before = cleanText(input.before || '', 80);
+  if (after) baseFilters.created_at = `gt.${after}`;
+  if (before) baseFilters.created_at = `lt.${before}`;
+  const rows = await supabaseAdminQueryRows(c, 'app_messages', {
+    select: '*',
+    filters: baseFilters,
+    order: after ? 'created_at.asc' : 'created_at.desc',
+    limit,
+  });
+  const ordered = after ? rows : rows.reverse();
+  return Promise.all(ordered.map((row) => messagePayload(c, supabaseMessageToLegacy(row))));
+}
+
+async function supabaseGroupMessageRows(c: any, groupId: string, input: { limit: number; before?: string; after?: string }) {
+  const limit = clampNumber(input.limit, 1, 100, 80);
+  const filters: Record<string, string> = { group_id: postgrestEqFilter(groupId) };
+  const after = cleanText(input.after || '', 80);
+  const before = cleanText(input.before || '', 80);
+  if (after) filters.created_at = `gt.${after}`;
+  if (before) filters.created_at = `lt.${before}`;
+  const rows = await supabaseAdminQueryRows(c, 'app_group_messages', {
+    select: '*',
+    filters,
+    order: after ? 'created_at.asc' : 'created_at.desc',
+    limit,
+  });
+  const ordered = after ? rows : rows.reverse();
+  return Promise.all(ordered.map((row) => messagePayload(c, supabaseMessageToLegacy(row))));
 }
 
 api.get('/conversations', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await touchUserPresence(c.env.DB, userId);
-  await ensureAbuseProtectionSchema(c.env.DB);
-  await ensureGroupChatSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'conversations_read');
+  if (supabaseRequired) return supabaseRequired;
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
-  const msgs = await c.env.DB.prepare(`
-    WITH ranked_messages AS (
-      SELECT
-        m.*,
-        CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END AS other_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
-          ORDER BY datetime(m.created_at) DESC
-        ) AS rn
-      FROM messages m
-      WHERE (m.sender_id = ? OR m.receiver_id = ?)
-    )
-    SELECT
-      m.*,
-      u.username,
-      u.full_name,
-      u.profile_image,
-      up.last_seen_at AS other_last_seen_at,
-      EXISTS (
-        SELECT 1 FROM message_typing mt
-        WHERE mt.user_id = u.id
-          AND mt.peer_id = ?
-          AND mt.is_typing = 1
-          AND datetime(mt.updated_at) > datetime('now', '-10 seconds')
-      ) AS other_is_typing
-      ,
-      (SELECT COUNT(*)
-       FROM messages unread
-       WHERE unread.sender_id = u.id
-         AND unread.receiver_id = ?
-         AND unread.is_read = 0) AS unread_total
-    FROM ranked_messages m
-    JOIN users u ON m.other_id = u.id
-    LEFT JOIN user_presence up ON up.user_id = u.id
-    WHERE m.rn = 1
-      AND COALESCE(u.status, 'active') = 'active'
-      AND NOT EXISTS (
-        SELECT 1 FROM blocks b
-        WHERE (b.blocker_id = ? AND b.blocked_id = u.id)
-           OR (b.blocker_id = u.id AND b.blocked_id = ?)
-      )
-    ORDER BY m.created_at DESC
-    LIMIT ?
-  `).bind(userId, userId, userId, userId, userId, userId, userId, userId, limit).all();
-  const map = new Map<string, any>();
-  for (const m of msgs.results as any[]) {
-    const oid = m.sender_id === userId ? m.receiver_id : m.sender_id;
-    if (!map.has(oid)) {
-      let preview = m.content || '';
-      if (!preview && m.media_type === 'video') preview = 'Sent a video';
-      else if (!preview && m.media_type === 'voice') preview = 'Sent a voice message';
-      else if (!preview && m.media_type === 'file') preview = 'Sent a file';
-      else if (!preview && (m.media_url || m.image)) preview = 'Sent a photo';
-      map.set(oid, {
-        id: `conv-${oid}`,
-        participants: [userId, oid],
-        other_user: {
-          id: oid,
-          username: m.username,
-          full_name: m.full_name,
-          profile_image: safeMediaReference(m.profile_image),
-          last_seen_at: m.other_last_seen_at || null,
-          is_online: isPresenceOnline(m.other_last_seen_at),
-          is_typing: Number(m.other_is_typing || 0) > 0,
-        },
-        last_message: preview,
-        last_message_time: m.created_at,
-        unread_count: Number(m.unread_total || 0),
-      });
-    }
+  const blockedIds = await supabaseBlockedUserIds(c, userId);
+  const directRows = await supabaseAdminQueryRows(c, 'app_messages', {
+    select: '*',
+    filters: { or: `(sender_id.eq.${userId},receiver_id.eq.${userId})` },
+    order: 'created_at.desc',
+    limit: Math.max(120, limit * 6),
+  });
+  const otherIds = Array.from(new Set(directRows.map((row) => publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120)).filter(Boolean)));
+  const users = await supabaseUsersByAnyIds(c, otherIds);
+  const directMap = new Map<string, any>();
+  const unreadCounts = new Map<string, number>();
+  for (const row of directRows) {
+    const otherId = publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120);
+    if (!otherId || blockedIds.has(otherId)) continue;
+    if (row.receiver_id === userId && row.is_read !== true) unreadCounts.set(otherId, (unreadCounts.get(otherId) || 0) + 1);
+    if (directMap.has(otherId)) continue;
+    const user = users.get(otherId) || {};
+    const legacyMessage = supabaseMessageToLegacy(row);
+    let preview = legacyMessage.content || '';
+    if (!preview && legacyMessage.media_type === 'video') preview = 'Sent a video';
+    else if (!preview && legacyMessage.media_type === 'voice') preview = 'Sent a voice message';
+    else if (!preview && legacyMessage.media_type === 'file') preview = 'Sent a file';
+    else if (!preview && legacyMessage.media_url) preview = 'Sent a photo';
+    directMap.set(otherId, {
+      id: `conv-${otherId}`,
+      participants: [userId, otherId],
+      other_user: {
+        id: otherId,
+        username: user?.username,
+        full_name: user?.full_name,
+        profile_image: safeMediaReference(user?.avatar_url),
+        last_seen_at: null,
+        is_online: false,
+        is_typing: false,
+      },
+      last_message: preview,
+      last_message_time: legacyMessage.created_at,
+      unread_count: unreadCounts.get(otherId) || 0,
+    });
   }
-  const directConversations = Array.from(map.values());
-
-  let groupConversations: any[] = [];
-  try {
-    const groups = await c.env.DB.prepare(`
-      SELECT
-        g.id,
-        g.name,
-        g.created_at,
-        COUNT(all_members.user_id) AS member_count,
-        last_message.content AS last_message,
-        last_message.media_url AS last_media_url,
-        last_message.media_type AS last_media_type,
-        last_message.created_at AS last_message_time,
-        sender.username AS last_sender_username
-      FROM group_chats g
-      JOIN group_chat_members my_membership ON my_membership.group_id = g.id AND my_membership.user_id = ?
-      LEFT JOIN group_chat_members all_members ON all_members.group_id = g.id
-      LEFT JOIN group_messages last_message ON last_message.id = (
-        SELECT id FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1
-      )
-      LEFT JOIN users sender ON sender.id = last_message.sender_id
-      GROUP BY g.id
-      ORDER BY COALESCE(last_message.created_at, g.created_at) DESC
-      LIMIT ?
-    `).bind(userId, limit).all();
-
-    groupConversations = (groups.results as any[]).map((g) => ({
-      id: `group-${g.id}`,
-      type: 'group',
-      group_id: g.id,
-      group_name: g.name,
-      member_count: Number(g.member_count || 0),
-      last_message: (() => {
-        const sender = g.last_sender_username || 'Someone';
-        if (g.last_message) return `${sender}: ${g.last_message}`;
-        if (g.last_media_type === 'video') return `${sender}: Sent a video`;
-        if (g.last_media_type === 'voice') return `${sender}: Sent a voice message`;
-        if (g.last_media_type === 'file') return `${sender}: Sent a file`;
-        if (g.last_media_url) return `${sender}: Sent a photo`;
-        return 'Group created';
-      })(),
-      last_message_time: g.last_message_time || g.created_at,
-      unread_count: 0,
+  for (const [otherId, count] of unreadCounts.entries()) {
+    const existing = directMap.get(otherId);
+    if (existing) existing.unread_count = count;
+  }
+  if (directMap.size) {
+    await Promise.all(Array.from(directMap.entries()).map(async ([otherId, conversation]) => {
+      const [lastSeenAt, isTyping] = await Promise.all([
+        readSupabasePrimaryPresence(c, otherId),
+        readSupabasePrimaryTyping(c, otherId, userId),
+      ]);
+      conversation.other_user.last_seen_at = lastSeenAt;
+      conversation.other_user.is_online = isPresenceOnline(lastSeenAt);
+      conversation.other_user.is_typing = isTyping;
     }));
-  } catch {
-    groupConversations = [];
   }
 
-  return c.json([...directConversations, ...groupConversations].sort((a, b) => Date.parse(b.last_message_time || '') - Date.parse(a.last_message_time || '')));
+  const memberships = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
+    select: 'group_id',
+    filters: { user_id: postgrestEqFilter(userId) },
+    order: 'created_at.desc',
+    limit: 100,
+  }).catch(() => []);
+  const groupIds = Array.from(new Set(memberships.map((row) => publicId(row.group_id, 120)).filter(Boolean)));
+  let groupConversations: any[] = [];
+  if (groupIds.length) {
+    const [groups, members, messages] = await Promise.all([
+      supabaseAdminQueryRows(c, 'app_group_chats', {
+        select: '*',
+        filters: { id: postgrestInFilter(groupIds) },
+        limit: groupIds.length,
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_group_chat_members', {
+        select: 'group_id,user_id',
+        filters: { group_id: postgrestInFilter(groupIds) },
+        limit: Math.max(100, groupIds.length * 60),
+      }).catch(() => []),
+      supabaseAdminQueryRows(c, 'app_group_messages', {
+        select: '*',
+        filters: { group_id: postgrestInFilter(groupIds) },
+        order: 'created_at.desc',
+        limit: Math.max(100, groupIds.length * 20),
+      }).catch(() => []),
+    ]);
+    const memberCount = new Map<string, number>();
+    for (const member of members) {
+      const groupId = publicId(member.group_id, 120);
+      memberCount.set(groupId, (memberCount.get(groupId) || 0) + 1);
+    }
+    const lastMessage = new Map<string, any>();
+    for (const message of messages) {
+      const groupId = publicId(message.group_id, 120);
+      if (!lastMessage.has(groupId)) lastMessage.set(groupId, message);
+    }
+    const senderIds = Array.from(new Set(messages.map((row) => publicId(row.sender_id, 120)).filter(Boolean)));
+    const senders = await supabaseUsersByAnyIds(c, senderIds);
+    groupConversations = groups.map((group: any) => {
+      const groupId = publicId(group.id, 120);
+      const msg = lastMessage.get(groupId);
+      const legacyMessage = msg ? supabaseMessageToLegacy(msg) : null;
+      const sender = msg ? senders.get(publicId(msg.sender_id, 120)) || {} : {};
+      const senderName = publicUsernameFor({ username: sender?.username }) || cleanText(sender?.full_name, 80) || 'Someone';
+      return {
+        id: `group-${groupId}`,
+        type: 'group',
+        group_id: groupId,
+        group_name: cleanText(group.name || 'New group', 120),
+        member_count: memberCount.get(groupId) || 0,
+        last_message: legacyMessage
+          ? legacyMessage.content
+            ? `${senderName}: ${legacyMessage.content}`
+            : legacyMessage.media_type === 'video'
+              ? `${senderName}: Sent a video`
+              : legacyMessage.media_type === 'voice'
+                ? `${senderName}: Sent a voice message`
+                : legacyMessage.media_type === 'file'
+                  ? `${senderName}: Sent a file`
+                  : legacyMessage.media_url
+                    ? `${senderName}: Sent a photo`
+                    : 'Group created'
+          : 'Group created',
+        last_message_time: legacyMessage?.created_at || group.legacy_created_at || group.created_at,
+        unread_count: 0,
+      };
+    });
+  }
+
+  return c.json([...directMap.values(), ...groupConversations]
+    .sort((a, b) => Date.parse(b.last_message_time || '') - Date.parse(a.last_message_time || ''))
+    .slice(0, limit));
 });
 
 api.post('/presence/touch', authMiddleware, async (c) => {
-  await touchUserPresence(c.env.DB, getUserId(c));
-  return c.json({ ok: true, touched_at: now() });
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'presence_touch');
+  if (supabaseRequired) return supabaseRequired;
+  const touchedAt = await touchSupabasePrimaryPresence(c, userId);
+  return c.json({ ok: true, touched_at: touchedAt });
 });
 
 api.post('/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await touchUserPresence(c.env.DB, userId);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_send');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'message_send', userId, 45, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'message_send_daily', userId, 600, 86400);
@@ -12485,19 +16984,43 @@ api.post('/messages', authMiddleware, async (c) => {
   if (invalidPeer) return invalidPeer;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
   if (content && !mediaUrl) {
-    const recentDuplicate: any = await c.env.DB.prepare(
-      "SELECT id FROM messages WHERE sender_id = ? AND receiver_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
-    ).bind(userId, receiverId, content).first();
-    if (recentDuplicate) {
+    const recentDuplicate = await supabaseAdminQueryRows(c, 'app_messages', {
+      select: 'id',
+      filters: {
+        sender_id: postgrestEqFilter(userId),
+        receiver_id: postgrestEqFilter(receiverId),
+        body: postgrestEqFilter(content),
+        created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
+      },
+      limit: 1,
+    });
+    if (recentDuplicate[0]) {
       await logSecurityEvent(c, 'duplicate_message_blocked', userId, { receiver_id: receiverId });
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
   }
   const id = uuid();
-  await c.env.DB.prepare('INSERT INTO messages (id, sender_id, receiver_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)').bind(id, userId, receiverId, content, mediaUrl || null, mediaType).run();
-  await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'message_id');
+  const ts = now();
+  const media: Record<string, unknown> = {};
+  if (mediaUrl) media.url = mediaUrl;
+  if (mediaType) media.type = mediaType;
+  await supabaseAdminUpsert(c, 'app_messages', [{
+    id,
+    sender_id: userId,
+    receiver_id: receiverId,
+    body: content,
+    media_url: mediaUrl || null,
+    media_type: mediaType,
+    media,
+    is_read: false,
+    status: 'sent',
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await setSupabasePrimaryTyping(c, userId, receiverId, false);
   runBackgroundTask(c, 'message_notification_failed', async () => {
-    const sender: any = await c.env.DB.prepare('SELECT username, full_name FROM users WHERE id = ?').bind(userId).first();
+    const sender = await supabaseUserByAnyId(c, userId);
     const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
     const privatePreview = mediaType === 'voice'
       ? 'Sent you a voice message'
@@ -12518,40 +17041,33 @@ api.post('/messages', authMiddleware, async (c) => {
       dedupeSeconds: 86400,
     });
   });
-  await c.env.DB.prepare('UPDATE message_typing SET is_typing = 0, updated_at = ? WHERE user_id = ? AND peer_id = ?')
-    .bind(now(), userId, receiverId)
-    .run()
-    .catch(() => {});
-  return c.json(await messagePayload(c, { id, sender_id: userId, receiver_id: receiverId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
+  return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, sender_id: userId, receiver_id: receiverId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
 });
 
 api.get('/messages/presence/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_presence');
+  if (supabaseRequired) return supabaseRequired;
   const peerId = publicId(c.req.param('userId'), 120);
-  await touchUserPresence(c.env.DB, myId);
+  await touchSupabasePrimaryPresence(c, myId);
   const limited = await enforceRateLimit(c, 'message_presence', myId, 160, 60);
   if (limited) return limited;
   const invalidPeer = await validateDirectMessagePeer(c, myId, peerId);
   if (invalidPeer) return invalidPeer;
-  const presence: any = await c.env.DB.prepare('SELECT last_seen_at FROM user_presence WHERE user_id = ?')
-    .bind(peerId)
-    .first();
-  const typing: any = await c.env.DB.prepare(`
-    SELECT id FROM message_typing
-    WHERE user_id = ? AND peer_id = ? AND is_typing = 1 AND datetime(updated_at) > datetime('now', '-10 seconds')
-    LIMIT 1
-  `).bind(peerId, myId).first();
+  const lastSeenAt = await readSupabasePrimaryPresence(c, peerId);
   return c.json({
     user_id: peerId,
-    last_seen_at: presence?.last_seen_at || null,
-    is_online: isPresenceOnline(presence?.last_seen_at),
-    is_typing: !!typing,
+    last_seen_at: lastSeenAt,
+    is_online: isPresenceOnline(lastSeenAt),
+    is_typing: await readSupabasePrimaryTyping(c, peerId, myId),
   });
 });
 
 api.post('/messages/typing', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await touchUserPresence(c.env.DB, userId);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_typing');
+  if (supabaseRequired) return supabaseRequired;
+  await touchSupabasePrimaryPresence(c, userId);
   const limited = await enforceRateLimit(c, 'message_typing', userId, 120, 60);
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 20_000);
@@ -12564,21 +17080,15 @@ api.post('/messages/typing', authMiddleware, async (c) => {
   if (!peerId || peerId === userId) return c.json({ typing: false });
   const invalidPeer = await validateDirectMessagePeer(c, userId, peerId);
   if (invalidPeer) return invalidPeer;
-  const timestamp = now();
-  await c.env.DB.prepare(`
-    INSERT INTO message_typing (id, user_id, peer_id, is_typing, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(user_id, peer_id) DO UPDATE SET
-      is_typing = excluded.is_typing,
-      updated_at = excluded.updated_at
-  `).bind(uuid(), userId, peerId, isTyping ? 1 : 0, timestamp).run();
-  return c.json({ typing: isTyping, updated_at: timestamp });
+  const updatedAt = await setSupabasePrimaryTyping(c, userId, peerId, isTyping);
+  return c.json({ typing: isTyping, updated_at: updatedAt });
 });
 
 api.get('/messages/:userId', authMiddleware, async (c) => {
   const myId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'message_read');
+  if (supabaseRequired) return supabaseRequired;
   const oid = publicId(c.req.param('userId'), 120);
-  await touchUserPresence(c.env.DB, myId);
   const limited = await enforceRateLimit(c, 'message_read', myId, 160, 60);
   if (limited) return limited;
   const invalidPeer = await validateDirectMessagePeer(c, myId, oid);
@@ -12586,37 +17096,18 @@ api.get('/messages/:userId', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
   const after = cleanText(c.req.query('after') || '', 60);
-  await c.env.DB.prepare('UPDATE messages SET is_read = 1 WHERE sender_id = ? AND receiver_id = ? AND is_read = 0').bind(oid, myId).run();
-  const directMessagesSql = after
-    ? `
-      SELECT * FROM messages
-      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-        AND datetime(created_at) > datetime(?)
-      ORDER BY created_at ASC
-      LIMIT ?
-    `
-    : `
-      SELECT * FROM (
-        SELECT * FROM messages
-        WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-          ${before ? "AND datetime(created_at) < datetime(?)" : ''}
-        ORDER BY created_at DESC
-        LIMIT ?
-      )
-      ORDER BY created_at ASC
-    `;
-  const binds = after
-    ? [myId, oid, oid, myId, after, limit]
-    : before
-      ? [myId, oid, oid, myId, before, limit]
-      : [myId, oid, oid, myId, limit];
-  const r = await c.env.DB.prepare(directMessagesSql).bind(...binds).all();
-  const messages = await Promise.all((r.results as any[]).map((row) => messagePayload(c, row)));
-  return c.json(messages);
+  await supabaseAdminPatchRows(c, 'app_messages', {
+    sender_id: postgrestEqFilter(oid),
+    receiver_id: postgrestEqFilter(myId),
+    is_read: 'eq.false',
+  }, { is_read: true, updated_at: now() }).catch(() => undefined);
+  return c.json(await supabaseDirectMessageRows(c, myId, oid, { limit, before, after }));
 });
 
 api.post('/group-chats', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'group_chat_create');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'group_chat_create', userId, 20, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'group_chat_create_daily', userId, 80, 86400);
@@ -12632,48 +17123,56 @@ api.post('/group-chats', authMiddleware, async (c) => {
     : [];
   const uniqueMemberIds = Array.from(new Set(memberIds)).slice(0, 50);
   if (uniqueMemberIds.length < 1) return c.json({ detail: 'Select at least one person for a group chat.' }, 400);
-  await ensureAbuseProtectionSchema(c.env.DB);
-  await ensureGroupChatSchema(c.env.DB);
-  const memberPlaceholders = uniqueMemberIds.map(() => '?').join(', ');
-  const existingMembersSql = `SELECT id FROM users WHERE id IN (${memberPlaceholders})`;
-  const existingMembers = await c.env.DB.prepare(existingMembersSql)
-    .bind(...uniqueMemberIds)
-    .all();
-  if ((existingMembers.results as any[]).length !== uniqueMemberIds.length) {
+  const users = await supabaseUsersByAnyIds(c, uniqueMemberIds);
+  if (uniqueMemberIds.some((memberId) => !users.has(memberId))) {
     return c.json({ detail: 'One or more selected people could not be found.' }, 400);
   }
-  const blockedMemberSql = `
-    SELECT id FROM blocks
-    WHERE (blocker_id = ? AND blocked_id IN (${memberPlaceholders}))
-       OR (blocked_id = ? AND blocker_id IN (${memberPlaceholders}))
-    LIMIT 1
-  `;
-  const blockedMember = await c.env.DB.prepare(blockedMemberSql).bind(userId, ...uniqueMemberIds, userId, ...uniqueMemberIds).first();
-  if (blockedMember) return c.json({ detail: 'A blocked profile cannot be added to this group.' }, 403);
-
-  const groupId = uuid();
-  const name = String(body.name || '').trim().slice(0, 80) || 'New group';
-  await c.env.DB.prepare('INSERT INTO group_chats (id, name, created_by) VALUES (?, ?, ?)').bind(groupId, name, userId).run();
-  await c.env.DB.prepare('INSERT INTO group_chat_members (id, group_id, user_id, role) VALUES (?, ?, ?, ?)')
-    .bind(uuid(), groupId, userId, 'owner')
-    .run();
-
   for (const memberId of uniqueMemberIds) {
-    await c.env.DB.prepare('INSERT OR IGNORE INTO group_chat_members (id, group_id, user_id, role) VALUES (?, ?, ?, ?)')
-      .bind(uuid(), groupId, memberId, 'member')
-      .run();
+    if (await supabaseBlockPair(c, userId, memberId)) return c.json({ detail: 'A blocked profile cannot be added to this group.' }, 403);
   }
-
+  const groupId = uuid();
+  const name = cleanText(body.name || '', 80) || 'New group';
+  const ts = now();
+  await supabaseAdminUpsert(c, 'app_group_chats', [{
+    id: groupId,
+    name,
+    created_by: userId,
+    metadata: { source: 'cloudflare_worker_primary' },
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await supabaseAdminUpsert(c, 'app_group_chat_members', [
+    { id: uuid(), group_id: groupId, user_id: userId, role: 'owner', legacy_created_at: ts, created_at: ts, updated_at: ts },
+    ...uniqueMemberIds.map((memberId) => ({
+      id: uuid(),
+      group_id: groupId,
+      user_id: memberId,
+      role: 'member',
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    })),
+  ], 'group_id,user_id');
   const messageId = uuid();
-  await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content) VALUES (?, ?, ?, ?)')
-    .bind(messageId, groupId, userId, 'Created the group')
-    .run();
+  await supabaseAdminUpsert(c, 'app_group_messages', [{
+    id: messageId,
+    group_id: groupId,
+    sender_id: userId,
+    body: 'Created the group',
+    media: {},
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
 
-  return c.json({ id: groupId, name, member_count: uniqueMemberIds.length + 1, created_by: userId, created_at: now() });
+  return c.json({ id: groupId, name, member_count: uniqueMemberIds.length + 1, created_by: userId, created_at: ts });
 });
 
 api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'group_messages_read');
+  if (supabaseRequired) return supabaseRequired;
   const groupId = publicId(c.req.param('groupId'), 120);
   const limited = await enforceRateLimit(c, 'group_message_read', userId, 160, 60);
   if (limited) return limited;
@@ -12681,43 +17180,35 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
   const before = cleanText(c.req.query('before') || '', 60);
   const after = cleanText(c.req.query('after') || '', 60);
-
-  const group: any = await c.env.DB.prepare(`
-    SELECT g.*, COUNT(m.user_id) AS member_count
-    FROM group_chats g
-    LEFT JOIN group_chat_members m ON m.group_id = g.id
-    WHERE g.id = ?
-    GROUP BY g.id
-  `).bind(groupId).first();
-  const groupMessagesSql = after
-    ? `
-      SELECT gm.*, u.username, u.full_name, u.profile_image
-      FROM group_messages gm
-      JOIN users u ON u.id = gm.sender_id
-      WHERE gm.group_id = ?
-        AND datetime(gm.created_at) > datetime(?)
-      ORDER BY gm.created_at ASC
-      LIMIT ?
-    `
-    : `
-      SELECT gm.*, u.username, u.full_name, u.profile_image
-      FROM group_messages gm
-      JOIN users u ON u.id = gm.sender_id
-      WHERE gm.group_id = ?
-        ${before ? "AND datetime(gm.created_at) < datetime(?)" : ''}
-      ORDER BY gm.created_at DESC
-      LIMIT ?
-    `;
-  const binds = after ? [groupId, after, limit] : before ? [groupId, before, limit] : [groupId, limit];
-  const messages = await c.env.DB.prepare(groupMessagesSql).bind(...binds).all();
-
-  const rows = after ? (messages.results as any[]) : [...(messages.results as any[])].reverse();
-  const signedMessages = await Promise.all(rows.map((row) => messagePayload(c, row)));
-  return c.json({ group, messages: signedMessages });
+  const [groups, members] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_group_chats', {
+      select: '*',
+      filters: { id: postgrestEqFilter(groupId) },
+      limit: 1,
+    }),
+    supabaseAdminQueryRows(c, 'app_group_chat_members', {
+      select: 'user_id',
+      filters: { group_id: postgrestEqFilter(groupId) },
+      limit: 200,
+    }),
+  ]);
+  const group = groups[0];
+  if (!group) return c.json({ detail: 'Group not found' }, 404);
+  const messages = await supabaseGroupMessageRows(c, groupId, { limit, before, after });
+  return c.json({
+    group: {
+      ...group,
+      member_count: members.length,
+      created_at: group.legacy_created_at || group.created_at,
+    },
+    messages,
+  });
 });
 
 api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'group_message_send');
+  if (supabaseRequired) return supabaseRequired;
   const groupId = publicId(c.req.param('groupId'), 120);
   const limited = await enforceRateLimit(c, 'group_message_send', userId, 60, 60);
   if (limited) return limited;
@@ -12741,311 +17232,96 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
         : mediaUrl ? 'image' : null;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
   if (content && !mediaUrl) {
-    const recentDuplicate: any = await c.env.DB.prepare(
-      "SELECT id FROM group_messages WHERE group_id = ? AND sender_id = ? AND content = ? AND created_at > datetime('now', '-30 seconds') LIMIT 1"
-    ).bind(groupId, userId, content).first();
-    if (recentDuplicate) {
+    const recentDuplicate = await supabaseAdminQueryRows(c, 'app_group_messages', {
+      select: 'id',
+      filters: {
+        group_id: postgrestEqFilter(groupId),
+        sender_id: postgrestEqFilter(userId),
+        body: postgrestEqFilter(content),
+        created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
+      },
+      limit: 1,
+    });
+    if (recentDuplicate[0]) {
       await logSecurityEvent(c, 'duplicate_group_message_blocked', userId, { group_id: groupId });
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
   }
-
   const id = uuid();
-  await c.env.DB.prepare('INSERT INTO group_messages (id, group_id, sender_id, content, media_url, media_type) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id, groupId, userId, content, mediaUrl || null, mediaType)
-    .run();
-  await attachMediaBackupToMessage(c.env.DB, userId, id, mediaUrl, 'group_message_id');
-  await c.env.DB.prepare('UPDATE group_chats SET updated_at = datetime(\'now\') WHERE id = ?').bind(groupId).run();
-  return c.json(await messagePayload(c, { id, group_id: groupId, sender_id: userId, content, media_url: mediaUrl || null, media_type: mediaType, created_at: now() }));
-});
-
-// Calls
-api.post('/calls/voip-token', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const body: any = await c.req.json().catch(() => ({}));
-  const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
-  if (token.length < 32) return c.json({ detail: 'Invalid VoIP token.' }, 400);
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const timestamp = now();
-  await c.env.DB.prepare(
-    `INSERT INTO voip_push_tokens (id, user_id, token, device_id, bundle_id, environment, platform, is_active, last_seen_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'ios', 1, ?, ?)
-     ON CONFLICT(user_id, token) DO UPDATE SET
-       device_id = excluded.device_id,
-       bundle_id = excluded.bundle_id,
-       environment = excluded.environment,
-       is_active = 1,
-       last_seen_at = excluded.last_seen_at`
-  ).bind(
-    uuid(),
-    userId,
-    token,
-    cleanText(body.device_id || body.deviceId || '', 160),
-    cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
-    cleanText(body.environment || 'production', 32),
-    timestamp,
-    timestamp
-  ).run();
-  return c.json({ ok: true });
-});
-
-api.post('/calls', authMiddleware, async (c) => {
-  try {
-    const phoneGate = await requirePhoneVerified(c, 'start video calls');
-    if (phoneGate) return phoneGate;
-    await ensureAbuseProtectionSchema(c.env.DB);
-    await expireRingingCalls(c.env.DB);
-
-    const callerId = getUserId(c);
-    const body: any = await c.req.json().catch(() => ({}));
-    const calleeId = publicId(body.callee_user_id || body.calleeUserId || body.user_id || body.userId || '', 120);
-    if (!calleeId || calleeId === callerId) return c.json({ detail: 'Choose someone else to call.' }, 400);
-
-    const blocked: any = await c.env.DB.prepare(
-      'SELECT id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?) LIMIT 1'
-    ).bind(callerId, calleeId, calleeId, callerId).first();
-    if (blocked) return c.json({ detail: 'This call is not available.' }, 403);
-
-    if (await hasActiveCallForUser(c.env.DB, callerId) || await hasActiveCallForUser(c.env.DB, calleeId)) {
-      return c.json({ detail: 'One of you is already in another call.' }, 409);
-    }
-
-    const caller: any = await c.env.DB.prepare('SELECT id, username, full_name, profile_image FROM users WHERE id = ? LIMIT 1').bind(callerId).first();
-    const callee: any = await c.env.DB.prepare('SELECT id, username, full_name, profile_image FROM users WHERE id = ? LIMIT 1').bind(calleeId).first();
-    if (!caller || !callee) return c.json({ detail: 'User not found.' }, 404);
-
-    const callId = uuid();
-    const timestamp = now();
-    const timeoutAt = callTimeoutAt();
-    const channel = buildCaptroCallChannel(callId);
-    await c.env.DB.prepare(
-      `INSERT INTO call_sessions
-       (id, caller_id, callee_id, caller_name, caller_avatar, callee_name, callee_avatar, call_type, status, room_id, channel_name, push_delivery_status, created_at, timeout_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'video', 'ringing', ?, ?, '', ?, ?, ?)`
-    ).bind(
-      callId,
-      callerId,
-      calleeId,
-      cleanText(caller.full_name || caller.username || 'Captro', 120),
-      cleanText(caller.profile_image || '', 500),
-      cleanText(callee.full_name || callee.username || 'Captro', 120),
-      cleanText(callee.profile_image || '', 500),
-      channel,
-      channel,
-      timestamp,
-      timeoutAt,
-      timestamp
-    ).run();
-
-    const call: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(callId).first();
-    await insertNotificationOnce(c, {
-      userId: calleeId,
-      type: 'incoming_call',
-      title: 'Captro Video Call',
-      body: `${call.caller_name || 'Someone'} is calling you`,
-      data: { call_id: callId, caller_user_id: callerId, status: 'ringing' },
-      dedupeKey: `incoming_call:${callId}`,
-      dedupeSeconds: 90,
-    });
-
-    const pushStatus = await sendVoipPushForCall(c, call);
-    await c.env.DB.prepare('UPDATE call_sessions SET push_delivery_status = ?, updated_at = ? WHERE id = ?')
-      .bind(pushStatus, now(), callId)
-      .run();
-    const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(callId).first();
-    return c.json(safeCallPayload(fresh));
-  } catch (error: any) {
-    const code = getErrorCode(error);
-    if (code === 'AGORA_INVALID_CHANNEL') return c.json({ detail: 'Invalid call channel.' }, 400);
-    return c.json({ detail: 'Could not start the call.' }, 500);
-  }
-});
-
-api.get('/calls/incoming', authMiddleware, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const userId = getUserId(c);
-  await expireRingingCalls(c.env.DB);
-  const row: any = await c.env.DB.prepare(
-    `SELECT * FROM call_sessions
-     WHERE callee_id = ? AND status = 'ringing' AND timeout_at > ?
-     ORDER BY created_at DESC
-     LIMIT 1`
-  ).bind(userId, now()).first();
-  return c.json({ call: safeCallPayload(row) });
-});
-
-api.get('/calls/:callId', authMiddleware, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), getUserId(c));
-  if (!row) return c.json({ detail: 'Call not found.' }, 404);
-  return c.json(safeCallPayload(row));
-});
-
-api.post('/calls/:callId/accept', authMiddleware, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const userId = getUserId(c);
-  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
-  if (!row || row.callee_id !== userId) return c.json({ detail: 'Call not found.' }, 404);
-  if (row.status !== 'ringing') return c.json(safeCallPayload(row));
-  const timestamp = now();
-  await c.env.DB.prepare("UPDATE call_sessions SET status = 'accepted', answered_at = ?, updated_at = ? WHERE id = ?")
-    .bind(timestamp, timestamp, row.id)
-    .run();
-  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
-  await insertNotificationOnce(c, {
-    userId: row.caller_id,
-    type: 'call_accepted',
-    title: 'Call accepted',
-    body: `${fresh.callee_name || 'They'} joined your call`,
-    data: { call_id: row.id, status: 'accepted' },
-    dedupeKey: `call_accepted:${row.id}`,
-    dedupeSeconds: 120,
-  });
-  return c.json(safeCallPayload(fresh));
-});
-
-api.post('/calls/:callId/decline', authMiddleware, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const userId = getUserId(c);
-  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
-  if (!row || row.callee_id !== userId) return c.json({ detail: 'Call not found.' }, 404);
-  if (row.status === 'ringing') {
-    const timestamp = now();
-    await c.env.DB.prepare("UPDATE call_sessions SET status = 'declined', ended_at = ?, updated_at = ? WHERE id = ?")
-      .bind(timestamp, timestamp, row.id)
-      .run();
-    await insertNotificationOnce(c, {
-      userId: row.caller_id,
-      type: 'call_declined',
-      title: 'Call declined',
-      body: `${row.callee_name || 'They'} declined your call`,
-      data: { call_id: row.id, status: 'declined' },
-      dedupeKey: `call_declined:${row.id}`,
-      dedupeSeconds: 120,
-    });
-  }
-  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
-  return c.json(safeCallPayload(fresh));
-});
-
-api.post('/calls/:callId/cancel', authMiddleware, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const userId = getUserId(c);
-  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
-  if (!row || row.caller_id !== userId) return c.json({ detail: 'Call not found.' }, 404);
-  if (row.status === 'ringing') {
-    const timestamp = now();
-    await c.env.DB.prepare("UPDATE call_sessions SET status = 'cancelled', ended_at = ?, updated_at = ? WHERE id = ?")
-      .bind(timestamp, timestamp, row.id)
-      .run();
-  }
-  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
-  if (fresh?.status === 'cancelled') {
-    const pushStatus = await sendVoipPushForCall(c, fresh);
-    await c.env.DB.prepare('UPDATE call_sessions SET push_delivery_status = ?, updated_at = ? WHERE id = ?')
-      .bind(pushStatus, now(), row.id)
-      .run();
-  }
-  return c.json(safeCallPayload(fresh));
-});
-
-api.post('/calls/:callId/active', authMiddleware, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const userId = getUserId(c);
-  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
-  if (!row) return c.json({ detail: 'Call not found.' }, 404);
-  if (['accepted', 'connecting', 'active'].includes(row.status)) {
-    await c.env.DB.prepare("UPDATE call_sessions SET status = 'active', updated_at = ? WHERE id = ?")
-      .bind(now(), row.id)
-      .run();
-  }
-  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
-  return c.json(safeCallPayload(fresh));
-});
-
-api.post('/calls/:callId/end', authMiddleware, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const userId = getUserId(c);
-  const row: any = await getVisibleCallForUser(c.env.DB, c.req.param('callId'), userId);
-  if (!row) return c.json({ detail: 'Call not found.' }, 404);
-  if (['accepted', 'connecting', 'active', 'ringing'].includes(row.status)) {
-    const timestamp = now();
-    const nextStatus = row.status === 'ringing' ? 'cancelled' : 'ended';
-    await c.env.DB.prepare('UPDATE call_sessions SET status = ?, ended_at = ?, updated_at = ? WHERE id = ?')
-      .bind(nextStatus, timestamp, timestamp, row.id)
-      .run();
-  }
-  const fresh: any = await c.env.DB.prepare('SELECT * FROM call_sessions WHERE id = ?').bind(row.id).first();
-  return c.json(safeCallPayload(fresh));
-});
-
-api.post('/calls/agora/token', authMiddleware, async (c) => {
-  try {
-    const phoneGate = await requirePhoneVerified(c, 'start video calls');
-    if (phoneGate) return phoneGate;
-    const userId = getUserId(c);
-    const body: any = await c.req.json().catch(() => ({}));
-    const { appId, appCertificate } = getAgoraConfig(c);
-    const channel = normalizeAgoraChannel(body.channel);
-    const role = normalizeAgoraRole(body.role);
-    const uid = await numericAgoraUid(userId);
-    const expiresIn = getAgoraTokenTtl(c);
-    const token = RtcTokenBuilder.buildTokenWithUid(
-      appId,
-      appCertificate,
-      channel,
-      uid,
-      role.rtcRole,
-      expiresIn,
-      expiresIn
-    );
-
-    return c.json({
-      appId,
-      channel,
-      uid,
-      role: role.label,
-      mode: body.mode === 'live' ? 'live' : body.mode === 'voice' ? 'voice' : 'call',
-      token,
-      expires_in: expiresIn,
-      expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
-    });
-  } catch (error: any) {
-    const code = getErrorCode(error);
-    if (code === 'AGORA_NOT_CONFIGURED') return c.json({ detail: 'Agora calling is not configured.' }, 503);
-    if (code === 'AGORA_INVALID_CHANNEL') return c.json({ detail: 'Invalid call channel.' }, 400);
-    return c.json({ detail: 'Could not create call token.' }, 500);
-  }
+  const ts = now();
+  const media: Record<string, unknown> = {};
+  if (mediaUrl) media.url = mediaUrl;
+  if (mediaType) media.type = mediaType;
+  await supabaseAdminUpsert(c, 'app_group_messages', [{
+    id,
+    group_id: groupId,
+    sender_id: userId,
+    body: content,
+    media_url: mediaUrl || null,
+    media_type: mediaType,
+    media,
+    legacy_created_at: ts,
+    created_at: ts,
+    updated_at: ts,
+  }], 'id');
+  await supabaseAdminPatchRows(c, 'app_group_chats', { id: postgrestEqFilter(groupId) }, { updated_at: ts }).catch(() => undefined);
+  return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, group_id: groupId, sender_id: userId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
 });
 
 // Notifications
 api.get('/notifications', authMiddleware, async (c) => {
   try {
     const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_read');
+    if (supabaseRequired) return supabaseRequired;
     const limited = await enforceRateLimit(c, 'notifications_read', userId, 180, 60);
     if (limited) return limited;
-    await ensureAbuseProtectionSchema(c.env.DB);
     const limit = clampNumber(c.req.query('limit') || '50', 1, 80, 50);
     const before = cleanText(c.req.query('before') || '', 60);
-    const notificationsSql = `SELECT * FROM notifications WHERE user_id = ? ${before ? 'AND datetime(created_at) < datetime(?)' : ''} ORDER BY created_at DESC LIMIT ?`;
-    const r = await c.env.DB.prepare(notificationsSql).bind(...(before ? [userId, before, limit] : [userId, limit])).all();
-    return c.json((r.results as any[]).map(safeNotificationPayload));
-  } catch {
-    // Auto-create table if missing
-    await c.env.DB.prepare('CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, type TEXT DEFAULT \'general\', title TEXT DEFAULT \'\', body TEXT DEFAULT \'\', data TEXT DEFAULT \'{}\', is_read INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime(\'now\')))').run();
-    return c.json([]);
+    const filters: Record<string, string> = { user_id: postgrestEqFilter(userId) };
+    if (before) filters.created_at = `lt.${toPgTime(before) || before}`;
+    const rows = await supabaseAdminQueryRows(c, 'app_notifications', {
+      select: 'id,user_id,from_user_id,type,title,body,content,reference_id,data,is_read,created_at,updated_at',
+      filters,
+      order: 'created_at.desc',
+      limit,
+    });
+    return c.json(rows.map(safeNotificationPayload));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'notifications_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load notifications.' }, 500);
   }
 });
 api.get('/notifications/unread-count', authMiddleware, async (c) => {
   try {
-    const r = await c.env.DB.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').bind(getUserId(c)).first();
-    return c.json({ count: (r as any)?.count || 0 });
-  } catch { return c.json({ count: 0 }); }
+    const userId = getUserId(c);
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_unread_count');
+    if (supabaseRequired) return supabaseRequired;
+    const count = await supabaseAdminCountRows(c, 'app_notifications', {
+      user_id: postgrestEqFilter(userId),
+      is_read: 'eq.false',
+    });
+    return c.json({ count });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'notifications_unread_count_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load notification count.' }, 500);
+  }
 });
-api.post('/notifications/mark-read', authMiddleware, async (c) => { await c.env.DB.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ?').bind(getUserId(c)).run(); return c.json({ marked: true }); });
+api.post('/notifications/mark-read', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_mark_read');
+  if (supabaseRequired) return supabaseRequired;
+  await supabaseAdminPatchRows(c, 'app_notifications', {
+    user_id: postgrestEqFilter(userId),
+    type: 'not.eq.connection_request',
+  }, { is_read: true, updated_at: now() });
+  return c.json({ marked: true });
+});
 
 api.post('/notifications/device-token', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'push_token_register');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'push_token_register', userId, 30, 60);
   if (limited) return limited;
   const bodyTooLarge = rejectLargeRequest(c, 20_000);
@@ -13053,46 +17329,44 @@ api.post('/notifications/device-token', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
   if (token.length < 32 || token.length > 512) return c.json({ detail: 'Invalid device token.' }, 400);
-  await ensureProductionReadinessSchema(c.env.DB);
   const timestamp = now();
-  await c.env.DB.prepare(
-    `INSERT INTO push_tokens (id, user_id, token, device_id, bundle_id, environment, platform, is_active, last_seen_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'ios', 1, ?, ?, ?)
-     ON CONFLICT(user_id, token) DO UPDATE SET
-       device_id = excluded.device_id,
-       bundle_id = excluded.bundle_id,
-       environment = excluded.environment,
-       is_active = 1,
-       last_seen_at = excluded.last_seen_at,
-       updated_at = excluded.updated_at`
-  ).bind(
-    uuid(),
-    userId,
-    token.toLowerCase(),
-    cleanText(body.device_id || body.deviceId || '', 160),
-    cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
-    cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
-    timestamp,
-    timestamp,
-    timestamp
-  ).run();
+  const normalizedToken = token.toLowerCase();
+  const tokenHash = await sha256Hex(normalizedToken);
+  await supabaseAdminUpsert(c, 'app_push_tokens', [{
+    id: await sha256Hex(`${userId}:${tokenHash}`),
+    user_id: userId,
+    token_hash: tokenHash,
+    token: normalizedToken,
+    device_id: cleanText(body.device_id || body.deviceId || '', 160),
+    bundle_id: cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
+    environment: cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
+    platform: 'ios',
+    is_active: true,
+    last_seen_at: timestamp,
+    updated_at: timestamp,
+  }], 'user_id,token_hash');
   return c.json({ ok: true });
 });
 
 api.delete('/notifications/device-token', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'push_token_delete');
+  if (supabaseRequired) return supabaseRequired;
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '').toLowerCase();
   if (!token) return c.json({ ok: true });
-  await ensureProductionReadinessSchema(c.env.DB);
-  await c.env.DB.prepare('UPDATE push_tokens SET is_active = 0, updated_at = ? WHERE user_id = ? AND token = ?')
-    .bind(now(), userId, token)
-    .run();
+  const tokenHash = await sha256Hex(token);
+  await supabaseAdminPatchRows(c, 'app_push_tokens', {
+    user_id: postgrestEqFilter(userId),
+    token_hash: postgrestEqFilter(tokenHash),
+  }, { is_active: false, updated_at: now() });
   return c.json({ ok: true });
 });
 
 api.post('/client/events', async (c) => {
   const userId = await getOptionalUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'client_events');
+  if (supabaseRequired) return supabaseRequired;
   const key = userId || clientIp(c);
   const limited = await enforceRateLimit(c, 'client_events', key, 80, 60);
   if (limited) return limited;
@@ -13102,668 +17376,572 @@ api.post('/client/events', async (c) => {
   const eventName = cleanText(body.event_name || body.eventName || body.name, 80);
   if (!eventName || !/^[a-z0-9_.:-]{2,80}$/i.test(eventName)) return c.json({ detail: 'Invalid event name.' }, 400);
   const metadata = sanitizeClientEventMetadata(body.metadata || {});
-  await ensureProductionReadinessSchema(c.env.DB);
-  await c.env.DB.prepare(
-    `INSERT INTO client_events (id, user_id, event_name, category, status, duration_ms, metadata, app_version, platform, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(
-    uuid(),
-    userId || '',
-    eventName,
-    cleanText(body.category || '', 40),
-    cleanText(body.status || '', 40),
-    clampNumber(body.duration_ms || body.durationMs || 0, 0, 600_000, 0),
-    JSON.stringify(metadata),
-    cleanText(body.app_version || body.appVersion || '', 40),
-    cleanText(body.platform || 'ios', 20),
-    now()
-  ).run();
+  await supabaseAdminUpsert(c, 'app_client_events', [{
+    id: uuid(),
+    user_id: userId || null,
+    event_name: eventName,
+    category: cleanText(body.category || '', 40),
+    status: cleanText(body.status || '', 40),
+    duration_ms: clampNumber(body.duration_ms || body.durationMs || 0, 0, 600_000, 0),
+    metadata,
+    app_version: cleanText(body.app_version || body.appVersion || '', 40),
+    platform: cleanText(body.platform || 'ios', 20),
+    created_at: now(),
+  }], 'id');
+  return c.json({ accepted: true }, 202);
+});
+
+// Conversation starters are aggregate product analytics only. Do not store post IDs, viewer IDs,
+// or the editable comment text; the Worker owns the anonymous event shape.
+api.post('/analytics/conversation-starters', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'conversation_starter_analytics');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'conversation_starter_analytics', clientIp(c), 30, 60);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 4_000);
+  if (bodyTooLarge) return bodyTooLarge;
+
+  const body: any = await c.req.json().catch(() => ({}));
+  const starterId = cleanText(body.starter_id || body.starterId, 80).toLowerCase();
+  const category = cleanText(body.category, 40).toLowerCase();
+  const source = cleanText(body.source || 'template', 32).toLowerCase();
+  const surface = cleanText(body.surface || 'feed', 32).toLowerCase();
+  if (!/^[a-z0-9_.:-]{3,80}$/.test(starterId)) return c.json({ detail: 'Invalid conversation starter.' }, 400);
+  if (!/^[a-z0-9_-]{2,40}$/.test(category) || !/^[a-z0-9_-]{2,32}$/.test(source) || !/^[a-z0-9_-]{2,32}$/.test(surface)) {
+    return c.json({ detail: 'Invalid analytics event.' }, 400);
+  }
+
+  await supabaseAdminUpsert(c, 'app_client_events', [{
+    id: uuid(),
+    user_id: null,
+    event_name: 'conversation_starter_selected',
+    category,
+    status: source,
+    duration_ms: 0,
+    metadata: { starter_id: starterId, surface },
+    app_version: '',
+    platform: 'ios',
+    created_at: now(),
+  }], 'id');
   return c.json({ accepted: true }, 202);
 });
 
 // Library
 api.get('/library/liked', authMiddleware, async (c) => {
-  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'liked_library_read');
+  if (supabaseRequired) return supabaseRequired;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
-  const likedLibrarySql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       1 AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-       (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-     FROM likes l JOIN posts p ON l.post_id = p.id JOIN users u ON p.user_id = u.id`,
-    `WHERE l.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'GROUP BY p.id ORDER BY MAX(l.created_at) DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const r = await c.env.DB.prepare(likedLibrarySql).bind(...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId), limit, skip).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  try {
+    const postIds = await supabaseViewerInteractionPostIds(c, userId, 'like', { limit, offset: skip });
+    const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
+    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_liked_library_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load liked posts.' }, 500);
+  }
 });
 api.get('/library/saved', authMiddleware, async (c) => {
-  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'saved_library_read');
+  if (supabaseRequired) return supabaseRequired;
   const collection = c.req.query('collection');
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
-  const savedLibraryBaseSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image, sp.collection,
-      EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-      1 AS saved,
-      (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-      (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden')) AS live_comments_count,
-      (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id) AS live_saves_count
-    FROM saved_posts sp
-    JOIN posts p ON sp.post_id = p.id
-    JOIN users u ON p.user_id = u.id`,
-    `WHERE sp.user_id IN (${relatedPlaceholders}) AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-  ];
-  let sql = savedLibraryBaseSql.join(' ');
-  const binds: any[] = [...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
-  if (collection) {
-    sql += ' AND sp.collection = ?';
-    binds.push(collection);
+  try {
+    const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
+    const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
+    return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_saved_library_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load bookmarks.' }, 500);
   }
-  sql += ' GROUP BY p.id ORDER BY MAX(sp.created_at) DESC LIMIT ? OFFSET ?';
-  binds.push(limit, skip);
-  const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
 });
 api.post('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
-  if (limited) return limited;
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'library_save');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
   const b = await c.req.json().catch(() => ({}));
-  const collection = cleanText((b as any).collection || 'My Library', 80) || 'My Library';
-  const saveVisiblePostSql = [
-    'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')} LIMIT 1`,
-  ].join(' ');
-  const post = await c.env.DB.prepare(saveVisiblePostSql).bind(postId, ...visiblePostBindValues(userId)).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collection);
-  return c.json(postEngagementResponse(engagement, { collection }));
+  const collection = cleanText((b as any).collection || 'Bookmarks', 80) || 'Bookmarks';
+  const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
+  if (limited) return limited;
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found' }, 404);
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collection);
+    return c.json(postEngagementResponse(engagement, { collection }));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_library_save_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not save post.' }, 500);
+  }
 });
 api.delete('/library/save/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'library_unsave');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = c.req.param('postId');
-  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
-  return c.json(postEngagementResponse(engagement, { unsaved: true }));
+  try {
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
+    return c.json(postEngagementResponse(engagement, { unsaved: true }));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_library_unsave_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not remove bookmark.' }, 500);
+  }
 });
 api.get('/library/collections', authMiddleware, async (c) => {
-  await ensureLikeUniquenessSchema(c.env.DB);
   const userId = getUserId(c);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const r = await c.env.DB.prepare(
-    `SELECT collection, COUNT(DISTINCT post_id) as count
-     FROM saved_posts
-     WHERE user_id IN (${relatedPlaceholders})
-     GROUP BY collection`
-  ).bind(...relatedUserIds).all();
-  return c.json(r.results);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'library_collections_read');
+  if (supabaseRequired) return supabaseRequired;
+  try {
+    return c.json(await supabaseViewerSaveCollectionCounts(c, userId));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_library_collections_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load bookmark collections.' }, 500);
+  }
 });
 
 // Friends
 api.post('/friends/request/:userId', authMiddleware, async (c) => {
   const fid = getUserId(c);
   const tid = publicId(c.req.param('userId'), 120);
-  if (fid === tid) return c.json({ detail: 'Cannot friend yourself' }, 400);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_request');
+  if (supabaseRequired) return supabaseRequired;
+  if (fid === tid) return c.json({ detail: 'Cannot connect with yourself' }, 400);
   const limited = await enforceRateLimit(c, 'friend_request', fid, 60, 60);
   if (limited) return limited;
-  const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(tid).first();
-  if (!target) return c.json({ detail: 'User not found' }, 404);
-  const ex = await c.env.DB.prepare('SELECT id, status FROM friend_requests WHERE from_user_id = ? AND to_user_id = ?').bind(fid, tid).first();
-  if (ex) return c.json({ detail: 'Already sent', status: (ex as any).status }, 400);
-  const id = uuid();
-  await c.env.DB.prepare('INSERT INTO friend_requests (id, from_user_id, to_user_id) VALUES (?, ?, ?)').bind(id, fid, tid).run();
-  return c.json({ id, status: 'pending' });
+  const bodyTooLarge = rejectLargeRequest(c, 10_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const body: any = await c.req.json().catch(() => ({}));
+  const result = await supabaseCreateFriendRequest(c, fid, tid, { note: body.note });
+  return c.json(result.body, result.status);
 });
-api.post('/friends/accept/:requestId', authMiddleware, async (c) => { const uid = getUserId(c); const rid = c.req.param('requestId'); const r: any = await c.env.DB.prepare('SELECT * FROM friend_requests WHERE id = ? AND to_user_id = ?').bind(rid, uid).first(); if (!r) return c.json({ detail: 'Not found' }, 404); await c.env.DB.prepare("UPDATE friend_requests SET status = 'accepted' WHERE id = ?").bind(rid).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), uid, r.from_user_id).run(); await c.env.DB.prepare('INSERT OR IGNORE INTO friendships (id, user_id, friend_id) VALUES (?, ?, ?)').bind(uuid(), r.from_user_id, uid).run(); return c.json({ accepted: true }); });
+api.post('/friends/accept/:requestId', authMiddleware, async (c) => {
+  const uid = getUserId(c);
+  const rid = c.req.param('requestId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_accept');
+  if (supabaseRequired) return supabaseRequired;
+  const result = await supabaseAcceptFriendRequest(c, uid, rid);
+  return c.json(result.body, result.status);
+});
 api.post('/friends/reject/:requestId', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const requestId = publicId(c.req.param('requestId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_reject');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'friend_reject', userId, 120, 60);
   if (limited) return limited;
-  const result = await c.env.DB.prepare("UPDATE friend_requests SET status = 'rejected' WHERE id = ? AND to_user_id = ?")
-    .bind(requestId, userId)
-    .run();
-  if (d1Changes(result) === 0) return c.json({ detail: 'Request not found' }, 404);
-  return c.json({ rejected: true });
+  const result = await supabaseRejectFriendRequest(c, userId, requestId);
+  return c.json(result.body, result.status);
 });
-api.get('/friends/requests', authMiddleware, async (c) => { const r = await c.env.DB.prepare(`SELECT fr.*, u.username, u.full_name, u.profile_image FROM friend_requests fr JOIN users u ON fr.from_user_id = u.id WHERE fr.to_user_id = ? AND fr.status = 'pending'`).bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/friends', authMiddleware, async (c) => { const r = await c.env.DB.prepare('SELECT u.id, u.username, u.full_name, u.profile_image, u.bio FROM friendships f JOIN users u ON f.friend_id = u.id WHERE f.user_id = ?').bind(getUserId(c)).all(); return c.json(r.results); });
-api.get('/friends/status/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); const f = await c.env.DB.prepare('SELECT id FROM friendships WHERE user_id = ? AND friend_id = ?').bind(mid, oid).first(); if (f) return c.json({ status: 'friends' }); const sr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(mid, oid).first(); if (sr) return c.json({ status: 'request_sent', request_id: sr.id }); const rr: any = await c.env.DB.prepare("SELECT id FROM friend_requests WHERE from_user_id = ? AND to_user_id = ? AND status = 'pending'").bind(oid, mid).first(); if (rr) return c.json({ status: 'request_received', request_id: rr.id }); return c.json({ status: 'none' }); });
-api.delete('/friends/:userId', authMiddleware, async (c) => { const mid = getUserId(c); const oid = c.req.param('userId'); await c.env.DB.prepare('DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)').bind(mid, oid, oid, mid).run(); return c.json({ removed: true }); });
+api.delete('/friends/request/:requestId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const requestId = publicId(c.req.param('requestId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_request_cancel');
+  if (supabaseRequired) return supabaseRequired;
+  const result = await supabaseCancelFriendRequest(c, userId, requestId);
+  return c.json(result.body, result.status);
+});
+api.get('/friends/requests', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_requests_read');
+  if (supabaseRequired) return supabaseRequired;
+  return c.json(await supabaseFriendRequestsPayload(c, userId));
+});
+api.get('/friends', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friends_read');
+  if (supabaseRequired) return supabaseRequired;
+  return c.json(await supabaseFriendsPayload(c, userId));
+});
+api.get('/friends/status/:userId', authMiddleware, async (c) => {
+  const mid = getUserId(c);
+  const oid = c.req.param('userId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_status_read');
+  if (supabaseRequired) return supabaseRequired;
+  return c.json(await supabaseFriendStatus(c, mid, oid));
+});
+api.delete('/friends/:userId', authMiddleware, async (c) => {
+  const mid = getUserId(c);
+  const oid = c.req.param('userId');
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'friend_remove');
+  if (supabaseRequired) return supabaseRequired;
+  return c.json(await supabaseRemoveFriend(c, mid, oid));
+});
 
-// Recommendations
-api.get('/recommendations', authMiddleware, async (c) => {
+// Yearbook social discovery
+api.get('/yearbook/discover', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_discover_read');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_discover_read', userId, 180, 60);
+  if (limited) return limited;
   try {
-    await ensureRecommendationSchema(c.env.DB);
-    const category = normalizeRecommendationCategory(c.req.query('category') || '');
-    const rawCategory = cleanText(c.req.query('category'), 80).toLowerCase();
-    const q = cleanText(c.req.query('q'), 120).toLowerCase();
-    const limit = Math.min(80, Math.max(8, Number(c.req.query('limit') || 36)));
-    const binds: any[] = [];
-    let where = "WHERE COALESCE(r.status, 'active') = 'active'";
-    if (rawCategory && rawCategory !== 'all') {
-      where += ' AND r.category = ?';
-      binds.push(category);
-    }
-    if (q) {
-      where += ' AND (LOWER(r.title) LIKE ? OR LOWER(r.description) LIKE ? OR LOWER(r.creator_name) LIKE ? OR LOWER(r.tags) LIKE ?)';
-      binds.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
-    }
-    binds.push(limit);
-
-    const recommendationsSql = `
-      SELECT r.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM recommendations r
-      LEFT JOIN users u ON u.id = r.user_id
-      ${where}
-      ORDER BY r.created_at DESC
-      LIMIT ?
-    `;
-    const rows = await c.env.DB.prepare(recommendationsSql).bind(...binds).all();
-    return c.json((rows.results as any[]).map(publicRecommendationPayload));
+    const ageMinQuery = c.req.query('age_min');
+    const ageMaxQuery = c.req.query('age_max');
+    const result = await supabaseYearbookDiscover(c, userId, {
+      intent: c.req.query('intent') || '',
+      query: c.req.query('query') || '',
+      city: c.req.query('city') || '',
+      language: c.req.query('language') || '',
+      interest: c.req.query('interest') || '',
+      ageMin: ageMinQuery ? Number(ageMinQuery) : undefined,
+      ageMax: ageMaxQuery ? Number(ageMaxQuery) : undefined,
+      limit: Number(c.req.query('limit') || 24),
+      offset: Number(c.req.query('offset') || 0),
+    });
+    const response = c.json(result);
+    response.headers.set('cache-control', 'private, max-age=15');
+    return response;
   } catch (error: any) {
-    console.error('Recommendations list failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load recommendations.' }, 500);
+    console.warn(JSON.stringify({ event: 'yearbook_discover_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load the Yearbook right now.' }, 500);
   }
 });
 
-api.get('/recommendations/:recommendationId', authMiddleware, async (c) => {
+api.get('/yearbook/me', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_profile_read');
+  if (supabaseRequired) return supabaseRequired;
   try {
-    await ensureRecommendationSchema(c.env.DB);
-    const recommendationId = c.req.param('recommendationId');
-    const row: any = await c.env.DB.prepare(`
-      SELECT r.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM recommendations r
-      LEFT JOIN users u ON u.id = r.user_id
-      WHERE r.id = ? AND COALESCE(r.status, 'active') = 'active'
-    `).bind(recommendationId).first();
-    if (!row) return c.json({ detail: 'Recommendation not found.' }, 404);
-    return c.json(publicRecommendationPayload(row));
+    const profile = await supabaseYearbookProfilePayload(c, userId, userId, true);
+    return c.json({ profile });
   } catch (error: any) {
-    console.error('Recommendation detail failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load recommendation.' }, 500);
+    console.warn(JSON.stringify({ event: 'yearbook_profile_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load your Yearbook profile.' }, 500);
   }
 });
 
-api.post('/recommendations', authMiddleware, async (c) => {
+api.put('/yearbook/me', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_profile_write');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_profile_write', userId, 20, 60);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 40_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const body = await c.req.json().catch(() => ({}));
   try {
-    const bodyTooLarge = rejectLargeRequest(c, 120_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    await ensureRecommendationSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'recommendation_create', userId, 40, 60);
-    if (limited) return limited;
-    const body: any = await c.req.json().catch(() => ({}));
-    const title = cleanText(body.title, 120);
-    const description = cleanText(body.description, 1400);
-    const externalUrl = safeExternalUrl(body.external_url || body.url || body.link);
-    if (!title) return c.json({ detail: 'Add a title for your recommendation.' }, 400);
-    if (!externalUrl) return c.json({ detail: 'Add a valid http or https link.' }, 400);
+    const profile = await supabaseUpsertYearbookProfile(c, userId, body);
+    return c.json({ profile, saved: true });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'yearbook_profile_write_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not save your Yearbook profile.' }, 500);
+  }
+});
 
-    const category = normalizeRecommendationCategory(body.category || body.type);
-    const tags = normalizeRecommendationTags(body.tags, [category]);
-    const meta = recommendationLinkMetadata(externalUrl, body.thumbnail_url || body.cover_url);
-    const ts = now();
-    const id = uuid();
-    await c.env.DB.prepare(
-      `INSERT INTO recommendations
-       (id, user_id, title, description, category, tags, external_url, provider, external_id, embed_url, thumbnail_url, creator_name, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`
-    ).bind(
+api.get('/yearbook/profiles/:userId', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_public_profile_read');
+  if (supabaseRequired) return supabaseRequired;
+  try {
+    const profile = await supabaseYearbookProfilePayload(c, viewerId, targetId, true);
+    if (!profile) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+    return c.json({ profile });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'yearbook_public_profile_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load this Yearbook profile.' }, 500);
+  }
+});
+
+api.get('/yearbook/profiles/:userId/signatures', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signatures_read');
+  if (supabaseRequired) return supabaseRequired;
+  if (await supabaseBlockPair(c, viewerId, targetId)) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+  const profile = await supabaseYearbookProfilePayload(c, viewerId, targetId, false);
+  if (!profile) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+  return c.json(await supabaseYearbookSignatureSummary(c, publicId(profile.user_id, 120)));
+});
+
+api.post('/yearbook/profiles/:userId/signatures', authMiddleware, async (c) => {
+  const signerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_write');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_signature_write', signerId, 12, 3600);
+  if (limited) return limited;
+  const bodyTooLarge = rejectLargeRequest(c, 8_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  if (!targetId || signerId === targetId) return c.json({ detail: 'You cannot sign your own Yearbook.' }, 400);
+  if (await supabaseBlockPair(c, signerId, targetId)) return c.json({ detail: 'This Yearbook is unavailable.' }, 403);
+  const target = await supabaseYearbookProfilePayload(c, signerId, targetId, false);
+  if (!target) return c.json({ detail: 'Yearbook profile not found.' }, 404);
+  const body: any = await c.req.json().catch(() => ({}));
+  const message = cleanMultilineText(body.message, 160).trim();
+  try {
+    const existingRows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+      select: 'id,created_at',
+      filters: {
+        profile_user_id: postgrestEqFilter(targetId),
+        signer_user_id: postgrestEqFilter(signerId),
+      },
+      limit: 1,
+    }).catch(() => []);
+    const id = publicId(existingRows[0]?.id, 120) || uuid();
+    await supabaseAdminUpsert(c, 'yearbook_signatures', [{
       id,
-      userId,
-      title,
-      description,
-      category,
-      JSON.stringify(tags),
-      externalUrl,
-      meta.provider,
-      meta.external_id,
-      meta.embed_url,
-      meta.thumbnail_url,
-      cleanText(body.creator_name || body.author || body.artist, 120),
-      ts,
-      ts
-    ).run();
-
-    const row: any = await c.env.DB.prepare(`
-      SELECT r.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
-      FROM recommendations r
-      LEFT JOIN users u ON u.id = r.user_id
-      WHERE r.id = ?
-    `).bind(id).first();
-    return c.json(publicRecommendationPayload(row), 201);
+      profile_user_id: targetId,
+      signer_user_id: signerId,
+      message,
+      status: 'visible',
+      created_at: existingRows[0]?.created_at || now(),
+      updated_at: now(),
+    }], 'profile_user_id,signer_user_id');
+    const signer = await supabaseUserByAnyId(c, signerId);
+    await insertNotificationOnce(c, {
+      userId: targetId,
+      type: 'yearbook_signature',
+      title: 'Your Yearbook was signed',
+      body: `${cleanText(signer?.full_name || signer?.username, 80) || 'Someone'} left a mark in your Yearbook.`,
+      data: { from_user_id: signerId, signature_id: id, reference_id: targetId },
+      dedupeKey: `yearbook_signature:${signerId}:${targetId}`,
+      dedupeSeconds: 300,
+    }).catch(() => undefined);
+    return c.json({ signed: true, signature_id: id });
   } catch (error: any) {
-    console.error('Recommendation create failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not submit recommendation.' }, 500);
+    console.warn(JSON.stringify({ event: 'yearbook_signature_write_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not sign this Yearbook.' }, 500);
   }
 });
 
-api.post('/recommendations/:recommendationId/report', authMiddleware, async (c) => {
-  try {
-    await ensureRecommendationSchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'recommendation_report', userId, 12, 60);
-    if (limited) return limited;
-    const recommendationId = c.req.param('recommendationId');
-    const body: any = await c.req.json().catch(() => ({}));
-    const recommendation: any = await c.env.DB.prepare('SELECT * FROM recommendations WHERE id = ?').bind(recommendationId).first();
-    if (!recommendation) return c.json({ detail: 'Recommendation not found.' }, 404);
-    if (recommendation.user_id === userId) return c.json({ detail: 'You cannot report your own recommendation.' }, 400);
-    const ts = now();
-    const reason = normalizeReportReason(body.reason || 'other');
-    const details = cleanMultilineText(body.details || '', 1000);
-    const reportResults = await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO recommendation_reports (id, recommendation_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind(uuid(), recommendationId, userId, reason, ts),
-      c.env.DB.prepare('UPDATE recommendations SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ? AND changes() > 0')
-        .bind(ts, recommendationId),
-    ]);
-    if (d1Changes(reportResults?.[0]) > 0) {
-      await c.env.DB.prepare(
-        `INSERT INTO reports
-         (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'recommendation', 'recommendation', ?, ?, ?, 'pending', ?, ?)`
-      ).bind(uuid(), userId, recommendation.user_id, reason, details, recommendationId, ts, ts).run();
-    }
-    return c.json({ reported: true });
-  } catch (error: any) {
-    const message = String(error?.message || '').toLowerCase();
-    if (message.includes('unique constraint')) return c.json({ reported: true });
-    console.error('Recommendation report failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not report recommendation.' }, 500);
-  }
+api.delete('/yearbook/profiles/:userId/signatures/me', authMiddleware, async (c) => {
+  const signerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_remove');
+  if (supabaseRequired) return supabaseRequired;
+  await supabaseAdminDeleteRows(c, 'yearbook_signatures', {
+    profile_user_id: postgrestEqFilter(targetId),
+    signer_user_id: postgrestEqFilter(signerId),
+  }).catch(() => undefined);
+  return c.json({ removed: true });
 });
 
-// People
-api.get('/people', authMiddleware, async (c) => {
-  try {
-    await ensurePeopleSchema(c.env.DB);
-    const userId = getUserId(c);
-    const q = cleanText(c.req.query('q'), 120).toLowerCase();
-    const limit = clampNumber(c.req.query('limit'), 8, 80, 36);
-    const profileRows = await c.env.DB.prepare(`
-      SELECT p.*,
-        EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'follow') AS followed,
-        EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'save') AS saved
-      FROM people_profiles p
-      WHERE COALESCE(p.status, 'active') = 'active'
-        AND (? = '' OR LOWER(p.name) LIKE ? OR LOWER(p.role) LIKE ? OR LOWER(p.bio) LIKE ? OR LOWER(p.known_for) LIKE ?)
-      ORDER BY p.updated_at DESC
-      LIMIT ?
-    `).bind(userId, userId, q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit).all();
-
-    const people = (profileRows.results as any[]).map((row) => publicPeoplePayload(row));
-    if (people.length < limit) {
-      const userRows = await c.env.DB.prepare(`
-        SELECT u.*,
-          EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.following_id = u.id) AS followed
-        FROM users u
-        WHERE u.id != ?
-          AND COALESCE(u.status, 'active') != 'banned'
-          AND COALESCE(u.is_private, 0) = 0
-          AND (COALESCE(u.full_name, '') != '' OR COALESCE(u.username, '') != '')
-          AND (? = '' OR LOWER(u.full_name) LIKE ? OR LOWER(u.username) LIKE ? OR LOWER(u.bio) LIKE ? OR LOWER(u.interests) LIKE ?)
-        ORDER BY COALESCE(u.followers_count, 0) DESC, u.updated_at DESC
-        LIMIT ?
-      `).bind(userId, userId, q, `%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`, limit - people.length).all();
-      people.push(...(userRows.results as any[]).map((u) => ({
-        id: `user:${u.id}`,
-        owner_user_id: u.id,
-        name: u.full_name || u.username || 'Creator',
-        role: u.is_creator ? 'creator' : 'local creator',
-        category: 'creator',
-        bio: u.bio || '',
-        known_for: parseInterestValues(u.interests || u.looking_for).slice(0, 4).join(', '),
-        city: u.city || u.location || '',
-        profile_image: u.profile_image || '',
-        instagram_url: safeOptionalUrl(u.social_instagram),
-        tiktok_url: safeOptionalUrl(u.social_tiktok),
-        youtube_url: '',
-        website_url: safeOptionalUrl(u.social_website),
-        source_url: '',
-        claim_status: 'claimed',
-        followers_count: Number(u.followers_count || 0),
-        saves_count: 0,
-        reports_count: 0,
-        followed: Number(u.followed || 0) === 1,
-        saved: false,
-        created_at: u.created_at,
-        updated_at: u.updated_at,
-      })));
-    }
-    return c.json(people);
-  } catch (error: any) {
-    console.error('People list failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load people.' }, 500);
-  }
+api.patch('/yearbook/signatures/:signatureId', authMiddleware, async (c) => {
+  const ownerId = getUserId(c);
+  const signatureId = publicId(c.req.param('signatureId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_moderate');
+  if (supabaseRequired) return supabaseRequired;
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+    select: 'id,profile_user_id', filters: { id: postgrestEqFilter(signatureId) }, limit: 1,
+  }).catch(() => []);
+  if (!rows[0] || publicId(rows[0].profile_user_id, 120) !== ownerId) return c.json({ detail: 'Signature not found.' }, 404);
+  const body: any = await c.req.json().catch(() => ({}));
+  const status = cleanText(body.status, 20) === 'visible' ? 'visible' : 'hidden';
+  await supabaseAdminPatchRows(c, 'yearbook_signatures', { id: postgrestEqFilter(signatureId) }, { status, updated_at: now() });
+  return c.json({ updated: true, status });
 });
 
-api.get('/people/:profileId', authMiddleware, async (c) => {
-  try {
-    await ensurePeopleSchema(c.env.DB);
-    const userId = getUserId(c);
-    const profileId = cleanText(c.req.param('profileId'), 120);
-    let profile: any = null;
-    if (profileId.startsWith('user:')) {
-      const targetId = profileId.slice(5);
-      const u: any = await c.env.DB.prepare(`
-        SELECT u.*, EXISTS(SELECT 1 FROM follows f WHERE f.follower_id = ? AND f.following_id = u.id) AS followed
-        FROM users u WHERE u.id = ? AND COALESCE(u.status, 'active') != 'banned'
-      `).bind(userId, targetId).first();
-      if (u) {
-        profile = {
-          id: `user:${u.id}`,
-          owner_user_id: u.id,
-          name: u.full_name || u.username || 'Creator',
-          role: u.is_creator ? 'creator' : 'local creator',
-          category: 'creator',
-          bio: u.bio || '',
-          known_for: parseInterestValues(u.interests || u.looking_for).slice(0, 6).join(', '),
-          city: u.city || u.location || '',
-          profile_image: u.profile_image || '',
-          instagram_url: safeOptionalUrl(u.social_instagram),
-          tiktok_url: safeOptionalUrl(u.social_tiktok),
-          youtube_url: '',
-          website_url: safeOptionalUrl(u.social_website),
-          source_url: '',
-          claim_status: 'claimed',
-          followers_count: Number(u.followers_count || 0),
-          saves_count: 0,
-          reports_count: 0,
-          followed: Number(u.followed || 0) === 1,
-          saved: false,
-          created_at: u.created_at,
-          updated_at: u.updated_at,
-        };
-      }
-    } else {
-      const row: any = await c.env.DB.prepare(`
-        SELECT p.*,
-          EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'follow') AS followed,
-          EXISTS(SELECT 1 FROM people_interactions i WHERE i.profile_id = p.id AND i.user_id = ? AND i.kind = 'save') AS saved
-        FROM people_profiles p
-        WHERE p.id = ? AND COALESCE(p.status, 'active') = 'active'
-      `).bind(userId, userId, profileId).first();
-      if (row) profile = publicPeoplePayload(row);
-    }
-    if (!profile) return c.json({ detail: 'People profile not found.' }, 404);
-    const similarRows = await c.env.DB.prepare(`
-      SELECT p.* FROM people_profiles p
-      WHERE COALESCE(p.status, 'active') = 'active' AND p.id != ? AND (p.category = ? OR p.role = ?)
-      ORDER BY p.updated_at DESC LIMIT 8
-    `).bind(profileId, profile.category || 'creator', profile.role || 'creator').all();
-    return c.json({ ...profile, similar_people: (similarRows.results as any[]).map((row) => publicPeoplePayload(row)) });
-  } catch (error: any) {
-    console.error('People detail failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load People profile.' }, 500);
+api.post('/yearbook/signatures/:signatureId/report', authMiddleware, async (c) => {
+  const reporterId = getUserId(c);
+  const signatureId = publicId(c.req.param('signatureId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_signature_report');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_signature_report', reporterId, 20, 86400);
+  if (limited) return limited;
+  const rows = await supabaseAdminQueryRows(c, 'yearbook_signatures', {
+    select: 'id,profile_user_id,signer_user_id,message', filters: { id: postgrestEqFilter(signatureId) }, limit: 1,
+  }).catch(() => []);
+  const signature = rows[0];
+  if (!signature) return c.json({ detail: 'Signature not found.' }, 404);
+  const body: any = await c.req.json().catch(() => ({}));
+  const reportId = uuid();
+  await supabaseAdminInsertRows(c, 'app_reports', [{
+    id: reportId,
+    reporter_id: reporterId,
+    target_type: 'yearbook_signature',
+    target_id: signatureId,
+    target_owner_user_id: publicId(signature.signer_user_id, 120),
+    reason: normalizeReportReason(body.reason || 'harassment'),
+    details: cleanMultilineText(body.details, 500),
+    status: 'open',
+    priority: priorityForReportReason(body.reason || 'harassment'),
+    metadata: { profile_user_id: publicId(signature.profile_user_id, 120), source: 'yearbook_signature_report' },
+    created_at: now(),
+    updated_at: now(),
+  }]);
+  if (publicId(signature.profile_user_id, 120) === reporterId) {
+    await supabaseAdminPatchRows(c, 'yearbook_signatures', { id: postgrestEqFilter(signatureId) }, { status: 'hidden', updated_at: now() });
   }
+  return c.json({ reported: true, id: reportId });
 });
 
-api.post('/people/:profileId/interactions', authMiddleware, async (c) => {
-  try {
-    await ensurePeopleSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'people_interaction', userId, 240, 60);
-    if (limited) return limited;
-    const profileId = cleanText(c.req.param('profileId'), 120);
-    const body: any = await c.req.json().catch(() => ({}));
-    const kind = String(body.kind) === 'save' ? 'save' : 'follow';
-    let active = optionalBoolean(body.active ?? body.following ?? body.saved ?? body.value);
-    if (profileId.startsWith('user:') && kind === 'follow') {
-      const targetId = profileId.slice(5);
-      if (targetId === userId) return c.json({ detail: 'Cannot follow yourself.' }, 400);
-      const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetId).first();
-      if (!target) return c.json({ detail: 'User not found.' }, 404);
-      if (active === null) {
-        const existing: any = await c.env.DB.prepare('SELECT id FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId).first();
-        active = !existing;
-      }
-      if (active) {
-        const results = await c.env.DB.batch([
-          c.env.DB.prepare('INSERT OR IGNORE INTO follows (id, follower_id, following_id) VALUES (?, ?, ?)').bind(uuid(), userId, targetId),
-          c.env.DB.prepare('UPDATE users SET following_count = COALESCE(following_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(userId),
-          c.env.DB.prepare('UPDATE users SET followers_count = COALESCE(followers_count, 0) + 1 WHERE id = ? AND changes() > 0').bind(targetId),
-        ]);
-        if (d1Changes(results?.[0]) > 0) {
-          runBackgroundTask(c, 'supabase_people_follow_write_through_failed', async () => {
-            await mirrorLegacyUserToSupabase(c, userId);
-            await mirrorLegacyUserToSupabase(c, targetId);
-            await mirrorLegacyFollowToSupabase(c, userId, targetId, true);
-          });
-        }
-      } else {
-        const results = await c.env.DB.batch([
-          c.env.DB.prepare('DELETE FROM follows WHERE follower_id = ? AND following_id = ?').bind(userId, targetId),
-          c.env.DB.prepare('UPDATE users SET following_count = MAX(0, COALESCE(following_count, 0) - 1) WHERE id = ? AND changes() > 0').bind(userId),
-          c.env.DB.prepare('UPDATE users SET followers_count = MAX(0, COALESCE(followers_count, 0) - 1) WHERE id = ? AND changes() > 0').bind(targetId),
-        ]);
-        if (d1Changes(results?.[0]) > 0) {
-          runBackgroundTask(c, 'supabase_people_unfollow_write_through_failed', async () => {
-            await mirrorLegacyUserToSupabase(c, userId);
-            await mirrorLegacyUserToSupabase(c, targetId);
-            await mirrorLegacyFollowToSupabase(c, userId, targetId, false);
-          });
-        }
-      }
-      return c.json({ active: !!active, kind });
-    }
-    if (active === null) {
-      const existing: any = await c.env.DB.prepare('SELECT id FROM people_interactions WHERE profile_id = ? AND user_id = ? AND kind = ?')
-        .bind(profileId, userId, kind)
-        .first();
-      active = !existing;
-    }
-    const column = kind === 'save' ? 'saves_count' : 'followers_count';
-    if (active) {
-      const incrementPeopleSql = `UPDATE people_profiles SET ${column} = COALESCE(${column}, 0) + 1, updated_at = ? WHERE id = ? AND changes() > 0`;
-      await c.env.DB.batch([
-        c.env.DB.prepare('INSERT OR IGNORE INTO people_interactions (id, profile_id, user_id, kind, created_at) VALUES (?, ?, ?, ?, ?)')
-          .bind(uuid(), profileId, userId, kind, now()),
-        c.env.DB.prepare(incrementPeopleSql)
-          .bind(now(), profileId),
-      ]);
-    } else {
-      const decrementPeopleSql = `UPDATE people_profiles SET ${column} = MAX(0, COALESCE(${column}, 0) - 1), updated_at = ? WHERE id = ? AND changes() > 0`;
-      await c.env.DB.batch([
-        c.env.DB.prepare('DELETE FROM people_interactions WHERE profile_id = ? AND user_id = ? AND kind = ?')
-          .bind(profileId, userId, kind),
-        c.env.DB.prepare(decrementPeopleSql)
-          .bind(now(), profileId),
-      ]);
-    }
-    return c.json({ active: !!active, kind });
-  } catch (error: any) {
-    console.error('People interaction failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not update People profile.' }, 500);
+api.post('/yearbook/profiles/:userId/interest', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_interest_write');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'yearbook_interest_write', viewerId, 40, 86400);
+  if (limited) return limited;
+  if (!targetId || viewerId === targetId) return c.json({ detail: 'This action is not available.' }, 400);
+  if (await supabaseBlockPair(c, viewerId, targetId)) return c.json({ detail: 'This profile is unavailable.' }, 403);
+  const [viewerRows, targetRows] = await Promise.all([
+    supabaseAdminQueryRows(c, 'yearbook_profiles', { select: 'age,dating_enabled,discovery_intent', filters: { user_id: postgrestEqFilter(viewerId) }, limit: 1 }),
+    supabaseAdminQueryRows(c, 'yearbook_profiles', { select: 'age,dating_enabled,discovery_intent', filters: { user_id: postgrestEqFilter(targetId) }, limit: 1 }),
+  ]);
+  const viewer = viewerRows[0];
+  const target = targetRows[0];
+  if (!viewer?.dating_enabled || Number(viewer?.age || 0) < 18 || !target?.dating_enabled || Number(target?.age || 0) < 18) {
+    return c.json({ detail: 'Interested is available only when both adults enable Dating.' }, 403);
   }
+  await supabaseAdminUpsert(c, 'yearbook_interest_signals', [{
+    from_user_id: viewerId, to_user_id: targetId, updated_at: now(),
+  }], 'from_user_id,to_user_id');
+  const state = await supabaseYearbookInterestState(c, viewerId, targetId);
+  if (state.mutual) {
+    const [viewerUser, targetUser] = await Promise.all([supabaseUserByAnyId(c, viewerId), supabaseUserByAnyId(c, targetId)]);
+    await Promise.all([
+      insertNotificationOnce(c, {
+        userId: viewerId, type: 'yearbook_match', title: 'You found each other',
+        body: `You and ${cleanText(targetUser?.full_name || targetUser?.username, 80) || 'this person'} are both interested.`,
+        data: { from_user_id: targetId, reference_id: targetId }, dedupeKey: `yearbook_match:${[viewerId, targetId].sort().join(':')}:viewer`, dedupeSeconds: 365 * 86400,
+      }),
+      insertNotificationOnce(c, {
+        userId: targetId, type: 'yearbook_match', title: 'You found each other',
+        body: `You and ${cleanText(viewerUser?.full_name || viewerUser?.username, 80) || 'this person'} are both interested.`,
+        data: { from_user_id: viewerId, reference_id: viewerId }, dedupeKey: `yearbook_match:${[viewerId, targetId].sort().join(':')}:target`, dedupeSeconds: 365 * 86400,
+      }),
+    ]).catch(() => undefined);
+  }
+  return c.json({ interested: true, mutual: state.mutual });
 });
 
-api.post('/people/:profileId/claim', authMiddleware, async (c) => {
-  try {
-    await ensurePeopleSchema(c.env.DB);
-    const userId = getUserId(c);
-    const profileId = cleanText(c.req.param('profileId'), 120);
-    const body: any = await c.req.json().catch(() => ({}));
-    const ts = now();
-    await c.env.DB.prepare(
-      'INSERT INTO people_claims (id, profile_id, user_id, message, evidence_url, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(uuid(), profileId, userId, cleanText(body.message || 'I want to claim this profile.', 1000), safeOptionalUrl(body.evidence_url), 'pending', ts, ts).run();
-    await c.env.DB.prepare("UPDATE people_profiles SET claim_status = 'pending', updated_at = ? WHERE id = ?").bind(ts, profileId).run();
-    return c.json({ claimed: true, status: 'pending' }, 201);
-  } catch (error: any) {
-    console.error('People claim failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not submit claim.' }, 500);
-  }
-});
-
-api.post('/people/:profileId/report', authMiddleware, async (c) => {
-  try {
-    await ensurePeopleSchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'people_report', userId, 12, 60);
-    if (limited) return limited;
-    const profileId = cleanText(c.req.param('profileId'), 120);
-    const body: any = await c.req.json().catch(() => ({}));
-    const ts = now();
-    const reason = normalizeReportReason(body.reason || 'other');
-    const details = cleanMultilineText(body.details || '', 1000);
-    const reportResults = await c.env.DB.batch([
-      c.env.DB.prepare('INSERT OR IGNORE INTO people_reports (id, profile_id, reporter_id, reason, details, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(uuid(), profileId, userId, reason, details, ts),
-      c.env.DB.prepare('UPDATE people_profiles SET reports_count = COALESCE(reports_count, 0) + 1, updated_at = ? WHERE id = ? AND changes() > 0')
-        .bind(ts, profileId),
-    ]);
-    if (d1Changes(reportResults?.[0]) > 0) {
-      await c.env.DB.prepare(
-        `INSERT INTO reports
-         (id, reporter_id, reported_id, report_type, reported_type, reason, details, content_id, status, created_at, updated_at)
-         VALUES (?, ?, ?, 'people', 'people', ?, ?, ?, 'pending', ?, ?)`
-      ).bind(uuid(), userId, profileId, reason || 'Wrong People profile info', details, profileId, ts, ts).run();
-    }
-    return c.json({ reported: true });
-  } catch (error: any) {
-    const message = String(error?.message || '').toLowerCase();
-    if (message.includes('unique constraint')) return c.json({ reported: true });
-    console.error('People report failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not report People profile.' }, 500);
-  }
+api.delete('/yearbook/profiles/:userId/interest', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const targetId = publicId(c.req.param('userId'), 120);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'yearbook_interest_remove');
+  if (supabaseRequired) return supabaseRequired;
+  await supabaseAdminDeleteRows(c, 'yearbook_interest_signals', {
+    from_user_id: postgrestEqFilter(viewerId), to_user_id: postgrestEqFilter(targetId),
+  }).catch(() => undefined);
+  return c.json({ interested: false, mutual: false });
 });
 
 // Discover
 api.get('/discover', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'discover_category_read', userId, 180, 60);
   if (limited) return limited;
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureAutoCategorySchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
   const rawCategory = c.req.query('category') || 'all';
   const category = normalizeDiscoverCategory(rawCategory, true);
   if (!category) return c.json({ detail: 'Unknown Discover category.' }, 400);
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '36', 1, 60, 36);
-  const conditions = [
-    visiblePostWhere('u', 'p'),
-    "COALESCE(p.discover_blocked_at, '') = ''",
-    feedPhotoPostWhere('p'),
-  ];
-  const binds: any[] = [userId, ...relatedUserIds, ...relatedUserIds, ...visiblePostBindValues(userId)];
-  if (category !== 'all') {
-    const categoryMatch = discoverCategoryCondition('p', category);
-    conditions.push(categoryMatch.sql);
-    binds.push(...categoryMatch.binds);
+  try {
+    const discoverRows = await supabaseReadVisiblePosts(c, userId, { category, limit, offset: skip, order: 'newest' });
+    const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load Discover.' }, 500);
   }
-  const sql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       EXISTS (SELECT 1 FROM follows fl WHERE fl.follower_id = ? AND fl.following_id = p.user_id) AS is_following,
-       EXISTS (SELECT 1 FROM likes lk WHERE lk.post_id = p.id AND lk.user_id IN (${relatedPlaceholders})) AS is_liked,
-       EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.post_id = p.id AND sp.user_id IN (${relatedPlaceholders})) AS saved,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count
-     FROM posts p JOIN users u ON p.user_id = u.id`,
-    `WHERE ${conditions.join(' AND ')}`,
-    'ORDER BY p.created_at DESC LIMIT ? OFFSET ?',
-  ].join(' ');
-  const rows = await c.env.DB.prepare(sql).bind(...binds, limit, skip).all();
-  const discoverRows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(rows.results as any[]), userId);
-  const response = c.json(discoverRows.map((post) => feedPostPayload(post, [], c.env)));
-  response.headers.set('cache-control', 'private, max-age=8');
-  return response;
 });
 
 api.get('/discover/trending', authMiddleware, async (c) => {
   const userId = getUserId(c);
-    await ensurePrivacySchema(c.env.DB);
-    await ensureGovernanceSchema(c.env.DB);
-    await ensurePostEditorSchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_trending_read');
+  if (supabaseRequired) return supabaseRequired;
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
-  const discoverTrendingSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
-    'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'ORDER BY p.likes_count DESC, p.created_at DESC LIMIT ?',
-  ].join(' ');
-  const r = await c.env.DB.prepare(discoverTrendingSql).bind(...visiblePostBindValues(userId), limit).all();
-  const rows = await overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(r.results as any[]), userId);
-  return c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+  try {
+    const rows = await supabaseReadVisiblePosts(c, userId, { limit, order: 'trending' });
+    const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_trending_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load trending posts.' }, 500);
+  }
 });
 api.get('/discover/search', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_search');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'discover_search', userId, 100, 60);
   if (limited) return limited;
-  await ensurePrivacySchema(c.env.DB);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensurePostEditorSchema(c.env.DB);
-  await ensureLocationSchema(c.env.DB);
-  await ensureMediaModerationSchema(c.env.DB);
   const q = cleanText(c.req.query('q'), 80);
   if (q.length < 2) return c.json({ posts: [], users: [] });
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
-  const discoverSearchSql = [
-    `SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image,
-       (SELECT COUNT(*) FROM likes lk_count WHERE lk_count.post_id = p.id) AS live_likes_count,
-       MAX(COALESCE(p.comments_count, 0), (SELECT COUNT(*) FROM comments cm_count WHERE cm_count.post_id = p.id AND COALESCE(cm_count.status, 'active') NOT IN ('removed', 'hidden'))) AS live_comments_count,
-       MAX(COALESCE(p.saves_count, 0), (SELECT COUNT(*) FROM saved_posts sp_count WHERE sp_count.post_id = p.id)) AS live_saves_count`,
-    'FROM posts p JOIN users u ON p.user_id = u.id',
-    `WHERE p.content LIKE ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    'LIMIT ?',
-  ].join(' ');
-  const posts = await c.env.DB.prepare(discoverSearchSql).bind(`%${q}%`, ...visiblePostBindValues(userId), limit).all();
-  const users = await c.env.DB.prepare(
-    "SELECT id, username, full_name, profile_image, bio, is_private FROM users WHERE COALESCE(status, 'active') = 'active' AND (username LIKE ? OR full_name LIKE ?) LIMIT 10"
-  ).bind(`%${q}%`, `%${q}%`).all();
-  return c.json({ posts: feedPhotoPostsOnly(posts.results as any[]).map((p) => feedPostPayload(p, [], c.env)), users: (users.results as any[]).map((user) => safeUserPayload(user)) });
+  try {
+    const [posts, users] = await Promise.all([
+      supabaseReadVisiblePosts(c, userId, { search: q, limit, order: 'newest' }),
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: 'id,username,full_name,avatar_url,bio,city,is_private,is_verified,counts,profile,metadata',
+        filters: {
+          or: `(username.ilike.*${postgrestSearchTerm(q)}*,full_name.ilike.*${postgrestSearchTerm(q)}*)`,
+        },
+        limit: 10,
+      }).catch(() => []),
+    ]);
+    return c.json({
+      posts: posts.map((p) => feedPostPayload(p, [], c.env)),
+      users: users
+        .filter((user: any) => supabaseUserStatus(user) === 'active')
+        .map((user: any) => safeUserPayload({
+          id: user.id,
+          username: user.username,
+          full_name: user.full_name,
+          profile_image: user.avatar_url,
+          bio: user.bio,
+          city: user.city,
+          is_private: user.is_private,
+          is_verified: user.is_verified,
+          followers_count: Number(parseJsonObject(user.counts).followers_count || 0),
+          following_count: Number(parseJsonObject(user.counts).following_count || 0),
+          posts_count: Number(parseJsonObject(user.counts).posts_count || 0),
+        })),
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_search_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not search Discover.' }, 500);
+  }
 });
 api.get('/discover/suggested-users', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'suggested_users_read');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'suggested_users_read', userId, 120, 60);
   if (limited) return limited;
-  const r = await c.env.DB.prepare(
-    "SELECT id, username, full_name, profile_image, bio, followers_count FROM users WHERE id != ? AND COALESCE(status, 'active') = 'active' ORDER BY followers_count DESC LIMIT 10"
-  ).bind(userId).all();
-  return c.json((r.results as any[]).map((user) => safeUserPayload(user)));
+  try {
+    const [viewerAliases, blockedIds, rows] = await Promise.all([
+      supabaseRelatedInteractionUserIds(c, userId),
+      supabaseBlockedUserIds(c, userId),
+      supabaseAdminQueryRows(c, 'app_users', {
+        select: SUPABASE_APP_USER_SELECT,
+        order: 'created_at.desc',
+        limit: 80,
+      }),
+    ]);
+    const hiddenIds = new Set([...viewerAliases, ...blockedIds].filter(Boolean));
+    const suggestions = rows
+      .filter((row: any) => {
+        const appUserId = publicId(row?.id, 120);
+        const authUserId = isUuidText(row?.supabase_user_id);
+        return appUserId && supabaseUserStatus(row) === 'active' && !hiddenIds.has(appUserId) && (!authUserId || !hiddenIds.has(authUserId));
+      })
+      .sort((a: any, b: any) => Number(parseJsonObject(b?.counts).followers_count || 0) - Number(parseJsonObject(a?.counts).followers_count || 0))
+      .slice(0, 10)
+      .map((row: any) => safeUserPayload(supabaseAppUserToLegacyUser(row)));
+    return c.json(suggestions);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_suggested_users_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load suggested users.' }, 500);
+  }
 });
 
 // Pre-publish media moderation upload flow.
 api.post('/media/upload-intent', authMiddleware, async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 24_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'media_upload_intent');
+  if (supabaseRequired) return supabaseRequired;
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'media_upload_intent', userId, 80, 60);
   if (limited) return limited;
@@ -13781,18 +17959,32 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   }
 
   const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash, 80).toLowerCase();
-  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) {
+  if (!/^[a-f0-9]{64}$/.test(sha256Hash)) {
     return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
   }
-  if (sha256Hash) {
-    const duplicate: any = await c.env.DB.prepare(
-      "SELECT COUNT(*) AS count FROM media_assets WHERE user_id = ? AND sha256_hash = ? AND created_at > datetime('now', '-24 hours')"
-    ).bind(userId, sha256Hash).first();
-    if (Number(duplicate?.count || 0) >= 12) {
-      return c.json({ detail: 'Upload limit reached for this file. Try again later.', code: 'duplicate_upload_limit' }, 429);
-    }
+  const duplicateCount = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: 'id',
+    filters: {
+      user_id: postgrestEqFilter(userId),
+      sha256_hash: postgrestEqFilter(sha256Hash),
+      created_at: `gte.${new Date(Date.now() - 86400_000).toISOString()}`,
+    },
+    limit: 12,
+  })).length;
+  if (duplicateCount >= 12) {
+    return c.json({ detail: 'Upload limit reached for this file. Try again later.', code: 'duplicate_upload_limit' }, 429);
   }
 
+  const mediaId = uuid();
+  const providerMetadata = {
+    userId,
+    mediaId,
+    filename: validation.filename,
+    mimeType: validation.mimeType,
+    fileSize: validation.fileSize,
+    moderation: 'pre_publish',
+    source: 'aura_ios',
+  };
   let uploadUrl = '';
   let storageKey = '';
   let storageProvider: 'images' | 'stream' = 'images';
@@ -13800,13 +17992,7 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     const requireSignedURLs = cloudflareImagesRequireSignedUrls(c.env);
     const formData = new FormData();
     formData.append('requireSignedURLs', String(requireSignedURLs));
-    formData.append('metadata', JSON.stringify({
-      userId,
-      filename: validation.filename,
-      mimeType: validation.mimeType,
-      moderation: 'pre_publish',
-      source: 'captro_ios',
-    }));
+    formData.append('metadata', JSON.stringify(providerMetadata));
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/images/v2/direct_upload`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
@@ -13822,14 +18008,15 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     storageProvider = 'images';
   } else {
     const maxDurationSeconds = clampNumber(body.duration_seconds || body.durationSeconds || 60, 1, 60, 60);
+    const requireSignedURLs = cloudflareStreamRequireSignedUrls(c.env);
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         maxDurationSeconds,
         creator: userId,
-        requireSignedURLs: true,
-        meta: { userId, moderation: 'pre_publish', filename: validation.filename },
+        requireSignedURLs,
+        meta: providerMetadata,
       }),
     });
     const data: any = await res.json().catch(() => ({}));
@@ -13843,31 +18030,23 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   }
 
   if (!uploadUrl || !storageKey) return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
-  const mediaId = uuid();
-  const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO media_assets (
-       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
-       mime_type, file_size, sha256_hash, width, height, duration_seconds,
-       upload_status, moderation_status, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'uploading', 'uploading', ?, ?)`
-  ).bind(
-    mediaId,
+  const assetInput = {
+    id: mediaId,
     userId,
-    validation.mediaType,
+    mediaType: validation.mediaType,
     storageProvider,
     storageKey,
-    `${storageProvider}:${storageKey}`,
-    validation.mimeType,
-    validation.fileSize,
+    privateUrl: `${storageProvider}:${storageKey}`,
+    mimeType: validation.mimeType,
+    fileSize: validation.fileSize,
     sha256Hash,
-    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
-    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
-    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
-    ts,
-    ts,
-  ).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+    width: body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
+    height: body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
+    durationSeconds: body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
+    metadata: { source: 'media_upload_intent', provider_metadata_version: 1 },
+  };
+  await supabaseInsertMediaAsset(c, assetInput);
+  await supabaseInsertModerationEvent(c, mediaId, 'upload_intent_created', {
     actorUserId: userId,
     reason: validation.mediaType,
     afterState: { storage_provider: storageProvider, mime_type: validation.mimeType, file_size: validation.fileSize },
@@ -13887,7 +18066,8 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
 api.post('/media/complete', authMiddleware, async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 32_000);
   if (bodyTooLarge) return bodyTooLarge;
-  await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'media_upload_complete');
+  if (supabaseRequired) return supabaseRequired;
   const userId = getUserId(c);
   const limited = await enforceRateLimit(c, 'media_upload_complete', userId, 120, 60);
   if (limited) return limited;
@@ -13895,7 +18075,7 @@ api.post('/media/complete', authMiddleware, async (c) => {
   const mediaId = publicId(body.media_id || body.mediaId || body.id, 160);
   if (!mediaId) return c.json({ detail: 'Media id is required.', code: 'media_id_required' }, 400);
 
-  const asset: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1').bind(mediaId, userId).first();
+  const asset: any = await supabaseReadMediaAsset(c, mediaId, userId);
   if (!asset) return c.json({ detail: 'Upload not found.', code: 'media_not_found' }, 404);
   const currentStatus = normalizeMediaModerationStatus(asset.moderation_status);
   if (currentStatus === 'approved' || currentStatus === 'review_required' || currentStatus === 'rejected') {
@@ -13912,33 +18092,64 @@ api.post('/media/complete', authMiddleware, async (c) => {
     });
   }
 
-  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash || asset.sha256_hash, 80).toLowerCase();
-  if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
+  const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash, 80).toLowerCase();
+  const expectedChecksum = cleanText(asset.sha256_hash, 80).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(sha256Hash) || sha256Hash !== expectedChecksum) {
+    return c.json({ detail: 'The upload checksum does not match its authorization.', code: 'upload_integrity_mismatch' }, 409);
+  }
+  const claimedFileSize = Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0)));
+  if (!claimedFileSize || claimedFileSize !== Math.max(0, Math.round(Number(asset.file_size || 0)))) {
+    return c.json({ detail: 'The upload size does not match its authorization.', code: 'upload_integrity_mismatch' }, 409);
+  }
+  let verifiedUpload: VerifiedProviderUpload;
+  try {
+    verifiedUpload = await verifyCloudflareProviderUpload(c.env, asset, userId);
+  } catch (error: any) {
+    console.warn(JSON.stringify({
+      event: 'media_provider_verification_failed',
+      media_id: mediaId,
+      provider: cleanText(asset.storage_provider, 40),
+      code: getErrorCode(error).slice(0, 180),
+    }));
+    return c.json({ detail: 'The uploaded media could not be validated. Please try again.', code: 'provider_verification_unavailable' }, 502);
+  }
+  if (!verifiedUpload.ok) {
+    return c.json({ detail: verifiedUpload.detail, code: verifiedUpload.code }, verifiedUpload.status as any);
+  }
   const ts = now();
-  await c.env.DB.prepare(
-    `UPDATE media_assets
-     SET upload_status = 'uploaded', moderation_status = 'pending_moderation',
-         sha256_hash = COALESCE(NULLIF(?, ''), sha256_hash),
-         file_size = COALESCE(NULLIF(?, 0), file_size),
-         width = COALESCE(?, width),
-         height = COALESCE(?, height),
-         duration_seconds = COALESCE(?, duration_seconds),
-         updated_at = ?
-     WHERE id = ? AND user_id = ?`
-  ).bind(
-    sha256Hash,
-    Math.max(0, Math.round(Number(body.file_size || body.fileSize || 0))),
-    body.width == null ? null : clampNumber(body.width, 1, 10000, 0),
-    body.height == null ? null : clampNumber(body.height, 1, 10000, 0),
-    body.duration_seconds == null && body.durationSeconds == null ? null : clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0),
-    ts,
-    mediaId,
-    userId,
-  ).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_completed', {
+  const updatePatch = {
+    upload_status: 'uploaded',
+    moderation_status: 'pending_moderation',
+    sha256_hash: verifiedUpload.sha256Hash,
+    file_size: verifiedUpload.fileSize,
+    mime_type: verifiedUpload.mimeType,
+    width: verifiedUpload.width,
+    height: verifiedUpload.height,
+    duration_seconds: verifiedUpload.durationSeconds,
+    metadata: {
+      ...parseJsonObject(asset.metadata),
+      provider_verified: true,
+      provider_verified_at: ts,
+      provider_verified_size: verifiedUpload.fileSize,
+      provider_observed_sha256: verifiedUpload.sha256Hash,
+      client_intent_sha256: expectedChecksum,
+      client_intent_file_size: claimedFileSize,
+      client_intent_mime_type: normalizedContentType(asset.mime_type),
+      checksum_source: cleanText(asset.storage_provider, 40) === 'images' ? 'cloudflare_images_blob' : 'client_intent_stream_provider_size_verified',
+    },
+    updated_at: ts,
+  };
+  await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId), user_id: postgrestEqFilter(userId) }, updatePatch);
+  await supabaseInsertModerationEvent(c, mediaId, 'upload_completed', {
     actorUserId: userId,
     beforeState: { upload_status: asset.upload_status, moderation_status: asset.moderation_status },
-    afterState: { upload_status: 'uploaded', moderation_status: 'pending_moderation' },
+    afterState: {
+      upload_status: 'uploaded',
+      moderation_status: 'pending_moderation',
+      provider_verified: true,
+      file_size: verifiedUpload.fileSize,
+      mime_type: verifiedUpload.mimeType,
+    },
     requestId: c.get?.('requestId') || '',
   });
   const moderationCaption = cleanMultilineText(body.caption || body.content || body.title || '', 1000);
@@ -13952,9 +18163,7 @@ api.post('/media/complete', authMiddleware, async (c) => {
       media_id: mediaId,
     }));
   }
-  const latest: any = await c.env.DB.prepare(
-    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
-  ).bind(mediaId, userId).first();
+  const latest: any = await supabaseReadMediaAsset(c, mediaId, userId);
   const latestStatus = normalizeMediaModerationStatus(latest?.moderation_status);
   const latestUploadStatus = cleanText(latest?.upload_status, 40) || 'uploaded';
   const latestPublicUrl = latestStatus === 'approved'
@@ -13965,7 +18174,7 @@ api.post('/media/complete', authMiddleware, async (c) => {
     : latestStatus === 'review_required'
       ? 'This upload needs a quick safety review before it can be posted.'
       : latestStatus === 'rejected'
-        ? "This upload can't be posted because it may break Captro's safety rules."
+        ? "This upload can't be posted because it may break Aura's safety rules."
         : latestStatus === 'failed'
           ? (cleanText(latest?.rejection_message, 240) || 'This upload could not be checked. Please try again.')
           : 'Checking your upload before posting...';
@@ -13982,12 +18191,11 @@ api.post('/media/complete', authMiddleware, async (c) => {
 });
 
 api.get('/media/:mediaId/status', authMiddleware, async (c) => {
-  await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'media_status_read');
+  if (supabaseRequired) return supabaseRequired;
   const userId = getUserId(c);
   const mediaId = publicId(c.req.param('mediaId'), 160);
-  const asset: any = await c.env.DB.prepare(
-    'SELECT id, media_type, storage_provider, storage_key, private_url, upload_status, moderation_status, rejection_code, rejection_message, public_url, created_at, updated_at FROM media_assets WHERE id = ? AND user_id = ? LIMIT 1'
-  ).bind(mediaId, userId).first();
+  const asset: any = await supabaseReadMediaAsset(c, mediaId, userId);
   if (!asset) return c.json({ detail: 'Upload not found.' }, 404);
   return c.json({
     ...asset,
@@ -14000,7 +18208,8 @@ api.get('/media/:mediaId/status', authMiddleware, async (c) => {
 // Uploads (Cloudflare Images + Stream direct upload)
 api.post('/upload/image-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'image_direct_upload');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'upload_image_direct', userId, 60, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_image_direct_daily', userId, 250, 86400);
@@ -14032,14 +18241,17 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
   }
   const imageId = cleanText(data.result?.id, 180);
   const mediaId = uuid();
-  const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO media_assets (
-       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
-       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
-     ) VALUES (?, ?, 'image', 'images', ?, NULL, ?, ?, 0, '', 'uploading', 'uploading', ?, ?)`
-  ).bind(mediaId, userId, imageId, `images:${imageId}`, mimeType || 'image/jpeg', ts, ts).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+  await supabaseInsertMediaAsset(c, {
+    id: mediaId,
+    userId,
+    mediaType: 'image',
+    storageProvider: 'images',
+    storageKey: imageId,
+    privateUrl: `images:${imageId}`,
+    mimeType: mimeType || 'image/jpeg',
+    metadata: { source: 'legacy_image_direct' },
+  });
+  await supabaseInsertModerationEvent(c, mediaId, 'upload_intent_created', {
     actorUserId: userId,
     reason: 'legacy_image_direct',
     afterState: { storage_provider: 'images', mime_type: mimeType || 'image/jpeg' },
@@ -14059,7 +18271,8 @@ api.post('/upload/image-direct', authMiddleware, async (c) => {
 
 api.post('/upload/video-direct', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureMediaModerationSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'video_direct_upload');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'upload_video_direct', userId, 40, 60);
   if (limited) return limited;
   const dailyLimited = await enforceRateLimit(c, 'upload_video_direct_daily', userId, 100, 86400);
@@ -14069,19 +18282,23 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
   if (!accountId || !token) {
     return c.json({ detail: 'Video upload is not configured.' }, 503);
   }
-  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs: true, meta: { userId, moderation: 'pre_publish' } }) });
+  const requireSignedURLs = cloudflareStreamRequireSignedUrls(c.env);
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs, meta: { userId, moderation: 'pre_publish' } }) });
   const data: any = await res.json();
   if (!data.success) return c.json({ detail: 'Failed to get upload URL' }, 500);
   const videoUid = cleanText(data.result.uid, 220);
   const mediaId = uuid();
-  const ts = now();
-  await c.env.DB.prepare(
-    `INSERT INTO media_assets (
-       id, user_id, media_type, storage_provider, storage_key, public_url, private_url,
-       mime_type, file_size, sha256_hash, upload_status, moderation_status, created_at, updated_at
-     ) VALUES (?, ?, 'video', 'stream', ?, NULL, ?, 'video/mp4', 0, '', 'uploading', 'uploading', ?, ?)`
-  ).bind(mediaId, userId, videoUid, `stream:${videoUid}`, ts, ts).run();
-  await insertModerationEvent(c.env.DB, mediaId, 'upload_intent_created', {
+  await supabaseInsertMediaAsset(c, {
+    id: mediaId,
+    userId,
+    mediaType: 'video',
+    storageProvider: 'stream',
+    storageKey: videoUid,
+    privateUrl: `stream:${videoUid}`,
+    mimeType: 'video/mp4',
+    metadata: { source: 'legacy_video_direct' },
+  });
+  await supabaseInsertModerationEvent(c, mediaId, 'upload_intent_created', {
     actorUserId: userId,
     reason: 'legacy_video_direct',
     afterState: { storage_provider: 'stream' },
@@ -14174,104 +18391,6 @@ api.post('/stripe/checkout/sessions', authMiddleware, async (c) => {
   }
 });
 
-api.get('/premium', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c);
-    const user = await getPremiumUser(c, userId);
-    if (!user) return c.json({ detail: 'User not found' }, 404);
-    const stripe = getStripeConfig(c);
-    return c.json({
-      ...premiumPayloadFromUser(user),
-      stripe_connected: stripe.configured,
-      price_configured: !!getPremiumPriceId(c),
-    });
-  } catch (error: any) {
-    console.error('Premium load failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not load Premium.', code: 'PREMIUM_LOAD_FAILED' }, 500);
-  }
-});
-
-api.post('/premium/checkout', authMiddleware, async (c) => {
-  try {
-    const bodyTooLarge = rejectLargeRequest(c, 20_000);
-    if (bodyTooLarge) return bodyTooLarge;
-    const userId = getUserId(c);
-    const limited = await enforceRateLimit(c, 'premium_checkout', userId, 8, 60);
-    if (limited) return limited;
-
-    await ensurePremiumSchema(c.env.DB);
-    const body: any = await c.req.json().catch(() => ({}));
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-    if (!user) return c.json({ detail: 'User not found' }, 404);
-    if (userHasActivePremium(user)) {
-      return c.json({ detail: 'Premium is already active on this account.', code: 'PREMIUM_ALREADY_ACTIVE' }, 409);
-    }
-
-    const stripe = getStripeConfig(c);
-    if (!stripe.configured) {
-      return c.json({ detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' }, 503);
-    }
-
-    const priceId = getPremiumPriceId(c);
-    const successUrl = allowedStripeReturnUrl(c, body.success_url || c.env.STRIPE_SUCCESS_URL, '/profile?premium=success&session_id={CHECKOUT_SESSION_ID}');
-    const cancelUrl = allowedStripeReturnUrl(c, body.cancel_url || c.env.STRIPE_CANCEL_URL, '/profile?premium=cancelled');
-    const requestId = getClientRequestId(c, body) || `premium_${userId}_${Date.now()}`;
-    const existingCustomer = cleanText(user.premium_stripe_customer_id, 140);
-    const publicEmail = publicUserEmail(user.email);
-    const checkoutParams: Record<string, string | number | boolean> = {
-      mode: 'subscription',
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      client_reference_id: userId,
-      'line_items[0][quantity]': 1,
-      'metadata[source]': 'captro-premium',
-      'metadata[user_id]': userId,
-      'metadata[plan]': PREMIUM_PLAN.id,
-      'metadata[price_id]': priceId,
-      'subscription_data[metadata][source]': 'captro-premium',
-      'subscription_data[metadata][user_id]': userId,
-      'subscription_data[metadata][plan]': PREMIUM_PLAN.id,
-    };
-    if (existingCustomer) checkoutParams.customer = existingCustomer;
-    else if (publicEmail) checkoutParams.customer_email = publicEmail;
-    if (priceId && priceId.startsWith('price_')) {
-      checkoutParams['line_items[0][price]'] = priceId;
-    } else {
-      checkoutParams['line_items[0][price_data][currency]'] = PREMIUM_PLAN.currency;
-      checkoutParams['line_items[0][price_data][unit_amount]'] = PREMIUM_PLAN.amount_cents;
-      checkoutParams['line_items[0][price_data][recurring][interval]'] = PREMIUM_PLAN.interval;
-      checkoutParams['line_items[0][price_data][product_data][name]'] = PREMIUM_PLAN.label;
-      checkoutParams['line_items[0][price_data][product_data][metadata][source]'] = 'captro-premium';
-    }
-
-    const session = await stripeApiRequest(c, '/checkout/sessions', checkoutParams, requestId);
-    if (!session.ok) {
-      const message = session.data?.error?.message || session.data?.detail || 'Could not start Premium checkout.';
-      return c.json({ detail: message, code: session.data?.error?.code || 'PREMIUM_CHECKOUT_FAILED' }, session.status as any);
-    }
-
-    await upsertPremiumSubscription(c, {
-      userId,
-      stripeCustomerId: cleanText(session.data.customer, 140),
-      stripeCheckoutSessionId: cleanText(session.data.id, 140),
-      priceId,
-      status: 'pending',
-    });
-
-    return c.json({
-      id: session.data.id,
-      url: session.data.url,
-      mode: session.data.mode,
-      status: session.data.status,
-      plan: PREMIUM_PLAN.id,
-      amount_cents: PREMIUM_PLAN.amount_cents,
-    });
-  } catch (error: any) {
-    console.error('Premium checkout failed:', getErrorCode(error), error?.message || error);
-    return c.json({ detail: 'Could not start Premium checkout.', code: 'PREMIUM_CHECKOUT_FAILED' }, 500);
-  }
-});
-
 api.post('/stripe/webhook', async (c) => {
   const bodyTooLarge = rejectLargeRequest(c, 500_000);
   if (bodyTooLarge) return bodyTooLarge;
@@ -14316,6 +18435,1228 @@ api.post('/stripe/webhook', async (c) => {
   }
 });
 
+// Wall of Notes
+const WALL_NOTE_COLORS = new Set(['butter', 'cream', 'rose', 'sky', 'mint', 'peach', 'paper']);
+const WALL_NOTE_STYLES = new Set([
+  'sticky', 'editorial', 'handwritten', 'poster', 'polaroid', 'receipt', 'torn_paper', 'notebook', 'postcard', 'minimal',
+  'sticky_square', 'vertical_card', 'question', 'confession', 'recommendation',
+]);
+const WALL_NOTE_CATEGORIES = new Set(['question', 'confession', 'food', 'advice', 'life']);
+const WALLS = new Map([['global', 'Global']]);
+
+type WallOverview = {
+  wallId: string;
+  displayName: string;
+  totalCount: number;
+  minX: number | null;
+  maxX: number | null;
+  minY: number | null;
+  maxY: number | null;
+};
+
+function normalizedWallId(_value: unknown): string {
+  // Legacy clients may still submit regional wall IDs. Captro now has one global Wall.
+  return 'global';
+}
+
+async function supabaseWallOverview(c: any, wallId: string): Promise<WallOverview> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/rpc/captro_wall_overview`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { ...supabaseAdminAuthHeaders(c), 'content-type': 'application/json' },
+    body: JSON.stringify({ p_wall_id: wallId }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_WALL_OVERVIEW_FAILED:${response.status}:${text.slice(0, 240)}`);
+  }
+  const data: any = await response.json().catch(() => []);
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    wallId,
+    displayName: WALLS.get(wallId) || 'Wall',
+    totalCount: Math.max(0, Number(row?.total_count || 0)),
+    minX: row?.min_x != null && Number.isFinite(Number(row.min_x)) ? Number(row.min_x) : null,
+    maxX: row?.max_x != null && Number.isFinite(Number(row.max_x)) ? Number(row.max_x) : null,
+    minY: row?.min_y != null && Number.isFinite(Number(row.min_y)) ? Number(row.min_y) : null,
+    maxY: row?.max_y != null && Number.isFinite(Number(row.max_y)) ? Number(row.max_y) : null,
+  };
+}
+
+async function claimWallPlacementSlot(c: any, wallId: string): Promise<number> {
+  const url = new URL(`${getSupabaseUrl(c)}/rest/v1/rpc/captro_claim_wall_slot`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { ...supabaseAdminAuthHeaders(c), 'content-type': 'application/json' },
+    body: JSON.stringify({ p_wall_id: wallId }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SUPABASE_WALL_SLOT_FAILED:${response.status}:${text.slice(0, 240)}`);
+  }
+  const data: any = await response.json().catch(() => 0);
+  const value = Array.isArray(data) ? data[0] : data;
+  return Math.max(0, Number(value || 0));
+}
+
+function wallOverlapRatio(candidate: { x: number; y: number; width: number; height: number }, existing: any): number {
+  const left = Math.max(candidate.x, Number(existing?.world_x || 0));
+  const top = Math.max(candidate.y, Number(existing?.world_y || 0));
+  const right = Math.min(candidate.x + candidate.width, Number(existing?.world_x || 0) + Number(existing?.width || 184));
+  const bottom = Math.min(candidate.y + candidate.height, Number(existing?.world_y || 0) + Number(existing?.height || 184));
+  if (right <= left || bottom <= top) return 0;
+  const intersection = (right - left) * (bottom - top);
+  const existingArea = Math.max(1, Number(existing?.width || 184) * Number(existing?.height || 184));
+  return intersection / Math.max(1, Math.min(candidate.width * candidate.height, existingArea));
+}
+
+function stableWallHash(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+async function resolveWallNotePlacement(
+  c: any,
+  wallId: string,
+  width: number,
+  height: number,
+  noteId: string,
+): Promise<{ x: number; y: number; rotation: number; totalBefore: number }> {
+  const claimedSlot = await claimWallPlacementSlot(c, wallId);
+  const [overview, existing] = await Promise.all([
+    supabaseWallOverview(c, wallId),
+    supabaseAdminQueryRows(c, 'wall_notes', {
+      select: 'id,world_x,world_y,width,height,created_at',
+      filters: {
+        wall_id: postgrestEqFilter(wallId),
+        status: postgrestEqFilter('active'),
+        moderation_status: postgrestEqFilter('approved'),
+      },
+      order: 'created_at.desc',
+      limit: 750,
+    }),
+  ]);
+  const count = Math.max(claimedSlot, overview.totalCount);
+  const earlySlots = [
+    { x: -95, y: -85 },
+    { x: 125, y: -150 },
+    { x: -220, y: 125 },
+    { x: 65, y: 105 },
+    { x: 295, y: -5 },
+  ];
+  const hash = stableWallHash(noteId);
+  const rotation = Number((((hash % 401) / 100) - 2).toFixed(2));
+  if (count < earlySlots.length) {
+    const slot = earlySlots[count];
+    return { x: slot.x, y: slot.y, rotation, totalBefore: count };
+  }
+
+  const minX = overview.minX ?? -width * 0.5;
+  const maxX = overview.maxX ?? width * 0.5;
+  const minY = overview.minY ?? -height * 0.5;
+  const maxY = overview.maxY ?? height * 0.5;
+  const centerX = (minX + maxX) * 0.5;
+  const centerY = (minY + maxY) * 0.5;
+  const clusterRadius = Math.max(180, Math.hypot(maxX - minX, maxY - minY) * 0.42);
+  const seedAngle = (hash % 6283) / 1000;
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  let best = { x: centerX - width * 0.5, y: centerY - height * 0.5, score: Number.POSITIVE_INFINITY };
+
+  for (let attempt = 0; attempt < 220; attempt += 1) {
+    const layer = Math.floor(attempt / 18);
+    const radius = clusterRadius + 42 + layer * 58 + (attempt % 3) * 15;
+    const angle = seedAngle + (count + attempt) * goldenAngle;
+    const candidate = {
+      x: centerX + Math.cos(angle) * radius - width * 0.5,
+      y: centerY + Math.sin(angle) * radius - height * 0.5,
+      width,
+      height,
+    };
+    const overlap = existing.reduce((highest, note) => Math.max(highest, wallOverlapRatio(candidate, note)), 0);
+    const gapPenalty = Math.abs(radius - (clusterRadius + 70));
+    const score = overlap * 10_000 + gapPenalty;
+    if (score < best.score) best = { x: candidate.x, y: candidate.y, score };
+    if (overlap <= 0.10) return { x: candidate.x, y: candidate.y, rotation, totalBefore: count };
+  }
+  return { x: best.x, y: best.y, rotation, totalBefore: count };
+}
+
+function normalizedWallNoteType(value: unknown, hasPhoto = false, hasVoice = false): 'text' | 'photo' | 'voice' {
+  const clean = cleanText(value, 20).toLowerCase();
+  if (hasVoice || clean === 'voice') return 'voice';
+  if (hasPhoto || clean === 'photo') return 'photo';
+  return 'text';
+}
+
+function wallNoteWaveform(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 48)
+    .map((sample) => Number(sample))
+    .filter((sample) => Number.isFinite(sample))
+    .map((sample) => Number(Math.min(1, Math.max(0, sample)).toFixed(4)));
+}
+
+const WALL_NOTE_CANVAS_TEMPLATES = new Set([
+  'blank', 'journal', 'personal_journal', 'daily_note', 'travel_diary', 'scrapbook',
+  'moodboard', 'notebook', 'minimal', 'minimal_photo', 'minimal_motivation',
+  'dark_album', 'recipe_book', 'book_review', 'event_poster', 'party_invitation',
+  'announcement', 'imported_artwork',
+]);
+const WALL_NOTE_CANVAS_FORMATS = new Set([
+  'square', 'portrait_4x5', 'editorial_3x4', 'portrait_2x3', 'poster_9x16',
+  'landscape_4x3', 'landscape_16x9', 'long_page',
+]);
+const WALL_NOTE_CANVAS_ELEMENT_KINDS = new Set([
+  'photo', 'polaroid', 'text', 'handwritten_caption', 'torn_paper', 'textured_paper',
+  'tape', 'sticker', 'drawing', 'flower', 'shape',
+]);
+const WALL_NOTE_ARTWORK_MODES = new Set(['editable_canvas', 'imported_artwork']);
+const WALL_NOTE_CONTENT_KINDS = new Set([
+  'journal', 'photo_collage', 'minimal_photo', 'travel_recap', 'event_poster',
+  'party_invitation', 'announcement', 'recipe', 'book_review', 'moodboard',
+  'outfit_board', 'birthday_page', 'memorial_page', 'poem', 'quote', 'artwork',
+  'imported_design', 'scrapbook', 'other',
+]);
+const WALL_NOTE_VISIBILITIES = new Set(['public_wall', 'friends', 'private_draft']);
+const WALL_NOTE_DETAIL_BLOCK_KINDS = new Set(['text', 'event', 'recipe', 'review', 'memory', 'link']);
+
+function noteCanvasNumber(value: unknown, minimum: number, maximum: number, fallback: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Number(Math.min(maximum, Math.max(minimum, number)).toFixed(5));
+}
+
+function wallNoteCanvasFormatForSize(width: number, height: number): string {
+  const ratio = width / Math.max(1, height);
+  const formats = [
+    ['square', 1],
+    ['portrait_4x5', 4 / 5],
+    ['editorial_3x4', 3 / 4],
+    ['portrait_2x3', 2 / 3],
+    ['poster_9x16', 9 / 16],
+    ['landscape_4x3', 4 / 3],
+    ['landscape_16x9', 16 / 9],
+    ['long_page', 9 / 19.5],
+  ] as Array<[string, number]>;
+  return formats.reduce((best, candidate) => (
+    Math.abs(candidate[1] - ratio) < Math.abs(best[1] - ratio) ? candidate : best
+  ), formats[3])[0];
+}
+
+function normalizeWallNoteCanvas(value: unknown): { canvas: any | null; error: string | null } {
+  if (value == null) return { canvas: null, error: null };
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { canvas: null, error: 'The note canvas is invalid.' };
+  }
+
+  const source: any = value;
+  const template = cleanText(source.template, 40).toLowerCase();
+  const elementsSource = Array.isArray(source.elements) ? source.elements : null;
+  if (!WALL_NOTE_CANVAS_TEMPLATES.has(template) || !elementsSource || elementsSource.length < 1 || elementsSource.length > 80) {
+    return { canvas: null, error: 'The note canvas has an unsupported template or element count.' };
+  }
+
+  const backgroundSource = source.background && typeof source.background === 'object' && !Array.isArray(source.background)
+    ? source.background
+    : {};
+  const background = {
+    material: cleanText(backgroundSource.material, 40) || 'cotton_paper',
+    color_hex: cleanText(backgroundSource.color_hex || backgroundSource.colorHex, 12) || '#F4F0E7',
+    texture_asset: cleanText(backgroundSource.texture_asset || backgroundSource.textureAsset, 80) || null,
+  };
+
+  let totalTextLength = 0;
+  let photoCount = 0;
+  const seenIds = new Set<string>();
+  const elements: any[] = [];
+  for (let index = 0; index < elementsSource.length; index += 1) {
+    const raw = elementsSource[index];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { canvas: null, error: 'The note canvas contains an invalid element.' };
+    }
+    const kind = cleanText(raw.kind, 40).toLowerCase();
+    if (!WALL_NOTE_CANVAS_ELEMENT_KINDS.has(kind)) {
+      return { canvas: null, error: 'The note canvas contains an unsupported element.' };
+    }
+    const id = publicId(raw.id, 120) || `element-${index + 1}`;
+    if (seenIds.has(id)) return { canvas: null, error: 'The note canvas contains duplicate elements.' };
+    seenIds.add(id);
+
+    const text = cleanMultilineText(raw.text, 1000) || null;
+    totalTextLength += text?.length || 0;
+    if (totalTextLength > 6000) return { canvas: null, error: 'The note contains too much text.' };
+
+    const mediaAssetId = publicId(raw.media_asset_id || raw.mediaAssetId, 160) || null;
+    if (kind === 'photo' || kind === 'polaroid') {
+      photoCount += 1;
+      if (!mediaAssetId) return { canvas: null, error: 'Upload every canvas photo through Aura first.' };
+      if (photoCount > 12) return { canvas: null, error: 'A note can contain up to 12 photos.' };
+    } else if (mediaAssetId) {
+      return { canvas: null, error: 'Only photo elements can reference uploaded media.' };
+    }
+
+    const rawStyle = raw.style && typeof raw.style === 'object' && !Array.isArray(raw.style) ? raw.style : {};
+    elements.push({
+      id,
+      kind,
+      x: noteCanvasNumber(raw.x, -0.25, 1.25, 0.5),
+      y: noteCanvasNumber(raw.y, -0.25, 1.25, 0.5),
+      width: noteCanvasNumber(raw.width, 0.02, 1.5, 0.25),
+      height: noteCanvasNumber(raw.height, 0.02, 1.5, 0.25),
+      rotation: noteCanvasNumber(raw.rotation, -180, 180, 0),
+      z_index: Math.round(noteCanvasNumber(raw.z_index ?? raw.zIndex, -1000, 1000, index)),
+      opacity: noteCanvasNumber(raw.opacity, 0.05, 1, 1),
+      is_locked: raw.is_locked === true || raw.isLocked === true,
+      text,
+      media_asset_id: mediaAssetId,
+      media_url: null,
+      thumbnail_url: null,
+      crop_x: noteCanvasNumber(raw.crop_x ?? raw.cropX, 0, 1, 0.5),
+      crop_y: noteCanvasNumber(raw.crop_y ?? raw.cropY, 0, 1, 0.5),
+      crop_scale: noteCanvasNumber(raw.crop_scale ?? raw.cropScale, 1, 8, 1),
+      style: {
+        material: cleanText(rawStyle.material, 40) || null,
+        color_hex: cleanText(rawStyle.color_hex || rawStyle.colorHex, 12) || null,
+        font_name: cleanText(rawStyle.font_name || rawStyle.fontName, 80) || null,
+        font_size: rawStyle.font_size != null || rawStyle.fontSize != null
+          ? noteCanvasNumber(rawStyle.font_size ?? rawStyle.fontSize, 10, 240, 42)
+          : null,
+        font_weight: cleanText(rawStyle.font_weight || rawStyle.fontWeight, 20) || null,
+        text_alignment: ['leading', 'center', 'trailing'].includes(cleanText(rawStyle.text_alignment || rawStyle.textAlignment, 20))
+          ? cleanText(rawStyle.text_alignment || rawStyle.textAlignment, 20)
+          : null,
+        corner_radius: rawStyle.corner_radius != null || rawStyle.cornerRadius != null
+          ? noteCanvasNumber(rawStyle.corner_radius ?? rawStyle.cornerRadius, 0, 160, 0)
+          : null,
+        border_width: rawStyle.border_width != null || rawStyle.borderWidth != null
+          ? noteCanvasNumber(rawStyle.border_width ?? rawStyle.borderWidth, 0, 24, 0)
+          : null,
+        border_color_hex: cleanText(rawStyle.border_color_hex || rawStyle.borderColorHex, 12) || null,
+        shadow_level: rawStyle.shadow_level != null || rawStyle.shadowLevel != null
+          ? Math.round(noteCanvasNumber(rawStyle.shadow_level ?? rawStyle.shadowLevel, 0, 5, 1))
+          : null,
+        sticker_name: cleanText(rawStyle.sticker_name || rawStyle.stickerName, 80) || null,
+        drawing_name: cleanText(rawStyle.drawing_name || rawStyle.drawingName, 80) || null,
+        shape_name: cleanText(rawStyle.shape_name || rawStyle.shapeName, 80) || null,
+        blend_mode: cleanText(rawStyle.blend_mode || rawStyle.blendMode, 30) || null,
+      },
+    });
+  }
+
+  return {
+    canvas: {
+      version: Math.round(noteCanvasNumber(source.version, 1, 10, 1)),
+      template,
+      format: WALL_NOTE_CANVAS_FORMATS.has(cleanText(source.format, 40).toLowerCase())
+        ? cleanText(source.format, 40).toLowerCase()
+        : wallNoteCanvasFormatForSize(
+          Math.round(noteCanvasNumber(source.design_width ?? source.designWidth, 320, 4096, 1080)),
+          Math.round(noteCanvasNumber(source.design_height ?? source.designHeight, 480, 12288, 1620)),
+        ),
+      design_width: Math.round(noteCanvasNumber(source.design_width ?? source.designWidth, 320, 4096, 1080)),
+      design_height: Math.round(noteCanvasNumber(source.design_height ?? source.designHeight, 480, 12288, 1620)),
+      background,
+      elements,
+    },
+    error: null,
+  };
+}
+
+function inferWallNoteContentKindFromCanvas(canvas: any | null): string {
+  const template = cleanText(canvas?.template, 40);
+  if (template === 'recipe_book') return 'recipe';
+  if (template === 'book_review') return 'book_review';
+  if (template === 'event_poster') return 'event_poster';
+  if (template === 'party_invitation') return 'party_invitation';
+  if (template === 'travel_diary') return 'travel_recap';
+  if (template === 'minimal_photo') return 'minimal_photo';
+  if (template === 'imported_artwork') return 'imported_design';
+  if (template === 'scrapbook' || template === 'moodboard') return 'scrapbook';
+  return 'journal';
+}
+
+function normalizeWallNoteDetailBlocks(value: unknown): any[] {
+  if (!Array.isArray(value)) return [];
+  const blocks: any[] = [];
+  let textBudget = 0;
+  for (const raw of value.slice(0, 24)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const source: any = raw;
+    const kind = cleanText(source.kind, 30).toLowerCase();
+    if (!WALL_NOTE_DETAIL_BLOCK_KINDS.has(kind)) continue;
+    const title = cleanText(source.title, 120) || null;
+    const body = cleanMultilineText(source.body, 1200) || null;
+    const url = safeMediaReference(source.url) || cleanText(source.url, 1000) || null;
+    const dateText = cleanText(source.date_text || source.dateText, 120) || null;
+    textBudget += (title?.length || 0) + (body?.length || 0) + (url?.length || 0) + (dateText?.length || 0);
+    if (textBudget > 8000) break;
+    const metadataSource = source.metadata && typeof source.metadata === 'object' && !Array.isArray(source.metadata)
+      ? source.metadata
+      : {};
+    const metadata: Record<string, string> = {};
+    for (const [key, rawValue] of Object.entries(metadataSource).slice(0, 20)) {
+      const cleanKey = cleanText(key, 40);
+      const cleanValue = cleanText(rawValue, 240);
+      if (cleanKey && cleanValue) metadata[cleanKey] = cleanValue;
+    }
+    blocks.push({
+      id: publicId(source.id, 120) || uuid(),
+      kind,
+      title,
+      body,
+      url,
+      date_text: dateText,
+      metadata,
+    });
+  }
+  return blocks;
+}
+
+function normalizeWallNoteDocument(value: unknown, fallbackCanvas: any | null): { document: any | null; error: string | null } {
+  if (value != null && (typeof value !== 'object' || Array.isArray(value))) {
+    return { document: null, error: 'The note document is invalid.' };
+  }
+  const source: any = value || {};
+  const canvasResult = value && source.canvas != null
+    ? normalizeWallNoteCanvas(source.canvas)
+    : { canvas: fallbackCanvas, error: null };
+  if (canvasResult.error) return { document: null, error: canvasResult.error };
+  const canvas = canvasResult.canvas || fallbackCanvas;
+  if (!canvas) return { document: null, error: null };
+
+  const artworkMode = WALL_NOTE_ARTWORK_MODES.has(cleanText(source.artwork_mode || source.artworkMode, 40).toLowerCase())
+    ? cleanText(source.artwork_mode || source.artworkMode, 40).toLowerCase()
+    : (canvas.template === 'imported_artwork' ? 'imported_artwork' : 'editable_canvas');
+  const contentKind = WALL_NOTE_CONTENT_KINDS.has(cleanText(source.content_kind || source.contentKind, 50).toLowerCase())
+    ? cleanText(source.content_kind || source.contentKind, 50).toLowerCase()
+    : inferWallNoteContentKindFromCanvas(canvas);
+  const visibility = WALL_NOTE_VISIBILITIES.has(cleanText(source.visibility, 40).toLowerCase())
+    ? cleanText(source.visibility, 40).toLowerCase()
+    : 'public_wall';
+
+  return {
+    document: {
+      id: publicId(source.id, 120) || uuid(),
+      schema_version: Math.round(noteCanvasNumber(source.schema_version ?? source.schemaVersion, 1, 10, 1)),
+      artwork_mode: artworkMode,
+      content_kind: contentKind,
+      visibility,
+      title: cleanText(source.title, 160) || null,
+      subtitle: cleanText(source.subtitle, 240) || null,
+      alt_text: cleanMultilineText(source.alt_text || source.altText, 500) || null,
+      thumbnail_url: safeMediaReference(source.thumbnail_url || source.thumbnailUrl) || null,
+      canvas,
+      detail_blocks: normalizeWallNoteDetailBlocks(source.detail_blocks || source.detailBlocks),
+      created_at: cleanText(source.created_at || source.createdAt, 80) || null,
+      updated_at: cleanText(source.updated_at || source.updatedAt, 80) || null,
+    },
+    error: null,
+  };
+}
+
+function wallNoteCanvasPayload(row: any) {
+  const template = cleanText(row?.canvas_template, 40);
+  const elements = Array.isArray(row?.canvas_elements) ? row.canvas_elements : null;
+  if (!WALL_NOTE_CANVAS_TEMPLATES.has(template) || !elements?.length) return null;
+  const width = Math.max(320, Number(row?.canvas_width || 1080));
+  const height = Math.max(480, Number(row?.canvas_height || 1620));
+  const format = cleanText(row?.canvas_format, 40);
+  return {
+    version: Math.max(1, Number(row?.canvas_version || 1)),
+    template,
+    format: WALL_NOTE_CANVAS_FORMATS.has(format) ? format : wallNoteCanvasFormatForSize(width, height),
+    design_width: width,
+    design_height: height,
+    background: parseJsonObject(row?.canvas_background),
+    elements,
+  };
+}
+
+function wallNoteDocumentPayload(row: any, canvas: any | null) {
+  if (!canvas) return null;
+  const metadata = parseJsonObject(row?.metadata);
+  const artworkMode = cleanText(row?.artwork_mode, 40);
+  const contentKind = cleanText(row?.content_kind, 50);
+  const visibility = cleanText(row?.note_visibility, 40);
+  const detailBlocks = Array.isArray(row?.detail_blocks) ? row.detail_blocks : [];
+  return {
+    id: publicId(row?.id, 120),
+    schema_version: Math.max(1, Number(row?.note_schema_version || 1)),
+    artwork_mode: WALL_NOTE_ARTWORK_MODES.has(artworkMode) ? artworkMode : (canvas.template === 'imported_artwork' ? 'imported_artwork' : 'editable_canvas'),
+    content_kind: WALL_NOTE_CONTENT_KINDS.has(contentKind) ? contentKind : inferWallNoteContentKindFromCanvas(canvas),
+    visibility: WALL_NOTE_VISIBILITIES.has(visibility) ? visibility : 'public_wall',
+    title: cleanText(row?.document_title, 160) || null,
+    subtitle: cleanText(row?.document_subtitle, 240) || null,
+    alt_text: cleanMultilineText(row?.alt_text, 500) || null,
+    thumbnail_url: cleanText(row?.thumbnail_url || metadata.media_thumbnail_url || metadata.media_url, 1200) || null,
+    canvas,
+    detail_blocks: detailBlocks.slice(0, 24),
+    created_at: row?.created_at || now(),
+    updated_at: row?.updated_at || row?.created_at || now(),
+  };
+}
+
+function wallNotePayload(
+  row: any,
+  author: any,
+  reactedByViewer = false,
+  savedByViewer = false,
+  signedByViewer = false,
+  viewerId = '',
+) {
+  const identity = cleanText(row?.publishing_identity || 'ghost', 20) === 'author' ? 'author' : 'ghost';
+  const metadata = parseJsonObject(row?.metadata);
+  const voiceMediaId = publicId(row?.voice_media_id, 160);
+  const noteType = normalizedWallNoteType(row?.note_type, !!metadata.media_url, !!voiceMediaId);
+  const canvas = wallNoteCanvasPayload(row);
+  return {
+    id: publicId(row?.id, 120),
+    wall_id: 'global',
+    publishing_identity: identity,
+    note_type: noteType,
+    body: cleanMultilineText(row?.body, 300),
+    back_body: cleanMultilineText(row?.back_body, 300) || null,
+    back_color_token: WALL_NOTE_COLORS.has(cleanText(row?.back_color_token, 30)) ? cleanText(row?.back_color_token, 30) : null,
+    back_style_token: WALL_NOTE_STYLES.has(cleanText(row?.back_style_token, 40)) ? cleanText(row?.back_style_token, 40) : null,
+    has_back_side: !!cleanMultilineText(row?.back_body, 300),
+    allow_contributions: !!row?.allow_contributions,
+    category: cleanText(row?.category, 50) || null,
+    color_token: WALL_NOTE_COLORS.has(cleanText(row?.color_token, 30)) ? cleanText(row?.color_token, 30) : 'butter',
+    style_token: WALL_NOTE_STYLES.has(cleanText(row?.style_token, 40)) ? cleanText(row?.style_token, 40) : 'sticky',
+    media_url: cleanText(metadata.media_url, 1200) || null,
+    media_thumbnail_url: cleanText(metadata.media_thumbnail_url || metadata.media_url, 1200) || null,
+    voice: voiceMediaId ? {
+      media_id: voiceMediaId,
+      url: cleanText(metadata.voice_url, 1200) || null,
+      duration_seconds: Math.max(0, Number(row?.voice_duration_seconds || 0)),
+      waveform: wallNoteWaveform(row?.voice_waveform),
+    } : null,
+    location: null,
+    document: wallNoteDocumentPayload(row, canvas),
+    canvas,
+    world_x: Number(row?.world_x || 0),
+    world_y: Number(row?.world_y || 0),
+    width: Number(row?.width || 184),
+    height: Number(row?.height || 184),
+    rotation: Number(row?.rotation || 0),
+    z_index: Number(row?.z_index || 0),
+    approximate_location: null,
+    created_at: row?.created_at || now(),
+    updated_at: row?.updated_at || row?.created_at || now(),
+    save_count: Math.max(0, Number(row?.save_count || 0)),
+    reaction_count: Math.max(0, Number(row?.reaction_count || 0)),
+    reply_count: Math.max(0, Number(row?.reply_count || row?.contribution_count || 0)),
+    signature_count: Math.max(0, Number(row?.signature_count || 0)),
+    contribution_count: Math.max(0, Number(row?.contribution_count || row?.reply_count || 0)),
+    reacted_by_viewer: reactedByViewer,
+    saved_by_viewer: savedByViewer,
+    signed_by_viewer: signedByViewer,
+    viewer_is_author: !!viewerId && publicId(row?.author_account_id, 120) === viewerId,
+    author_preview: identity === 'author' ? {
+      user_id: publicId(author?.id, 120),
+      username: cleanText(author?.username, 80),
+      display_name: cleanText(author?.full_name, 120),
+      avatar_url: cleanText(author?.avatar_url, 1200),
+    } : null,
+  };
+}
+
+function normalizeWallSignatureDrawing(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const source: any = value;
+  if (Number(source.version) !== 1 || !Array.isArray(source.strokes)) return null;
+  if (source.strokes.length < 1 || source.strokes.length > 12) return null;
+
+  let pointCount = 0;
+  const strokes: Array<{ points: Array<{ x: number; y: number }> }> = [];
+  for (const stroke of source.strokes) {
+    if (!stroke || typeof stroke !== 'object' || !Array.isArray(stroke.points)) return null;
+    if (stroke.points.length < 2 || stroke.points.length > 180) return null;
+    const points: Array<{ x: number; y: number }> = [];
+    for (const point of stroke.points) {
+      const x = Number(point?.x);
+      const y = Number(point?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return null;
+      points.push({
+        x: Math.round(x * 10_000) / 10_000,
+        y: Math.round(y * 10_000) / 10_000,
+      });
+      pointCount += 1;
+      if (pointCount > 600) return null;
+    }
+    strokes.push({ points });
+  }
+  const normalized = { version: 1, strokes };
+  return JSON.stringify(normalized).length <= 16_000 ? normalized : null;
+}
+
+function wallSignerPayload(user: any, createdAt: unknown, signatureDrawing?: unknown) {
+  return {
+    user_id: publicId(user?.id, 120),
+    username: cleanText(user?.username, 80),
+    display_name: cleanText(user?.full_name, 120),
+    avatar_url: cleanText(user?.avatar_url, 1200),
+    signed_at: cleanText(createdAt, 80) || now(),
+    drawing: normalizeWallSignatureDrawing(signatureDrawing),
+  };
+}
+function wallReplyPayload(row: any, author: any) {
+  const identity = cleanText(row?.publishing_identity || 'author', 20) === 'ghost' ? 'ghost' : 'author';
+  return {
+    id: publicId(row?.id, 120),
+    note_id: publicId(row?.note_id, 120),
+    body: cleanMultilineText(row?.body, 300),
+    publishing_identity: identity,
+    created_at: row?.created_at || now(),
+    author_preview: identity === 'author' ? {
+      user_id: publicId(author?.id, 120),
+      username: cleanText(author?.username, 80),
+      display_name: cleanText(author?.full_name, 120),
+      avatar_url: cleanText(author?.avatar_url, 1200),
+    } : null,
+  };
+}
+
+async function visibleWallNote(c: any, viewerId: string, noteId: string) {
+  const rows = await supabaseAdminQueryRows(c, 'wall_notes', {
+    filters: {
+      id: postgrestEqFilter(noteId),
+      status: postgrestEqFilter('active'),
+      moderation_status: postgrestEqFilter('approved'),
+    },
+    limit: 1,
+  });
+  const note = rows[0];
+  if (!note) return null;
+  const ownerId = publicId(note.author_account_id, 120);
+  const blocked = ownerId && viewerId !== ownerId ? await supabaseUserIdsAreBlocked(c, viewerId, ownerId) : false;
+  if (blocked) return null;
+  const author = await supabaseUserByAnyId(c, ownerId);
+  if (!author || supabaseUserStatus(author) !== 'active') return null;
+  return { note, author };
+}
+
+async function wallNoteViewerState(c: any, viewerId: string, noteIds: string[]) {
+  const reacted = new Set<string>();
+  const saved = new Set<string>();
+  const signed = new Set<string>();
+  if (!viewerId || !noteIds.length) return { reacted, saved, signed };
+  const noteFilter = postgrestInFilter(noteIds);
+  const [reactions, saves, signatures] = await Promise.all([
+    supabaseAdminQueryRows(c, 'wall_note_reactions', {
+      select: 'note_id',
+      filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
+      limit: Math.min(1000, noteIds.length),
+    }),
+    supabaseAdminQueryRows(c, 'wall_note_saves', {
+      select: 'note_id',
+      filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
+      limit: Math.min(1000, noteIds.length),
+    }),
+    supabaseAdminQueryRows(c, 'wall_note_signatures', {
+      select: 'note_id',
+      filters: { note_id: noteFilter, app_user_id: postgrestEqFilter(viewerId) },
+      limit: Math.min(1000, noteIds.length),
+    }),
+  ]);
+  reactions.forEach((row) => reacted.add(publicId(row?.note_id, 120)));
+  saves.forEach((row) => saved.add(publicId(row?.note_id, 120)));
+  signatures.forEach((row) => signed.add(publicId(row?.note_id, 120)));
+  return { reacted, saved, signed };
+}
+api.get('/wall/notes', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_notes_read');
+  if (supabaseRequired) return supabaseRequired;
+  const viewerId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'wall_notes_read', viewerId, 180, 60);
+  if (limited) return limited;
+
+  const wallId = normalizedWallId(c.req.query('wall_id'));
+  const minX = clampFloat(c.req.query('min_x'), -200000, 200000, -1400);
+  const maxX = clampFloat(c.req.query('max_x'), -200000, 200000, 1400);
+  const minY = clampFloat(c.req.query('min_y'), -200000, 200000, -2200);
+  const maxY = clampFloat(c.req.query('max_y'), -200000, 200000, 2200);
+  if (minX >= maxX || minY >= maxY) return c.json({ detail: 'Invalid wall region.' }, 400);
+  const zoom = clampFloat(c.req.query('zoom'), 0.15, 3, 1);
+  const limit = clampNumber(c.req.query('limit') || (zoom < 0.45 ? '600' : '320'), 1, 750, 320);
+  const layout = cleanText(c.req.query('layout'), 30).toLowerCase();
+  const isCollageLayout = layout === 'collage';
+  const filter = cleanText(c.req.query('filter') || 'all', 40).toLowerCase();
+  const query = cleanText(c.req.query('query'), 80).replace(/[%*_(),]/g, ' ').trim();
+  const authorUserId = publicId(c.req.query('author_user_id'), 120);
+  const regionConditions = [
+    `world_x.gte.${minX}`,
+    `world_x.lte.${maxX}`,
+    `world_y.gte.${minY}`,
+    `world_y.lte.${maxY}`,
+  ];
+  const filters: Record<string, string> = {
+    status: postgrestEqFilter('active'),
+    moderation_status: postgrestEqFilter('approved'),
+    wall_id: postgrestEqFilter('global'),
+  };
+  if (authorUserId) {
+    // Creator collections are intentionally independent of the currently visible
+    // wall region. Only attributed notes are returned so a ghost note can never
+    // reveal its author through this endpoint.
+    filters.author_account_id = postgrestEqFilter(authorUserId);
+    filters.publishing_identity = postgrestEqFilter('author');
+  } else if (!isCollageLayout) {
+    filters.and = `(${regionConditions.join(',')})`;
+  }
+  if (filter === 'ghost' || filter === 'author') filters.publishing_identity = postgrestEqFilter(filter);
+  if (WALL_NOTE_CATEGORIES.has(filter)) filters.category = postgrestEqFilter(filter);
+  if (query) filters.body = `ilike.*${query}*`;
+  if (filter === 'saved') {
+    const savedRows = await supabaseAdminQueryRows(c, 'wall_note_saves', {
+      select: 'note_id',
+      filters: { app_user_id: postgrestEqFilter(viewerId) },
+      order: 'created_at.desc',
+      limit: 750,
+    });
+    const savedIds = savedRows.map((row) => publicId(row?.note_id, 120)).filter(Boolean);
+    if (!savedIds.length) return c.json({ notes: [], wall_id: wallId, zoom, layout: isCollageLayout ? 'collage' : 'spatial' });
+    filters.id = postgrestInFilter(savedIds);
+  }
+
+  const order = authorUserId
+    ? 'created_at.desc'
+    : filter === 'popular'
+    ? 'reaction_count.desc,save_count.desc,created_at.desc'
+    : isCollageLayout
+    ? 'created_at.desc,z_index.desc'
+    : 'z_index.asc,created_at.desc';
+  const rows = await supabaseAdminQueryRows(c, 'wall_notes', { filters, order, limit });
+  const ownerIds = Array.from(new Set(rows.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
+  const [authors, blockedIds] = await Promise.all([
+    supabaseUsersByAnyIds(c, ownerIds),
+    supabaseBlockedUserIds(c, viewerId),
+  ]);
+  const visibleRows = rows.filter((row) => {
+    const ownerId = publicId(row?.author_account_id, 120);
+    const author = authors.get(ownerId);
+    return ownerId && !blockedIds.has(ownerId) && !!author && supabaseUserStatus(author) === 'active';
+  });
+  const noteIds = visibleRows.map((row) => publicId(row?.id, 120)).filter(Boolean);
+  const state = await wallNoteViewerState(c, viewerId, noteIds);
+  const notes = visibleRows.map((row) => {
+    const id = publicId(row?.id, 120);
+    return wallNotePayload(row, authors.get(publicId(row?.author_account_id, 120)), state.reacted.has(id), state.saved.has(id), state.signed.has(id), viewerId);
+  });
+  const response = c.json({ notes, wall_id: wallId, zoom, layout: isCollageLayout ? 'collage' : 'spatial' });
+  response.headers.set('cache-control', 'private, max-age=15, stale-while-revalidate=45');
+  return response;
+});
+
+api.get('/wall/overview', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_overview_read');
+  if (supabaseRequired) return supabaseRequired;
+  const viewerId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'wall_overview_read', viewerId, 90, 60);
+  if (limited) return limited;
+  const wallId = normalizedWallId(c.req.query('wall_id'));
+  const overview = await supabaseWallOverview(c, wallId);
+  const response = c.json({
+    wall_id: overview.wallId,
+    display_name: overview.displayName,
+    total_count: overview.totalCount,
+    min_x: overview.minX,
+    max_x: overview.maxX,
+    min_y: overview.minY,
+    max_y: overview.maxY,
+  });
+  response.headers.set('cache-control', 'private, max-age=20, stale-while-revalidate=60');
+  return response;
+});
+
+api.post('/wall/notes', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_note_create');
+  if (supabaseRequired) return supabaseRequired;
+  const userId = getUserId(c);
+  const shortLimit = await enforceRateLimit(c, 'wall_note_create', userId, 8, 60);
+  if (shortLimit) return shortLimit;
+  const dailyLimit = await enforceRateLimit(c, 'wall_note_create_daily', userId, 40, 86400);
+  if (dailyLimit) return dailyLimit;
+  const restricted = await enforceUserRestriction(c, userId, 'posting');
+  if (restricted) return restricted;
+  const bodyTooLarge = rejectLargeRequest(c, 180_000);
+  if (bodyTooLarge) return bodyTooLarge;
+
+  const b: any = await c.req.json().catch(() => ({}));
+  const body = cleanMultilineText(b.body || b.text, 300);
+  const submittedDocumentResult = normalizeWallNoteDocument(b.document || b.note_document || b.noteDocument, null);
+  if (submittedDocumentResult.error) {
+    return c.json({ detail: submittedDocumentResult.error, code: 'WALL_NOTE_DOCUMENT_INVALID' }, 400);
+  }
+  let noteDocument = submittedDocumentResult.document;
+  const canvasResult = normalizeWallNoteCanvas(b.canvas ?? noteDocument?.canvas);
+  if (canvasResult.error) {
+    return c.json({ detail: canvasResult.error, code: 'WALL_NOTE_CANVAS_INVALID' }, 400);
+  }
+  let noteCanvas = canvasResult.canvas;
+  if (!noteDocument && noteCanvas) {
+    const defaultDocumentResult = normalizeWallNoteDocument(null, noteCanvas);
+    noteDocument = defaultDocumentResult.document;
+  }
+  if (noteDocument && noteCanvas) {
+    noteDocument = { ...noteDocument, canvas: noteCanvas };
+  }
+  const canvasElements = Array.isArray(noteCanvas?.elements) ? noteCanvas.elements : [];
+  const canvasPhotoAssetIds: string[] = Array.from(new Set<string>(
+    canvasElements
+      .filter((element: any) => element.kind === 'photo' || element.kind === 'polaroid')
+      .map((element: any) => publicId(element.media_asset_id, 160))
+      .filter((assetId: string) => !!assetId),
+  ));
+  const canvasText = canvasElements
+    .map((element: any) => cleanMultilineText(element.text, 1000))
+    .filter(Boolean);
+  const canvasHasContent = canvasPhotoAssetIds.length > 0 || canvasText.length > 0;
+  const submittedMediaAssetId = publicId(b.media_asset_id || b.mediaAssetId, 160);
+  const mediaAssetIds: string[] = Array.from(new Set<string>([
+    ...canvasPhotoAssetIds,
+    ...(submittedMediaAssetId ? [submittedMediaAssetId] : []),
+  ]));
+  const mediaAssetId = canvasPhotoAssetIds[0] || submittedMediaAssetId;
+  const voiceMediaId = publicId(b.voice_media_id || b.voiceMediaId, 160);
+  const requestedType = normalizedWallNoteType(b.note_type || b.noteType, mediaAssetIds.length > 0, !!voiceMediaId);
+  if (mediaAssetIds.length && voiceMediaId) {
+    return c.json({ detail: 'A Wall note can contain photos or a voice recording, not both.', code: 'WALL_NOTE_MEDIA_CONFLICT' }, 400);
+  }
+  if (requestedType === 'text' && !body && !canvasHasContent) {
+    return c.json({ detail: 'Write something before releasing this note.', code: 'WALL_NOTE_BODY_REQUIRED' }, 400);
+  }
+  if (body) {
+    const moderation = moderateCommunityText(body);
+    if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
+  }
+  for (const elementText of canvasText) {
+    const moderation = moderateCommunityText(elementText);
+    if (!moderation.ok) return c.json({ detail: moderation.detail || 'This note cannot be published.' }, 400);
+  }
+
+  const backBody = cleanMultilineText(b.back_body || b.backBody, 300);
+  if (backBody) {
+    const backModeration = moderateCommunityText(backBody);
+    if (!backModeration.ok) return c.json({ detail: backModeration.detail || 'This back side cannot be published.' }, 400);
+  }
+
+  const submittedMediaUrl = safeMediaReference(b.media_url || b.mediaUrl);
+  if (submittedMediaUrl && !mediaAssetId) {
+    return c.json({ detail: 'Upload this photo through Aura before attaching it to a note.', code: 'MEDIA_ASSET_REQUIRED' }, 400);
+  }
+
+  let mediaAsset: any = null;
+  let mediaAssets: any[] = [];
+  let mediaUrl = '';
+  let mediaThumbnailUrl = '';
+  if (mediaAssetIds.length) {
+    const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, []);
+    if (!mediaApproval.ok) return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
+    mediaAssets = mediaApproval.assets;
+    const invalidAsset = mediaAssets.find((asset: any) => (
+      normalizeMediaAssetType(asset?.media_type) !== 'image'
+      || cleanText(asset?.storage_provider, 40) !== 'images'
+    ));
+    if (requestedType !== 'photo' || invalidAsset) {
+      return c.json({ detail: 'Wall photo notes support approved Cloudflare Images uploads.', code: 'WALL_NOTE_IMAGE_REQUIRED' }, 400);
+    }
+    const assetsById = new Map(mediaAssets.map((asset: any) => [publicId(asset?.id, 160), asset]));
+    mediaAsset = assetsById.get(mediaAssetId) || mediaAssets[0] || null;
+    mediaUrl = safeMediaReference(mediaAsset?.public_url) || mediaAssetPublicUrl(c.env, mediaAsset);
+    mediaThumbnailUrl = mediaAssetPreviewUrl(c.env, mediaAsset) || mediaUrl;
+    if (!mediaUrl) return c.json({ detail: 'This photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
+
+    if (noteCanvas) {
+      noteCanvas = {
+        ...noteCanvas,
+        elements: canvasElements.map((element: any) => {
+          if (element.kind !== 'photo' && element.kind !== 'polaroid') return element;
+          const asset = assetsById.get(publicId(element.media_asset_id, 160));
+          if (!asset) return element;
+          const trustedUrl = safeMediaReference(asset?.public_url) || mediaAssetPublicUrl(c.env, asset);
+          const trustedThumbnailUrl = mediaAssetPreviewUrl(c.env, asset) || trustedUrl;
+          return {
+            ...element,
+            media_url: trustedUrl || null,
+            thumbnail_url: trustedThumbnailUrl || null,
+          };
+        }),
+      };
+      const unresolvedCanvasPhoto = noteCanvas.elements.find((element: any) => (
+        (element.kind === 'photo' || element.kind === 'polaroid') && !element.media_url
+      ));
+      if (unresolvedCanvasPhoto) {
+        return c.json({ detail: 'One canvas photo is not ready yet. Please try again.', code: 'MEDIA_NOT_READY' }, 409);
+      }
+      if (noteDocument) {
+        noteDocument = {
+          ...noteDocument,
+          thumbnail_url: noteDocument.thumbnail_url || mediaThumbnailUrl || mediaUrl || null,
+          canvas: noteCanvas,
+        };
+      }
+    }
+  }
+
+  let voiceAsset: any = null;
+  let voiceDuration = 0;
+  const voiceWaveform = wallNoteWaveform(b.voice_waveform || b.voiceWaveform);
+  if (voiceMediaId) {
+    const voiceRows = await supabaseAdminQueryRows(c, 'app_media_assets', {
+      select: '*',
+      filters: { id: postgrestEqFilter(voiceMediaId), user_id: postgrestEqFilter(userId) },
+      limit: 1,
+    });
+    voiceAsset = voiceRows[0] || null;
+    if (!voiceAsset
+      || cleanText(voiceAsset.media_type, 40) !== 'audio'
+      || cleanText(voiceAsset.storage_provider, 40) !== 'r2_audio'
+      || cleanText(voiceAsset.upload_status, 40) !== 'uploaded'
+      || cleanText(voiceAsset.moderation_status, 40) !== 'approved') {
+      return c.json({ detail: 'This voice recording is not ready yet. Please record it again.', code: 'VOICE_NOT_READY' }, 409);
+    }
+    voiceDuration = clampFloat(b.voice_duration_seconds || b.voiceDurationSeconds, 0.25, 60, 0);
+    if (!voiceDuration || requestedType !== 'voice') {
+      return c.json({ detail: 'Voice notes must be between one second and one minute.', code: 'VOICE_DURATION_INVALID' }, 400);
+    }
+  } else if (requestedType === 'voice') {
+    return c.json({ detail: 'Record a voice note before releasing it.', code: 'VOICE_REQUIRED' }, 400);
+  }
+
+  const identity = cleanText(b.publishing_identity, 20) === 'author' ? 'author' : 'ghost';
+  const colorToken = cleanText(b.color_token, 30);
+  const styleToken = cleanText(b.style_token, 40);
+  const backColorToken = cleanText(b.back_color_token || b.backColorToken, 30);
+  const backStyleToken = cleanText(b.back_style_token || b.backStyleToken, 40);
+  const wallId = normalizedWallId(b.wall_id);
+
+  const noteId = uuid();
+  const width = clampFloat(b.width, 96, 360, requestedType === 'voice' ? 196 : 184);
+  const height = clampFloat(b.height, 96, 420, requestedType === 'voice' ? 156 : 184);
+  const resolvedStyleToken = WALL_NOTE_STYLES.has(styleToken)
+    ? styleToken
+    : (mediaAsset ? 'polaroid' : requestedType === 'voice' ? 'receipt' : 'sticky');
+  const placementScale = mediaAsset ? 1.34 : requestedType === 'voice' ? 1.18 : 1.27;
+  const placementWidth = width * placementScale;
+  const placementHeight = height * placementScale;
+  const placement = await resolveWallNotePlacement(c, wallId, placementWidth, placementHeight, noteId);
+  const voiceUrl = voiceAsset ? safeMediaReference(voiceAsset.public_url || voiceAsset.private_url) : '';
+  const row = {
+    id: noteId,
+    wall_id: wallId,
+    author_account_id: userId,
+    publishing_identity: identity,
+    note_type: requestedType,
+    body,
+    back_body: backBody || null,
+    back_color_token: backBody && WALL_NOTE_COLORS.has(backColorToken) ? backColorToken : null,
+    back_style_token: backBody && WALL_NOTE_STYLES.has(backStyleToken) ? backStyleToken : null,
+    allow_contributions: b.allow_contributions === true || b.allowContributions === true,
+    voice_media_id: voiceMediaId || null,
+    voice_duration_seconds: voiceMediaId ? voiceDuration : null,
+    voice_waveform: voiceMediaId ? voiceWaveform : [],
+    location_label: null,
+    location_city: null,
+    location_country: null,
+    location_cell: null,
+    location_lat_bucket: null,
+    location_lng_bucket: null,
+    location_visibility: false,
+    category: null,
+    color_token: WALL_NOTE_COLORS.has(colorToken) ? colorToken : 'butter',
+    style_token: resolvedStyleToken,
+    note_schema_version: noteDocument?.schema_version ?? (noteCanvas ? 1 : null),
+    artwork_mode: noteDocument?.artwork_mode ?? null,
+    content_kind: noteDocument?.content_kind ?? null,
+    note_visibility: noteDocument?.visibility ?? null,
+    document_title: noteDocument?.title ?? null,
+    document_subtitle: noteDocument?.subtitle ?? null,
+    thumbnail_url: noteDocument?.thumbnail_url ?? (mediaThumbnailUrl || mediaUrl || null),
+    alt_text: noteDocument?.alt_text ?? null,
+    detail_blocks: noteDocument?.detail_blocks ?? null,
+    canvas_version: noteCanvas?.version ?? 1,
+    canvas_template: noteCanvas?.template ?? null,
+    canvas_format: noteCanvas?.format ?? null,
+    canvas_width: noteCanvas?.design_width ?? null,
+    canvas_height: noteCanvas?.design_height ?? null,
+    canvas_background: noteCanvas?.background ?? null,
+    canvas_elements: noteCanvas?.elements ?? null,
+    world_x: placement.x + (placementWidth - width) * 0.5,
+    world_y: placement.y + (placementHeight - height) * 0.5,
+    width,
+    height,
+    rotation: placement.rotation,
+    z_index: clampNumber(b.z_index, -100000, 100000, Math.floor(Date.now() / 1000)),
+    approximate_location: null,
+    moderation_status: 'approved',
+    status: 'active',
+    metadata: {
+      source: 'captro_native_wall',
+      layout_version: noteDocument ? 'note_document_v1' : noteCanvas ? 'note_canvas_v1' : 'living_wall_v1',
+      placed_after: placement.totalBefore,
+      ...(noteCanvas ? { canvas_template: noteCanvas.template, canvas_format: noteCanvas.format, canvas_version: noteCanvas.version } : {}),
+      ...(noteDocument ? { note_schema_version: noteDocument.schema_version, artwork_mode: noteDocument.artwork_mode, content_kind: noteDocument.content_kind } : {}),
+      ...(mediaAsset ? { media_asset_id: mediaAssetId, media_url: mediaUrl, media_thumbnail_url: mediaThumbnailUrl } : {}),
+      ...(voiceAsset ? { voice_url: voiceUrl } : {}),
+    },
+  };
+  const inserted = await supabaseAdminInsertRows(c, 'wall_notes', [row], '*');
+  if (mediaAssets.length || voiceAsset) {
+    const assetsToLink = mediaAssets.length ? mediaAssets : [voiceAsset];
+    await Promise.all(assetsToLink.map(async (linkedAsset: any) => {
+      const linkedAssetId = publicId(linkedAsset?.id, 160) || voiceMediaId;
+      await supabaseAdminPatchRows(c, 'app_media_assets', {
+        id: postgrestEqFilter(linkedAssetId),
+        user_id: postgrestEqFilter(userId),
+      }, {
+        metadata: { ...parseJsonObject(linkedAsset?.metadata), usage: requestedType === 'voice' ? 'wall_voice' : 'wall_note', wall_note_id: noteId },
+        updated_at: now(),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'wall_note_media_link_failed', media_id: linkedAssetId, note_id: noteId, code: getErrorCode(error).slice(0, 180) }));
+      });
+    }));
+  }
+  const author = await supabaseUserByAnyId(c, userId);
+  return c.json({ note: wallNotePayload(inserted[0] || row, author, false, false, false, userId) }, 201);
+});
+api.post('/wall/notes/:noteId/reaction', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  const b: any = await c.req.json().catch(() => ({}));
+  const existing = await supabaseAdminQueryRows(c, 'wall_note_reactions', {
+    select: 'note_id',
+    filters: { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) },
+    limit: 1,
+  });
+  const reacted = typeof b.reacted === 'boolean' ? b.reacted : !existing.length;
+  await supabaseAdminDeleteRows(c, 'wall_note_reactions', {
+    note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId),
+  });
+  if (reacted) {
+    await supabaseAdminUpsert(c, 'wall_note_reactions', [{ note_id: noteId, app_user_id: userId, reaction_type: 'felt_this' }], 'note_id,app_user_id');
+  }
+  const count = await supabaseAdminCountRows(c, 'wall_note_reactions', { note_id: postgrestEqFilter(noteId) });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { reaction_count: count });
+  return c.json({ reacted, reaction_count: count });
+});
+
+api.post('/wall/notes/:noteId/save', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  const b: any = await c.req.json().catch(() => ({}));
+  const existing = await supabaseAdminQueryRows(c, 'wall_note_saves', {
+    select: 'note_id',
+    filters: { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) },
+    limit: 1,
+  });
+  const saved = typeof b.saved === 'boolean' ? b.saved : !existing.length;
+  await supabaseAdminDeleteRows(c, 'wall_note_saves', {
+    note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId),
+  });
+  if (saved) await supabaseAdminUpsert(c, 'wall_note_saves', [{ note_id: noteId, app_user_id: userId }], 'note_id,app_user_id');
+  const count = await supabaseAdminCountRows(c, 'wall_note_saves', { note_id: postgrestEqFilter(noteId) });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { save_count: count });
+  return c.json({ saved, save_count: count });
+});
+
+api.post('/wall/notes/:noteId/signature', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 18_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  if (publicId(visible.note.author_account_id, 120) === userId) {
+    return c.json({ detail: 'You cannot sign your own note.' }, 400);
+  }
+  const limited = await enforceRateLimit(c, 'wall_note_signature', userId, 30, 60);
+  if (limited) return limited;
+  const b: any = await c.req.json().catch(() => ({}));
+  const existing = await supabaseAdminQueryRows(c, 'wall_note_signatures', {
+    select: 'note_id',
+    filters: { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) },
+    limit: 1,
+  });
+  const signed = typeof b.signed === 'boolean' ? b.signed : !existing.length;
+  if (signed) {
+    const drawing = normalizeWallSignatureDrawing(b.drawing);
+    if (!drawing) {
+      return c.json({
+        detail: 'Draw your signature before signing this note.',
+        error_code: 'SIGNATURE_DRAWING_REQUIRED',
+      }, 400);
+    }
+    await supabaseAdminUpsert(c, 'wall_note_signatures', [{
+      note_id: noteId,
+      app_user_id: userId,
+      signature_strokes: drawing,
+    }], 'note_id,app_user_id');
+  } else {
+    await supabaseAdminDeleteRows(c, 'wall_note_signatures', { note_id: postgrestEqFilter(noteId), app_user_id: postgrestEqFilter(userId) });
+  }
+  const signatureCount = await supabaseAdminCountRows(c, 'wall_note_signatures', { note_id: postgrestEqFilter(noteId) });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { signature_count: signatureCount });
+  return c.json({ signed, signature_count: signatureCount });
+});
+
+api.get('/wall/notes/:noteId/signatures', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  if (!(await visibleWallNote(c, userId, noteId))) return c.json({ detail: 'Note not found.' }, 404);
+  const limit = clampNumber(c.req.query('limit') || '30', 1, 100, 30);
+  const before = cleanText(c.req.query('before'), 80);
+  const filters: Record<string, string> = { note_id: postgrestEqFilter(noteId) };
+  if (before && Number.isFinite(Date.parse(before))) filters.created_at = `lt.${encodeURIComponent(before)}`;
+  const rows = await supabaseAdminQueryRows(c, 'wall_note_signatures', { filters, order: 'created_at.desc', limit: limit + 1 });
+  const page = rows.slice(0, limit);
+  const signerIds = Array.from(new Set(page.map((row) => publicId(row?.app_user_id, 120)).filter(Boolean)));
+  const [signers, blocked] = await Promise.all([supabaseUsersByAnyIds(c, signerIds), supabaseBlockedUserIds(c, userId)]);
+  return c.json({
+    signers: page
+      .filter((row) => !blocked.has(publicId(row?.app_user_id, 120)))
+      .filter((row) => supabaseUserIsActive(signers.get(publicId(row?.app_user_id, 120))))
+      .map((row) => wallSignerPayload(
+        signers.get(publicId(row?.app_user_id, 120)),
+        row?.created_at,
+        row?.signature_strokes,
+      ))
+      .filter((row) => !!row.user_id),
+    next_before: rows.length > limit ? cleanText(page[page.length - 1]?.created_at, 80) || null : null,
+  });
+});
+
+api.patch('/wall/notes/:noteId/collaboration', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const noteRows = await supabaseAdminQueryRows(c, 'wall_notes', { select: 'id,author_account_id,status,moderation_status', filters: { id: postgrestEqFilter(noteId) }, limit: 1 });
+  const note = noteRows[0];
+  if (!note || cleanText(note.status, 40) !== 'active' || cleanText(note.moderation_status, 40) !== 'approved') return c.json({ detail: 'Note not found.' }, 404);
+  if (publicId(note.author_account_id, 120) !== userId) return c.json({ detail: 'Only the note author can change contributions.' }, 403);
+  const b: any = await c.req.json().catch(() => ({}));
+  if (typeof b.allow_contributions !== 'boolean' && typeof b.allowContributions !== 'boolean') {
+    return c.json({ detail: 'Choose whether this note accepts contributions.' }, 400);
+  }
+  const allowContributions = b.allow_contributions === true || b.allowContributions === true;
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { allow_contributions: allowContributions, updated_at: now() });
+  return c.json({ allow_contributions: allowContributions });
+});
+
+async function listWallNoteContributions(c: any, noteId: string, userId: string) {
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return { error: c.json({ detail: 'Note not found.' }, 404) };
+  const limit = clampNumber(c.req.query('limit') || '80', 1, 100, 80);
+  const after = cleanText(c.req.query('after'), 80);
+  const filters: Record<string, string> = {
+    note_id: postgrestEqFilter(noteId),
+    status: postgrestEqFilter('active'),
+    moderation_status: postgrestEqFilter('approved'),
+  };
+  if (after && Number.isFinite(Date.parse(after))) filters.created_at = `gt.${encodeURIComponent(after)}`;
+  const rows = await supabaseAdminQueryRows(c, 'wall_note_contributions', { filters, order: 'created_at.asc', limit: limit + 1 });
+  const page = rows.slice(0, limit);
+  const authorIds = Array.from(new Set(page.map((row) => publicId(row?.author_account_id, 120)).filter(Boolean)));
+  const [authors, blocked] = await Promise.all([supabaseUsersByAnyIds(c, authorIds), supabaseBlockedUserIds(c, userId)]);
+  const contributions = page
+    .filter((row) => !blocked.has(publicId(row?.author_account_id, 120)))
+    .filter((row) => supabaseUserIsActive(authors.get(publicId(row?.author_account_id, 120))))
+    .map((row) => wallReplyPayload(row, authors.get(publicId(row?.author_account_id, 120))));
+  return {
+    data: {
+      contributions,
+      next_after: rows.length > limit ? cleanText(page[page.length - 1]?.created_at, 80) || null : null,
+      allow_contributions: !!visible.note.allow_contributions,
+    },
+  };
+}
+
+api.get('/wall/notes/:noteId/contributions', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const result = await listWallNoteContributions(c, noteId, userId);
+  return result.error || c.json(result.data);
+});
+
+api.post('/wall/notes/:noteId/contributions', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  if (!visible.note.allow_contributions) return c.json({ detail: 'This note is no longer accepting contributions.' }, 409);
+  const limited = await enforceRateLimit(c, 'wall_note_contribution', userId, 16, 60);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'commenting');
+  if (restricted) return restricted;
+  const b: any = await c.req.json().catch(() => ({}));
+  const body = cleanMultilineText(b.body || b.text, 300);
+  const moderation = moderateCommunityText(body);
+  if (!body || !moderation.ok) return c.json({ detail: moderation.detail || 'This contribution cannot be published.' }, 400);
+  const identity = cleanText(b.publishing_identity, 20) === 'ghost' ? 'ghost' : 'author';
+  const row = {
+    id: uuid(), note_id: noteId, author_account_id: userId, body,
+    publishing_identity: identity, moderation_status: 'approved', status: 'active',
+  };
+  const inserted = await supabaseAdminInsertRows(c, 'wall_note_contributions', [row], '*');
+  const contributionCount = await supabaseAdminCountRows(c, 'wall_note_contributions', {
+    note_id: postgrestEqFilter(noteId), status: postgrestEqFilter('active'), moderation_status: postgrestEqFilter('approved'),
+  });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { contribution_count: contributionCount, reply_count: contributionCount });
+  const author = await supabaseUserByAnyId(c, userId);
+  return c.json({ contribution: wallReplyPayload(inserted[0] || row, author), contribution_count: contributionCount }, 201);
+});
+
+// The original reply endpoints remain as a compatibility layer while existing clients migrate.
+api.get('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const result = await listWallNoteContributions(c, noteId, userId);
+  if (result.error) return result.error;
+  return c.json({ replies: result.data!.contributions });
+});
+
+api.post('/wall/notes/:noteId/replies', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const visible = await visibleWallNote(c, userId, noteId);
+  if (!visible) return c.json({ detail: 'Note not found.' }, 404);
+  if (!visible.note.allow_contributions) return c.json({ detail: 'This note is no longer accepting contributions.' }, 409);
+  const limited = await enforceRateLimit(c, 'wall_note_contribution', userId, 16, 60);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'commenting');
+  if (restricted) return restricted;
+  const b: any = await c.req.json().catch(() => ({}));
+  const body = cleanMultilineText(b.body || b.text, 300);
+  const moderation = moderateCommunityText(body);
+  if (!body || !moderation.ok) return c.json({ detail: moderation.detail || 'This contribution cannot be published.' }, 400);
+  const identity = cleanText(b.publishing_identity, 20) === 'ghost' ? 'ghost' : 'author';
+  const row = { id: uuid(), note_id: noteId, author_account_id: userId, body, publishing_identity: identity, moderation_status: 'approved', status: 'active' };
+  const inserted = await supabaseAdminInsertRows(c, 'wall_note_contributions', [row], '*');
+  const contributionCount = await supabaseAdminCountRows(c, 'wall_note_contributions', { note_id: postgrestEqFilter(noteId), status: postgrestEqFilter('active'), moderation_status: postgrestEqFilter('approved') });
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { contribution_count: contributionCount, reply_count: contributionCount });
+  const author = await supabaseUserByAnyId(c, userId);
+  return c.json({ reply: wallReplyPayload(inserted[0] || row, author), reply_count: contributionCount }, 201);
+});
+api.delete('/wall/notes/:noteId', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const noteId = publicId(c.req.param('noteId'), 120);
+  const rows = await supabaseAdminQueryRows(c, 'wall_notes', {
+    select: 'id,author_account_id', filters: { id: postgrestEqFilter(noteId) }, limit: 1,
+  });
+  if (!rows[0]) return c.json({ detail: 'Note not found.' }, 404);
+  if (publicId(rows[0].author_account_id, 120) !== userId) return c.json({ detail: 'You cannot remove this note.' }, 403);
+  await supabaseAdminPatchRows(c, 'wall_notes', { id: postgrestEqFilter(noteId) }, { status: 'deleted' });
+  return c.json({ deleted: true });
+});
+
 // Reports
 api.post('/reports', authMiddleware, async (c) => {
   try {
@@ -14326,154 +19667,25 @@ api.post('/reports', authMiddleware, async (c) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PUBLISHER
-// ═══════════════════════════════════════════════════════════════════════════════
-api.post('/publisher/apply', authMiddleware, async (c) => {
-  try {
-    const userId = getUserId(c); const b = await c.req.json();
-    if (!b.business_name || !b.category || !b.about || !b.phone || !b.why_publish) {
-      return c.json({ detail: 'Missing required fields' }, 400);
-    }
-    const existing: any = await c.env.DB.prepare('SELECT id, status FROM publisher_applications WHERE user_id = ?').bind(userId).first();
-    if (existing) return c.json({ detail: 'Application already exists', status: existing.status });
-    const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image FROM users WHERE id = ?').bind(userId).first();
-    const id = uuid();
-    await c.env.DB.prepare(
-      `INSERT INTO publisher_applications (id, user_id, user_username, user_full_name, user_profile_image, business_name, category, about, phone, website, social_instagram, social_twitter, social_tiktok, address, city, why_publish)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, userId, user?.username || '', user?.full_name || '', user?.profile_image || '', b.business_name || '', b.category || '', b.about || '', b.phone || '', b.website || '', b.social_instagram || '', b.social_twitter || '', b.social_tiktok || '', b.address || '', b.city || '', b.why_publish || '').run();
-    return c.json({ id, status: 'pending', submitted: true });
-  } catch (e: any) {
-    return c.json({ detail: 'Application failed: ' + (e.message || 'unknown error') }, 500);
-  }
-});
-
-api.get('/publisher/status', authMiddleware, async (c) => {
-  const app: any = await c.env.DB.prepare('SELECT status FROM publisher_applications WHERE user_id = ? ORDER BY created_at DESC LIMIT 1').bind(getUserId(c)).first();
-  return c.json({ status: app?.status || 'none' });
-});
-
 // Discover posts (publisher content)
-api.post('/discover/posts', authMiddleware, async (c) => {
-  const bodyTooLarge = rejectLargeRequest(c, 1_000_000);
-  if (bodyTooLarge) return bodyTooLarge;
-  const userId = getUserId(c);
-  const limited = await enforceRateLimit(c, 'discover_post_create', userId, 30, 60);
-  if (limited) return limited;
-  const restricted = await enforceUserRestriction(c, userId, 'posting');
-  if (restricted) return restricted;
-  const b = await c.req.json().catch(() => ({}));
-  const user: any = await c.env.DB.prepare('SELECT username, full_name, profile_image, is_publisher FROM users WHERE id = ?').bind(userId).first();
-  if (!user?.is_publisher) return c.json({ detail: 'Publishers only' }, 403);
-  const id = uuid();
-  await c.env.DB.prepare('INSERT INTO discover_posts (id, user_id, content, image, images, category, location) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(id, userId, b.content || '', b.image || null, JSON.stringify(b.images || []), b.category || 'culture', b.location || '').run();
-  return c.json({ id, user_id: userId, user_username: user.username, user_full_name: user.full_name, user_profile_image: safeMediaReference(user.profile_image), content: b.content, category: b.category, created_at: now() });
-});
-
 api.get('/discover/feed', authMiddleware, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'discover_feed_read');
+  if (supabaseRequired) return supabaseRequired;
   const category = c.req.query('category') || 'all';
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '30', 1, 60, 30);
-  let sql = `SELECT dp.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image FROM discover_posts dp JOIN users u ON dp.user_id = u.id`;
-  const binds: any[] = [];
-  if (category !== 'all') {
-    sql += ' WHERE dp.category = ?';
-    binds.push(category);
+  const normalizedCategory = normalizeDiscoverCategory(category, true);
+  if (!normalizedCategory) return c.json({ detail: 'Unknown Discover category.' }, 400);
+  try {
+    const userId = getUserId(c);
+    const rows = await supabaseReadVisiblePosts(c, userId, { category: normalizedCategory, limit, offset: skip, order: 'newest' });
+    const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
+    response.headers.set('cache-control', 'no-store');
+    return response;
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_discover_feed_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load Discover.' }, 500);
   }
-  sql += ' ORDER BY dp.created_at DESC LIMIT ? OFFSET ?';
-  binds.push(limit, skip);
-  const r = binds.length ? await c.env.DB.prepare(sql).bind(...binds).all() : await c.env.DB.prepare(sql).all();
-  return c.json((r.results as any[]).map(p => {
-    const images = sanitizeMediaReferences(p.images, p.image);
-    return {
-      ...p,
-      image: safeMediaReference(p.image) || images[0] || '',
-      images,
-      user_username: publicUsernameFor({ username: p.user_username }),
-      user_profile_image: safeMediaReference(p.user_profile_image),
-    };
-  }));
-});
-
-api.post('/discover/posts/:postId/like', authMiddleware, async (c) => {
-  const userId = getUserId(c); const postId = c.req.param('postId');
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const limited = await enforceRateLimit(c, 'discover_like', userId, 300, 60);
-  if (limited) return limited;
-  const body: any = await c.req.json().catch(() => ({}));
-  const requested = optionalBoolean(body.liked ?? body.like ?? body.value);
-
-  const canonicalPost = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
-  if (canonicalPost) {
-    await reconcileLegacyDiscoverLikes(c.env.DB, postId);
-    const likeVisiblePostSql = [
-      `SELECT p.id, p.user_id,
-         EXISTS (SELECT 1 FROM likes lk WHERE lk.user_id = ? AND lk.post_id = p.id) AS is_liked,
-         EXISTS (SELECT 1 FROM saved_posts sp WHERE sp.user_id = ? AND sp.post_id = p.id) AS saved
-       FROM posts p JOIN users u ON p.user_id = u.id`,
-      `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} AND ${feedPhotoPostWhere('p')}`,
-    ].join(' ');
-    const visiblePost: any = await c.env.DB.prepare(likeVisiblePostSql)
-      .bind(userId, userId, postId, ...visiblePostBindValues(userId))
-      .first();
-    if (!visiblePost) return c.json({ detail: 'Post not found' }, 404);
-
-    const { state, changed } = await setCanonicalPostLikeState(c, postId, userId, requested);
-    await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?')
-      .bind(state.likes_count, postId)
-      .run()
-      .catch(() => {});
-
-    if (state.liked && changed && visiblePost.user_id !== userId) {
-      try {
-        const me: any = await c.env.DB.prepare('SELECT full_name FROM users WHERE id = ?').bind(userId).first();
-        await insertNotificationOnce(c, {
-          userId: visiblePost.user_id,
-          type: 'like',
-          title: 'New Like',
-          body: `${me?.full_name || 'Someone'} liked your post`,
-          data: { post_id: postId, from_user_id: userId, actor_name: me?.full_name || 'Someone' },
-          dedupeKey: `like:${userId}:${postId}`,
-          dedupeSeconds: 86400,
-        });
-      } catch {}
-    }
-
-    return c.json(postEngagementResponse(state));
-  }
-
-  let nextLiked = requested;
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  if (nextLiked === null) {
-    const ex = await c.env.DB.prepare(
-      `SELECT id FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders}) LIMIT 1`
-    ).bind(postId, ...relatedUserIds).first();
-    nextLiked = !ex;
-  }
-  const post = await c.env.DB.prepare('SELECT id FROM discover_posts WHERE id = ?').bind(postId).first();
-  if (!post) return c.json({ detail: 'Post not found' }, 404);
-  if (nextLiked) {
-    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
-      .bind(postId, ...relatedUserIds)
-      .run();
-    await c.env.DB.prepare('INSERT OR IGNORE INTO discover_likes (id, user_id, post_id) VALUES (?, ?, ?)')
-      .bind(uuid(), userId, postId)
-      .run();
-  } else {
-    await c.env.DB.prepare(`DELETE FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})`)
-      .bind(postId, ...relatedUserIds)
-      .run();
-  }
-  const likeRow: any = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS likes_count,
-      EXISTS (SELECT 1 FROM discover_likes WHERE post_id = ? AND user_id IN (${relatedPlaceholders})) AS liked
-     FROM discover_likes WHERE post_id = ?`
-  ).bind(postId, ...relatedUserIds, postId).first();
-  const likesCount = Math.max(0, Number(likeRow?.likes_count || 0));
-  const liked = likeRow?.liked === true || likeRow?.liked === 1 || likeRow?.liked === '1';
-  await c.env.DB.prepare('UPDATE discover_posts SET likes_count = ? WHERE id = ?').bind(likesCount, postId).run();
-  return c.json(postEngagementResponse({ liked, saved: false, likes_count: likesCount, comments_count: 0, saves_count: 0 }));
 });
 
 api.get('/discover/categories', async (c) => {
@@ -14488,36 +19700,6 @@ api.get('/discover/categories', async (c) => {
   ]);
 });
 
-// Places (user-created)
-api.post('/places', authMiddleware, async (c) => {
-  const userId = getUserId(c); const b = await c.req.json(); const id = uuid();
-  await c.env.DB.prepare('INSERT INTO places (id, name, description, category, lat, lng, address, image, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, b.name, b.description || '', b.category || '', b.lat || null, b.lng || null, b.address || '', b.image || null, userId).run();
-  return c.json({ id, name: b.name, created_at: now() });
-});
-
-api.get('/places', authMiddleware, async (c) => {
-  const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
-  return c.json(r.results);
-});
-
-api.get('/places/nearby', authMiddleware, async (c) => {
-  const r = await c.env.DB.prepare('SELECT * FROM places ORDER BY created_at DESC LIMIT 50').all();
-  return c.json(r.results);
-});
-
-api.get('/places/:placeId', authMiddleware, async (c) => {
-  const p = await c.env.DB.prepare('SELECT * FROM places WHERE id = ?').bind(c.req.param('placeId')).first();
-  if (!p) return c.json({ detail: 'Not found' }, 404);
-  return c.json(p);
-});
-
-api.post('/places/verify-proximity', authMiddleware, async (c) => {
-  const b = await c.req.json();
-  const distance = Math.sqrt(Math.pow((b.user_lat - b.place_lat) * 111320, 2) + Math.pow((b.user_lng - b.place_lng) * 111320 * Math.cos(b.user_lat * Math.PI / 180), 2));
-  return c.json({ verified: distance <= 200, distance: Math.round(distance) });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
 type AdminRole = 'owner' | 'admin' | 'moderator' | 'support' | 'viewer';
@@ -14589,19 +19771,37 @@ function adminPermissionList(role: AdminRole): string[] {
 }
 
 async function getAdminContext(c: any): Promise<AdminContext | null> {
-  await ensureAdminModerationSchema(c.env.DB);
   const userId = getUserId(c);
   if (!userId) return null;
-  const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
-  if (!user || ['banned', 'deleted'].includes(String(user.status || 'active'))) return null;
+  if (!supabasePrimaryConfigured(c)) return null;
 
-  let role = normalizeAdminRole(user.admin_role);
-  const roleRow: any = await c.env.DB.prepare('SELECT role FROM admin_roles WHERE user_id = ?').bind(userId).first();
-  role = normalizeAdminRole(roleRow?.role) || role;
-  if (isOwnerUsername(c, user.username) || isOwnerEmail(c, user.email)) role = 'owner';
-  if (!role && Number(user.is_admin || 0) === 1) role = 'admin';
+  const row = await getSupabaseAppUserRowByAnyId(c, userId);
+  if (!row) return null;
+  const legacy = supabaseAppUserToLegacyUser(row);
+  if (['banned', 'deleted', 'deletion_pending'].includes(String(legacy.status || 'active'))) return null;
+
+  const metadata = parseJsonObject(row?.metadata);
+  let role = normalizeAdminRole((metadata as any).admin_role || (metadata as any).role);
+  const candidateIds = Array.from(new Set([
+    publicId(row?.id, 120),
+    isUuidText(row?.supabase_user_id) || '',
+    publicId(userId, 120),
+  ].filter(Boolean)));
+  if (candidateIds.length) {
+    const roleRows = await supabaseAdminQueryRows(c, 'app_admin_roles', {
+      select: 'user_id,role',
+      filters: { user_id: postgrestInFilter(candidateIds) },
+      limit: 10,
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_admin_role_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    });
+    role = normalizeAdminRole(roleRows.find((roleRow: any) => normalizeAdminRole(roleRow?.role))?.role) || role;
+  }
+  if (isOwnerUsername(c, legacy.username) || isOwnerEmail(c, legacy.email)) role = 'owner';
+  if (!role && ((metadata as any).is_admin === true || Number((metadata as any).is_admin || 0) === 1)) role = 'admin';
   if (!role) return null;
-  return { userId, role, user };
+  return { userId: publicId(row.id, 120), role, user: { ...legacy, admin_role: role } };
 }
 
 async function requireAdminRole(c: any, permission = 'admin:read'): Promise<AdminContext> {
@@ -14631,37 +19831,52 @@ function governanceError(c: any, error: any) {
 }
 
 async function logGovernanceAction(c: any, adminId: string, actionType: string, targetType: string, targetId: string, details: any = {}) {
-  await ensureGovernanceSchema(c.env.DB);
   const ts = now();
-  await c.env.DB.prepare(
-    'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(uuid(), adminId, actionType, targetType, targetId, JSON.stringify(scrubLogMetadata(details || {})), ts).run();
-  try {
-    const admin = await getAdminContext(c);
-    if (admin && admin.userId === adminId) {
-      await c.env.DB.batch([
-        c.env.DB.prepare(
-          `INSERT INTO audit_logs (
-             id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id,
-             reason, internal_note, before_state, after_state, ip_hash, request_id, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', '{}', ?, ?, ?)`
-        ).bind(uuid(), adminId, admin.role, cleanText(actionType, 80), cleanText(targetType, 60), publicId(targetId, 160), cleanText((details || {}).target_user_id || '', 120), cleanMultilineText((details || {}).reason || '', 800), cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000), await safeRequestIpHash(c), cleanText(c.get?.('requestId') || '', 120), ts),
-        c.env.DB.prepare(
-          `INSERT INTO moderation_actions (
-             id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id, reason, note, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(uuid(), adminId, admin.role, cleanText(actionType, 80), cleanText(targetType, 60), publicId(targetId, 160), cleanText((details || {}).target_user_id || '', 120), cleanMultilineText((details || {}).reason || '', 800), cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000), ts),
-      ]);
-    }
-  } catch {
-    // Legacy governance routes still keep admin_actions if the richer audit schema is not ready yet.
-  }
-}
-
-async function safeRequestIpHash(c: any): Promise<string> {
-  const ip = clientIp(c);
-  const secret = String(c.env.ABUSE_SIGNAL_SECRET || c.env.JWT_SECRET || 'captro-admin-audit');
-  return sha256Hex(`${secret}:admin:${ip}`);
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED');
+  const admin = await getAdminContext(c);
+  const actorId = publicId(admin?.userId || adminId, 120);
+  const actorRole = normalizeAdminRole(admin?.role) || 'admin';
+  const requestId = cleanText(c.get?.('requestId') || c.req.header('X-Request-ID') || '', 120);
+  const cleanActionType = cleanText(actionType, 80);
+  const cleanTargetType = cleanText(targetType, 60);
+  const cleanTargetId = publicId(targetId, 160);
+  const targetUserId = cleanText((details || {}).target_user_id || '', 120);
+  const reason = cleanMultilineText((details || {}).reason || '', 800);
+  const note = cleanMultilineText((details || {}).note || (details || {}).admin_notes || '', 1000);
+  await Promise.all([
+    supabaseAdminUpsert(c, 'app_audit_logs', [{
+      id: uuid(),
+      actor_admin_user_id: actorId,
+      actor_role: actorRole,
+      action_type: cleanActionType,
+      target_type: cleanTargetType,
+      target_id: cleanTargetId,
+      target_user_id: targetUserId,
+      reason,
+      internal_note: note,
+      before_state: {},
+      after_state: scrubLogMetadata(details || {}),
+      request_id: requestId,
+      metadata: { source: 'cloudflare_worker_governance' },
+      legacy_created_at: ts,
+      created_at: ts,
+    }], 'id'),
+    supabaseAdminUpsert(c, 'app_moderation_actions', [{
+      id: uuid(),
+      actor_admin_user_id: actorId,
+      actor_role: actorRole,
+      action_type: cleanActionType,
+      target_type: cleanTargetType,
+      target_id: cleanTargetId,
+      target_user_id: targetUserId,
+      reason,
+      note,
+      metadata: { request_id: requestId, source: 'cloudflare_worker_governance' },
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id'),
+  ]);
 }
 
 function safeJsonState(value: any): string {
@@ -14679,33 +19894,49 @@ async function writeAdminAuditLog(c: any, admin: AdminContext, input: {
   beforeState?: Record<string, unknown>;
   afterState?: Record<string, unknown>;
 }) {
-  await ensureAdminModerationSchema(c.env.DB);
   const ts = now();
   const reason = cleanMultilineText(input.reason || '', 800);
   const note = cleanMultilineText(input.note || '', 1000);
   const targetUserId = publicId(input.targetUserId || '', 120);
   const requestId = cleanText(c.get?.('requestId') || c.req.header('X-Request-ID') || '', 120);
-  const ipHash = await safeRequestIpHash(c);
   const actionType = cleanText(input.actionType, 80);
   const targetType = cleanText(input.targetType, 60);
   const targetId = publicId(input.targetId, 160);
 
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      `INSERT INTO audit_logs (
-         id, actor_admin_user_id, actor_role, action_type, target_type, target_id, target_user_id,
-         reason, internal_note, before_state, after_state, ip_hash, request_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(uuid(), admin.userId, admin.role, actionType, targetType, targetId, targetUserId, reason, note, safeJsonState(input.beforeState), safeJsonState(input.afterState), ipHash, requestId, ts),
-    c.env.DB.prepare(
-      `INSERT INTO moderation_actions (
-         id, actor_admin_user_id, actor_role, action_type, target_type, target_id,
-         target_user_id, reason, note, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(uuid(), admin.userId, admin.role, actionType, targetType, targetId, targetUserId, reason, note, ts),
-    c.env.DB.prepare(
-      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(uuid(), admin.userId, actionType, targetType, targetId, JSON.stringify(scrubLogMetadata({ target_user_id: targetUserId, reason, note })), ts),
+  if (!supabasePrimaryConfigured(c)) throw new Error('SUPABASE_PRIMARY_REQUIRED');
+  await Promise.all([
+    supabaseAdminUpsert(c, 'app_audit_logs', [{
+      id: uuid(),
+      actor_admin_user_id: admin.userId,
+      actor_role: admin.role,
+      action_type: actionType,
+      target_type: targetType,
+      target_id: targetId,
+      target_user_id: targetUserId,
+      reason,
+      internal_note: note,
+      before_state: scrubLogMetadata(input.beforeState || {}),
+      after_state: scrubLogMetadata(input.afterState || {}),
+      request_id: requestId,
+      metadata: { source: 'cloudflare_worker_primary' },
+      legacy_created_at: ts,
+      created_at: ts,
+    }], 'id'),
+    supabaseAdminUpsert(c, 'app_moderation_actions', [{
+      id: uuid(),
+      actor_admin_user_id: admin.userId,
+      actor_role: admin.role,
+      action_type: actionType,
+      target_type: targetType,
+      target_id: targetId,
+      target_user_id: targetUserId,
+      reason,
+      note,
+      metadata: { request_id: requestId, source: 'cloudflare_worker_primary' },
+      legacy_created_at: ts,
+      created_at: ts,
+      updated_at: ts,
+    }], 'id'),
   ]);
 }
 
@@ -14718,7 +19949,40 @@ function normalizeRestrictionType(value: unknown): string {
   return ['all', 'posting', 'commenting', 'messaging', 'discover', 'handshake'].includes(type) ? type : 'all';
 }
 
+function supabaseUserRestrictionsFromMetadata(metadataValue: unknown): any[] {
+  const metadata = parseJsonObject(metadataValue);
+  const restrictions = Array.isArray((metadata as any).restrictions) ? (metadata as any).restrictions : [];
+  return restrictions
+    .map((restriction: any) => ({
+      id: publicId(restriction?.id || '', 120) || uuid(),
+      user_id: publicId(restriction?.user_id || '', 120),
+      restriction_type: normalizeRestrictionType(restriction?.restriction_type || restriction?.type),
+      reason: cleanMultilineText(restriction?.reason, 500),
+      note: cleanMultilineText(restriction?.note, 500),
+      starts_at: cleanText(restriction?.starts_at || restriction?.created_at || '', 80),
+      ends_at: cleanText(restriction?.ends_at || '', 80),
+      created_by: publicId(restriction?.created_by || '', 120),
+      created_at: cleanText(restriction?.created_at || restriction?.starts_at || '', 80),
+    }))
+    .filter((restriction: any) => restriction.reason || restriction.ends_at || restriction.created_at)
+    .sort((a: any, b: any) => (Date.parse(b.created_at || b.starts_at || '') || 0) - (Date.parse(a.created_at || a.starts_at || '') || 0))
+    .slice(0, 100);
+}
+
 async function userHasActiveRestriction(c: any, userId: string, type: 'posting' | 'commenting' | 'messaging' | 'discover' | 'handshake'): Promise<boolean> {
+  if (supabasePrimaryConfigured(c)) {
+    const row = await getSupabaseAppUserRowByAnyId(c, userId);
+    const restrictions = supabaseUserRestrictionsFromMetadata(row?.metadata);
+    const currentTime = Date.now();
+    return restrictions.some((restriction: any) => {
+      const restrictionType = normalizeRestrictionType(restriction?.restriction_type || restriction?.type);
+      if (restrictionType !== 'all' && restrictionType !== type) return false;
+      const startsAt = Date.parse(String(restriction?.starts_at || restriction?.created_at || ''));
+      const endsAt = Date.parse(String(restriction?.ends_at || ''));
+      return (!Number.isFinite(startsAt) || startsAt <= currentTime)
+        && (!Number.isFinite(endsAt) || endsAt > currentTime);
+    });
+  }
   await ensureAdminModerationSchema(c.env.DB);
   const row = await c.env.DB.prepare(
     `SELECT id FROM user_restrictions
@@ -14735,520 +19999,6 @@ async function enforceUserRestriction(c: any, userId: string, type: 'posting' | 
   if (!(await userHasActiveRestriction(c, userId, type))) return null;
   return c.json({ detail: `This account is temporarily restricted from ${type}.` }, 403);
 }
-
-api.put('/admin/people/:profileId', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensurePeopleSchema(c.env.DB);
-    const profileId = cleanText(c.req.param('profileId'), 120);
-    const body: any = await c.req.json().catch(() => ({}));
-    const fields = ['name', 'role', 'category', 'bio', 'known_for', 'city', 'profile_image', 'instagram_url', 'tiktok_url', 'youtube_url', 'website_url', 'source_url', 'status'];
-    const updates: string[] = [];
-    const values: any[] = [];
-    for (const field of fields) {
-      if (body[field] === undefined) continue;
-      updates.push(`${field} = ?`);
-      values.push(field.endsWith('_url') || field === 'source_url' ? safeOptionalUrl(body[field]) : cleanText(body[field], field === 'bio' || field === 'known_for' ? 1200 : 240));
-    }
-    if (updates.length === 0) return c.json({ detail: 'No fields to update.' }, 400);
-    updates.push('updated_at = ?');
-    values.push(now(), profileId);
-    const updatePeopleProfileSql = `UPDATE people_profiles SET ${updates.join(', ')} WHERE id = ?`;
-    await c.env.DB.prepare(updatePeopleProfileSql).bind(...values).run();
-    await logGovernanceAction(c, adminId, 'edit_people_profile', 'people', profileId, body);
-    return c.json({ updated: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.delete('/admin/people/:profileId', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensurePeopleSchema(c.env.DB);
-    const profileId = cleanText(c.req.param('profileId'), 120);
-    await c.env.DB.prepare("UPDATE people_profiles SET status = 'removed', updated_at = ? WHERE id = ?").bind(now(), profileId).run();
-    await logGovernanceAction(c, adminId, 'remove_people_profile', 'people', profileId);
-    return c.json({ removed: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/people/claims/:claimId/approve', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensurePeopleSchema(c.env.DB);
-    const claimId = cleanText(c.req.param('claimId'), 120);
-    const claim: any = await c.env.DB.prepare('SELECT * FROM people_claims WHERE id = ?').bind(claimId).first();
-    if (!claim) return c.json({ detail: 'Claim not found.' }, 404);
-    const ts = now();
-    await c.env.DB.prepare("UPDATE people_claims SET status = 'approved', updated_at = ? WHERE id = ?").bind(ts, claimId).run();
-    await c.env.DB.prepare("UPDATE people_profiles SET owner_user_id = ?, claim_status = 'claimed', updated_at = ? WHERE id = ?").bind(claim.user_id, ts, claim.profile_id).run();
-    await logGovernanceAction(c, adminId, 'approve_people_claim', 'people_claim', claimId, claim);
-    return c.json({ approved: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/people/claims/:claimId/reject', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensurePeopleSchema(c.env.DB);
-    const claimId = cleanText(c.req.param('claimId'), 120);
-    const body: any = await c.req.json().catch(() => ({}));
-    await c.env.DB.prepare("UPDATE people_claims SET status = 'rejected', admin_notes = ?, updated_at = ? WHERE id = ?")
-      .bind(cleanText(body.admin_notes || body.reason || '', 1000), now(), claimId).run();
-    await logGovernanceAction(c, adminId, 'reject_people_claim', 'people_claim', claimId, body);
-    return c.json({ rejected: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-async function maybeDeleteStreamAssets(c: any, post: any) {
-  const values = [
-    post?.image,
-    ...parseJsonArray(post?.images),
-  ].filter(Boolean).map(String);
-  const streamIds = values
-    .filter((value) => value.startsWith('cfstream:'))
-    .map((value) => value.replace('cfstream:', '').trim())
-    .filter(Boolean);
-
-  const accountId = cloudflareAccountId(c.env);
-  const token = cloudflareStreamToken(c.env);
-  if (!accountId || !token) {
-    return { attempted: false, deleted: [], failed: streamIds };
-  }
-
-  const deleted: string[] = [];
-  const failed: string[] = [];
-  for (const uid of streamIds) {
-    try {
-      const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${uid}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (response.ok) deleted.push(uid);
-      else failed.push(uid);
-    } catch {
-      failed.push(uid);
-    }
-  }
-  return { attempted: streamIds.length > 0, deleted, failed };
-}
-
-api.post('/admin/music/sounds/:trackId/hide', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureAudioSchema(c.env.DB);
-    const trackId = cleanText(c.req.param('trackId'), 80);
-    if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-    const body: any = await c.req.json().catch(() => ({}));
-    const reason = cleanText(body.reason || 'Hidden by moderation', 300);
-    await c.env.DB.prepare(
-      "INSERT OR REPLACE INTO hidden_sounds (track_id, provider, reason, hidden_by, created_at) VALUES (?, 'audius', ?, ?, ?)"
-    ).bind(trackId, reason, adminId, now()).run();
-    await c.env.DB.prepare("UPDATE posts SET audio_hidden = 1 WHERE audio_provider = 'audius' AND audio_track_id = ?")
-      .bind(trackId)
-      .run();
-    await logGovernanceAction(c, adminId, 'hide_sound', 'sound', trackId, { provider: 'audius', reason });
-    return c.json({ hidden: true, track_id: trackId });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.delete('/admin/music/sounds/:trackId/hide', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureAudioSchema(c.env.DB);
-    const trackId = cleanText(c.req.param('trackId'), 80);
-    if (!trackId) return c.json({ detail: 'Track id is required.' }, 400);
-    await c.env.DB.prepare("DELETE FROM hidden_sounds WHERE provider = 'audius' AND track_id = ?")
-      .bind(trackId)
-      .run();
-    await c.env.DB.prepare("UPDATE posts SET audio_hidden = 0 WHERE audio_provider = 'audius' AND audio_track_id = ?")
-      .bind(trackId)
-      .run();
-    await logGovernanceAction(c, adminId, 'unhide_sound', 'sound', trackId, { provider: 'audius' });
-    return c.json({ hidden: false, track_id: trackId });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.get('/admin/music/settings', authMiddleware, async (c) => {
-  try {
-    await requireGovernanceAdmin(c);
-    await ensureAiMusicSchema(c.env.DB);
-    const rows = await c.env.DB.prepare(
-      "SELECT key, value FROM app_settings WHERE key IN ('music_daily_generation_limit', 'music_generation_cooldown_seconds')"
-    ).all();
-    const settings = Object.fromEntries((rows.results as any[]).map((row) => [row.key, row.value]));
-    return c.json({
-      daily_generation_limit: Number(settings.music_daily_generation_limit || c.env.MUSIC_DAILY_GENERATION_LIMIT || 5),
-      cooldown_seconds: Number(settings.music_generation_cooldown_seconds || c.env.MUSIC_GENERATION_COOLDOWN_SECONDS || 60),
-    });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.put('/admin/music/settings', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureAiMusicSchema(c.env.DB);
-    const body: any = await c.req.json().catch(() => ({}));
-    const dailyLimit = clampNumber(body.daily_generation_limit, 1, 50, 5);
-    const cooldown = clampNumber(body.cooldown_seconds, 0, 3600, 60);
-    const ts = now();
-    await c.env.DB.prepare(
-      'INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
-    ).bind('music_daily_generation_limit', String(dailyLimit), ts).run();
-    await c.env.DB.prepare(
-      'INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
-    ).bind('music_generation_cooldown_seconds', String(cooldown), ts).run();
-    await logGovernanceAction(c, adminId, 'update_ai_music_settings', 'settings', 'ai_music', { dailyLimit, cooldown });
-    return c.json({ daily_generation_limit: dailyLimit, cooldown_seconds: cooldown });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.delete('/admin/music/:musicId', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureAiMusicSchema(c.env.DB);
-    const musicId = cleanText(c.req.param('musicId'), 80);
-    const music: any = await c.env.DB.prepare('SELECT * FROM ai_music_posts WHERE id = ?').bind(musicId).first();
-    if (!music) return c.json({ detail: 'Music post not found.' }, 404);
-    await c.env.DB.prepare("UPDATE ai_music_posts SET status = 'removed', is_public = 0, updated_at = ? WHERE id = ?")
-      .bind(now(), musicId)
-      .run();
-    await logGovernanceAction(c, adminId, 'remove_ai_music', 'ai_music', musicId, { provider: music.provider, user_id: music.user_id });
-    return c.json({ removed: true, id: musicId });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/posts/:postId/audio/remove', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureAudioSchema(c.env.DB);
-    const postId = c.req.param('postId');
-    const body: any = await c.req.json().catch(() => ({}));
-    await c.env.DB.prepare(
-      `UPDATE posts
-       SET audio_hidden = 1, audio_provider = '', audio_track_id = '', audio_title = '', audio_artist = '',
-           audio_artwork_url = '', audio_stream_url = '', audio_start_time = 0, audio_duration = 0
-       WHERE id = ?`
-    ).bind(postId).run();
-    await logGovernanceAction(c, adminId, 'remove_post_sound', 'post', postId, { reason: cleanText(body.reason, 300) });
-    return c.json({ removed: true, post_id: postId });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.get('/admin/governance/me', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const user: any = await c.env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(adminId).first();
-    return c.json(authUserPayload(user));
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.get('/admin/governance/stats', authMiddleware, async (c) => {
-  try {
-    await requireGovernanceAdmin(c);
-    const [pendingReports, bannedUsers, removedPosts, activeUsers] = await Promise.all([
-      c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(status, 'pending') = 'pending'").first(),
-      c.env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE COALESCE(status, 'active') = 'banned'").first(),
-      c.env.DB.prepare("SELECT COUNT(*) AS count FROM posts WHERE COALESCE(status, 'active') = 'removed'").first(),
-      c.env.DB.prepare("SELECT COUNT(*) AS count FROM users WHERE COALESCE(status, 'active') != 'banned'").first(),
-    ]);
-    return c.json({
-      pending_reports: (pendingReports as any)?.count || 0,
-      banned_users: (bannedUsers as any)?.count || 0,
-      removed_posts: (removedPosts as any)?.count || 0,
-      active_users: (activeUsers as any)?.count || 0,
-    });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.get('/admin/governance/reports', authMiddleware, async (c) => {
-  try {
-    await requireGovernanceAdmin(c);
-    const status = c.req.query('status') || 'pending';
-    const bindings: string[] = [];
-    let where = '';
-    if (status !== 'all') {
-      where = "WHERE COALESCE(r.status, 'pending') = ?";
-      bindings.push(status);
-    }
-    const query = `
-      SELECT
-        r.id,
-        r.reporter_id,
-        r.reported_id,
-        COALESCE(NULLIF(r.reported_type, ''), r.report_type, 'other') AS reported_type,
-        r.report_type,
-        r.reason,
-        r.details,
-        r.content_id,
-        COALESCE(r.status, 'pending') AS status,
-        r.admin_notes,
-        r.action_taken,
-        COALESCE(r.priority, 'normal') AS priority,
-        r.reviewed_by,
-        r.reviewed_at,
-        r.created_at,
-        r.updated_at,
-        reporter.username AS reporter_username,
-        reporter.full_name AS reporter_full_name,
-        reporter.profile_image AS reporter_profile_image,
-        target_user.username AS target_username,
-        target_user.full_name AS target_full_name,
-        target_user.profile_image AS target_profile_image,
-        target_user.status AS target_status,
-        p.id AS post_id,
-        p.user_id AS post_user_id,
-        p.content AS post_content,
-        p.image AS post_image,
-        p.images AS post_images,
-        p.media_types AS post_media_types,
-        p.status AS post_status,
-        post_author.username AS post_author_username,
-        post_author.full_name AS post_author_full_name
-      FROM reports r
-      LEFT JOIN users reporter ON reporter.id = r.reporter_id
-      LEFT JOIN users target_user ON target_user.id = r.reported_id
-      LEFT JOIN posts p ON p.id = COALESCE(r.content_id, CASE WHEN COALESCE(NULLIF(r.reported_type, ''), r.report_type) = 'post' THEN r.reported_id ELSE NULL END)
-      LEFT JOIN users post_author ON post_author.id = p.user_id
-      ${where}
-      ORDER BY CASE COALESCE(r.priority, 'normal') WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, r.created_at DESC
-      LIMIT 100
-    `;
-    const result = bindings.length
-      ? await c.env.DB.prepare(query).bind(...bindings).all()
-      : await c.env.DB.prepare(query).all();
-    return c.json((result.results as any[]).map((report) => ({
-      ...report,
-      post_images: parseJsonArray(report.post_images),
-      post_media_types: parseJsonArray(report.post_media_types),
-    })));
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/reports/:reportId/resolve', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const reportId = c.req.param('reportId');
-    const body: any = await c.req.json().catch(() => ({}));
-    const actionTaken = cleanText(body.action_taken || body.action || 'action_taken', 120);
-    await c.env.DB.prepare(
-      "UPDATE reports SET status = 'action_taken', admin_notes = ?, action_taken = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?"
-    ).bind(cleanMultilineText(body.admin_notes || '', 1000), actionTaken, adminId, now(), now(), reportId).run();
-    await logGovernanceAction(c, adminId, 'resolve_report', 'report', reportId, body);
-    return c.json({ resolved: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/reports/:reportId/dismiss', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const reportId = c.req.param('reportId');
-    const body: any = await c.req.json().catch(() => ({}));
-    await c.env.DB.prepare(
-      "UPDATE reports SET status = 'dismissed', admin_notes = ?, action_taken = 'dismissed', reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?"
-    ).bind(cleanMultilineText(body.admin_notes || '', 1000), adminId, now(), now(), reportId).run();
-    await logGovernanceAction(c, adminId, 'dismiss_report', 'report', reportId, body);
-    return c.json({ dismissed: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/reports/:reportId/status', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const reportId = c.req.param('reportId');
-    const body: any = await c.req.json().catch(() => ({}));
-    const status = normalizeReportStatus(body.status, 'under_review');
-    const actionTaken = cleanText(body.action_taken || body.action || status, 120);
-    const adminNotes = cleanMultilineText(body.admin_notes || body.notes || '', 1000);
-    const ts = now();
-    await c.env.DB.prepare(
-      'UPDATE reports SET status = ?, admin_notes = ?, action_taken = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'
-    ).bind(status, adminNotes, actionTaken, adminId, ts, ts, reportId).run();
-    await logGovernanceAction(c, adminId, `report_${status}`, 'report', reportId, { status, action_taken: actionTaken, admin_notes: adminNotes });
-    return c.json({ updated: true, status });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.get('/admin/governance/ban-evasion', authMiddleware, async (c) => {
-  try {
-    await requireGovernanceAdmin(c);
-    await ensureAbuseProtectionSchema(c.env.DB);
-    const status = normalizeReportStatus(c.req.query('status') || 'pending', 'pending');
-    const rows = await c.env.DB.prepare(
-      `SELECT f.*, u.username, u.full_name, u.profile_image, u.status AS user_status,
-              matched.username AS matched_username, matched.full_name AS matched_full_name, matched.status AS matched_status
-       FROM ban_evasion_flags f
-       LEFT JOIN users u ON u.id = f.user_id
-       LEFT JOIN users matched ON matched.id = f.matched_user_id
-       WHERE COALESCE(f.status, 'pending') = ?
-       ORDER BY f.created_at DESC
-       LIMIT 100`
-    ).bind(status).all();
-    return c.json(rows.results || []);
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/ban-evasion/:flagId/review', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureAbuseProtectionSchema(c.env.DB);
-    const flagId = c.req.param('flagId');
-    const body: any = await c.req.json().catch(() => ({}));
-    const status = normalizeReportStatus(body.status, 'under_review');
-    const adminNotes = cleanMultilineText(body.admin_notes || body.notes || '', 1000);
-    const ts = now();
-    await c.env.DB.prepare(
-      'UPDATE ban_evasion_flags SET status = ?, admin_notes = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'
-    ).bind(status, adminNotes, adminId, ts, ts, flagId).run();
-    await logGovernanceAction(c, adminId, `ban_evasion_${status}`, 'ban_evasion_flag', flagId, { status, admin_notes: adminNotes });
-    return c.json({ updated: true, status });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/users/:userId/ban', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const targetUserId = c.req.param('userId');
-    if (targetUserId === adminId) return c.json({ detail: 'Admins cannot ban themselves.' }, 400);
-    const body: any = await c.req.json().catch(() => ({}));
-    const target: any = await c.env.DB.prepare('SELECT username, full_name, bio, social_website, social_tiktok, social_instagram FROM users WHERE id = ?').bind(targetUserId).first();
-    if (!target) return c.json({ detail: 'User not found.' }, 404);
-    await recordAbuseSignals(c, targetUserId, 'admin_ban', {
-      username: target.username,
-      display_name: target.full_name,
-      bio: target.bio,
-      links: [target.social_website, target.social_tiktok, target.social_instagram].filter(Boolean),
-    });
-    await c.env.DB.prepare("UPDATE users SET status = 'banned', banned_at = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
-      .bind(now(), body.reason || 'Banned by governance', targetUserId)
-      .run();
-    await logGovernanceAction(c, adminId, 'ban_user', 'user', targetUserId, body);
-    return c.json({ banned: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/users/:userId/suspend', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const targetUserId = c.req.param('userId');
-    if (targetUserId === adminId) return c.json({ detail: 'Admins cannot suspend themselves.' }, 400);
-    const body: any = await c.req.json().catch(() => ({}));
-    const reason = cleanMultilineText(body.reason || 'Suspended by governance', 500);
-    await c.env.DB.prepare("UPDATE users SET status = 'suspended', ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
-      .bind(reason, targetUserId)
-      .run();
-    await logGovernanceAction(c, adminId, 'suspend_user', 'user', targetUserId, { reason });
-    return c.json({ suspended: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/users/:userId/unban', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const targetUserId = c.req.param('userId');
-    const body: any = await c.req.json().catch(() => ({}));
-    await c.env.DB.prepare("UPDATE users SET status = 'active', banned_at = NULL, ban_reason = '', updated_at = datetime('now') WHERE id = ?")
-      .bind(targetUserId)
-      .run();
-    await logGovernanceAction(c, adminId, 'unban_user', 'user', targetUserId, body);
-    return c.json({ unbanned: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/posts/:postId/remove', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    const postId = c.req.param('postId');
-    const body: any = await c.req.json().catch(() => ({}));
-    const post: any = await c.env.DB.prepare('SELECT * FROM posts WHERE id = ?').bind(postId).first();
-    if (!post) return c.json({ detail: 'Post not found' }, 404);
-    const stream = body.delete_stream ? await maybeDeleteStreamAssets(c, post) : { attempted: false, deleted: [], failed: [] };
-    await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?")
-      .bind(now(), body.reason || 'Removed by governance', postId)
-      .run();
-    await logGovernanceAction(c, adminId, 'remove_post', 'post', postId, { ...body, stream });
-    return c.json({ removed: true, stream });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.post('/admin/governance/comments/:commentId/remove', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireGovernanceAdmin(c);
-    await ensureGovernanceSchema(c.env.DB);
-    const commentId = c.req.param('commentId');
-    const body: any = await c.req.json().catch(() => ({}));
-    const reason = cleanMultilineText(body.reason || 'Removed by governance', 500);
-    await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?")
-      .bind(now(), reason, commentId)
-      .run();
-    await logGovernanceAction(c, adminId, 'remove_comment', 'comment', commentId, { reason });
-    return c.json({ removed: true, soft_deleted: true });
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
-
-api.get('/admin/governance/actions', authMiddleware, async (c) => {
-  try {
-    await requireGovernanceAdmin(c);
-    const result = await c.env.DB.prepare(`
-      SELECT a.*, u.username AS admin_username, u.full_name AS admin_full_name
-      FROM admin_actions a
-      LEFT JOIN users u ON u.id = a.admin_id
-      ORDER BY a.created_at DESC
-      LIMIT 100
-    `).all();
-    return c.json((result.results as any[]).map((action) => ({
-      ...action,
-      details: action.details ? JSON.parse(action.details) : {},
-    })));
-  } catch (error: any) {
-    return governanceError(c, error);
-  }
-});
 
 function adminPageParams(c: any, defaultLimit = 50, maxLimit = 100) {
   const limit = clampNumber(c.req.query('limit') || defaultLimit, 1, maxLimit, defaultLimit);
@@ -15295,6 +20045,74 @@ function adminUserPayload(row: any, role: AdminRole) {
     payload.phone = row.phone || '';
   }
   return payload;
+}
+
+function adminSupabaseUserPayload(row: any, role: AdminRole, reportCount = 0) {
+  const legacy = supabaseAppUserToLegacyUser(row);
+  const metadata = parseJsonObject(row?.metadata);
+  return adminUserPayload({
+    ...legacy,
+    report_count: reportCount,
+    warning_count: Number((metadata as any).warning_count || 0),
+    suspended_until: cleanText((metadata as any).suspended_until, 80),
+    banned_at: cleanText((metadata as any).banned_at, 80),
+    ban_reason: cleanMultilineText((metadata as any).ban_reason, 500),
+  }, role);
+}
+
+async function supabaseAdminReportCountsForUsers(c: any, userIds: string[]): Promise<Map<string, number>> {
+  const ids = Array.from(new Set(userIds.map((value) => publicId(value, 120)).filter(Boolean)));
+  const counts = new Map<string, number>();
+  if (!ids.length) return counts;
+  const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+    select: 'target_owner_user_id',
+    filters: { target_owner_user_id: postgrestInFilter(ids) },
+    limit: Math.max(100, ids.length * 100),
+  }).catch((error: any) => {
+    console.warn(JSON.stringify({ event: 'supabase_admin_user_report_counts_failed', code: getErrorCode(error).slice(0, 180) }));
+    return [];
+  });
+  for (const row of rows) {
+    const id = publicId(row?.target_owner_user_id, 120);
+    if (id) counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  return counts;
+}
+
+async function supabaseAdminUserRows(c: any, input: { search?: string; status?: string; limit: number; offset: number }) {
+  const search = cleanText(input.search || '', 120).toLowerCase();
+  const status = cleanText(input.status || '', 40).toLowerCase();
+  const rowLimit = Math.min(500, Math.max(input.limit + input.offset + 50, input.limit));
+  const rows = await supabaseAdminQueryRows(c, 'app_users', {
+    select: SUPABASE_APP_USER_SELECT,
+    order: 'created_at.desc',
+    limit: rowLimit,
+  });
+  return rows
+    .filter((row) => {
+      const legacy = supabaseAppUserToLegacyUser(row);
+      if (status && status !== 'all' && cleanText(legacy.status || 'active', 40).toLowerCase() !== status) return false;
+      if (!search) return true;
+      return [
+        legacy.id,
+        legacy.username,
+        legacy.full_name,
+        legacy.email,
+      ].some((value) => String(value || '').toLowerCase().includes(search));
+    })
+    .slice(input.offset, input.offset + input.limit);
+}
+
+async function supabasePatchUserModerationMetadata(c: any, targetUserId: string, mutate: (metadata: Record<string, any>, row: any) => Record<string, any>) {
+  const row = await getSupabaseAppUserRowByAnyId(c, targetUserId);
+  if (!row) return { row: null, before: null, metadata: null };
+  const before = supabaseAppUserToLegacyUser(row);
+  const metadata = mutate(parseJsonObject(row?.metadata) as Record<string, any>, row);
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(row.id, 120)) }, {
+    metadata: scrubLogMetadata(metadata),
+    updated_at: now(),
+  });
+  return { row, before, metadata };
 }
 
 function adminPostPayload(row: any, env: Env) {
@@ -15451,6 +20269,16 @@ function adminMediaModerationPayload(row: any, env: Env) {
     duration_seconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
     upload_status: cleanText(row.upload_status, 40),
     moderation_status: normalizeMediaModerationStatus(row.moderation_status),
+    content_credentials: {
+      has_content_credentials: row.has_content_credentials === true || Number(row.has_content_credentials || 0) === 1,
+      c2pa_verified: row.c2pa_verified === true || Number(row.c2pa_verified || 0) === 1,
+      c2pa_creator: cleanText(row.c2pa_creator, 180),
+      c2pa_created_at: row.c2pa_created_at || null,
+      c2pa_ai_used: row.c2pa_ai_used === true || Number(row.c2pa_ai_used || 0) === 1,
+      c2pa_edit_history_summary: cleanMultilineText(row.c2pa_edit_history_summary, 500),
+      media_origin_status: normalizeMediaOriginStatus(row.media_origin_status),
+      metadata: scrubLogMetadata(parseJsonObject(row.c2pa_metadata)),
+    },
     rejection_code: cleanText(row.rejection_code, 120),
     rejection_message: cleanMultilineText(row.rejection_message, 500),
     scores: {
@@ -15480,6 +20308,100 @@ function adminMediaModerationPayload(row: any, env: Env) {
   };
 }
 
+async function supabaseAdminMediaModerationRows(c: any, input: {
+  status?: MediaModerationStatus | '';
+  mediaType?: CaptroMediaType | '';
+  search?: string;
+  limit: number;
+  offset: number;
+}): Promise<any[]> {
+  const filters: Record<string, string> = {};
+  if (input.status) {
+    filters.moderation_status = postgrestEqFilter(input.status);
+  } else {
+    filters.moderation_status = postgrestInFilter(['review_required', 'failed']);
+  }
+  if (input.mediaType) filters.media_type = postgrestEqFilter(input.mediaType);
+  const cleanSearch = String(input.search || '').replace(/^%|%$/g, '').trim().toLowerCase();
+  if (cleanSearch) {
+    const pattern = `*${cleanSearch.replace(/[*,()]/g, '')}*`;
+    filters.or = `(id.ilike.${pattern},user_id.ilike.${pattern},sha256_hash.ilike.${pattern})`;
+  }
+  const assets = (await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: '*',
+    filters,
+    order: 'created_at.desc',
+    limit: input.limit,
+    offset: input.offset,
+  })).map(supabaseMediaAssetToLegacy);
+  if (!assets.length) return [];
+
+  const mediaIds = Array.from(new Set(assets.map((row) => publicId(row.id, 160)).filter(Boolean)));
+  const userIds = Array.from(new Set(assets.map((row) => publicId(row.user_id, 120)).filter(Boolean)));
+  const postIds = Array.from(new Set(assets.map((row) => publicId(row.legacy_post_id || row.post_id, 160)).filter(Boolean)));
+  const [results, users, posts] = await Promise.all([
+    mediaIds.length ? supabaseAdminQueryRows(c, 'app_moderation_results', {
+      select: '*',
+      filters: { media_id: postgrestInFilter(mediaIds) },
+      order: 'created_at.desc',
+      limit: Math.max(100, mediaIds.length * 6),
+    }) : Promise.resolve([]),
+    userIds.length ? supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id,email,username,full_name,avatar_url',
+      filters: { id: postgrestInFilter(userIds) },
+      limit: userIds.length,
+    }) : Promise.resolve([]),
+    postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
+      select: 'legacy_post_id,title,content',
+      filters: { legacy_post_id: postgrestInFilter(postIds) },
+      limit: postIds.length,
+    }) : Promise.resolve([]),
+  ]);
+
+  const latestResultByMedia = new Map<string, any>();
+  for (const result of results) {
+    const mediaId = publicId(result.media_id, 160);
+    if (mediaId && !latestResultByMedia.has(mediaId)) latestResultByMedia.set(mediaId, result);
+  }
+  const userById = new Map(users.map((user: any) => [publicId(user.id, 120), user]));
+  const postById = new Map(posts.map((post: any) => [publicId(post.legacy_post_id, 160), post]));
+
+  return assets.map((asset) => {
+    const result = latestResultByMedia.get(publicId(asset.id, 160)) || {};
+    const user = userById.get(publicId(asset.user_id, 120)) || {};
+    const post = postById.get(publicId(asset.legacy_post_id || asset.post_id, 160)) || {};
+    return {
+      ...asset,
+      post_id: asset.legacy_post_id || asset.post_id || null,
+      user_username: user.username,
+      user_full_name: user.full_name,
+      user_email: user.email,
+      user_profile_image: user.avatar_url,
+      post_title: post.title,
+      post_content: post.content,
+      model_name: result.model_name,
+      adult_explicit_score: result.adult_explicit_score,
+      nudity_score: result.nudity_score,
+      sexual_context_score: result.sexual_context_score,
+      sexual_solicitation_score: result.sexual_solicitation_score,
+      minor_safety_risk_score: result.minor_safety_risk_score,
+      violence_score: result.violence_score,
+      gore_score: result.gore_score,
+      weapon_score: result.weapon_score,
+      hate_symbol_score: result.hate_symbol_score,
+      ai_generated_likelihood: result.ai_generated_likelihood,
+      spam_scam_score: result.spam_scam_score,
+      malware_status: result.malware_status,
+      link_risk_score: result.link_risk_score,
+      confidence: result.confidence,
+      decision: result.decision,
+      result_reasons: JSON.stringify(result.reasons || []),
+      result_raw_result: JSON.stringify(result.raw_result || {}),
+      result_created_at: result.created_at || null,
+    };
+  });
+}
+
 function adminCommentPayload(row: any) {
   return {
     id: row.id,
@@ -15505,8 +20427,67 @@ function adminCommentPayload(row: any) {
   };
 }
 
+async function supabaseAdminCommentPayloads(c: any, rows: any[]): Promise<any[]> {
+  const cleanRows = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!cleanRows.length) return [];
+  const authorIds = cleanRows
+    .flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || ''])
+    .filter(Boolean);
+  const postIds = Array.from(new Set(cleanRows.map((row) => publicId(row?.legacy_post_id, 120)).filter(Boolean)));
+  const [authorMap, postRows] = await Promise.all([
+    supabaseUsersByAnyIds(c, authorIds),
+    postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
+      select: 'legacy_post_id,app_user_id,user_id',
+      filters: { legacy_post_id: postgrestInFilter(postIds) },
+      limit: Math.max(1, postIds.length),
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_admin_comment_posts_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    }) : Promise.resolve([]),
+  ]);
+  const postMap = new Map(postRows.map((row: any) => [publicId(row?.legacy_post_id, 120), row]));
+  return cleanRows.map((row) => {
+    const metadata = parseJsonObject(row?.metadata);
+    const appUserId = publicId(row?.app_user_id, 120);
+    const author = authorMap.get(appUserId) || authorMap.get(isUuidText(row?.user_id) || '') || {};
+    const post = postMap.get(publicId(row?.legacy_post_id, 120)) || {};
+    return adminCommentPayload({
+      id: publicId(row?.legacy_comment_id || row?.id, 120),
+      user_id: appUserId || isUuidText(row?.user_id) || '',
+      post_id: publicId(row?.legacy_post_id || row?.post_id, 120),
+      parent_id: publicId((metadata as any).parent_legacy_id || row?.parent_id, 120),
+      content: cleanMultilineText(row?.body, 1200),
+      status: cleanText(row?.status || 'active', 40),
+      removed_at: cleanText((metadata as any).removed_at, 80) || null,
+      removed_reason: cleanMultilineText((metadata as any).removed_reason, 500),
+      hidden_at: cleanText((metadata as any).hidden_at, 80) || null,
+      hidden_by_user_id: publicId((metadata as any).hidden_by_user_id, 120),
+      likes_count: Number((metadata as any).likes_count || 0),
+      user_username: author?.username,
+      user_full_name: author?.full_name,
+      user_profile_image: author?.avatar_url,
+      post_user_id: publicId(post?.app_user_id || post?.user_id || (metadata as any).post_user_id, 120),
+      created_at: row?.legacy_created_at || row?.created_at,
+      updated_at: row?.updated_at || row?.created_at,
+    });
+  });
+}
+
+function supabaseAdminCommentPayloadMatchesSearch(payload: any, search: string): boolean {
+  const query = cleanText(search, 120).toLowerCase();
+  if (!query) return true;
+  return [
+    payload?.id,
+    payload?.post_id,
+    payload?.content,
+    payload?.author?.id,
+    payload?.author?.username,
+    payload?.author?.full_name,
+  ].some((value) => String(value || '').toLowerCase().includes(query));
+}
+
 function reportTargetType(row: any): string {
-  return normalizeReportTargetType(row?.reported_type || row?.report_type || 'other');
+  return normalizeReportTargetType(row?.target_type || row?.reported_type || row?.report_type || 'other');
 }
 
 function adminReportSummary(row: any, env?: Env) {
@@ -15528,9 +20509,9 @@ function adminReportSummary(row: any, env?: Env) {
   return {
     id: row.id,
     reporter_id: row.reporter_id,
-    reported_id: row.reported_id,
+    reported_id: row.reported_id || row.target_id,
     target_type: type,
-    target_id: row.reported_id,
+    target_id: row.target_id || row.reported_id,
     target_owner_user_id: row.target_owner_user_id || row.post_user_id || row.comment_user_id || row.message_sender_id || '',
     reason: normalizeReportReason(row.reason),
     details: cleanMultilineText(row.details, 1000),
@@ -15558,7 +20539,124 @@ function adminReportSummary(row: any, env?: Env) {
   };
 }
 
+async function supabaseEnrichAdminReportRows(c: any, reports: any[]): Promise<any[]> {
+  if (!reports.length) return [];
+  const reporterIds = reports.map((row) => publicId(row?.reporter_id, 120)).filter(Boolean);
+  const ownerIds = reports.map((row) => publicId(row?.target_owner_user_id, 120)).filter(Boolean);
+  const postIds = new Set<string>();
+  const commentIds = new Set<string>();
+  const messageIds = new Set<string>();
+
+  for (const report of reports) {
+    const targetType = normalizeReportTargetType(report?.target_type);
+    const targetId = publicId(report?.target_id, 160);
+    const metadata = parseJsonObject(report?.metadata);
+    const contentId = publicId((metadata as any).content_id, 160);
+    if ((targetType === 'post' || targetType === 'discover_post') && targetId) postIds.add(targetId);
+    if (contentId) postIds.add(contentId);
+    if (targetType === 'comment' && targetId) commentIds.add(targetId);
+    if (targetType === 'message' && targetId) messageIds.add(targetId);
+  }
+
+  const [users, posts, comments, messages] = await Promise.all([
+    supabaseUsersByAnyIds(c, [...reporterIds, ...ownerIds]),
+    postIds.size
+      ? supabaseAdminQueryRows(c, 'app_posts', {
+        select: SUPABASE_APP_POST_SELECT,
+        filters: { legacy_post_id: postgrestInFilter(Array.from(postIds)) },
+        limit: Math.max(1, postIds.size),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_report_posts_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      })
+      : Promise.resolve([]),
+    commentIds.size
+      ? supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_comment_id,legacy_post_id,app_user_id,user_id,body,status,created_at,legacy_created_at',
+        filters: { legacy_comment_id: postgrestInFilter(Array.from(commentIds)) },
+        limit: Math.max(1, commentIds.size),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_report_comments_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      })
+      : Promise.resolve([]),
+    messageIds.size
+      ? supabaseAdminQueryRows(c, 'app_messages', {
+        select: 'id,sender_id,receiver_id,body,media_url,media_type,status,created_at,legacy_created_at',
+        filters: { id: postgrestInFilter(Array.from(messageIds)) },
+        limit: Math.max(1, messageIds.size),
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_report_messages_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      })
+      : Promise.resolve([]),
+  ]);
+
+  const postMap = new Map(posts.map((row: any) => [publicId(row?.legacy_post_id || row?.id, 160), row]));
+  const commentMap = new Map(comments.map((row: any) => [publicId(row?.legacy_comment_id, 160), row]));
+  const messageMap = new Map(messages.map((row: any) => [publicId(row?.id, 160), row]));
+
+  return reports.map((report) => {
+    const targetType = normalizeReportTargetType(report?.target_type);
+    const targetId = publicId(report?.target_id, 160);
+    const metadata = parseJsonObject(report?.metadata);
+    const contentId = publicId((metadata as any).content_id, 160);
+    const post = postMap.get(targetId) || postMap.get(contentId) || null;
+    const comment = commentMap.get(targetId) || null;
+    const message = messageMap.get(targetId) || null;
+    const targetUserId = publicId(report?.target_owner_user_id || post?.app_user_id || comment?.app_user_id || message?.sender_id || targetId, 120);
+    const reporter = users.get(publicId(report?.reporter_id, 120)) || {};
+    const targetUser = users.get(targetUserId) || {};
+    const media = post ? supabaseAppPostMedia(post) : { mediaUrls: [], mediaTypes: [], mediaDimensions: [] };
+    return {
+      ...report,
+      reported_id: targetId,
+      reported_type: targetType,
+      report_type: targetType,
+      content_id: contentId,
+      created_at: report?.legacy_created_at || report?.created_at,
+      updated_at: report?.legacy_updated_at || report?.updated_at,
+      reporter_username: reporter?.username,
+      reporter_full_name: reporter?.full_name,
+      reporter_profile_image: reporter?.avatar_url,
+      post_id: post ? publicId(post?.legacy_post_id || post?.id, 160) : '',
+      post_user_id: publicId(post?.app_user_id || post?.user_id, 120),
+      post_content: cleanMultilineText(post?.content, 4000),
+      post_title: cleanText(post?.title, 180),
+      post_image: media.mediaUrls[0] || '',
+      post_images: JSON.stringify(media.mediaUrls),
+      post_media_types: JSON.stringify(media.mediaTypes),
+      post_media_dimensions: JSON.stringify(media.mediaDimensions),
+      post_status: cleanText(post?.status, 40),
+      comment_id: publicId(comment?.legacy_comment_id, 160),
+      comment_user_id: publicId(comment?.app_user_id || comment?.user_id, 120),
+      comment_content: cleanMultilineText(comment?.body, 1000),
+      comment_status: cleanText(comment?.status, 40),
+      message_id: publicId(message?.id, 160),
+      message_sender_id: publicId(message?.sender_id, 120),
+      message_receiver_id: publicId(message?.receiver_id, 120),
+      message_content: cleanMultilineText(message?.body, 1000),
+      message_media_type: cleanText(message?.media_type, 40),
+      message_status: cleanText(message?.status, 40),
+      target_user_id: targetUserId,
+      target_username: targetUser?.username,
+      target_full_name: targetUser?.full_name,
+      target_profile_image: targetUser?.avatar_url,
+      target_status: cleanText(parseJsonObject(targetUser?.metadata).status || 'active', 40),
+    };
+  });
+}
+
 async function getAdminReportRow(c: any, reportId: string) {
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+      select: '*',
+      filters: { id: postgrestEqFilter(reportId) },
+      limit: 1,
+    });
+    const enriched = await supabaseEnrichAdminReportRows(c, rows);
+    return enriched[0] || null;
+  }
   return c.env.DB.prepare(`
     SELECT
       r.*,
@@ -15597,6 +20695,22 @@ async function getAdminReportRow(c: any, reportId: string) {
     WHERE r.id = ?
     LIMIT 1
   `).bind(reportId).first();
+}
+
+function adminReportedMessageContextPayload(row: any, reportedMessageId = '') {
+  const id = publicId(row?.id, 160);
+  return {
+    id,
+    sender_id: publicId(row?.sender_id, 120),
+    receiver_id: publicId(row?.receiver_id, 120),
+    content: cleanMultilineText(row?.body || row?.content, 2000),
+    media_url: safeMediaReference(row?.media_url),
+    media_type: cleanText(row?.media_type, 40),
+    media: parseJsonObject(row?.media),
+    status: cleanText(row?.status || 'active', 40),
+    created_at: row?.legacy_created_at || row?.created_at,
+    is_reported: !!reportedMessageId && id === reportedMessageId,
+  };
 }
 
 async function reportTargetPreview(c: any, report: any) {
@@ -15661,6 +20775,90 @@ async function reportTargetPreview(c: any, report: any) {
 }
 
 async function adminReportDetail(c: any, report: any) {
+  if (supabasePrimaryConfigured(c)) {
+    const type = reportTargetType(report);
+    let target: any = { type, missing: true };
+    if ((type === 'post' || type === 'discover_post') && (report.post_id || report.reported_id)) {
+      target = {
+        type: 'post',
+        post: adminPostPayload({
+          id: report.post_id || report.reported_id,
+          user_id: report.post_user_id || report.target_owner_user_id || '',
+          content: report.post_content || '',
+          title: report.post_title || '',
+          image: report.post_image || '',
+          images: report.post_images || '',
+          media_types: report.post_media_types || '',
+          media_dimensions: report.post_media_dimensions || '',
+          status: report.post_status || '',
+          user_username: report.target_username || '',
+          user_full_name: report.target_full_name || '',
+          user_profile_image: report.target_profile_image || '',
+        }, c.env),
+      };
+    } else if (type === 'comment' && (report.comment_id || report.reported_id)) {
+      target = {
+        type: 'comment',
+        comment: {
+          id: report.comment_id || report.reported_id,
+          post_id: report.content_id || '',
+          user_id: report.comment_user_id || report.target_owner_user_id || '',
+          content: cleanMultilineText(report.comment_content, 1000),
+          status: cleanText(report.comment_status, 40),
+        },
+      };
+    } else if (type === 'message' && (report.message_id || report.reported_id)) {
+      target = {
+        type: 'message',
+        privacy_warning: true,
+        message: {
+          id: report.message_id || report.reported_id,
+          sender_id: report.message_sender_id || '',
+          receiver_id: report.message_receiver_id || '',
+          content: cleanMultilineText(report.message_content, 1000),
+          media_type: cleanText(report.message_media_type, 40),
+          status: cleanText(report.message_status, 40),
+        },
+      };
+    } else if ((type === 'profile' || type === 'user') && report.target_user_id) {
+      target = {
+        type: 'user',
+        user: {
+          id: report.target_user_id,
+          username: publicUsernameFor({ username: report.target_username }),
+          full_name: cleanText(report.target_full_name, 120),
+          profile_image: safeMediaReference(report.target_profile_image),
+          status: cleanText(report.target_status, 40),
+        },
+      };
+    }
+    const actionTargetId = publicId(report.reported_id || report.target_id || report.id, 160);
+    const actionTargetUserId = publicId(report.target_owner_user_id || report.reported_id || '', 120);
+    const actionFilters: Record<string, string> = actionTargetUserId
+      ? { or: `(target_id.eq.${actionTargetId},target_user_id.eq.${actionTargetUserId})` }
+      : { target_id: postgrestEqFilter(actionTargetId) };
+    const actionRows = await supabaseAdminQueryRows(c, 'app_moderation_actions', {
+      select: '*',
+      filters: actionFilters,
+      order: 'created_at.desc',
+      limit: 30,
+    }).catch(() => []);
+    return {
+      ...adminReportSummary(report, c.env),
+      admin_notes: cleanMultilineText(report.admin_notes, 1000),
+      action_taken: cleanText(report.action_taken, 120),
+      reviewed_by: report.reviewed_by || '',
+      reviewed_at: report.reviewed_at || null,
+      target,
+      notes: [],
+      previous_actions: actionRows.map((action: any) => ({
+        ...action,
+        reason: cleanMultilineText(action.reason, 500),
+        note: cleanMultilineText(action.note, 800),
+      })),
+    };
+  }
+
   const notes = await c.env.DB.prepare(`
     SELECT n.*, u.username AS admin_username, u.full_name AS admin_full_name
     FROM moderation_notes n
@@ -15703,6 +20901,39 @@ async function adminReportDetail(c: any, report: any) {
 }
 
 async function setReportStatus(c: any, admin: AdminContext, reportId: string, status: string, reason: string, note: string) {
+  if (supabasePrimaryConfigured(c)) {
+    const beforeRows = await supabaseAdminQueryRows(c, 'app_reports', {
+      select: '*',
+      filters: { id: postgrestEqFilter(reportId) },
+      limit: 1,
+    });
+    const before = beforeRows[0];
+    if (!before) return c.json({ detail: 'Report not found.' }, 404);
+    const normalizedStatus = normalizeReportStatus(status, 'under_review');
+    const ts = now();
+    const patch: Record<string, unknown> = {
+      status: normalizedStatus,
+      admin_notes: note,
+      action_taken: normalizedStatus,
+      reviewed_by: admin.userId,
+      updated_at: ts,
+    };
+    if (['action_taken', 'dismissed', 'closed', 'duplicate'].includes(normalizedStatus)) patch.closed_at = ts;
+    await supabaseAdminPatchRows(c, 'app_reports', { id: postgrestEqFilter(reportId) }, patch);
+    await writeAdminAuditLog(c, admin, {
+      actionType: `report_${normalizedStatus}`,
+      targetType: 'report',
+      targetId: reportId,
+      targetUserId: before.target_owner_user_id || before.target_id || '',
+      reason,
+      note,
+      beforeState: { status: before.status },
+      afterState: { status: normalizedStatus },
+    });
+    const updated = await getAdminReportRow(c, reportId);
+    return c.json({ report: await adminReportDetail(c, updated) });
+  }
+
   const before: any = await c.env.DB.prepare('SELECT id, status, reported_id, reported_type, report_type FROM reports WHERE id = ?').bind(reportId).first();
   if (!before) return c.json({ detail: 'Report not found.' }, 404);
   const normalizedStatus = normalizeReportStatus(status, 'under_review');
@@ -15730,16 +20961,23 @@ async function setReportStatus(c: any, admin: AdminContext, reportId: string, st
 api.get('/admin/health', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'admin:read');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensureMediaModerationSchema(c.env.DB);
-    const db: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+    let database = 'unknown';
+    if (supabasePrimaryConfigured(c)) {
+      await supabaseAdminQueryRows(c, 'app_users', { select: 'id', limit: 1 });
+      database = 'supabase_postgres';
+    } else {
+      await ensureAdminModerationSchema(c.env.DB);
+      await ensureMediaModerationSchema(c.env.DB);
+      const db: any = await c.env.DB.prepare('SELECT 1 AS ok').first();
+      database = Number(db?.ok || 0) === 1 ? 'legacy_d1' : 'unknown';
+    }
     return c.json({
       status: 'ok',
       environment: c.env.ENVIRONMENT || 'production',
       timestamp: now(),
       version: c.env.WORKER_VERSION || API_VERSION,
       commit: c.env.SOURCE_COMMIT || '',
-      database: Number(db?.ok || 0) === 1 ? 'ok' : 'unknown',
+      database,
     });
   } catch (error: any) {
     return governanceError(c, error);
@@ -15749,12 +20987,25 @@ api.get('/admin/health', authMiddleware, async (c) => {
 api.get('/admin/moderation', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
-    await ensureMediaModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c, 40, 100);
     const statusParam = cleanText(c.req.query('status') || '', 40);
     const status = statusParam ? normalizeMediaModerationStatus(statusParam) : '';
     const mediaType = normalizeMediaAssetType(c.req.query('media_type') || c.req.query('type'));
     const search = searchPattern(c.req.query('search'));
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminMediaModerationRows(c, {
+        status,
+        mediaType,
+        search,
+        limit,
+        offset,
+      });
+      return c.json({
+        results: rows.map((row) => adminMediaModerationPayload(row, c.env)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+    await ensureMediaModerationSchema(c.env.DB);
     const conditions = ['1 = 1'];
     const binds: any[] = [];
     if (status) {
@@ -15803,13 +21054,39 @@ api.post('/admin/moderation/:id/approve', authMiddleware, async (c) => {
     const admin = await requireAdminRole(c, 'content:write');
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_approve');
     if (limited) return limited;
-    await ensureMediaModerationSchema(c.env.DB);
     const mediaId = publicId(c.req.param('id'), 160);
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['reason', 'note']);
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason || 'Approved by admin review', 500);
     const note = cleanMultilineText(body.note || '', 1000);
+    if (supabasePrimaryConfigured(c)) {
+      const before: any = await supabaseReadMediaAsset(c, mediaId);
+      if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+      const publicUrl = mediaAssetPublicUrl(c.env, before);
+      const ts = now();
+      await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+        moderation_status: 'approved',
+        ...(publicUrl ? { public_url: publicUrl } : {}),
+        rejection_code: null,
+        rejection_message: null,
+        updated_at: ts,
+      });
+      await supabaseInsertModerationEvent(c, mediaId, 'admin_approved', {
+        actorUserId: admin.userId,
+        actorRole: admin.role,
+        decision: 'approved',
+        reason,
+        note,
+        beforeState: before,
+        afterState: { moderation_status: 'approved', public_url: publicUrl },
+        requestId: c.get?.('requestId') || '',
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'media_approved', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'approved' } });
+      const updated: any = await supabaseReadMediaAsset(c, mediaId);
+      return c.json({ approved: true, media: adminMediaModerationPayload(updated, c.env) });
+    }
+    await ensureMediaModerationSchema(c.env.DB);
     const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
     if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
     const publicUrl = mediaAssetPublicUrl(c.env, before);
@@ -15840,7 +21117,6 @@ api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
     const admin = await requireAdminRole(c, 'content:write');
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_media_moderation_reject');
     if (limited) return limited;
-    await ensureMediaModerationSchema(c.env.DB);
     const mediaId = publicId(c.req.param('id'), 160);
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['reason', 'note', 'rejection_code']);
@@ -15849,9 +21125,35 @@ api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
     const note = cleanMultilineText(body.note || '', 1000);
     const rejectionCode = cleanText(body.rejection_code || 'admin_rejected', 120);
+    if (supabasePrimaryConfigured(c)) {
+      const before: any = await supabaseReadMediaAsset(c, mediaId);
+      if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
+      const userMessage = "This upload can't be posted because it may break Aura's safety rules.";
+      await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId) }, {
+        moderation_status: 'rejected',
+        public_url: null,
+        rejection_code: rejectionCode,
+        rejection_message: userMessage,
+        updated_at: now(),
+      });
+      await supabaseInsertModerationEvent(c, mediaId, 'admin_rejected', {
+        actorUserId: admin.userId,
+        actorRole: admin.role,
+        decision: 'rejected',
+        reason,
+        note,
+        beforeState: before,
+        afterState: { moderation_status: 'rejected', rejection_code: rejectionCode },
+        requestId: c.get?.('requestId') || '',
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'media_rejected', targetType: 'media_asset', targetId: mediaId, targetUserId: before.user_id, reason, note, beforeState: { moderation_status: before.moderation_status }, afterState: { moderation_status: 'rejected', rejection_code: rejectionCode } });
+      const updated: any = await supabaseReadMediaAsset(c, mediaId);
+      return c.json({ rejected: true, media: adminMediaModerationPayload(updated, c.env) });
+    }
+    await ensureMediaModerationSchema(c.env.DB);
     const before: any = await c.env.DB.prepare('SELECT * FROM media_assets WHERE id = ? LIMIT 1').bind(mediaId).first();
     if (!before) return c.json({ detail: 'Media asset not found.' }, 404);
-    const userMessage = "This upload can't be posted because it may break Captro's safety rules.";
+    const userMessage = "This upload can't be posted because it may break Aura's safety rules.";
     await c.env.DB.prepare(
       "UPDATE media_assets SET moderation_status = 'rejected', public_url = NULL, rejection_code = ?, rejection_message = ?, updated_at = ? WHERE id = ?"
     ).bind(rejectionCode, userMessage, now(), mediaId).run();
@@ -15890,6 +21192,46 @@ api.get('/admin/me', authMiddleware, async (c) => {
 api.get('/admin/dashboard', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'admin:read');
+    if (supabasePrimaryConfigured(c)) {
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayIso = todayStart.toISOString();
+      const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const openStatuses = ['open', 'pending', 'under_review', 'in_review', 'escalated'];
+      const [openReports, urgentReports, reportsToday, postsRemovedToday, usersSuspendedToday, newAccountsToday, uploadFailures, quickRows] = await Promise.all([
+        supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses) }),
+        supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses), priority: postgrestInFilter(['urgent', 'high']) }),
+        supabaseAdminCountRows(c, 'app_reports', { created_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['removed', 'deleted']), updated_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_users', { 'metadata->>status': postgrestEqFilter('suspended'), updated_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_users', { created_at: `gte.${todayIso}` }),
+        supabaseAdminCountRows(c, 'app_media_assets', { or: '(moderation_status.eq.failed,upload_status.eq.failed)', updated_at: `gte.${dayAgoIso}` }),
+        supabaseAdminQueryRows(c, 'app_reports', {
+          select: '*',
+          filters: { status: postgrestInFilter(openStatuses) },
+          order: 'created_at.desc',
+          limit: 40,
+        }),
+      ]);
+      const rank: Record<string, number> = { urgent: 0, high: 1, medium: 2, normal: 3 };
+      const quick = (await supabaseEnrichAdminReportRows(c, quickRows))
+        .sort((a, b) => (rank[cleanText(a.priority || 'normal', 20)] ?? 4) - (rank[cleanText(b.priority || 'normal', 20)] ?? 4))
+        .slice(0, 8);
+      return c.json({
+        cards: {
+          open_reports: openReports,
+          urgent_reports: urgentReports,
+          reports_today: reportsToday,
+          posts_removed_today: postsRemovedToday,
+          users_suspended_today: usersSuspendedToday,
+          new_accounts_today: newAccountsToday,
+          upload_failures_24h: uploadFailures,
+        },
+        queues: {
+          new_reports: quick.map((row) => adminReportSummary(row, c.env)),
+        },
+      });
+    }
     await ensureAdminModerationSchema(c.env.DB);
     const [openReports, urgentReports, reportsToday, postsRemovedToday, usersSuspendedToday, newAccountsToday, uploadFailures] = await Promise.all([
       c.env.DB.prepare("SELECT COUNT(*) AS count FROM reports WHERE COALESCE(status, 'open') IN ('open', 'pending', 'under_review', 'escalated')").first(),
@@ -15937,8 +21279,42 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
 api.get('/admin/reports', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'reports:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
+    if (supabasePrimaryConfigured(c)) {
+      const filters: Record<string, string> = {};
+      const statusQuery = cleanText(c.req.query('status') || 'open', 40).toLowerCase();
+      if (statusQuery && statusQuery !== 'all') {
+        filters.status = statusQuery === 'open'
+          ? postgrestInFilter(['open', 'pending', 'under_review', 'in_review', 'escalated'])
+          : postgrestEqFilter(normalizeReportStatus(statusQuery, 'open'));
+      }
+      const reason = cleanText(c.req.query('reason') || '', 80);
+      if (reason && reason !== 'all') filters.reason = postgrestEqFilter(normalizeReportReason(reason));
+      const targetType = cleanText(c.req.query('target_type') || c.req.query('type') || '', 60);
+      if (targetType && targetType !== 'all') filters.target_type = postgrestEqFilter(normalizeReportTargetType(targetType));
+      const fromDate = cleanText(c.req.query('from') || '', 40);
+      if (/^\d{4}-\d{2}-\d{2}/.test(fromDate)) filters.created_at = `gte.${fromDate}`;
+      const search = postgrestSearchTerm(c.req.query('search') || '');
+      if (search) {
+        filters.or = `(id.ilike.*${search}*,target_id.ilike.*${search}*,reporter_id.ilike.*${search}*,target_owner_user_id.ilike.*${search}*)`;
+      }
+      const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+        select: '*',
+        filters,
+        order: 'created_at.desc',
+        limit,
+        offset,
+      });
+      const enriched = await supabaseEnrichAdminReportRows(c, rows);
+      const rank: Record<string, number> = { urgent: 0, high: 1, medium: 2, normal: 3 };
+      enriched.sort((a, b) => (rank[cleanText(a.priority || 'normal', 20)] ?? 4) - (rank[cleanText(b.priority || 'normal', 20)] ?? 4));
+      return c.json({
+        results: enriched.map((row) => adminReportSummary(row, c.env)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
     const conditions: string[] = [];
     const binds: any[] = [];
     const statusQuery = cleanText(c.req.query('status') || 'open', 40).toLowerCase();
@@ -16001,7 +21377,7 @@ api.get('/admin/reports', authMiddleware, async (c) => {
 api.get('/admin/reports/:reportId', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'reports:read');
-    await ensureAdminModerationSchema(c.env.DB);
+    if (!supabasePrimaryConfigured(c)) await ensureAdminModerationSchema(c.env.DB);
     const reportId = publicId(c.req.param('reportId'), 120);
     const report = await getAdminReportRow(c, reportId);
     if (!report) return c.json({ detail: 'Report not found.' }, 404);
@@ -16036,6 +21412,40 @@ api.post('/admin/reports/:reportId/note', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const note = cleanMultilineText(body.note, 1000);
     if (!note) return c.json({ detail: 'Internal note is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const report = await getAdminReportRow(c, reportId);
+      if (!report) return c.json({ detail: 'Report not found.' }, 404);
+      const ts = now();
+      const metadata = parseJsonObject(report.metadata);
+      const existingNotes = Array.isArray(metadata.internal_notes) ? metadata.internal_notes : [];
+      const structuredNote = {
+        id: uuid(),
+        admin_user_id: admin.userId,
+        admin_role: admin.role,
+        note,
+        created_at: ts,
+      };
+      const adminNotes = [cleanMultilineText(report.admin_notes, 4000), `[${ts}] ${note}`]
+        .filter(Boolean)
+        .join('\n\n')
+        .slice(-8000);
+      await supabaseAdminPatchRows(c, 'app_reports', { id: postgrestEqFilter(reportId) }, {
+        admin_notes: adminNotes,
+        metadata: {
+          ...metadata,
+          internal_notes: [...existingNotes, structuredNote].slice(-100),
+        },
+        updated_at: ts,
+      });
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'internal_note_added',
+        targetType: 'report',
+        targetId: reportId,
+        targetUserId: report.target_owner_user_id || report.target_id || '',
+        note,
+      });
+      return c.json({ added: true });
+    }
     const report: any = await c.env.DB.prepare('SELECT id, reported_id, reported_type, report_type FROM reports WHERE id = ?').bind(reportId).first();
     if (!report) return c.json({ detail: 'Report not found.' }, 404);
     await c.env.DB.prepare(
@@ -16064,6 +21474,113 @@ api.post('/admin/reports/:reportId/action', authMiddleware, async (c) => {
     const note = cleanMultilineText(body.note || body.admin_notes || '', 1000);
     if (action === 'remove_content') {
       const type = reportTargetType(report);
+      if (supabasePrimaryConfigured(c)) {
+        const ts = now();
+        if ((type === 'post' || type === 'discover_post') && (report.post_id || report.target_id || report.reported_id)) {
+          const postId = report.post_id || report.target_id || report.reported_id;
+          const identity = await supabaseResolvePostIdentity(c, postId);
+          let existingPostRows: any[] = [];
+          if (identity.legacyPostId || identity.requestedPostId) {
+            existingPostRows = await supabaseAdminQueryRows(c, 'app_posts', {
+              select: 'metadata',
+              filters: { legacy_post_id: postgrestEqFilter(identity.legacyPostId || identity.requestedPostId) },
+              limit: 1,
+            }).catch(() => []);
+          }
+          if (!existingPostRows.length && identity.postUuid) {
+            existingPostRows = await supabaseAdminQueryRows(c, 'app_posts', {
+              select: 'metadata',
+              filters: { id: postgrestEqFilter(identity.postUuid) },
+              limit: 1,
+            }).catch((error: any) => {
+              if (!isSupabaseColumnShapeError(error)) throw error;
+              return [];
+            });
+          }
+          const metadata = parseJsonObject(existingPostRows[0]?.metadata);
+          const patch = {
+            status: 'removed',
+            metadata: {
+              ...metadata,
+              removed_at: ts,
+              removed_by: admin.userId,
+              removal_reason: reason,
+            },
+            updated_at: ts,
+          };
+          if (identity.legacyPostId || identity.requestedPostId) {
+            await supabaseAdminPatchRows(c, 'app_posts', { legacy_post_id: postgrestEqFilter(identity.legacyPostId || identity.requestedPostId) }, patch);
+          }
+          if (identity.postUuid) {
+            await supabaseAdminPatchRows(c, 'app_posts', { id: postgrestEqFilter(identity.postUuid) }, patch).catch((error: any) => {
+              if (!isSupabaseColumnShapeError(error)) throw error;
+            });
+          }
+          await writeAdminAuditLog(c, admin, {
+            actionType: 'content_removed_from_report',
+            targetType: 'post',
+            targetId: identity.legacyPostId || identity.requestedPostId || postId,
+            targetUserId: report.post_user_id || report.target_owner_user_id || '',
+            reason,
+            note,
+            afterState: { status: 'removed' },
+          });
+        } else if (type === 'comment' && (report.comment_id || report.target_id || report.reported_id)) {
+          const commentId = report.comment_id || report.target_id || report.reported_id;
+          const commentRows = await supabaseAdminQueryRows(c, 'post_comments', {
+            select: 'metadata',
+            filters: { legacy_comment_id: postgrestEqFilter(commentId) },
+            limit: 1,
+          }).catch(() => []);
+          const metadata = parseJsonObject(commentRows[0]?.metadata);
+          await supabaseAdminPatchRows(c, 'post_comments', { legacy_comment_id: postgrestEqFilter(commentId) }, {
+            status: 'removed',
+            metadata: {
+              ...metadata,
+              removed_at: ts,
+              removed_by: admin.userId,
+              removal_reason: reason,
+            },
+            updated_at: ts,
+          });
+          await writeAdminAuditLog(c, admin, {
+            actionType: 'content_removed_from_report',
+            targetType: 'comment',
+            targetId: commentId,
+            targetUserId: report.comment_user_id || report.target_owner_user_id || '',
+            reason,
+            note,
+            afterState: { status: 'removed' },
+          });
+        } else if (type === 'message' && (report.message_id || report.target_id || report.reported_id)) {
+          const messageId = report.message_id || report.target_id || report.reported_id;
+          const messageRows = await supabaseAdminQueryRows(c, 'app_messages', {
+            select: 'media',
+            filters: { id: postgrestEqFilter(messageId) },
+            limit: 1,
+          }).catch(() => []);
+          await supabaseAdminPatchRows(c, 'app_messages', { id: postgrestEqFilter(messageId) }, {
+            status: 'removed',
+            media: {
+              ...parseJsonObject(messageRows[0]?.media),
+              removed_at: ts,
+              removed_by: admin.userId,
+              removal_reason: reason,
+            },
+            updated_at: ts,
+          });
+          await writeAdminAuditLog(c, admin, {
+            actionType: 'message_removed_from_report',
+            targetType: 'message',
+            targetId: messageId,
+            targetUserId: report.message_sender_id || report.target_owner_user_id || '',
+            reason,
+            note,
+            afterState: { status: 'removed' },
+          });
+        }
+        return setReportStatus(c, admin, reportId, 'action_taken', reason, note);
+      }
       if (type === 'post' && (report.post_id || report.reported_id)) {
         await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?")
           .bind(now(), reason, report.post_id || report.reported_id).run();
@@ -16091,10 +21608,19 @@ api.post('/admin/reports/:reportId/action', authMiddleware, async (c) => {
 api.get('/admin/users', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'users:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
-    const search = searchPattern(c.req.query('search'));
+    const rawSearch = cleanText(c.req.query('search') || '', 120);
     const status = cleanText(c.req.query('status') || '', 40);
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminUserRows(c, { search: rawSearch, status, limit, offset });
+      const reportCounts = await supabaseAdminReportCountsForUsers(c, rows.map((row) => publicId(row?.id, 120)));
+      return c.json({
+        results: rows.map((row) => adminSupabaseUserPayload(row, admin.role, reportCounts.get(publicId(row?.id, 120)) || 0)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
+    const search = searchPattern(c.req.query('search'));
     const conditions: string[] = [];
     const binds: any[] = [];
     if (search) {
@@ -16123,8 +21649,35 @@ api.get('/admin/users', authMiddleware, async (c) => {
 api.get('/admin/users/:userId', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'users:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const targetUserId = publicId(c.req.param('userId'), 120);
+    if (supabasePrimaryConfigured(c)) {
+      const row = await getSupabaseAppUserRowByAnyId(c, targetUserId);
+      if (!row) return c.json({ detail: 'User not found.' }, 404);
+      const rowId = publicId(row.id, 120);
+      const [reportCounts, actions, posts] = await Promise.all([
+        supabaseAdminReportCountsForUsers(c, [rowId]),
+        supabaseAdminQueryRows(c, 'app_moderation_actions', {
+          select: '*',
+          filters: { or: `(target_user_id.eq.${rowId},target_id.eq.${rowId})` },
+          order: 'created_at.desc',
+          limit: 50,
+        }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_admin_user_actions_failed', code: getErrorCode(error).slice(0, 180) }));
+          return [];
+        }),
+        supabaseReadVisiblePosts(c, rowId, { ownerId: rowId, limit: 12 }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_admin_user_posts_failed', code: getErrorCode(error).slice(0, 180) }));
+          return [];
+        }),
+      ]);
+      return c.json({
+        user: adminSupabaseUserPayload(row, admin.role, reportCounts.get(rowId) || 0),
+        restrictions: supabaseUserRestrictionsFromMetadata(row.metadata),
+        actions,
+        recent_posts: posts.map((post) => adminPostPayload(post, c.env)),
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
     const row: any = await c.env.DB.prepare(`
       SELECT u.*,
              (SELECT COUNT(*) FROM reports r WHERE r.reported_id = u.id OR r.target_owner_user_id = u.id) AS report_count
@@ -16165,13 +21718,45 @@ api.post('/admin/users/:userId/warn', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => ({
+        ...metadata,
+        warning_count: Math.max(0, Number((metadata as any).warning_count || 0)) + 1,
+        last_warning_reason: reason,
+        last_warned_at: now(),
+      }));
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await insertNotificationOnce(c, {
+        userId: canonicalUserId,
+        type: 'moderation_warning',
+        title: 'Aura safety warning',
+        body: reason,
+        data: { moderation_action: 'warning' },
+        dedupeKey: `warn:${canonicalUserId}:${Date.now()}`,
+        dedupeSeconds: 60,
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_warning_notification_failed', code: getErrorCode(error).slice(0, 180) }));
+      });
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'user_warned',
+        targetType: 'user',
+        targetId: canonicalUserId,
+        targetUserId: canonicalUserId,
+        reason,
+        note: body.note,
+        beforeState: { warning_count: Number((parseJsonObject(patched.row.metadata) as any).warning_count || 0) },
+        afterState: { warning_count: Number((patched.metadata as any).warning_count || 0) },
+      });
+      return c.json({ warned: true });
+    }
     const target: any = await c.env.DB.prepare('SELECT id, warning_count FROM users WHERE id = ?').bind(targetUserId).first();
     if (!target) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare('UPDATE users SET warning_count = COALESCE(warning_count, 0) + 1, updated_at = datetime(\'now\') WHERE id = ?').bind(targetUserId).run();
     await insertNotificationOnce(c, {
       userId: targetUserId,
       type: 'moderation_warning',
-      title: 'Captro safety warning',
+      title: 'Aura safety warning',
       body: reason,
       data: { moderation_action: 'warning' },
       dedupeKey: `warn:${targetUserId}:${Date.now()}`,
@@ -16194,13 +21779,38 @@ api.post('/admin/users/:userId/restrict', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const unknown = rejectUnknownFields(c, body, ['restriction_type', 'type', 'reason', 'note', 'duration_hours', 'ends_at']);
     if (unknown) return unknown;
-    const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetUserId).first();
-    if (!target) return c.json({ detail: 'User not found.' }, 404);
     const restrictionType = normalizeRestrictionType(body.restriction_type || body.type);
     const hours = clampNumber(body.duration_hours || 24, 1, 24 * 90, 24);
     const endsAt = cleanText(body.ends_at || '', 60) || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const createdAt = now();
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata, row) => {
+        const existing = supabaseUserRestrictionsFromMetadata(metadata);
+        const canonicalUserId = publicId(row?.id, 120);
+        return {
+          ...metadata,
+          restrictions: [{
+            id: uuid(),
+            user_id: canonicalUserId,
+            restriction_type: restrictionType,
+            reason,
+            note: cleanMultilineText(body.note, 500),
+            starts_at: createdAt,
+            ends_at: endsAt,
+            created_by: admin.userId,
+            created_at: createdAt,
+          }, ...existing].slice(0, 100),
+        };
+      });
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_restricted', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, afterState: { restriction_type: restrictionType, ends_at: endsAt } });
+      return c.json({ restricted: true, restriction_type: restrictionType, ends_at: endsAt });
+    }
+    const target = await c.env.DB.prepare('SELECT id FROM users WHERE id = ?').bind(targetUserId).first();
+    if (!target) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare(
       'INSERT INTO user_restrictions (id, user_id, restriction_type, reason, starts_at, ends_at, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     ).bind(uuid(), targetUserId, restrictionType, reason, now(), endsAt, admin.userId, now()).run();
@@ -16225,6 +21835,18 @@ api.post('/admin/users/:userId/suspend', authMiddleware, async (c) => {
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
     const hours = clampNumber(body.duration_hours || 24, 1, 24 * 90, 24);
     const suspendedUntil = cleanText(body.ends_at || '', 60) || new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+    if (supabasePrimaryConfigured(c)) {
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => ({
+        ...metadata,
+        status: 'suspended',
+        suspended_until: suspendedUntil,
+        ban_reason: reason,
+      }));
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_suspended', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: patched.before || {}, afterState: { status: 'suspended', suspended_until: suspendedUntil } });
+      return c.json({ suspended: true, suspended_until: suspendedUntil });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare("UPDATE users SET status = 'suspended', suspended_until = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
@@ -16248,6 +21870,19 @@ api.post('/admin/users/:userId/ban', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const bannedAt = now();
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => ({
+        ...metadata,
+        status: 'banned',
+        banned_at: bannedAt,
+        ban_reason: reason,
+      }));
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_banned', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: patched.before || {}, afterState: { status: 'banned', banned_at: bannedAt } });
+      return c.json({ banned: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, status, username, full_name FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare("UPDATE users SET status = 'banned', banned_at = ?, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
@@ -16270,6 +21905,20 @@ api.post('/admin/users/:userId/unban', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const patched = await supabasePatchUserModerationMetadata(c, targetUserId, (metadata) => {
+        const next = { ...metadata };
+        next.status = 'active';
+        delete next.banned_at;
+        delete next.suspended_until;
+        delete next.ban_reason;
+        return next;
+      });
+      if (!patched.row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(patched.row.id, 120);
+      await writeAdminAuditLog(c, admin, { actionType: 'user_unbanned', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: patched.before || {}, afterState: { status: 'active' } });
+      return c.json({ unbanned: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, status FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     await c.env.DB.prepare("UPDATE users SET status = 'active', banned_at = NULL, suspended_until = NULL, ban_reason = '', updated_at = datetime('now') WHERE id = ?")
@@ -16290,6 +21939,26 @@ api.post('/admin/users/:userId/force-username-change', authMiddleware, async (c)
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const row = await getSupabaseAppUserRowByAnyId(c, targetUserId);
+      if (!row) return c.json({ detail: 'User not found.' }, 404);
+      const canonicalUserId = publicId(row.id, 120);
+      const before = supabaseAppUserToLegacyUser(row);
+      const pending = pendingUsernameForUser(canonicalUserId);
+      const metadata = parseJsonObject(row.metadata);
+      await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(canonicalUserId) }, {
+        username: pending,
+        metadata: scrubLogMetadata({
+          ...metadata,
+          username_required: true,
+          username_force_change_reason: reason,
+          username_force_changed_at: now(),
+        }),
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'username_force_changed', targetType: 'user', targetId: canonicalUserId, targetUserId: canonicalUserId, reason, note: body.note, beforeState: { username: before.username }, afterState: { username_required: true, username: pending } });
+      return c.json({ username_required: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, username FROM users WHERE id = ?').bind(targetUserId).first();
     if (!before) return c.json({ detail: 'User not found.' }, 404);
     const pending = pendingUsernameForUser(targetUserId);
@@ -16304,14 +21973,45 @@ api.post('/admin/users/:userId/force-username-change', authMiddleware, async (c)
 api.get('/admin/posts', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensurePostEditorSchema(c.env.DB);
-    await ensureAutoCategorySchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
     const category = cleanText(c.req.query('category') || '', 60).toLowerCase();
     const surface = cleanText(c.req.query('surface') || '', 40).toLowerCase();
+    const rawSearch = cleanText(c.req.query('search') || '', 120);
+
+    if (supabasePrimaryConfigured(c)) {
+      const normalizedCategory = category && category !== 'all'
+        ? normalizeDiscoverCategory(category, false)
+        : '';
+      if (category && category !== 'all' && !normalizedCategory) return c.json({ detail: 'Unknown category.' }, 400);
+      const filters: Record<string, string> = {};
+      if (status !== 'all') filters.status = postgrestEqFilter(status);
+      const needsMemoryFilter = !!normalizedCategory || surface === 'discover' || !!rawSearch;
+      const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+        select: SUPABASE_APP_POST_SELECT,
+        filters,
+        order: 'legacy_created_at.desc.nullslast,created_at.desc',
+        limit: needsMemoryFilter ? Math.min(1000, Math.max(offset + limit + 100, (offset + limit) * 5)) : limit,
+        offset: needsMemoryFilter ? 0 : offset,
+      });
+      const postRows = rows.filter((row) => {
+        if (normalizedCategory && !supabaseAppPostMatchesCategory(row, normalizedCategory)) return false;
+        if (surface === 'discover') {
+          const metadata = parseJsonObject(row?.metadata);
+          if (cleanText((metadata as any).discover_blocked_at, 80)) return false;
+        }
+        return true;
+      });
+      const payloads = await supabaseAdminPostPayloads(c, postRows);
+      const filtered = rawSearch ? payloads.filter((payload) => supabaseAdminPostPayloadMatchesSearch(payload, rawSearch)) : payloads;
+      const results = needsMemoryFilter ? filtered.slice(offset, offset + limit) : filtered;
+      return c.json({ results, pagination: { limit, offset, next_offset: offset + limit } });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensurePostEditorSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const search = searchPattern(c.req.query('search'));
     const conditions: string[] = [];
     const binds: any[] = [];
@@ -16351,10 +22051,29 @@ api.get('/admin/posts', authMiddleware, async (c) => {
 api.get('/admin/posts/:postId', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
+    const postId = publicId(c.req.param('postId'), 120);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const post = await supabaseAdminPostPayload(c, target.row);
+      const actionTargetIds = supabasePostIdentityKeys(target.identity);
+      const actions = await supabaseAdminQueryRows(c, 'app_moderation_actions', {
+        select: '*',
+        filters: {
+          target_type: postgrestEqFilter('post'),
+          target_id: postgrestInFilter(actionTargetIds.length ? actionTargetIds : [postId]),
+        },
+        order: 'created_at.desc',
+        limit: 30,
+      }).catch((error: any) => {
+        console.warn(JSON.stringify({ event: 'supabase_admin_post_actions_failed', code: getErrorCode(error).slice(0, 180) }));
+        return [];
+      });
+      return c.json({ post, actions });
+    }
     await ensureAdminModerationSchema(c.env.DB);
     await ensureAutoCategorySchema(c.env.DB);
     await ensureLocationSchema(c.env.DB);
-    const postId = publicId(c.req.param('postId'), 120);
     const row: any = await c.env.DB.prepare(`
       SELECT p.*, u.username AS user_username, u.full_name AS user_full_name, u.profile_image AS user_profile_image
       FROM posts p LEFT JOIN users u ON u.id = p.user_id
@@ -16386,6 +22105,25 @@ api.post('/admin/posts/:postId/remove', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      const removedAt = now();
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        status: 'removed',
+        metadata: {
+          ...metadata,
+          removed_at: removedAt,
+          removed_reason: reason,
+          removed_by: admin.userId,
+        },
+        updated_at: removedAt,
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_removed', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { status: 'removed' } });
+      return c.json({ removed: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, status FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = ? WHERE id = ?").bind(now(), reason, postId).run();
@@ -16406,6 +22144,22 @@ api.post('/admin/posts/:postId/restore', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      delete (metadata as any).removed_at;
+      delete (metadata as any).removed_reason;
+      delete (metadata as any).removed_by;
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        status: 'active',
+        metadata,
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_restored', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { status: 'active' } });
+      return c.json({ restored: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, status FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare("UPDATE posts SET status = 'active', removed_at = NULL, removed_reason = '' WHERE id = ?").bind(postId).run();
@@ -16428,6 +22182,22 @@ api.post('/admin/posts/:postId/mark-safe', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      for (const key of ['removed_at', 'removed_reason', 'removed_by', 'discover_blocked_at', 'discover_blocked_by', 'discover_blocked_reason']) {
+        delete (metadata as any)[key];
+      }
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        status: 'active',
+        metadata,
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_marked_safe', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { status: 'active', discover_blocked: false } });
+      return c.json({ marked_safe: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, status, discover_blocked_at FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare("UPDATE posts SET status = 'active', removed_at = NULL, removed_reason = '', discover_blocked_at = NULL, discover_blocked_by = '', discover_blocked_reason = '', updated_at = datetime('now') WHERE id = ?")
@@ -16449,6 +22219,23 @@ api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) 
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        metadata: {
+          ...metadata,
+          discover_blocked_at: now(),
+          discover_blocked_by: admin.userId,
+          discover_blocked_reason: reason,
+        },
+        updated_at: now(),
+      });
+      await writeAdminAuditLog(c, admin, { actionType: 'post_removed_from_discover', targetType: 'post', targetId: postId, targetUserId: supabasePostModerationTargetUserId(before), reason, note: body.note, beforeState: before, afterState: { discover_blocked: true } });
+      return c.json({ removed_from_discover: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, discover_blocked_at FROM posts WHERE id = ?').bind(postId).first();
     if (!before) return c.json({ detail: 'Post not found.' }, 404);
     await c.env.DB.prepare('UPDATE posts SET discover_blocked_at = ?, discover_blocked_by = ?, discover_blocked_reason = ? WHERE id = ?')
@@ -16463,8 +22250,6 @@ api.post('/admin/posts/:postId/remove-from-discover', authMiddleware, async (c) 
 api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'content:write');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensureLocationSchema(c.env.DB);
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_location_clear');
     if (limited) return limited;
     const postId = publicId(c.req.param('postId'), 120);
@@ -16473,6 +22258,62 @@ api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
     if (unknown) return unknown;
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      const raw = parseJsonObject((metadata as any).raw);
+      delete (metadata as any).place;
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        location: '',
+        metadata: {
+          ...metadata,
+          raw: {
+            ...raw,
+            display_city: '',
+            display_region: '',
+            display_country: '',
+            display_location_label: '',
+            display_location_source: 'none',
+            display_location_visibility: 'hidden',
+          },
+          display_city: '',
+          display_region: '',
+          display_country: '',
+          display_location_label: '',
+          display_location_source: 'none',
+          display_location_visibility: 'hidden',
+          place_type: '',
+          location_cleared_at: now(),
+          location_cleared_by: admin.userId,
+          location_cleared_reason: reason,
+        },
+        updated_at: now(),
+      });
+      const legacyPostId = publicId(before?.legacy_post_id || postId, 120);
+      if (legacyPostId) {
+        await supabaseAdminDeleteRows(c, 'app_post_places', { legacy_post_id: postgrestEqFilter(legacyPostId) }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_admin_post_places_delete_failed', code: getErrorCode(error).slice(0, 180) }));
+        });
+      }
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'post_location_cleared',
+        targetType: 'post',
+        targetId: postId,
+        targetUserId: supabasePostModerationTargetUserId(before),
+        reason,
+        note: body.note,
+        beforeState: before,
+        afterState: { display_location_visibility: 'hidden', place_removed: true },
+      });
+      const refreshed = await supabaseAdminPostForModeration(c, postId);
+      const post = refreshed ? await supabaseAdminPostPayload(c, refreshed.row) : null;
+      return c.json({ post });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureLocationSchema(c.env.DB);
     const before: any = await c.env.DB.prepare(
       `SELECT id, user_id, display_location_label, display_location_visibility, place_name, place_formatted_address, place_lat, place_lng
        FROM posts WHERE id = ? LIMIT 1`
@@ -16515,8 +22356,6 @@ api.post('/admin/posts/:postId/location/clear', authMiddleware, async (c) => {
 api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'content:write');
-    await ensureAdminModerationSchema(c.env.DB);
-    await ensureAutoCategorySchema(c.env.DB);
     const limited = await requireAdminWriteRateLimit(c, admin, 'admin_post_category_change');
     if (limited) return limited;
     const postId = publicId(c.req.param('postId'), 120);
@@ -16527,6 +22366,56 @@ api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
     if (!category) return c.json({ detail: 'Choose a valid Discover category.' }, 400);
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const target = await supabaseAdminPostForModeration(c, postId);
+      if (!target) return c.json({ detail: 'Post not found.' }, 404);
+      const before = target.row;
+      const metadata = parseJsonObject(before?.metadata);
+      const discover = parseJsonObject((metadata as any).discover_category);
+      const oldCategory = normalizeDiscoverCategory(before?.category || (discover as any).primary_category || before?.post_type, false) || DEFAULT_DISCOVER_CATEGORY;
+      const changedAt = now();
+      const nextScores = { [category]: 100 };
+      const nextDiscover = {
+        ...discover,
+        primary_category: category,
+        confidence: 1,
+        source: 'admin_changed',
+        status: 'admin_corrected',
+        secondary_categories: [category],
+        category_scores: nextScores,
+        admin_changed_at: changedAt,
+        admin_previous_category: oldCategory,
+        admin_new_category: category,
+        admin_reason: reason,
+      };
+      await supabaseAdminPatchRows(c, 'app_posts', { or: supabaseAppPostIdentityOrFilter(target.identity) }, {
+        category,
+        metadata: {
+          ...metadata,
+          discover_category: nextDiscover,
+          category_scores: nextScores,
+          secondary_categories: [category],
+          user_selected_category: category,
+        },
+        updated_at: changedAt,
+      });
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'category_changed',
+        targetType: 'post',
+        targetId: postId,
+        targetUserId: supabasePostModerationTargetUserId(before),
+        reason,
+        note: body.note,
+        beforeState: { old_category: oldCategory, category_source: (discover as any).source, category_status: (discover as any).status },
+        afterState: { new_category: category, category_source: 'admin_changed', category_status: 'admin_corrected' },
+      });
+      const refreshed = await supabaseAdminPostForModeration(c, postId);
+      const post = refreshed ? await supabaseAdminPostPayload(c, refreshed.row) : null;
+      return c.json({ post });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
+    await ensureAutoCategorySchema(c.env.DB);
     const before: any = await c.env.DB.prepare(
       `SELECT id, user_id, primary_category, category_confidence, category_source, category_status, category_signals_json, tags_json
        FROM posts
@@ -16575,9 +22464,28 @@ api.post('/admin/posts/:postId/category', authMiddleware, async (c) => {
 api.get('/admin/comments', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'content:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
     const status = cleanText(c.req.query('status') || 'all', 40);
+    const rawSearch = cleanText(c.req.query('search') || '', 120);
+
+    if (supabasePrimaryConfigured(c)) {
+      const filters: Record<string, string> = {};
+      if (status !== 'all') filters.status = postgrestEqFilter(status);
+      const needsMemoryFilter = !!rawSearch;
+      const rows = await supabaseAdminQueryRows(c, 'post_comments', {
+        select: 'legacy_comment_id,legacy_post_id,app_user_id,user_id,body,status,metadata,legacy_created_at,created_at,updated_at',
+        filters,
+        order: 'legacy_created_at.desc.nullslast,created_at.desc',
+        limit: needsMemoryFilter ? Math.min(1000, Math.max(offset + limit + 100, (offset + limit) * 5)) : limit,
+        offset: needsMemoryFilter ? 0 : offset,
+      });
+      const payloads = await supabaseAdminCommentPayloads(c, rows);
+      const filtered = rawSearch ? payloads.filter((payload) => supabaseAdminCommentPayloadMatchesSearch(payload, rawSearch)) : payloads;
+      const results = needsMemoryFilter ? filtered.slice(offset, offset + limit) : filtered;
+      return c.json({ results, pagination: { limit, offset, next_offset: offset + limit } });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
     const search = searchPattern(c.req.query('search'));
     const conditions: string[] = [];
     const binds: any[] = [];
@@ -16614,6 +22522,33 @@ api.post('/admin/comments/:commentId/remove', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const identity = await supabaseResolveCommentIdentity(c, commentId);
+      if (!identity) return c.json({ detail: 'Comment not found.' }, 404);
+      const removedAt = now();
+      await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, {
+        status: 'removed',
+        metadata: {
+          ...identity.metadata,
+          removed_at: removedAt,
+          removed_reason: reason,
+          pinned_at: null,
+        },
+        updated_at: removedAt,
+      });
+      if (identity.legacyPostId) await getSupabasePostEngagementState(c, identity.legacyPostId, admin.userId).catch(() => undefined);
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'comment_removed',
+        targetType: 'comment',
+        targetId: commentId,
+        targetUserId: publicId(identity.row?.app_user_id || identity.row?.user_id, 120),
+        reason,
+        note: body.note,
+        beforeState: identity.row,
+        afterState: { status: 'removed' },
+      });
+      return c.json({ removed: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, post_id, status FROM comments WHERE id = ?').bind(commentId).first();
     if (!before) return c.json({ detail: 'Comment not found.' }, 404);
     await c.env.DB.prepare("UPDATE comments SET status = 'removed', removed_at = ?, removed_reason = ?, pinned_at = NULL WHERE id = ?")
@@ -16634,6 +22569,31 @@ api.post('/admin/comments/:commentId/restore', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const reason = cleanMultilineText(body.reason, 500);
     if (!reason) return c.json({ detail: 'Reason is required.' }, 400);
+    if (supabasePrimaryConfigured(c)) {
+      const identity = await supabaseResolveCommentIdentity(c, commentId);
+      if (!identity) return c.json({ detail: 'Comment not found.' }, 404);
+      const metadata = { ...identity.metadata };
+      for (const key of ['removed_at', 'removed_reason', 'hidden_at', 'hidden_by_user_id', 'pinned_at']) {
+        delete (metadata as any)[key];
+      }
+      await supabaseAdminPatchRows(c, 'post_comments', { or: supabaseCommentRowOrFilter(identity) }, {
+        status: 'active',
+        metadata,
+        updated_at: now(),
+      });
+      if (identity.legacyPostId) await getSupabasePostEngagementState(c, identity.legacyPostId, admin.userId).catch(() => undefined);
+      await writeAdminAuditLog(c, admin, {
+        actionType: 'comment_restored',
+        targetType: 'comment',
+        targetId: commentId,
+        targetUserId: publicId(identity.row?.app_user_id || identity.row?.user_id, 120),
+        reason,
+        note: body.note,
+        beforeState: identity.row,
+        afterState: { status: 'active' },
+      });
+      return c.json({ restored: true });
+    }
     const before: any = await c.env.DB.prepare('SELECT id, user_id, post_id, status FROM comments WHERE id = ?').bind(commentId).first();
     if (!before) return c.json({ detail: 'Comment not found.' }, 404);
     await c.env.DB.prepare("UPDATE comments SET status = 'active', removed_at = NULL, removed_reason = '', hidden_at = NULL, hidden_by_user_id = '', pinned_at = NULL WHERE id = ?")
@@ -16648,8 +22608,22 @@ api.post('/admin/comments/:commentId/restore', authMiddleware, async (c) => {
 api.get('/admin/messages/reported', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'messages:reported:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c);
+    if (supabasePrimaryConfigured(c)) {
+      const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+        select: '*',
+        filters: { target_type: postgrestEqFilter('message') },
+        order: 'created_at.desc',
+        limit,
+        offset,
+      });
+      const enriched = await supabaseEnrichAdminReportRows(c, rows);
+      return c.json({
+        results: enriched.map((row) => adminReportSummary(row, c.env)),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
     const rows = await c.env.DB.prepare(`
       SELECT r.*, m.sender_id AS message_sender_id, m.receiver_id AS message_receiver_id, m.content AS message_content,
              m.media_type AS message_media_type, m.status AS message_status,
@@ -16673,11 +22647,59 @@ api.get('/admin/messages/reported', authMiddleware, async (c) => {
 api.get('/admin/messages/reported/:reportId', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'messages:reported:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const reportId = publicId(c.req.param('reportId'), 120);
     const report = await getAdminReportRow(c, reportId);
     if (!report || reportTargetType(report) !== 'message') return c.json({ detail: 'Reported message not found.' }, 404);
     const messageId = report.message_id || report.reported_id;
+    if (supabasePrimaryConfigured(c)) {
+      const messageRows = await supabaseAdminQueryRows(c, 'app_messages', {
+        select: 'id,sender_id,receiver_id,conversation_id,body,media_url,media_type,media,status,created_at,legacy_created_at',
+        filters: { id: postgrestEqFilter(messageId) },
+        limit: 1,
+      });
+      const message = messageRows[0];
+      if (!message) return c.json({ detail: 'Message not found.' }, 404);
+      const senderId = publicId(message.sender_id, 120);
+      const receiverId = publicId(message.receiver_id, 120);
+      const conversationId = publicId(message.conversation_id, 160);
+      const contextFilters: Record<string, string> = {};
+      if (conversationId) {
+        contextFilters.conversation_id = postgrestEqFilter(conversationId);
+      } else if (senderId && receiverId) {
+        contextFilters.or = `(and(sender_id.eq.${senderId},receiver_id.eq.${receiverId}),and(sender_id.eq.${receiverId},receiver_id.eq.${senderId}))`;
+      }
+      let rawContext: any[] = [message];
+      if (conversationId || (senderId && receiverId)) {
+        rawContext = await supabaseAdminQueryRows(c, 'app_messages', {
+          select: 'id,sender_id,receiver_id,conversation_id,body,media_url,media_type,media,status,created_at,legacy_created_at',
+          filters: contextFilters,
+          order: 'created_at.desc',
+          limit: 50,
+        }).catch((error: any) => {
+          console.warn(JSON.stringify({ event: 'supabase_reported_message_context_failed', code: getErrorCode(error).slice(0, 180) }));
+          return [message];
+        });
+      }
+      const centerMs = Date.parse(cleanText(message.legacy_created_at || message.created_at, 80));
+      const boundedContext = rawContext
+        .filter((row) => {
+          if (!Number.isFinite(centerMs)) return true;
+          const rowMs = Date.parse(cleanText(row?.legacy_created_at || row?.created_at, 80));
+          return Number.isFinite(rowMs) && Math.abs(rowMs - centerMs) <= 10 * 60 * 1000;
+        })
+        .sort((a, b) => Date.parse(cleanText(a?.legacy_created_at || a?.created_at, 80)) - Date.parse(cleanText(b?.legacy_created_at || b?.created_at, 80)))
+        .slice(0, 12);
+      const contextRows = boundedContext.some((row) => publicId(row?.id, 160) === messageId)
+        ? boundedContext
+        : [message, ...boundedContext.filter((row) => publicId(row?.id, 160) !== messageId)].slice(0, 12);
+      await writeAdminAuditLog(c, admin, { actionType: 'reported_message_viewed', targetType: 'message', targetId: messageId, targetUserId: senderId, reason: 'Safety review', note: `Report ${reportId}` });
+      return c.json({
+        report: await adminReportDetail(c, report),
+        privacy_warning: 'Reported message access is audit logged and limited to nearby context needed for safety review.',
+        context: contextRows.map((row) => adminReportedMessageContextPayload(row, messageId)),
+      });
+    }
+    await ensureAdminModerationSchema(c.env.DB);
     const message: any = await c.env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(messageId).first();
     if (!message) return c.json({ detail: 'Message not found.' }, 404);
     const context = await c.env.DB.prepare(`
@@ -16721,6 +22743,30 @@ api.post('/admin/messages/reported/:reportId/action', authMiddleware, async (c) 
     const report = await getAdminReportRow(c, reportId);
     if (!report || reportTargetType(report) !== 'message') return c.json({ detail: 'Reported message not found.' }, 404);
     const messageId = report.message_id || report.reported_id;
+    if (supabasePrimaryConfigured(c)) {
+      if (action === 'remove_message' || action === 'remove') {
+        const messageRows = await supabaseAdminQueryRows(c, 'app_messages', {
+          select: 'id,sender_id,media,status',
+          filters: { id: postgrestEqFilter(messageId) },
+          limit: 1,
+        });
+        const message = messageRows[0];
+        if (!message) return c.json({ detail: 'Message not found.' }, 404);
+        await supabaseAdminPatchRows(c, 'app_messages', { id: postgrestEqFilter(messageId) }, {
+          status: 'removed',
+          media: {
+            ...parseJsonObject(message.media),
+            removed_at: now(),
+            removed_by: admin.userId,
+            removal_reason: reason,
+          },
+          updated_at: now(),
+        });
+        await writeAdminAuditLog(c, admin, { actionType: 'reported_message_removed', targetType: 'message', targetId: messageId, targetUserId: publicId(message.sender_id || report.message_sender_id, 120), reason, note: body.note });
+        return setReportStatus(c, admin, reportId, 'action_taken', reason, body.note || '');
+      }
+      return setReportStatus(c, admin, reportId, action === 'dismiss' ? 'dismissed' : 'under_review', reason, body.note || '');
+    }
     if (action === 'remove_message' || action === 'remove') {
       await c.env.DB.prepare("UPDATE messages SET status = 'removed', removed_at = ?, removed_by = ?, removed_reason = ? WHERE id = ?")
         .bind(now(), admin.userId, reason, messageId).run();
@@ -16736,11 +22782,51 @@ api.post('/admin/messages/reported/:reportId/action', authMiddleware, async (c) 
 api.get('/admin/audit-logs', authMiddleware, async (c) => {
   try {
     await requireAdminRole(c, 'audit:read');
-    await ensureAdminModerationSchema(c.env.DB);
     const { limit, offset } = adminPageParams(c, 80, 150);
     const action = cleanText(c.req.query('action') || '', 80);
     const targetType = cleanText(c.req.query('target_type') || '', 60);
     const adminId = publicId(c.req.query('admin_id') || '', 120);
+
+    if (supabasePrimaryConfigured(c)) {
+      const filters: Record<string, string> = {};
+      if (action) filters.action_type = postgrestEqFilter(action);
+      if (targetType) filters.target_type = postgrestEqFilter(targetType);
+      if (adminId) filters.actor_admin_user_id = postgrestEqFilter(adminId);
+      const rows = await supabaseAdminQueryRows(c, 'app_audit_logs', {
+        select: '*',
+        filters,
+        order: 'created_at.desc',
+        limit,
+        offset,
+      });
+      const actorIds = rows.map((row: any) => publicId(row?.actor_admin_user_id, 120)).filter(Boolean);
+      const actors = await supabaseUsersByAnyIds(c, actorIds);
+      return c.json({
+        results: rows.map((row: any) => {
+          const actor = actors.get(publicId(row?.actor_admin_user_id, 120)) || {};
+          return {
+            id: row.id,
+            actor_admin_user_id: row.actor_admin_user_id,
+            actor_role: row.actor_role,
+            actor_username: publicUsernameFor(actor),
+            actor_full_name: cleanText(actor?.full_name, 120),
+            action_type: row.action_type,
+            target_type: row.target_type,
+            target_id: row.target_id,
+            target_user_id: row.target_user_id || '',
+            reason: cleanMultilineText(row.reason, 500),
+            internal_note: cleanMultilineText(row.internal_note, 800),
+            before_state: parseJsonObject(row.before_state),
+            after_state: parseJsonObject(row.after_state),
+            request_id: row.request_id || '',
+            created_at: row.created_at,
+          };
+        }),
+        pagination: { limit, offset, next_offset: offset + limit },
+      });
+    }
+
+    await ensureAdminModerationSchema(c.env.DB);
     const conditions: string[] = [];
     const binds: any[] = [];
     if (action) { conditions.push('a.action_type = ?'); binds.push(action); }
@@ -16781,158 +22867,75 @@ api.get('/admin/audit-logs', authMiddleware, async (c) => {
 });
 
 api.get('/admin/stats', authMiddleware, adminGuard, async (c) => {
-  const users = await c.env.DB.prepare('SELECT COUNT(*) as c FROM users').first() as any;
-  const posts = await c.env.DB.prepare('SELECT COUNT(*) as c FROM posts').first() as any;
-  const reports = await c.env.DB.prepare('SELECT COUNT(*) as c FROM reports').first() as any;
-  const apps = await c.env.DB.prepare("SELECT COUNT(*) as c FROM publisher_applications WHERE status = 'pending'").first() as any;
-  return c.json({ total_users: users?.c || 0, total_posts: posts?.c || 0, total_reports: reports?.c || 0, pending_applications: apps?.c || 0 });
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin_stats');
+  if (supabaseRequired) return supabaseRequired;
+  const [users, posts, reports, pendingApplications] = await Promise.all([
+    supabaseAdminCountRows(c, 'app_users', {}),
+    supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['active', 'under_review', 'removed']) }),
+    supabaseAdminCountRows(c, 'app_reports', {}),
+    supabaseAdminCountRows(c, 'app_documents', { collection: postgrestEqFilter('publisher_applications'), visibility: postgrestEqFilter('private') }).catch(() => 0),
+  ]);
+  return c.json({ total_users: users, total_posts: posts, total_reports: reports, pending_applications: pendingApplications });
 });
 
 api.get('/admin/reported-posts', authMiddleware, adminGuard, async (c) => {
-  const r = await c.env.DB.prepare(`SELECT r.*, p.content AS post_content, p.image AS post_image, u.username AS reporter_name FROM reports r LEFT JOIN posts p ON r.content_id = p.id LEFT JOIN users u ON r.reporter_id = u.id WHERE r.report_type = 'post' ORDER BY r.created_at DESC`).all();
-  return c.json(r.results);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin_reported_posts');
+  if (supabaseRequired) return supabaseRequired;
+  const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+    filters: { target_type: postgrestEqFilter('post') },
+    order: 'created_at.desc',
+    limit: 100,
+  });
+  return c.json(await supabaseEnrichAdminReportRows(c, rows));
 });
 
 api.get('/admin/reported-accounts', authMiddleware, adminGuard, async (c) => {
-  const r = await c.env.DB.prepare(`SELECT r.reported_id, u.username, u.full_name, u.profile_image, COUNT(*) as report_count FROM reports r JOIN users u ON r.reported_id = u.id WHERE r.report_type = 'user' GROUP BY r.reported_id`).all();
-  return c.json(r.results);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin_reported_accounts');
+  if (supabaseRequired) return supabaseRequired;
+  const rows = await supabaseAdminQueryRows(c, 'app_reports', {
+    filters: { target_type: postgrestEqFilter('user') },
+    order: 'created_at.desc',
+    limit: 100,
+  });
+  return c.json(await supabaseEnrichAdminReportRows(c, rows));
 });
 
 api.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => {
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin_remove_post_legacy');
+  if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
-  await ensureGovernanceSchema(c.env.DB);
-  await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Removed by admin' WHERE id = ?")
-    .bind(now(), postId).run();
-  await logGovernanceAction(c, getUserId(c), 'remove_post', 'post', postId, { legacy_route: true });
+  const identity = await supabaseResolvePostIdentity(c, postId);
+  const patch = {
+    status: 'removed',
+    metadata: {
+      removed_at: now(),
+      removed_reason: 'Removed by admin',
+      removed_by: getUserId(c),
+    },
+    updated_at: now(),
+  };
+  if (identity.legacyPostId || identity.requestedPostId) {
+    await supabaseAdminPatchRows(c, 'app_posts', { legacy_post_id: postgrestEqFilter(identity.legacyPostId || identity.requestedPostId) }, patch).catch(() => undefined);
+  }
+  if (identity.postUuid) {
+    await supabaseAdminPatchRows(c, 'app_posts', { id: postgrestEqFilter(identity.postUuid) }, patch).catch(() => undefined);
+  }
+  await logGovernanceAction(c, getUserId(c), 'remove_post', 'post', postId, { legacy_route: true, supabase_primary: true });
   return c.json({ removed: true, soft_deleted: true });
 });
 
-api.get('/admin/publisher-applications', authMiddleware, adminGuard, async (c) => {
-  const r = await c.env.DB.prepare('SELECT * FROM publisher_applications ORDER BY created_at DESC').all();
-  return c.json(r.results);
-});
-
-api.post('/admin/publisher-applications/:appId/decide', authMiddleware, adminGuard, async (c) => {
-  const appId = c.req.param('appId'); const { decision } = await c.req.json();
-  const app: any = await c.env.DB.prepare('SELECT user_id FROM publisher_applications WHERE id = ?').bind(appId).first();
-  if (!app) return c.json({ detail: 'Not found' }, 404);
-  await c.env.DB.prepare('UPDATE publisher_applications SET status = ? WHERE id = ?').bind(decision, appId).run();
-  if (decision === 'approved') {
-    await c.env.DB.prepare('UPDATE users SET is_publisher = 1 WHERE id = ?').bind(app.user_id).run();
-  }
-  return c.json({ decided: true, status: decision });
-});
-
 api.post('/admin/make-admin/:userId', authMiddleware, adminGuard, async (c) => {
-  await c.env.DB.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').bind(c.req.param('userId')).run();
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin_make_admin');
+  if (supabaseRequired) return supabaseRequired;
+  const targetUserId = publicId(c.req.param('userId'), 120);
+  await supabaseAdminUpsert(c, 'app_admin_roles', [{
+    user_id: targetUserId,
+    role: 'admin',
+    created_by: getUserId(c),
+    updated_at: now(),
+  }], 'user_id');
+  await logGovernanceAction(c, getUserId(c), 'assign_admin_role', 'user', targetUserId, { legacy_route: true, supabase_primary: true });
   return c.json({ success: true });
-});
-
-// Admin: List all users
-api.get('/admin/users', authMiddleware, adminGuard, async (c) => {
-  await ensureAbuseProtectionSchema(c.env.DB);
-  const search = c.req.query('search') || '';
-  const role = c.req.query('role') || '';
-  let sql = "SELECT id, email, username, full_name, profile_image, bio, city, is_admin, is_creator, is_publisher, is_verified, followers_count, posts_count, created_at, COALESCE(status, 'active') AS status, (SELECT COUNT(*) FROM ban_evasion_flags bef WHERE bef.user_id = users.id AND COALESCE(bef.status, 'pending') = 'pending') AS possible_ban_evasion FROM users";
-  const conditions: string[] = [];
-  const binds: any[] = [];
-  if (search) { conditions.push('(username LIKE ? OR full_name LIKE ? OR email LIKE ?)'); binds.push(`%${search}%`, `%${search}%`, `%${search}%`); }
-  if (role === 'admin') { conditions.push('is_admin = 1'); }
-  else if (role === 'creator') { conditions.push('is_creator = 1'); }
-  else if (role === 'publisher') { conditions.push('is_publisher = 1'); }
-  if (conditions.length) sql += ' WHERE ' + conditions.join(' AND ');
-  sql += ' ORDER BY created_at DESC LIMIT 100';
-  const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json(r.results);
-});
-
-// Admin: Update user roles
-api.put('/admin/users/:userId', authMiddleware, adminGuard, async (c) => {
-  const userId = c.req.param('userId');
-  const body = await c.req.json();
-  const fields: string[] = []; const vals: any[] = [];
-  if (body.is_admin !== undefined) { fields.push('is_admin = ?'); vals.push(body.is_admin ? 1 : 0); }
-  if (body.is_creator !== undefined) { fields.push('is_creator = ?'); vals.push(body.is_creator ? 1 : 0); }
-  if (body.is_publisher !== undefined) { fields.push('is_publisher = ?'); vals.push(body.is_publisher ? 1 : 0); }
-  if (body.is_verified !== undefined) { fields.push('is_verified = ?'); vals.push(body.is_verified ? 1 : 0); }
-  if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
-  vals.push(userId);
-  const updateAdminUserSql = `UPDATE users SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ?`;
-  await c.env.DB.prepare(updateAdminUserSql).bind(...vals).run();
-  return c.json({ success: true, message: 'User roles updated' });
-});
-
-// Admin: List all posts (for moderation)
-api.get('/admin/posts', authMiddleware, adminGuard, async (c) => {
-  const search = c.req.query('search') || '';
-  let sql = `SELECT p.id, p.user_id, p.content, p.image, p.images, p.post_type, p.likes_count, p.comments_count, p.created_at,
-             u.username AS user_username, u.full_name AS user_full_name, u.email AS user_email, u.profile_image AS user_profile_image
-             FROM posts p JOIN users u ON p.user_id = u.id`;
-  const binds: any[] = [];
-  if (search) { sql += ' WHERE p.content LIKE ?'; binds.push(`%${search}%`); }
-  sql += ' ORDER BY p.created_at DESC LIMIT 100';
-  const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json(r.results);
-});
-
-// Admin: Ban/Unban user
-api.post('/admin/users/:userId/ban', authMiddleware, adminGuard, async (c) => {
-  const userId = c.req.param('userId');
-  await ensureGovernanceSchema(c.env.DB);
-  const { banned, reason } = await c.req.json().catch(() => ({}));
-  await c.env.DB.prepare("UPDATE users SET status = ?, banned_at = CASE WHEN ? = 1 THEN ? ELSE NULL END, ban_reason = ?, updated_at = datetime('now') WHERE id = ?")
-    .bind(banned ? 'banned' : 'active', banned ? 1 : 0, now(), banned ? cleanMultilineText(reason || 'Banned by admin', 500) : '', userId)
-    .run();
-  await logGovernanceAction(c, getUserId(c), banned ? 'ban_user' : 'unban_user', 'user', userId, { legacy_route: true, reason });
-  return c.json({ success: true, banned: !!banned });
-});
-
-api.get('/admin/reports', authMiddleware, adminGuard, async (c) => {
-  const r = await c.env.DB.prepare('SELECT * FROM reports ORDER BY created_at DESC LIMIT 50').all();
-  return c.json(r.results);
-});
-
-api.post('/admin/reports/:reportId/action', authMiddleware, adminGuard, async (c) => {
-  await ensureGovernanceSchema(c.env.DB);
-  const body: any = await c.req.json().catch(() => ({}));
-  const action = cleanText(body.action || body.action_taken || 'action_taken', 120);
-  const status = normalizeReportStatus(body.status || (action === 'dismissed' ? 'dismissed' : 'action_taken'), 'action_taken');
-  const reportId = c.req.param('reportId');
-  const ts = now();
-  await c.env.DB.prepare(
-    'UPDATE reports SET status = ?, action_taken = ?, admin_notes = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'
-  ).bind(status, action, cleanMultilineText(body.admin_notes || body.notes || '', 1000), getUserId(c), ts, ts, reportId).run();
-  await logGovernanceAction(c, getUserId(c), `report_${status}`, 'report', reportId, { action });
-  return c.json({ action, status, done: true });
-});
-
-api.get('/admin/media-backups', authMiddleware, adminGuard, async (c) => {
-  await ensureMediaBackupSchema(c.env.DB);
-  const limit = Math.min(parseInt(c.req.query('limit') || '100', 10) || 100, 500);
-  const rows = await c.env.DB.prepare(
-    `SELECT mb.*, u.username AS user_username, u.full_name AS user_full_name
-     FROM media_backups mb
-     LEFT JOIN users u ON u.id = mb.user_id
-     ORDER BY mb.created_at DESC
-     LIMIT ?`
-  ).bind(limit).all();
-  return c.json(rows.results || []);
-});
-
-api.get('/admin/media-backups/:backupId/download', authMiddleware, adminGuard, async (c) => {
-  if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'R2 backup bucket is not bound' }, 500);
-  await ensureMediaBackupSchema(c.env.DB);
-  const backup: any = await c.env.DB.prepare('SELECT * FROM media_backups WHERE id = ?').bind(c.req.param('backupId')).first();
-  if (!backup) return c.json({ detail: 'Backup not found' }, 404);
-  const object = await c.env.MEDIA_BACKUP.get(backup.r2_key);
-  if (!object) return c.json({ detail: 'R2 object not found' }, 404);
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set('etag', object.httpEtag);
-  headers.set('content-disposition', `attachment; filename="${sanitizeMediaName(backup.original_filename || backup.id)}.${contentTypeExtension(backup.content_type || '')}"`);
-  headers.set('cache-control', 'private, no-store');
-  headers.set('x-content-type-options', 'nosniff');
-  return new Response(object.body, { headers });
 });
 
 function parseByteRange(rangeHeader: string | undefined, size: number): { offset: number; length: number; end: number } | null | 'invalid' {
@@ -16966,70 +22969,82 @@ function parseByteRange(rangeHeader: string | undefined, size: number): { offset
 async function serveMediaBackup(c: any) {
   if (!c.env.MEDIA_BACKUP) return c.json({ detail: 'Media storage is not configured' }, 503);
   try {
-    await ensureMediaBackupSchema(c.env.DB);
-    const backup: any = await c.env.DB.prepare('SELECT * FROM media_backups WHERE id = ?')
-      .bind(c.req.param('backupId'))
-      .first();
-    if (!backup) return c.json({ detail: 'Media not found' }, 404);
-    const hasSignedAccess = await hasValidMediaAccessToken(c, backup.id);
+    const mediaId = publicId(c.req.param('backupId'), 160);
+    if (!mediaId) return c.json({ detail: 'Media not found' }, 404);
     const viewerId = await getOptionalUserId(c);
     const limited = await enforceRateLimit(c, 'media_read', viewerId || clientIp(c), 600, 60);
     if (limited) return limited;
 
-    if (hasSignedAccess) {
-      // Signed URLs are issued only from authorized message APIs so AVPlayer can stream private chat media.
-    } else if (backup.post_id) {
-      const mediaVisiblePostSql = [
-        'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
-        `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`,
-      ].join(' ');
-      const visiblePost: any = await c.env.DB.prepare(mediaVisiblePostSql).bind(backup.post_id, ...visiblePostBindValues(viewerId)).first();
-      if (!visiblePost) return c.json({ detail: 'Media not found' }, 404);
-    } else if (!viewerId) {
-      return c.json({ detail: 'Media not found' }, 404);
-    } else if (cleanText(backup.message_id, 120)) {
-      const visibleMessage: any = await c.env.DB.prepare(
-        'SELECT id FROM messages WHERE id = ? AND (sender_id = ? OR receiver_id = ?) LIMIT 1'
-      ).bind(cleanText(backup.message_id, 120), viewerId, viewerId).first();
-      if (!visibleMessage) return c.json({ detail: 'Media not found' }, 404);
-    } else if (cleanText(backup.group_message_id, 120)) {
-      const visibleGroupMessage: any = await c.env.DB.prepare(
-        `SELECT gm.id
-         FROM group_messages gm
-         JOIN group_chat_members m ON m.group_id = gm.group_id
-         WHERE gm.id = ? AND m.user_id = ?
-         LIMIT 1`
-      ).bind(cleanText(backup.group_message_id, 120), viewerId).first();
-      if (!visibleGroupMessage) return c.json({ detail: 'Media not found' }, 404);
-    } else if (backup.user_id !== viewerId) {
-      const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
-      if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {
-        await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
+    // Wall voice media is canonical in Supabase. It never needs a D1 media row.
+    const canonicalAsset = supabasePrimaryConfigured(c) ? await supabaseReadMediaAsset(c, mediaId) : null;
+    let storageKey = '';
+    let contentType = '';
+    if (canonicalAsset && cleanText(canonicalAsset.media_type, 40) === 'audio' && cleanText(canonicalAsset.storage_provider, 40) === 'r2_audio') {
+      const voiceNotes = await supabaseAdminQueryRows(c, 'wall_notes', {
+        select: 'id,author_account_id,status,moderation_status',
+        filters: {
+          voice_media_id: postgrestEqFilter(mediaId),
+          status: postgrestEqFilter('active'),
+          moderation_status: postgrestEqFilter('approved'),
+        },
+        limit: 1,
+      });
+      const voiceNote = voiceNotes[0];
+      const ownerId = publicId(canonicalAsset.user_id, 120);
+      if (!voiceNote && viewerId !== ownerId) return c.json({ detail: 'Media not found' }, 404);
+      if (voiceNote && viewerId && viewerId !== ownerId && await supabaseUserIdsAreBlocked(c, viewerId, ownerId)) {
         return c.json({ detail: 'Media not found' }, 404);
       }
+      storageKey = cleanText(canonicalAsset.storage_key, 500);
+      contentType = cleanText(canonicalAsset.mime_type, 120);
+    } else {
+      // Temporary compatibility path for pre-Supabase chat and historical media. New Wall media never enters this branch.
+      await ensureMediaBackupSchema(c.env.DB);
+      const backup: any = await c.env.DB.prepare('SELECT * FROM media_backups WHERE id = ?').bind(mediaId).first();
+      if (!backup) return c.json({ detail: 'Media not found' }, 404);
+      const hasSignedAccess = await hasValidMediaAccessToken(c, backup.id);
+      if (hasSignedAccess) {
+        // Signed URLs are issued only from authorized message APIs so AVPlayer can stream private chat media.
+      } else if (backup.post_id) {
+        const mediaVisiblePostSql = [
+          'SELECT p.id FROM posts p JOIN users u ON p.user_id = u.id',
+          `WHERE p.id = ? AND ${visiblePostWhere('u', 'p')} LIMIT 1`,
+        ].join(' ');
+        const visiblePost: any = await c.env.DB.prepare(mediaVisiblePostSql).bind(backup.post_id, ...visiblePostBindValues(viewerId)).first();
+        if (!visiblePost) return c.json({ detail: 'Media not found' }, 404);
+      } else if (!viewerId) {
+        return c.json({ detail: 'Media not found' }, 404);
+      } else if (cleanText(backup.message_id, 120)) {
+        const visibleMessage: any = await c.env.DB.prepare('SELECT id FROM messages WHERE id = ? AND (sender_id = ? OR receiver_id = ?) LIMIT 1').bind(cleanText(backup.message_id, 120), viewerId, viewerId).first();
+        if (!visibleMessage) return c.json({ detail: 'Media not found' }, 404);
+      } else if (cleanText(backup.group_message_id, 120)) {
+        const visibleGroupMessage: any = await c.env.DB.prepare(`SELECT gm.id FROM group_messages gm JOIN group_chat_members m ON m.group_id = gm.group_id WHERE gm.id = ? AND m.user_id = ? LIMIT 1`).bind(cleanText(backup.group_message_id, 120), viewerId).first();
+        if (!visibleGroupMessage) return c.json({ detail: 'Media not found' }, 404);
+      } else if (backup.user_id !== viewerId) {
+        const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
+        if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {
+          await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
+          return c.json({ detail: 'Media not found' }, 404);
+        }
+      }
+      storageKey = cleanText(backup.r2_key, 500);
+      contentType = cleanText(backup.content_type, 120);
     }
 
-    const head = await c.env.MEDIA_BACKUP.head(backup.r2_key);
+    if (!storageKey) return c.json({ detail: 'Media not found' }, 404);
+    const head = await c.env.MEDIA_BACKUP.head(storageKey);
     if (!head) return c.json({ detail: 'Media file not found' }, 404);
-
     const range = parseByteRange(c.req.header('range'), head.size || 0);
     if (range === 'invalid') {
-      return new Response(null, {
-        status: 416,
-        headers: {
-          'accept-ranges': 'bytes',
-          'content-range': `bytes */${head.size || 0}`,
-        },
-      });
+      return new Response(null, { status: 416, headers: { 'accept-ranges': 'bytes', 'content-range': `bytes */${head.size || 0}` } });
     }
-
     const object = range
-      ? await c.env.MEDIA_BACKUP.get(backup.r2_key, { range: { offset: range.offset, length: range.length } })
-      : await c.env.MEDIA_BACKUP.get(backup.r2_key);
+      ? await c.env.MEDIA_BACKUP.get(storageKey, { range: { offset: range.offset, length: range.length } })
+      : await c.env.MEDIA_BACKUP.get(storageKey);
     if (!object) return c.json({ detail: 'Media file not found' }, 404);
-
     const headers = new Headers();
     object.writeHttpMetadata(headers);
+    if (contentType) headers.set('content-type', contentType);
     headers.set('etag', head.httpEtag || object.httpEtag);
     headers.set('accept-ranges', 'bytes');
     headers.set('cache-control', 'public, max-age=31536000, immutable');
@@ -17038,15 +23053,12 @@ async function serveMediaBackup(c: any) {
     headers.set('x-content-type-options', 'nosniff');
     headers.set('content-length', String(range ? range.length : head.size || object.size || 0));
     if (range) headers.set('content-range', `bytes ${range.offset}-${range.end}/${head.size}`);
-
-    const body = c.req.method === 'HEAD' ? null : object.body;
-    return new Response(body, { status: range ? 206 : 200, headers });
+    return new Response(c.req.method === 'HEAD' ? null : object.body, { status: range ? 206 : 200, headers });
   } catch (error: any) {
     console.error('Media fetch failed:', getErrorCode(error), error?.message || error);
     return c.json({ detail: 'Could not load media' }, 500);
   }
 }
-
 async function serveCloudflareImageProxy(c: any) {
   const imageId = publicId(c.req.param('imageId'), 220);
   if (!imageId) return c.json({ detail: 'Media not found' }, 404);
@@ -17131,6 +23143,8 @@ api.on('HEAD', '/media/:backupId', serveMediaBackup);
 // Upload (Cloudflare Images)
 api.post('/upload/image', authMiddleware, async (c) => {
   try {
+    const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/image');
+    if (legacyDisabled) return legacyDisabled;
     const bodyTooLarge = rejectLargeRequest(c, 18_000_000);
     if (bodyTooLarge) return bodyTooLarge;
     const userId = getUserId(c);
@@ -17227,6 +23241,8 @@ api.post('/upload/image', authMiddleware, async (c) => {
 });
 
 api.post('/upload/base64-image', authMiddleware, async (c) => {
+  const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/base64-image');
+  if (legacyDisabled) return legacyDisabled;
   // Alias for /upload/image
   const bodyTooLarge = rejectLargeRequest(c, 18_000_000);
   if (bodyTooLarge) return bodyTooLarge;
@@ -17300,13 +23316,17 @@ api.post('/upload/file', authMiddleware, async (c) => {
 });
 
 api.post('/upload/audio', authMiddleware, async (c) => {
+  let orphanedStorageKey = '';
+  let orphanedMediaId = '';
   try {
+    const supabaseRequired = requireSupabasePrimaryDatabase(c, 'wall_voice_upload');
+    if (supabaseRequired) return supabaseRequired;
     const userId = getUserId(c);
-    const bodyTooLarge = rejectLargeRequest(c, 12_000_000);
+    const bodyTooLarge = rejectLargeRequest(c, 3_000_000);
     if (bodyTooLarge) return bodyTooLarge;
-    const limited = await enforceRateLimit(c, 'upload_audio', userId, 40, 60);
+    const limited = await enforceRateLimit(c, 'upload_audio', userId, 8, 60);
     if (limited) return limited;
-    const dailyLimited = await enforceRateLimit(c, 'upload_audio_daily', userId, 180, 86400);
+    const dailyLimited = await enforceRateLimit(c, 'upload_audio_daily', userId, 40, 86400);
     if (dailyLimited) return dailyLimited;
 
     const formData = await c.req.raw.formData();
@@ -17325,11 +23345,27 @@ api.post('/upload/audio', authMiddleware, async (c) => {
     if (!ALLOWED_AUDIO_TYPES.has(fileType) || !extensionAllowed(file.name, ALLOWED_AUDIO_EXTENSIONS)) {
       return c.json({ detail: 'Unsupported audio type. Use M4A, AAC, MP3, WAV, or WebM.' }, 400);
     }
-    if (fileSize > 10_000_000) {
-      return c.json({ detail: 'Audio is too large.', max_bytes: 10_000_000 }, 413);
+    if (fileSize > 2_500_000) {
+      return c.json({ detail: 'Audio is too large.', max_bytes: 2_500_000 }, 413);
     }
 
     const bytes = await file.arrayBuffer();
+    if (!bytes.byteLength || bytes.byteLength > 2_500_000) {
+      return c.json({ detail: 'Audio is empty or too large.', max_bytes: 2_500_000 }, 413);
+    }
+    const audioBytes = new Uint8Array(bytes);
+    const detectedType = detectAudioContentType(audioBytes);
+    if (!detectedType || !audioContentMatches(fileType, detectedType)) {
+      await logSecurityEvent(c, 'audio_upload_type_mismatch', userId, {
+        declared_type: fileType,
+        detected_type: detectedType || 'unknown',
+      });
+      return c.json({ detail: 'Audio type does not match the uploaded data.' }, 400);
+    }
+    const moderation = await moderateWallVoiceUpload(c.env, audioBytes);
+    if (!moderation.ok) {
+      return c.json({ detail: moderation.detail, code: moderation.code }, moderation.status as any);
+    }
     const backup = await storeMediaBackup(c, {
       userId,
       mediaKind: 'audio',
@@ -17337,8 +23373,24 @@ api.post('/upload/audio', authMiddleware, async (c) => {
       contentType: fileType,
       bytes,
       originalFilename: file.name || `voice.${contentTypeExtension(fileType, 'm4a')}`,
+      persistLegacyMetadata: false,
     });
     if (!backup) return c.json({ detail: 'Media storage is not configured.' }, 503);
+    orphanedStorageKey = backup.r2_key;
+    orphanedMediaId = backup.id;
+    await supabaseInsertStoredAudioAsset(c, {
+      id: backup.id,
+      userId,
+      storageKey: backup.r2_key,
+      publicUrl: backup.delivery_url,
+      mimeType: fileType,
+      fileSize: backup.size_bytes,
+      sha256Hash: backup.checksum_sha256,
+      originalFilename: file.name || `voice.${contentTypeExtension(fileType, 'm4a')}`,
+      moderation,
+    });
+    orphanedStorageKey = '';
+    orphanedMediaId = '';
 
     return c.json({
       url: backup.delivery_url,
@@ -17349,6 +23401,11 @@ api.post('/upload/audio', authMiddleware, async (c) => {
       checksum_sha256: backup.checksum_sha256,
     });
   } catch (e: any) {
+    if (orphanedStorageKey) await c.env.MEDIA_BACKUP?.delete(orphanedStorageKey).catch(() => {});
+    if (orphanedMediaId) {
+      await supabaseAdminDeleteRows(c, 'app_moderation_results', { media_id: postgrestEqFilter(orphanedMediaId) }).catch(() => {});
+      await supabaseAdminDeleteRows(c, 'app_media_assets', { id: postgrestEqFilter(orphanedMediaId) }).catch(() => {});
+    }
     console.error('Audio upload failed:', getErrorCode(e));
     return c.json({ detail: 'Audio upload failed. Please try again.' }, 500);
   }
@@ -17356,6 +23413,8 @@ api.post('/upload/audio', authMiddleware, async (c) => {
 
 api.post('/upload/video', authMiddleware, async (c) => {
   try {
+    const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/video');
+    if (legacyDisabled) return legacyDisabled;
     const userId = getUserId(c);
     const limited = await enforceRateLimit(c, 'upload_video_direct', userId, 40, 60);
     if (limited) return limited;
@@ -17386,6 +23445,8 @@ api.post('/upload/video', authMiddleware, async (c) => {
 
 api.post('/upload/video-with-backup', authMiddleware, async (c) => {
   try {
+    const legacyDisabled = rejectLegacyUploadWhenSupabasePrimary(c, '/upload/video-with-backup');
+    if (legacyDisabled) return legacyDisabled;
     const userId = getUserId(c);
     const maxBytes = maxBackupVideoBytes(c);
     const bodyTooLarge = rejectLargeRequest(c, maxBytes + 2_000_000);
@@ -17497,9 +23558,10 @@ api.post('/upload/video-with-backup', authMiddleware, async (c) => {
 });
 
 // Get video playback info from Cloudflare Stream
-api.get('/stream/video/:videoUid', async (c) => {
-  const uid = c.req.param('videoUid');
+api.get('/stream/video/:videoUid', authMiddleware, async (c) => {
+  const uid = publicId(c.req.param('videoUid'), 128);
   try {
+    if (!uid || !/^[a-zA-Z0-9_-]{6,128}$/.test(uid)) return c.json({ detail: 'Video not found' }, 404);
     const accountId = cloudflareAccountId(c.env);
     const token = cloudflareStreamToken(c.env);
     if (!accountId || !token) return c.json({ detail: 'Cloudflare Stream is not configured.' }, 503);
@@ -17518,15 +23580,20 @@ api.get('/stream/video/:videoUid', async (c) => {
     if (!data.success || !data.result) return c.json({ detail: 'Video not found' }, 404);
     const v = data.result;
     const state = cleanText(v.status?.state || '', 40).toLowerCase();
-    const hls = cleanText(v.playback?.hls || '', 2200) || null;
-    const dash = cleanText(v.playback?.dash || '', 2200) || null;
-    const ready = Boolean(v.readyToStream || state === 'ready') && !!hls;
+    const fallbackHls = streamPlaybackUrl(`cfstream:${uid}`);
+    const fallbackThumbnail = streamThumbnailUrl(`cfstream:${uid}`);
+    const hls = safeExternalUrl(v.playback?.hls) || fallbackHls || null;
+    const dash = safeExternalUrl(v.playback?.dash) || null;
+    const thumbnail = safeExternalUrl(v.thumbnail) || fallbackThumbnail || null;
+    const readyStates = new Set(['ready', 'readytostream', 'ready_to_stream', 'published']);
+    const processingStates = new Set(['queued', 'pendingupload', 'downloading', 'encoding', 'inprogress', 'processing']);
+    const ready = !!hls && (v.readyToStream === true || readyStates.has(state) || (!processingStates.has(state) && !!v.playback?.hls));
     const payload = {
       uid: v.uid,
       status: state || 'unknown',
       duration: v.duration,
-      thumbnail: v.thumbnail,
-      preview: v.preview,
+      thumbnail,
+      preview: safeExternalUrl(v.preview),
       playback: v.playback || {},
       hls,
       dash,
@@ -17706,7 +23773,7 @@ api.get('/mapbox-locations/cities', authMiddleware, mapboxCitySearchHandler);
 api.get('/mapbox-locations/reverse', authMiddleware, mapboxReverseBroadLocationHandler);
 
 // Health
-api.get('/', (c) => c.json({ message: 'Captro API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + Supabase Postgres + Cloudflare media storage' }));
+api.get('/', (c) => c.json({ message: 'Aura API', version: API_VERSION, runtime: 'Cloudflare Workers + Hono + Supabase Postgres + Cloudflare media storage' }));
 api.get('/health', async (c) => {
   const startedAt = Date.now();
   const dbStartedAt = Date.now();
@@ -17738,6 +23805,12 @@ api.get('/health', async (c) => {
         healthy: databaseHealthy,
         latency_ms: Date.now() - dbStartedAt,
       },
+      cloudflare_images: {
+        configured: !!(cloudflareAccountId(c.env) && cloudflareImagesToken(c.env) && cloudflareImagesAccountHash(c.env)),
+      },
+      cloudflare_stream: {
+        configured: !!(cloudflareAccountId(c.env) && cloudflareStreamToken(c.env)),
+      },
     },
     latency_ms: Date.now() - startedAt,
   }, databaseHealthy ? 200 : 503);
@@ -17747,7 +23820,9 @@ api.get('/health', async (c) => {
 api.get('/database/status', authMiddleware, async (c) => {
   try {
     await requireOwnerOrAdmin(c);
-    const d1Check = await c.env.DB.prepare('SELECT 1 AS ok').first().then(() => true).catch(() => false);
+    const d1Check = databasePrimary(c) === 'legacy_d1'
+      ? await c.env.DB.prepare('SELECT 1 AS ok').first().then(() => true).catch(() => false)
+      : null;
     let kvCheck = false;
     if (c.env.KV) {
       const key = `health:database:${uuid()}`;
@@ -17770,12 +23845,14 @@ api.get('/database/status', authMiddleware, async (c) => {
         provider: 'supabase_postgres',
         configured: databasePrimary(c) === 'supabase_postgres',
         healthy: supabasePostgresHealthy,
-        note: 'Supabase Postgres is the canonical Captro app database for profiles, posts, interactions, reports, chat metadata, admin roles, and audit records.',
+        note: 'Supabase Postgres is the canonical Aura app database for profiles, posts, interactions, reports, chat metadata, admin roles, and audit records.',
       },
       d1_sqlite_legacy_cache: {
         configured: true,
         healthy: d1Check,
-        role: 'legacy compatibility/cache only; do not treat D1 as the production source of truth.',
+        role: databasePrimary(c) === 'legacy_d1'
+          ? 'legacy database mode only'
+          : 'disabled for Supabase-primary production; Cloudflare D1 is not the Aura source of truth.',
       },
       kv_nosql: { configured: !!c.env.KV, healthy: kvCheck },
       postgres_hyperdrive: {
@@ -17792,8 +23869,8 @@ api.get('/database/status', authMiddleware, async (c) => {
       supabase_authentication: {
         configured: !!c.env.SUPABASE_URL,
         service_role_secret_set: !!c.env.SUPABASE_SERVICE_ROLE_KEY,
-        anon_key_set: !!c.env.SUPABASE_ANON_KEY,
-        note: 'Captro account creation and social sign-in are bridged into Supabase Authentication and linked by users.supabase_user_id.',
+        anon_key_set: !!(c.env.SUPABASE_AUTH_ANON_KEY || c.env.SUPABASE_ANON_KEY),
+        note: 'Aura account creation and social sign-in are bridged into Supabase Authentication and linked by users.supabase_user_id.',
       },
       timestamp: now(),
     });
@@ -17807,57 +23884,32 @@ api.get('/database/status', authMiddleware, async (c) => {
 // BOOKMARKS / SAVE SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Setup bookmarks table
 api.post('/bookmarks/setup-db', authMiddleware, async (c) => {
-  try {
-    await requireOwnerOrAdmin(c);
-    await c.env.DB.exec(`
-      CREATE TABLE IF NOT EXISTS bookmarks (
-        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, post_id TEXT NOT NULL,
-        collection TEXT DEFAULT 'saved', created_at TEXT DEFAULT (datetime('now')),
-        UNIQUE(user_id, post_id), FOREIGN KEY (user_id) REFERENCES users(id), FOREIGN KEY (post_id) REFERENCES posts(id)
-      );
-      CREATE TABLE IF NOT EXISTS saved_places (
-        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, place_id TEXT NOT NULL,
-        place_name TEXT DEFAULT '', place_type TEXT DEFAULT '',
-        save_type TEXT DEFAULT 'want_to_go', created_at TEXT DEFAULT (datetime('now')),
-        UNIQUE(user_id, place_id), FOREIGN KEY (user_id) REFERENCES users(id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_id);
-      CREATE INDEX IF NOT EXISTS idx_bookmarks_post ON bookmarks(post_id);
-      CREATE INDEX IF NOT EXISTS idx_saved_places_user ON saved_places(user_id);
-    `);
-    // Add category column to posts if not exists
-    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN category TEXT DEFAULT 'all';`); } catch {}
-    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_id TEXT DEFAULT NULL;`); } catch {}
-    try { await c.env.DB.exec(`ALTER TABLE posts ADD COLUMN place_name TEXT DEFAULT NULL;`); } catch {}
-    return c.json({ success: true, message: 'Bookmarks + Saved Places tables created' });
-  } catch (e: any) {
-    const forbidden = String(e?.message || '') === 'FORBIDDEN';
-    if (forbidden) return c.json({ detail: 'Owner access required.' }, 403);
-    console.error('Bookmarks setup failed:', getErrorCode(e));
-    return c.json({ success: true, message: 'Tables already exist or could not be changed now' });
-  }
+  await requireOwnerOrAdmin(c);
+  return c.json({
+    detail: 'Legacy D1 bookmark setup is retired. Aura bookmarks are managed in Supabase.',
+    code: 'LEGACY_D1_SETUP_RETIRED',
+  }, 410);
 });
 
 // Save/Bookmark a post
 api.post('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
-  if (limited) return limited;
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmark_save');
+  if (supabaseRequired) return supabaseRequired;
   const { post_id, collection } = await c.req.json().catch(() => ({}));
   const postId = publicId(post_id, 120);
   if (!postId) return c.json({ detail: 'post_id required' }, 400);
+  const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
+  if (limited) return limited;
   try {
-    const post = await c.env.DB.prepare('SELECT id FROM posts WHERE id = ?').bind(postId).first();
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
     if (!post) return c.json({ detail: 'Post not found' }, 404);
     const collectionName = cleanText(collection || 'saved', 80) || 'saved';
     const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, true, collectionName);
     return c.json(postEngagementResponse(engagement, { collection: collectionName }));
   } catch (e: any) {
-    console.error('Bookmark save failed:', getErrorCode(e));
+    console.warn(JSON.stringify({ event: 'supabase_bookmark_save_failed', code: getErrorCode(e).slice(0, 180) }));
     return c.json({ detail: 'Save failed. Please try again.' }, 500);
   }
 });
@@ -17865,367 +23917,92 @@ api.post('/bookmarks', authMiddleware, async (c) => {
 // Unsave/Remove bookmark
 api.delete('/bookmarks/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureGovernanceSchema(c.env.DB);
-  await ensureLikeUniquenessSchema(c.env.DB);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmark_delete');
+  if (supabaseRequired) return supabaseRequired;
   const limited = await enforceRateLimit(c, 'save_post', userId, 240, 60);
   if (limited) return limited;
   const postId = publicId(c.req.param('postId'), 120);
-  const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
-  return c.json(postEngagementResponse(engagement));
+  try {
+    const { state: engagement } = await setCanonicalPostSaveState(c, postId, userId, false);
+    return c.json(postEngagementResponse(engagement));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_bookmark_delete_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not remove bookmark.' }, 500);
+  }
 });
 
 // Get saved posts by collection
 api.get('/bookmarks', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmarks_read');
+  if (supabaseRequired) return supabaseRequired;
   const collection = cleanText(c.req.query('collection'), 80);
-  let q = `SELECT b.*, p.content, p.image, p.images, p.likes_count, p.post_type, p.created_at as post_date, u.full_name, u.username, u.profile_image
-    FROM bookmarks b
-    JOIN posts p ON b.post_id = p.id
-    JOIN users u ON p.user_id = u.id
-    WHERE b.user_id IN (${relatedPlaceholders})`;
-  const binds: any[] = [...relatedUserIds];
-  if (collection) { q += ' AND b.collection = ?'; binds.push(collection); }
-  q += ' GROUP BY p.id ORDER BY MAX(b.created_at) DESC';
-  const { results } = await c.env.DB.prepare(q).bind(...binds).all();
-  return c.json({ bookmarks: results || [] });
+  const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
+  const limit = clampNumber(c.req.query('limit') || '40', 1, 80, 40);
+  try {
+    const postIds = await supabaseViewerInteractionPostIds(c, userId, 'save', { collection, limit, offset: skip });
+    const rows = postIds.length ? await supabaseReadVisiblePosts(c, userId, { postIds, limit: postIds.length }) : [];
+    return c.json({
+      bookmarks: rows.map((post) => {
+        const payload = feedPostPayload(post, [], c.env);
+        return {
+          ...payload,
+          post_id: payload.id,
+          post_date: payload.created_at,
+          collection: collection || 'saved',
+        };
+      }),
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_bookmarks_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load bookmarks.' }, 500);
+  }
 });
 
 // Check if post is saved
 api.get('/bookmarks/check/:postId', authMiddleware, async (c) => {
   const userId = getUserId(c);
-  await ensureLikeUniquenessSchema(c.env.DB);
-  const postId = c.req.param('postId');
-  const relatedUserIds = await relatedInteractionUserIds(c.env.DB, userId);
-  if (supabaseEngagementConfigured(c)) {
-    try {
-      const rows = await supabaseAdminSelectRows(c, 'app_post_interactions', {
-        legacy_post_id: postgrestEqFilter(postId),
-        kind: postgrestEqFilter('save'),
-        app_user_id: postgrestInFilter(relatedUserIds),
-      }, 'collection', 1);
-      if (rows.length) return c.json({ saved: true, collection: rows[0]?.collection || 'saved' });
-    } catch (error: any) {
-      console.warn(JSON.stringify({ event: 'supabase_bookmark_check_failed', code: getErrorCode(error).slice(0, 180) }));
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'bookmark_check');
+  if (supabaseRequired) return supabaseRequired;
+  const postId = publicId(c.req.param('postId'), 120);
+  try {
+    const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
+    const saved = await supabaseViewerPostInteractionExists(c, postId, relatedUserIds, 'save');
+    let collection: string | null = null;
+    if (saved) {
+      const identity = await supabaseResolvePostIdentity(c, postId);
+      const keys = await supabaseInteractionActorKeys(c, relatedUserIds);
+      const rows: any[] = [];
+      if (keys.actorKeys.length) {
+        rows.push(...await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+          or: supabasePostIdentityOrFilter(identity),
+          kind: postgrestEqFilter('save'),
+          actor_key: postgrestInFilter(keys.actorKeys),
+        }, 'collection', 1));
+      }
+      if (!rows.length && keys.appUserIds.length) {
+        rows.push(...await supabaseAdminSelectRows(c, 'app_post_interactions', {
+          or: supabasePostIdentityOrFilter(identity),
+          kind: postgrestEqFilter('save'),
+          app_user_id: postgrestInFilter(keys.appUserIds),
+        }, 'collection', 1));
+      }
+      if (!rows.length && keys.authUserIds.length) {
+        rows.push(...await supabaseAdminSelectRowsIfShapeExists(c, 'app_post_interactions', {
+          or: supabasePostIdentityOrFilter(identity),
+          kind: postgrestEqFilter('save'),
+          user_id: postgrestInFilter(keys.authUserIds),
+        }, 'collection', 1));
+      }
+      collection = cleanText(rows[0]?.collection, 80) || null;
     }
-  }
-  const relatedPlaceholders = inPlaceholders(relatedUserIds);
-  const r: any = await c.env.DB.prepare(
-    `SELECT collection FROM bookmarks WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
-     UNION
-     SELECT collection FROM saved_posts WHERE post_id = ? AND user_id IN (${relatedPlaceholders})
-     LIMIT 1`
-  ).bind(postId, ...relatedUserIds, postId, ...relatedUserIds).first();
-  return c.json({ saved: !!r, collection: r?.collection || null });
-});
-
-// Save a place (My Spots)
-api.post('/saved-places', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const { place_id, place_name, place_type, save_type } = await c.req.json().catch(() => ({}));
-  const placeId = cleanText(place_id, 160);
-  if (!placeId) return c.json({ detail: 'place_id required' }, 400);
-  const id = uuid();
-  try {
-    await c.env.DB.prepare('INSERT INTO saved_places (id, user_id, place_id, place_name, place_type, save_type) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, place_id) DO UPDATE SET save_type = ?')
-      .bind(id, userId, placeId, cleanText(place_name, 240), cleanText(place_type, 80), cleanText(save_type || 'want_to_go', 40), cleanText(save_type || 'want_to_go', 40)).run();
-    return c.json({ saved: true });
-  } catch (e: any) {
-    console.error('Saved place failed:', getErrorCode(e));
-    return c.json({ detail: 'Save failed. Please try again.' }, 500);
+    return c.json({ saved, collection });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_bookmark_check_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not check bookmark state.' }, 500);
   }
 });
 
-// Get saved places (My Spots)
-api.get('/saved-places', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const save_type = c.req.query('type');
-  let q = 'SELECT * FROM saved_places WHERE user_id = ?';
-  const binds: any[] = [userId];
-  if (save_type) { q += ' AND save_type = ?'; binds.push(cleanText(save_type, 40)); }
-  q += ' ORDER BY created_at DESC';
-  const { results } = await c.env.DB.prepare(q).bind(...binds).all();
-  return c.json({ places: results || [] });
-});
-
-// Remove saved place
-api.delete('/saved-places/:placeId', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  await c.env.DB.prepare('DELETE FROM saved_places WHERE user_id = ? AND place_id = ?').bind(userId, cleanText(c.req.param('placeId'), 160)).run();
-  return c.json({ saved: false });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CREATOR HUB
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// DB Setup — run once to create creator tables
-api.post('/creators/setup-db', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const user: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!user?.is_admin) return c.json({ detail: 'Admin only' }, 403);
-  try {
-    await c.env.DB.exec(`
-      CREATE TABLE IF NOT EXISTS creators (
-        id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, category TEXT NOT NULL,
-        skills TEXT DEFAULT '[]', portfolio_links TEXT DEFAULT '[]', short_bio TEXT DEFAULT '',
-        city TEXT DEFAULT '', borough TEXT DEFAULT '', availability_status TEXT DEFAULT 'available',
-        pricing_range TEXT DEFAULT '', contact_link TEXT DEFAULT '', example_work TEXT DEFAULT '[]',
-        status TEXT DEFAULT 'pending', is_verified INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      );
-      CREATE TABLE IF NOT EXISTS creator_portfolio_items (
-        id TEXT PRIMARY KEY, creator_id TEXT NOT NULL, post_id TEXT NOT NULL,
-        display_order INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')),
-        UNIQUE(creator_id, post_id),
-        FOREIGN KEY (creator_id) REFERENCES creators(id), FOREIGN KEY (post_id) REFERENCES posts(id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_creators_user ON creators(user_id);
-      CREATE INDEX IF NOT EXISTS idx_creators_status ON creators(status);
-      CREATE INDEX IF NOT EXISTS idx_creators_category ON creators(category);
-      CREATE INDEX IF NOT EXISTS idx_creators_city ON creators(city);
-      CREATE INDEX IF NOT EXISTS idx_portfolio_creator ON creator_portfolio_items(creator_id);
-    `);
-    // Add is_creator column if not exists
-    try { await c.env.DB.exec(`ALTER TABLE users ADD COLUMN is_creator INTEGER DEFAULT 0;`); } catch {}
-    return c.json({ success: true, message: 'Creator Hub tables created' });
-  } catch (e: any) { console.error('Creator setup failed:', getErrorCode(e)); return c.json({ success: true, message: 'Tables already exist or could not be changed now' }); }
-});
-
-// Apply for Creator status
-api.post('/creators/apply', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const body = await c.req.json();
-  const { category, portfolio_links, short_bio, city, example_work } = body;
-  if (!category) return c.json({ detail: 'Category is required' }, 400);
-
-  // Check if already applied
-  try {
-    const existing: any = await c.env.DB.prepare('SELECT id, status FROM creators WHERE user_id = ?').bind(userId).first();
-    if (existing) {
-      if (existing.status === 'approved') return c.json({ detail: 'You are already an approved creator' }, 400);
-      if (existing.status === 'pending') return c.json({ detail: 'You already have a pending application' }, 400);
-      // If rejected, allow re-application by updating
-      await c.env.DB.prepare(
-        'UPDATE creators SET category = ?, portfolio_links = ?, short_bio = ?, city = ?, example_work = ?, status = ?, updated_at = ? WHERE user_id = ?'
-      ).bind(category, JSON.stringify(portfolio_links || []), short_bio || '', city || '', JSON.stringify(example_work || []), 'pending', now(), userId).run();
-      return c.json({ message: 'Creator application re-submitted', status: 'pending' });
-    }
-  } catch {}
-
-  const id = uuid();
-  try {
-    await c.env.DB.prepare(
-      'INSERT INTO creators (id, user_id, category, portfolio_links, short_bio, city, example_work, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(id, userId, category, JSON.stringify(portfolio_links || []), short_bio || '', city || '', JSON.stringify(example_work || []), 'pending').run();
-  } catch (e: any) {
-    console.error('Creator application failed:', getErrorCode(e));
-    return c.json({ detail: 'Failed to submit application.' }, 500);
-  }
-  return c.json({ message: 'Creator application submitted', creator_id: id, status: 'pending' });
-});
-
-// Get own creator status
-api.get('/creators/me', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  try {
-    const creator: any = await c.env.DB.prepare('SELECT * FROM creators WHERE user_id = ?').bind(userId).first();
-    if (!creator) return c.json({ is_creator: false, status: null });
-    return c.json({
-      ...creator, is_creator: creator.status === 'approved',
-      portfolio_links: JSON.parse(creator.portfolio_links || '[]'),
-      skills: JSON.parse(creator.skills || '[]'),
-      example_work: JSON.parse(creator.example_work || '[]'),
-    });
-  } catch { return c.json({ is_creator: false, status: null }); }
-});
-
-// Update creator profile
-api.put('/creators/me', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const body = await c.req.json();
-  try {
-    const creator: any = await c.env.DB.prepare('SELECT id, status FROM creators WHERE user_id = ?').bind(userId).first();
-    if (!creator || creator.status !== 'approved') return c.json({ detail: 'Not an approved creator' }, 403);
-    const fields: string[] = []; const vals: any[] = [];
-    if (body.availability_status !== undefined) { fields.push('availability_status = ?'); vals.push(body.availability_status); }
-    if (body.pricing_range !== undefined) { fields.push('pricing_range = ?'); vals.push(body.pricing_range); }
-    if (body.contact_link !== undefined) { fields.push('contact_link = ?'); vals.push(body.contact_link); }
-    if (body.short_bio !== undefined) { fields.push('short_bio = ?'); vals.push(body.short_bio); }
-    if (body.skills !== undefined) { fields.push('skills = ?'); vals.push(JSON.stringify(body.skills)); }
-    if (body.portfolio_links !== undefined) { fields.push('portfolio_links = ?'); vals.push(JSON.stringify(body.portfolio_links)); }
-    if (body.city !== undefined) { fields.push('city = ?'); vals.push(body.city); }
-    if (body.borough !== undefined) { fields.push('borough = ?'); vals.push(body.borough); }
-    if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
-    fields.push('updated_at = ?'); vals.push(now()); vals.push(userId);
-    const updateCreatorSql = `UPDATE creators SET ${fields.join(', ')} WHERE user_id = ?`;
-    await c.env.DB.prepare(updateCreatorSql).bind(...vals).run();
-    return c.json({ message: 'Creator profile updated' });
-  } catch (e: any) { console.error('Creator profile update failed:', getErrorCode(e)); return c.json({ detail: 'Update failed' }, 500); }
-});
-
-// List creators (with optional filters: category, city, availability)
-api.get('/creators', async (c) => {
-  const category = c.req.query('category');
-  const city = c.req.query('city');
-  const availability = c.req.query('availability');
-  const search = c.req.query('search');
-  const limit = parseInt(c.req.query('limit') || '20');
-  const offset = parseInt(c.req.query('offset') || '0');
-
-  let where = "c.status = 'approved'";
-  const binds: any[] = [];
-  if (category) { where += ' AND c.category = ?'; binds.push(category); }
-  if (city) { where += ' AND c.city = ?'; binds.push(city); }
-  if (availability) { where += ' AND c.availability_status = ?'; binds.push(availability); }
-  if (search) { where += ' AND (u.full_name LIKE ? OR u.username LIKE ? OR c.category LIKE ?)'; binds.push(`%${search}%`, `%${search}%`, `%${search}%`); }
-  binds.push(limit, offset);
-
-  try {
-    const creatorsSql = `
-      SELECT c.*, u.full_name, u.username, u.profile_image, u.followers_count, u.posts_count
-      FROM creators c JOIN users u ON c.user_id = u.id
-      WHERE ${where} ORDER BY u.followers_count DESC, c.created_at DESC LIMIT ? OFFSET ?
-    `;
-    const { results } = await c.env.DB.prepare(creatorsSql).bind(...binds).all();
-    const creators = (results || []).map((cr: any) => ({
-      ...cr, portfolio_links: JSON.parse(cr.portfolio_links || '[]'),
-      skills: JSON.parse(cr.skills || '[]'),
-    }));
-    return c.json({ creators, count: creators.length });
-  } catch (e: any) { console.error('Creators list failed:', getErrorCode(e)); return c.json({ creators: [], count: 0 }); }
-});
-
-// Get creator categories
-api.get('/creators/categories', async (c) => {
-  return c.json({
-    categories: [
-      { id: 'photographer', name: 'Photographer', icon: 'camera' },
-      { id: 'artist', name: 'Artist', icon: 'color-palette' },
-      { id: 'musician', name: 'Musician', icon: 'musical-notes' },
-      { id: 'model', name: 'Model', icon: 'body' },
-      { id: 'stylist', name: 'Stylist', icon: 'cut' },
-      { id: 'dancer', name: 'Dancer', icon: 'walk' },
-      { id: 'influencer', name: 'Influencer', icon: 'star' },
-      { id: 'chef', name: 'Chef', icon: 'restaurant' },
-      { id: 'filmmaker', name: 'Filmmaker', icon: 'videocam' },
-      { id: 'designer', name: 'Designer', icon: 'brush' },
-      { id: 'writer', name: 'Writer', icon: 'pencil' },
-      { id: 'dj', name: 'DJ', icon: 'headset' },
-    ],
-  });
-});
-
-// Get single creator profile
-api.get('/creators/:creatorId', async (c) => {
-  const creatorId = c.req.param('creatorId');
-  try {
-    const creator: any = await c.env.DB.prepare(`
-      SELECT c.*, u.full_name, u.username, u.profile_image, u.bio, u.followers_count, u.following_count, u.posts_count, u.city as user_city
-      FROM creators c JOIN users u ON c.user_id = u.id WHERE c.id = ?
-    `).bind(creatorId).first();
-    if (!creator) return c.json({ detail: 'Creator not found' }, 404);
-    // Get portfolio items
-    const { results: portfolio } = await c.env.DB.prepare(`
-      SELECT cpi.*, p.content, p.image, p.images, p.likes_count, p.created_at as post_created_at
-      FROM creator_portfolio_items cpi JOIN posts p ON cpi.post_id = p.id
-      WHERE cpi.creator_id = ? ORDER BY cpi.display_order ASC LIMIT 20
-    `).bind(creatorId).all();
-    return c.json({
-      ...creator, portfolio_links: JSON.parse(creator.portfolio_links || '[]'),
-      skills: JSON.parse(creator.skills || '[]'), portfolio: portfolio || [],
-    });
-  } catch (e: any) { console.error('Creator detail failed:', getErrorCode(e)); return c.json({ detail: 'Error fetching creator' }, 500); }
-});
-
-// Portfolio management
-api.post('/creators/portfolio', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const { post_id, display_order } = await c.req.json();
-  if (!post_id) return c.json({ detail: 'post_id is required' }, 400);
-  try {
-    const creator: any = await c.env.DB.prepare('SELECT id FROM creators WHERE user_id = ? AND status = ?').bind(userId, 'approved').first();
-    if (!creator) return c.json({ detail: 'Not an approved creator' }, 403);
-    const id = uuid();
-    await c.env.DB.prepare(
-      'INSERT INTO creator_portfolio_items (id, creator_id, post_id, display_order) VALUES (?, ?, ?, ?)'
-    ).bind(id, creator.id, post_id, display_order || 0).run();
-    return c.json({ message: 'Portfolio item added', id });
-  } catch (e: any) { console.error('Creator portfolio add failed:', getErrorCode(e)); return c.json({ detail: 'Failed to add portfolio item' }, 500); }
-});
-
-api.delete('/creators/portfolio/:itemId', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const itemId = c.req.param('itemId');
-  try {
-    const creator: any = await c.env.DB.prepare('SELECT id FROM creators WHERE user_id = ?').bind(userId).first();
-    if (!creator) return c.json({ detail: 'Not a creator' }, 403);
-    await c.env.DB.prepare('DELETE FROM creator_portfolio_items WHERE id = ? AND creator_id = ?').bind(itemId, creator.id).run();
-    return c.json({ message: 'Portfolio item removed' });
-  } catch (e: any) { console.error('Creator portfolio delete failed:', getErrorCode(e)); return c.json({ detail: 'Delete failed' }, 500); }
-});
-
-// Admin: Creator applications
-api.get('/admin/creator-applications', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
-  const status = c.req.query('status') || 'pending';
-  try {
-    const { results } = await c.env.DB.prepare(`
-      SELECT c.*, u.full_name, u.username, u.profile_image, u.email
-      FROM creators c JOIN users u ON c.user_id = u.id WHERE c.status = ? ORDER BY c.created_at DESC
-    `).bind(status).all();
-    return c.json({ applications: results || [] });
-  } catch (e: any) { console.error('Creator applications list failed:', getErrorCode(e)); return c.json({ applications: [] }); }
-});
-
-// Admin: Approve creator
-api.post('/admin/creators/:creatorId/approve', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
-  const creatorId = c.req.param('creatorId');
-  try {
-    const creator: any = await c.env.DB.prepare('SELECT user_id FROM creators WHERE id = ?').bind(creatorId).first();
-    if (!creator) return c.json({ detail: 'Creator not found' }, 404);
-    await c.env.DB.prepare('UPDATE creators SET status = ?, is_verified = 1, updated_at = ? WHERE id = ?').bind('approved', now(), creatorId).run();
-    try { await c.env.DB.prepare('UPDATE users SET is_creator = 1 WHERE id = ?').bind(creator.user_id).run(); } catch {}
-    return c.json({ message: 'Creator approved' });
-  } catch (e: any) { console.error('Creator approve failed:', getErrorCode(e)); return c.json({ detail: 'Approve failed' }, 500); }
-});
-
-// Admin: Reject creator
-api.post('/admin/creators/:creatorId/reject', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
-  const creatorId = c.req.param('creatorId');
-  try {
-    await c.env.DB.prepare('UPDATE creators SET status = ?, updated_at = ? WHERE id = ?').bind('rejected', now(), creatorId).run();
-    return c.json({ message: 'Creator rejected' });
-  } catch (e: any) { console.error('Creator reject failed:', getErrorCode(e)); return c.json({ detail: 'Reject failed' }, 500); }
-});
-
-// Admin: Remove creator badge
-api.delete('/admin/creators/:creatorId/badge', authMiddleware, async (c) => {
-  const userId = getUserId(c);
-  const admin: any = await c.env.DB.prepare('SELECT is_admin FROM users WHERE id = ?').bind(userId).first();
-  if (!admin?.is_admin) return c.json({ detail: 'Admin only' }, 403);
-  const creatorId = c.req.param('creatorId');
-  try {
-    const creator: any = await c.env.DB.prepare('SELECT user_id FROM creators WHERE id = ?').bind(creatorId).first();
-    if (!creator) return c.json({ detail: 'Creator not found' }, 404);
-    await c.env.DB.prepare('UPDATE creators SET status = ?, is_verified = 0, updated_at = ? WHERE id = ?').bind('revoked', now(), creatorId).run();
-    try { await c.env.DB.prepare('UPDATE users SET is_creator = 0 WHERE id = ?').bind(creator.user_id).run(); } catch {}
-    return c.json({ message: 'Creator badge removed' });
-  } catch (e: any) { console.error('Creator badge remove failed:', getErrorCode(e)); return c.json({ detail: 'Remove badge failed' }, 500); }
-});
-
-// ═══════════════════════════════════════════════════════════════
 // ADMIN GOVERNANCE ENDPOINTS
 // ═══════════════════════════════════════════════════════════════
 
@@ -18234,381 +24011,6 @@ const requireAdmin = async (c: any) => {
   const admin = await requireAdminRole(c, 'admin:read');
   return admin.userId;
 };
-
-api.post('/admin/supabase/transfer', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireAdmin(c);
-    const body: any = await c.req.json().catch(() => ({}));
-    const limit = clampNumber(body.limit || c.req.query('limit'), 1, 1000, 500);
-    const offset = clampNumber(body.offset || c.req.query('offset'), 0, 1_000_000_000, 0);
-    const requestedTables = Array.isArray(body.tables) ? body.tables.map(String) : [];
-    const allTables = [
-      'users',
-      'posts',
-      'comments',
-      'interactions',
-      'follows',
-      'blocks',
-      'notifications',
-      'reports',
-      'messages',
-      'group_chats',
-      'post_places',
-      'media_assets',
-    ];
-    const tables = requestedTables.length ? allTables.filter((table) => requestedTables.includes(table)) : allTables;
-    if (!tables.length) return c.json({ detail: 'No valid transfer tables requested.' }, 400);
-
-    const results: any[] = [];
-    if (tables.includes('users')) results.push(await transferLegacyUsersToSupabase(c, limit, offset));
-    if (tables.includes('posts')) results.push(await transferLegacyPostsToSupabase(c, limit, offset));
-    if (tables.includes('comments')) results.push(await transferLegacyCommentsToSupabase(c, limit, offset));
-    if (tables.includes('interactions')) results.push(await transferLegacyInteractionsToSupabase(c, limit, offset));
-    if (tables.includes('follows')) results.push(await transferLegacyFollowsToSupabase(c, limit, offset));
-    if (tables.includes('blocks')) results.push(await transferLegacyBlocksToSupabase(c, limit, offset));
-    if (tables.includes('notifications')) results.push(await transferLegacyNotificationsToSupabase(c, limit, offset));
-    if (tables.includes('reports')) results.push(await transferLegacyReportsToSupabase(c, limit, offset));
-    if (tables.includes('messages')) results.push(await transferLegacyMessagesToSupabase(c, limit, offset));
-    if (tables.includes('group_chats')) results.push(await transferLegacyGroupChatsToSupabase(c, limit, offset));
-    if (tables.includes('post_places')) results.push(await transferLegacyPostPlacesToSupabase(c, limit, offset));
-    if (tables.includes('media_assets')) results.push(await transferLegacyMediaAssetsToSupabase(c, limit, offset));
-
-    try {
-      await supabaseAdminUpsert(c, 'app_documents', [{
-        owner_id: null,
-        collection: 'transfer_runs',
-        document_key: `d1_${Date.now()}_${offset}`,
-        visibility: 'private',
-        document: {
-          source: 'cloudflare_d1',
-          admin_id: adminId,
-          limit,
-          offset,
-          tables,
-          results,
-          created_at: now(),
-        },
-      }], 'owner_id,collection,document_key');
-    } catch {}
-
-    return c.json({
-      ok: true,
-      limit,
-      offset,
-      next_offset: offset + limit,
-      results,
-      note: 'Run again with the next_offset until every table returns 0 rows.',
-    });
-  } catch (error: any) {
-    const code = getErrorCode(error);
-    if (code === 'FORBIDDEN') return c.json({ detail: 'Admin only' }, 403);
-    if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'SUPABASE_URL is not configured.' }, 503);
-    if (code === 'SUPABASE_SERVICE_ROLE_MISSING') {
-      return c.json({
-        detail: 'Set SUPABASE_SERVICE_ROLE_KEY as a Cloudflare Worker secret before transfer.',
-        command: 'npx.cmd wrangler secret put SUPABASE_SERVICE_ROLE_KEY',
-      }, 503);
-    }
-    console.error('Supabase transfer failed:', code, error?.message || error);
-    return c.json({ detail: 'Supabase transfer failed.', code }, 500);
-  }
-});
-
-api.post('/admin/supabase/auth/backfill', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireAdmin(c);
-    const body: any = await c.req.json().catch(() => ({}));
-    const limit = clampNumber(body.limit || c.req.query('limit'), 1, 500, 100);
-    const offset = clampNumber(body.offset || c.req.query('offset'), 0, 1_000_000_000, 0);
-    const result = await backfillLegacyUsersToSupabaseAuth(c, limit, offset);
-    await logSecurityEvent(c, 'supabase_auth_backfill_run', adminId, { limit, offset, result });
-    return c.json({
-      ok: true,
-      limit,
-      offset,
-      next_offset: offset + limit,
-      result,
-      note: 'Run again with next_offset until processed returns 0. Existing password users are linked and their Supabase password is set on next successful login/password update.',
-    });
-  } catch (error: any) {
-    const code = getErrorCode(error);
-    if (code === 'FORBIDDEN') return c.json({ detail: 'Admin only' }, 403);
-    if (code === 'SUPABASE_NOT_CONFIGURED') return c.json({ detail: 'SUPABASE_URL is not configured.' }, 503);
-    if (code === 'SUPABASE_SERVICE_ROLE_MISSING') return c.json({ detail: 'SUPABASE_SERVICE_ROLE_KEY is not configured.' }, 503);
-    console.error('Supabase Auth backfill failed:', code, error?.message || error);
-    return c.json({ detail: 'Supabase Auth backfill failed.', code }, 500);
-  }
-});
-
-// Create tables for governance (run once)
-api.post('/admin/init-governance', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireAdmin(c);
-    await c.env.DB.exec(`
-      CREATE TABLE IF NOT EXISTS applications (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        details TEXT DEFAULT '{}',
-        admin_notes TEXT DEFAULT '',
-        reviewed_by TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      );
-      CREATE TABLE IF NOT EXISTS reports (
-        id TEXT PRIMARY KEY,
-        reporter_id TEXT NOT NULL,
-        reported_type TEXT NOT NULL,
-        reported_id TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        details TEXT DEFAULT '',
-        status TEXT DEFAULT 'pending',
-        admin_notes TEXT DEFAULT '',
-        reviewed_by TEXT,
-        action_taken TEXT DEFAULT '',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (reporter_id) REFERENCES users(id)
-      );
-      CREATE TABLE IF NOT EXISTS admin_actions (
-        id TEXT PRIMARY KEY,
-        admin_id TEXT NOT NULL,
-        action_type TEXT NOT NULL,
-        target_type TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        details TEXT DEFAULT '',
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (admin_id) REFERENCES users(id)
-      );
-      CREATE TABLE IF NOT EXISTS notifications (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL,
-        type TEXT NOT NULL DEFAULT 'general',
-        title TEXT NOT NULL DEFAULT '',
-        body TEXT NOT NULL DEFAULT '',
-        data TEXT DEFAULT '{}',
-        is_read INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (user_id) REFERENCES users(id)
-      );
-    `);
-    return c.json({ message: 'Governance tables created' });
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// ── Applications ──
-
-// Submit application (from main app)
-api.post('/applications', authMiddleware, async (c) => {
-  const body = await c.req.json();
-  const { type } = body; // type: 'creator' | 'publisher'
-  if (!type || !['creator', 'publisher'].includes(type)) return c.json({ detail: 'Invalid type' }, 400);
-  return c.json({ detail: 'Creator and publisher applications have been removed from Captro.' }, 410);
-});
-
-// List applications (admin)
-api.get('/admin/applications', authMiddleware, async (c) => {
-  try {
-    await requireAdmin(c);
-    const type = c.req.query('type') || '';
-    const status = c.req.query('status') || '';
-    let q = 'SELECT a.*, u.full_name, u.email, u.username, u.profile_image FROM applications a LEFT JOIN users u ON a.user_id = u.id';
-    const conditions: string[] = [];
-    const binds: string[] = [];
-    if (type) { conditions.push('a.type = ?'); binds.push(type); }
-    if (status) { conditions.push('a.status = ?'); binds.push(status); }
-    if (conditions.length > 0) q += ' WHERE ' + conditions.join(' AND ');
-    q += ' ORDER BY a.created_at DESC LIMIT 100';
-    let stmt = c.env.DB.prepare(q);
-    for (let i = 0; i < binds.length; i++) stmt = stmt.bind(...binds);
-    // Manual binding
-    const r = binds.length === 0 ? await c.env.DB.prepare(q).all()
-      : binds.length === 1 ? await c.env.DB.prepare(q).bind(binds[0]).all()
-      : await c.env.DB.prepare(q).bind(binds[0], binds[1]).all();
-    return c.json(r.results);
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// Review application (admin)
-api.put('/admin/applications/:id', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireAdmin(c);
-    const appId = c.req.param('id');
-    const body = await c.req.json();
-    const { status, admin_notes } = body;
-    if (!['approved', 'declined'].includes(status)) return c.json({ detail: 'Invalid status' }, 400);
-    const ts = now();
-    await c.env.DB.prepare(
-      'UPDATE applications SET status = ?, admin_notes = ?, reviewed_by = ?, updated_at = ? WHERE id = ?'
-    ).bind(status, admin_notes || '', adminId, ts, appId).run();
-
-    // If approved, update user role
-    if (status === 'approved') {
-      const app: any = await c.env.DB.prepare('SELECT * FROM applications WHERE id = ?').bind(appId).first();
-      if (app) {
-        if (app.type === 'creator') {
-          await c.env.DB.prepare('UPDATE users SET is_creator = 1 WHERE id = ?').bind(app.user_id).run();
-        } else if (app.type === 'publisher') {
-          await c.env.DB.prepare('UPDATE users SET is_publisher = 1 WHERE id = ?').bind(app.user_id).run();
-        }
-      }
-    }
-
-    // Log admin action
-    await c.env.DB.prepare(
-      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(crypto.randomUUID(), adminId, `application_${status}`, 'application', appId, JSON.stringify({ admin_notes }), ts).run();
-
-    return c.json({ message: `Application ${status}` });
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// ── Reports ──
-
-// Submit report (from main app)
-api.post('/reports', authMiddleware, async (c) => {
-  return await submitReportRequest(c);
-});
-
-// List reports (admin)
-api.get('/admin/reports', authMiddleware, async (c) => {
-  try {
-    await requireAdmin(c);
-    const status = c.req.query('status') || '';
-    let q = 'SELECT r.*, u.full_name as reporter_name, u.email as reporter_email FROM reports r LEFT JOIN users u ON r.reporter_id = u.id';
-    if (status) q += ' WHERE r.status = ?';
-    q += ' ORDER BY r.created_at DESC LIMIT 100';
-    const r = status
-      ? await c.env.DB.prepare(q).bind(status).all()
-      : await c.env.DB.prepare(q).all();
-    return c.json(r.results);
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// Review report (admin)
-api.put('/admin/reports/:id', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireAdmin(c);
-    const reportId = c.req.param('id');
-    const body = await c.req.json();
-    const { status, admin_notes, action_taken } = body;
-    const ts = now();
-    const normalizedStatus = normalizeReportStatus(status || action_taken || 'under_review', 'under_review');
-    await c.env.DB.prepare(
-      'UPDATE reports SET status = ?, admin_notes = ?, action_taken = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ? WHERE id = ?'
-    ).bind(normalizedStatus, cleanMultilineText(admin_notes || '', 1000), cleanText(action_taken || normalizedStatus, 120), adminId, ts, ts, reportId).run();
-
-    await c.env.DB.prepare(
-      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(crypto.randomUUID(), adminId, `report_${normalizedStatus}`, 'report', reportId, JSON.stringify(scrubLogMetadata({ admin_notes, action_taken })), ts).run();
-
-    return c.json({ message: 'Report updated' });
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// ── Content Moderation ──
-
-// Admin: Remove post
-api.delete('/admin/posts/:postId', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireAdmin(c);
-    const postId = c.req.param('postId');
-    const ts = now();
-    await ensureGovernanceSchema(c.env.DB);
-    await c.env.DB.prepare("UPDATE posts SET status = 'removed', removed_at = ?, removed_reason = 'Removed by admin' WHERE id = ?")
-      .bind(ts, postId).run();
-
-    await c.env.DB.prepare(
-      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(crypto.randomUUID(), adminId, 'remove_post', 'post', postId, JSON.stringify({ soft_deleted: true }), ts).run();
-
-    return c.json({ message: 'Post removed', soft_deleted: true });
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// Admin: Get all posts for moderation
-api.get('/admin/posts', authMiddleware, async (c) => {
-  try {
-    await requireAdmin(c);
-    const page = parseInt(c.req.query('page') || '1');
-    const limit = 20;
-    const offset = (page - 1) * limit;
-    const r = await c.env.DB.prepare(
-      'SELECT p.*, u.full_name as user_full_name, u.email as user_email FROM posts p LEFT JOIN users u ON p.user_id = u.id ORDER BY p.created_at DESC LIMIT ? OFFSET ?'
-    ).bind(limit, offset).all();
-    return c.json(r.results);
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// Admin: Get all users
-api.get('/admin/users', authMiddleware, async (c) => {
-  try {
-    await requireAdmin(c);
-    const r = await c.env.DB.prepare(
-      'SELECT id, email, full_name, username, profile_image, is_admin, is_creator, is_publisher, is_verified, created_at FROM users ORDER BY created_at DESC LIMIT 200'
-    ).all();
-    return c.json(r.results);
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// Admin: Update user role
-api.put('/admin/users/:userId', authMiddleware, async (c) => {
-  try {
-    const adminId = await requireAdmin(c);
-    const targetUserId = c.req.param('userId');
-    const body = await c.req.json();
-    const { is_admin, is_creator, is_publisher, is_verified } = body;
-    const ts = now();
-    const fields: string[] = [];
-    const vals: any[] = [];
-    if (is_admin !== undefined) { fields.push('is_admin = ?'); vals.push(is_admin ? 1 : 0); }
-    if (is_creator !== undefined) { fields.push('is_creator = ?'); vals.push(is_creator ? 1 : 0); }
-    if (is_publisher !== undefined) { fields.push('is_publisher = ?'); vals.push(is_publisher ? 1 : 0); }
-    if (is_verified !== undefined) { fields.push('is_verified = ?'); vals.push(is_verified ? 1 : 0); }
-    if (fields.length === 0) return c.json({ detail: 'No fields to update' }, 400);
-    vals.push(targetUserId);
-    const updateTargetUserSql = `UPDATE users SET ${fields.join(', ')} WHERE id = ?`;
-    await c.env.DB.prepare(updateTargetUserSql).bind(...vals).run();
-
-    await c.env.DB.prepare(
-      'INSERT INTO admin_actions (id, admin_id, action_type, target_type, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(crypto.randomUUID(), adminId, 'update_user', 'user', targetUserId, JSON.stringify(body), ts).run();
-
-    return c.json({ message: 'User updated' });
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// Admin: Action log
-api.get('/admin/actions', authMiddleware, async (c) => {
-  try {
-    await requireAdmin(c);
-    const r = await c.env.DB.prepare(
-      'SELECT a.*, u.full_name as admin_name FROM admin_actions a LEFT JOIN users u ON a.admin_id = u.id ORDER BY a.created_at DESC LIMIT 100'
-    ).all();
-    return c.json(r.results);
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
-
-// Admin: Dashboard stats
-api.get('/admin/stats', authMiddleware, async (c) => {
-  try {
-    await requireAdmin(c);
-    const [users, posts, pendingApps, pendingReports] = await Promise.all([
-      c.env.DB.prepare('SELECT COUNT(*) as count FROM users').first(),
-      c.env.DB.prepare('SELECT COUNT(*) as count FROM posts').first(),
-      c.env.DB.prepare("SELECT COUNT(*) as count FROM applications WHERE status = 'pending'").first().catch(() => ({ count: 0 })),
-      c.env.DB.prepare("SELECT COUNT(*) as count FROM reports WHERE status = 'pending'").first().catch(() => ({ count: 0 })),
-    ]);
-    return c.json({
-      total_users: (users as any)?.count || 0,
-      total_posts: (posts as any)?.count || 0,
-      pending_applications: (pendingApps as any)?.count || 0,
-      pending_reports: (pendingReports as any)?.count || 0,
-    });
-  } catch (e: any) { return c.json({ detail: e?.message === 'FORBIDDEN' ? 'Admin access required' : 'Request failed.' }, e?.message === 'FORBIDDEN' ? 403 : 500); }
-});
 
 async function runDeletionStatement(env: Env, sql: string, binds: any[] = []) {
   try {
@@ -18660,6 +24062,173 @@ async function deleteCloudflareMediaAsset(env: Env, asset: any) {
       status: response.status,
       media_id: publicId(asset?.id || '', 120),
     }));
+  }
+}
+
+function chunkDeletionValues<T>(values: T[], size = 50): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
+  return out;
+}
+
+function dueDeletionScheduledAt(value: unknown, cutoffMs = Date.now()): boolean {
+  const text = cleanText(value, 80);
+  if (!text) return false;
+  const scheduledMs = Date.parse(text);
+  return Number.isFinite(scheduledMs) && scheduledMs <= cutoffMs;
+}
+
+async function supabaseDeleteRowsByAnyField(c: any, table: string, fieldValues: Array<[string, string]>) {
+  for (const [field, value] of fieldValues) {
+    const cleanValue = cleanText(value, 240);
+    if (!field || !cleanValue) continue;
+    await supabaseAdminDeleteRowsIfShapeExists(c, table, { [field]: postgrestEqFilter(cleanValue) })
+      .catch((error: any) => console.warn(JSON.stringify({
+        event: 'supabase_account_deletion_table_cleanup_failed',
+        table,
+        field,
+        code: getErrorCode(error).slice(0, 180),
+      })));
+  }
+}
+
+async function supabaseDeleteRowsForPostIds(c: any, table: string, field: string, postIds: string[]) {
+  const cleanPostIds = Array.from(new Set(postIds.map((postId) => cleanText(postId, 120)).filter(Boolean)));
+  for (const chunk of chunkDeletionValues(cleanPostIds)) {
+    await supabaseAdminDeleteRowsIfShapeExists(c, table, { [field]: postgrestInFilter(chunk) })
+      .catch((error: any) => console.warn(JSON.stringify({
+        event: 'supabase_account_deletion_post_cleanup_failed',
+        table,
+        field,
+        code: getErrorCode(error).slice(0, 180),
+      })));
+  }
+}
+
+async function permanentlyDeleteSupabaseAccount(env: Env, row: any) {
+  const c: any = { env };
+  const user = supabaseAppUserToLegacyUser(row);
+  const userId = publicId(user?.id, 120);
+  if (!userId || String(user?.status || '') === 'deleted') return;
+  const deletedAt = now();
+  const authUserId = isUuidText(row?.supabase_user_id || user?.supabase_user_id);
+
+  const identities = await supabaseAdminQueryRows(c, 'app_account_identities', {
+    select: 'provider,provider_user_id,email_hash',
+    filters: { user_id: postgrestEqFilter(userId) },
+    limit: 200,
+  }).catch(() => []);
+  const identityRows = identities.length ? identities : [{
+    provider: cleanText(user.oauth_provider || (user.email ? 'email' : ''), 40),
+    provider_user_id: cleanText(user.oauth_subject || authUserId || '', 240),
+    email_hash: user.email ? await privacyHash(c, normalizeOptionalEmail(user.email) || '') : '',
+  }];
+  for (const identity of identityRows) {
+    await supabaseAdminUpsertSafe(c, 'app_deleted_account_safety_records', [{
+      id: uuid(),
+      user_id: userId,
+      email_hash: cleanText(identity.email_hash || '', 160) || null,
+      provider: cleanText(identity.provider || '', 40) || null,
+      provider_user_id_hash: identity.provider_user_id ? await privacyHash(c, identity.provider_user_id) : null,
+      status_at_deletion: cleanText(user.status || 'deletion_pending', 40),
+      reason: cleanText(user.ban_reason || 'account_deletion', 160),
+      metadata: {
+        source: 'supabase_primary_scheduled_cleanup',
+        deleted_at: deletedAt,
+      },
+      created_at: deletedAt,
+    }], 'id');
+  }
+
+  const assets = await supabaseAdminQueryRows(c, 'app_media_assets', {
+    select: 'id,storage_provider,storage_key,media_type',
+    filters: { user_id: postgrestEqFilter(userId) },
+    limit: 10000,
+  }).catch(() => []);
+  for (const asset of assets) await deleteCloudflareMediaAsset(env, asset);
+
+  const postRows = await supabaseAdminQueryRows(c, 'app_posts', {
+    select: 'legacy_post_id',
+    filters: { app_user_id: postgrestEqFilter(userId) },
+    limit: 10000,
+  }).catch(() => []);
+  const postIds = postRows.map((post: any) => cleanText(post.legacy_post_id, 120)).filter(Boolean);
+  for (const table of ['app_post_places', 'post_comments', 'app_post_interactions', 'app_media_assets']) {
+    await supabaseDeleteRowsForPostIds(c, table, 'legacy_post_id', postIds);
+  }
+
+  await supabaseDeleteRowsByAnyField(c, 'app_moderation_results', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
+  await supabaseDeleteRowsByAnyField(c, 'app_moderation_jobs', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
+  await supabaseDeleteRowsByAnyField(c, 'app_moderation_events', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
+
+  const userScopedDeletes: Array<[string, Array<[string, string]>]> = [
+    ['app_push_tokens', [['user_id', userId]]],
+    ['app_notifications', [['user_id', userId], ['from_user_id', userId]]],
+    ['app_post_interactions', [['app_user_id', userId], ['user_id', authUserId || userId]]],
+    ['post_comment_likes', [['app_user_id', userId], ['user_id', authUserId || userId]]],
+    ['post_comments', [['app_user_id', userId], ['user_id', authUserId || userId]]],
+    ['app_follows', [['app_follower_id', userId], ['app_following_id', userId]]],
+    ['app_blocks', [['blocker_id', userId], ['blocked_id', userId]]],
+    ['app_friend_requests', [['from_user_id', userId], ['to_user_id', userId]]],
+    ['app_friendships', [['user_id', userId], ['friend_id', userId]]],
+    ['app_reports', [['reporter_id', userId], ['target_owner_user_id', userId], ['assigned_to', userId], ['reviewed_by', userId]]],
+    ['app_messages', [['sender_id', userId], ['receiver_id', userId]]],
+    ['app_group_messages', [['sender_id', userId]]],
+    ['app_group_chat_members', [['user_id', userId]]],
+    ['app_group_chats', [['created_by', userId]]],
+    ['app_stories', [['user_id', userId]]],
+    ['app_story_likes', [['user_id', userId]]],
+    ['app_story_views', [['user_id', userId]]],
+    ['app_story_thoughts', [['user_id', userId]]],
+    ['app_favorite_sounds', [['user_id', userId]]],
+    ['app_client_events', [['user_id', userId]]],
+    ['app_account_identities', [['user_id', userId]]],
+  ];
+  for (const [table, filters] of userScopedDeletes) await supabaseDeleteRowsByAnyField(c, table, filters);
+  await supabaseDeleteRowsForPostIds(c, 'app_posts', 'legacy_post_id', postIds);
+
+  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(userId) }, {
+    supabase_user_id: null,
+    email: null,
+    username: `deleted_${userId.slice(0, 12)}`,
+    full_name: 'Deleted user',
+    avatar_url: null,
+    cover_url: null,
+    bio: '',
+    city: '',
+    is_private: true,
+    is_verified: false,
+    counts: { followers_count: 0, following_count: 0, posts_count: 0 },
+    profile: {},
+    metadata: {
+      status: 'deleted',
+      deleted_at: deletedAt,
+      permanent_deletion_completed_at: deletedAt,
+    },
+    updated_at: deletedAt,
+  });
+
+  await writeSupabaseAuditLog(c, {
+    actionType: 'account_deletion_permanent_completed',
+    actorUserId: 'system',
+    actorRole: 'system',
+    targetType: 'user',
+    targetId: userId,
+    targetUserId: userId,
+    metadata: {
+      deleted_at: deletedAt,
+      deleted_media_count: assets.length,
+      deleted_post_count: postIds.length,
+    },
+  }).catch((error: any) => console.warn(JSON.stringify({
+    event: 'supabase_account_deletion_audit_failed',
+    code: getErrorCode(error).slice(0, 180),
+  })));
+
+  if (authUserId) {
+    await deleteSupabaseAuthUser(c, authUserId).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_auth_permanent_delete_failed', code: getErrorCode(error).slice(0, 160), user_id: publicId(userId, 120) }));
+    });
   }
 }
 
@@ -18774,6 +24343,40 @@ async function permanentlyDeleteAccount(env: Env, user: any) {
 }
 
 async function processAccountDeletionQueue(env: Env, limit = 20) {
+  const c: any = { env };
+  if (supabasePrimaryConfigured(c)) {
+    const rows = await supabaseAdminQueryRows(c, 'app_users', {
+      select: SUPABASE_APP_USER_SELECT,
+      filters: { 'metadata->>status': postgrestEqFilter('deletion_pending') },
+      order: 'updated_at.asc',
+      limit: Math.max(limit * 5, limit),
+    }).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_account_deletion_due_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
+      return [];
+    });
+    const due = rows
+      .filter((account: any) => dueDeletionScheduledAt((parseJsonObject(account?.metadata) as any).deletion_scheduled_at))
+      .slice(0, limit);
+    for (const account of due) {
+      try {
+        await permanentlyDeleteSupabaseAccount(env, account);
+      } catch (error: any) {
+        console.warn(JSON.stringify({
+          event: 'supabase_account_deletion_cleanup_failed',
+          code: getErrorCode(error).slice(0, 180),
+          user_id: publicId(account?.id || '', 120),
+        }));
+      }
+    }
+    return;
+  }
+  if (supabasePrimaryRequestedForEnv(env)) {
+    console.warn(JSON.stringify({
+      event: 'supabase_primary_required',
+      feature: 'account_deletion_queue',
+    }));
+    return;
+  }
   await ensureAccountDeletionSchema(env.DB);
   const due = await queryDeletionRows(env,
     `SELECT * FROM users
@@ -18798,6 +24401,7 @@ async function processAccountDeletionQueue(env: Env, limit = 20) {
 }
 
 // Mount API routes on app
+api.route('/aura', createAuraRoutes(authMiddleware, getUserId, enforceRateLimit));
 app.route('/api', api);
 
 async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJobMessage>, env: Env, _ctx: ExecutionContext) {
