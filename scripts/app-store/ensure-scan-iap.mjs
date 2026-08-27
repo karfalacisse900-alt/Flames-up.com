@@ -82,22 +82,6 @@ async function createPurchase(appID) {
   return body.data;
 }
 
-async function ensureReviewNote(purchaseID) {
-  const payload = {
-    data: {
-      type: 'inAppPurchases',
-      id: purchaseID,
-      attributes: {
-        reviewNote: 'Adds 10 private receipt or invoice verification credits. Each completed verification consumes one $0.10 credit.',
-      },
-    },
-  };
-  await expect(`/v2/inAppPurchases/${purchaseID}`, {
-    method: 'PATCH',
-    body: JSON.stringify(payload),
-  });
-}
-
 async function ensureAvailability(purchaseID) {
   const existing = await request(`/v2/inAppPurchases/${purchaseID}/inAppPurchaseAvailability`);
   if (existing.response.ok && existing.body?.data?.id) {
@@ -211,7 +195,6 @@ if (!purchase) {
 } else {
   console.log(`Using existing ${productID} (${purchase.id}).`);
 }
-await ensureReviewNote(purchase.id);
 await ensureAvailability(purchase.id);
 await ensureLocalization(purchase.id);
 await ensurePrice(purchase.id);
