@@ -46,11 +46,11 @@
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSCameraUsageDescription</key>
-  <string>Captro uses your camera so you can take photos and videos to share as posts, stories, or profile pictures. For example, you can take a photo and upload it to your Captro feed.</string>
+  <string>Captro uses your camera to create posts and stories, update your profile, and privately scan receipts or invoices that you choose to verify.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Captro uses your microphone so you can record audio when creating videos for posts or stories.</string>
   <key>NSPhotoLibraryUsageDescription</key>
-  <string>Captro uses your photo library so you can choose photos and videos to share as posts, stories, or profile pictures.</string>
+  <string>Captro uses your photo library so you can choose media for posts and profiles or privately select a receipt or invoice that you choose to verify.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
   <string>Save edited media from Captro to your photo library.</string>
   <key>NSLocationWhenInUseUsageDescription</key>

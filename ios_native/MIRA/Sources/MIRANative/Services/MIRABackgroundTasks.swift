@@ -89,17 +89,15 @@ private enum MIRABackgroundRefreshWorker {
 
     let api = MIRAAPIClient(sessionProvider: keychain)
     async let feed: Bool = refreshFeed(api: api)
-    async let discover: Bool = refreshDiscover(api: api)
     async let profile: Bool = refreshProfile(api: api)
     async let notifications: Bool = refreshNotifications(api: api)
     async let chat: Bool = refreshChat(api: api)
     await cleanupCaches()
     let feedUpdated = await feed
-    let discoverUpdated = await discover
     let profileUpdated = await profile
     let notificationsUpdated = await notifications
     let chatUpdated = await chat
-    let result = feedUpdated || discoverUpdated || profileUpdated || notificationsUpdated || chatUpdated
+    let result = feedUpdated || profileUpdated || notificationsUpdated || chatUpdated
     MIRAApplePerformanceLogger.event("background_refresh_complete", detail: result ? "updated" : "no_update")
     return result
   }
@@ -114,14 +112,6 @@ private enum MIRABackgroundRefreshWorker {
     let cached = await MIRAAppCacheStore.shared.loadFeed() ?? []
     let merged = await MIRAAppCacheStore.shared.mergeFreshFirstPage(existing: cached, fresh: posts, pageLimit: 8)
     await MIRAAppCacheStore.shared.saveFeed(merged)
-    return true
-  }
-
-  private static func refreshDiscover(api: MIRAAPIClient) async -> Bool {
-    guard let posts: [MIRAPost] = try? await api.get("/discover?category=all&limit=18"), !posts.isEmpty else { return false }
-    let cached = await MIRAAppCacheStore.shared.loadDiscoverPosts(category: "all") ?? []
-    let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(existing: cached, fresh: posts, maxCount: 90)
-    await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: "all")
     return true
   }
 

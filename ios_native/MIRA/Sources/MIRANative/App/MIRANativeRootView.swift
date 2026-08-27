@@ -5,7 +5,7 @@ import GoogleSignIn
 
 public enum MIRATab: Hashable {
   case main
-  case discover
+  case scan
   case chat
   case profile
 }
@@ -15,7 +15,6 @@ public enum MIRAStartupPhase: Equatable {
   case checkingSession
   case loadingUser
   case preparingFeed
-  case preparingDiscover
   case preparingProfile
   case preparingMainTabs
   case readyAuthenticated
@@ -32,8 +31,6 @@ public enum MIRAStartupPhase: Equatable {
       return "Loading your profile"
     case .preparingFeed:
       return "Preparing your feed"
-    case .preparingDiscover:
-      return "Preparing Discover"
     case .preparingProfile:
       return "Preparing your profile"
     case .preparingMainTabs:
@@ -55,7 +52,6 @@ final class MIRAStartupCoordinator: ObservableObject {
   @Published private(set) var shouldMountAllAuthenticatedTabs = false
 
   let feedModel: MainFeedModel
-  let discoverModel: DiscoverNativeModel
   let chatModel: ChatNativeModel
   let profileModel: ProfileNativeModel
 
@@ -67,7 +63,6 @@ final class MIRAStartupCoordinator: ObservableObject {
   init(api: MIRAAPIClient) {
     self.api = api
     self.feedModel = MainFeedModel(api: api)
-    self.discoverModel = DiscoverNativeModel(api: api)
     self.chatModel = ChatNativeModel(api: api)
     self.profileModel = ProfileNativeModel(api: api)
   }
@@ -110,15 +105,12 @@ final class MIRAStartupCoordinator: ObservableObject {
     phase = .preparingFeed
     let feedTask = Task { await feedModel.prepareForStartup() }
 
-    phase = .preparingDiscover
-    let discoverTask = Task { await discoverModel.prepareForStartup() }
-
     phase = .preparingProfile
     let profileTask = Task { await profileModel.prepareForStartup(signedInUser: authSession.user) }
 
     let chatTask = Task { await chatModel.prepareForStartup() }
 
-    _ = await (feedTask.value, discoverTask.value, profileTask.value, chatTask.value)
+    _ = await (feedTask.value, profileTask.value, chatTask.value)
     startInitialMediaPrewarm()
 
     phase = .readyAuthenticated
@@ -162,7 +154,7 @@ final class MIRAStartupCoordinator: ObservableObject {
   }
 
   private func startInitialMediaPrewarm() {
-    let posts = Array(feedModel.posts.prefix(4)) + Array(discoverModel.posts.prefix(9)) + Array(profileModel.posts.prefix(6))
+    let posts = Array(feedModel.posts.prefix(6)) + Array(profileModel.posts.prefix(6))
     let previewURLs = posts.flatMap { post in
       post.posterMediaURLs + post.thumbnailMediaURLs
     }
@@ -251,7 +243,7 @@ public struct MIRANativeRootView: View {
         selectedTab = .main
         loadedTabs = [.main]
       } else {
-        loadedTabs.formUnion([.main, .discover, .profile])
+        loadedTabs.formUnion([.main, .scan, .profile])
       }
       registerCachedPushTokenIfPossible()
     }
@@ -307,11 +299,11 @@ public struct MIRANativeRootView: View {
         .tag(MIRATab.main)
         .tabItem { Label("Home", systemImage: "house.fill") }
 
-      lazyTab(.discover) {
-        DiscoverNativeView(api: api, model: startup.discoverModel)
+      lazyTab(.scan) {
+        CaptroScanView(api: api)
       }
-        .tag(MIRATab.discover)
-        .tabItem { Label("Discover", systemImage: "safari.fill") }
+        .tag(MIRATab.scan)
+        .tabItem { Label("Scan", systemImage: "doc.viewfinder.fill") }
 
       lazyTab(.chat) {
         ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)

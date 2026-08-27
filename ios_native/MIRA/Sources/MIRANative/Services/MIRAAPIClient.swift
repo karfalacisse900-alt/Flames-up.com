@@ -209,10 +209,19 @@ public final class MIRAAPIClient {
     fieldName: String = "file",
     fileName: String,
     mimeType: String,
-    data: Data
+    data: Data,
+    fields: [String: String] = [:]
   ) async throws -> T {
     let url = try makeURL(path)
-    return try await uploadMultipart(to: url, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data, authorize: true)
+    return try await uploadMultipart(
+      to: url,
+      fieldName: fieldName,
+      fileName: fileName,
+      mimeType: mimeType,
+      data: data,
+      fields: fields,
+      authorize: true
+    )
   }
 
   public func uploadMultipart<T: Decodable>(
@@ -221,6 +230,7 @@ public final class MIRAAPIClient {
     fileName: String,
     mimeType: String,
     data: Data,
+    fields: [String: String] = [:],
     authorize: Bool = false
   ) async throws -> T {
     var request = URLRequest(url: absoluteURL)
@@ -235,7 +245,14 @@ public final class MIRAAPIClient {
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
     request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
     request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
-    request.httpBody = multipartBody(boundary: boundary, fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: data)
+    request.httpBody = multipartBody(
+      boundary: boundary,
+      fieldName: fieldName,
+      fileName: fileName,
+      mimeType: mimeType,
+      data: data,
+      fields: fields
+    )
     if authorize, let token = await sessionProvider?.accessToken(), !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
@@ -377,8 +394,22 @@ public final class MIRAAPIClient {
     )
   }
 
-  private func multipartBody(boundary: String, fieldName: String, fileName: String, mimeType: String, data: Data) -> Data {
+  private func multipartBody(
+    boundary: String,
+    fieldName: String,
+    fileName: String,
+    mimeType: String,
+    data: Data,
+    fields: [String: String]
+  ) -> Data {
     var body = Data()
+    for key in fields.keys.sorted() {
+      guard let value = fields[key] else { continue }
+      body.append("--\(boundary)\r\n".data(using: .utf8)!)
+      body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
+      body.append(value.data(using: .utf8)!)
+      body.append("\r\n".data(using: .utf8)!)
+    }
     body.append("--\(boundary)\r\n".data(using: .utf8)!)
     body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
     body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)

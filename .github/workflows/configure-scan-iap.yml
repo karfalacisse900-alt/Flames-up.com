@@ -1,0 +1,25 @@
+name: Configure Captro Scan IAP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  configure-scan-consumable:
+    name: Ensure Captro Scan consumable exists
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Configure 10-credit consumable
+        env:
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          APP_STORE_BUNDLE_ID: com.captro.app
+          CAPTRO_SCAN_PRODUCT_ID: com.captro.scan.credits.10
+        run: node scripts/app-store/ensure-scan-iap.mjs

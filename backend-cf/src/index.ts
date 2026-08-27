@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
+import { createCaptroScanRoutes } from './scan';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -90,6 +91,15 @@ interface Env {
   STRIPE_SUCCESS_URL?: string;
   STRIPE_CANCEL_URL?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  VERYFI_CLIENT_ID?: string;
+  VERYFI_CLIENT_SECRET?: string;
+  VERYFI_USERNAME?: string;
+  VERYFI_API_KEY?: string;
+  VERYFI_BASE_URL?: string;
+  APP_STORE_CONNECT_API_ISSUER_ID?: string;
+  APP_STORE_CONNECT_API_KEY_ID?: string;
+  APP_STORE_CONNECT_API_KEY_BASE64?: string;
+  APP_STORE_BUNDLE_ID?: string;
   ELEVENLABS_API_KEY?: string;
   MUSIC_DAILY_GENERATION_LIMIT?: string;
   MUSIC_GENERATION_COOLDOWN_SECONDS?: string;
@@ -21181,6 +21191,8 @@ async function processAccountDeletionQueue(env: Env, limit = 20) {
     }
   }
 }
+
+api.route('/scan', createCaptroScanRoutes(authMiddleware, getUserId, enforceRateLimit));
 
 // Mount API routes on app
 app.route('/api', api);
