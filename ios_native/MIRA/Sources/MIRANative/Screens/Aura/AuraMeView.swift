@@ -1,7 +1,8 @@
 import SwiftUI
+import UIKit
 
-/// Account surface for the four-tab Aura shell. Profile fields come from the authenticated user,
-/// while wallet/proof counts come only from local encrypted wallet and canonical proof state.
+/// Editorial account surface for the four-tab Aura shell. Profile fields come from the
+/// authenticated user, while Wallet and journal destinations retain their real stores/actions.
 public struct AuraMeView: View {
   let api: MIRAAPIClient
   @ObservedObject private var authSession: MIRAAuthSession
@@ -9,6 +10,7 @@ public struct AuraMeView: View {
   @ObservedObject private var gateway: AuraWalletGatewayStore
   @ObservedObject private var proofs: AuraProofLifecycleStore
   let openWallet: () -> Void
+  @State private var isEditingProfile = false
 
   public init(
     api: MIRAAPIClient,
@@ -29,185 +31,253 @@ public struct AuraMeView: View {
   public var body: some View {
     NavigationStack {
       ScrollView(showsIndicators: false) {
-        VStack(spacing: 13) {
-          profileCard
-          walletCard
-          proofStats
-          accountMenu
+        LazyVStack(alignment: .leading, spacing: 0) {
+          profileHeader
+
+          Divider()
+            .padding(.vertical, 18)
+
+          walletShortcut
+
+          Divider()
+            .padding(.vertical, 18)
+
+          journal
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 28)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 36)
       }
-      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
+      .background(Color(uiColor: .systemBackground).ignoresSafeArea())
       .navigationTitle("Me")
       .navigationBarTitleDisplayMode(.inline)
-      .toolbarBackground(MIRATheme.Color.paperCanvas, for: .navigationBar)
+      .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
       .toolbarBackground(.visible, for: .navigationBar)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          NavigationLink {
-            SettingsNativeView(api: api, authSession: authSession)
-          } label: {
-            Image(systemName: "gearshape")
-              .font(.system(size: 15, weight: .bold))
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .frame(width: 34, height: 34)
-              .background(MIRATheme.Color.paperSurface, in: Circle())
-              .overlay { Circle().stroke(MIRATheme.Color.inkBorder, lineWidth: 1.2) }
-              .shadow(color: MIRATheme.Color.hardShadow, radius: 0, x: 0, y: 2)
-              .padding(.bottom, 2)
+      .sheet(isPresented: $isEditingProfile) {
+        EditProfileNativeView(
+          user: authSession.user,
+          api: api,
+          onCancel: { isEditingProfile = false }
+        ) { updatedUser in
+          Task { @MainActor in
+            authSession.replaceUser(updatedUser)
+            isEditingProfile = false
           }
-          .accessibilityLabel("Settings")
         }
       }
     }
   }
 
-  private var profileCard: some View {
-    HStack(spacing: 14) {
-      RemoteAvatar(url: authSession.user?.profileImage, size: 72)
-        .overlay { Circle().stroke(MIRATheme.Color.inkBorder, lineWidth: 1.25) }
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 5) {
-          Text(profileDisplayName)
-            .font(.title3)
-            .fontWeight(.bold)
-          if authSession.user?.isVerified == true {
-            Image(systemName: "checkmark.seal.fill")
-              .foregroundStyle(MIRATheme.Color.auraViolet)
-              .accessibilityLabel("Verified profile")
+  private var profileHeader: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      HStack(alignment: .top, spacing: 16) {
+        RemoteAvatar(url: authSession.user?.profileImage, size: 88)
+
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(spacing: 6) {
+            Text(profileDisplayName)
+              .font(.title2)
+              .fontWeight(.bold)
+            if authSession.user?.isVerified == true {
+              Image(systemName: "checkmark.seal.fill")
+                .foregroundStyle(MIRATheme.Color.auraViolet)
+                .accessibilityLabel("Verified profile")
+            }
+          }
+
+          if let profileUsername {
+            Text(profileUsername)
+              .font(.subheadline)
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+
+          if let profileLocation {
+            Label(profileLocation, systemImage: "mappin.and.ellipse")
+              .font(.subheadline)
+              .foregroundStyle(MIRATheme.Color.textMuted)
           }
         }
-        Text(username)
-          .font(.subheadline)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-        if let bio = authSession.user?.bio, !bio.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-          Text(bio)
-            .font(.subheadline)
+
+        Spacer(minLength: 0)
+      }
+
+      if let profileBio {
+        Text(profileBio)
+          .font(.body)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      if authSession.user?.followersCount != nil || authSession.user?.followingCount != nil {
+        HStack(spacing: 24) {
+          if let followers = authSession.user?.followersCount {
+            profileMetric(value: followers, label: "Followers")
+          }
+          if let following = authSession.user?.followingCount {
+            profileMetric(value: following, label: "Following")
+          }
+        }
+      }
+
+      HStack(spacing: 10) {
+        Button {
+          isEditingProfile = true
+        } label: {
+          Label("Edit Profile", systemImage: "pencil")
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .tint(MIRATheme.Color.auraViolet)
+
+        NavigationLink {
+          SettingsNativeView(api: api, authSession: authSession)
+        } label: {
+          Label("Settings", systemImage: "gearshape")
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .tint(MIRATheme.Color.textSecondary)
+      }
+    }
+  }
+
+  private var walletShortcut: some View {
+    Button(action: openWallet) {
+      HStack(spacing: 13) {
+        Image(systemName: "wallet.pass")
+          .font(.title3.weight(.semibold))
+          .foregroundStyle(MIRATheme.Color.auraViolet)
+          .frame(width: 30)
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Wallet")
+            .font(.headline)
             .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(3)
+          Text(walletStatus)
+            .font(.caption)
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
         }
-      }
-      Spacer(minLength: 0)
-    }
-    .padding(16)
-    .physicalAuraCard(cornerRadius: 18)
-  }
 
-  private var walletCard: some View {
-    HStack(spacing: 14) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Wallet balance")
-          .font(.subheadline)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
+        Spacer(minLength: 8)
+
         Text(walletBalance)
-          .font(.title2)
-          .fontWeight(.bold)
-        Text(walletStatus)
-          .font(.caption)
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .multilineTextAlignment(.trailing)
+
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
-      Spacer()
-      Button("View Wallet", action: openWallet)
-        .buttonStyle(AuraTactilePrimaryButtonStyle())
+      .contentShape(Rectangle())
     }
-    .padding(16)
-    .physicalAuraCard(cornerRadius: 18)
+    .buttonStyle(.plain)
+    .accessibilityLabel("Open Wallet, \(walletBalance), \(walletStatus)")
   }
 
-  private var proofStats: some View {
-    HStack(spacing: 0) {
-      stat(value: String(proofs.records.count), label: "Proofs", systemImage: "checkmark.seal")
-      Rectangle().fill(MIRATheme.Color.inkBorder.opacity(0.24)).frame(width: 1, height: 52)
-      stat(value: String(confirmedProofCount), label: "Confirmed", systemImage: "cube.fill")
-      Rectangle().fill(MIRATheme.Color.inkBorder.opacity(0.24)).frame(width: 1, height: 52)
-      stat(value: String(feedbackCount), label: "Aura given", systemImage: "star.bubble")
-    }
-    .padding(.vertical, 16)
-    .physicalAuraCard(cornerRadius: 18)
-  }
+  private var journal: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Your journal")
+        .font(.title2)
+        .fontWeight(.bold)
+        .padding(.bottom, 8)
 
-  private var accountMenu: some View {
-    VStack(spacing: 0) {
       NavigationLink {
         AuraMyCommunityView(api: api, scope: "created", title: "My Posts")
       } label: {
-        menuRow("My Posts", systemImage: "square.and.pencil")
+        journalRow("Posts", subtitle: "Your published community posts", systemImage: "square.and.pencil")
       }
-      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
+      Divider().padding(.leading, 38)
+
       NavigationLink {
         AuraMyCommunityView(api: api, scope: "joined", title: "Joined Meetups")
       } label: {
-        menuRow("Joined Meetups", systemImage: "person.2")
+        journalRow("Joined", subtitle: "Meetups you have joined", systemImage: "person.2")
       }
-      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
+      Divider().padding(.leading, 38)
+
       NavigationLink {
         AuraProofsView(api: api, proofs: proofs)
       } label: {
-        menuRow("My Proofs", systemImage: "ticket")
+        journalRow("Proofs", subtitle: "Your private proof history", systemImage: "checkmark.seal")
       }
-      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
+      Divider().padding(.leading, 38)
+
       NavigationLink {
         AuraReputationView(api: api, wallet: wallet, proofs: proofs)
       } label: {
-        menuRow("Leave Aura", systemImage: "star.bubble")
+        journalRow("Reputation", subtitle: "Verified feedback and Aura", systemImage: "star.bubble")
       }
-      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
+      Divider().padding(.leading, 38)
+
       NavigationLink {
         SettingsNativeView(api: api, authSession: authSession)
       } label: {
-        menuRow("Privacy & Settings", systemImage: "lock.shield")
-      }
-      Divider().overlay(MIRATheme.Color.inkBorder.opacity(0.20)).padding(.leading, 52)
-      NavigationLink {
-        TermsOfServiceView()
-      } label: {
-        menuRow("About Aura", systemImage: "info.circle")
+        journalRow("Settings", subtitle: "Privacy, notifications, and account", systemImage: "gearshape")
       }
     }
-    .physicalAuraCard(cornerRadius: 18)
   }
 
-  private func stat(value: String, label: String, systemImage: String) -> some View {
-    VStack(spacing: 6) {
-      Image(systemName: systemImage)
-        .foregroundStyle(MIRATheme.Color.auraViolet)
-      Text(value)
-        .font(.title3)
-        .fontWeight(.bold)
+  private func profileMetric(value: Int, label: String) -> some View {
+    HStack(spacing: 4) {
+      Text(value.formatted())
+        .font(.subheadline.weight(.bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
       Text(label)
-        .font(.caption)
+        .font(.subheadline)
         .foregroundStyle(MIRATheme.Color.textSecondary)
     }
-    .frame(maxWidth: .infinity)
   }
 
-  private func menuRow(_ title: String, systemImage: String) -> some View {
+  private func journalRow(_ title: String, subtitle: String, systemImage: String) -> some View {
     HStack(spacing: 12) {
       Image(systemName: systemImage)
         .font(.headline)
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .frame(width: 24)
-      Text(title)
-        .font(.body)
-        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .foregroundStyle(MIRATheme.Color.auraViolet)
+        .frame(width: 26)
+
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.body.weight(.semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+        Text(subtitle)
+          .font(.caption)
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+
       Spacer()
+
       Image(systemName: "chevron.right")
-        .font(.caption)
+        .font(.caption.weight(.semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
     }
-    .padding(.horizontal, 16)
-    .frame(minHeight: 50)
+    .frame(minHeight: 58)
     .contentShape(Rectangle())
   }
 
-  private var username: String {
+  private var profileUsername: String? {
     guard let username = authSession.user?.username,
           !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      return "Username unavailable"
+      return nil
     }
     return "@\(username)"
+  }
+
+  private var profileBio: String? {
+    guard let bio = authSession.user?.bio?.trimmingCharacters(in: .whitespacesAndNewlines), !bio.isEmpty else {
+      return nil
+    }
+    return bio
+  }
+
+  private var profileLocation: String? {
+    guard let city = authSession.user?.city?.trimmingCharacters(in: .whitespacesAndNewlines), !city.isEmpty else {
+      return nil
+    }
+    return city
   }
 
   private var profileDisplayName: String {
@@ -231,13 +301,5 @@ public struct AuraMeView: View {
     case .noWallet: return "No wallet on this iPhone"
     case .unavailable: return "Wallet storage unavailable"
     }
-  }
-
-  private var confirmedProofCount: Int {
-    proofs.records.filter(\.isConfirmed).count
-  }
-
-  private var feedbackCount: Int {
-    proofs.records.filter(\.feedbackUsed).count
   }
 }

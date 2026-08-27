@@ -119,6 +119,10 @@ public struct MIRANativeRootView: View {
   @State private var loadedTabs: Set<MIRATab> = [.home]
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
+  @State private var isCreateMenuPresented = false
+  @State private var isCommunityComposerPresented = false
+  @State private var pendingCreateAction: AuraRootCreateAction?
+  @State private var communityHomeRefreshID = UUID()
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
@@ -183,6 +187,9 @@ public struct MIRANativeRootView: View {
       if userID == nil {
         selectedTab = .home
         loadedTabs = [.home]
+        isCreateMenuPresented = false
+        isCommunityComposerPresented = false
+        pendingCreateAction = nil
       } else {
         loadedTabs.insert(.home)
       }
@@ -234,6 +241,7 @@ public struct MIRANativeRootView: View {
       lazyTab(.home) {
         if let currentUser = authSession.user {
           AuraHomeView(api: api, currentUser: currentUser)
+            .id(communityHomeRefreshID)
         } else {
           Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -280,10 +288,37 @@ public struct MIRANativeRootView: View {
     }
     .tint(MIRATheme.Color.auraViolet)
     .toolbar(.hidden, for: .tabBar)
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      AuraTactileTabBar(selection: $selectedTab)
+    .overlay(alignment: .bottom) {
+      AuraTactileTabBar(selection: $selectedTab) {
+        isCreateMenuPresented = true
+      }
+      .padding(.horizontal, 16)
+      .padding(.bottom, 8)
+      .zIndex(2)
     }
     .background(MIRATheme.Color.paperCanvas)
+    .sheet(
+      isPresented: $isCreateMenuPresented,
+      onDismiss: openPendingCreateAction
+    ) {
+      AuraRootCreateSheet { action in
+        pendingCreateAction = action
+      }
+      .presentationDetents([.height(300)])
+      .presentationDragIndicator(.visible)
+      .presentationCornerRadius(30)
+      .presentationBackground(MIRATheme.Color.paperCanvas)
+    }
+    .fullScreenCover(isPresented: $isCommunityComposerPresented) {
+      if let currentUser = authSession.user {
+        AuraCreateCommunityPostView(api: api, currentUser: currentUser) {
+          isCommunityComposerPresented = false
+          communityHomeRefreshID = UUID()
+          selectedTab = .home
+          loadedTabs.insert(.home)
+        }
+      }
+    }
     .task {
       await auraProofs.observeLifecycle()
     }
@@ -316,6 +351,19 @@ public struct MIRANativeRootView: View {
     return loadedTabs.contains(tab) || selectedTab == tab
   }
 
+  private func openPendingCreateAction() {
+    guard let action = pendingCreateAction else { return }
+    pendingCreateAction = nil
+    switch action {
+    case .communityPost:
+      guard authSession.user != nil else { return }
+      isCommunityComposerPresented = true
+    case .scanDocument:
+      selectedTab = .scan
+      loadedTabs.insert(.scan)
+    }
+  }
+
   private func registerCachedPushTokenIfPossible() {
     guard authSession.user != nil else { return }
     if let token = MIRAPushNotificationRegistrar.cachedDeviceToken {
@@ -333,51 +381,167 @@ public struct MIRANativeRootView: View {
   }
 }
 
+private enum AuraRootCreateAction {
+  case communityPost
+  case scanDocument
+}
+
 private struct AuraTactileTabBar: View {
   @Binding var selection: MIRATab
+  let onCreate: () -> Void
 
-  private let items: [(tab: MIRATab, title: String, systemImage: String)] = [
-    (.home, "Home", "house.fill"),
-    (.scan, "Scan", "viewfinder"),
-    (.wallet, "Wallet", "wallet.pass.fill"),
-    (.me, "Me", "face.smiling")
+  private let items: [(tab: MIRATab, title: String, systemImage: String, selectedImage: String)] = [
+    (.home, "Home", "house", "house.fill"),
+    (.scan, "Scan", "viewfinder", "viewfinder"),
+    (.wallet, "Wallet", "wallet.pass", "wallet.pass.fill"),
+    (.me, "Me", "face.smiling", "face.smiling")
   ]
 
   var body: some View {
-    HStack(spacing: 2) {
-      ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-        Button {
-          selection = item.tab
-        } label: {
-          VStack(spacing: 3) {
-            Image(systemName: item.systemImage)
-              .font(.system(size: 17, weight: .bold))
-            Text(item.title)
-              .font(.caption2.weight(.semibold))
+    HStack(spacing: 12) {
+      HStack(spacing: 3) {
+        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+          Button {
+            selection = item.tab
+          } label: {
+            Image(systemName: selection == item.tab ? item.selectedImage : item.systemImage)
+              .font(.system(size: 19, weight: .semibold))
+              .foregroundStyle(
+                selection == item.tab
+                  ? MIRATheme.Color.auraViolet
+                  : MIRATheme.Color.textPrimary.opacity(0.72)
+              )
+              .frame(width: 46, height: 46)
+              .background(
+                selection == item.tab ? MIRATheme.Color.auraVioletSoft : Color.clear,
+                in: Circle()
+              )
           }
-          .foregroundStyle(selection == item.tab ? MIRATheme.Color.auraViolet : MIRATheme.Color.textPrimary)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 6)
-          .background(
-            selection == item.tab ? MIRATheme.Color.auraVioletSoft : Color.clear,
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-          )
+          .buttonStyle(.plain)
+          .contentShape(Circle())
+          .accessibilityLabel(item.title)
+          .accessibilityAddTraits(selection == item.tab ? .isSelected : [])
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(item.title)
-        .accessibilityAddTraits(selection == item.tab ? .isSelected : [])
+      }
+      .padding(6)
+      .background(MIRATheme.Color.paperSurface, in: Capsule())
+      .overlay {
+        Capsule()
+          .stroke(MIRATheme.Color.inkBorder.opacity(0.16), lineWidth: 1)
+      }
+      .shadow(color: Color.black.opacity(0.17), radius: 18, x: 0, y: 9)
+      .shadow(color: Color.black.opacity(0.07), radius: 3, x: 0, y: 2)
+
+      Button(action: onCreate) {
+        Image(systemName: "plus")
+          .font(.system(size: 21, weight: .bold))
+          .foregroundStyle(MIRATheme.Color.textPrimary.opacity(0.72))
+          .frame(width: 56, height: 56)
+          .background(MIRATheme.Color.paperSurface, in: Circle())
+          .overlay {
+            Circle()
+              .stroke(MIRATheme.Color.inkBorder.opacity(0.22), lineWidth: 1)
+          }
+      }
+      .buttonStyle(.plain)
+      .contentShape(Circle())
+      .shadow(color: Color.black.opacity(0.20), radius: 16, x: 0, y: 8)
+      .shadow(color: Color.black.opacity(0.08), radius: 3, x: 0, y: 2)
+      .accessibilityLabel("Create")
+    }
+    .frame(maxWidth: .infinity)
+  }
+}
+
+private struct AuraRootCreateSheet: View {
+  @Environment(\.dismiss) private var dismiss
+  let onSelect: (AuraRootCreateAction) -> Void
+
+  var body: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Choose what you want to make in Aura.")
+          .font(.subheadline)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+
+        createRow(
+          title: "Post or Meetup",
+          subtitle: "Share with your community",
+          systemImage: "square.and.pencil",
+          action: .communityPost
+        )
+
+        createRow(
+          title: "Scan Document",
+          subtitle: "Scan or import a receipt or invoice",
+          systemImage: "viewfinder",
+          action: .scanDocument
+        )
+
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 18)
+      .padding(.top, 6)
+      .background(MIRATheme.Color.paperCanvas.ignoresSafeArea())
+      .navigationTitle("Create")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button {
+            dismiss()
+          } label: {
+            Image(systemName: "xmark")
+          }
+          .buttonStyle(.bordered)
+          .buttonBorderShape(.circle)
+          .accessibilityLabel("Close")
+        }
       }
     }
-    .padding(.horizontal, 10)
-    .padding(.top, 6)
-    .padding(.bottom, 3)
-    .background(MIRATheme.Color.paperSurface)
-    .overlay(alignment: .top) {
-      Rectangle()
-        .fill(MIRATheme.Color.inkBorder.opacity(0.55))
-        .frame(height: 1)
+  }
+
+  private func createRow(
+    title: String,
+    subtitle: String,
+    systemImage: String,
+    action: AuraRootCreateAction
+  ) -> some View {
+    Button {
+      onSelect(action)
+      dismiss()
+    } label: {
+      HStack(spacing: 14) {
+        Image(systemName: systemImage)
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.auraViolet)
+          .frame(width: 42, height: 42)
+          .background(MIRATheme.Color.auraVioletSoft, in: Circle())
+
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(.headline)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text(subtitle)
+            .font(.footnote)
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+
+        Spacer(minLength: 8)
+
+        Image(systemName: "chevron.right")
+          .font(.footnote.weight(.bold))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+      .padding(.horizontal, 14)
+      .frame(maxWidth: .infinity, minHeight: 64)
+      .background(MIRATheme.Color.paperSurface)
+      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+          .stroke(MIRATheme.Color.inkBorder.opacity(0.16), lineWidth: 1)
+      }
     }
-    .shadow(color: MIRATheme.Color.hardShadow.opacity(0.12), radius: 0, x: 0, y: -3)
+    .buttonStyle(.plain)
   }
 }
 

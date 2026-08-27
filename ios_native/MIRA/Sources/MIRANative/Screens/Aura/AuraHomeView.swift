@@ -199,7 +199,6 @@ public struct AuraHomeView: View {
 
   @StateObject private var model: AuraCommunityFeedModel
   @State private var scope: AuraCommunityFeedScope = .city
-  @State private var isCreatingPost = false
 
   private let cityName = "New York City"
 
@@ -214,60 +213,94 @@ public struct AuraHomeView: View {
       VStack(spacing: 0) {
         feedHeader
         ScrollView(showsIndicators: false) {
-          LazyVStack(spacing: 9) {
+          LazyVStack(spacing: 0) {
             feedContent
           }
-          .padding(.horizontal, 12)
-          .padding(.top, 9)
-          .padding(.bottom, 30)
+          .padding(.top, 2)
+          .padding(.bottom, 112)
         }
         .refreshable { await model.load(scope: scope, city: cityName, refresh: true) }
       }
-      .background(AuraFeedPalette.canvas.ignoresSafeArea())
+      .background {
+        ZStack {
+          AuraFeedPalette.canvas
+          RadialGradient(
+            colors: [Color(red: 0.86, green: 0.94, blue: 0.80).opacity(0.30), .clear],
+            center: .topTrailing,
+            startRadius: 10,
+            endRadius: 300
+          )
+          RadialGradient(
+            colors: [Color(red: 1.00, green: 0.96, blue: 0.72).opacity(0.13), .clear],
+            center: .topLeading,
+            startRadius: 8,
+            endRadius: 240
+          )
+        }
+        .ignoresSafeArea()
+      }
       .navigationBarHidden(true)
       .task(id: scope) {
         await model.load(scope: scope, city: cityName, refresh: true)
-      }
-      .fullScreenCover(isPresented: $isCreatingPost) {
-        AuraCreateCommunityPostView(api: api, currentUser: currentUser) {
-          isCreatingPost = false
-          Task { await model.load(scope: scope, city: cityName, refresh: true) }
-        }
       }
     }
   }
 
   private var feedHeader: some View {
-    // Kept outside the ScrollView so the Friends/NYC selector remains sticky while native
-    // material picks up just enough of the real feed imagery at the scroll edge.
-    HStack(alignment: .bottom, spacing: 24) {
-      feedScopeButton(.friends, title: "Friends")
-      feedScopeButton(.city, title: cityName)
-      Spacer(minLength: 8)
-      Button {
-        isCreatingPost = true
-      } label: {
-        Image(systemName: "plus")
-          .font(.system(size: 17, weight: .black))
+    // The reference uses two quiet layers: account/actions above and the feed scope below.
+    // This remains outside the ScrollView so uploaded photography softly passes beneath it.
+    VStack(spacing: 6) {
+      HStack(spacing: 12) {
+        RemoteAvatar(url: currentUser.profileImage, size: 42)
+          .overlay { Circle().stroke(Color.white, lineWidth: 2) }
+          .shadow(color: Color.black.opacity(0.12), radius: 6, x: 0, y: 3)
+
+        Text("Aura")
+          .font(.title3.weight(.black))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 40, height: 40)
-          .background(AuraFeedPalette.card, in: Circle())
-          .overlay { Circle().stroke(AuraFeedPalette.ink, lineWidth: 1.25) }
-          .shadow(color: AuraFeedPalette.shadow, radius: 0, x: 0, y: 3)
-          .padding(.bottom, 3)
+
+        Spacer(minLength: 8)
+
+        HStack(spacing: 2) {
+          NavigationLink {
+            ChatNativeView(api: api, currentUserId: currentUser.id)
+          } label: {
+            Image(systemName: "paperplane")
+              .frame(width: 40, height: 40)
+          }
+          .accessibilityLabel("Messages")
+
+          NavigationLink {
+            NotificationNativeView(api: api)
+          } label: {
+            Image(systemName: "bell")
+              .frame(width: 40, height: 40)
+          }
+          .accessibilityLabel("Notifications")
+        }
+        .font(.system(size: 19, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 3)
+        .background(AuraFeedPalette.card, in: Capsule())
+        .shadow(color: Color.black.opacity(0.16), radius: 12, x: 0, y: 6)
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel("Create post")
+
+      HStack(alignment: .bottom, spacing: 24) {
+        feedScopeButton(.friends, title: "Friends")
+        feedScopeButton(.city, title: cityName)
+        Spacer(minLength: 8)
+      }
     }
     .padding(.horizontal, 18)
-    .padding(.top, 12)
-    .padding(.bottom, 8)
+    .padding(.top, 8)
+    .padding(.bottom, 7)
     .background(.thinMaterial)
-    .background(AuraFeedPalette.canvas.opacity(0.82))
+    .background(AuraFeedPalette.canvas.opacity(0.74))
     .overlay(alignment: .bottom) {
       Rectangle()
-        .fill(AuraFeedPalette.ink.opacity(0.20))
-        .frame(height: 1)
+        .fill(Color(uiColor: .separator).opacity(0.55))
+        .frame(height: 0.5)
     }
   }
 

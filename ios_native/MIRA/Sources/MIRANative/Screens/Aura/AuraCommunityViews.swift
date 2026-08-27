@@ -68,10 +68,278 @@ private struct PhysicalAuraCardModifier: ViewModifier {
   }
 }
 
-private enum AuraSmallPostCardVariant: Equatable {
-  case micro
-  case small
-  case smallWithImage
+private struct AuraEditorialAvatarRail: View {
+  let avatarURL: String?
+
+  var body: some View {
+    RemoteAvatar(url: avatarURL, size: 48)
+      .overlay(alignment: .bottomTrailing) {
+        // The feed projection does not expose a follow mutation. Keep the reference's compact
+        // profile affordance visual-only instead of pretending a tap followed the member.
+        Image(systemName: "plus")
+          .font(.caption.weight(.black))
+          .foregroundStyle(Color.white)
+          .frame(width: 23, height: 23)
+          .background(AuraFeedPalette.ink, in: Circle())
+          .overlay { Circle().stroke(AuraFeedPalette.card, lineWidth: 2) }
+          .offset(x: 2, y: 2)
+          .accessibilityHidden(true)
+      }
+      .frame(width: 52, alignment: .top)
+  }
+}
+
+private struct AuraEditorialStatusBadge: View {
+  let symbol: String
+
+  var body: some View {
+    Image(systemName: symbol)
+      .font(.caption2.weight(.black))
+      .foregroundStyle(MIRATheme.Color.auraViolet)
+      .frame(width: 19, height: 19)
+      .background(MIRATheme.Color.auraVioletSoft, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+      .accessibilityHidden(true)
+  }
+}
+
+private struct AuraEditorialPostHeader: View {
+  let post: AuraCommunityPost
+  let status: String
+  let symbol: String
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Text(post.authorHandle)
+        .font(.headline)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .lineLimit(1)
+      AuraEditorialStatusBadge(symbol: symbol)
+      Text(status)
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .lineLimit(1)
+      Text("·")
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Text(AuraCommunityFormatting.relativeDate(post.createdAt))
+        .font(.subheadline)
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .lineLimit(1)
+      Spacer(minLength: 0)
+    }
+  }
+}
+
+private struct AuraEditorialAttachmentRow: View {
+  let post: AuraCommunityPost
+
+  var body: some View {
+    HStack(spacing: 0) {
+      attachmentThumbnail
+        .frame(width: 72, height: 72)
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title)
+          .font(.headline)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+
+        if let subtitle {
+          Text(subtitle)
+            .font(.subheadline)
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .lineLimit(1)
+        }
+
+        if let detail {
+          Text(detail)
+            .font(.subheadline)
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .lineLimit(1)
+        }
+      }
+      .padding(.horizontal, 10)
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      // Saving is not part of the community feed projection yet. This preserves the requested
+      // visual target without introducing a no-op button or a fabricated saved state.
+      Image(systemName: "bookmark")
+        .font(.body.weight(.semibold))
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .frame(width: 36, height: 36)
+        .background(AuraFeedPalette.card, in: Circle())
+        .shadow(color: Color.black.opacity(0.18), radius: 3, x: 0, y: 2)
+        .padding(.trailing, 10)
+        .accessibilityHidden(true)
+    }
+    .frame(minHeight: 72)
+    .background(AuraFeedPalette.card)
+    .overlay {
+      Rectangle().stroke(Color(uiColor: .separator), lineWidth: 1)
+    }
+  }
+
+  @ViewBuilder
+  private var attachmentThumbnail: some View {
+    if let url = post.auraEditorialPhotoURLs.first ?? post.primaryImageURL {
+      AuraCommunityRemoteImage(url: url, height: 72)
+    } else {
+      ZStack {
+        AuraFeedPalette.muted
+        Image(systemName: "mappin.and.ellipse")
+          .font(.title3.weight(.semibold))
+          .foregroundStyle(MIRATheme.Color.auraViolet)
+      }
+    }
+  }
+
+  private var title: String {
+    post.auraEditorialAttachmentValues.first ?? "Place"
+  }
+
+  private var subtitle: String? {
+    post.auraEditorialAttachmentValues.dropFirst().first
+  }
+
+  private var detail: String? {
+    post.auraEditorialAttachmentValues.dropFirst(2).first
+  }
+}
+
+private struct AuraEditorialMediaGallery: View {
+  let post: AuraCommunityPost
+
+  private let mediaHeight: CGFloat = 252
+
+  // AuraCommunityPost currently has no explicit editorial-feature signal. Media count,
+  // engagement, and feed position must not be used to invent a hero/featured treatment.
+
+  @ViewBuilder
+  var body: some View {
+    let urls = post.auraEditorialPhotoURLs
+    if urls.count >= 2 {
+      HStack(spacing: 3) {
+        editorialPhoto(urls[0])
+        editorialPhoto(urls[1])
+          .overlay(alignment: .bottomTrailing) {
+            if urls.count > 2 {
+              Text("+\(urls.count - 2)")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.black.opacity(0.72), in: Capsule())
+                .padding(8)
+            }
+          }
+      }
+    } else if let url = urls.first {
+      editorialPhoto(url)
+    } else if post.primaryMediaType == "video", post.primaryImageURL != nil {
+      AuraCommunityPostMedia(post: post, height: mediaHeight)
+    }
+  }
+
+  private func editorialPhoto(_ url: String) -> some View {
+    AuraCommunityRemoteImage(url: url, height: mediaHeight)
+      .frame(maxWidth: .infinity)
+  }
+}
+
+private struct AuraEditorialFeedbackRow: View {
+  let post: AuraCommunityPost
+
+  var body: some View {
+    HStack(spacing: 16) {
+      Spacer(minLength: 0)
+      HStack(spacing: 5) {
+        Image(systemName: post.communityAllowReplies == false ? "bubble.left.and.exclamationmark.bubble.right" : "bubble.left")
+        if let count = post.commentsCount, count > 0 {
+          Text("\(count)")
+        }
+      }
+      Image(systemName: "heart")
+        .accessibilityHidden(true)
+    }
+    .font(.body.weight(.medium))
+    .foregroundStyle(MIRATheme.Color.textMuted)
+    .accessibilityLabel(replyLabel)
+  }
+
+  private var replyLabel: String {
+    if post.communityAllowReplies == false { return "Replies off" }
+    return post.commentsCount.map { "\($0) replies" } ?? "Replies"
+  }
+}
+
+private extension AuraCommunityPost {
+  var auraEditorialPhotoURLs: [String] {
+    let preferred = (feedMediaUrls ?? []).isEmpty
+      ? (images ?? []) + [image ?? ""]
+      : (feedMediaUrls ?? [])
+    var seen = Set<String>()
+    var photos: [String] = []
+
+    for (index, rawValue) in preferred.enumerated() {
+      let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !value.isEmpty else { continue }
+      let lowercased = value.lowercased()
+      let declaredType = (mediaTypes?.indices.contains(index) == true)
+        ? mediaTypes?[index].lowercased()
+        : nil
+      let isVideo = declaredType == "video"
+        || lowercased.hasPrefix("cfstream:")
+        || lowercased.contains("videodelivery.net/")
+        || lowercased.contains("cloudflarestream.com/")
+        || lowercased.contains(".m3u8")
+      guard !isVideo, seen.insert(value).inserted else { continue }
+      photos.append(value)
+    }
+
+    if photos.isEmpty, primaryMediaType != "video", let primaryImageURL {
+      photos.append(primaryImageURL)
+    }
+    return photos
+  }
+
+  var auraEditorialAttachmentValues: [String] {
+    let candidates = [
+      placeName,
+      displayLocationLabel,
+      placeFormattedAddress,
+      meetupNeighborhood,
+      displayCity,
+      location,
+    ]
+    var normalized = Set<String>()
+    return candidates.compactMap { candidate in
+      guard let value = candidate?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+        return nil
+      }
+      let key = value.lowercased()
+      guard normalized.insert(key).inserted else { return nil }
+      return value
+    }
+  }
+
+  var auraEditorialStatus: String {
+    let value = communityCategory?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return value.isEmpty ? "posted" : value.lowercased()
+  }
+
+  var auraEditorialStatusSymbol: String {
+    switch communityCategory?.lowercased() {
+    case "question": return "questionmark"
+    case "idea": return "lightbulb.fill"
+    case "concern": return "exclamationmark"
+    case "recommendation": return "hand.thumbsup.fill"
+    case "update": return "megaphone.fill"
+    default: return "sparkle"
+    }
+  }
+
+  var hasAuraEditorialAttachment: Bool {
+    !auraEditorialAttachmentValues.isEmpty
+  }
 }
 
 public struct AuraSmallPostFeedCard: View {
@@ -81,131 +349,52 @@ public struct AuraSmallPostFeedCard: View {
     self.post = post
   }
 
-  @ViewBuilder
   public var body: some View {
-    switch variant {
-    case .micro:
-      microCard
-    case .small, .smallWithImage:
-      smallCard
-    }
-  }
+    HStack(alignment: .top, spacing: 12) {
+      AuraEditorialAvatarRail(avatarURL: post.userProfileImage)
 
-  private var variant: AuraSmallPostCardVariant {
-    if post.primaryImageURL != nil { return .smallWithImage }
-    if post.titleText.isEmpty && post.bodyText.count <= 120 { return .micro }
-    return .small
-  }
-
-  private var microCard: some View {
-    HStack(alignment: .top, spacing: 9) {
-      RemoteAvatar(url: post.userProfileImage, size: 30)
-
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 6) {
-          Text(post.authorHandle)
-            .font(.system(size: 13.5, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(1)
-          categoryPill
-          Spacer(minLength: 3)
-          timestamp
-        }
-
-        Text(post.bodyText)
-          .font(.system(size: 13.5, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(2)
-          .frame(maxWidth: .infinity, alignment: .leading)
-
-        if let commentsCount = post.commentsCount, commentsCount > 0 {
-          Text("\(commentsCount) replies")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-        }
-      }
-    }
-    .padding(10)
-    .auraFeedCard(cornerRadius: 12, shadowOffset: 4)
-    .accessibilityElement(children: .combine)
-  }
-
-  private var smallCard: some View {
-    HStack(alignment: .top, spacing: 10) {
-      RemoteAvatar(url: post.userProfileImage, size: 34)
-
-      VStack(alignment: .leading, spacing: 5) {
-        HStack(spacing: 7) {
-          Text(post.authorHandle)
-            .font(.system(size: 14, weight: .bold))
-            .fontWeight(.bold)
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(1)
-          categoryPill
-          Spacer(minLength: 4)
-          timestamp
-        }
+      VStack(alignment: .leading, spacing: 11) {
+        AuraEditorialPostHeader(
+          post: post,
+          status: post.auraEditorialStatus,
+          symbol: post.auraEditorialStatusSymbol
+        )
 
         if !post.titleText.isEmpty {
           Text(post.titleText)
-            .font(.system(size: 16, weight: .bold))
+            .font(.headline)
             .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        HStack(alignment: .top, spacing: 10) {
-          if !post.bodyText.isEmpty {
-            Text(post.bodyText)
-              .font(.system(size: 14))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-              .lineLimit(3)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-          if variant == .smallWithImage {
-            AuraCommunityPostMedia(post: post, height: 64)
-              .frame(width: 70)
-              .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-              .overlay {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                  .stroke(MIRATheme.Color.inkBorder.opacity(0.72), lineWidth: 1)
-              }
-          }
+        if !post.bodyText.isEmpty {
+          Text(post.bodyText)
+            .font(.body)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(7)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if post.communityAllowReplies != false {
-          Label(replyLabel, systemImage: "bubble.left")
-            .font(.caption)
-            .fontWeight(.semibold)
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        } else {
-          Label("Replies off", systemImage: "bubble.left.and.exclamationmark.bubble.right")
-            .font(.caption)
-            .foregroundStyle(MIRATheme.Color.textMuted)
+        if post.hasAuraEditorialAttachment {
+          AuraEditorialAttachmentRow(post: post)
         }
+
+        if post.primaryImageURL != nil || !post.auraEditorialPhotoURLs.isEmpty {
+          AuraEditorialMediaGallery(post: post)
+        }
+
+        AuraEditorialFeedbackRow(post: post)
       }
     }
-    .padding(12)
-    .auraFeedCard(cornerRadius: 13, shadowOffset: 5)
-    .accessibilityElement(children: .combine)
-  }
-
-  private var categoryPill: some View {
-    Text(post.communityCategory?.uppercased() ?? "POST")
-      .font(.system(size: 9.5, weight: .black))
-      .foregroundStyle(MIRATheme.Color.auraViolet)
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2.5)
-      .background(MIRATheme.Color.auraVioletSoft, in: Capsule())
-  }
-
-  private var timestamp: some View {
-    Text(AuraCommunityFormatting.relativeDate(post.createdAt))
-      .font(.caption2)
-      .foregroundStyle(MIRATheme.Color.textMuted)
-  }
-
-  private var replyLabel: String {
-    post.commentsCount.map { "\($0) replies" } ?? "Replies"
+    .padding(.vertical, 14)
+    .padding(.horizontal, 14)
+    .background(Color.clear)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(Color(uiColor: .separator))
+        .frame(height: 0.5)
+    }
+    .accessibilityElement(children: .contain)
   }
 }
 
@@ -278,11 +467,6 @@ public struct AuraSmallPostDetailLoaderView: View {
   }
 }
 
-private enum AuraMeetupCardVariant: Equatable {
-  case compactWithImage
-  case compactWithoutImage
-}
-
 public struct AuraMeetupFeedCard: View {
   let post: AuraCommunityPost
 
@@ -291,102 +475,74 @@ public struct AuraMeetupFeedCard: View {
   }
 
   public var body: some View {
-    HStack(alignment: .top, spacing: 11) {
-      meetupThumbnail
+    HStack(alignment: .top, spacing: 12) {
+      AuraEditorialAvatarRail(avatarURL: post.userProfileImage)
 
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(alignment: .center, spacing: 6) {
-          meetupPill
-          Spacer(minLength: 4)
-          entryPill
-        }
+      VStack(alignment: .leading, spacing: 11) {
+        AuraEditorialPostHeader(post: post, status: "meetup", symbol: "person.3.fill")
 
         Text(post.titleText)
-          .font(.headline)
+          .font(.title3)
           .fontWeight(.black)
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(2)
+          .frame(maxWidth: .infinity, alignment: .leading)
 
-        Label(post.locationLine, systemImage: "mappin.and.ellipse")
-          .font(.caption)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
+        if !post.bodyText.isEmpty {
+          Text(post.bodyText)
+            .font(.body)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        if post.hasAuraEditorialAttachment {
+          AuraEditorialAttachmentRow(post: post)
+        }
+
+        if post.primaryImageURL != nil || !post.auraEditorialPhotoURLs.isEmpty {
+          AuraEditorialMediaGallery(post: post)
+        }
+
+        meetupMetadata
+      }
+    }
+    .padding(.vertical, 14)
+    .padding(.horizontal, 14)
+    .background(Color.clear)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(Color(uiColor: .separator))
+        .frame(height: 0.5)
+    }
+    .accessibilityElement(children: .contain)
+  }
+
+  private var meetupMetadata: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      HStack(spacing: 8) {
+        Label(AuraCommunityFormatting.meetupDate(post.meetupStartsAt), systemImage: "calendar")
           .lineLimit(1)
-
-        HStack(spacing: 5) {
-          Image(systemName: "calendar")
-          Text(AuraCommunityFormatting.meetupDate(post.meetupStartsAt))
-            .lineLimit(1)
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-
-        HStack(spacing: 7) {
-          AuraStackedProfilePlaceholders(count: max(0, min(post.meetupJoinedCount ?? 0, 4)))
-          Text(attendanceLabel)
-            .font(.caption2)
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-          Spacer(minLength: 0)
-        }
+        Spacer(minLength: 4)
+        entryPill
       }
-      .padding(.vertical, 2)
-    }
-    .padding(10)
-    .auraFeedCard(cornerRadius: 14, shadowOffset: 5)
-    .accessibilityElement(children: .combine)
-  }
 
-  @ViewBuilder
-  private var meetupThumbnail: some View {
-    switch variant {
-    case .compactWithImage:
-      AuraCommunityPostMedia(post: post, height: 104)
-        .frame(width: 100)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .stroke(AuraFeedPalette.ink.opacity(0.72), lineWidth: 1)
-        }
-    case .compactWithoutImage:
-      ZStack {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(AuraFeedPalette.muted)
-        Image(systemName: "calendar.badge.plus")
-          .font(.system(size: 24, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.auraViolet)
-      }
-      .frame(width: 72, height: 96)
-      .overlay {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .stroke(AuraFeedPalette.ink.opacity(0.48), lineWidth: 1)
+      HStack(spacing: 8) {
+        AuraStackedProfilePlaceholders(count: max(0, min(post.meetupJoinedCount ?? 0, 4)))
+        Text(attendanceLabel)
+        Spacer(minLength: 0)
       }
     }
-  }
-
-  private var meetupPill: some View {
-    Text("MEETUP")
-      .font(.system(size: 9.5, weight: .black))
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 5)
-      .background(AuraFeedPalette.card, in: Capsule())
-      .overlay { Capsule().stroke(AuraFeedPalette.ink, lineWidth: 1) }
+    .font(.footnote.weight(.semibold))
+    .foregroundStyle(MIRATheme.Color.textSecondary)
   }
 
   private var entryPill: some View {
     Text(post.entryLabel)
-      .font(.caption2)
-      .fontWeight(.black)
+      .font(.caption.weight(.black))
       .foregroundStyle(post.meetupEntryType == "aur" ? MIRATheme.Color.auraViolet : MIRATheme.Color.forest)
-      .padding(.horizontal, 8)
+      .padding(.horizontal, 9)
       .padding(.vertical, 5)
       .background(post.meetupEntryType == "aur" ? MIRATheme.Color.auraVioletSoft : MIRATheme.Color.forestSoft, in: Capsule())
-      .overlay {
-        Capsule().stroke(AuraFeedPalette.ink.opacity(0.72), lineWidth: 1)
-      }
-  }
-
-  private var variant: AuraMeetupCardVariant {
-    post.primaryImageURL == nil ? .compactWithoutImage : .compactWithImage
   }
 
   private var attendanceLabel: String {
