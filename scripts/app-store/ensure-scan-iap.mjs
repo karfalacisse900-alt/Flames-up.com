@@ -72,7 +72,6 @@ async function createPurchase(appID) {
         name: 'Captro Scan Credits 10',
         productId: productID,
         inAppPurchaseType: 'CONSUMABLE',
-        reviewNote: 'Adds 10 private receipt or invoice verification credits. Each completed verification consumes one $0.10 credit.',
       },
       relationships: {
         app: { data: { type: 'apps', id: appID } },
@@ -81,6 +80,22 @@ async function createPurchase(appID) {
   };
   const body = await expect('/v2/inAppPurchases', { method: 'POST', body: JSON.stringify(payload) }, [201]);
   return body.data;
+}
+
+async function ensureReviewNote(purchaseID) {
+  const payload = {
+    data: {
+      type: 'inAppPurchases',
+      id: purchaseID,
+      attributes: {
+        reviewNote: 'Adds 10 private receipt or invoice verification credits. Each completed verification consumes one $0.10 credit.',
+      },
+    },
+  };
+  await expect(`/v2/inAppPurchases/${purchaseID}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
 }
 
 async function ensureAvailability(purchaseID) {
@@ -196,6 +211,7 @@ if (!purchase) {
 } else {
   console.log(`Using existing ${productID} (${purchase.id}).`);
 }
+await ensureReviewNote(purchase.id);
 await ensureAvailability(purchase.id);
 await ensureLocalization(purchase.id);
 await ensurePrice(purchase.id);

@@ -118,4 +118,5 @@ test('App Store setup uses the dedicated in-app purchase availability resource',
   assert.match(setup, /\/v1\/inAppPurchaseAvailabilities/);
   assert.match(setup, /availableInNewTerritories: true/);
   assert.match(setup, /\/v1\/territories\?limit=200/);
+  assert.match(setup, /method: 'PATCH'/);
 });
