@@ -11375,6 +11375,83 @@ async function findSupabaseAuthUser(c: any, input: { email?: unknown; phone?: un
   }) || null;
 }
 
+async function findSupabaseAuthUserForOAuthSubject(
+  c: any,
+  provider: unknown,
+  oauthSubject: unknown
+) {
+  const cleanProvider = supabaseAuthProvider(provider);
+  const cleanSubject = cleanText(oauthSubject, 240);
+  if (!['google', 'apple'].includes(cleanProvider) || !cleanSubject) return null;
+
+  const identities = await supabaseAdminQueryRows(c, 'app_account_identities', {
+    select: 'user_id',
+    filters: {
+      provider: postgrestEqFilter(cleanProvider),
+      provider_user_id: postgrestEqFilter(cleanSubject),
+    },
+    limit: 1,
+  });
+  const appUserId = publicId(identities[0]?.user_id, 120);
+  if (!appUserId) return null;
+
+  const appUsers = await supabaseAdminQueryRows(c, 'app_users', {
+    select: 'supabase_user_id',
+    filters: { id: postgrestEqFilter(appUserId) },
+    limit: 1,
+  });
+  const supabaseUserId = isUuidText(appUsers[0]?.supabase_user_id);
+  return supabaseUserId ? findSupabaseAuthUser(c, { id: supabaseUserId }) : null;
+}
+
+function mergedSupabaseProviderMetadata(existing: any, provider: unknown, appUserId?: unknown, oauthSubject?: unknown) {
+  const next = supabaseProviderMetadata(provider, appUserId, oauthSubject);
+  const current = existing?.app_metadata && typeof existing.app_metadata === 'object' ? existing.app_metadata : {};
+  const providers = Array.from(new Set([
+    ...(Array.isArray(current.providers) ? current.providers : []),
+    ...(Array.isArray(next.providers) ? next.providers : []),
+  ].map((value) => cleanText(value, 40)).filter(Boolean)));
+  return {
+    ...current,
+    ...next,
+    providers,
+  };
+}
+
+async function updateExistingSupabaseAuthUser(c: any, existing: any, input: {
+  password?: unknown;
+  username?: unknown;
+  fullName?: unknown;
+  profileImage?: unknown;
+  provider?: 'email' | 'phone' | 'google' | 'apple' | 'supabase';
+  oauthSubject?: unknown;
+  appUserId?: unknown;
+  phone?: unknown;
+  termsVersion?: unknown;
+  termsAcceptedAt?: unknown;
+}) {
+  const currentMetadata = existing?.user_metadata && typeof existing.user_metadata === 'object' ? existing.user_metadata : {};
+  const updatePayload: any = {
+    user_metadata: {
+      ...currentMetadata,
+      ...supabaseProfileMetadata({
+        appUserId: input.appUserId,
+        username: input.username,
+        fullName: input.fullName,
+        profileImage: input.profileImage,
+        phone: input.phone,
+        termsVersion: input.termsVersion,
+        termsAcceptedAt: input.termsAcceptedAt,
+      }),
+    },
+    app_metadata: mergedSupabaseProviderMetadata(existing, input.provider, input.appUserId, input.oauthSubject),
+  };
+  if (input.password) updatePayload.password = String(input.password);
+  await updateSupabaseAuthUser(c, existing.id, updatePayload);
+  const refreshed = await findSupabaseAuthUser(c, { id: existing.id });
+  return refreshed || existing;
+}
+
 async function createOrFindSupabaseAuthUser(c: any, input: {
   email?: unknown;
   phone?: unknown;
@@ -11388,6 +11465,14 @@ async function createOrFindSupabaseAuthUser(c: any, input: {
   termsVersion?: unknown;
   termsAcceptedAt?: unknown;
 }) {
+  const subjectMatch = await findSupabaseAuthUserForOAuthSubject(c, input.provider, input.oauthSubject);
+  if (subjectMatch?.id) {
+    return {
+      user: await updateExistingSupabaseAuthUser(c, subjectMatch, input),
+      created: false,
+    };
+  }
+
   const body = supabaseAuthCreatePayload(input);
   const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/admin/users`, {
     method: 'POST',
@@ -11403,22 +11488,10 @@ async function createOrFindSupabaseAuthUser(c: any, input: {
   if ([400, 409, 422].includes(response.status) && /already|registered|exists|duplicate|unique/i.test(text)) {
     const existing = await findSupabaseAuthUser(c, { email: input.email, phone: input.phone });
     if (existing?.id) {
-      const updatePayload: any = {
-        user_metadata: supabaseProfileMetadata({
-          appUserId: input.appUserId,
-          username: input.username,
-          fullName: input.fullName,
-          profileImage: input.profileImage,
-          phone: input.phone,
-          termsVersion: input.termsVersion,
-          termsAcceptedAt: input.termsAcceptedAt,
-        }),
-        app_metadata: supabaseProviderMetadata(input.provider, input.appUserId, input.oauthSubject),
+      return {
+        user: await updateExistingSupabaseAuthUser(c, existing, input),
+        created: false,
       };
-      if (input.password) updatePayload.password = String(input.password);
-      await updateSupabaseAuthUser(c, existing.id, updatePayload);
-      const refreshed = await findSupabaseAuthUser(c, { id: existing.id });
-      return { user: refreshed || existing, created: false };
     }
   }
 
@@ -11560,7 +11633,7 @@ async function updateSupabasePassword(c: any, accessToken: string, password: str
 }
 
 async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, options: { nonce?: string; accessToken?: string } = {}) {
-  const body: any = { provider, token: idToken };
+  const body: any = { provider, id_token: idToken };
   const nonce = cleanText(options.nonce, 512);
   const accessToken = cleanText(options.accessToken, 4096);
   if (nonce) body.nonce = nonce;
@@ -11616,9 +11689,10 @@ async function signInSupabaseVerifiedOAuth(c: any, input: {
   });
   if (!authResult.user?.id) throw new Error('SUPABASE_AUTH_CREATE_EMPTY');
 
-  const supabaseSession = await signInSupabasePassword(c, email, password);
+  const sessionEmail = normalizeOptionalEmail(authResult.user.email) || email;
+  const supabaseSession = await signInSupabasePassword(c, sessionEmail, password);
   const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
-    email,
+    email: sessionEmail,
     full_name: fullName,
     profile_image: profileImage,
     auth_provider: input.provider,
