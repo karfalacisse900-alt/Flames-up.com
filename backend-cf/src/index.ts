@@ -15971,7 +15971,16 @@ api.get('/posts/world-board', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'world_board_read');
     if (supabaseRequired) return supabaseRequired;
-    const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
+    const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60).catch((error: any) => {
+      // A read-only public feed must remain available if the rate-limit store
+      // exhausts its write quota. Authenticated and mutating routes still fail
+      // closed through the normal limiter path.
+      console.warn(JSON.stringify({
+        event: 'public_world_board_rate_limit_unavailable',
+        code: getErrorCode(error).slice(0, 180),
+      }));
+      return null;
+    });
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
