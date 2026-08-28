@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import MIRANative
 
@@ -12,7 +13,7 @@ struct MIRAApp: App {
 
   var body: some Scene {
     WindowGroup {
-      MIRANativeRootView()
+      appRoot
         .onAppear {
           MIRAPerformanceTimeline.markOnce("time_to_first_window")
         }
@@ -26,5 +27,18 @@ struct MIRAApp: App {
           }
         }
     }
+  }
+
+  @ViewBuilder
+  private var appRoot: some View {
+#if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--captro-home-feed-visual-test") {
+      CaptroHomeFeedVisualTestView()
+    } else {
+      MIRANativeRootView()
+    }
+#else
+    MIRANativeRootView()
+#endif
   }
 }
