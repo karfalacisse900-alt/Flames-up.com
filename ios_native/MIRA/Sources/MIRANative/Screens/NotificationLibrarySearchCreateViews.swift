@@ -966,13 +966,7 @@ public struct CreatePostNativeView: View {
   }
 
   public var body: some View {
-    Group {
-      if isEditingPostDetails {
-        finalPostPage
-      } else {
-        mediaFirstPage
-      }
-    }
+    composerPage
     .toolbar(.hidden, for: .navigationBar)
     .toolbar {
       ToolbarItemGroup(placement: .keyboard) {
@@ -1073,6 +1067,13 @@ public struct CreatePostNativeView: View {
       }
       .ignoresSafeArea()
     }
+  }
+
+  private var composerPage: AnyView {
+    if isEditingPostDetails {
+      return AnyView(finalPostPage)
+    }
+    return AnyView(mediaFirstPage)
   }
 
   private var postDetailSheetPresentedBinding: Binding<Bool> {
