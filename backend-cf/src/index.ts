@@ -7751,16 +7751,21 @@ async function supabaseProjectVisiblePostRows(
   const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
   const ownerId = publicId(options.ownerId, 120);
   const authorIds = candidateRows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
+  const cleanViewerId = publicId(viewerId, 120);
+  const isAnonymousViewer = !cleanViewerId;
   const [viewerAliases, blockedIds, authorMap, commentCounts] = await Promise.all([
-    supabaseRelatedInteractionUserIds(c, viewerId),
-    supabaseBlockedUserIds(c, viewerId),
+    isAnonymousViewer ? Promise.resolve([] as string[]) : supabaseRelatedInteractionUserIds(c, cleanViewerId),
+    isAnonymousViewer ? Promise.resolve(new Set<string>()) : supabaseBlockedUserIds(c, cleanViewerId),
     supabaseUsersByAnyIds(c, authorIds),
-    supabasePostCommentCounts(c, candidateRows),
+    supabasePostCommentCounts(c, candidateRows).catch((error: any) => {
+      console.warn(JSON.stringify({ event: 'supabase_post_comment_counts_failed', code: getErrorCode(error).slice(0, 180) }));
+      return new Map<string, number>();
+    }),
   ]);
   const cleanAuthorIds = Array.from(new Set(authorIds.map((id) => publicId(id, 120)).filter(Boolean)));
-  const [followingIds, friendRows, outgoingRequests, incomingRequests] = cleanAuthorIds.length
+  const [followingIds, friendRows, outgoingRequests, incomingRequests] = cleanAuthorIds.length && !isAnonymousViewer
     ? await Promise.all([
-      supabaseFollowingUserIds(c, viewerId, cleanAuthorIds),
+      supabaseFollowingUserIds(c, cleanViewerId, cleanAuthorIds),
       supabaseAdminQueryRows(c, 'app_friendships', {
         select: 'friend_id',
         filters: { user_id: postgrestInFilter(viewerAliases), friend_id: postgrestInFilter(cleanAuthorIds) },
@@ -7768,12 +7773,12 @@ async function supabaseProjectVisiblePostRows(
       }).catch(() => []),
       supabaseAdminQueryRows(c, 'app_friend_requests', {
         select: 'id,to_user_id',
-        filters: { from_user_id: postgrestEqFilter(publicId(viewerId, 120)), to_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
+        filters: { from_user_id: postgrestEqFilter(cleanViewerId), to_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
         limit: Math.max(1, cleanAuthorIds.length),
       }).catch(() => []),
       supabaseAdminQueryRows(c, 'app_friend_requests', {
         select: 'id,from_user_id',
-        filters: { to_user_id: postgrestEqFilter(publicId(viewerId, 120)), from_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
+        filters: { to_user_id: postgrestEqFilter(cleanViewerId), from_user_id: postgrestInFilter(cleanAuthorIds), status: postgrestEqFilter('pending') },
         limit: Math.max(1, cleanAuthorIds.length),
       }).catch(() => []),
     ])
@@ -15975,7 +15980,8 @@ api.get('/posts/world-board', async (c) => {
     const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;
-  } catch {
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_world_board_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load world board.' }, 500);
   }
 });
