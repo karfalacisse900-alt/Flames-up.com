@@ -25,19 +25,17 @@ struct CaptroFeedPostView: View {
         onFollow: onFollow,
         onCreate: onCreate,
         onOpenOptions: onOpenOptions
-      )
-
-      if !post.feedMediaURLs.isEmpty {
-        CaptroMediaPager(
-          post: post,
-          isVideoActive: isVideoActive,
-          selectedMediaIndex: $selectedMediaIndex,
-          onOpenPost: onOpenPost
-        )
-        .padding(.horizontal, 16)
-      } else {
-        CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost)
-          .padding(.horizontal, 16)
+      ) {
+        if !post.feedMediaURLs.isEmpty {
+          CaptroMediaPager(
+            post: post,
+            isVideoActive: isVideoActive,
+            selectedMediaIndex: $selectedMediaIndex,
+            onOpenPost: onOpenPost
+          )
+        } else {
+          CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost)
+        }
       }
 
       Rectangle()
@@ -75,7 +73,7 @@ struct CaptroFeedPostView: View {
   }
 }
 
-private struct CaptroAuthorHeader: View {
+private struct CaptroAuthorHeader<Content: View>: View {
   let post: MIRAPost
   let api: MIRAAPIClient
   let showsFeedControls: Bool
@@ -83,59 +81,88 @@ private struct CaptroAuthorHeader: View {
   let onFollow: () async -> Bool
   let onCreate: () -> Void
   let onOpenOptions: () -> Void
+  let content: Content
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var isSubmittingFollow = false
   @State private var isFollowConfirmationVisible = false
 
+  init(
+    post: MIRAPost,
+    api: MIRAAPIClient,
+    showsFeedControls: Bool,
+    canFollowAuthor: Bool,
+    onFollow: @escaping () async -> Bool,
+    onCreate: @escaping () -> Void,
+    onOpenOptions: @escaping () -> Void,
+    @ViewBuilder content: () -> Content
+  ) {
+    self.post = post
+    self.api = api
+    self.showsFeedControls = showsFeedControls
+    self.canFollowAuthor = canFollowAuthor
+    self.onFollow = onFollow
+    self.onCreate = onCreate
+    self.onOpenOptions = onOpenOptions
+    self.content = content()
+  }
+
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(alignment: .top, spacing: 10) {
       authorAvatar
+        .padding(.top, 4)
 
-      authorIdentity
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .layoutPriority(1)
+      VStack(alignment: .leading, spacing: 0) {
+        HStack(spacing: 0) {
+          authorIdentity
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
 
-      if post.isPinned {
-        Image(systemName: "pin.fill")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(MIRATheme.Color.forest)
-          .frame(width: 32, height: 44)
-          .accessibilityLabel("Pinned post")
-      }
+          if post.isPinned {
+            Image(systemName: "pin.fill")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(MIRATheme.Color.forest)
+              .frame(width: 32, height: 44)
+              .accessibilityLabel("Pinned post")
+          }
 
-      if showsFeedControls {
-        Button(action: onCreate) {
-          MIRAHeaderCircleButton(systemImage: "plus")
+          if showsFeedControls {
+            Button(action: onCreate) {
+              MIRAHeaderCircleButton(systemImage: "plus")
+            }
+            .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
+            .accessibilityLabel("Create post")
+
+            NavigationLink(destination: NotificationNativeView(api: api)) {
+              MIRAHeaderCircleButton(systemImage: "bell")
+            }
+            .buttonStyle(.plain)
+            .frame(width: 44, height: 44)
+            .accessibilityLabel("Notifications")
+          }
+
+          Button {
+            CaptroHaptics.light()
+            onOpenOptions()
+          } label: {
+            Image(systemName: "ellipsis")
+              .font(.system(size: 17, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .frame(width: 44, height: 44)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("Post options")
         }
-        .buttonStyle(.plain)
-        .frame(width: 44, height: 44)
-        .accessibilityLabel("Create post")
 
-        NavigationLink(destination: NotificationNativeView(api: api)) {
-          MIRAHeaderCircleButton(systemImage: "bell")
-        }
-        .buttonStyle(.plain)
-        .frame(width: 44, height: 44)
-        .accessibilityLabel("Notifications")
+        content
       }
-
-      Button {
-        CaptroHaptics.light()
-        onOpenOptions()
-      } label: {
-        Image(systemName: "ellipsis")
-          .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .frame(width: 44, height: 44)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(.miraPress)
-      .accessibilityLabel("Post options")
+      .frame(maxWidth: .infinity, alignment: .topLeading)
     }
     .padding(.horizontal, 16)
-    .padding(.vertical, 10)
-    .overlay(alignment: .bottomLeading) {
+    .padding(.top, 10)
+    .overlay(alignment: .topLeading) {
       if isFollowConfirmationVisible {
         Label("Following", systemImage: "checkmark")
           .font(.caption.weight(.semibold))
@@ -144,7 +171,7 @@ private struct CaptroAuthorHeader: View {
           .frame(height: 28)
           .background(MIRATheme.Color.forest.opacity(0.94))
           .clipShape(Capsule())
-          .offset(x: 64, y: 16)
+          .offset(x: 64, y: 52)
           .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
           .allowsHitTesting(false)
       }
