@@ -941,6 +941,7 @@ public struct CreatePostNativeView: View {
   @State private var editingMedia: MIRAEditorPresentation?
   @State private var editedCameraMedia: MIRAPickedMedia?
   @State private var activePostDetailSheet: PostDetailSheet?
+  @State private var selectedStampKind: CaptroStampKind = .social
   @State private var selectedPlace: MIRAExactPostPlace?
   @State private var broadLocation = MIRABroadDisplayLocation()
   @State private var showBroadLocation = false
@@ -997,7 +998,13 @@ public struct CreatePostNativeView: View {
     .onChange(of: title) { _, _ in cacheComposerDraft() }
     .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
     .onChange(of: mediaItems) { _, _ in cacheComposerDraft(includeMedia: true) }
-    .onChange(of: selectedPlace) { _, _ in cacheComposerDraft() }
+    .onChange(of: selectedPlace) { _, place in
+      if !isRestoringPostDraft, place != nil, selectedStampKind == .social {
+        selectedStampKind = .place
+      }
+      cacheComposerDraft()
+    }
+    .onChange(of: selectedStampKind) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
     .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedDiscoverCategory) { _, _ in cacheComposerDraft() }
@@ -1012,7 +1019,13 @@ public struct CreatePostNativeView: View {
       handleComposerScenePhaseChange(phase)
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
-      ComposerPreviewSheet(title: title, bodyText: bodyText, mediaItems: mediaItems)
+      ComposerPreviewSheet(
+        title: title,
+        bodyText: bodyText,
+        mediaItems: mediaItems,
+        stampKind: selectedStampKind,
+        location: selectedPlace?.displayName ?? (shouldPublishBroadLocation ? broadLocation.label : nil)
+      )
     }
     .miraBottomSheet(isPresented: postDetailSheetPresentedBinding, preferredHeightFraction: postDetailSheetHeightFraction) { closeSheet in
       switch activePostDetailSheet {
@@ -1229,6 +1242,8 @@ public struct CreatePostNativeView: View {
               .frame(height: 0.7)
               .padding(.top, 16)
 
+            stampTypeMenu
+
             postOptionRow(
               icon: "mappin.circle",
               title: selectedPlace?.displayName ?? "Add place",
@@ -1373,7 +1388,7 @@ public struct CreatePostNativeView: View {
 
   private var postDetailsTextFields: some View {
     VStack(alignment: .leading, spacing: 14) {
-      TextField("Headline", text: $title)
+      TextField("Stamp title", text: $title)
         .font(.system(size: 21, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .submitLabel(.next)
@@ -1383,7 +1398,7 @@ public struct CreatePostNativeView: View {
         .fill(MIRATheme.Color.hairline.opacity(0.78))
         .frame(height: 0.7)
 
-      TextField("Tell people about this post...", text: $bodyText, axis: .vertical)
+      TextField("Write on the stamp...", text: $bodyText, axis: .vertical)
         .font(.system(size: 16, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(3...6)
@@ -1394,6 +1409,48 @@ public struct CreatePostNativeView: View {
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(.red.opacity(0.9))
       }
+    }
+  }
+
+  private var stampTypeMenu: some View {
+    Menu {
+      ForEach(CaptroStampKind.creationCases) { kind in
+        Button {
+          selectedStampKind = kind
+        } label: {
+          Label(kind.displayName, systemImage: selectedStampKind == kind ? "checkmark" : "seal")
+        }
+      }
+    } label: {
+      HStack(spacing: 12) {
+        Image(systemName: "seal")
+          .font(.system(size: 22, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 28)
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Post stamp")
+            .font(.system(size: 16, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text(selectedStampKind.displayName)
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+
+        Spacer()
+
+        Image(systemName: "chevron.up.chevron.down")
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
+      }
+      .frame(minHeight: 58)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline.opacity(0.72))
+        .frame(height: 0.7)
     }
   }
 
@@ -1594,7 +1651,7 @@ public struct CreatePostNativeView: View {
       title: title,
       caption: bodyText,
       mediaType: mediaType,
-      postType: selectedPlace == nil ? "general" : "place",
+      postType: selectedStampKind.backendPostType,
       hashtags: cleanedTags,
       location: selectedPlace?.addressText ?? broadLocation.label,
       placeName: selectedPlace?.displayName,
@@ -1663,7 +1720,7 @@ public struct CreatePostNativeView: View {
         displayLocationLabel: shouldPublishBroadLocation ? broadLocation.label : nil,
         displayLocationSource: shouldPublishBroadLocation ? broadLocation.source : "none",
         displayLocationVisibility: shouldPublishBroadLocation ? "public" : "hidden",
-        postType: selectedPlace == nil ? "general" : "place",
+        postType: selectedStampKind.backendPostType,
         placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
         placeProvider: selectedPlace?.provider,
@@ -1820,6 +1877,7 @@ public struct CreatePostNativeView: View {
     defer { isRestoringPostDraft = false }
     title = draft.title
     bodyText = draft.bodyText
+    selectedStampKind = CaptroStampKind(rawValue: draft.stampType ?? "") ?? .social
     hashtags = draft.hashtags
     selectedAudioTrack = draft.selectedAudioTrack
     selectedPlace = draft.place.map(MIRAExactPostPlace.init(snapshot:))
@@ -1870,6 +1928,7 @@ public struct CreatePostNativeView: View {
     let snapshot = MIRAPostDraftSnapshot(
       title: title,
       bodyText: bodyText,
+      stampType: selectedStampKind.rawValue,
       hashtags: hashtags,
       selectedDiscoverCategory: selectedDiscoverCategory,
       selectedAudioTrack: selectedAudioTrack,
@@ -1890,6 +1949,7 @@ public struct CreatePostNativeView: View {
     focusedPostDetailsField = nil
     title = ""
     bodyText = ""
+    selectedStampKind = .social
     mediaItems = []
     pickerItems = []
     showPreview = false
@@ -4015,6 +4075,8 @@ private struct ComposerPreviewSheet: View {
   let title: String
   let bodyText: String
   let mediaItems: [MIRAPickedMedia]
+  let stampKind: CaptroStampKind
+  let location: String?
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
@@ -4024,16 +4086,19 @@ private struct ComposerPreviewSheet: View {
           if let first = mediaItems.first {
             let width = UIScreen.main.bounds.width - 32
             let height = min(width * (first.kind == .video ? 16.0 / 9.0 : 1.25), UIScreen.main.bounds.height * 0.74)
-            LocalMediaThumb(media: first, width: width, height: height)
-          }
-          if !title.isEmpty {
-            Text(title)
-              .font(.system(size: 24, weight: .semibold))
-          }
-          if !bodyText.isEmpty {
-            Text(bodyText)
-              .font(.system(size: 16, weight: .regular))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
+            ZStack(alignment: .bottomLeading) {
+              LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 18)
+
+              CaptroPostStamp(content: previewStampContent)
+                .frame(width: width * 0.72, alignment: .leading)
+                .padding(16)
+            }
+            .frame(width: width, height: height)
+          } else {
+            CaptroPostStamp(content: previewStampContent)
+              .padding(16)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
           }
         }
         .padding(MIRATheme.Space.md)
@@ -4043,4 +4108,36 @@ private struct ComposerPreviewSheet: View {
       .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
     }
   }
+
+  private var previewStampContent: CaptroStampContent {
+    let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cleanBody = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let cleanLocation = location?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let placeTitle = cleanLocation.flatMap { $0.isEmpty ? nil : $0 }
+    let titleText = stampKind == .place && cleanTitle.isEmpty
+      ? (placeTitle ?? stampKind.displayName)
+      : (cleanTitle.isEmpty ? stampKind.displayName : cleanTitle)
+    let footerValues = [cleanLocation, Self.previewDateFormatter.string(from: Date())]
+      .compactMap { value -> String? in
+        guard let value, !value.isEmpty else { return nil }
+        return value
+      }
+
+    return CaptroStampContent(
+      kind: stampKind,
+      title: titleText,
+      metadata: stampKind == .social ? nil : cleanLocation,
+      description: cleanBody.isEmpty ? nil : cleanBody,
+      footer: footerValues.isEmpty ? nil : footerValues.joined(separator: " · "),
+      actionTitle: stampKind.actionTitle,
+      contributors: []
+    )
+  }
+
+  private static let previewDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "MMM d"
+    return formatter
+  }()
 }

@@ -16,6 +16,8 @@ struct CaptroMediaPager: View {
       ZStack {
         mediaContent
           .frame(width: proxy.size.width, height: proxy.size.height)
+          .contentShape(Rectangle())
+          .onTapGesture(perform: onOpenPost)
 
         overlayContent(mediaWidth: proxy.size.width)
 
@@ -36,7 +38,6 @@ struct CaptroMediaPager: View {
     .background(MIRATheme.Color.mediaPlaceholder)
     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .onTapGesture(perform: onOpenPost)
     .accessibilityElement(children: .contain)
     .accessibilityLabel(mediaAccessibilityLabel)
     .accessibilityHint("Opens the post detail screen")
@@ -84,18 +85,7 @@ struct CaptroMediaPager: View {
 
   private func overlayContent(mediaWidth: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 0) {
-      HStack(alignment: .top, spacing: 12) {
-        if post.captroIsGuidePost, let title = post.captroCleanTitle {
-          Text(title.uppercased())
-            .font(.title2.weight(.bold))
-            .foregroundStyle(.white)
-            .lineLimit(2)
-            .minimumScaleFactor(0.82)
-            .shadow(color: .black.opacity(0.34), radius: 2, x: 0, y: 1)
-            .frame(maxWidth: mediaWidth * 0.62, alignment: .leading)
-            .accessibilityAddTraits(.isHeader)
-        }
-
+      HStack {
         Spacer(minLength: 0)
 
         if mediaURLs.count > 1 {
@@ -105,20 +95,15 @@ struct CaptroMediaPager: View {
 
       Spacer(minLength: 12)
 
-      VStack(alignment: .leading, spacing: 8) {
-        if post.captroIsGuidePost, post.captroHasGuideOverlayContent {
-          CaptroGuideOverlay(post: post)
-            .frame(maxWidth: mediaWidth * 0.62, alignment: .leading)
-        }
-
-        if let stampText = post.captroCapturedStampText {
-          CaptroCapturedStamp(detail: stampText)
-        }
-      }
+      CaptroPostStamp(
+        content: post.captroStampContent,
+        onOpen: onOpenPost,
+        onAction: onOpenPost
+      )
+      .frame(width: mediaWidth * 0.72, alignment: .leading)
       .padding(.bottom, mediaURLs.count > 1 ? 24 : 0)
     }
     .padding(16)
-    .allowsHitTesting(false)
   }
 
   private var mediaAccessibilityLabel: String {

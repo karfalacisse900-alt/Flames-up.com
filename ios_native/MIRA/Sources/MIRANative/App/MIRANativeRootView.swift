@@ -303,7 +303,12 @@ public struct MIRANativeRootView: View {
   private var mainTabs: some View {
     TabView(selection: $selectedTab) {
       lazyTab(.main) {
-        MainFeedView(api: api, model: startup.feedModel, isTabActive: selectedTab == .main)
+        MainFeedView(
+          api: api,
+          model: startup.feedModel,
+          isTabActive: selectedTab == .main,
+          isGuest: authSession.isGuest
+        )
       }
         .tag(MIRATab.main)
         .tabItem { Label("Home", systemImage: "house.fill") }

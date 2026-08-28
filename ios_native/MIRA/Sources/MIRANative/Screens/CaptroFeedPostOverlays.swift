@@ -1,66 +1,222 @@
 import Foundation
 import SwiftUI
 
-struct CaptroGuideOverlay: View {
-  let post: MIRAPost
+enum CaptroStampKind: String, Identifiable {
+  case social = "general"
+  case place
+  case club
+  case group
+  case meetup
+  case event
+  case deal
+  case localOffer = "local_offer"
+  case guide
 
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      if let title = post.captroCleanTitle {
-        Text(title)
-          .font(.title3.weight(.semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(2)
-          .minimumScaleFactor(0.86)
-      }
+  static let creationCases: [CaptroStampKind] = [
+    .social,
+    .place,
+    .club,
+    .group,
+    .meetup,
+    .event,
+    .deal,
+    .localOffer,
+  ]
 
-      if let supportingText = post.captroGuideSupportingText {
-        Text(supportingText)
-          .font(.body)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(2)
-      }
+  var id: String { rawValue }
+  var backendPostType: String { rawValue }
 
-      if !post.captroGuideContributors.isEmpty {
-        CaptroContributorAvatars(contributors: post.captroGuideContributors)
-      }
+  var displayName: String {
+    switch self {
+    case .social: return "Just Post"
+    case .place: return "Place"
+    case .club: return "Club"
+    case .group: return "Group"
+    case .meetup: return "Meetup"
+    case .event: return "Event"
+    case .deal: return "Deal"
+    case .localOffer: return "Local Offer"
+    case .guide: return "Guide"
     }
-    .padding(15)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.white.opacity(0.95))
-    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 15, style: .continuous)
-        .stroke(Color.white.opacity(0.72), lineWidth: 1)
-    )
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("Captro Guide")
+  }
+
+  var actionTitle: String? {
+    switch self {
+    case .club, .meetup: return "JOIN"
+    case .event: return "ATTEND"
+    case .deal, .localOffer: return "CLAIM"
+    case .group: return "ACCESS"
+    case .social, .place, .guide: return nil
+    }
   }
 }
 
-struct CaptroCapturedStamp: View {
-  let detail: String
+struct CaptroStampContent {
+  let kind: CaptroStampKind
+  let title: String
+  let metadata: String?
+  let description: String?
+  let footer: String?
+  let actionTitle: String?
+  let contributors: [MIRATaggedUserPayload]
+}
+
+struct CaptroPostStamp: View {
+  let content: CaptroStampContent
+  var onOpen: (() -> Void)? = nil
+  var onAction: (() -> Void)? = nil
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 1) {
-      Text("CAPTURED")
-        .font(.caption2.weight(.bold))
-      Text(detail)
-        .font(.caption2.weight(.semibold))
+    stampLayout
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.white.opacity(0.96))
+      .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+          .stroke(Color.black.opacity(0.12), lineWidth: 0.75)
+      )
+      .contentShape(Rectangle())
+      .onTapGesture { onOpen?() }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel(accessibilityLabel)
+      .accessibilityHint(onOpen == nil ? "" : "Opens details")
+  }
+
+  @ViewBuilder
+  private var stampLayout: some View {
+    switch content.kind {
+    case .social:
+      VStack(alignment: .leading, spacing: 7) {
+        stampTitle
+        stampDescription
+        stampFooter
+      }
+
+    case .place:
+      VStack(alignment: .leading, spacing: 7) {
+        stampTitle
+        stampMetadata
+        Rectangle()
+          .fill(Color.black.opacity(0.16))
+          .frame(height: 0.75)
+        stampDescription
+        stampFooter
+      }
+
+    case .club, .group, .guide:
+      VStack(alignment: .leading, spacing: 7) {
+        stampMetadata
+        stampTitle
+        if !content.contributors.isEmpty {
+          CaptroContributorAvatars(contributors: content.contributors)
+        }
+        stampDescription
+        stampActionFooter
+      }
+
+    case .meetup, .event:
+      VStack(alignment: .leading, spacing: 7) {
+        stampTitle
+        stampMetadata
+        stampDescription
+        Rectangle()
+          .fill(Color.black.opacity(0.14))
+          .frame(height: 0.75)
+        stampActionFooter
+      }
+
+    case .deal, .localOffer:
+      VStack(alignment: .leading, spacing: 7) {
+        stampMetadata
+        stampTitle
+        stampDescription
+        stampActionFooter
+      }
+    }
+  }
+
+  private var stampTitle: some View {
+    Text(content.title.uppercased())
+      .font(.system(size: 18, weight: .semibold))
+      .foregroundStyle(Color.black.opacity(0.88))
+      .lineLimit(2)
+      .minimumScaleFactor(0.84)
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityAddTraits(.isHeader)
+  }
+
+  @ViewBuilder
+  private var stampMetadata: some View {
+    if let metadata = content.metadata {
+      Text(metadata.uppercased())
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(Color.black.opacity(0.58))
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  @ViewBuilder
+  private var stampDescription: some View {
+    if let description = content.description {
+      Text(description)
+        .font(.system(size: 12, weight: .regular))
+        .foregroundStyle(Color.black.opacity(0.78))
+        .lineSpacing(2)
+        .lineLimit(4)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  @ViewBuilder
+  private var stampFooter: some View {
+    if let footer = content.footer {
+      Text(footer.uppercased())
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(Color.black.opacity(0.56))
         .lineLimit(1)
         .minimumScaleFactor(0.82)
     }
-    .foregroundStyle(Color.black.opacity(0.76))
-    .padding(.horizontal, 10)
-    .padding(.vertical, 7)
-    .background(Color.white.opacity(0.78))
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .stroke(Color.white.opacity(0.86), lineWidth: 1)
-    )
-    .accessibilityElement(children: .combine)
-    .accessibilityLabel("Captured, \(detail)")
+  }
+
+  private var stampActionFooter: some View {
+    HStack(alignment: .center, spacing: 8) {
+      if let footer = content.footer {
+        Text(footer.uppercased())
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(Color.black.opacity(0.56))
+          .lineLimit(1)
+          .minimumScaleFactor(0.78)
+      }
+
+      Spacer(minLength: 6)
+
+      if let actionTitle = content.actionTitle {
+        if let onAction {
+          Button(action: onAction) {
+            Text(actionTitle)
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.forest)
+              .frame(minWidth: 44, minHeight: 32, alignment: .trailing)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(actionTitle.capitalized)
+        } else {
+          Text(actionTitle)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
+      }
+    }
+  }
+
+  private var accessibilityLabel: String {
+    [content.kind.displayName, content.title, content.metadata, content.description, content.footer, content.actionTitle]
+      .compactMap { $0 }
+      .joined(separator: ", ")
   }
 }
 
@@ -96,17 +252,7 @@ private struct CaptroContributorAvatars: View {
 
 extension MIRAPost {
   var captroCleanTitle: String? {
-    let value = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return value.isEmpty ? nil : value
-  }
-
-  var captroIsGuidePost: Bool {
-    let value = postType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    return value == "guide" ||
-      value == "album" ||
-      value == "collaborative_album" ||
-      value == "collaborative-album" ||
-      value.contains("collab")
+    cleanedCaptroFeedValue(title)
   }
 
   var captroFeedCaptionText: String? {
@@ -130,32 +276,79 @@ extension MIRAPost {
       cleanedCaptroFeedValue(location)
   }
 
+  var captroStampKind: CaptroStampKind {
+    let value = postType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    switch value {
+    case "place", "location": return .place
+    case "club": return .club
+    case "group", "access", "group_access": return .group
+    case "meetup": return .meetup
+    case "event": return .event
+    case "deal": return .deal
+    case "offer", "local_offer", "local-offer": return .localOffer
+    case "guide", "album", "collaborative_album", "collaborative-album": return .guide
+    default:
+      if value.contains("collab") { return .guide }
+      if cleanedCaptroFeedValue(placeDisplayName) != nil { return .place }
+      return .social
+    }
+  }
+
+  var captroStampContent: CaptroStampContent {
+    let kind = captroStampKind
+    let location = captroFeedLocationText
+    let title: String
+    switch kind {
+    case .place:
+      title = cleanedCaptroFeedValue(placeDisplayName) ?? captroCleanTitle ?? kind.displayName
+    default:
+      title = captroCleanTitle ?? kind.displayName
+    }
+
+    let metadata: String?
+    switch kind {
+    case .social:
+      metadata = nil
+    case .place:
+      metadata = cleanedCaptroFeedValue(displayLocationText) ?? cleanedCaptroFeedValue(placeCity)
+    case .guide:
+      metadata = location ?? (feedMediaURLs.count > 1 ? "\(feedMediaURLs.count) photos" : nil)
+    default:
+      metadata = location
+    }
+
+    return CaptroStampContent(
+      kind: kind,
+      title: title,
+      metadata: metadata,
+      description: captroFeedCaptionText,
+      footer: captroCapturedStampText ?? captroAuthorStampFooter,
+      actionTitle: kind.actionTitle,
+      contributors: captroGuideContributors
+    )
+  }
+
   var captroGuideContributors: [MIRATaggedUserPayload] {
     (taggedUsers ?? []).filter {
       !($0.profileImage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
   }
 
-  var captroGuideSupportingText: String? {
-    if let caption = captroFeedCaptionText {
-      let firstLine = caption
-        .components(separatedBy: .newlines)
-        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .first { !$0.isEmpty }
-      if let firstLine, !firstLine.isEmpty { return firstLine }
-    }
-    if feedMediaURLs.count > 1 { return "\(feedMediaURLs.count) photos" }
-    return cleanedCaptroFeedValue(placeDisplayName)
-  }
-
-  var captroHasGuideOverlayContent: Bool {
-    captroCleanTitle != nil || captroGuideSupportingText != nil || !captroGuideContributors.isEmpty
-  }
-
   var captroCapturedStampText: String? {
     guard let location = captroCapturedLocation,
           let date = captroCreatedDate else { return nil }
     return "\(location.uppercased()) · \(CaptroFeedDateFormatters.stamp.string(from: date).uppercased())"
+  }
+
+  private var captroAuthorStampFooter: String? {
+    var values: [String] = []
+    if let username = cleanedCaptroFeedValue(userUsername) {
+      values.append("@\(username.trimmingCharacters(in: CharacterSet(charactersIn: "@")))")
+    }
+    if let date = captroCreatedDate {
+      values.append(CaptroFeedDateFormatters.stamp.string(from: date))
+    }
+    return values.isEmpty ? nil : values.joined(separator: " · ")
   }
 
   private var captroCapturedLocation: String? {

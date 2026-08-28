@@ -28,6 +28,8 @@ test('guest access is persisted and routed into the app without an auth token', 
   assert.match(rootView, /GuestSignInRequiredView/);
   assert.match(authView, /Text\("Continue as Guest"\)/);
   assert.match(mainFeed, /\/posts\/world-board\?limit=/);
+  assert.match(mainFeed, /private let publicFeedCacheKey = "native\.main\.public\.feed\.v1"/);
+  assert.match(mainFeed, /if isGuestFeedMode \{[\s\S]*?\/posts\/world-board\?limit=/);
 });
 
 test('native OAuth preserves provider requirements before calling Captro', () => {

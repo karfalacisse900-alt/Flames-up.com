@@ -14466,7 +14466,15 @@ api.get('/posts/world-board', async (c) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'world_board_read');
     if (supabaseRequired) return supabaseRequired;
-    const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60);
+    const limited = await enforceRateLimit(c, 'public_world_board', clientIp(c), 180, 60).catch((error: any) => {
+      // Keep anonymous feed reads available if Cloudflare KV exhausts its
+      // write quota. Mutating and authenticated routes retain strict limits.
+      console.warn(JSON.stringify({
+        event: 'public_world_board_rate_limit_unavailable',
+        code: getErrorCode(error).slice(0, 180),
+      }));
+      return null;
+    });
     if (limited) return limited;
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
@@ -14475,7 +14483,8 @@ api.get('/posts/world-board', async (c) => {
     const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;
-  } catch {
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'supabase_world_board_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load world board.' }, 500);
   }
 });

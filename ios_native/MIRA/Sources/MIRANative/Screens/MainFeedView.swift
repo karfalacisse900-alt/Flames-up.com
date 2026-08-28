@@ -34,7 +34,9 @@ final class MainFeedModel: ObservableObject {
   @Published var currentUsername: String?
 
   let api: MIRAAPIClient
-  private let feedCacheKey = "native.main.feed.v7"
+  private let legacyFeedCacheKey = "native.main.feed.v7"
+  private let publicFeedCacheKey = "native.main.public.feed.v1"
+  private var isGuestFeedMode = false
   private var hasLoadedFreshFeed = false
   private var isLoadingFreshFeed = false
   private var canLoadMore = true
@@ -50,9 +52,23 @@ final class MainFeedModel: ObservableObject {
     self.api = api
   }
 
+  func configureGuestMode(_ isGuest: Bool) {
+    guard isGuestFeedMode != isGuest else { return }
+    isGuestFeedMode = isGuest
+    posts = []
+    currentUserId = nil
+    currentUsername = nil
+    errorMessage = nil
+    hasLoadedFreshFeed = false
+    isLoadingFreshFeed = false
+    canLoadMore = true
+    isLoading = true
+    mediaPrefetchTask?.cancel()
+  }
+
   func prepareForStartup() async {
     MIRAPerformanceTimeline.mark("home_startup_prepare")
-    if currentUserId == nil && currentUsername == nil {
+    if !isGuestFeedMode && currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
     }
     await hydrateCachedFeedIfNeeded()
@@ -63,7 +79,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func load(forceRefresh: Bool = false) async {
-    if currentUserId == nil && currentUsername == nil {
+    if !isGuestFeedMode && currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
     }
     if isLoadingFreshFeed && !forceRefresh { return }
@@ -89,12 +105,21 @@ final class MainFeedModel: ObservableObject {
       return
     }
     let sorted = await sortedByNativeScore(photoFeedPosts(loaded))
-    let merged = await MIRAAppCacheStore.shared.mergeFreshFirstPage(existing: posts, fresh: sorted, pageLimit: firstPageLimit)
+    let merged: [MIRAPost]
+    if isGuestFeedMode {
+      merged = mergePublicFirstPage(existing: posts, fresh: sorted)
+    } else {
+      merged = await MIRAAppCacheStore.shared.mergeFreshFirstPage(
+        existing: posts,
+        fresh: sorted,
+        pageLimit: firstPageLimit
+      )
+    }
     if posts != merged {
       posts = merged
     }
     canLoadMore = loaded.count >= firstPageLimit
-    await MIRAAppCacheStore.shared.saveFeed(posts)
+    await persistCurrentFeed()
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
     errorMessage = nil
     prefetchInitialMediaWindow()
@@ -103,13 +128,30 @@ final class MainFeedModel: ObservableObject {
 
   private func hydrateCachedFeedIfNeeded() async {
     guard posts.isEmpty else { return }
-    var cached = await MIRAAppCacheStore.shared.loadFeed()
-    if cached == nil {
-      cached = await MIRALocalJSONCache.load([MIRAPost].self, key: feedCacheKey, maxAge: 60 * 60 * 24 * 30)
+    let cached: [MIRAPost]?
+    if isGuestFeedMode {
+      cached = await MIRALocalJSONCache.load(
+        [MIRAPost].self,
+        key: publicFeedCacheKey,
+        maxAge: 60 * 60 * 24
+      )
+    } else {
+      var authenticatedCache = await MIRAAppCacheStore.shared.loadFeed()
+      if authenticatedCache == nil {
+        authenticatedCache = await MIRALocalJSONCache.load(
+          [MIRAPost].self,
+          key: legacyFeedCacheKey,
+          maxAge: 60 * 60 * 24 * 30
+        )
+      }
+      cached = authenticatedCache
     }
     guard let cached else { return }
-    // Cached feed is already stored in display order, so show it immediately.
-    posts = await MIRAPostEngagementSync.apply(to: photoFeedPosts(cached))
+    if isGuestFeedMode {
+      posts = photoFeedPosts(cached)
+    } else {
+      posts = await MIRAPostEngagementSync.apply(to: photoFeedPosts(cached))
+    }
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
     isLoading = false
@@ -444,6 +486,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func canFollowAuthor(_ post: MIRAPost) -> Bool {
+    if isGuestFeedMode { return false }
     if post.viewerFollowing { return false }
 
     if currentUserId == nil && currentUsername == nil {
@@ -552,6 +595,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func loadCurrentUserIfNeeded() async {
+    guard !isGuestFeedMode else { return }
     guard currentUserId == nil && currentUsername == nil else { return }
     guard !isLoadingCurrentUser else { return }
     isLoadingCurrentUser = true
@@ -562,6 +606,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func canDelete(_ post: MIRAPost) -> Bool {
+    if isGuestFeedMode { return false }
     if currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
       return false
@@ -576,7 +621,28 @@ final class MainFeedModel: ObservableObject {
 
   private func cacheCurrentPosts() {
     let snapshot = posts
-    Task { await MIRAAppCacheStore.shared.saveFeed(snapshot) }
+    let isGuest = isGuestFeedMode
+    let publicCacheKey = publicFeedCacheKey
+    Task {
+      if isGuest {
+        await MIRALocalJSONCache.save(Array(snapshot.prefix(120)), key: publicCacheKey)
+      } else {
+        await MIRAAppCacheStore.shared.saveFeed(snapshot)
+      }
+    }
+  }
+
+  private func persistCurrentFeed() async {
+    if isGuestFeedMode {
+      await MIRALocalJSONCache.save(Array(posts.prefix(120)), key: publicFeedCacheKey)
+    } else {
+      await MIRAAppCacheStore.shared.saveFeed(posts)
+    }
+  }
+
+  private func mergePublicFirstPage(existing: [MIRAPost], fresh: [MIRAPost]) -> [MIRAPost] {
+    let freshIDs = Set(fresh.map(\.id))
+    return Array((fresh + existing.filter { !freshIDs.contains($0.id) }).prefix(120))
   }
 
   func removePostLocally(id postId: String) {
@@ -599,6 +665,17 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func fetchFeedPage(skip: Int) async -> [MIRAPost] {
+    if isGuestFeedMode {
+      do {
+        let publicPosts: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
+        MIRAPerformanceTimeline.mark("home_feed_public", detail: "guest skip=\(skip)")
+        return publicPosts
+      } catch {
+        MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "guest_public skip=\(skip)")
+        return []
+      }
+    }
+
     do {
       let loaded: [MIRAPost] = try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)")
       if !loaded.isEmpty { return loaded }
@@ -685,6 +762,7 @@ private struct MainPostVisibilityUpdateBody: Encodable {
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
   private let isTabActive: Bool
+  private let isGuest: Bool
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
@@ -699,14 +777,16 @@ public struct MainFeedView: View {
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
 
-  public init(api: MIRAAPIClient) {
+  public init(api: MIRAAPIClient, isGuest: Bool = false) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
     self.isTabActive = true
+    self.isGuest = isGuest
   }
 
-  init(api: MIRAAPIClient, model: MainFeedModel, isTabActive: Bool = true) {
+  init(api: MIRAAPIClient, model: MainFeedModel, isTabActive: Bool = true, isGuest: Bool = false) {
     _model = StateObject(wrappedValue: model)
     self.isTabActive = isTabActive
+    self.isGuest = isGuest
   }
 
   public var body: some View {
@@ -718,7 +798,7 @@ public struct MainFeedView: View {
           }
           .frame(height: 1)
 
-          LazyVStack(spacing: MIRATheme.Space.xl) {
+          LazyVStack(spacing: 0) {
             if model.isLoading && model.posts.isEmpty {
               ForEach(0..<4, id: \.self) { _ in MainPostSkeleton() }
             } else if model.posts.isEmpty {
@@ -730,7 +810,7 @@ public struct MainFeedView: View {
                   post: post,
                   api: model.api,
                   isVideoActive: post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
-                  showsFeedControls: post.id == model.posts.first?.id,
+                  showsFeedControls: !isGuest && post.id == model.posts.first?.id,
                   onFollow: { await model.followAuthor(post) },
                   onOpenOptions: { presentPostOptions(for: post) },
                   onCreate: {
@@ -741,7 +821,7 @@ public struct MainFeedView: View {
                     CaptroHaptics.light()
                     detailPost = post
                   },
-                  canFollowAuthor: model.canFollowAuthor(post)
+                  canFollowAuthor: !isGuest && model.canFollowAuthor(post)
                 )
                 .onAppear {
                   MIRAApplePerformanceLogger.event("post_cell_appear", detail: post.feedMediaURLs.first?.isVideoURL == true ? "video" : "image")
@@ -823,7 +903,10 @@ public struct MainFeedView: View {
       .miraFullScreenOverlay(isPresented: $isShowingCreatePost, background: .black) { dismiss in
         CreatePostNativeView(api: model.api, onClose: dismiss)
       }
-      .task { await model.load() }
+      .task(id: isGuest) {
+        model.configureGuestMode(isGuest)
+        await model.load()
+      }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)

@@ -12,10 +12,8 @@ struct CaptroFeedPostView: View {
   let onOpenPost: () -> Void
   let canFollowAuthor: Bool
 
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.displayScale) private var displayScale
   @State private var selectedMediaIndex = 0
-  @State private var isShowingCaption = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -37,29 +35,16 @@ struct CaptroFeedPostView: View {
           onOpenPost: onOpenPost
         )
         .padding(.horizontal, 16)
-      }
-
-      if hasCaption {
-        CaptroExpandableCaption(
-          title: captionTitle,
-          caption: captionText,
-          isExpanded: isShowingCaption,
-          showsMore: captionNeedsExpansion,
-          onToggleCaption: toggleCaption
-        )
-        .padding(.top, post.feedMediaURLs.isEmpty ? 0 : 6)
-        .transition(.opacity.combined(with: .scale(scale: 0.99, anchor: .top)))
-      }
-
-      if let locationText = post.captroFeedLocationText {
-        CaptroLocationRow(location: locationText)
+      } else {
+        CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost)
+          .padding(.horizontal, 16)
       }
 
       Rectangle()
         .fill(MIRATheme.Color.hairline)
         .frame(height: 1 / max(displayScale, 1))
         .padding(.horizontal, 16)
-        .padding(.top, 18)
+        .padding(.top, 24)
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
     .background(MIRATheme.Color.surface)
@@ -79,34 +64,6 @@ struct CaptroFeedPostView: View {
     }
     .onChange(of: post.id) { _, _ in
       selectedMediaIndex = 0
-      isShowingCaption = false
-    }
-    .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isShowingCaption)
-  }
-
-  private var captionTitle: String? {
-    post.captroIsGuidePost ? nil : post.captroCleanTitle
-  }
-
-  private var captionText: String? {
-    post.captroFeedCaptionText
-  }
-
-  private var hasCaption: Bool {
-    captionTitle != nil || captionText != nil
-  }
-
-  private var captionNeedsExpansion: Bool {
-    if let captionTitle, captionTitle.count > 58 { return true }
-    guard let captionText else { return false }
-    return captionText.count > 118 || captionText.contains("\n")
-  }
-
-  private func toggleCaption() {
-    guard captionNeedsExpansion else { return }
-    CaptroHaptics.light()
-    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-      isShowingCaption.toggle()
     }
   }
 
@@ -279,75 +236,6 @@ private struct CaptroAuthorHeader: View {
         isSubmittingFollow = false
       }
     }
-  }
-}
-
-private struct CaptroExpandableCaption: View {
-  let title: String?
-  let caption: String?
-  let isExpanded: Bool
-  let showsMore: Bool
-  let onToggleCaption: () -> Void
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      if let title {
-        Text(title)
-          .font(.system(size: 20, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(isExpanded ? nil : 2)
-          .truncationMode(.tail)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      if let caption {
-        Text(caption)
-          .font(.system(size: 12, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineSpacing(2)
-          .lineLimit(isExpanded ? nil : 3)
-          .truncationMode(.tail)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      if showsMore {
-        HStack(spacing: 0) {
-          Spacer(minLength: 0)
-          Button(action: onToggleCaption) {
-            Text(isExpanded ? "Less" : "More")
-              .font(.system(size: 12, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.forest)
-              .frame(minWidth: 44, minHeight: 28, alignment: .trailing)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(isExpanded ? "Show less caption" : "Show full caption")
-        }
-      }
-    }
-    .padding(.horizontal, 16)
-    .accessibilityElement(children: .contain)
-  }
-}
-
-private struct CaptroLocationRow: View {
-  let location: String
-
-  var body: some View {
-    HStack(spacing: 7) {
-      Image(systemName: "mappin.and.ellipse")
-        .font(.system(size: 14, weight: .medium))
-      Text(location)
-        .font(.system(size: 14, weight: .medium))
-        .lineLimit(1)
-        .truncationMode(.tail)
-    }
-    .foregroundStyle(MIRATheme.Color.forest)
-    .frame(minHeight: 24)
-    .padding(.horizontal, 16)
-    .padding(.top, 6)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Location: \(location)")
   }
 }
 
