@@ -999,10 +999,7 @@ public struct CreatePostNativeView: View {
     .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
     .onChange(of: mediaItems) { _, _ in cacheComposerDraft(includeMedia: true) }
     .onChange(of: selectedPlace) { _, place in
-      if !isRestoringPostDraft, place != nil, selectedStampKind == .social {
-        selectedStampKind = .place
-      }
-      cacheComposerDraft()
+      handleSelectedPlaceChange(place)
     }
     .onChange(of: selectedStampKind) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
@@ -1452,6 +1449,14 @@ public struct CreatePostNativeView: View {
         .fill(MIRATheme.Color.hairline.opacity(0.72))
         .frame(height: 0.7)
     }
+  }
+
+  private func handleSelectedPlaceChange(_ place: MIRAExactPostPlace?) {
+    let shouldUsePlaceStamp = !isRestoringPostDraft && place != nil
+    if shouldUsePlaceStamp && selectedStampKind == .social {
+      selectedStampKind = .place
+    }
+    cacheComposerDraft()
   }
 
   private var discoverCategoryMenu: some View {
