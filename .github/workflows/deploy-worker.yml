@@ -215,7 +215,13 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          endpoint="https://api.flames-up.com/api/posts/world-board?limit=1"
+          workers_subdomain="$(
+            curl --silent --show-error --fail \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+              | node -e 'let body=""; process.stdin.on("data", chunk => body += chunk); process.stdin.on("end", () => { const name = JSON.parse(body)?.result?.subdomain; if (!name) process.exit(1); process.stdout.write(name); });'
+          )"
+          endpoint="https://flames-up-api.${workers_subdomain}.workers.dev/api/posts/world-board?limit=1"
           status="$(curl --silent --show-error --output /tmp/world-board.json --write-out '%{http_code}' "$endpoint")"
           if [ "$status" = "200" ]; then
             node -e 'const body=require("/tmp/world-board.json"); if (!Array.isArray(body)) process.exit(1)'
