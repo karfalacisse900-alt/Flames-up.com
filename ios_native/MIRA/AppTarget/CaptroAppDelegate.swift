@@ -7,12 +7,6 @@ final class MIRAAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
   ) -> Bool {
-#if DEBUG
-    if ProcessInfo.processInfo.arguments.contains("--captro-home-feed-visual-test") {
-      UNUserNotificationCenter.current().delegate = self
-      return true
-    }
-#endif
     MIRAAppleRuntimeDiagnostics.start()
     MIRABackgroundTaskCoordinator.shared.register()
     UNUserNotificationCenter.current().delegate = self

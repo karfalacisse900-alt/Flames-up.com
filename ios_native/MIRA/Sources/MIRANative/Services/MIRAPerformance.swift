@@ -107,7 +107,10 @@ public enum MIRAPerformanceTimeline {
   public static func mark(_ name: String, detail: String? = nil) {
     MIRAApplePerformanceLogger.event(name, detail: detail)
     #if DEBUG
-    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+    let now = DispatchTime.now().uptimeNanoseconds
+    let startedAt = start.uptimeNanoseconds
+    let elapsedNanoseconds = now >= startedAt ? now - startedAt : 0
+    let elapsed = Double(elapsedNanoseconds) / 1_000_000
     let detailText = detail.map { " \($0)" } ?? ""
     print("[Captro perf] mark \(name) \(Int(elapsed))ms\(detailText)")
     #endif
