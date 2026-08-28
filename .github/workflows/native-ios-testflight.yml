@@ -278,15 +278,37 @@ jobs:
       - name: Install and launch visual test
         shell: bash
         run: |
+          set -euo pipefail
+          OUTPUT_DIR="$RUNNER_TEMP/home-feed-visual-qa"
           APP_PATH="$RUNNER_TEMP/CaptroHomeFeedDerivedData/Build/Products/Debug-iphonesimulator/Captro.app"
+          mkdir -p "$OUTPUT_DIR"
           xcrun simctl install "$SIMULATOR_UDID" "$APP_PATH"
           xcrun simctl status_bar "$SIMULATOR_UDID" override \
             --time "9:41" \
             --batteryLevel 100 \
             --wifiBars 3 \
             --cellularBars 4
-          xcrun simctl launch --terminate-running-process "$SIMULATOR_UDID" com.captro.app --captro-home-feed-visual-test
+          xcrun simctl launch \
+            --terminate-running-process \
+            --stdout="$OUTPUT_DIR/captro.stdout.log" \
+            --stderr="$OUTPUT_DIR/captro.stderr.log" \
+            "$SIMULATOR_UDID" \
+            com.captro.app \
+            --captro-home-feed-visual-test
           sleep 15
+
+          xcrun simctl spawn "$SIMULATOR_UDID" log show \
+            --style compact \
+            --last 3m \
+            --predicate 'process == "Captro" OR eventMessage CONTAINS[c] "com.captro.app"' \
+            > "$OUTPUT_DIR/captro-system.log" 2>&1 || true
+
+          if xcrun simctl spawn "$SIMULATOR_UDID" launchctl list | grep -Fq "com.captro.app"; then
+            echo "CAPTRO_VISUAL_APP_RUNNING=true" >> "$GITHUB_ENV"
+          else
+            echo "CAPTRO_VISUAL_APP_RUNNING=false" >> "$GITHUB_ENV"
+            echo "::error::Captro terminated before the visual QA screenshot."
+          fi
 
       - name: Capture screenshot
         shell: bash
@@ -295,10 +317,24 @@ jobs:
           xcrun simctl io "$SIMULATOR_UDID" screenshot "$RUNNER_TEMP/home-feed-visual-qa/captro-home-feed.png"
           sips -g pixelWidth -g pixelHeight "$RUNNER_TEMP/home-feed-visual-qa/captro-home-feed.png"
 
-      - name: Upload screenshot
+      - name: Verify Captro remained active
+        shell: bash
+        run: |
+          if [ "$CAPTRO_VISUAL_APP_RUNNING" != "true" ]; then
+            echo "--- Captro stderr ---"
+            cat "$RUNNER_TEMP/home-feed-visual-qa/captro.stderr.log" || true
+            echo "--- Captro stdout ---"
+            cat "$RUNNER_TEMP/home-feed-visual-qa/captro.stdout.log" || true
+            echo "--- Simulator log tail ---"
+            tail -n 200 "$RUNNER_TEMP/home-feed-visual-qa/captro-system.log" || true
+            exit 1
+          fi
+
+      - name: Upload screenshot and diagnostics
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           name: captro-home-feed-visual-qa
-          path: ${{ runner.temp }}/home-feed-visual-qa/captro-home-feed.png
+          path: ${{ runner.temp }}/home-feed-visual-qa/
           if-no-files-found: error
           retention-days: 14

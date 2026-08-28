@@ -14,19 +14,26 @@ public struct CaptroHomeFeedVisualTestView: View {
       NavigationStack {
         ScrollView(showsIndicators: false) {
           LazyVStack(spacing: 24) {
-            ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
-              CaptroFeedPostView(
-                post: post,
-                api: api,
-                isVideoActive: false,
-                showsFeedControls: index == 0,
-                onLike: {},
-                onFollow: { false },
-                onOpenOptions: {},
-                onCreate: {},
-                onOpenPost: {},
-                canFollowAuthor: false
-              )
+            if posts.isEmpty {
+              Text("Home feed visual fixture could not load")
+                .font(.headline)
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .padding(24)
+            } else {
+              ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
+                CaptroFeedPostView(
+                  post: post,
+                  api: api,
+                  isVideoActive: false,
+                  showsFeedControls: index == 0,
+                  onLike: {},
+                  onFollow: { false },
+                  onOpenOptions: {},
+                  onCreate: {},
+                  onOpenPost: {},
+                  canFollowAuthor: false
+                )
+              }
             }
           }
           .padding(.bottom, 112)
@@ -89,6 +96,7 @@ private enum CaptroHomeFeedVisualFixtures {
         "displayCity": "Brooklyn",
         "displayRegion": "New York",
         "displayLocationLabel": "Brooklyn, New York",
+        "displayLocationVisibility": "city",
         "placeName": "Brooklyn",
         "placeCity": "Brooklyn",
         "postType": "guide",
@@ -112,7 +120,10 @@ private enum CaptroHomeFeedVisualFixtures {
           "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1080&q=85"
         ],
         "location": "New York",
+        "displayCity": "New York",
         "displayLocationLabel": "New York",
+        "displayLocationVisibility": "city",
+        "placeCity": "New York",
         "postType": "moment",
         "createdAt": "2026-08-28T08:20:00Z",
         "likesCount": 7,
@@ -120,15 +131,20 @@ private enum CaptroHomeFeedVisualFixtures {
       }
       """
     )
-  ]
+  ].compactMap { $0 }
 
-  private static func decode(_ json: String) -> MIRAPost {
+  private static func decode(_ json: String) -> MIRAPost? {
     let decoder = JSONDecoder()
-    guard let data = json.data(using: .utf8),
-          let post = try? decoder.decode(MIRAPost.self, from: data) else {
-      preconditionFailure("Invalid Home feed visual test fixture")
+    guard let data = json.data(using: .utf8) else {
+      print("[CaptroVisualQA] Fixture is not valid UTF-8")
+      return nil
     }
-    return post
+    do {
+      return try decoder.decode(MIRAPost.self, from: data)
+    } catch {
+      print("[CaptroVisualQA] Fixture decode failed: \(error)")
+      return nil
+    }
   }
 }
 #endif
