@@ -206,3 +206,30 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Smoke-test public guest feed
+        working-directory: ./backend-cf
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.flames-up.com/api/posts/world-board?limit=1"
+          status="$(curl --silent --show-error --output /tmp/world-board.json --write-out '%{http_code}' "$endpoint")"
+          if [ "$status" = "200" ]; then
+            node -e 'const body=require("/tmp/world-board.json"); if (!Array.isArray(body)) process.exit(1)'
+            exit 0
+          fi
+
+          timeout 20s npx wrangler tail --env production --format pretty >/tmp/worker-tail.log 2>&1 &
+          tail_pid=$!
+          sleep 4
+          curl --silent --show-error --output /tmp/world-board-retry.json --write-out 'Guest feed retry HTTP %{http_code}\n' "$endpoint" || true
+          sleep 5
+          kill "$tail_pid" 2>/dev/null || true
+          wait "$tail_pid" 2>/dev/null || true
+          cat /tmp/world-board.json
+          cat /tmp/world-board-retry.json
+          cat /tmp/worker-tail.log
+          exit 1
