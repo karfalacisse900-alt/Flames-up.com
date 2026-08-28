@@ -721,7 +721,6 @@ public struct MainFeedView: View {
                   api: model.api,
                   isVideoActive: post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
                   showsFeedControls: post.id == model.posts.first?.id,
-                  onLike: { Task { await model.toggleLike(post) } },
                   onFollow: { await model.followAuthor(post) },
                   onOpenOptions: { presentPostOptions(for: post) },
                   onCreate: {
@@ -2095,21 +2094,20 @@ private struct MainPostSkeleton: View {
         .aspectRatio(4.0 / 5.0, contentMode: .fit)
         .padding(.horizontal, MIRATheme.Space.md)
 
-      HStack {
-        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 58, height: 20)
-        Spacer()
-        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 44, height: 18)
+      VStack(alignment: .leading, spacing: 5) {
+        RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(width: 196, height: 20)
+        RoundedRectangle(cornerRadius: 4).fill(MIRATheme.Color.surfaceSoft).frame(maxWidth: .infinity).frame(height: 12)
+        RoundedRectangle(cornerRadius: 4).fill(MIRATheme.Color.surfaceSoft).frame(width: 226, height: 12)
       }
-      .frame(height: 44)
       .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.top, 6)
 
-      VStack(alignment: .leading, spacing: 7) {
-        RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(maxWidth: .infinity).frame(height: 14)
-        RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(width: 226, height: 14)
-        RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(width: 118, height: 13)
-      }
-      .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.bottom, 18)
+      RoundedRectangle(cornerRadius: 4)
+        .fill(MIRATheme.Color.surfaceSoft)
+        .frame(width: 118, height: 14)
+        .padding(.horizontal, MIRATheme.Space.md)
+        .padding(.top, 6)
+        .padding(.bottom, 18)
 
       Rectangle()
         .fill(MIRATheme.Color.hairline)

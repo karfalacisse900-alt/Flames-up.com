@@ -6,7 +6,6 @@ struct CaptroFeedPostView: View {
   let api: MIRAAPIClient
   let isVideoActive: Bool
   let showsFeedControls: Bool
-  let onLike: () -> Void
   let onFollow: () async -> Bool
   let onOpenOptions: () -> Void
   let onCreate: () -> Void
@@ -40,21 +39,15 @@ struct CaptroFeedPostView: View {
         .padding(.horizontal, 16)
       }
 
-      CaptroLikeRow(
-        isLiked: post.viewerLiked,
-        likeCount: post.likesCount ?? 0,
-        showsMore: captionNeedsExpansion,
-        isExpanded: isShowingCaption,
-        onLike: onLike,
-        onToggleCaption: toggleCaption
-      )
-
       if hasCaption {
         CaptroExpandableCaption(
           title: captionTitle,
           caption: captionText,
-          isExpanded: isShowingCaption
+          isExpanded: isShowingCaption,
+          showsMore: captionNeedsExpansion,
+          onToggleCaption: toggleCaption
         )
+        .padding(.top, post.feedMediaURLs.isEmpty ? 0 : 6)
         .transition(.opacity.combined(with: .scale(scale: 0.99, anchor: .top)))
       }
 
@@ -251,14 +244,14 @@ private struct CaptroAuthorHeader: View {
   private var authorIdentityLabel: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(post.authorDisplayName)
-        .font(.body.weight(.semibold))
+        .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
         .truncationMode(.tail)
 
       if let location = post.captroFeedHeaderLocation {
         Text(location)
-          .font(.subheadline)
+          .font(.system(size: 14, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
           .truncationMode(.tail)
@@ -289,64 +282,18 @@ private struct CaptroAuthorHeader: View {
   }
 }
 
-private struct CaptroLikeRow: View {
-  let isLiked: Bool
-  let likeCount: Int
-  let showsMore: Bool
-  let isExpanded: Bool
-  let onLike: () -> Void
-  let onToggleCaption: () -> Void
-
-  var body: some View {
-    HStack(spacing: 8) {
-      Button {
-        CaptroHaptics.light()
-        onLike()
-      } label: {
-        HStack(spacing: 7) {
-          Image(systemName: isLiked ? "heart.fill" : "heart")
-            .font(.system(size: 23, weight: .regular))
-          Text(captroCompactCount(likeCount))
-            .font(.callout)
-            .monospacedDigit()
-        }
-        .foregroundStyle(isLiked ? MIRATheme.Color.like : MIRATheme.Color.textPrimary)
-        .frame(minHeight: 44)
-        .contentShape(Rectangle())
-      }
-      .buttonStyle(.miraPress)
-      .accessibilityLabel(isLiked ? "Unlike post" : "Like post")
-      .accessibilityValue("\(likeCount) likes")
-
-      Spacer(minLength: 12)
-
-      if showsMore {
-        Button(action: onToggleCaption) {
-          Text(isExpanded ? "Less" : "More")
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(MIRATheme.Color.forest)
-            .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isExpanded ? "Show less caption" : "Show full caption")
-      }
-    }
-    .padding(.horizontal, 16)
-    .padding(.top, 12)
-  }
-}
-
 private struct CaptroExpandableCaption: View {
   let title: String?
   let caption: String?
   let isExpanded: Bool
+  let showsMore: Bool
+  let onToggleCaption: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 5) {
       if let title {
         Text(title)
-          .font(.headline)
+          .font(.system(size: 20, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(isExpanded ? nil : 2)
           .truncationMode(.tail)
@@ -355,16 +302,31 @@ private struct CaptroExpandableCaption: View {
 
       if let caption {
         Text(caption)
-          .font(.body)
+          .font(.system(size: 12, weight: .regular))
           .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineSpacing(2)
           .lineLimit(isExpanded ? nil : 3)
           .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
       }
+
+      if showsMore {
+        HStack(spacing: 0) {
+          Spacer(minLength: 0)
+          Button(action: onToggleCaption) {
+            Text(isExpanded ? "Less" : "More")
+              .font(.system(size: 12, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.forest)
+              .frame(minWidth: 44, minHeight: 28, alignment: .trailing)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(isExpanded ? "Show less caption" : "Show full caption")
+        }
+      }
     }
     .padding(.horizontal, 16)
-    .padding(.top, 1)
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
   }
 }
 
@@ -374,16 +336,16 @@ private struct CaptroLocationRow: View {
   var body: some View {
     HStack(spacing: 7) {
       Image(systemName: "mappin.and.ellipse")
-        .font(.subheadline.weight(.semibold))
+        .font(.system(size: 14, weight: .medium))
       Text(location)
-        .font(.callout)
+        .font(.system(size: 14, weight: .medium))
         .lineLimit(1)
         .truncationMode(.tail)
     }
     .foregroundStyle(MIRATheme.Color.forest)
-    .frame(minHeight: 44)
+    .frame(minHeight: 24)
     .padding(.horizontal, 16)
-    .padding(.top, 4)
+    .padding(.top, 6)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Location: \(location)")
   }
@@ -401,18 +363,4 @@ struct CaptroFeedPostVisibilityPreferenceKey: PreferenceKey {
   static func reduce(value: inout [CaptroFeedPostVisibility], nextValue: () -> [CaptroFeedPostVisibility]) {
     value.append(contentsOf: nextValue())
   }
-}
-
-private func captroCompactCount(_ value: Int) -> String {
-  if value >= 1_000_000 { return captroCompactDecimal(Double(value) / 1_000_000, suffix: "M") }
-  if value >= 1_000 { return captroCompactDecimal(Double(value) / 1_000, suffix: "K") }
-  return "\(value)"
-}
-
-private func captroCompactDecimal(_ value: Double, suffix: String) -> String {
-  let rounded = value >= 100 ? floor(value) : floor(value * 10) / 10
-  if rounded.truncatingRemainder(dividingBy: 1) == 0 {
-    return "\(Int(rounded))\(suffix)"
-  }
-  return String(format: "%.1f%@", rounded, suffix)
 }

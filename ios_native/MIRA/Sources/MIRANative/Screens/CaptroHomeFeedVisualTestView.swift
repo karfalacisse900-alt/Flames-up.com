@@ -26,7 +26,6 @@ public struct CaptroHomeFeedVisualTestView: View {
                   api: api,
                   isVideoActive: false,
                   showsFeedControls: index == 0,
-                  onLike: {},
                   onFollow: { false },
                   onOpenOptions: {},
                   onCreate: {},
