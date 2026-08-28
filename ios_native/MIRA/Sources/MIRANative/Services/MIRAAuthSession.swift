@@ -8,18 +8,26 @@ public struct MIRAPasswordResetContext: Equatable {
 
 public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProviding {
   @Published public private(set) var user: MIRAUser?
+  @Published public private(set) var isGuest: Bool
   @Published public private(set) var isBootstrapping = true
   @Published public private(set) var isWorking = false
   @Published public var errorMessage: String?
   @Published public var passwordResetContext: MIRAPasswordResetContext?
 
   private let keychain: MIRAKeychainSessionProvider
+  private let defaults: UserDefaults
   private var token: String?
   private var refreshToken: String?
   private let cachedUserKey = "native.auth.user.v2"
+  private static let guestModeKey = "native.auth.guest.v1"
 
-  public init(keychain: MIRAKeychainSessionProvider = MIRAKeychainSessionProvider()) {
+  public init(
+    keychain: MIRAKeychainSessionProvider = MIRAKeychainSessionProvider(),
+    defaults: UserDefaults = .standard
+  ) {
     self.keychain = keychain
+    self.defaults = defaults
+    self.isGuest = defaults.bool(forKey: Self.guestModeKey)
   }
 
   public func accessToken() async -> String? {
@@ -87,6 +95,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
     token = storedToken
     refreshToken = await keychain.refreshToken()
+    setGuestMode(false)
 
     var cachedUser = await MIRAAppCacheStore.shared.loadCurrentProfile()
     if cachedUser == nil {
@@ -252,6 +261,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       token = response.accessToken
       refreshToken = response.refreshToken
       user = response.user
+      setGuestMode(false)
       self.passwordResetContext = nil
       keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
       await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
@@ -283,11 +293,34 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   }
 
   @MainActor
+  public func continueAsGuest() {
+    token = nil
+    refreshToken = nil
+    user = nil
+    errorMessage = nil
+    passwordResetContext = nil
+    setGuestMode(true)
+    keychain.clearSession()
+    MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
+    Task {
+      await MIRALocalJSONCache.remove(key: cachedUserKey)
+      await MIRAPostEngagementSync.clearCachedState()
+    }
+  }
+
+  @MainActor
+  public func exitGuestMode() {
+    setGuestMode(false)
+    errorMessage = nil
+  }
+
+  @MainActor
   public func logout() {
     token = nil
     refreshToken = nil
     user = nil
     errorMessage = nil
+    setGuestMode(false)
     keychain.clearSession()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
     Task {
@@ -299,6 +332,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   @MainActor
   public func replaceUser(_ updatedUser: MIRAUser) {
     user = updatedUser
+    setGuestMode(false)
     Task {
       await MIRAAppCacheStore.shared.saveCurrentProfile(updatedUser)
       await MIRALocalJSONCache.save(updatedUser, key: cachedUserKey)
@@ -315,6 +349,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       token = response.accessToken
       refreshToken = response.refreshToken
       user = response.user
+      setGuestMode(false)
       keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
       await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
       await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
@@ -327,6 +362,12 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
         errorMessage = "Could not sign in. Check your account and try again."
       }
     }
+  }
+
+  @MainActor
+  private func setGuestMode(_ enabled: Bool) {
+    isGuest = enabled
+    defaults.set(enabled, forKey: Self.guestModeKey)
   }
 
   private func passwordResetContext(from url: URL) -> MIRAPasswordResetContext? {

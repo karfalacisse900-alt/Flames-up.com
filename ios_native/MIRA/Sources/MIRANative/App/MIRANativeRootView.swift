@@ -247,6 +247,15 @@ public struct MIRANativeRootView: View {
       }
       registerCachedPushTokenIfPossible()
     }
+    .onChange(of: authSession.isGuest) { _, isGuest in
+      if isGuest {
+        selectedTab = .main
+        loadedTabs = [.main]
+      } else if authSession.user == nil {
+        selectedTab = .main
+        loadedTabs = [.main]
+      }
+    }
     .onChange(of: scenePhase) { _, phase in
       withAnimation(.easeOut(duration: phase == .active ? 0.18 : 0.06)) {
         isPrivacyShieldVisible = phase != .active
@@ -271,12 +280,12 @@ public struct MIRANativeRootView: View {
   }
 
   private var shouldHideStatusBar: Bool {
-    startup.isSplashMounted || featureStatusBarHidden || (authSession.user != nil && selectedTab == .main)
+    startup.isSplashMounted || featureStatusBarHidden || ((authSession.user != nil || authSession.isGuest) && selectedTab == .main)
   }
 
   @ViewBuilder
   private var destinationView: some View {
-    if authSession.user == nil {
+    if authSession.user == nil && !authSession.isGuest {
       AuthNativeView(session: authSession, api: api)
         .transition(.opacity)
     } else if let user = authSession.user, user.isDeletionPending {
@@ -300,19 +309,46 @@ public struct MIRANativeRootView: View {
         .tabItem { Label("Home", systemImage: "house.fill") }
 
       lazyTab(.scan) {
-        CaptroScanView(api: api)
+        if authSession.isGuest {
+          GuestSignInRequiredView(
+            title: "Sign in to use Scan",
+            message: "Create an account or sign in before submitting a paid document verification.",
+            systemImage: "doc.viewfinder.fill",
+            onSignIn: leaveGuestModeForSignIn
+          )
+        } else {
+          CaptroScanView(api: api)
+        }
       }
         .tag(MIRATab.scan)
         .tabItem { Label("Scan", systemImage: "doc.viewfinder.fill") }
 
       lazyTab(.chat) {
-        ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)
+        if authSession.isGuest {
+          GuestSignInRequiredView(
+            title: "Sign in to use Chat",
+            message: "Create an account or sign in to start and continue conversations.",
+            systemImage: "bubble.left.and.bubble.right.fill",
+            onSignIn: leaveGuestModeForSignIn
+          )
+        } else {
+          ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)
+        }
       }
         .tag(MIRATab.chat)
         .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
 
       lazyTab(.profile) {
-        ProfileNativeView(api: api, authSession: authSession, model: startup.profileModel)
+        if authSession.isGuest {
+          GuestSignInRequiredView(
+            title: "Sign in to view your profile",
+            message: "Create an account or sign in to save your activity and manage your Captro profile.",
+            systemImage: "person.crop.circle.fill",
+            onSignIn: leaveGuestModeForSignIn
+          )
+        } else {
+          ProfileNativeView(api: api, authSession: authSession, model: startup.profileModel)
+        }
       }
         .tag(MIRATab.profile)
         .tabItem { Label("Profile", systemImage: "person.fill") }
@@ -350,6 +386,12 @@ public struct MIRANativeRootView: View {
     return loadedTabs.contains(tab) || selectedTab == tab
   }
 
+  private func leaveGuestModeForSignIn() {
+    selectedTab = .main
+    loadedTabs = [.main]
+    authSession.exitGuestMode()
+  }
+
   private func registerCachedPushTokenIfPossible() {
     guard authSession.user != nil else { return }
     if let token = MIRAPushNotificationRegistrar.cachedDeviceToken {
@@ -363,6 +405,55 @@ public struct MIRANativeRootView: View {
     guard authSession.user != nil else { return }
     Task {
       await MIRAPushTokenRegistry.shared.registerDeviceToken(token, api: api)
+    }
+  }
+}
+
+private struct GuestSignInRequiredView: View {
+  let title: String
+  let message: String
+  let systemImage: String
+  let onSignIn: () -> Void
+
+  var body: some View {
+    ZStack {
+      MIRATheme.Color.appBackground.ignoresSafeArea()
+
+      VStack(spacing: 18) {
+        Image(systemName: systemImage)
+          .font(.system(size: 32, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .frame(width: 68, height: 68)
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(Circle())
+
+        VStack(spacing: 8) {
+          Text(title)
+            .font(.system(size: 24, weight: .bold, design: .rounded))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .multilineTextAlignment(.center)
+
+          Text(message)
+            .font(.system(size: 15, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        Button(action: onSignIn) {
+          Text("Sign in or create account")
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .background(MIRATheme.Color.forest)
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.miraPress)
+        .accessibilityLabel("Sign in or create account")
+      }
+      .padding(.horizontal, 28)
+      .frame(maxWidth: 430)
     }
   }
 }

@@ -606,6 +606,16 @@ final class MainFeedModel: ObservableObject {
     } catch {
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "authenticated skip=\(skip)")
     }
+
+    do {
+      let publicPosts: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
+      if !publicPosts.isEmpty {
+        MIRAPerformanceTimeline.mark("home_feed_public_fallback", detail: "skip=\(skip)")
+        return publicPosts
+      }
+    } catch {
+      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "public skip=\(skip)")
+    }
     return []
   }
 

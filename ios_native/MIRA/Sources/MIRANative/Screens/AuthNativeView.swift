@@ -25,6 +25,7 @@ public struct AuthNativeView: View {
   @State private var resetPassword = ""
   @State private var confirmResetPassword = ""
   @State private var appleSignInNonce: String?
+  @State private var isSocialSignInWorking = false
   @AppStorage("captro.terms.accepted.version") private var acceptedTermsVersion = ""
   @AppStorage("captro.terms.accepted.at") private var acceptedTermsAt = ""
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -40,7 +41,11 @@ public struct AuthNativeView: View {
         CaptroWelcomePager(
           selectedPage: $selectedWelcomePage,
           onLogin: { presentAuthPanel(createAccount: false) },
-          onSignup: { presentAuthPanel(createAccount: true) }
+          onSignup: { presentAuthPanel(createAccount: true) },
+          onGuest: {
+            CaptroHaptics.light()
+            session.continueAsGuest()
+          }
         )
 
         if isAuthPanelVisible {
@@ -455,8 +460,8 @@ public struct AuthNativeView: View {
       .overlay(Capsule().stroke(Color.black.opacity(0.12), lineWidth: 1))
     }
     .buttonStyle(.miraPress)
-    .disabled(session.isWorking || !hasAcceptedCurrentTerms)
-    .opacity(hasAcceptedCurrentTerms ? 1 : 0.56)
+    .disabled(session.isWorking || isSocialSignInWorking)
+    .opacity(session.isWorking || isSocialSignInWorking ? 0.56 : 1)
     .accessibilityLabel("Continue with Google")
   }
 
@@ -476,44 +481,36 @@ public struct AuthNativeView: View {
   }
 
   private var appleButton: some View {
-    SignInWithAppleButton(.continue) { request in
-      request.requestedScopes = [.fullName, .email]
-      let nonce = randomNonceString()
-      appleSignInNonce = nonce
-      request.nonce = sha256(nonce)
-    } onCompletion: { result in
-      guard hasAcceptedCurrentTerms else {
-        session.errorMessage = termsRequiredMessage
-        return
+    ZStack {
+      SignInWithAppleButton(.continue) { request in
+        request.requestedScopes = [.fullName, .email]
+        let nonce = randomNonceString()
+        appleSignInNonce = nonce
+        isSocialSignInWorking = true
+        request.nonce = sha256(nonce)
+      } onCompletion: { result in
+        Task { @MainActor in
+          finishAppleSignIn(result)
+        }
       }
-      guard case .success(let authorization) = result,
-            let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-            let tokenData = credential.identityToken,
-            let idToken = String(data: tokenData, encoding: .utf8) else {
-        session.errorMessage = "Apple sign in could not finish."
-        return
-      }
-      let fullName = PersonNameComponentsFormatter().string(from: credential.fullName ?? PersonNameComponents())
-      let nonce = appleSignInNonce
-      appleSignInNonce = nil
-      Task {
-        await session.signInWithApple(
-          idToken: idToken,
-          email: credential.email,
-          fullName: fullName.isEmpty ? nil : fullName,
-          appleUser: credential.user,
-          nonce: nonce,
-          termsVersion: acceptedTermsVersion,
-          termsAcceptedAt: acceptedTermsAt,
-          api: api
-        )
+      .signInWithAppleButtonStyle(.black)
+      .allowsHitTesting(hasAcceptedCurrentTerms && !session.isWorking && !isSocialSignInWorking)
+
+      if !hasAcceptedCurrentTerms {
+        Button {
+          session.errorMessage = termsRequiredMessage
+          CaptroHaptics.error()
+        } label: {
+          Color.clear
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Accept Captro's terms before continuing with Apple")
       }
     }
-    .signInWithAppleButtonStyle(.black)
     .frame(height: 50)
     .clipShape(Capsule())
-    .disabled(session.isWorking || !hasAcceptedCurrentTerms)
-    .opacity(hasAcceptedCurrentTerms ? 1 : 0.56)
+    .opacity(session.isWorking || isSocialSignInWorking ? 0.56 : 1)
   }
 
   private var termsAcceptanceBlock: some View {
@@ -646,7 +643,7 @@ public struct AuthNativeView: View {
   }
 
   private var canSubmit: Bool {
-    hasAcceptedCurrentTerms && email.contains("@") && password.count >= 6 && (!isCreatingAccount || username.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3)
+    email.contains("@") && password.count >= 6 && (!isCreatingAccount || username.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3)
   }
 
   @MainActor
@@ -695,41 +692,91 @@ public struct AuthNativeView: View {
     CaptroHaptics.light()
     session.errorMessage = nil
     guard requireTermsAcceptance() else { return }
-    if let googleServerClientID {
-      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID, serverClientID: googleServerClientID)
-    } else {
-      GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: googleClientID)
+    guard let googleServerClientID else {
+      session.errorMessage = "Google sign in is temporarily unavailable."
+      MIRAApplePerformanceLogger.event("oauth_google_configuration_missing")
+      return
     }
+    GIDSignIn.sharedInstance.configuration = GIDConfiguration(
+      clientID: googleClientID,
+      serverClientID: googleServerClientID
+    )
 
     guard let presenter = UIApplication.shared.miraTopPresentedViewController() else {
       session.errorMessage = "Google sign in is not ready. Please try again."
       return
     }
 
-    GIDSignIn.sharedInstance.signIn(withPresenting: presenter) { result, error in
-      if error != nil {
-        Task { @MainActor in
-          session.errorMessage = "Google sign in could not finish."
-        }
-        return
-      }
-
-      guard let idToken = result?.user.idToken?.tokenString else {
-        Task { @MainActor in
+    isSocialSignInWorking = true
+    Task { @MainActor in
+      defer { isSocialSignInWorking = false }
+      do {
+        let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: presenter)
+        let googleUser = try await result.user.refreshTokensIfNeeded()
+        guard let idToken = googleUser.idToken?.tokenString, !idToken.isEmpty else {
           session.errorMessage = "Google sign in did not return a valid token."
+          MIRAApplePerformanceLogger.event("oauth_google_id_token_missing")
+          return
         }
-        return
-      }
 
-      Task {
         await session.signInWithGoogle(
           idToken: idToken,
-          accessToken: result?.user.accessToken.tokenString,
+          accessToken: googleUser.accessToken.tokenString,
           termsVersion: acceptedTermsVersion,
           termsAcceptedAt: acceptedTermsAt,
           api: api
         )
+      } catch {
+        let providerError = error as NSError
+        MIRAApplePerformanceLogger.event(
+          "oauth_google_provider_failed",
+          detail: "\(providerError.domain):\(providerError.code)"
+        )
+        session.errorMessage = "Google sign in could not finish. Please try again."
       }
+    }
+  }
+
+  @MainActor
+  private func finishAppleSignIn(_ result: Result<ASAuthorization, Error>) {
+    defer {
+      appleSignInNonce = nil
+      isSocialSignInWorking = false
+    }
+    guard hasAcceptedCurrentTerms else {
+      session.errorMessage = termsRequiredMessage
+      return
+    }
+    guard case .success(let authorization) = result,
+          let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+          let tokenData = credential.identityToken,
+          let idToken = String(data: tokenData, encoding: .utf8),
+          !idToken.isEmpty else {
+      if case .failure(let error) = result {
+        let providerError = error as NSError
+        MIRAApplePerformanceLogger.event(
+          "oauth_apple_provider_failed",
+          detail: "\(providerError.domain):\(providerError.code)"
+        )
+      } else {
+        MIRAApplePerformanceLogger.event("oauth_apple_id_token_missing")
+      }
+      session.errorMessage = "Apple sign in could not finish. Please try again."
+      return
+    }
+    let fullName = PersonNameComponentsFormatter().string(from: credential.fullName ?? PersonNameComponents())
+    let nonce = appleSignInNonce
+    Task {
+      await session.signInWithApple(
+        idToken: idToken,
+        email: credential.email,
+        fullName: fullName.isEmpty ? nil : fullName,
+        appleUser: credential.user,
+        nonce: nonce,
+        termsVersion: acceptedTermsVersion,
+        termsAcceptedAt: acceptedTermsAt,
+        api: api
+      )
     }
   }
 
@@ -851,6 +898,7 @@ private struct CaptroWelcomePager: View {
   @Binding var selectedPage: Int
   let onLogin: () -> Void
   let onSignup: () -> Void
+  let onGuest: () -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @EnvironmentObject private var localization: MIRALocalization
 
@@ -883,12 +931,24 @@ private struct CaptroWelcomePager: View {
 
         Spacer()
 
-        HStack(spacing: MIRATheme.Space.md) {
-          CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: openLogin)
-          CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: openSignup)
+        VStack(spacing: 8) {
+          HStack(spacing: MIRATheme.Space.md) {
+            CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: openLogin)
+            CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: openSignup)
+          }
+
+          Button(action: onGuest) {
+            Text("Continue as Guest")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(currentPage.textColor)
+              .frame(maxWidth: .infinity)
+              .frame(height: 44)
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("Continue as Guest")
         }
         .padding(.horizontal, 28)
-        .padding(.bottom, 34)
+        .padding(.bottom, 22)
       }
       .ignoresSafeArea()
     }
