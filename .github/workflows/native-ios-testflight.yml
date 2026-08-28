@@ -218,7 +218,7 @@ jobs:
 
   home-feed-visual-qa:
     name: Capture Captro Home feed on iPhone simulator
-    if: ${{ github.ref_name == 'fix-main-feed-media-sizing' }}
+    if: ${{ false }}
     runs-on: macos-26
     timeout-minutes: 25
     defaults:
