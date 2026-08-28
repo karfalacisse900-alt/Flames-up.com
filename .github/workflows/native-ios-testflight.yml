@@ -299,9 +299,22 @@ jobs:
 
           xcrun simctl spawn "$SIMULATOR_UDID" log show \
             --style compact \
+            --info \
+            --debug \
             --last 3m \
             --predicate 'process == "Captro" OR eventMessage CONTAINS[c] "com.captro.app"' \
             > "$OUTPUT_DIR/captro-system.log" 2>&1 || true
+
+          sleep 2
+          for report_root in \
+            "$HOME/Library/Logs/DiagnosticReports" \
+            "$HOME/Library/Developer/CoreSimulator/Devices/$SIMULATOR_UDID/data/Library/Logs/CrashReporter"; do
+            if [ -d "$report_root" ]; then
+              find "$report_root" -type f -mmin -10 \
+                \( -iname 'Captro*.ips' -o -iname 'Captro*.crash' \) \
+                -exec cp {} "$OUTPUT_DIR/" \; || true
+            fi
+          done
 
           if xcrun simctl spawn "$SIMULATOR_UDID" launchctl list | grep -Fq "com.captro.app"; then
             echo "CAPTRO_VISUAL_APP_RUNNING=true" >> "$GITHUB_ENV"
