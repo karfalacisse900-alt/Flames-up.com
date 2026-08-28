@@ -288,14 +288,32 @@ jobs:
             --batteryLevel 100 \
             --wifiBars 3 \
             --cellularBars 4
-          xcrun simctl launch \
+          LAUNCH_OUTPUT=$(xcrun simctl launch \
             --terminate-running-process \
+            --wait-for-debugger \
             --stdout="$OUTPUT_DIR/captro.stdout.log" \
             --stderr="$OUTPUT_DIR/captro.stderr.log" \
             "$SIMULATOR_UDID" \
             com.captro.app \
-            --captro-home-feed-visual-test
-          sleep 15
+            --captro-home-feed-visual-test)
+          echo "$LAUNCH_OUTPUT"
+          CAPTRO_PID="${LAUNCH_OUTPUT##*: }"
+
+          if [[ "$CAPTRO_PID" =~ ^[0-9]+$ ]]; then
+            set +e
+            xcrun lldb --batch \
+              -o "process attach --pid $CAPTRO_PID" \
+              -o "process continue" \
+              -o "thread backtrace all" \
+              -o "quit" \
+              > "$OUTPUT_DIR/captro-lldb.log" 2>&1
+            LLDB_STATUS=$?
+            set -e
+            echo "LLDB_STATUS=$LLDB_STATUS" >> "$GITHUB_ENV"
+          else
+            echo "Could not parse Captro PID from: $LAUNCH_OUTPUT" > "$OUTPUT_DIR/captro-lldb.log"
+          fi
+          sleep 2
 
           xcrun simctl spawn "$SIMULATOR_UDID" log show \
             --style compact \
