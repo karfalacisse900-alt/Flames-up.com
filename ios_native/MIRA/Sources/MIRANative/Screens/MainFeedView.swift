@@ -682,10 +682,7 @@ public struct MainFeedView: View {
   @State private var activeVideoPostID: String?
   @State private var isHeaderHidden = false
   @State private var isShowingCreatePost = false
-  @State private var activeCommentsPost: MIRAPost?
-  @State private var isCommentsPresented = false
-  @State private var saveTargetPost: MIRAPost?
-  @State private var isSaveSheetPresented = false
+  @State private var detailPost: MIRAPost?
   @State private var postOptionsTarget: MIRAPost?
   @State private var isPostOptionsPresented = false
   @State private var reportTarget: MIRAReportTarget?
@@ -711,7 +708,7 @@ public struct MainFeedView: View {
           }
           .frame(height: 1)
 
-          LazyVStack(spacing: 0) {
+          LazyVStack(spacing: MIRATheme.Space.xl) {
             if model.isLoading && model.posts.isEmpty {
               ForEach(0..<4, id: \.self) { _ in MainPostSkeleton() }
             } else if model.posts.isEmpty {
@@ -719,15 +716,22 @@ public struct MainFeedView: View {
                 .padding(.top, 80)
             } else {
               ForEach(model.posts) { post in
-                MainNativePostCard(
+                CaptroFeedPostView(
                   post: post,
                   api: model.api,
                   isVideoActive: post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
+                  showsFeedControls: post.id == model.posts.first?.id,
                   onLike: { Task { await model.toggleLike(post) } },
-                  onSave: { presentSaveSheet(for: post) },
-                  onComment: { presentComments(for: post) },
                   onFollow: { await model.followAuthor(post) },
                   onOpenOptions: { presentPostOptions(for: post) },
+                  onCreate: {
+                    CaptroHaptics.light()
+                    isShowingCreatePost = true
+                  },
+                  onOpenPost: {
+                    CaptroHaptics.light()
+                    detailPost = post
+                  },
                   canFollowAuthor: model.canFollowAuthor(post)
                 )
                 .onAppear {
@@ -748,7 +752,7 @@ public struct MainFeedView: View {
               }
             }
           }
-          .padding(.bottom, MIRATheme.Space.xxl)
+          .padding(.bottom, 112)
         }
         .coordinateSpace(name: "mainFeedScroll")
         .scrollIndicators(.hidden)
@@ -758,68 +762,15 @@ public struct MainFeedView: View {
             .onChanged(handleScrollDrag)
         )
 
-        mainHeader
-          .offset(y: isFeedChromeHidden ? -84 : 0)
-          .opacity(isFeedChromeHidden ? 0 : 1)
-          .allowsHitTesting(!isFeedChromeHidden)
-          .zIndex(10)
-          .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isFeedChromeHidden)
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar(feedTabBarVisibility, for: .tabBar)
       .statusBarHidden(true)
-      .miraBottomSheet(
-        isPresented: $isCommentsPresented,
-        onDismissed: { activeCommentsPost = nil }
-      ) { dismiss in
-        if let post = activeCommentsPost {
-          MainFeedCommentsSheet(
-            post: post,
-            api: model.api,
-            onClose: dismiss,
-            onReportComment: { comment in
-              dismiss()
-              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-                presentReport(for: comment)
-              }
-            },
-            onBlockCommentUser: { comment in
-              dismiss()
-              Task { await blockCommentAuthor(comment) }
-            }
-          )
-        } else {
-          Color.clear
-        }
-      }
-      .miraBottomSheet(
-        isPresented: $isSaveSheetPresented,
-        preferredHeightFraction: 0.46,
-        maxHeight: 440,
-        onDismissed: { saveTargetPost = nil }
-      ) { dismiss in
-        if let post = saveTargetPost {
-          MIRASaveToCollectionSheet(
-            isSaved: post.viewerSaved,
-            onSelect: { collection in
-              Task {
-                await model.save(post, to: collection)
-                dismiss()
-              }
-            },
-            onRemove: {
-              Task {
-                await model.unsave(post)
-                dismiss()
-              }
-            },
-            onClose: dismiss
-          )
-        } else {
-          Color.clear
-        }
+      .navigationDestination(item: $detailPost) { post in
+        DiscoverPostDetailNativeView(post: post, api: model.api)
+          .miraHideTabBarOnAppear()
       }
       .miraActionModal(
         isPresented: $isPostOptionsPresented,
@@ -881,7 +832,7 @@ public struct MainFeedView: View {
         Task { await model.load(forceRefresh: true) }
       }
       .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
-      .onPreferenceChange(MainPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
+      .onPreferenceChange(CaptroFeedPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
       .onChange(of: isMediaPlaybackSuppressed) { _, suppressed in
         if suppressed {
           MIRAPlaybackCoordinator.pauseAll(reason: "home_feed_overlay")
@@ -947,7 +898,7 @@ public struct MainFeedView: View {
     }
   }
 
-  private func updateActiveVideo(_ visibility: [MainPostVisibility]) {
+  private func updateActiveVideo(_ visibility: [CaptroFeedPostVisibility]) {
     guard !isMediaPlaybackSuppressed else { return }
     let candidate = visibility
       .filter { $0.hasVideo && $0.visibleRatio >= 0.60 }
@@ -989,28 +940,6 @@ public struct MainFeedView: View {
       transaction.animation = nil
       withTransaction(transaction) {
         activeVideoPostID = nil
-      }
-    }
-  }
-
-  private func presentComments(for post: MIRAPost) {
-    CaptroHaptics.light()
-    MIRAPerformanceTimeline.mark("comments_open", detail: "post")
-    activeCommentsPost = post
-    DispatchQueue.main.async {
-      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-        isCommentsPresented = true
-      }
-    }
-  }
-
-  private func presentSaveSheet(for post: MIRAPost) {
-    CaptroHaptics.light()
-    MIRAApplePerformanceLogger.event("modal_open", detail: "save_sheet")
-    saveTargetPost = post
-    DispatchQueue.main.async {
-      withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-        isSaveSheetPresented = true
       }
     }
   }
@@ -1086,28 +1015,6 @@ public struct MainFeedView: View {
     }
   }
 
-  private var mainHeader: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Spacer()
-      Button {
-        CaptroHaptics.light()
-        isShowingCreatePost = true
-      } label: {
-        MIRAHeaderCircleButton(systemImage: "plus")
-      }
-      .buttonStyle(.plain)
-      NavigationLink(destination: NotificationNativeView(api: model.api)) {
-        MIRAHeaderCircleButton(systemImage: "bell")
-      }
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .padding(.top, 0)
-  }
-
-  private var isFeedChromeHidden: Bool {
-    isHeaderHidden || isFeedOverlayPresented
-  }
-
   private var feedTabBarVisibility: Visibility {
     isFeedOverlayPresented ? .hidden : .visible
   }
@@ -1117,11 +1024,7 @@ public struct MainFeedView: View {
   }
 
   private var isFeedOverlayPresented: Bool {
-    isCommentsPresented ||
-      activeCommentsPost != nil ||
-      isSaveSheetPresented ||
-      saveTargetPost != nil ||
-      isPostOptionsPresented ||
+    isPostOptionsPresented ||
       postOptionsTarget != nil ||
       isReportSheetPresented ||
       reportTarget != nil ||
@@ -2175,26 +2078,43 @@ private struct MainPostSkeleton: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: MIRATheme.Space.sm) {
-        Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 42, height: 42)
-        RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(width: 150, height: 16)
+        Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 46, height: 46)
+        VStack(alignment: .leading, spacing: 6) {
+          RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 132, height: 15)
+          RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(width: 86, height: 11)
+        }
         Spacer()
+        Circle().fill(MIRATheme.Color.surfaceSoft).frame(width: 44, height: 44)
       }
       .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.vertical, MIRATheme.Space.sm)
+      .padding(.vertical, 10)
 
-      RoundedRectangle(cornerRadius: 0)
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
         .fill(MIRATheme.Color.surfaceSoft)
         .frame(maxWidth: .infinity)
-        .frame(height: MIRAMediaSizing.mainFeedHeight(for: []))
+        .aspectRatio(4.0 / 5.0, contentMode: .fit)
+        .padding(.horizontal, MIRATheme.Space.md)
 
       HStack {
-        RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(width: 60, height: 18)
-        RoundedRectangle(cornerRadius: 8).fill(MIRATheme.Color.surfaceSoft).frame(width: 54, height: 18)
+        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 58, height: 20)
         Spacer()
-        RoundedRectangle(cornerRadius: 16).fill(MIRATheme.Color.surfaceSoft).frame(width: 74, height: 34)
-        RoundedRectangle(cornerRadius: 16).fill(MIRATheme.Color.surfaceSoft).frame(width: 92, height: 34)
+        RoundedRectangle(cornerRadius: 6).fill(MIRATheme.Color.surfaceSoft).frame(width: 44, height: 18)
       }
-      .padding(MIRATheme.Space.md)
+      .frame(height: 44)
+      .padding(.horizontal, MIRATheme.Space.md)
+
+      VStack(alignment: .leading, spacing: 7) {
+        RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(maxWidth: .infinity).frame(height: 14)
+        RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(width: 226, height: 14)
+        RoundedRectangle(cornerRadius: 5).fill(MIRATheme.Color.surfaceSoft).frame(width: 118, height: 13)
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .padding(.bottom, 18)
+
+      Rectangle()
+        .fill(MIRATheme.Color.hairline)
+        .frame(height: 0.5)
+        .padding(.horizontal, MIRATheme.Space.md)
     }
     .background(MIRATheme.Color.surface)
     .redacted(reason: .placeholder)
