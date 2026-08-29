@@ -78,10 +78,6 @@ public struct AuthNativeView: View {
       .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: session.passwordResetContext != nil)
       .toolbar(.hidden, for: .navigationBar)
     }
-    .onOpenURL { url in
-      _ = GIDSignIn.sharedInstance.handle(url)
-      session.handleIncomingURL(url)
-    }
   }
 
   private var authPanel: some View {
@@ -488,6 +484,7 @@ public struct AuthNativeView: View {
         appleSignInNonce = nonce
         isSocialSignInWorking = true
         request.nonce = sha256(nonce)
+        MIRAAuthDiagnostics.stage(.apple, "authorization_started")
       } onCompletion: { result in
         Task { @MainActor in
           finishAppleSignIn(result)
@@ -691,10 +688,20 @@ public struct AuthNativeView: View {
   private func startGoogleSignIn() {
     CaptroHaptics.light()
     session.errorMessage = nil
+    guard !session.isWorking && !isSocialSignInWorking else {
+      MIRAAuthDiagnostics.stage(.google, "duplicate_request_ignored")
+      return
+    }
     guard requireTermsAcceptance() else { return }
     guard let googleServerClientID else {
       session.errorMessage = "Google sign in is temporarily unavailable."
       MIRAApplePerformanceLogger.event("oauth_google_configuration_missing")
+      MIRAAuthDiagnostics.failure(
+        .google,
+        stage: "configuration",
+        category: .providerConfiguration,
+        error: NSError(domain: "Captro.Auth.Configuration", code: 1, userInfo: [NSLocalizedDescriptionKey: "Google server client ID is missing"])
+      )
       return
     }
     GIDSignIn.sharedInstance.configuration = GIDConfiguration(
@@ -708,17 +715,26 @@ public struct AuthNativeView: View {
     }
 
     isSocialSignInWorking = true
+    MIRAAuthDiagnostics.stage(.google, "authorization_started")
     Task { @MainActor in
       defer { isSocialSignInWorking = false }
       do {
         let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: presenter)
+        MIRAAuthDiagnostics.stage(.google, "provider_callback_received")
         let googleUser = try await result.user.refreshTokensIfNeeded()
         guard let idToken = googleUser.idToken?.tokenString, !idToken.isEmpty else {
           session.errorMessage = "Google sign in did not return a valid token."
           MIRAApplePerformanceLogger.event("oauth_google_id_token_missing")
+          MIRAAuthDiagnostics.failure(
+            .google,
+            stage: "provider_callback",
+            category: .callbackFailure,
+            error: NSError(domain: "Captro.Auth.Google", code: 2, userInfo: [NSLocalizedDescriptionKey: "Provider credential missing"])
+          )
           return
         }
 
+        MIRAAuthDiagnostics.stage(.google, "provider_credential_received")
         await session.signInWithGoogle(
           idToken: idToken,
           accessToken: googleUser.accessToken.tokenString,
@@ -727,11 +743,12 @@ public struct AuthNativeView: View {
           api: api
         )
       } catch {
-        let providerError = error as NSError
-        MIRAApplePerformanceLogger.event(
-          "oauth_google_provider_failed",
-          detail: "\(providerError.domain):\(providerError.code)"
-        )
+        if isGoogleCancellation(error) {
+          session.errorMessage = nil
+          MIRAAuthDiagnostics.stage(.google, "provider_cancelled")
+          return
+        }
+        MIRAAuthDiagnostics.failure(.google, stage: "provider_authorization", category: .callbackFailure, error: error)
         session.errorMessage = "Google sign in could not finish. Please try again."
       }
     }
@@ -739,34 +756,52 @@ public struct AuthNativeView: View {
 
   @MainActor
   private func finishAppleSignIn(_ result: Result<ASAuthorization, Error>) {
-    defer {
+    guard hasAcceptedCurrentTerms else {
       appleSignInNonce = nil
       isSocialSignInWorking = false
-    }
-    guard hasAcceptedCurrentTerms else {
       session.errorMessage = termsRequiredMessage
       return
     }
-    guard case .success(let authorization) = result,
-          let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-          let tokenData = credential.identityToken,
-          let idToken = String(data: tokenData, encoding: .utf8),
-          !idToken.isEmpty else {
+    guard case .success(let authorization) = result else {
+      appleSignInNonce = nil
+      isSocialSignInWorking = false
+      if case .failure(let error) = result, isAppleCancellation(error) {
+        session.errorMessage = nil
+        MIRAAuthDiagnostics.stage(.apple, "provider_cancelled")
+        return
+      }
       if case .failure(let error) = result {
-        let providerError = error as NSError
-        MIRAApplePerformanceLogger.event(
-          "oauth_apple_provider_failed",
-          detail: "\(providerError.domain):\(providerError.code)"
-        )
-      } else {
-        MIRAApplePerformanceLogger.event("oauth_apple_id_token_missing")
+        MIRAAuthDiagnostics.failure(.apple, stage: "provider_authorization", category: .callbackFailure, error: error)
       }
       session.errorMessage = "Apple sign in could not finish. Please try again."
       return
     }
+    MIRAAuthDiagnostics.stage(.apple, "provider_callback_received")
+    guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+          let tokenData = credential.identityToken,
+          let idToken = String(data: tokenData, encoding: .utf8),
+          !idToken.isEmpty,
+          let nonce = appleSignInNonce,
+          !nonce.isEmpty else {
+      appleSignInNonce = nil
+      isSocialSignInWorking = false
+      MIRAApplePerformanceLogger.event("oauth_apple_credential_missing")
+      MIRAAuthDiagnostics.failure(
+        .apple,
+        stage: "provider_callback",
+        category: .callbackFailure,
+        error: NSError(domain: "Captro.Auth.Apple", code: 2, userInfo: [NSLocalizedDescriptionKey: "Provider credential or nonce missing"])
+      )
+      session.errorMessage = "Apple sign in could not finish. Please try again."
+      return
+    }
     let fullName = PersonNameComponentsFormatter().string(from: credential.fullName ?? PersonNameComponents())
-    let nonce = appleSignInNonce
-    Task {
+    MIRAAuthDiagnostics.stage(.apple, "provider_credential_received")
+    Task { @MainActor in
+      defer {
+        appleSignInNonce = nil
+        isSocialSignInWorking = false
+      }
       await session.signInWithApple(
         idToken: idToken,
         email: credential.email,
@@ -778,6 +813,16 @@ public struct AuthNativeView: View {
         api: api
       )
     }
+  }
+
+  private func isGoogleCancellation(_ error: Error) -> Bool {
+    let providerError = error as NSError
+    return providerError.code == -5 && providerError.domain.lowercased().contains("gidsignin")
+  }
+
+  private func isAppleCancellation(_ error: Error) -> Bool {
+    let providerError = error as NSError
+    return providerError.code == 1001 && providerError.domain.lowercased().contains("authenticationservices")
   }
 
   private var hasAcceptedCurrentTerms: Bool {

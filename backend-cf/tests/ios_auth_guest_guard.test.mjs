@@ -18,6 +18,14 @@ const mainFeed = readFileSync(
   new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift', import.meta.url),
   'utf8',
 );
+const authDiagnostics = readFileSync(
+  new URL('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAuthDiagnostics.swift', import.meta.url),
+  'utf8',
+);
+const apiClient = readFileSync(
+  new URL('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAPIClient.swift', import.meta.url),
+  'utf8',
+);
 
 test('guest access is persisted and routed into the app without an auth token', () => {
   assert.match(authSession, /@Published public private\(set\) var isGuest: Bool/);
@@ -37,6 +45,19 @@ test('native OAuth preserves provider requirements before calling Captro', () =>
   assert.match(authView, /result\.user\.refreshTokensIfNeeded\(\)/);
   assert.match(authView, /request\.nonce = sha256\(nonce\)/);
   assert.match(authView, /nonce: nonce,[\s\S]*api: api/);
+  assert.equal((authView.match(/\.onOpenURL/g) ?? []).length, 0);
+  assert.equal((rootView.match(/\.onOpenURL/g) ?? []).length, 1);
+  assert.match(rootView, /MIRAAuthDiagnostics\.callbackReceived\(url, googleHandled: googleHandled\)/);
+  assert.match(authView, /isGoogleCancellation\(error\)/);
+  assert.match(authView, /isAppleCancellation\(error\)/);
+  assert.match(authSession, /guard !isWorking else \{[\s\S]*duplicate_request_ignored/);
+  assert.match(authSession, /backend_session_created/);
+  assert.match(authSession, /session_persisted/);
+  assert.match(authSession, /auth_state_updated/);
+  assert.match(authDiagnostics, /case providerCancelled/);
+  assert.match(authDiagnostics, /case credentialExchangeFailure/);
+  assert.match(authDiagnostics, /case sessionFailure/);
+  assert.match(apiClient, /!isCredentialRequest,[\s\S]*status == 401 \|\| status == 403/);
 });
 
 test('terms validation explains the requirement instead of making auth look inert', () => {

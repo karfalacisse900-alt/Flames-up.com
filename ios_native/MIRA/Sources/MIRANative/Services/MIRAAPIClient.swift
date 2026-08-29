@@ -333,8 +333,15 @@ public final class MIRAAPIClient {
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: data.count)
-    let isRefreshRequest = request.url?.path.hasSuffix("/auth/refresh") == true
+    let requestPath = request.url?.path ?? ""
+    let isRefreshRequest = requestPath.hasSuffix("/auth/refresh")
+    let isCredentialRequest = requestPath.hasSuffix("/auth/login")
+      || requestPath.hasSuffix("/auth/register")
+      || requestPath.hasSuffix("/auth/oauth/google")
+      || requestPath.hasSuffix("/auth/oauth/apple")
+      || requestPath.contains("/auth/password/reset/")
     if !isRefreshRequest,
+       !isCredentialRequest,
        (status == 401 || status == 403),
        let refreshable = sessionProvider as? MIRARefreshableSessionProviding,
        await refreshable.refreshAccessTokenIfNeeded(api: self) {

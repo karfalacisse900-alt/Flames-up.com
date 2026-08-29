@@ -48,6 +48,35 @@ jobs:
             exit 1
           fi
 
+      - name: Verify production social-auth providers
+        shell: bash
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          project_ref = os.environ["SUPABASE_PROJECT_REF"]
+          service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+          request = urllib.request.Request(
+              f"https://{project_ref}.supabase.co/auth/v1/settings",
+              headers={"apikey": service_key},
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              settings = json.load(response)
+          external = settings.get("external", {})
+          missing = [provider for provider in ("google", "apple") if external.get(provider) is not True]
+          if missing:
+              raise SystemExit(f"Supabase social-auth provider disabled: {', '.join(missing)}")
+          if settings.get("disable_signup") is True:
+              raise SystemExit("Supabase account signup is disabled")
+          print("Supabase Google and Apple providers are enabled; account signup is enabled.")
+          PY
+
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:

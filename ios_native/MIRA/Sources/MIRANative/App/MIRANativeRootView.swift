@@ -274,7 +274,8 @@ public struct MIRANativeRootView: View {
       registerPushToken(token)
     }
     .onOpenURL { url in
-      _ = GIDSignIn.sharedInstance.handle(url)
+      let googleHandled = GIDSignIn.sharedInstance.handle(url)
+      MIRAAuthDiagnostics.callbackReceived(url, googleHandled: googleHandled)
       authSession.handleIncomingURL(url)
     }
   }

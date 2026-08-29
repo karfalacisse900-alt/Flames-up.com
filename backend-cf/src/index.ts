@@ -9615,7 +9615,35 @@ async function verifyGoogleIdToken(c: any, idToken: string) {
   };
 }
 
-async function verifyAppleIdToken(c: any, idToken: string) {
+function safeOAuthDiagnosticCode(error: any): string {
+  const raw = getErrorCode(error);
+  const prefix = raw.split(':', 1)[0] || 'UNKNOWN';
+  return cleanText(prefix, 80).replace(/[^A-Za-z0-9_.-]/g, '_') || 'UNKNOWN';
+}
+
+function logOAuthStage(
+  c: any,
+  provider: 'google' | 'apple',
+  stage: string,
+  outcome: 'started' | 'passed' | 'failed',
+  error?: any,
+  strategy?: string
+) {
+  const payload: Record<string, unknown> = {
+    event: 'oauth_stage',
+    request_id: c.get?.('requestId') || '',
+    provider,
+    stage: cleanText(stage, 60),
+    outcome,
+  };
+  if (strategy) payload.strategy = cleanText(strategy, 40);
+  if (error) payload.code = safeOAuthDiagnosticCode(error);
+  const line = JSON.stringify(payload);
+  if (outcome === 'failed') console.warn(line);
+  else console.info(line);
+}
+
+async function verifyAppleIdToken(c: any, idToken: string, rawNonce = '') {
   const { createRemoteJWKSet, jwtVerify } = await import('jose');
   const jwks = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
   const verifyOptions: any = { issuer: 'https://appleid.apple.com' };
@@ -9627,6 +9655,13 @@ async function verifyAppleIdToken(c: any, idToken: string) {
   const { payload } = await jwtVerify(idToken, jwks, verifyOptions);
   if (!payload.sub) {
     throw new Error('APPLE_SUBJECT_MISSING');
+  }
+  const tokenNonce = cleanText(payload.nonce, 512);
+  const nonce = cleanText(rawNonce, 512);
+  if (tokenNonce) {
+    if (!nonce) throw new Error('APPLE_NONCE_REQUIRED');
+    const expectedNonce = await sha256Hex(nonce);
+    if (tokenNonce !== expectedNonce) throw new Error('APPLE_NONCE_MISMATCH');
   }
 
   const email = normalizeOptionalEmail(payload.email);
@@ -10613,7 +10648,7 @@ async function signInSupabaseVerifiedOAuth(c: any, input: {
     auth_provider: input.provider,
     oauth_subject: subject,
   });
-  await recordTermsAcceptance(c, session.user, authResult.user.id, termsAcceptanceFromBody(input), `${input.provider}_oauth_fallback`);
+  await recordTermsAcceptance(c, session.user, authResult.user.id, termsAcceptanceFromBody(input), `${input.provider}_oauth_verified_bridge`);
   return { supabaseSession, user: session.user };
 }
 
@@ -12809,6 +12844,7 @@ api.post('/auth/password/reset/confirm', async (c) => {
 });
 
 api.post('/auth/oauth/google', async (c) => {
+  let stage = 'request_validation';
   try {
     const bodyTooLarge = rejectLargeRequest(c, 120_000);
     if (bodyTooLarge) return bodyTooLarge;
@@ -12821,72 +12857,53 @@ api.post('/auth/oauth/google', async (c) => {
     if (unknown) return unknown;
     const termsAcceptance = termsAcceptanceFromBody(body);
     const id_token = String(body.id_token || body.idToken || '');
-    if (!id_token) return c.json({ detail: 'id_token is required' }, 400);
+    if (!id_token) return c.json({ detail: 'Google sign in did not return a credential.', code: 'GOOGLE_CREDENTIAL_MISSING' }, 400);
 
-    try {
-      const accessToken = cleanText(body.access_token || body.accessToken, 4096);
-      const supabaseSession = await signInSupabaseIdToken(c, 'google', id_token, {
-        accessToken,
-        nonce: String(body.nonce || body.raw_nonce || body.rawNonce || ''),
-      });
-      const sessionProfile = supabaseOAuthProfileFromSession(supabaseSession, id_token);
-      const oauthSubject = supabaseOAuthSubjectFromSession(supabaseSession, 'google', id_token);
-      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
-        email: sessionProfile.email,
-        full_name: sessionProfile.fullName,
-        profile_image: sessionProfile.profileImage,
-        auth_provider: 'google',
-        oauth_subject: oauthSubject,
-      });
-      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'google_oauth');
-      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
-    } catch (error: any) {
-      const code = getErrorCode(error);
-      if (code === 'ACCOUNT_DISABLED') throw error;
-      console.warn(JSON.stringify({ event: 'supabase_google_id_token_failed', code: code.slice(0, 160) }));
-      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
-        return c.json({ detail: 'Google sign in is not configured.' }, 503);
-      }
-      try {
-        const profile = await verifyGoogleIdToken(c, id_token);
-        const fallback = await signInSupabaseVerifiedOAuth(c, {
-          provider: 'google',
-          subject: profile.subject,
-          email: profile.email,
-          fullName: profile.fullName,
-          profileImage: profile.profileImage,
-          termsVersion: termsAcceptance?.version,
-          termsAcceptedAt: termsAcceptance?.acceptedAt,
-        });
-        await logSecurityEvent(c, 'google_supabase_oauth_fallback_used', fallback.user.id, {
-          provider: 'google',
-          source_error: code.slice(0, 120),
-        });
-        return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
-      } catch (fallbackError: any) {
-        console.warn(JSON.stringify({ event: 'google_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
-        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-          return c.json({ detail: 'Google sign in could not be completed. Please try again.' }, 401);
-        }
-      }
-      return c.json({ detail: 'Could not finish Google sign in right now.' }, 502);
-    }
+    logOAuthStage(c, 'google', 'credential_received', 'passed', undefined, 'verified_bridge');
+    stage = 'credential_verification';
+    logOAuthStage(c, 'google', stage, 'started', undefined, 'verified_bridge');
+    const profile = await verifyGoogleIdToken(c, id_token);
+    logOAuthStage(c, 'google', stage, 'passed', undefined, 'verified_bridge');
+
+    stage = 'session_creation';
+    logOAuthStage(c, 'google', stage, 'started', undefined, 'verified_bridge');
+    const verifiedSession = await signInSupabaseVerifiedOAuth(c, {
+      provider: 'google',
+      subject: profile.subject,
+      email: profile.email,
+      fullName: profile.fullName,
+      profileImage: profile.profileImage,
+      termsVersion: termsAcceptance?.version,
+      termsAcceptedAt: termsAcceptance?.acceptedAt,
+    });
+    logOAuthStage(c, 'google', stage, 'passed', undefined, 'verified_bridge');
+    await logSecurityEvent(c, 'google_verified_oauth_session_created', verifiedSession.user.id, {
+      provider: 'google',
+      strategy: 'verified_bridge',
+    });
+    return c.json(supabaseAuthSessionResponse(verifiedSession.supabaseSession, verifiedSession.user));
   } catch (error: any) {
-    const code = String(error?.message || '');
+    const code = getErrorCode(error);
+    logOAuthStage(c, 'google', stage, 'failed', error, 'verified_bridge');
     if (code === 'GOOGLE_OAUTH_NOT_CONFIGURED') {
-      return c.json({ detail: 'Google sign in is not configured on the backend. Set GOOGLE_OAUTH_CLIENT_IDS in Cloudflare to your Google OAuth client ID.' }, 503);
+      return c.json({ detail: 'Google sign in is temporarily unavailable.', code: 'GOOGLE_PROVIDER_CONFIGURATION' }, 503);
     }
-    if (code === 'GOOGLE_AUDIENCE_INVALID') return c.json({ detail: 'Google client audience mismatch' }, 401);
-    if (code === 'GOOGLE_EMAIL_UNVERIFIED') return c.json({ detail: 'Google account email is not verified' }, 401);
-    if (code.startsWith('GOOGLE_')) return c.json({ detail: 'Invalid Google token' }, 401);
-    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
-    if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Google account email is required' }, 400);
-    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    return c.json({ detail: 'Google OAuth login failed' }, 401);
+    if (code === 'GOOGLE_AUDIENCE_INVALID') return c.json({ detail: 'Google sign in is not configured for this Captro build.', code: 'GOOGLE_AUDIENCE_MISMATCH' }, 401);
+    if (code === 'GOOGLE_EMAIL_UNVERIFIED') return c.json({ detail: 'This Google account email is not verified.', code: 'GOOGLE_EMAIL_UNVERIFIED' }, 401);
+    if (code.startsWith('GOOGLE_') || code === 'OAUTH_SUBJECT_REQUIRED') {
+      return c.json({ detail: 'Could not verify the Google sign in response.', code: 'GOOGLE_PROVIDER_CREDENTIAL_INVALID' }, 401);
+    }
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.', code: 'ACCOUNT_DISABLED' }, 403);
+    if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Google account email is required.', code: 'GOOGLE_EMAIL_REQUIRED' }, 400);
+    if (code === 'JWT_SECRET_MISSING' || code === 'OAUTH_FALLBACK_SECRET_MISSING' || code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+      return c.json({ detail: 'Google sign in is temporarily unavailable.', code: 'AUTH_PROVIDER_CONFIGURATION' }, 503);
+    }
+    return c.json({ detail: 'Could not finish Google sign in right now.', code: 'GOOGLE_CREDENTIAL_EXCHANGE_FAILED' }, 502);
   }
 });
 
 api.post('/auth/oauth/apple', async (c) => {
+  let stage = 'request_validation';
   try {
     const bodyTooLarge = rejectLargeRequest(c, 120_000);
     if (bodyTooLarge) return bodyTooLarge;
@@ -12899,13 +12916,18 @@ api.post('/auth/oauth/apple', async (c) => {
     if (unknown) return unknown;
     const termsAcceptance = termsAcceptanceFromBody(body);
     const idToken = String(body.id_token || body.idToken || '');
-    if (!idToken) return c.json({ detail: 'id_token is required' }, 400);
+    if (!idToken) return c.json({ detail: 'Apple sign in did not return a credential.', code: 'APPLE_CREDENTIAL_MISSING' }, 400);
+    const rawNonce = cleanText(body.nonce || body.raw_nonce || body.rawNonce, 512);
+    if (!rawNonce) return c.json({ detail: 'Apple sign in could not be securely completed.', code: 'APPLE_NONCE_REQUIRED' }, 400);
 
     const clientEmail = normalizeOptionalEmail(body.email);
     const clientFullName = normalizeOptionalName(body.full_name || body.fullName);
+    logOAuthStage(c, 'apple', 'credential_received', 'passed', undefined, 'supabase_id_token');
     try {
+      stage = 'credential_exchange';
+      logOAuthStage(c, 'apple', stage, 'started', undefined, 'supabase_id_token');
       const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, {
-        nonce: String(body.nonce || body.raw_nonce || body.rawNonce || ''),
+        nonce: rawNonce,
       });
       const sessionProfile = supabaseOAuthProfileFromSession(supabaseSession, idToken);
       const appleSubject = supabaseOAuthSubjectFromSession(supabaseSession, 'apple', idToken) || cleanText(body.apple_user || body.appleUser, 240);
@@ -12916,18 +12938,24 @@ api.post('/auth/oauth/apple', async (c) => {
         oauth_subject: appleSubject,
       });
       await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'apple_oauth');
+      logOAuthStage(c, 'apple', 'session_creation', 'passed', undefined, 'supabase_id_token');
       return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
     } catch (error: any) {
       const code = getErrorCode(error);
       if (code === 'ACCOUNT_DISABLED') throw error;
-      console.warn(JSON.stringify({ event: 'supabase_apple_id_token_failed', code: code.slice(0, 160) }));
+      logOAuthStage(c, 'apple', stage, 'failed', error, 'supabase_id_token');
       if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
-        return c.json({ detail: 'Apple sign in is not configured.' }, 503);
+        return c.json({ detail: 'Apple sign in is temporarily unavailable.', code: 'AUTH_PROVIDER_CONFIGURATION' }, 503);
       }
       try {
-        const profile = await verifyAppleIdToken(c, idToken);
+        stage = 'credential_verification';
+        logOAuthStage(c, 'apple', stage, 'started', undefined, 'verified_bridge');
+        const profile = await verifyAppleIdToken(c, idToken, rawNonce);
+        logOAuthStage(c, 'apple', stage, 'passed', undefined, 'verified_bridge');
         const appleSubject = profile.subject || cleanText(body.apple_user || body.appleUser, 240);
-        const fallback = await signInSupabaseVerifiedOAuth(c, {
+        stage = 'session_creation';
+        logOAuthStage(c, 'apple', stage, 'started', undefined, 'verified_bridge');
+        const verifiedSession = await signInSupabaseVerifiedOAuth(c, {
           provider: 'apple',
           subject: appleSubject,
           email: profile.email || clientEmail || undefined,
@@ -12936,34 +12964,34 @@ api.post('/auth/oauth/apple', async (c) => {
           termsVersion: termsAcceptance?.version,
           termsAcceptedAt: termsAcceptance?.acceptedAt,
         });
-        await logSecurityEvent(c, 'apple_supabase_oauth_fallback_used', fallback.user.id, {
+        logOAuthStage(c, 'apple', stage, 'passed', undefined, 'verified_bridge');
+        await logSecurityEvent(c, 'apple_verified_oauth_bridge_used', verifiedSession.user.id, {
           provider: 'apple',
-          source_error: code.slice(0, 120),
+          strategy: 'verified_bridge',
+          direct_error: safeOAuthDiagnosticCode(error),
         });
-        return c.json(supabaseAuthSessionResponse(fallback.supabaseSession, fallback.user));
-      } catch (fallbackError: any) {
-        console.warn(JSON.stringify({ event: 'apple_oauth_fallback_failed', code: getErrorCode(fallbackError).slice(0, 160) }));
-        if (code.startsWith('SUPABASE_ID_TOKEN_SIGN_IN_FAILED')) {
-          return c.json({ detail: 'Apple sign in could not be completed. Please try again.' }, 401);
-        }
+        return c.json(supabaseAuthSessionResponse(verifiedSession.supabaseSession, verifiedSession.user));
+      } catch (bridgeError: any) {
+        logOAuthStage(c, 'apple', stage, 'failed', bridgeError, 'verified_bridge');
+        throw bridgeError;
       }
-      return c.json({ detail: 'Could not finish Apple sign in right now.' }, 502);
     }
   } catch (error: any) {
     const code = getErrorCode(error);
-    if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in' }, 400);
-    if (code === 'OAUTH_SUBJECT_REQUIRED') return c.json({ detail: 'Apple account identifier was missing' }, 400);
-    if (code === 'JWT_SECRET_MISSING') return c.json({ detail: 'Auth service is not configured.' }, 503);
-    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
-    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED' && error?.claim === 'aud') return c.json({ detail: 'Apple audience mismatch' }, 401);
-    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return c.json({ detail: 'Invalid Apple token claims' }, 401);
-    if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return c.json({ detail: 'Invalid Apple token signature' }, 401);
-    if (code === 'ERR_JWT_EXPIRED') return c.json({ detail: 'Apple token expired. Please try again.' }, 401);
-    if (code.startsWith('ERR_JWS_') || code.startsWith('ERR_JWT_') || code.startsWith('ERR_JWKS_')) {
-      return c.json({ detail: 'Invalid Apple token' }, 401);
+    logOAuthStage(c, 'apple', stage, 'failed', error, 'verified_bridge');
+    if (code === 'EMAIL_REQUIRED') return c.json({ detail: 'Apple account email is required on first sign-in.', code: 'APPLE_EMAIL_REQUIRED' }, 400);
+    if (code === 'OAUTH_SUBJECT_REQUIRED' || code === 'APPLE_SUBJECT_MISSING') return c.json({ detail: 'Apple account identifier was missing.', code: 'APPLE_PROVIDER_CREDENTIAL_INVALID' }, 400);
+    if (code === 'APPLE_NONCE_REQUIRED' || code === 'APPLE_NONCE_MISMATCH') return c.json({ detail: 'Apple sign in could not be securely completed.', code: 'APPLE_NONCE_INVALID' }, 401);
+    if (code === 'JWT_SECRET_MISSING' || code === 'OAUTH_FALLBACK_SECRET_MISSING' || code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
+      return c.json({ detail: 'Apple sign in is temporarily unavailable.', code: 'AUTH_PROVIDER_CONFIGURATION' }, 503);
     }
-    if (code.startsWith('APPLE_')) return c.json({ detail: 'Invalid Apple token' }, 401);
-    return c.json({ detail: 'Apple OAuth login failed' }, 401);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.', code: 'ACCOUNT_DISABLED' }, 403);
+    if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED' && error?.claim === 'aud') return c.json({ detail: 'Apple sign in is not configured for this Captro build.', code: 'APPLE_AUDIENCE_MISMATCH' }, 401);
+    if (code === 'ERR_JWT_EXPIRED') return c.json({ detail: 'Apple sign in has expired. Please try again.', code: 'APPLE_PROVIDER_CREDENTIAL_EXPIRED' }, 401);
+    if (code.startsWith('APPLE_') || code.startsWith('ERR_JWT_') || code.startsWith('ERR_JWS_') || code.startsWith('ERR_JWKS_')) {
+      return c.json({ detail: 'Could not verify the Apple sign in response.', code: 'APPLE_PROVIDER_CREDENTIAL_INVALID' }, 401);
+    }
+    return c.json({ detail: 'Could not finish Apple sign in right now.', code: 'APPLE_CREDENTIAL_EXCHANGE_FAILED' }, 502);
   }
 });
 

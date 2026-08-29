@@ -25,6 +25,28 @@ test('OAuth fallback resolves returning accounts by provider subject', () => {
   assert.match(source, /const sessionEmail = normalizeOptionalEmail\(authResult\.user\.email\) \|\| email;/);
 });
 
+test('Google uses the server-verified bridge instead of the nonce-incompatible Supabase grant', () => {
+  const googleRoute = source.slice(
+    source.indexOf("api.post('/auth/oauth/google'"),
+    source.indexOf("api.post('/auth/oauth/apple'"),
+  );
+  assert.doesNotMatch(googleRoute, /signInSupabaseIdToken\(c, 'google'/);
+  assert.match(googleRoute, /verifyGoogleIdToken\(c, id_token\)/);
+  assert.match(googleRoute, /signInSupabaseVerifiedOAuth\(c, \{/);
+  assert.match(googleRoute, /GOOGLE_CREDENTIAL_EXCHANGE_FAILED/);
+});
+
+test('Apple retains its raw nonce through direct exchange and verified bridge', () => {
+  const appleRoute = source.slice(
+    source.indexOf("api.post('/auth/oauth/apple'"),
+    source.indexOf("api.get('/auth/me'"),
+  );
+  assert.match(appleRoute, /const rawNonce = cleanText/);
+  assert.match(appleRoute, /signInSupabaseIdToken\(c, 'apple', idToken, \{[\s\S]*nonce: rawNonce/);
+  assert.match(appleRoute, /verifyAppleIdToken\(c, idToken, rawNonce\)/);
+  assert.match(source, /if \(tokenNonce !== expectedNonce\) throw new Error\('APPLE_NONCE_MISMATCH'\)/);
+});
+
 test('iOS social-auth payload fields remain accepted by both routes', () => {
   const googleRoute = source.slice(
     source.indexOf("api.post('/auth/oauth/google'"),

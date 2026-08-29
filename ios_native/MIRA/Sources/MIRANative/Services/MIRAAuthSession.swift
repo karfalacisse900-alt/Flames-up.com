@@ -83,6 +83,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   @MainActor
   public func bootstrap(api: MIRAAPIClient) async {
     MIRAPerformanceTimeline.mark("auth_bootstrap_start")
+    MIRAAuthDiagnostics.sessionStage("restore_started")
     isBootstrapping = true
     guard let storedToken = await keychain.accessToken(), !storedToken.isEmpty else {
       token = nil
@@ -90,6 +91,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       user = nil
       isBootstrapping = false
       MIRAPerformanceTimeline.mark("auth_bootstrap_no_token")
+      MIRAAuthDiagnostics.sessionStage("restore_no_session")
       return
     }
 
@@ -105,6 +107,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       user = cachedUser
       isBootstrapping = false
       MIRAPerformanceTimeline.mark("auth_cached_user_ready")
+      MIRAAuthDiagnostics.sessionStage("restore_cached_session")
       Task { await refreshCachedSession(api: api) }
       return
     }
@@ -115,6 +118,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
       await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
       errorMessage = nil
+      MIRAAuthDiagnostics.sessionStage("restore_succeeded")
     } catch {
       if (error.isUnauthorizedAPIError || error.isForbiddenAPIError), await refreshAccessTokenIfNeeded(api: api) {
         do {
@@ -123,12 +127,14 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
           await MIRAAppCacheStore.shared.saveCurrentProfile(refreshedUser)
           await MIRALocalJSONCache.save(refreshedUser, key: cachedUserKey)
           errorMessage = nil
+          MIRAAuthDiagnostics.sessionStage("restore_refreshed")
         } catch {
           token = nil
           refreshToken = nil
           user = nil
           keychain.clearSession()
           await MIRALocalJSONCache.remove(key: cachedUserKey)
+          MIRAAuthDiagnostics.sessionStage("restore_rejected")
         }
       } else if error.isUnauthorizedAPIError || error.isForbiddenAPIError {
         token = nil
@@ -136,10 +142,12 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
         user = nil
         keychain.clearSession()
         await MIRALocalJSONCache.remove(key: cachedUserKey)
+        MIRAAuthDiagnostics.sessionStage("restore_rejected")
       } else {
         // Keep the stored session intact on transient/network failures so the
         // user is not signed out unexpectedly during bootstrap.
         errorMessage = nil
+        MIRAAuthDiagnostics.sessionStage("restore_deferred_network")
       }
     }
     isBootstrapping = false
@@ -185,14 +193,14 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
   @MainActor
   public func login(email: String, password: String, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
-    await authenticate {
+    await authenticate(provider: .email) {
       try await api.post("/auth/login", body: MIRAAuthLoginBody(email: email, password: password, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt))
     }
   }
 
   @MainActor
   public func register(email: String, password: String, username: String, fullName: String, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
-    await authenticate {
+    await authenticate(provider: .email) {
       try await api.post(
         "/auth/register",
         body: MIRAAuthRegisterBody(email: email, password: password, username: username, fullName: fullName, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt)
@@ -200,9 +208,10 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
     }
   }
 
+  @discardableResult
   @MainActor
-  public func signInWithApple(idToken: String, email: String?, fullName: String?, appleUser: String?, nonce: String?, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
-    await authenticate {
+  public func signInWithApple(idToken: String, email: String?, fullName: String?, appleUser: String?, nonce: String?, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async -> Bool {
+    await authenticate(provider: .apple) {
       try await api.post(
         "/auth/oauth/apple",
         body: MIRAAppleOAuthBody(idToken: idToken, email: email, fullName: fullName, appleUser: appleUser, nonce: nonce, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt)
@@ -210,9 +219,10 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
     }
   }
 
+  @discardableResult
   @MainActor
-  public func signInWithGoogle(idToken: String, accessToken: String?, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async {
-    await authenticate {
+  public func signInWithGoogle(idToken: String, accessToken: String?, termsVersion: String? = nil, termsAcceptedAt: String? = nil, api: MIRAAPIClient) async -> Bool {
+    await authenticate(provider: .google) {
       try await api.post("/auth/oauth/google", body: MIRAGoogleOAuthBody(idToken: idToken, accessToken: accessToken, termsVersion: termsVersion, termsAcceptedAt: termsAcceptedAt))
     }
   }
@@ -340,27 +350,49 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   }
 
   @MainActor
-  private func authenticate(_ operation: () async throws -> MIRAAuthResponse) async {
+  @discardableResult
+  private func authenticate(
+    provider: MIRAAuthProvider,
+    _ operation: () async throws -> MIRAAuthResponse
+  ) async -> Bool {
+    guard !isWorking else {
+      MIRAAuthDiagnostics.stage(provider, "duplicate_request_ignored")
+      return false
+    }
     isWorking = true
     errorMessage = nil
     defer { isWorking = false }
     do {
+      MIRAAuthDiagnostics.stage(provider, "credential_exchange_started")
       let response = try await operation()
+      guard !response.accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw MIRAAPIError.emptyResponse
+      }
+      MIRAAuthDiagnostics.stage(provider, "backend_session_created")
       token = response.accessToken
       refreshToken = response.refreshToken
       user = response.user
       setGuestMode(false)
       keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
+      MIRAAuthDiagnostics.stage(provider, "session_persisted")
       await MIRAAppCacheStore.shared.saveCurrentProfile(response.user)
       await MIRALocalJSONCache.save(response.user, key: cachedUserKey)
+      MIRAAuthDiagnostics.stage(provider, "auth_state_updated")
+      return true
     } catch {
-      if let apiError = error as? MIRAAPIError,
-         let message = apiError.errorDescription,
-         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      MIRAAuthDiagnostics.failure(provider, stage: "credential_exchange", error: error)
+      if provider == .google {
+        errorMessage = "Could not sign in with Google. Please try again."
+      } else if provider == .apple {
+        errorMessage = "Could not sign in with Apple. Please try again."
+      } else if let apiError = error as? MIRAAPIError,
+                let message = apiError.errorDescription,
+                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         errorMessage = message
       } else {
         errorMessage = "Could not sign in. Check your account and try again."
       }
+      return false
     }
   }
 
