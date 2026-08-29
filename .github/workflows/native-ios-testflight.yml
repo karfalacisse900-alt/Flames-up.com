@@ -256,16 +256,6 @@ jobs:
             --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
 
-      - name: Configure Captro Scan consumable
-        continue-on-error: true
-        env:
-          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
-          APP_STORE_BUNDLE_ID: com.captro.app
-          CAPTRO_SCAN_PRODUCT_ID: com.captro.scan.credits.10
-        run: node scripts/app-store/ensure-scan-iap.mjs
-
   home-feed-visual-qa:
     name: Capture Captro Home feed on iPhone simulator
     if: ${{ false }}
