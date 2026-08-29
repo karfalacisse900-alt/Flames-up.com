@@ -3134,19 +3134,29 @@ async function enforceRateLimit(c: any, bucket: string, identity: string, limit:
   const key = `${safeRateLimitPart(bucket)}:${safeRateLimitPart(identity)}:${windowStart}`;
   const updatedAt = now();
   if (c.env.KV) {
-    const cached: any = await c.env.KV.get(key, 'json').catch(() => null);
-    const count = Math.max(0, Number(cached?.count || 0)) + 1;
-    await c.env.KV.put(key, JSON.stringify({ window_start: windowStart, count, updated_at: updatedAt }), {
-      expirationTtl: Math.max(60, windowSeconds + 30),
-    });
-    if (count > limit) {
-      console.warn(JSON.stringify({ event: 'rate_limit_hit', request_id: c.get?.('requestId') || '', bucket: safeRateLimitPart(bucket), identity: safeRateLimitPart(identity), count, limit }));
-      return c.json({ detail: 'Too many requests. Try again in a moment.', retry_after_seconds: windowSeconds }, 429);
+    try {
+      const cached: any = await c.env.KV.get(key, 'json');
+      const count = Math.max(0, Number(cached?.count || 0)) + 1;
+      await c.env.KV.put(key, JSON.stringify({ window_start: windowStart, count, updated_at: updatedAt }), {
+        expirationTtl: Math.max(60, windowSeconds + 30),
+      });
+      if (count > limit) {
+        console.warn(JSON.stringify({ event: 'rate_limit_hit', request_id: c.get?.('requestId') || '', bucket: safeRateLimitPart(bucket), identity: safeRateLimitPart(identity), count, limit }));
+        return c.json({ detail: 'Too many requests. Try again in a moment.', retry_after_seconds: windowSeconds }, 429);
+      }
+      return null;
+    } catch (error: any) {
+      console.warn(JSON.stringify({
+        event: 'rate_limit_kv_unavailable',
+        request_id: c.get?.('requestId') || '',
+        bucket: safeRateLimitPart(bucket),
+        code: safeRateLimitPart(getErrorCode(error)),
+        fallback: 'd1',
+      }));
     }
-    return null;
   }
 
-  if (supabasePrimaryConfigured(c) && isProductionEnv(c)) {
+  if (!c.env.KV && supabasePrimaryConfigured(c) && isProductionEnv(c)) {
     console.error(JSON.stringify({
       event: 'rate_limit_kv_missing',
       request_id: c.get?.('requestId') || '',

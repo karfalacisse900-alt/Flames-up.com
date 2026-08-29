@@ -312,7 +312,11 @@ jobs:
               request = urllib.request.Request(
                   f"{base}{path}",
                   method="POST" if body is not None else "GET",
-                  headers={"Content-Type": "application/json"},
+                  headers={
+                      "Accept": "application/json",
+                      "Content-Type": "application/json",
+                      "User-Agent": "Captro-Release-Smoke/1.0",
+                  },
                   data=json.dumps(body).encode() if body is not None else None,
               )
               try:

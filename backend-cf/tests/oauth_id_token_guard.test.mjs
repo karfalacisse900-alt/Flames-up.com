@@ -45,6 +45,17 @@ test('OAuth session bridge requires its dedicated production secret', () => {
   assert.match(source, /session_bridge:[\s\S]*configured:/);
 });
 
+test('OAuth rate limiting falls back to D1 when the KV binding throws', () => {
+  const limiter = source.slice(
+    source.indexOf('async function enforceRateLimit'),
+    source.indexOf('async function usersAreBlocked'),
+  );
+  assert.match(limiter, /event: 'rate_limit_kv_unavailable'/);
+  assert.match(limiter, /fallback: 'd1'/);
+  assert.match(limiter, /await ensureReliabilitySchema\(c\.env\.DB\)/);
+  assert.match(limiter, /if \(!c\.env\.KV && supabasePrimaryConfigured\(c\) && isProductionEnv\(c\)\)/);
+});
+
 test('iOS social-auth payload fields remain accepted by both routes', () => {
   const googleRoute = source.slice(
     source.indexOf("api.post('/auth/oauth/google'"),
