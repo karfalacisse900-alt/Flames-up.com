@@ -306,7 +306,8 @@ public struct CaptroScanView: View {
         .frame(height: 320)
       }
     }
-    .frame(width: width, maxHeight: 440)
+    .frame(maxHeight: 440)
+    .frame(width: width)
     .padding(8)
     .background(CaptroReceiptPalette.paper)
     .overlay(Rectangle().stroke(CaptroReceiptPalette.line.opacity(0.7), lineWidth: 0.5))
@@ -363,7 +364,8 @@ public struct CaptroScanView: View {
     .foregroundStyle(CaptroReceiptPalette.ink)
     .padding(.horizontal, 18)
     .padding(.vertical, 22)
-    .frame(width: width, minHeight: 330)
+    .frame(width: width)
+    .frame(minHeight: 330)
     .background(CaptroReceiptPalette.paper)
     .overlay(Rectangle().stroke(CaptroReceiptPalette.line.opacity(0.6), lineWidth: 0.5))
     .shadow(color: .black.opacity(0.07), radius: 14, x: 0, y: 8)
