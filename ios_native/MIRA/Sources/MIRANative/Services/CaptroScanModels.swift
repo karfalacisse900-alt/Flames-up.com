@@ -414,7 +414,7 @@ extension MIRAAPIClient {
     idempotencyKey: String
   ) async throws -> CaptroReceiptRewardResult {
     let normalizedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
-    try await post(
+    return try await post(
       "/scan/receipts/\(receiptId)/feedback",
       body: CaptroReceiptFeedbackBody(
         idempotencyKey: idempotencyKey,
