@@ -31,8 +31,10 @@ jobs:
         shell: bash
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OAUTH_FALLBACK_SECRET: ${{ secrets.OAUTH_FALLBACK_SECRET }}
         run: |
           set -euo pipefail
           if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then
@@ -45,6 +47,14 @@ jobs:
           fi
           if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
             echo "SUPABASE_SERVICE_ROLE_KEY is required as a Cloudflare Worker secret for server-side database writes."
+            exit 1
+          fi
+          if [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "SUPABASE_ANON_KEY is required for real Supabase session creation."
+            exit 1
+          fi
+          if [ -z "${OAUTH_FALLBACK_SECRET:-}" ]; then
+            echo "OAUTH_FALLBACK_SECRET is required for Apple and Google Supabase sessions."
             exit 1
           fi
 
@@ -77,6 +87,86 @@ jobs:
           print("Supabase Google and Apple providers are enabled; account signup is enabled.")
           PY
 
+      - name: Verify production Supabase session lifecycle
+        shell: bash
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import secrets
+          import urllib.error
+          import urllib.request
+          import uuid
+
+          base = f"https://{os.environ['SUPABASE_PROJECT_REF']}.supabase.co/auth/v1"
+          anon_key = os.environ["SUPABASE_ANON_KEY"]
+          service_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+          email = f"captro-auth-smoke-{uuid.uuid4().hex}@captro.invalid"
+          password = secrets.token_urlsafe(48)
+          user_id = None
+
+          def request_json(url, method="GET", headers=None, body=None):
+              request = urllib.request.Request(
+                  url,
+                  method=method,
+                  headers=headers or {},
+                  data=json.dumps(body).encode() if body is not None else None,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=25) as response:
+                      return response.status, json.load(response)
+              except urllib.error.HTTPError as error:
+                  raise SystemExit(f"Supabase session smoke test failed at {method} {url.rsplit('/', 1)[-1]} with HTTP {error.code}")
+
+          admin_headers = {
+              "apikey": service_key,
+              "Authorization": f"Bearer {service_key}",
+              "Content-Type": "application/json",
+          }
+          public_headers = {
+              "apikey": anon_key,
+              "Content-Type": "application/json",
+          }
+
+          try:
+              _, created = request_json(
+                  f"{base}/admin/users",
+                  method="POST",
+                  headers=admin_headers,
+                  body={"email": email, "password": password, "email_confirm": True},
+              )
+              user_id = created.get("id") or created.get("user", {}).get("id")
+              if not user_id:
+                  raise SystemExit("Supabase session smoke test did not create an auth user")
+
+              _, session = request_json(
+                  f"{base}/token?grant_type=password",
+                  method="POST",
+                  headers=public_headers,
+                  body={"email": email, "password": password},
+              )
+              access_token = session.get("access_token")
+              refresh_token = session.get("refresh_token")
+              if not access_token or not refresh_token:
+                  raise SystemExit("Supabase session smoke test did not return access and refresh tokens")
+
+              _, current = request_json(
+                  f"{base}/user",
+                  headers={"apikey": anon_key, "Authorization": f"Bearer {access_token}"},
+              )
+              if current.get("id") != user_id:
+                  raise SystemExit("Supabase session smoke test returned the wrong user")
+              print("Supabase admin creation, password exchange, access token, and refresh token validated.")
+          finally:
+              if user_id:
+                  request_json(f"{base}/admin/users/{user_id}", method="DELETE", headers=admin_headers)
+          PY
+
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
@@ -102,6 +192,17 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+      - name: Sync OAuth session-bridge Worker secret
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s' "$OAUTH_FALLBACK_SECRET" | npx wrangler secret put OAUTH_FALLBACK_SECRET --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OAUTH_FALLBACK_SECRET: ${{ secrets.OAUTH_FALLBACK_SECRET }}
 
       - name: Sync Scan verification provider secrets
         working-directory: ./backend-cf
@@ -195,3 +296,58 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify production OAuth routes and runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import urllib.error
+          import urllib.request
+
+          base = "https://api.flames-up.com/api"
+
+          def json_request(path, body=None):
+              request = urllib.request.Request(
+                  f"{base}{path}",
+                  method="POST" if body is not None else "GET",
+                  headers={"Content-Type": "application/json"},
+                  data=json.dumps(body).encode() if body is not None else None,
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return response.status, json.load(response)
+              except urllib.error.HTTPError as error:
+                  try:
+                      payload = json.load(error)
+                  except Exception:
+                      payload = {}
+                  return error.code, payload
+
+          status, config = json_request("/auth/oauth/config")
+          if status != 200:
+              raise SystemExit(f"OAuth runtime config returned HTTP {status}")
+          checks = {
+              "Google audience": config.get("google", {}).get("backend_configured") is True,
+              "Apple audience": config.get("apple", {}).get("audience_configured") is True,
+              "OAuth session bridge": config.get("session_bridge", {}).get("configured") is True,
+              "Supabase session dependencies": config.get("session_bridge", {}).get("supabase_configured") is True,
+          }
+          failed = [name for name, passed in checks.items() if not passed]
+          if failed:
+              raise SystemExit("Production OAuth runtime is incomplete: " + ", ".join(failed))
+
+          probes = (
+              ("google", {"id_token": "invalid"}, "GOOGLE_PROVIDER_CREDENTIAL_INVALID"),
+              ("apple", {"id_token": "invalid", "nonce": "invalid"}, "APPLE_PROVIDER_CREDENTIAL_INVALID"),
+          )
+          for provider, body, expected_code in probes:
+              probe_status, payload = json_request(f"/auth/oauth/{provider}", body)
+              if probe_status != 401 or payload.get("code") != expected_code:
+                  raise SystemExit(
+                      f"Production {provider} route failed before provider validation: "
+                      f"HTTP {probe_status}, code={payload.get('code', 'missing')}"
+                  )
+          print("Production Apple and Google routes reach provider validation; OAuth runtime dependencies are configured.")
+          PY

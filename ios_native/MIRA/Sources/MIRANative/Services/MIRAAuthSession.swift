@@ -1,5 +1,25 @@
 import Foundation
 
+private actor MIRAAuthRefreshCoordinator {
+  private var inFlight: Task<MIRAAuthResponse, Error>?
+
+  func refresh(api: MIRAAPIClient, refreshToken: String) async throws -> MIRAAuthResponse {
+    if let inFlight {
+      return try await inFlight.value
+    }
+
+    let task = Task<MIRAAuthResponse, Error> {
+      try await api.post(
+        "/auth/refresh",
+        body: MIRARefreshSessionBody(refreshToken: refreshToken)
+      )
+    }
+    inFlight = task
+    defer { inFlight = nil }
+    return try await task.value
+  }
+}
+
 public struct MIRAPasswordResetContext: Equatable {
   public let accessToken: String
   public let refreshToken: String?
@@ -18,6 +38,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   private let defaults: UserDefaults
   private var token: String?
   private var refreshToken: String?
+  private let refreshCoordinator = MIRAAuthRefreshCoordinator()
   private let cachedUserKey = "native.auth.user.v2"
   private static let guestModeKey = "native.auth.guest.v1"
 
@@ -38,16 +59,12 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   }
 
   public func refreshAccessTokenIfNeeded(api: MIRAAPIClient) async -> Bool {
-    if isWorking { return false }
     let keychainRefreshToken = await keychain.refreshToken()
     let storedRefreshToken = refreshToken ?? keychainRefreshToken
     guard let storedRefreshToken, !storedRefreshToken.isEmpty else { return false }
 
     do {
-      let response: MIRAAuthResponse = try await api.post(
-        "/auth/refresh",
-        body: MIRARefreshSessionBody(refreshToken: storedRefreshToken)
-      )
+      let response = try await refreshCoordinator.refresh(api: api, refreshToken: storedRefreshToken)
       await MainActor.run {
         token = response.accessToken
         refreshToken = response.refreshToken ?? storedRefreshToken

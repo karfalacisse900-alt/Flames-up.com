@@ -4,20 +4,6 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 
-test('native OAuth uses the raw Supabase ID-token REST contract', () => {
-  assert.match(
-    source,
-    /const body: any = \{ provider, id_token: idToken \};/,
-    'Supabase raw REST requests must send id_token, not the client-library token alias',
-  );
-  assert.doesNotMatch(
-    source,
-    /const body: any = \{ provider, token: idToken \};/,
-  );
-  assert.match(source, /if \(provider === 'google' && accessToken\) body\.access_token = accessToken;/);
-  assert.match(source, /if \(nonce\) body\.nonce = nonce;/);
-});
-
 test('OAuth fallback resolves returning accounts by provider subject', () => {
   assert.match(source, /async function findSupabaseAuthUserForOAuthSubject/);
   assert.match(source, /provider_user_id: postgrestEqFilter\(cleanSubject\)/);
@@ -36,15 +22,27 @@ test('Google uses the server-verified bridge instead of the nonce-incompatible S
   assert.match(googleRoute, /GOOGLE_CREDENTIAL_EXCHANGE_FAILED/);
 });
 
-test('Apple retains its raw nonce through direct exchange and verified bridge', () => {
+test('Apple retains its raw nonce and uses the same server-verified bridge as Google', () => {
   const appleRoute = source.slice(
     source.indexOf("api.post('/auth/oauth/apple'"),
     source.indexOf("api.get('/auth/me'"),
   );
   assert.match(appleRoute, /const rawNonce = cleanText/);
-  assert.match(appleRoute, /signInSupabaseIdToken\(c, 'apple', idToken, \{[\s\S]*nonce: rawNonce/);
   assert.match(appleRoute, /verifyAppleIdToken\(c, idToken, rawNonce\)/);
+  assert.match(appleRoute, /signInSupabaseVerifiedOAuth\(c, \{/);
+  assert.doesNotMatch(appleRoute, /supabase_id_token/);
   assert.match(source, /if \(tokenNonce !== expectedNonce\) throw new Error\('APPLE_NONCE_MISMATCH'\)/);
+});
+
+test('OAuth session bridge requires its dedicated production secret', () => {
+  const fallback = source.slice(
+    source.indexOf('async function oauthFallbackPassword'),
+    source.indexOf('async function signInSupabaseVerifiedOAuth'),
+  );
+  assert.match(fallback, /c\.env\.OAUTH_FALLBACK_SECRET/);
+  assert.doesNotMatch(fallback, /c\.env\.JWT_SECRET/);
+  assert.doesNotMatch(fallback, /c\.env\.ABUSE_SIGNAL_SECRET/);
+  assert.match(source, /session_bridge:[\s\S]*configured:/);
 });
 
 test('iOS social-auth payload fields remain accepted by both routes', () => {

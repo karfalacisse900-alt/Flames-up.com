@@ -57,6 +57,7 @@ interface Env {
   OWNER_EMAILS?: string;
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_IDS?: string;
+  OAUTH_FALLBACK_SECRET?: string;
   SUPABASE_URL?: string;
   SUPABASE_ANON_KEY?: string;
   SUPABASE_PUBLISHABLE_KEY?: string;
@@ -10584,30 +10585,10 @@ async function updateSupabasePassword(c: any, accessToken: string, password: str
   return await response.json().catch(() => ({}));
 }
 
-async function signInSupabaseIdToken(c: any, provider: 'google' | 'apple', idToken: string, options: { nonce?: string; accessToken?: string } = {}) {
-  const body: any = { provider, id_token: idToken };
-  const nonce = cleanText(options.nonce, 512);
-  const accessToken = cleanText(options.accessToken, 4096);
-  if (nonce) body.nonce = nonce;
-  if (provider === 'google' && accessToken) body.access_token = accessToken;
-  const response = await fetch(`${getSupabaseUrl(c)}/auth/v1/token?grant_type=id_token`, {
-    method: 'POST',
-    headers: supabasePublicAuthHeaders(c),
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_ID_TOKEN_SIGN_IN_FAILED:${provider}:${response.status}:${text.slice(0, 180)}`);
-  }
-  const data: any = await response.json().catch(() => ({}));
-  if (!data?.access_token) throw new Error(`SUPABASE_ID_TOKEN_SESSION_MISSING:${provider}`);
-  return data;
-}
-
 async function oauthFallbackPassword(c: any, provider: 'google' | 'apple', subject: string): Promise<string> {
   const cleanSubject = cleanText(subject, 240);
   if (!cleanSubject) throw new Error('OAUTH_SUBJECT_REQUIRED');
-  const secret = String(c.env.OAUTH_FALLBACK_SECRET || c.env.JWT_SECRET || c.env.ABUSE_SIGNAL_SECRET || '').trim();
+  const secret = String(c.env.OAUTH_FALLBACK_SECRET || '').trim();
   if (!secret) throw new Error('OAUTH_FALLBACK_SECRET_MISSING');
   const digest = await sha256Hex(`${secret}:${provider}:${cleanSubject}:captro_supabase_oauth_v1`);
   return `Captro-${provider}-${digest.slice(0, 48)}!`;
@@ -12734,6 +12715,12 @@ api.get('/auth/oauth/config', async (c) => {
       audience_configured: appleAudiences.length > 0,
       required_secret: 'APPLE_OAUTH_AUDIENCES',
     },
+    session_bridge: {
+      configured: Boolean(String(c.env.OAUTH_FALLBACK_SECRET || '').trim()),
+      supabase_configured: Boolean(String(c.env.SUPABASE_URL || '').trim())
+        && Boolean(String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_PUBLISHABLE_KEY || '').trim())
+        && Boolean(String(c.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()),
+    },
   });
 });
 
@@ -12924,60 +12911,30 @@ api.post('/auth/oauth/apple', async (c) => {
 
     const clientEmail = normalizeOptionalEmail(body.email);
     const clientFullName = normalizeOptionalName(body.full_name || body.fullName);
-    logOAuthStage(c, 'apple', 'credential_received', 'passed', undefined, 'supabase_id_token');
-    try {
-      stage = 'credential_exchange';
-      logOAuthStage(c, 'apple', stage, 'started', undefined, 'supabase_id_token');
-      const supabaseSession = await signInSupabaseIdToken(c, 'apple', idToken, {
-        nonce: rawNonce,
-      });
-      const sessionProfile = supabaseOAuthProfileFromSession(supabaseSession, idToken);
-      const appleSubject = supabaseOAuthSubjectFromSession(supabaseSession, 'apple', idToken) || cleanText(body.apple_user || body.appleUser, 240);
-      const session = await issueCaptroTokenForSupabaseAccessToken(c, supabaseSession.access_token, {
-        email: sessionProfile.email || clientEmail || internalOAuthEmail('apple', appleSubject),
-        full_name: clientFullName || sessionProfile.fullName || 'Apple User',
-        auth_provider: 'apple',
-        oauth_subject: appleSubject,
-      });
-      await recordTermsAcceptance(c, session.user, supabaseSession.user?.id, termsAcceptance, 'apple_oauth');
-      logOAuthStage(c, 'apple', 'session_creation', 'passed', undefined, 'supabase_id_token');
-      return c.json(supabaseAuthSessionResponse(supabaseSession, session.user));
-    } catch (error: any) {
-      const code = getErrorCode(error);
-      if (code === 'ACCOUNT_DISABLED') throw error;
-      logOAuthStage(c, 'apple', stage, 'failed', error, 'supabase_id_token');
-      if (code === 'SUPABASE_AUTH_KEY_MISSING' || code === 'SUPABASE_NOT_CONFIGURED' || code === 'SUPABASE_SERVICE_ROLE_MISSING') {
-        return c.json({ detail: 'Apple sign in is temporarily unavailable.', code: 'AUTH_PROVIDER_CONFIGURATION' }, 503);
-      }
-      try {
-        stage = 'credential_verification';
-        logOAuthStage(c, 'apple', stage, 'started', undefined, 'verified_bridge');
-        const profile = await verifyAppleIdToken(c, idToken, rawNonce);
-        logOAuthStage(c, 'apple', stage, 'passed', undefined, 'verified_bridge');
-        const appleSubject = profile.subject || cleanText(body.apple_user || body.appleUser, 240);
-        stage = 'session_creation';
-        logOAuthStage(c, 'apple', stage, 'started', undefined, 'verified_bridge');
-        const verifiedSession = await signInSupabaseVerifiedOAuth(c, {
-          provider: 'apple',
-          subject: appleSubject,
-          email: profile.email || clientEmail || undefined,
-          fullName: clientFullName || profile.fullName || 'Apple User',
-          profileImage: profile.profileImage,
-          termsVersion: termsAcceptance?.version,
-          termsAcceptedAt: termsAcceptance?.acceptedAt,
-        });
-        logOAuthStage(c, 'apple', stage, 'passed', undefined, 'verified_bridge');
-        await logSecurityEvent(c, 'apple_verified_oauth_bridge_used', verifiedSession.user.id, {
-          provider: 'apple',
-          strategy: 'verified_bridge',
-          direct_error: safeOAuthDiagnosticCode(error),
-        });
-        return c.json(supabaseAuthSessionResponse(verifiedSession.supabaseSession, verifiedSession.user));
-      } catch (bridgeError: any) {
-        logOAuthStage(c, 'apple', stage, 'failed', bridgeError, 'verified_bridge');
-        throw bridgeError;
-      }
-    }
+    logOAuthStage(c, 'apple', 'credential_received', 'passed', undefined, 'verified_bridge');
+    stage = 'credential_verification';
+    logOAuthStage(c, 'apple', stage, 'started', undefined, 'verified_bridge');
+    const profile = await verifyAppleIdToken(c, idToken, rawNonce);
+    logOAuthStage(c, 'apple', stage, 'passed', undefined, 'verified_bridge');
+
+    const appleSubject = profile.subject || cleanText(body.apple_user || body.appleUser, 240);
+    stage = 'session_creation';
+    logOAuthStage(c, 'apple', stage, 'started', undefined, 'verified_bridge');
+    const verifiedSession = await signInSupabaseVerifiedOAuth(c, {
+      provider: 'apple',
+      subject: appleSubject,
+      email: profile.email || clientEmail || undefined,
+      fullName: clientFullName || profile.fullName || 'Apple User',
+      profileImage: profile.profileImage,
+      termsVersion: termsAcceptance?.version,
+      termsAcceptedAt: termsAcceptance?.acceptedAt,
+    });
+    logOAuthStage(c, 'apple', stage, 'passed', undefined, 'verified_bridge');
+    await logSecurityEvent(c, 'apple_verified_oauth_session_created', verifiedSession.user.id, {
+      provider: 'apple',
+      strategy: 'verified_bridge',
+    });
+    return c.json(supabaseAuthSessionResponse(verifiedSession.supabaseSession, verifiedSession.user));
   } catch (error: any) {
     const code = getErrorCode(error);
     logOAuthStage(c, 'apple', stage, 'failed', error, 'verified_bridge');

@@ -26,6 +26,10 @@ const apiClient = readFileSync(
   new URL('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAPIClient.swift', import.meta.url),
   'utf8',
 );
+const keychain = readFileSync(
+  new URL('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAKeychainSessionProvider.swift', import.meta.url),
+  'utf8',
+);
 
 test('guest access is persisted and routed into the app without an auth token', () => {
   assert.match(authSession, /@Published public private\(set\) var isGuest: Bool/);
@@ -58,6 +62,10 @@ test('native OAuth preserves provider requirements before calling Captro', () =>
   assert.match(authDiagnostics, /case credentialExchangeFailure/);
   assert.match(authDiagnostics, /case sessionFailure/);
   assert.match(apiClient, /!isCredentialRequest,[\s\S]*status == 401 \|\| status == 403/);
+  assert.match(authSession, /private actor MIRAAuthRefreshCoordinator/);
+  assert.match(authSession, /if let inFlight/);
+  assert.doesNotMatch(authSession, /refreshAccessTokenIfNeeded[\s\S]{0,120}if isWorking \{ return false \}/);
+  assert.match(keychain, /else \{[\s\S]*clearRefreshToken\(\)/);
 });
 
 test('terms validation explains the requirement instead of making auth look inert', () => {

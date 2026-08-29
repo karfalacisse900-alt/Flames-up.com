@@ -31,6 +31,8 @@ public final class MIRAKeychainSessionProvider: MIRASessionProviding {
     saveToken(accessToken, account: accessTokenAccount)
     if let refreshToken, !refreshToken.isEmpty {
       saveToken(refreshToken, account: refreshTokenAccount)
+    } else {
+      clearRefreshToken()
     }
   }
 
