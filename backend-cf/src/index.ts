@@ -96,6 +96,8 @@ interface Env {
   VERYFI_USERNAME?: string;
   VERYFI_API_KEY?: string;
   VERYFI_BASE_URL?: string;
+  RECEIPT_REWARD_CENTS?: string;
+  INVOICE_REWARD_CENTS?: string;
   APP_STORE_CONNECT_API_ISSUER_ID?: string;
   APP_STORE_CONNECT_API_KEY_ID?: string;
   APP_STORE_CONNECT_API_KEY_BASE64?: string;

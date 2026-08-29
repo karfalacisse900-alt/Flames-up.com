@@ -323,7 +323,9 @@ public struct MIRANativeRootView: View {
             onSignIn: leaveGuestModeForSignIn
           )
         } else {
-          CaptroScanView(api: api)
+          CaptroScanView(api: api) {
+            selectedTab = .main
+          }
         }
       }
         .tag(MIRATab.scan)

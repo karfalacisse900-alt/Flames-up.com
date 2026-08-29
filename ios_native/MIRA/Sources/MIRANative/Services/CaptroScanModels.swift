@@ -25,6 +25,14 @@ enum CaptroLocalDocumentSource: String {
   case camera = "Document Scanner"
   case fileImport = "Files Import"
   case photoLibrary = "Photo Library"
+
+  var apiValue: String {
+    switch self {
+    case .camera: return "camera"
+    case .fileImport: return "files"
+    case .photoLibrary: return "photo_library"
+    }
+  }
 }
 
 enum CaptroDetectedDocumentType: String, Codable, Hashable {
@@ -350,6 +358,7 @@ struct CaptroReceiptReview: Decodable, Identifiable {
   let tax: String?
   let total: String?
   let currency: String?
+  let verdict: String?
   let rewardEligible: Bool
   let duplicate: Bool
   let rewardCents: Int
@@ -372,9 +381,35 @@ struct CaptroReceiptRewardBalance: Decodable, Equatable {
   let availableBalanceCents: Int
   let lifetimeEarnedCents: Int
   let lifetimeWithdrawnCents: Int
+  let pendingRewardCents: Int
   let pendingWithdrawalCents: Int
   let currency: String
   let withdrawalEnabled: Bool
+}
+
+struct CaptroReceiptSubmission: Decodable, Identifiable, Hashable {
+  let receiptId: String
+  let documentType: String
+  let status: String
+  let verdict: String?
+  let merchantName: String?
+  let purchaseDate: String?
+  let total: String?
+  let currency: String?
+  let earnedCents: Int
+  let duplicate: Bool
+  let createdAt: String
+
+  var id: String { receiptId }
+}
+
+struct CaptroReceiptSubmissionHistory: Decodable {
+  let submissions: [CaptroReceiptSubmission]
+}
+
+struct CaptroPrivateDocumentLink: Decodable {
+  let signedUrl: URL
+  let expiresIn: Int
 }
 
 private struct CaptroReceiptFeedbackBody: Encodable {
@@ -390,10 +425,8 @@ private struct CaptroStoreTransactionBody: Encodable {
 extension MIRAAPIClient {
   func reviewCaptroReceipt(
     _ document: CaptroLocalDocument,
-    detectedType: CaptroDetectedDocumentType,
     idempotencyKey: String
   ) async throws -> CaptroReceiptReview {
-    guard detectedType != .unsupported else { throw CaptroLocalDocumentError.unsupported }
     let upload = try document.verificationUpload()
     return try await uploadMultipart(
       "/scan/receipts/review",
@@ -402,9 +435,22 @@ extension MIRAAPIClient {
       data: upload.data,
       fields: [
         "idempotencyKey": idempotencyKey,
-        "detectedType": detectedType.rawValue,
+        "source": document.source.apiValue,
       ]
     )
+  }
+
+  func captroReceiptReview(id: String) async throws -> CaptroReceiptReview {
+    try await get("/scan/receipts/\(id)")
+  }
+
+  func captroReceiptSubmissionHistory() async throws -> [CaptroReceiptSubmission] {
+    let response: CaptroReceiptSubmissionHistory = try await get("/scan/receipts/history")
+    return response.submissions
+  }
+
+  func captroReceiptOriginalLink(id: String) async throws -> CaptroPrivateDocumentLink {
+    try await get("/scan/receipts/\(id)/original")
   }
 
   func submitCaptroReceiptFeedback(

@@ -10,6 +10,8 @@ export interface CaptroScanEnv {
   VERYFI_USERNAME?: string;
   VERYFI_API_KEY?: string;
   VERYFI_BASE_URL?: string;
+  RECEIPT_REWARD_CENTS?: string;
+  INVOICE_REWARD_CENTS?: string;
   APP_STORE_CONNECT_API_ISSUER_ID?: string;
   APP_STORE_CONNECT_API_KEY_ID?: string;
   APP_STORE_CONNECT_API_KEY_BASE64?: string;
@@ -34,7 +36,6 @@ type VerificationCheck = {
 const MAX_DOCUMENT_BYTES = 12 * 1024 * 1024;
 const MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024;
 const VERIFY_PRICE_CENTS = 10;
-const RECEIPT_REWARD_CENTS = 10;
 const PRIVATE_RECEIPT_BUCKET = 'captro-private-receipts';
 const VERYFI_DOCUMENTS_PATH = '/api/v8/partner/documents';
 const DEFAULT_BUNDLE_ID = 'com.captro.app';
@@ -45,6 +46,16 @@ const CREDIT_PRODUCTS: Record<string, { creditCents: number; paidCents: number }
 function cleanText(value: unknown, maximum = 1024): string {
   if (value === null || value === undefined) return '';
   return String(value).trim().slice(0, maximum);
+}
+
+function configuredRewardCents(env: CaptroScanEnv, documentType: 'receipt' | 'invoice' | 'unsupported'): number {
+  const raw = documentType === 'invoice' ? env.INVOICE_REWARD_CENTS : env.RECEIPT_REWARD_CENTS;
+  if (raw === undefined || cleanText(raw, 20) === '') return 10;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0 || value > 5000) {
+    throw new Error('SCAN_REWARD_CONFIGURATION_INVALID');
+  }
+  return value;
 }
 
 function nested(source: any, path: string): any {
@@ -268,7 +279,24 @@ function providerConfigured(env: CaptroScanEnv): boolean {
   return Boolean(cleanText(env.VERYFI_CLIENT_ID, 300) && apiKey && (apiKey.startsWith('vrfk_') || cleanText(env.VERYFI_USERNAME, 300)));
 }
 
-async function veryfiSignature(secret: string, request: any, timestamp: number): Promise<string> {
+function veryfiSerializeValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(veryfiSerializeValue).join(', ')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .map(([key, nestedValue]) => `${key}: ${veryfiSerializeValue(nestedValue)}`)
+      .join(', ')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+function veryfiSignaturePayload(request: Record<string, unknown>, timestamp: number): string {
+  const serialized = Object.entries(request)
+    .map(([key, value]) => `${key}:${veryfiSerializeValue(value)}`)
+    .join(',');
+  return `timestamp:${timestamp}${serialized ? `,${serialized}` : ''}`;
+}
+
+async function veryfiSignature(secret: string, request: Record<string, unknown>, timestamp: number): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
@@ -276,8 +304,14 @@ async function veryfiSignature(secret: string, request: any, timestamp: number):
     false,
     ['sign'],
   );
-  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}${JSON.stringify(request)}`));
-  return Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(veryfiSignaturePayload(request, timestamp)),
+  ));
+  let binary = '';
+  for (const byte of signature) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
 
 async function readBoundedResponse(response: Response): Promise<Uint8Array> {
@@ -299,17 +333,22 @@ function providerDocumentType(document: any): 'receipt' | 'invoice' | 'unsupport
 
 function normalizedAddress(document: any) {
   const addressValue = first(document, ['vendor.address', 'merchant.address', 'bill_from.address']);
+  const parsedAddress = first(document, [
+    'vendor.parsed_address', 'merchant.parsed_address', 'bill_from.parsed_address',
+  ]);
   const original = typeof addressValue === 'string'
     ? cleanText(addressValue, 1200)
     : firstText(document, ['vendor.address_text', 'merchant.address_text', 'bill_from.address_text'], 1200);
-  const source = addressValue && typeof addressValue === 'object' ? addressValue : {};
+  const source = parsedAddress && typeof parsedAddress === 'object'
+    ? parsedAddress
+    : addressValue && typeof addressValue === 'object' ? addressValue : {};
   return {
     original,
-    street: firstText(source, ['street', 'address_line', 'line1'], 300)
+    street: firstText(source, ['street', 'address_line', 'line1', 'street_address'], 300)
       || firstText(document, ['vendor.street', 'merchant.street', 'bill_from.street'], 300),
     city: firstText(source, ['city'], 160) || firstText(document, ['vendor.city', 'merchant.city', 'bill_from.city'], 160),
     state: firstText(source, ['state', 'region'], 120) || firstText(document, ['vendor.state', 'merchant.state', 'bill_from.state'], 120),
-    postalCode: firstText(source, ['postal_code', 'zip', 'zip_code'], 40)
+    postalCode: firstText(source, ['postal_code', 'postcode', 'zip', 'zip_code'], 40)
       || firstText(document, ['vendor.zip_code', 'vendor.postal_code', 'merchant.zip_code', 'bill_from.zip_code'], 40),
     country: firstText(source, ['country', 'country_code'], 80)
       || firstText(document, ['vendor.country', 'merchant.country', 'bill_from.country'], 80),
@@ -365,6 +404,8 @@ function providerSignals(document: any) {
     invalidQr: signal('invalid qr data', ['fraud.invalid_qr_data', 'fraud.invalidQrData']),
     vendorLayoutMismatch: signal('vendor layout mismatch', ['fraud.vendor_layout_mismatch', 'fraud.vendorLayoutMismatch']),
     notADocument: signal('not a document', ['fraud.not_a_document', 'fraud.notADocument']),
+    duplicate: firstBool(document, ['is_duplicate']),
+    duplicateOf: firstText(document, ['duplicate_of'], 160) || null,
   };
 }
 
@@ -426,10 +467,10 @@ function normalizeProviderDocument(document: any) {
 type PurchaseCategory = 'restaurant_food' | 'product_retail' | 'grocery' | 'service_business' | 'general';
 
 const CATEGORY_QUESTION_KEYS: Record<PurchaseCategory, string[]> = {
-  restaurant_food: ['cleanliness', 'speed', 'quality', 'service', 'overall'],
-  product_retail: ['quality', 'value', 'organization', 'speed', 'overall'],
-  grocery: ['freshness', 'cleanliness', 'speed', 'value', 'overall'],
-  service_business: ['speed', 'professionalism', 'satisfaction', 'overall'],
+  restaurant_food: ['quality', 'cleanliness', 'speed', 'service', 'value', 'overall'],
+  product_retail: ['quality', 'expectations', 'value', 'speed', 'organization', 'overall'],
+  grocery: ['freshness', 'cleanliness', 'stock', 'speed', 'value', 'overall'],
+  service_business: ['professionalism', 'speed', 'result', 'value', 'overall'],
   general: ['quality', 'value', 'service', 'overall'],
 };
 
@@ -458,10 +499,12 @@ function purchaseCategory(document: any, extracted: any): PurchaseCategory {
 function receiptAcceptedForFeedback(extracted: any): boolean {
   const checks = buildChecks(extracted);
   const status = (key: string) => checks.find((check) => check.key === key)?.status;
+  const arithmeticPassed = status('total_arithmetic') === 'passed' || status('line_item_arithmetic') === 'passed';
   return ['receipt', 'invoice'].includes(extracted.type)
     && status('document_structure') === 'passed'
-    && status('provider_document_signal') !== 'failed'
-    && status('date_validity') !== 'failed'
+    && status('provider_document_signal') === 'passed'
+    && status('date_validity') === 'passed'
+    && arithmeticPassed
     && status('total_arithmetic') !== 'failed'
     && status('line_item_arithmetic') !== 'failed';
 }
@@ -611,16 +654,23 @@ function verdictFromChecks(checks: VerificationCheck[]): 'verified' | 'couldnt_v
     : 'couldnt_verify';
 }
 
-async function providerVerify(env: CaptroScanEnv, bytes: Uint8Array, fileName: string): Promise<any> {
+async function providerVerify(
+  env: CaptroScanEnv,
+  bytes: Uint8Array,
+  fileName: string,
+  externalId: string,
+): Promise<any> {
   if (!providerConfigured(env)) throw new Error('SCAN_PROVIDER_UNAVAILABLE');
   const request = {
     file_name: fileName,
     file_data: bytesToBase64(bytes),
+    external_id: externalId,
     document_type: null,
     boost_mode: false,
     async: false,
     auto_delete: true,
     confidence_details: true,
+    parse_address: true,
     allowed_async_enrichments: [],
   };
   const apiKey = cleanText(env.VERYFI_API_KEY, 4096);
@@ -633,7 +683,7 @@ async function providerVerify(env: CaptroScanEnv, bytes: Uint8Array, fileName: s
   });
   const secret = cleanText(env.VERYFI_CLIENT_SECRET, 4096);
   if (secret) {
-    const timestamp = Date.now();
+    const timestamp = Math.floor(Date.now() / 1000) * 1000;
     headers.set('x-veryfi-request-timestamp', String(timestamp));
     headers.set('x-veryfi-request-signature', await veryfiSignature(secret, request, timestamp));
   }
@@ -756,9 +806,32 @@ function receiptReviewPayload(row: any) {
     tax: extracted.tax || null,
     total: row.total_amount === null || row.total_amount === undefined ? extracted.total || null : String(row.total_amount),
     currency: row.currency || extracted.currency || null,
+    verdict: row.verification_status === 'verified'
+      ? 'Verified'
+      : row.verification_status === 'couldnt_verify' ? "Couldn't Verify" : null,
     rewardEligible: Boolean(row.reward_eligible),
     duplicate: row.status === 'duplicate',
-    rewardCents: RECEIPT_REWARD_CENTS,
+    rewardCents: Math.max(0, Number(row.reward_amount_cents || 0)),
+    createdAt: row.created_at,
+  };
+}
+
+function receiptHistoryPayload(row: any) {
+  const extracted = row?.extracted_data && typeof row.extracted_data === 'object' ? row.extracted_data : {};
+  const completed = ['completed', 'rewarded'].includes(cleanText(row.status, 40));
+  return {
+    receiptId: row.id,
+    documentType: row.receipt_type,
+    status: row.status,
+    verdict: row.verification_status === 'verified'
+      ? 'Verified'
+      : row.verification_status === 'couldnt_verify' ? "Couldn't Verify" : null,
+    merchantName: row.merchant_name || extracted.business?.name || null,
+    purchaseDate: row.purchase_date || extracted.issueDate || null,
+    total: row.total_amount === null || row.total_amount === undefined ? extracted.total || null : String(row.total_amount),
+    currency: row.currency || extracted.currency || null,
+    earnedCents: completed ? Math.max(0, Number(row.reward_amount_cents || 0)) : 0,
+    duplicate: row.status === 'duplicate',
     createdAt: row.created_at,
   };
 }
@@ -823,6 +896,21 @@ async function storePrivateReceipt(
     throw new Error(`SCAN_PRIVATE_STORAGE_UPLOAD_FAILED:${response.status}:${text.slice(0, 300)}`);
   }
   return path;
+}
+
+async function signedPrivateReceiptUrl(env: CaptroScanEnv, storagePath: string): Promise<string> {
+  const { url } = supabaseConfiguration(env);
+  const encodedPath = storagePath.split('/').map(encodeURIComponent).join('/');
+  const response = await fetch(`${url}/storage/v1/object/sign/${PRIVATE_RECEIPT_BUCKET}/${encodedPath}`, {
+    method: 'POST',
+    headers: supabaseHeaders(env),
+    body: JSON.stringify({ expiresIn: 300 }),
+  });
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`SCAN_PRIVATE_STORAGE_SIGN_FAILED:${response.status}`);
+  const signed = cleanText(data?.signedURL || data?.signedUrl || data?.signed_url, 4000);
+  if (!signed) throw new Error('SCAN_PRIVATE_STORAGE_SIGN_FAILED');
+  return signed.startsWith('http') ? signed : `${url}${signed.startsWith('/') ? '' : '/'}${signed}`;
 }
 
 function extractedProviderText(document: any): string | null {
@@ -896,10 +984,13 @@ function errorCode(error: any): string {
 export const captroScanTestSupport = Object.freeze({
   buildChecks,
   categoryQuestionKeys: CATEGORY_QUESTION_KEYS,
+  configuredRewardCents,
   purchaseCategory,
   receiptAcceptedForFeedback,
   receiptRewardFingerprint,
   verdictFromChecks,
+  veryfiSignature,
+  veryfiSignaturePayload,
   normalizeProviderDocument,
 });
 
@@ -927,15 +1018,13 @@ export function createCaptroScanRoutes(
       const form = await c.req.raw.formData();
       const file = form.get('file') as File | null;
       const idempotencyKey = cleanText(form.get('idempotencyKey'), 180);
-      const detectedType = cleanText(form.get('detectedType'), 30).toLowerCase();
+      const sourceInput = cleanText(form.get('source'), 40).toLowerCase();
+      const source = ['camera', 'photo_library', 'files'].includes(sourceInput) ? sourceInput : 'unknown';
       if (!file || typeof file.arrayBuffer !== 'function') {
         return c.json({ detail: 'No receipt or invoice was provided.', code: 'SCAN_DOCUMENT_MISSING' }, 400);
       }
       if (!/^[a-zA-Z0-9:_-]{16,180}$/.test(idempotencyKey)) {
         return c.json({ detail: 'Receipt review request is invalid.', code: 'SCAN_IDEMPOTENCY_INVALID' }, 400);
-      }
-      if (!['receipt', 'invoice'].includes(detectedType)) {
-        return c.json({ detail: "Captro couldn't recognize this as a receipt or invoice.", code: 'SCAN_DOCUMENT_UNSUPPORTED' }, 422);
       }
       const bytes = new Uint8Array(await file.arrayBuffer());
       if (bytes.byteLength < 250 || bytes.byteLength > MAX_DOCUMENT_BYTES) {
@@ -955,7 +1044,9 @@ export function createCaptroScanRoutes(
         p_document_sha256: documentSha256,
         p_file_name: fileName,
         p_mime_type: contentType,
-        p_detected_type: detectedType,
+        p_detected_type: 'unsupported',
+        p_source: source,
+        p_reward_amount_cents: configuredRewardCents(c.env, 'unsupported'),
       });
       receiptId = cleanText(begin?.receiptId, 80) || receiptId;
       if (!['created', 'retry'].includes(cleanText(begin?.action, 30))) {
@@ -971,12 +1062,13 @@ export function createCaptroScanRoutes(
         updated_at: new Date().toISOString(),
       });
 
-      const providerDocument = await providerVerify(c.env, bytes, fileName);
+      const providerDocument = await providerVerify(c.env, bytes, fileName, receiptId);
       const extracted = normalizeProviderDocument(providerDocument);
       if (extracted.type === 'unsupported') {
         await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
           receipt_type: 'unsupported',
           status: 'unsupported',
+          verification_status: 'couldnt_verify',
           reward_eligible: false,
           provider_request_id: extracted.providerRequestId || null,
           extracted_text: extractedProviderText(providerDocument),
@@ -984,13 +1076,16 @@ export function createCaptroScanRoutes(
           updated_at: new Date().toISOString(),
           completed_at: new Date().toISOString(),
         });
-        return c.json({ detail: "Captro couldn't recognize this as a receipt or invoice.", code: 'SCAN_DOCUMENT_UNSUPPORTED' }, 422);
+        const unsupported = await receiptRow(c.env, receiptId, userId);
+        if (!unsupported) throw new Error('SCAN_RECEIPT_RESULT_MISSING');
+        return c.json(receiptReviewPayload(unsupported));
       }
 
       const category = purchaseCategory(providerDocument, extracted);
       const accepted = receiptAcceptedForFeedback(extracted);
-      let semanticDuplicate = false;
-      if (accepted) {
+      const rewardAmountCents = configuredRewardCents(c.env, extracted.type);
+      let semanticDuplicate = extracted.signals?.duplicate === true || Boolean(extracted.signals?.duplicateOf);
+      if (accepted && !semanticDuplicate) {
         const fingerprint = await receiptRewardFingerprint(extracted);
         if (fingerprint) {
           const claim = await supabaseRpc(c.env, 'captro_claim_receipt_reward_fingerprint', {
@@ -1013,26 +1108,22 @@ export function createCaptroScanRoutes(
         purchase_date: normalizedDatabaseDate(extracted.issueDate),
         purchase_time: normalizedDatabaseTime(extracted.time),
         provider_request_id: extracted.providerRequestId || null,
-        status: semanticDuplicate ? 'duplicate' : accepted ? 'ready_for_feedback' : 'failed',
+        status: semanticDuplicate ? 'duplicate' : accepted ? 'feedback_pending' : 'review_ready',
+        verification_status: accepted ? 'verified' : 'couldnt_verify',
+        reward_amount_cents: rewardAmountCents,
         reward_eligible: accepted && !semanticDuplicate,
         updated_at: completedAt,
         completed_at: completedAt,
       });
       const completed = await receiptRow(c.env, receiptId, userId);
       if (!completed) throw new Error('SCAN_RECEIPT_RESULT_MISSING');
-      if (!accepted) {
-        return c.json({
-          ...receiptReviewPayload(completed),
-          detail: 'Captro could not read enough consistent purchase information from this document.',
-          code: 'SCAN_RECEIPT_NOT_ACCEPTED',
-        }, 422);
-      }
       return c.json(receiptReviewPayload(completed));
     } catch (error: any) {
       const code = errorCode(error).split(':')[0];
       if (receiptId) {
         await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
           status: 'failed',
+          verification_status: 'couldnt_verify',
           reward_eligible: false,
           updated_at: new Date().toISOString(),
           completed_at: new Date().toISOString(),
@@ -1044,6 +1135,29 @@ export function createCaptroScanRoutes(
         detail: unavailable ? 'Receipt processing is temporarily unavailable. Please try again.' : 'Captro could not process this document.',
         code,
       }, unavailable ? 503 : 400);
+    }
+  });
+
+  scan.get('/receipts/history', async (c) => {
+    try {
+      const rows = await selectRows(c.env, 'scanned_receipts', {
+        user_id: `eq.${getUserId(c)}`,
+      }, { order: 'created_at.desc', limit: 50 });
+      return c.json({ submissions: rows.map(receiptHistoryPayload) });
+    } catch {
+      return c.json({ detail: 'Receipt history is temporarily unavailable.', code: 'SCAN_DATABASE_UNAVAILABLE' }, 503);
+    }
+  });
+
+  scan.get('/receipts/:id/original', async (c) => {
+    try {
+      const row = await receiptRow(c.env, cleanText(c.req.param('id'), 80), getUserId(c));
+      if (!row) return c.json({ detail: 'Receipt not found.', code: 'SCAN_RECEIPT_NOT_FOUND' }, 404);
+      const storagePath = cleanText(row.private_storage_path, 1200);
+      if (!storagePath) return c.json({ detail: 'Original document is unavailable.', code: 'SCAN_ORIGINAL_UNAVAILABLE' }, 404);
+      return c.json({ signedUrl: await signedPrivateReceiptUrl(c.env, storagePath), expiresIn: 300 });
+    } catch {
+      return c.json({ detail: 'Original document is temporarily unavailable.', code: 'SCAN_PRIVATE_STORAGE_UNAVAILABLE' }, 503);
     }
   });
 
@@ -1093,6 +1207,9 @@ export function createCaptroScanRoutes(
         p_organization_rating: validRating(ratings.organization),
         p_professionalism_rating: validRating(ratings.professionalism),
         p_satisfaction_rating: validRating(ratings.satisfaction),
+        p_expectations_rating: validRating(ratings.expectations),
+        p_stock_rating: validRating(ratings.stock),
+        p_result_rating: validRating(ratings.result),
         p_overall_rating: validRating(ratings.overall),
         p_note: note || null,
       });
@@ -1119,6 +1236,7 @@ export function createCaptroScanRoutes(
         availableBalanceCents: Math.max(0, Number(row.available_balance_cents || 0)),
         lifetimeEarnedCents: Math.max(0, Number(row.lifetime_earned_cents || 0)),
         lifetimeWithdrawnCents: Math.max(0, Number(row.lifetime_withdrawn_cents || 0)),
+        pendingRewardCents: Math.max(0, Number(row.pending_reward_cents || 0)),
         pendingWithdrawalCents: Math.max(0, Number(row.pending_withdrawal_cents || 0)),
         currency: 'USD',
         withdrawalEnabled: false,
@@ -1240,7 +1358,7 @@ export function createCaptroScanRoutes(
         provider: 'Veryfi',
         provider_attempted_at: new Date().toISOString(),
       });
-      const providerDocument = await providerVerify(c.env, bytes, fileName);
+      const providerDocument = await providerVerify(c.env, bytes, fileName, verificationId);
       const extracted = normalizeProviderDocument(providerDocument);
       if (extracted.type === 'unsupported') {
         await restoreCredit(c.env, verificationId, userId, 'SCAN_DOCUMENT_UNSUPPORTED', 'refunded');

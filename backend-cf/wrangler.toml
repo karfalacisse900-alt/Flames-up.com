@@ -22,6 +22,8 @@ MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 DATA_RESET_VERSION = "2026-06-15-production-reset-v1"
 DATA_RESET_AT = "2026-06-15T21:44:27Z"
 APP_STORE_BUNDLE_ID = "com.captro.app"
+RECEIPT_REWARD_CENTS = "10"
+INVOICE_REWARD_CENTS = "10"
 
 [observability]
 enabled = true
@@ -81,6 +83,8 @@ MEDIA_BACKUP_MAX_VIDEO_BYTES = "95000000"
 DATA_RESET_VERSION = "2026-06-15-production-reset-v1"
 DATA_RESET_AT = "2026-06-15T21:44:27Z"
 APP_STORE_BUNDLE_ID = "com.captro.app"
+RECEIPT_REWARD_CENTS = "10"
+INVOICE_REWARD_CENTS = "10"
 
 [env.production.observability]
 enabled = true

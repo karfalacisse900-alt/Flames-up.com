@@ -14,6 +14,7 @@ final class ProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
   @Published var receiptEarnings: CaptroReceiptRewardBalance?
+  @Published var receiptSubmissions: [CaptroReceiptSubmission] = []
   @Published var profileError: String?
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v5"
@@ -39,6 +40,9 @@ final class ProfileNativeModel: ObservableObject {
 
     if let earnings = try? await api.captroReceiptRewardBalance(), receiptEarnings != earnings {
       receiptEarnings = earnings
+    }
+    if let submissions = try? await api.captroReceiptSubmissionHistory(), receiptSubmissions != submissions {
+      receiptSubmissions = submissions
     }
 
     guard let freshUser: MIRAUser = try? await api.get("/auth/me") else { return }
@@ -241,6 +245,9 @@ public struct ProfileNativeView: View {
           profileHeader
           if let earnings = model.receiptEarnings {
             receiptEarningsSection(earnings)
+          }
+          if !model.receiptSubmissions.isEmpty {
+            receiptSubmissionsSection(model.receiptSubmissions)
           }
           if model.posts.isEmpty && model.user == nil {
             ProfileGridSkeleton()
@@ -519,9 +526,11 @@ public struct ProfileNativeView: View {
       }
 
       HStack(spacing: 0) {
-        earningsValue("Available Balance", cents: earnings.availableBalanceCents)
-        Divider().frame(height: 42).padding(.horizontal, 18)
-        earningsValue("Lifetime Earned", cents: earnings.lifetimeEarnedCents)
+        earningsValue("Available", cents: earnings.availableBalanceCents)
+        Divider().frame(height: 42).padding(.horizontal, 10)
+        earningsValue("Pending", cents: earnings.pendingRewardCents)
+        Divider().frame(height: 42).padding(.horizontal, 10)
+        earningsValue("Lifetime", cents: earnings.lifetimeEarnedCents)
       }
     }
     .padding(.horizontal, MIRATheme.Space.xl)
@@ -545,6 +554,96 @@ public struct ProfileNativeView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
+  private func receiptSubmissionsSection(_ submissions: [CaptroReceiptSubmission]) -> some View {
+    let visibleSubmissions = Array(submissions.prefix(8))
+    return VStack(alignment: .leading, spacing: 0) {
+      Text("My Receipt Submissions")
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .padding(.horizontal, MIRATheme.Space.xl)
+        .padding(.vertical, 15)
+
+      Divider().overlay(MIRATheme.Color.hairline)
+
+      ForEach(visibleSubmissions) { submission in
+        NavigationLink {
+          CaptroReceiptSubmissionDetailView(submission: submission, api: model.api)
+        } label: {
+          receiptSubmissionRow(submission)
+        }
+        .buttonStyle(.plain)
+
+        if submission.id != visibleSubmissions.last?.id {
+          Divider()
+            .overlay(MIRATheme.Color.hairline)
+            .padding(.leading, MIRATheme.Space.xl)
+        }
+      }
+    }
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .top) { Divider().overlay(MIRATheme.Color.hairline) }
+    .overlay(alignment: .bottom) { Divider().overlay(MIRATheme.Color.hairline) }
+  }
+
+  private func receiptSubmissionRow(_ submission: CaptroReceiptSubmission) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: submission.documentType == "invoice" ? "doc.text" : "receipt")
+        .font(.system(size: 17, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(width: 32, height: 32)
+        .background(MIRATheme.Color.surfaceSoft)
+        .clipShape(Circle())
+
+      VStack(alignment: .leading, spacing: 3) {
+        Text(submission.merchantName ?? (submission.documentType == "invoice" ? "Invoice" : "Receipt"))
+          .font(.system(size: 14, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .lineLimit(1)
+        Text(submissionHistoryMetadata(submission))
+          .font(.system(size: 12, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+          .lineLimit(1)
+      }
+
+      Spacer(minLength: 8)
+
+      VStack(alignment: .trailing, spacing: 3) {
+        if submission.earnedCents > 0 {
+          Text("+\(receiptMoney(submission.earnedCents))")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.forest)
+        }
+        Text(receiptSubmissionStatus(submission))
+          .font(.system(size: 11, weight: .medium))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+      }
+
+      Image(systemName: "chevron.right")
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+    }
+    .padding(.horizontal, MIRATheme.Space.xl)
+    .padding(.vertical, 12)
+    .contentShape(Rectangle())
+  }
+
+  private func submissionHistoryMetadata(_ submission: CaptroReceiptSubmission) -> String {
+    let kind = submission.documentType == "invoice" ? "Invoice" : "Receipt"
+    let date = submission.purchaseDate ?? submission.createdAt.prefix(10).description
+    return date.isEmpty ? kind : "\(kind) - \(date)"
+  }
+
+  private func receiptSubmissionStatus(_ submission: CaptroReceiptSubmission) -> String {
+    if submission.duplicate { return "Already submitted" }
+    switch submission.status {
+    case "completed": return "Completed"
+    case "feedback_pending": return "Feedback pending"
+    case "reward_pending": return "Reward processing"
+    case "failed", "unsupported": return "Couldn't verify"
+    default: return "Processing"
+    }
+  }
+
   private func receiptMoney(_ cents: Int) -> String {
     let formatter = NumberFormatter()
     formatter.numberStyle = .currency
@@ -566,6 +665,147 @@ public struct ProfileNativeView: View {
       return fullName
     }
     return model.user?.username ?? "captro"
+  }
+}
+
+private struct CaptroReceiptSubmissionDetailView: View {
+  let submission: CaptroReceiptSubmission
+  let api: MIRAAPIClient
+
+  @State private var review: CaptroReceiptReview?
+  @State private var errorMessage: String?
+  @State private var isOpeningOriginal = false
+  @Environment(\.openURL) private var openURL
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 7) {
+          Text(review?.verdict ?? submission.verdict ?? statusTitle)
+            .font(.system(size: 24, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Text(review?.merchantName ?? submission.merchantName ?? documentTitle)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          if let address = review?.business?.address?.original, !address.isEmpty {
+            Text(address)
+              .font(.system(size: 13, weight: .regular))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+        }
+
+        if let review {
+          VStack(spacing: 0) {
+            detailRow(review.documentType == "invoice" ? "Invoice" : "Receipt", value: review.documentNumber)
+            detailRow("Purchased", value: [review.purchaseDate, review.purchaseTime].compactMap { $0 }.joined(separator: " - "))
+            detailRow("Subtotal", value: review.subtotal)
+            detailRow("Tax", value: review.tax)
+            detailRow("Total", value: review.total, emphasized: true)
+          }
+          .padding(.horizontal, 16)
+          .background(MIRATheme.Color.surface)
+          .overlay(alignment: .top) { Divider().overlay(MIRATheme.Color.hairline) }
+          .overlay(alignment: .bottom) { Divider().overlay(MIRATheme.Color.hairline) }
+
+          if !review.items.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+              Text("Items")
+                .font(.system(size: 17, weight: .semibold))
+              ForEach(review.items) { item in
+                HStack(alignment: .firstTextBaseline) {
+                  Text(item.description ?? "Item")
+                    .font(.system(size: 13, weight: .regular))
+                  Spacer(minLength: 12)
+                  if let total = item.total ?? item.unitPrice {
+                    Text(total)
+                      .font(.system(size: 13, weight: .medium))
+                      .monospacedDigit()
+                  }
+                }
+              }
+            }
+          }
+        } else if errorMessage == nil {
+          ProgressView("Loading submission...")
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 30)
+        }
+
+        if let errorMessage {
+          Text(errorMessage)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.red)
+        }
+
+        Button {
+          openOriginal()
+        } label: {
+          Label(isOpeningOriginal ? "Opening..." : "View Original", systemImage: "doc.text.magnifyingglass")
+            .frame(maxWidth: .infinity, minHeight: 52)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(MIRATheme.Color.forest)
+        .disabled(isOpeningOriginal)
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 24)
+    }
+    .background(MIRATheme.Color.appBackground)
+    .navigationTitle(documentTitle)
+    .navigationBarTitleDisplayMode(.inline)
+    .task {
+      do {
+        review = try await api.captroReceiptReview(id: submission.receiptId)
+      } catch {
+        errorMessage = "This private submission is temporarily unavailable."
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func detailRow(_ label: String, value: String?, emphasized: Bool = false) -> some View {
+    if let value, !value.isEmpty {
+      HStack(alignment: .firstTextBaseline) {
+        Text(label)
+          .font(.system(size: 13, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textMuted)
+        Spacer(minLength: 16)
+        Text(value)
+          .font(.system(size: emphasized ? 16 : 13, weight: emphasized ? .semibold : .medium))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .multilineTextAlignment(.trailing)
+          .monospacedDigit()
+      }
+      .padding(.vertical, 12)
+      .overlay(alignment: .bottom) { Divider().overlay(MIRATheme.Color.hairline) }
+    }
+  }
+
+  private var documentTitle: String {
+    submission.documentType == "invoice" ? "Invoice" : "Receipt"
+  }
+
+  private var statusTitle: String {
+    if submission.duplicate { return "Already submitted" }
+    switch submission.status {
+    case "completed": return "Completed"
+    case "failed", "unsupported": return "Couldn't Verify"
+    default: return "Processing"
+    }
+  }
+
+  private func openOriginal() {
+    guard !isOpeningOriginal else { return }
+    isOpeningOriginal = true
+    Task {
+      defer { isOpeningOriginal = false }
+      do {
+        let link = try await api.captroReceiptOriginalLink(id: submission.receiptId)
+        openURL(link.signedUrl)
+      } catch {
+        errorMessage = "The original document could not be opened right now."
+      }
+    }
   }
 }
 
