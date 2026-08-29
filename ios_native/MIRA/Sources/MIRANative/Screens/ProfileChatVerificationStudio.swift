@@ -13,6 +13,7 @@ private func profileVisiblePosts(_ posts: [MIRAPost]) -> [MIRAPost] {
 final class ProfileNativeModel: ObservableObject {
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
+  @Published var receiptEarnings: CaptroReceiptRewardBalance?
   @Published var profileError: String?
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v5"
@@ -35,6 +36,10 @@ final class ProfileNativeModel: ObservableObject {
     defer { isLoadingFreshProfile = false }
 
     await hydrateCachedProfileIfNeeded()
+
+    if let earnings = try? await api.captroReceiptRewardBalance(), receiptEarnings != earnings {
+      receiptEarnings = earnings
+    }
 
     guard let freshUser: MIRAUser = try? await api.get("/auth/me") else { return }
     if user != freshUser {
@@ -212,6 +217,7 @@ public struct ProfileNativeView: View {
   @State private var isDeletePostConfirmationPresented = false
   @State private var reportTarget: MIRAReportTarget?
   @State private var isReportSheetPresented = false
+  @State private var showingWithdrawalInfo = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let authSession: MIRAAuthSession?
   private var postGridColumns: [GridItem] {
@@ -233,6 +239,9 @@ public struct ProfileNativeView: View {
       ScrollView {
         VStack(spacing: MIRATheme.Space.lg) {
           profileHeader
+          if let earnings = model.receiptEarnings {
+            receiptEarningsSection(earnings)
+          }
           if model.posts.isEmpty && model.user == nil {
             ProfileGridSkeleton()
           } else {
@@ -335,6 +344,11 @@ public struct ProfileNativeView: View {
         } else {
           Color.clear
         }
+      }
+      .alert("Withdraw receipt earnings", isPresented: $showingWithdrawalInfo) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text("Withdrawals are being prepared. Your private balance will remain available in Captro.")
       }
       .miraActionModal(
         isPresented: $isProfilePostActionModalPresented,
@@ -480,6 +494,64 @@ public struct ProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private func receiptEarningsSection(_ earnings: CaptroReceiptRewardBalance) -> some View {
+    VStack(alignment: .leading, spacing: 15) {
+      HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Receipt Earnings")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          Label("Private", systemImage: "lock.fill")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        Spacer()
+        Button("Withdraw") {
+          CaptroHaptics.light()
+          showingWithdrawalInfo = true
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.forest)
+        .frame(minWidth: 78, minHeight: 44)
+        .accessibilityHint(earnings.withdrawalEnabled ? "Start a withdrawal" : "Withdrawal availability information")
+      }
+
+      HStack(spacing: 0) {
+        earningsValue("Available Balance", cents: earnings.availableBalanceCents)
+        Divider().frame(height: 42).padding(.horizontal, 18)
+        earningsValue("Lifetime Earned", cents: earnings.lifetimeEarnedCents)
+      }
+    }
+    .padding(.horizontal, MIRATheme.Space.xl)
+    .padding(.vertical, 18)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .top) { Divider().overlay(MIRATheme.Color.hairline) }
+    .overlay(alignment: .bottom) { Divider().overlay(MIRATheme.Color.hairline) }
+  }
+
+  private func earningsValue(_ label: String, cents: Int) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(receiptMoney(cents))
+        .font(.system(size: 21, weight: .semibold, design: .rounded))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .monospacedDigit()
+      Text(label)
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func receiptMoney(_ cents: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = "USD"
+    formatter.minimumFractionDigits = 2
+    formatter.maximumFractionDigits = 2
+    return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "$0.00"
   }
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {

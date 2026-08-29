@@ -41,7 +41,7 @@ enum CaptroDetectedDocumentType: String, Codable, Hashable {
   }
 }
 
-/// Sensitive document bytes stay in memory until the user explicitly submits verification.
+/// Sensitive document bytes stay in memory until Captro begins the private receipt review.
 struct CaptroLocalDocument: Identifiable {
   static let maximumBytes = 12 * 1024 * 1024
 
@@ -316,11 +316,118 @@ struct CaptroScanProofSummary: Decodable {
   let currency: String?
 }
 
+enum CaptroPurchaseCategory: String, Decodable, Hashable {
+  case restaurantFood = "restaurant_food"
+  case productRetail = "product_retail"
+  case grocery
+  case serviceBusiness = "service_business"
+  case general
+
+  var title: String {
+    switch self {
+    case .restaurantFood: return "Food purchase"
+    case .productRetail: return "Retail purchase"
+    case .grocery: return "Grocery purchase"
+    case .serviceBusiness: return "Service purchase"
+    case .general: return "Purchase"
+    }
+  }
+}
+
+struct CaptroReceiptReview: Decodable, Identifiable {
+  let receiptId: String
+  let documentType: String
+  let status: String
+  let merchantName: String?
+  let category: CaptroPurchaseCategory
+  let business: CaptroScanBusiness?
+  let documentNumber: String?
+  let transactionReference: String?
+  let purchaseDate: String?
+  let purchaseTime: String?
+  let items: [CaptroScanLineItem]
+  let subtotal: String?
+  let tax: String?
+  let total: String?
+  let currency: String?
+  let rewardEligible: Bool
+  let duplicate: Bool
+  let rewardCents: Int
+  let createdAt: String
+
+  var id: String { receiptId }
+}
+
+struct CaptroReceiptRewardResult: Decodable {
+  let rewarded: Bool
+  let duplicate: Bool
+  let rewardId: String
+  let amountCents: Int
+  let availableBalanceCents: Int
+  let lifetimeEarnedCents: Int
+  let currency: String
+}
+
+struct CaptroReceiptRewardBalance: Decodable, Equatable {
+  let availableBalanceCents: Int
+  let lifetimeEarnedCents: Int
+  let lifetimeWithdrawnCents: Int
+  let pendingWithdrawalCents: Int
+  let currency: String
+  let withdrawalEnabled: Bool
+}
+
+private struct CaptroReceiptFeedbackBody: Encodable {
+  let idempotencyKey: String
+  let ratings: [String: Int]
+  let note: String?
+}
+
 private struct CaptroStoreTransactionBody: Encodable {
   let transactionId: String
 }
 
 extension MIRAAPIClient {
+  func reviewCaptroReceipt(
+    _ document: CaptroLocalDocument,
+    detectedType: CaptroDetectedDocumentType,
+    idempotencyKey: String
+  ) async throws -> CaptroReceiptReview {
+    guard detectedType != .unsupported else { throw CaptroLocalDocumentError.unsupported }
+    let upload = try document.verificationUpload()
+    return try await uploadMultipart(
+      "/scan/receipts/review",
+      fileName: upload.filename,
+      mimeType: upload.mediaType,
+      data: upload.data,
+      fields: [
+        "idempotencyKey": idempotencyKey,
+        "detectedType": detectedType.rawValue,
+      ]
+    )
+  }
+
+  func submitCaptroReceiptFeedback(
+    receiptId: String,
+    ratings: [String: Int],
+    note: String?,
+    idempotencyKey: String
+  ) async throws -> CaptroReceiptRewardResult {
+    let normalizedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+    try await post(
+      "/scan/receipts/\(receiptId)/feedback",
+      body: CaptroReceiptFeedbackBody(
+        idempotencyKey: idempotencyKey,
+        ratings: ratings,
+        note: normalizedNote?.isEmpty == false ? normalizedNote : nil
+      )
+    )
+  }
+
+  func captroReceiptRewardBalance() async throws -> CaptroReceiptRewardBalance {
+    try await get("/scan/rewards/balance")
+  }
+
   func captroScanBalance() async throws -> CaptroScanCreditBalance {
     try await get("/scan/credits")
   }

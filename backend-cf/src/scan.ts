@@ -34,6 +34,8 @@ type VerificationCheck = {
 const MAX_DOCUMENT_BYTES = 12 * 1024 * 1024;
 const MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024;
 const VERIFY_PRICE_CENTS = 10;
+const RECEIPT_REWARD_CENTS = 10;
+const PRIVATE_RECEIPT_BUCKET = 'captro-private-receipts';
 const VERYFI_DOCUMENTS_PATH = '/api/v8/partner/documents';
 const DEFAULT_BUNDLE_ID = 'com.captro.app';
 const CREDIT_PRODUCTS: Record<string, { creditCents: number; paidCents: number }> = {
@@ -421,6 +423,76 @@ function normalizeProviderDocument(document: any) {
   };
 }
 
+type PurchaseCategory = 'restaurant_food' | 'product_retail' | 'grocery' | 'service_business' | 'general';
+
+const CATEGORY_QUESTION_KEYS: Record<PurchaseCategory, string[]> = {
+  restaurant_food: ['cleanliness', 'speed', 'quality', 'service', 'overall'],
+  product_retail: ['quality', 'value', 'organization', 'speed', 'overall'],
+  grocery: ['freshness', 'cleanliness', 'speed', 'value', 'overall'],
+  service_business: ['speed', 'professionalism', 'satisfaction', 'overall'],
+  general: ['quality', 'value', 'service', 'overall'],
+};
+
+function purchaseCategory(document: any, extracted: any): PurchaseCategory {
+  const source = [
+    firstText(document, ['category', 'document_category', 'vendor.category', 'merchant.category', 'expense_category'], 300),
+    cleanText(extracted.business?.name, 300),
+    ...extracted.items.slice(0, 24).map((item: any) => cleanText(item.description, 180)),
+  ].join(' ').toLowerCase();
+  const contains = (values: string[]) => values.some((value) => source.includes(value));
+
+  if (contains(['grocery', 'supermarket', 'produce', 'food market', 'whole foods'])) return 'grocery';
+  if (contains(['restaurant', 'cafe', 'coffee', 'bakery', 'bar ', 'dining', 'food', 'pizza', 'grill', 'kitchen'])) {
+    return 'restaurant_food';
+  }
+  if (contains(['salon', 'spa', 'repair', 'service', 'consult', 'cleaning', 'plumbing', 'electrician', 'appointment'])) {
+    return 'service_business';
+  }
+  if (contains(['retail', 'clothing', 'apparel', 'electronics', 'pharmacy', 'department store', 'hardware', 'shop'])) {
+    return 'product_retail';
+  }
+  if (extracted.type === 'invoice') return 'service_business';
+  return 'general';
+}
+
+function receiptAcceptedForFeedback(extracted: any): boolean {
+  const checks = buildChecks(extracted);
+  const status = (key: string) => checks.find((check) => check.key === key)?.status;
+  return ['receipt', 'invoice'].includes(extracted.type)
+    && status('document_structure') === 'passed'
+    && status('provider_document_signal') !== 'failed'
+    && status('date_validity') !== 'failed'
+    && status('total_arithmetic') !== 'failed'
+    && status('line_item_arithmetic') !== 'failed';
+}
+
+async function receiptRewardFingerprint(extracted: any): Promise<string | null> {
+  const merchant = cleanText(extracted.business?.name, 400).toLowerCase();
+  const date = normalizedDatabaseDate(extracted.issueDate);
+  const time = normalizedDatabaseTime(extracted.time);
+  const total = decimalText(extracted.total);
+  const documentNumber = cleanText(extracted.documentNumber, 160).toLowerCase();
+  const transactionReference = cleanText(extracted.transactionReference, 160).toLowerCase();
+  const address = cleanText(
+    extracted.business?.address?.original
+      || [extracted.business?.address?.street, extracted.business?.address?.city, extracted.business?.address?.postalCode]
+        .filter(Boolean).join(' '),
+    1200,
+  ).toLowerCase();
+  if (!merchant || !date || !total || !(documentNumber || transactionReference || time || address)) return null;
+  return sha256Hex(JSON.stringify({
+    type: extracted.type,
+    merchant,
+    address,
+    documentNumber,
+    transactionReference,
+    date,
+    time,
+    total,
+    currency: cleanText(extracted.currency, 12).toUpperCase(),
+  }));
+}
+
 function arithmeticCheck(extracted: any): VerificationCheck {
   const subtotal = decimalNumber(extracted.subtotal);
   const tax = decimalNumber(extracted.tax);
@@ -639,6 +711,130 @@ function rowPayload(row: any) {
   };
 }
 
+async function patchRows(
+  env: CaptroScanEnv,
+  table: string,
+  filters: Record<string, string>,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  const { url } = supabaseConfiguration(env);
+  const endpoint = new URL(`${url}/rest/v1/${table}`);
+  for (const [key, value] of Object.entries(filters)) endpoint.searchParams.set(key, value);
+  const response = await fetch(endpoint.toString(), {
+    method: 'PATCH',
+    headers: supabaseHeaders(env, 'return=minimal'),
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SCAN_UPDATE_FAILED:${table}:${response.status}:${text.slice(0, 500)}`);
+  }
+}
+
+async function receiptRow(env: CaptroScanEnv, id: string, userId: string): Promise<any | null> {
+  return (await selectRows(env, 'scanned_receipts', {
+    id: `eq.${id}`,
+    user_id: `eq.${userId}`,
+  }, { limit: 1 }))[0] || null;
+}
+
+function receiptReviewPayload(row: any) {
+  const extracted = row?.extracted_data && typeof row.extracted_data === 'object' ? row.extracted_data : {};
+  return {
+    receiptId: row.id,
+    documentType: row.receipt_type,
+    status: row.status,
+    merchantName: row.merchant_name || extracted.business?.name || null,
+    category: row.category || 'general',
+    business: extracted.business || null,
+    documentNumber: extracted.documentNumber || null,
+    transactionReference: extracted.transactionReference || null,
+    purchaseDate: row.purchase_date || extracted.issueDate || null,
+    purchaseTime: row.purchase_time || extracted.time || null,
+    items: extracted.items || [],
+    subtotal: extracted.subtotal || null,
+    tax: extracted.tax || null,
+    total: row.total_amount === null || row.total_amount === undefined ? extracted.total || null : String(row.total_amount),
+    currency: row.currency || extracted.currency || null,
+    rewardEligible: Boolean(row.reward_eligible),
+    duplicate: row.status === 'duplicate',
+    rewardCents: RECEIPT_REWARD_CENTS,
+    createdAt: row.created_at,
+  };
+}
+
+let privateReceiptBucketPromise: Promise<void> | null = null;
+
+async function ensurePrivateReceiptBucket(env: CaptroScanEnv): Promise<void> {
+  if (privateReceiptBucketPromise) return privateReceiptBucketPromise;
+  privateReceiptBucketPromise = (async () => {
+    const { url } = supabaseConfiguration(env);
+    const lookup = await fetch(`${url}/storage/v1/bucket/${PRIVATE_RECEIPT_BUCKET}`, {
+      headers: supabaseHeaders(env),
+    });
+    if (lookup.ok) return;
+    if (lookup.status !== 404) {
+      const text = await lookup.text().catch(() => '');
+      throw new Error(`SCAN_PRIVATE_STORAGE_LOOKUP_FAILED:${lookup.status}:${text.slice(0, 300)}`);
+    }
+    const create = await fetch(`${url}/storage/v1/bucket`, {
+      method: 'POST',
+      headers: supabaseHeaders(env),
+      body: JSON.stringify({
+        id: PRIVATE_RECEIPT_BUCKET,
+        name: PRIVATE_RECEIPT_BUCKET,
+        public: false,
+        file_size_limit: MAX_DOCUMENT_BYTES,
+        allowed_mime_types: ['image/jpeg', 'image/png', 'image/heic', 'application/pdf'],
+      }),
+    });
+    if (!create.ok && create.status !== 409) {
+      const text = await create.text().catch(() => '');
+      throw new Error(`SCAN_PRIVATE_STORAGE_CREATE_FAILED:${create.status}:${text.slice(0, 300)}`);
+    }
+  })().catch((error) => {
+    privateReceiptBucketPromise = null;
+    throw error;
+  });
+  return privateReceiptBucketPromise;
+}
+
+async function storePrivateReceipt(
+  env: CaptroScanEnv,
+  userId: string,
+  receiptId: string,
+  contentType: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  await ensurePrivateReceiptBucket(env);
+  const { url } = supabaseConfiguration(env);
+  const ownerHash = (await sha256Hex(userId)).slice(0, 32);
+  const path = `${ownerHash}/${receiptId}/original.${fileExtension(contentType)}`;
+  const headers = new Headers(supabaseHeaders(env));
+  headers.set('Content-Type', contentType);
+  headers.set('x-upsert', 'true');
+  const response = await fetch(`${url}/storage/v1/object/${PRIVATE_RECEIPT_BUCKET}/${path}`, {
+    method: 'POST',
+    headers,
+    body: bytes,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`SCAN_PRIVATE_STORAGE_UPLOAD_FAILED:${response.status}:${text.slice(0, 300)}`);
+  }
+  return path;
+}
+
+function extractedProviderText(document: any): string | null {
+  const text = firstText(document, ['ocr_text', 'raw_text', 'text', 'document_text'], 50_000);
+  return text || null;
+}
+
+function validRating(value: unknown): number | null {
+  const rating = Number(value);
+  return Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : null;
+}
+
 async function verificationRow(env: CaptroScanEnv, id: string, userId: string): Promise<any | null> {
   return (await selectRows(env, 'scan_verifications', { id: `eq.${id}`, user_id: `eq.${userId}` }, { limit: 1 }))[0] || null;
 }
@@ -699,6 +895,10 @@ function errorCode(error: any): string {
 
 export const captroScanTestSupport = Object.freeze({
   buildChecks,
+  categoryQuestionKeys: CATEGORY_QUESTION_KEYS,
+  purchaseCategory,
+  receiptAcceptedForFeedback,
+  receiptRewardFingerprint,
   verdictFromChecks,
   normalizeProviderDocument,
 });
@@ -710,6 +910,228 @@ export function createCaptroScanRoutes(
 ) {
   const scan = new Hono<any>();
   scan.use('*', authMiddleware);
+
+  scan.post('/receipts/review', async (c) => {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'receipt_review', userId, 6, 60);
+    if (limited) return limited;
+    const dailyLimited = await enforceRateLimit(c, 'receipt_review_daily', userId, 30, 86400);
+    if (dailyLimited) return dailyLimited;
+    const declared = Number(c.req.header('content-length') || 0);
+    if (Number.isFinite(declared) && declared > MAX_DOCUMENT_BYTES + 160_000) {
+      return c.json({ detail: 'Document must be 12 MiB or smaller.', code: 'SCAN_DOCUMENT_TOO_LARGE' }, 413);
+    }
+
+    let receiptId = '';
+    try {
+      const form = await c.req.raw.formData();
+      const file = form.get('file') as File | null;
+      const idempotencyKey = cleanText(form.get('idempotencyKey'), 180);
+      const detectedType = cleanText(form.get('detectedType'), 30).toLowerCase();
+      if (!file || typeof file.arrayBuffer !== 'function') {
+        return c.json({ detail: 'No receipt or invoice was provided.', code: 'SCAN_DOCUMENT_MISSING' }, 400);
+      }
+      if (!/^[a-zA-Z0-9:_-]{16,180}$/.test(idempotencyKey)) {
+        return c.json({ detail: 'Receipt review request is invalid.', code: 'SCAN_IDEMPOTENCY_INVALID' }, 400);
+      }
+      if (!['receipt', 'invoice'].includes(detectedType)) {
+        return c.json({ detail: "Captro couldn't recognize this as a receipt or invoice.", code: 'SCAN_DOCUMENT_UNSUPPORTED' }, 422);
+      }
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes.byteLength < 250 || bytes.byteLength > MAX_DOCUMENT_BYTES) {
+        return c.json({ detail: 'Document must be between 250 bytes and 12 MiB.', code: 'SCAN_DOCUMENT_SIZE_INVALID' }, 400);
+      }
+      const contentType = detectedContentType(bytes);
+      if (!contentType) {
+        return c.json({ detail: 'Choose a valid JPG, PNG, HEIC/HEIF, or PDF document.', code: 'SCAN_DOCUMENT_TYPE_INVALID' }, 400);
+      }
+      const fileName = safeFilename(file.name, contentType);
+      const documentSha256 = await sha256Hex(bytes);
+      receiptId = crypto.randomUUID();
+      const begin = await supabaseRpc(c.env, 'captro_begin_receipt_review', {
+        p_receipt_id: receiptId,
+        p_user_id: userId,
+        p_idempotency_key: idempotencyKey,
+        p_document_sha256: documentSha256,
+        p_file_name: fileName,
+        p_mime_type: contentType,
+        p_detected_type: detectedType,
+      });
+      receiptId = cleanText(begin?.receiptId, 80) || receiptId;
+      if (!['created', 'retry'].includes(cleanText(begin?.action, 30))) {
+        const existing = await receiptRow(c.env, receiptId, userId);
+        if (!existing) throw new Error('SCAN_EXISTING_RECEIPT_MISSING');
+        return c.json(receiptReviewPayload(existing), existing.status === 'processing' ? 202 : 200);
+      }
+
+      const storagePath = await storePrivateReceipt(c.env, userId, receiptId, contentType, bytes);
+      await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
+        private_storage_path: storagePath,
+        provider: 'Veryfi',
+        updated_at: new Date().toISOString(),
+      });
+
+      const providerDocument = await providerVerify(c.env, bytes, fileName);
+      const extracted = normalizeProviderDocument(providerDocument);
+      if (extracted.type === 'unsupported') {
+        await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
+          receipt_type: 'unsupported',
+          status: 'unsupported',
+          reward_eligible: false,
+          provider_request_id: extracted.providerRequestId || null,
+          extracted_text: extractedProviderText(providerDocument),
+          extracted_data: extracted,
+          updated_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+        });
+        return c.json({ detail: "Captro couldn't recognize this as a receipt or invoice.", code: 'SCAN_DOCUMENT_UNSUPPORTED' }, 422);
+      }
+
+      const category = purchaseCategory(providerDocument, extracted);
+      const accepted = receiptAcceptedForFeedback(extracted);
+      let semanticDuplicate = false;
+      if (accepted) {
+        const fingerprint = await receiptRewardFingerprint(extracted);
+        if (fingerprint) {
+          const claim = await supabaseRpc(c.env, 'captro_claim_receipt_reward_fingerprint', {
+            p_receipt_id: receiptId,
+            p_user_id: userId,
+            p_reward_fingerprint: fingerprint,
+          });
+          semanticDuplicate = claim?.claimed === false;
+        }
+      }
+      const completedAt = new Date().toISOString();
+      await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
+        receipt_type: extracted.type,
+        merchant_name: extracted.business.name,
+        category,
+        extracted_text: extractedProviderText(providerDocument),
+        extracted_data: extracted,
+        total_amount: extracted.total,
+        currency: extracted.currency,
+        purchase_date: normalizedDatabaseDate(extracted.issueDate),
+        purchase_time: normalizedDatabaseTime(extracted.time),
+        provider_request_id: extracted.providerRequestId || null,
+        status: semanticDuplicate ? 'duplicate' : accepted ? 'ready_for_feedback' : 'failed',
+        reward_eligible: accepted && !semanticDuplicate,
+        updated_at: completedAt,
+        completed_at: completedAt,
+      });
+      const completed = await receiptRow(c.env, receiptId, userId);
+      if (!completed) throw new Error('SCAN_RECEIPT_RESULT_MISSING');
+      if (!accepted) {
+        return c.json({
+          ...receiptReviewPayload(completed),
+          detail: 'Captro could not read enough consistent purchase information from this document.',
+          code: 'SCAN_RECEIPT_NOT_ACCEPTED',
+        }, 422);
+      }
+      return c.json(receiptReviewPayload(completed));
+    } catch (error: any) {
+      const code = errorCode(error).split(':')[0];
+      if (receiptId) {
+        await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
+          status: 'failed',
+          reward_eligible: false,
+          updated_at: new Date().toISOString(),
+          completed_at: new Date().toISOString(),
+        }).catch(() => null);
+      }
+      const unavailable = code.includes('PROVIDER') || code.includes('STORAGE') || code.includes('DATABASE')
+        || code.includes('RPC') || code.includes('UPDATE');
+      return c.json({
+        detail: unavailable ? 'Receipt processing is temporarily unavailable. Please try again.' : 'Captro could not process this document.',
+        code,
+      }, unavailable ? 503 : 400);
+    }
+  });
+
+  scan.get('/receipts/:id', async (c) => {
+    try {
+      const row = await receiptRow(c.env, cleanText(c.req.param('id'), 80), getUserId(c));
+      if (!row) return c.json({ detail: 'Receipt not found.', code: 'SCAN_RECEIPT_NOT_FOUND' }, 404);
+      return c.json(receiptReviewPayload(row));
+    } catch {
+      return c.json({ detail: 'Receipt review is temporarily unavailable.', code: 'SCAN_DATABASE_UNAVAILABLE' }, 503);
+    }
+  });
+
+  scan.post('/receipts/:id/feedback', async (c) => {
+    const userId = getUserId(c);
+    const limited = await enforceRateLimit(c, 'receipt_feedback', userId, 12, 60);
+    if (limited) return limited;
+    try {
+      const receiptId = cleanText(c.req.param('id'), 80);
+      const row = await receiptRow(c.env, receiptId, userId);
+      if (!row) return c.json({ detail: 'Receipt not found.', code: 'SCAN_RECEIPT_NOT_FOUND' }, 404);
+      const body = await c.req.json();
+      const idempotencyKey = cleanText(body?.idempotencyKey ?? body?.idempotency_key, 180);
+      if (!/^[a-zA-Z0-9:_-]{16,180}$/.test(idempotencyKey)) {
+        return c.json({ detail: 'Feedback request is invalid.', code: 'SCAN_IDEMPOTENCY_INVALID' }, 400);
+      }
+      const ratings = body?.ratings && typeof body.ratings === 'object' ? body.ratings : {};
+      const category = (row.category || 'general') as PurchaseCategory;
+      const required = CATEGORY_QUESTION_KEYS[category] || CATEGORY_QUESTION_KEYS.general;
+      const missing = required.filter((key) => validRating(ratings[key]) === null);
+      if (missing.length) {
+        return c.json({ detail: 'Answer every purchase question before submitting.', code: 'SCAN_FEEDBACK_INCOMPLETE' }, 400);
+      }
+      const note = cleanText(body?.note, 801);
+      if (note.length > 800) return c.json({ detail: 'The optional note is too long.', code: 'SCAN_FEEDBACK_NOTE_TOO_LONG' }, 400);
+
+      const result = await supabaseRpc(c.env, 'captro_submit_receipt_feedback_reward', {
+        p_receipt_id: receiptId,
+        p_user_id: userId,
+        p_idempotency_key: idempotencyKey,
+        p_cleanliness_rating: validRating(ratings.cleanliness),
+        p_speed_rating: validRating(ratings.speed),
+        p_quality_rating: validRating(ratings.quality),
+        p_service_rating: validRating(ratings.service),
+        p_value_rating: validRating(ratings.value),
+        p_freshness_rating: validRating(ratings.freshness),
+        p_organization_rating: validRating(ratings.organization),
+        p_professionalism_rating: validRating(ratings.professionalism),
+        p_satisfaction_rating: validRating(ratings.satisfaction),
+        p_overall_rating: validRating(ratings.overall),
+        p_note: note || null,
+      });
+      return c.json({ ...result, currency: 'USD' });
+    } catch (error: any) {
+      const code = errorCode(error);
+      if (code.includes('NOT_REWARD_ELIGIBLE')) {
+        return c.json({ detail: 'This receipt is not eligible for another reward.', code: 'SCAN_RECEIPT_NOT_REWARD_ELIGIBLE' }, 409);
+      }
+      if (code.includes('OVERALL_RATING_REQUIRED')) {
+        return c.json({ detail: 'Answer every purchase question before submitting.', code: 'SCAN_FEEDBACK_INCOMPLETE' }, 400);
+      }
+      return c.json({ detail: 'Captro could not save your feedback. Please try again.', code: code.split(':')[0] }, 503);
+    }
+  });
+
+  scan.get('/rewards/balance', async (c) => {
+    try {
+      const rows = await selectRows(c.env, 'user_reward_balance', {
+        user_id: `eq.${getUserId(c)}`,
+      }, { limit: 1 });
+      const row = rows[0] || {};
+      return c.json({
+        availableBalanceCents: Math.max(0, Number(row.available_balance_cents || 0)),
+        lifetimeEarnedCents: Math.max(0, Number(row.lifetime_earned_cents || 0)),
+        lifetimeWithdrawnCents: Math.max(0, Number(row.lifetime_withdrawn_cents || 0)),
+        pendingWithdrawalCents: Math.max(0, Number(row.pending_withdrawal_cents || 0)),
+        currency: 'USD',
+        withdrawalEnabled: false,
+      });
+    } catch {
+      return c.json({ detail: 'Receipt earnings are temporarily unavailable.', code: 'SCAN_DATABASE_UNAVAILABLE' }, 503);
+    }
+  });
+
+  scan.post('/rewards/withdrawals', (c) => c.json({
+    detail: 'Withdrawals are not available yet. Your receipt earnings remain in your private balance.',
+    code: 'SCAN_WITHDRAWALS_NOT_AVAILABLE',
+  }, 501));
 
   scan.get('/credits', async (c) => {
     try {

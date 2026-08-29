@@ -318,7 +318,7 @@ public struct MIRANativeRootView: View {
         if authSession.isGuest {
           GuestSignInRequiredView(
             title: "Sign in to use Scan",
-            message: "Create an account or sign in before submitting a paid document verification.",
+            message: "Create an account or sign in to submit receipt feedback and keep your earnings private.",
             systemImage: "doc.viewfinder.fill",
             onSignIn: leaveGuestModeForSignIn
           )

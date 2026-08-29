@@ -1,67 +1,48 @@
-import PDFKit
+import Foundation
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 import VisionKit
 
 public struct CaptroScanView: View {
   let api: MIRAAPIClient
-  @StateObject private var purchase: CaptroScanPurchaseService
 
+  @State private var stage: CaptroReceiptStage = .capture
   @State private var selectedDocument: CaptroLocalDocument?
   @State private var detectedType: CaptroDetectedDocumentType?
-  @State private var idempotencyKey: String?
+  @State private var review: CaptroReceiptReview?
+  @State private var reward: CaptroReceiptRewardResult?
   @State private var selectedPhoto: PhotosPickerItem?
-  @State private var result: CaptroScanVerificationResult?
-  @State private var proof: CaptroScanProof?
+  @State private var ratings: [String: Int] = [:]
+  @State private var note = ""
+  @State private var reviewIdempotencyKey: String?
+  @State private var feedbackIdempotencyKey: String?
   @State private var isDetecting = false
-  @State private var isVerifying = false
-  @State private var isPurchasing = false
+  @State private var isProcessingReview = false
+  @State private var isSubmittingFeedback = false
   @State private var showingScanner = false
   @State private var showingImporter = false
-  @State private var showingCreditPurchase = false
-  @State private var showingDetails = false
-  @State private var showingProof = false
-  @State private var showingSavedConfirmation = false
   @State private var errorMessage: String?
 
   public init(api: MIRAAPIClient) {
     self.api = api
-    _purchase = StateObject(wrappedValue: CaptroScanPurchaseService(api: api))
   }
 
   public var body: some View {
     NavigationStack {
-      ZStack {
-        CaptroScanPalette.background.ignoresSafeArea()
-        ScrollView {
-          VStack(spacing: 0) {
-            scanHeader
-            if let result {
-              resultStage(result)
-            } else if let document = selectedDocument {
-              reviewStage(document)
-            } else {
-              captureStage
-            }
-          }
-          .frame(maxWidth: 680)
-          .padding(.horizontal, 20)
-          .padding(.bottom, 40)
-          .frame(maxWidth: .infinity)
-        }
-      }
-      .toolbar(.hidden, for: .navigationBar)
+      stageContent
+        .background(CaptroReceiptPalette.background.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
     }
-    .task { await purchase.prepare() }
     .onChange(of: selectedPhoto) { _, item in
       guard let item else { return }
       Task { await loadPhoto(item) }
     }
     .fullScreenCover(isPresented: $showingScanner) {
       CaptroDocumentScannerView(
-        completion: { scanResult in
-          handleScannedPages(scanResult)
+        completion: { result in
+          handleScannedPages(result)
           showingScanner = false
         },
         cancellation: { showingScanner = false }
@@ -74,651 +55,554 @@ public struct CaptroScanView: View {
       allowsMultipleSelection: false,
       onCompletion: handleImportedURLs
     )
-    .sheet(isPresented: $showingCreditPurchase) {
-      creditPurchaseSheet
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.visible)
-    }
-    .sheet(isPresented: $showingDetails) {
-      if let result {
-        detailsSheet(result)
-      }
-    }
-    .sheet(isPresented: $showingProof) {
-      if let proof {
-        proofSheet(proof)
-      }
-    }
     .alert("Captro Scan", isPresented: errorBinding) {
       Button("OK", role: .cancel) { errorMessage = nil }
     } message: {
       Text(errorMessage ?? "Captro could not complete that request.")
     }
-    .alert("Saved", isPresented: $showingSavedConfirmation) {
-      Button("Done", role: .cancel) {}
-    } message: {
-      Text("This result is saved privately to your Captro account.")
-    }
   }
 
-  private var scanHeader: some View {
-    HStack(alignment: .center) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Scan")
-          .font(.system(size: 34, weight: .bold))
-          .foregroundStyle(CaptroScanPalette.ink)
-        Text("Receipt & invoice verification")
-          .font(.system(size: 14, weight: .medium))
-          .foregroundStyle(CaptroScanPalette.secondaryInk)
-      }
-      Spacer()
-      Image(systemName: "checkmark.seal")
-        .font(.system(size: 22, weight: .semibold))
-        .foregroundStyle(CaptroScanPalette.forest)
-        .frame(width: 46, height: 46)
-        .background(CaptroScanPalette.paper)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(CaptroScanPalette.line, lineWidth: 1))
-        .accessibilityHidden(true)
+  @ViewBuilder
+  private var stageContent: some View {
+    switch stage {
+    case .capture:
+      captureStage
+    case .review:
+      reviewStage
+    case .feedback:
+      feedbackStage
+    case .success:
+      successStage
     }
-    .padding(.top, 18)
-    .padding(.bottom, 24)
   }
 
   private var captureStage: some View {
-    VStack(spacing: 24) {
-      VStack(spacing: 8) {
-        Text("Scan a receipt or invoice")
-          .font(.system(size: 24, weight: .bold))
-          .foregroundStyle(CaptroScanPalette.ink)
-          .multilineTextAlignment(.center)
-        Text("Captro automatically recognizes the document type.")
-          .font(.system(size: 15, weight: .regular))
-          .foregroundStyle(CaptroScanPalette.secondaryInk)
-          .multilineTextAlignment(.center)
-      }
-
-      emptyPaperPreview
-
-      VStack(spacing: 12) {
-        Button(action: beginScan) {
-          Label("Scan Document", systemImage: "doc.viewfinder")
-            .captroPrimaryButtonLabel()
+    ScrollView {
+      VStack(spacing: 28) {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Scan")
+            .font(.system(size: 34, weight: .bold))
+            .foregroundStyle(CaptroReceiptPalette.ink)
+          Text("Scan a receipt or invoice")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+          Text("Captro reads the purchase and asks a few quick questions.")
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(CaptroReceiptPalette.secondaryInk)
         }
-        .buttonStyle(.miraPress)
+        .frame(maxWidth: .infinity, alignment: .leading)
 
-        HStack(spacing: 12) {
-          PhotosPicker(selection: $selectedPhoto, matching: .images, preferredItemEncoding: .current) {
-            Label("Photos", systemImage: "photo.on.rectangle")
-              .captroSecondaryButtonLabel()
+        emptyReceiptPreview
+
+        VStack(spacing: 12) {
+          Button(action: beginScan) {
+            Label("Scan Document", systemImage: "doc.viewfinder")
+              .captroReceiptPrimaryButton()
           }
           .buttonStyle(.miraPress)
 
-          Button(action: beginImport) {
-            Label("Import", systemImage: "square.and.arrow.down")
-              .captroSecondaryButtonLabel()
-          }
-          .buttonStyle(.miraPress)
-        }
-      }
+          HStack(spacing: 12) {
+            PhotosPicker(selection: $selectedPhoto, matching: .images, preferredItemEncoding: .current) {
+              Label("Photos", systemImage: "photo.on.rectangle")
+                .captroReceiptSecondaryButton()
+            }
+            .buttonStyle(.miraPress)
 
-      privacyCopy
+            Button(action: beginImport) {
+              Label("Import", systemImage: "square.and.arrow.down")
+                .captroReceiptSecondaryButton()
+            }
+            .buttonStyle(.miraPress)
+          }
+        }
+
+        Label("Receipts are processed privately and never added to your public profile.", systemImage: "lock.fill")
+          .font(.system(size: 12, weight: .medium))
+          .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .frame(maxWidth: 560)
+      .padding(.horizontal, 20)
+      .padding(.top, 18)
+      .padding(.bottom, 34)
+      .frame(maxWidth: .infinity)
     }
+    .miraScrollFeel(.feed)
   }
 
-  private var emptyPaperPreview: some View {
+  private var emptyReceiptPreview: some View {
     ZStack {
-      dottedEdge
-      VStack(spacing: 18) {
-        Image(systemName: "doc.text.viewfinder")
-          .font(.system(size: 52, weight: .ultraLight))
-          .foregroundStyle(CaptroScanPalette.forest)
-        VStack(spacing: 9) {
-          ForEach([CGFloat(0.82), 0.66, 0.9, 0.58], id: \.self) { width in
-            Capsule()
-              .fill(CaptroScanPalette.line)
-              .frame(maxWidth: 190 * width)
-              .frame(height: 5)
+      RoundedRectangle(cornerRadius: 3, style: .continuous)
+        .fill(CaptroReceiptPalette.paper)
+        .frame(width: 230, height: 310)
+        .overlay(
+          VStack(spacing: 14) {
+            Circle()
+              .fill(CaptroReceiptPalette.reward.opacity(0.15))
+              .frame(width: 38, height: 38)
+              .overlay(
+                Image(systemName: "doc.text")
+                  .font(.system(size: 16, weight: .medium))
+                  .foregroundStyle(CaptroReceiptPalette.reward)
+              )
+            Text("RECEIPT")
+              .font(.system(size: 11, weight: .bold))
+              .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+            VStack(spacing: 10) {
+              receiptPlaceholderLine(width: 128)
+              receiptPlaceholderLine(width: 154)
+              receiptPlaceholderLine(width: 116)
+              receiptPlaceholderLine(width: 145)
+            }
+            Spacer().frame(height: 18)
+            Divider().frame(width: 150)
+            HStack {
+              Text("TOTAL")
+              Spacer()
+              Text("$0.00")
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .frame(width: 150)
+            .foregroundStyle(CaptroReceiptPalette.ink)
           }
-        }
-        Text("Capture or import for free")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(CaptroScanPalette.secondaryInk)
-      }
-      .frame(maxWidth: 310)
-      .frame(height: 330)
-      .background(CaptroScanPalette.paper)
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroScanPalette.line, lineWidth: 1))
-      .shadow(color: .black.opacity(0.11), radius: 20, x: 0, y: 12)
-      .padding(.horizontal, 30)
+          .padding(.vertical, 34)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(CaptroReceiptPalette.line, lineWidth: 1))
+        .shadow(color: .black.opacity(0.07), radius: 18, x: 0, y: 10)
     }
     .frame(maxWidth: .infinity)
-    .frame(height: 390)
-  }
-
-  private var dottedEdge: some View {
-    HStack {
-      VStack(spacing: 12) {
-        ForEach(0..<8, id: \.self) { _ in
-          Circle().fill(CaptroScanPalette.dot).frame(width: 6, height: 6)
-        }
-      }
-      Spacer()
-      VStack(spacing: 12) {
-        ForEach(0..<8, id: \.self) { _ in
-          Circle().fill(CaptroScanPalette.dot).frame(width: 6, height: 6)
-        }
-      }
-    }
+    .frame(height: 350)
     .accessibilityHidden(true)
   }
 
-  private var privacyCopy: some View {
-    Label(
-      "Your document stays private and uploads only after you approve verification.",
-      systemImage: "lock.shield.fill"
-    )
-    .font(.system(size: 13, weight: .medium))
-    .foregroundStyle(CaptroScanPalette.secondaryInk)
-    .frame(maxWidth: .infinity, alignment: .leading)
+  private func receiptPlaceholderLine(width: CGFloat) -> some View {
+    Capsule()
+      .fill(CaptroReceiptPalette.line)
+      .frame(width: width, height: 4)
   }
 
-  private func reviewStage(_ document: CaptroLocalDocument) -> some View {
-    VStack(spacing: 22) {
-      documentPaper(document)
-
-      VStack(alignment: .leading, spacing: 16) {
-        HStack(alignment: .top, spacing: 12) {
-          detectionStatus
-          Spacer()
-          Button {
-            clearSelection()
-          } label: {
-            Image(systemName: "xmark")
-              .font(.system(size: 14, weight: .bold))
-              .foregroundStyle(CaptroScanPalette.ink)
-              .frame(width: 36, height: 36)
-              .background(CaptroScanPalette.paper)
-              .clipShape(Circle())
-              .overlay(Circle().stroke(CaptroScanPalette.line, lineWidth: 1))
+  private var reviewStage: some View {
+    VStack(spacing: 0) {
+      reviewTopBar
+      ScrollView {
+        VStack(spacing: 24) {
+          if let document = selectedDocument {
+            scannedReceiptPreview(document)
           }
-          .buttonStyle(.miraPress)
-          .accessibilityLabel("Choose another document")
+          reviewStatus
+          if let review {
+            extractedPurchase(review)
+          }
         }
-
-        if detectedType == .receipt || detectedType == .invoice {
-          Divider().overlay(CaptroScanPalette.line)
-          HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Verification")
-                .font(.system(size: 15, weight: .bold))
-              Text("Charged only after you submit")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(CaptroScanPalette.secondaryInk)
-            }
-            Spacer()
-            Text("$0.10")
-              .font(.system(size: 25, weight: .bold, design: .rounded))
-          }
-          .foregroundStyle(CaptroScanPalette.ink)
-
-          Button(action: beginVerification) {
-            HStack(spacing: 9) {
-              if isVerifying {
-                ProgressView().tint(.white)
-              } else {
-                Image(systemName: "checkmark.shield.fill")
-              }
-              Text(isVerifying ? "Verifying…" : "Verify for $0.10")
-            }
-            .captroPrimaryButtonLabel()
-          }
-          .buttonStyle(.miraPress)
-          .disabled(isVerifying || isDetecting)
-
-          Text("A completed verification uses one $0.10 credit, including a legitimate Couldn't Verify result. Infrastructure failures are restored automatically.")
-            .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(CaptroScanPalette.secondaryInk)
-            .fixedSize(horizontal: false, vertical: true)
-        } else if detectedType == .unsupported {
-          Divider().overlay(CaptroScanPalette.line)
-          Text("Captro couldn't recognize this as a receipt or invoice. Choose a clearer image or import another document. You were not charged.")
-            .font(.system(size: 14, weight: .regular))
-            .foregroundStyle(CaptroScanPalette.secondaryInk)
-            .fixedSize(horizontal: false, vertical: true)
-          Button(action: clearSelection) {
-            Label("Choose Another", systemImage: "arrow.counterclockwise")
-              .captroSecondaryButtonLabel()
-          }
-          .buttonStyle(.miraPress)
-        }
+        .frame(maxWidth: 560)
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 24)
+        .frame(maxWidth: .infinity)
       }
-      .padding(18)
-      .background(CaptroScanPalette.paper.opacity(0.92))
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroScanPalette.line, lineWidth: 1))
+      .miraScrollFeel(.feed)
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      reviewBottomBar
     }
   }
 
-  private func documentPaper(_ document: CaptroLocalDocument) -> some View {
-    ZStack {
-      CaptroScanPalette.canvas
+  private var reviewTopBar: some View {
+    HStack {
+      Button(action: resetFlow) {
+        Image(systemName: "xmark")
+          .font(.system(size: 16, weight: .semibold))
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
+      }
+      .accessibilityLabel("Close review")
+
+      Spacer()
+      Text("Review")
+        .font(.system(size: 17, weight: .semibold))
+      Spacer()
+
+      Menu {
+        Button(action: resetFlow) {
+          Label("Scan another", systemImage: "arrow.counterclockwise")
+        }
+      } label: {
+        Image(systemName: "ellipsis")
+          .font(.system(size: 17, weight: .semibold))
+          .frame(width: 44, height: 44)
+          .contentShape(Rectangle())
+      }
+      .accessibilityLabel("Review options")
+    }
+    .foregroundStyle(CaptroReceiptPalette.ink)
+    .padding(.horizontal, 10)
+    .frame(height: 54)
+  }
+
+  private func scannedReceiptPreview(_ document: CaptroLocalDocument) -> some View {
+    Group {
       if let image = document.firstPageImage {
         Image(uiImage: image)
           .resizable()
           .scaledToFit()
-          .padding(14)
       } else {
         VStack(spacing: 12) {
-          Image(systemName: "doc.richtext.fill")
-            .font(.system(size: 54, weight: .regular))
-          Text("Preview unavailable")
-            .font(.system(size: 14, weight: .semibold))
+          Image(systemName: "doc.richtext")
+            .font(.system(size: 42, weight: .ultraLight))
+          Text("Document preview")
+            .font(.system(size: 13, weight: .medium))
         }
-        .foregroundStyle(CaptroScanPalette.secondaryInk)
+        .foregroundStyle(CaptroReceiptPalette.secondaryInk)
       }
     }
+    .frame(maxWidth: 286, maxHeight: 440)
+    .padding(10)
+    .background(CaptroReceiptPalette.paper)
+    .overlay(RoundedRectangle(cornerRadius: 3).stroke(CaptroReceiptPalette.line, lineWidth: 1))
+    .shadow(color: .black.opacity(0.08), radius: 16, x: 0, y: 9)
     .frame(maxWidth: .infinity)
-    .frame(height: 430)
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroScanPalette.line, lineWidth: 1))
-    .shadow(color: .black.opacity(0.12), radius: 18, x: 0, y: 10)
-    .accessibilityLabel("Selected document preview")
+    .accessibilityLabel("Scanned receipt preview")
   }
 
-  private var detectionStatus: some View {
-    HStack(alignment: .top, spacing: 11) {
-      Group {
-        if isDetecting {
-          ProgressView().tint(CaptroScanPalette.forest)
-        } else {
-          Image(systemName: detectedType == .unsupported ? "questionmark.circle.fill" : "doc.text.magnifyingglass")
-            .foregroundStyle(detectedType == .unsupported ? CaptroScanPalette.secondaryInk : CaptroScanPalette.forest)
-        }
-      }
-      .frame(width: 24, height: 24)
-
-      VStack(alignment: .leading, spacing: 3) {
-        Text(isDetecting ? "Detecting document type…" : (detectedType?.title ?? "Ready to detect"))
-          .font(.system(size: 18, weight: .bold))
-          .foregroundStyle(CaptroScanPalette.ink)
-        if let document = selectedDocument {
-          Text("\(document.source.rawValue) · \(ByteCountFormatter.string(fromByteCount: Int64(document.byteCount), countStyle: .file))")
-            .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(CaptroScanPalette.secondaryInk)
-        }
-      }
+  @ViewBuilder
+  private var reviewStatus: some View {
+    if isDetecting {
+      statusLine("Recognizing receipt or invoice", progress: true)
+    } else if isProcessingReview {
+      statusLine("Reading purchase details", progress: true)
+    } else if let review, review.duplicate {
+      statusLine("This receipt was already submitted", systemImage: "clock.arrow.circlepath")
+    } else if let review, review.rewardEligible {
+      statusLine("Ready for your feedback", systemImage: "checkmark.circle.fill")
+    } else if detectedType == .unsupported {
+      statusLine("Captro could not recognize this document", systemImage: "questionmark.circle")
     }
   }
 
-  private func resultStage(_ result: CaptroScanVerificationResult) -> some View {
-    VStack(spacing: 22) {
-      VStack(spacing: 10) {
-        Image(systemName: result.isVerified ? "checkmark.seal.fill" : "xmark.seal")
-          .font(.system(size: 52, weight: .medium))
-          .foregroundStyle(result.isVerified ? CaptroScanPalette.forest : CaptroScanPalette.secondaryInk)
-        Text(result.isVerified ? "Verified" : "Couldn't Verify")
-          .font(.system(size: 30, weight: .bold))
-          .foregroundStyle(CaptroScanPalette.ink)
-        if !result.isVerified {
-          Text("Captro couldn't verify this document with the available information.")
-            .font(.system(size: 15, weight: .regular))
-            .foregroundStyle(CaptroScanPalette.secondaryInk)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-        }
+  private func statusLine(_ text: String, progress: Bool = false, systemImage: String? = nil) -> some View {
+    HStack(spacing: 10) {
+      if progress {
+        ProgressView().tint(CaptroReceiptPalette.reward)
+      } else if let systemImage {
+        Image(systemName: systemImage)
+          .foregroundStyle(CaptroReceiptPalette.reward)
       }
-      .padding(.top, 10)
-
-      resultPaper(result)
-
-      if result.isVerified {
-        verifiedActions(result)
-      } else {
-        couldntVerifyActions
-      }
-    }
-  }
-
-  private func resultPaper(_ result: CaptroScanVerificationResult) -> some View {
-    VStack(alignment: .leading, spacing: 18) {
-      VStack(alignment: .leading, spacing: 5) {
-        Text(result.business?.name?.nonEmpty ?? documentTypeName(result.documentType))
-          .font(.system(size: 23, weight: .bold, design: .serif))
-          .foregroundStyle(CaptroScanPalette.ink)
-        if let address = displayAddress(result.business?.address) {
-          Text(address)
-            .font(.system(size: 14, weight: .regular))
-            .foregroundStyle(CaptroScanPalette.secondaryInk)
-        }
-      }
-
-      Divider().overlay(CaptroScanPalette.line)
-
-      VStack(alignment: .leading, spacing: 9) {
-        if let number = result.documentNumber?.nonEmpty {
-          resultLine(label: result.documentType == "invoice" ? "Invoice" : "Receipt", value: "#\(number)")
-        }
-        if let date = result.issueDate?.nonEmpty {
-          resultLine(
-            label: result.documentType == "invoice" ? "Issued" : "Date",
-            value: joinedDateTime(date, time: result.time) ?? date
-          )
-        }
-        if result.documentType == "invoice", let due = result.dueDate?.nonEmpty {
-          resultLine(label: "Due", value: due)
-        }
-        if let reference = result.transactionReference?.nonEmpty {
-          resultLine(label: "Reference", value: reference)
-        }
-      }
-
-      if let total = result.total?.nonEmpty {
-        Divider().overlay(CaptroScanPalette.line)
-        HStack(alignment: .firstTextBaseline) {
-          Text("Total")
-            .font(.system(size: 16, weight: .bold))
-          Spacer()
-          Text(money(total, currency: result.currency))
-            .font(.system(size: 27, weight: .bold, design: .rounded))
-        }
-        .foregroundStyle(CaptroScanPalette.ink)
-      }
-
-      Text(result.billingState == "charged" ? "Verification fee paid · $0.10" : billingCopy(result.billingState))
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(CaptroScanPalette.secondaryInk)
-    }
-    .padding(24)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(CaptroScanPalette.paper)
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroScanPalette.line, lineWidth: 1))
-    .shadow(color: .black.opacity(0.12), radius: 20, x: 0, y: 12)
-  }
-
-  private func resultLine(label: String, value: String) -> some View {
-    HStack(alignment: .top, spacing: 16) {
-      Text(label.uppercased())
-        .font(.system(size: 10, weight: .bold))
-        .foregroundStyle(CaptroScanPalette.secondaryInk)
-        .frame(width: 68, alignment: .leading)
-      Text(value)
+      Text(text)
         .font(.system(size: 14, weight: .medium))
-        .foregroundStyle(CaptroScanPalette.ink)
-        .textSelection(.enabled)
-      Spacer(minLength: 0)
+        .foregroundStyle(CaptroReceiptPalette.secondaryInk)
     }
+    .frame(maxWidth: .infinity, alignment: .center)
   }
 
-  private func verifiedActions(_ result: CaptroScanVerificationResult) -> some View {
-    VStack(spacing: 12) {
-      Button {
-        showingDetails = true
-      } label: {
-        Label("View Details", systemImage: "list.bullet.rectangle")
-          .captroPrimaryButtonLabel()
-      }
-      .buttonStyle(.miraPress)
-
-      HStack(spacing: 12) {
-        Button {
-          showingSavedConfirmation = true
-        } label: {
-          Label("Save", systemImage: "bookmark.fill")
-            .captroSecondaryButtonLabel()
-        }
-        .buttonStyle(.miraPress)
-
-        if let proofID = result.proofId {
-          Button {
-            loadProof(proofID)
-          } label: {
-            Label("View Proof", systemImage: "checkmark.seal")
-              .captroSecondaryButtonLabel()
-          }
-          .buttonStyle(.miraPress)
+  private func extractedPurchase(_ review: CaptroReceiptReview) -> some View {
+    VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(review.merchantName?.nonEmpty ?? (review.documentType == "invoice" ? "Invoice" : "Receipt"))
+          .font(.system(size: 19, weight: .semibold))
+          .foregroundStyle(CaptroReceiptPalette.ink)
+        if let date = purchaseDateLine(review) {
+          Text(date)
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(CaptroReceiptPalette.secondaryInk)
         }
       }
 
-      Button("Scan Another", action: clearSelection)
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(CaptroScanPalette.forest)
-        .padding(.top, 4)
-    }
-  }
-
-  private var couldntVerifyActions: some View {
-    VStack(spacing: 12) {
-      Button {
-        result = nil
-      } label: {
-        Label("Try Again", systemImage: "arrow.counterclockwise")
-          .captroPrimaryButtonLabel()
-      }
-      .buttonStyle(.miraPress)
-
-      Button(action: clearSelection) {
-        Label("Scan Another", systemImage: "doc.viewfinder")
-          .captroSecondaryButtonLabel()
-      }
-      .buttonStyle(.miraPress)
-    }
-  }
-
-  private var creditPurchaseSheet: some View {
-    NavigationStack {
-      VStack(alignment: .leading, spacing: 20) {
-        Image(systemName: "checkmark.shield.fill")
-          .font(.system(size: 34, weight: .semibold))
-          .foregroundStyle(CaptroScanPalette.forest)
-
-        VStack(alignment: .leading, spacing: 8) {
-          Text("Add verification credits")
-            .font(.system(size: 25, weight: .bold))
-          Text("The App Store charges \(purchase.localizedPackPrice) for 10 Captro Scan credits. This verification uses one $0.10 credit.")
-            .font(.system(size: 15, weight: .regular))
-            .foregroundStyle(CaptroScanPalette.secondaryInk)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-
-        HStack {
-          Text("10 verifications")
-            .font(.system(size: 15, weight: .bold))
-          Spacer()
-          Text(purchase.localizedPackPrice)
-            .font(.system(size: 20, weight: .bold, design: .rounded))
-        }
-        .padding(16)
-        .background(CaptroScanPalette.canvas)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-
-        Spacer(minLength: 0)
-
-        Button(action: purchaseCreditsAndVerify) {
-          HStack(spacing: 9) {
-            if isPurchasing { ProgressView().tint(.white) }
-            else { Image(systemName: "cart.fill") }
-            Text(isPurchasing ? "Confirming Purchase…" : "Buy Credits & Continue")
-          }
-          .captroPrimaryButtonLabel()
-        }
-        .buttonStyle(.miraPress)
-        .disabled(isPurchasing)
-
-        Button("Not Now") { showingCreditPurchase = false }
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(CaptroScanPalette.secondaryInk)
-          .frame(maxWidth: .infinity)
-      }
-      .padding(24)
-      .background(CaptroScanPalette.background.ignoresSafeArea())
-      .toolbar(.hidden, for: .navigationBar)
-    }
-  }
-
-  private func detailsSheet(_ result: CaptroScanVerificationResult) -> some View {
-    NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 24) {
-          detailSection("Document") {
-            optionalDetail("Business", result.business?.name)
-            optionalDetail(result.documentType == "invoice" ? "Invoice number" : "Receipt number", result.documentNumber)
-            optionalDetail("Reference", result.transactionReference)
-            optionalDetail("Date", joinedDateTime(result.issueDate, time: result.time))
-            optionalDetail("Due date", result.dueDate)
-            optionalDetail("Phone", result.business?.phone)
-            optionalDetail("Store", result.business?.storeNumber)
-          }
-
-          if !result.items.isEmpty {
-            detailSection(result.documentType == "invoice" ? "Line Items" : "Items") {
-              ForEach(Array(result.items.enumerated()), id: \.offset) { _, item in
-                HStack(alignment: .top, spacing: 12) {
-                  VStack(alignment: .leading, spacing: 3) {
-                    Text(item.description?.nonEmpty ?? "Item")
-                      .font(.system(size: 14, weight: .semibold))
-                    if let quantity = item.quantity?.nonEmpty {
-                      Text("Qty \(quantity)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(CaptroScanPalette.secondaryInk)
-                    }
-                  }
-                  Spacer()
-                  Text(money(item.total ?? item.unitPrice, currency: result.currency))
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                }
-                .padding(.vertical, 5)
+      if !review.items.isEmpty {
+        VStack(spacing: 9) {
+          ForEach(Array(review.items.prefix(6).enumerated()), id: \.offset) { _, item in
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+              Text(item.description?.nonEmpty ?? "Item")
+                .lineLimit(2)
+              Spacer(minLength: 12)
+              if let total = item.total?.nonEmpty ?? item.unitPrice?.nonEmpty {
+                Text(money(total, currency: review.currency))
+                  .monospacedDigit()
               }
             }
-          }
-
-          detailSection("Totals") {
-            optionalMoneyDetail("Subtotal", result.subtotal, currency: result.currency)
-            optionalMoneyDetail("Discount", result.discount, currency: result.currency)
-            optionalMoneyDetail("Tax", result.tax, currency: result.currency)
-            optionalMoneyDetail("Fees", result.fees, currency: result.currency)
-            optionalMoneyDetail("Total", result.total, currency: result.currency, emphasized: true)
-          }
-
-          if result.payment?.method?.nonEmpty != nil || result.payment?.lastFour?.nonEmpty != nil {
-            detailSection("Payment") {
-              optionalDetail("Method", result.payment?.method)
-              if let lastFour = result.payment?.lastFour?.nonEmpty {
-                optionalDetail("Card", "•••• \(lastFour)")
-              }
-            }
-          }
-
-          if result.customer?.name?.nonEmpty != nil || result.customer?.address?.nonEmpty != nil || result.paymentTerms?.nonEmpty != nil {
-            detailSection("Invoice Details") {
-              optionalDetail("Bill to", result.customer?.name)
-              optionalDetail("Address", result.customer?.address)
-              optionalDetail("Terms", result.paymentTerms)
-            }
-          }
-
-          if !result.barcodes.isEmpty {
-            detailSection("Barcode / QR") {
-              ForEach(Array(result.barcodes.enumerated()), id: \.offset) { _, barcode in
-                optionalDetail(barcode.type?.nonEmpty ?? "Code", barcode.data)
-              }
-            }
+            .font(.system(size: 12, weight: .regular))
+            .foregroundStyle(CaptroReceiptPalette.ink)
           }
         }
-        .padding(20)
       }
-      .background(CaptroScanPalette.background.ignoresSafeArea())
-      .navigationTitle("Verification Details")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { showingDetails = false }
-        }
-      }
-    }
-  }
 
-  private func proofSheet(_ proof: CaptroScanProof) -> some View {
-    NavigationStack {
-      VStack(alignment: .leading, spacing: 20) {
-        Image(systemName: "checkmark.seal.fill")
-          .font(.system(size: 48, weight: .semibold))
-          .foregroundStyle(CaptroScanPalette.forest)
-        Text("Captro Proof")
-          .font(.system(size: 28, weight: .bold))
-        Text("This private proof records the completed verification without exposing the original receipt or invoice.")
-          .font(.system(size: 15))
-          .foregroundStyle(CaptroScanPalette.secondaryInk)
-        Divider()
-        optionalDetail("Proof ID", proof.proofId)
-        optionalDetail("Business", proof.summary.businessName)
-        optionalDetail("Document", proof.summary.documentNumber)
-        optionalDetail("Date", proof.summary.issueDate)
-        optionalMoneyDetail("Total", proof.summary.total, currency: proof.summary.currency, emphasized: true)
-        Spacer()
-      }
-      .padding(24)
-      .background(CaptroScanPalette.background.ignoresSafeArea())
-      .navigationTitle("View Proof")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { showingProof = false }
-        }
+      Divider().overlay(CaptroReceiptPalette.line)
+      VStack(spacing: 8) {
+        amountRow("Subtotal", value: review.subtotal, currency: review.currency)
+        amountRow("Tax", value: review.tax, currency: review.currency)
+        amountRow("Total", value: review.total, currency: review.currency, emphasized: true)
       }
     }
-  }
-
-  private func detailSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text(title.uppercased())
-        .font(.system(size: 11, weight: .bold))
-        .foregroundStyle(CaptroScanPalette.secondaryInk)
-      VStack(alignment: .leading, spacing: 10) { content() }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CaptroScanPalette.paper)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroScanPalette.line, lineWidth: 1))
-    }
+    .frame(maxWidth: 330, alignment: .leading)
+    .padding(.top, 2)
   }
 
   @ViewBuilder
-  private func optionalDetail(_ label: String, _ value: String?) -> some View {
-    if let value = value?.nonEmpty {
-      HStack(alignment: .top, spacing: 12) {
-        Text(label)
-          .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(CaptroScanPalette.secondaryInk)
-          .frame(width: 100, alignment: .leading)
-        Text(value)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(CaptroScanPalette.ink)
-          .textSelection(.enabled)
-        Spacer(minLength: 0)
-      }
-    }
-  }
-
-  @ViewBuilder
-  private func optionalMoneyDetail(
-    _ label: String,
-    _ value: String?,
-    currency: String?,
-    emphasized: Bool = false
-  ) -> some View {
+  private func amountRow(_ label: String, value: String?, currency: String?, emphasized: Bool = false) -> some View {
     if let value = value?.nonEmpty {
       HStack {
         Text(label)
-          .font(.system(size: emphasized ? 15 : 13, weight: emphasized ? .bold : .medium))
         Spacer()
-        Text(money(value, currency: currency))
-          .font(.system(size: emphasized ? 18 : 13, weight: emphasized ? .bold : .semibold, design: .rounded))
+        Text(money(value, currency: currency)).monospacedDigit()
       }
-      .foregroundStyle(CaptroScanPalette.ink)
+      .font(.system(size: emphasized ? 14 : 12, weight: emphasized ? .semibold : .regular))
+      .foregroundStyle(CaptroReceiptPalette.ink)
     }
+  }
+
+  private var reviewBottomBar: some View {
+    VStack(spacing: 8) {
+      if review?.duplicate == true {
+        Button(action: resetFlow) {
+          Text("Scan Another").captroReceiptPrimaryButton()
+        }
+        .buttonStyle(.miraPress)
+      } else {
+        Button(action: continueToFeedback) {
+          HStack(spacing: 9) {
+            Text("Next")
+            Image(systemName: "arrow.right")
+          }
+          .captroReceiptPrimaryButton()
+        }
+        .buttonStyle(.miraPress)
+        .disabled(review?.rewardEligible != true || isDetecting || isProcessingReview)
+        .opacity(review?.rewardEligible == true ? 1 : 0.48)
+      }
+      Button("Back", action: resetFlow)
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+        .frame(minWidth: 80, minHeight: 36)
+    }
+    .padding(.horizontal, 20)
+    .padding(.top, 12)
+    .padding(.bottom, 10)
+    .background(.ultraThinMaterial)
+  }
+
+  private var feedbackStage: some View {
+    VStack(spacing: 0) {
+      feedbackTopBar
+      ScrollView {
+        VStack(alignment: .leading, spacing: 28) {
+          VStack(alignment: .leading, spacing: 5) {
+            Text(review?.merchantName?.nonEmpty ?? "Your purchase")
+              .font(.system(size: 25, weight: .bold))
+              .foregroundStyle(CaptroReceiptPalette.ink)
+            Text(review?.category.title ?? "Purchase")
+              .font(.system(size: 14, weight: .medium))
+              .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+          }
+
+          ForEach(feedbackQuestions) { question in
+            ratingQuestion(question)
+          }
+
+          VStack(alignment: .leading, spacing: 10) {
+            Text("Add a short note (optional)")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(CaptroReceiptPalette.ink)
+            ZStack(alignment: .topLeading) {
+              if note.isEmpty {
+                Text("What stood out?")
+                  .font(.system(size: 14))
+                  .foregroundStyle(CaptroReceiptPalette.secondaryInk.opacity(0.7))
+                  .padding(.horizontal, 13)
+                  .padding(.vertical, 14)
+              }
+              TextEditor(text: $note)
+                .font(.system(size: 14, weight: .regular))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(minHeight: 110)
+            }
+            .background(CaptroReceiptPalette.surface)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroReceiptPalette.line, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+          }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 34)
+        .frame(maxWidth: .infinity)
+      }
+      .miraScrollFeel(.feed)
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      Button(action: submitFeedback) {
+        HStack(spacing: 9) {
+          if isSubmittingFeedback {
+            ProgressView().tint(.white)
+          }
+          Text(isSubmittingFeedback ? "Submitting" : "Submit")
+        }
+        .captroReceiptPrimaryButton()
+      }
+      .buttonStyle(.miraPress)
+      .disabled(!allQuestionsAnswered || isSubmittingFeedback)
+      .opacity(allQuestionsAnswered ? 1 : 0.48)
+      .padding(.horizontal, 20)
+      .padding(.vertical, 12)
+      .background(.ultraThinMaterial)
+    }
+  }
+
+  private var feedbackTopBar: some View {
+    HStack {
+      Button {
+        stage = .review
+      } label: {
+        Image(systemName: "chevron.left")
+          .font(.system(size: 17, weight: .semibold))
+          .frame(width: 44, height: 44)
+      }
+      .accessibilityLabel("Back to review")
+      Spacer()
+      Text("Purchase feedback")
+        .font(.system(size: 17, weight: .semibold))
+      Spacer()
+      Color.clear.frame(width: 44, height: 44)
+    }
+    .foregroundStyle(CaptroReceiptPalette.ink)
+    .padding(.horizontal, 10)
+    .frame(height: 54)
+  }
+
+  private func ratingQuestion(_ question: CaptroFeedbackQuestion) -> some View {
+    VStack(alignment: .leading, spacing: 13) {
+      Text(question.title)
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(CaptroReceiptPalette.ink)
+        .fixedSize(horizontal: false, vertical: true)
+
+      HStack(spacing: 10) {
+        ForEach(1...5, id: \.self) { value in
+          Button {
+            CaptroHaptics.light()
+            ratings[question.key] = value
+          } label: {
+            Text("\(value)")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(ratings[question.key] == value ? Color.white : CaptroReceiptPalette.ink)
+              .frame(maxWidth: .infinity)
+              .frame(height: 42)
+              .background(ratings[question.key] == value ? CaptroReceiptPalette.reward : CaptroReceiptPalette.surface)
+              .clipShape(Capsule())
+              .overlay(Capsule().stroke(CaptroReceiptPalette.line, lineWidth: ratings[question.key] == value ? 0 : 1))
+          }
+          .buttonStyle(.miraPress)
+          .accessibilityLabel("\(question.title), \(value) out of 5")
+          .accessibilityValue(ratings[question.key] == value ? "Selected" : "Not selected")
+        }
+      }
+
+      HStack {
+        Text("Not great")
+        Spacer()
+        Text("Excellent")
+      }
+      .font(.system(size: 11, weight: .regular))
+      .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+    }
+  }
+
+  private var successStage: some View {
+    VStack(spacing: 0) {
+      Spacer(minLength: 36)
+      VStack(spacing: 18) {
+        Circle()
+          .fill(CaptroReceiptPalette.reward.opacity(0.11))
+          .frame(width: 86, height: 86)
+          .overlay(
+            Image(systemName: "checkmark")
+              .font(.system(size: 34, weight: .semibold))
+              .foregroundStyle(CaptroReceiptPalette.reward)
+          )
+
+        VStack(spacing: 8) {
+          Text("Thanks!")
+            .font(.system(size: 30, weight: .bold))
+            .foregroundStyle(CaptroReceiptPalette.ink)
+          Text("You earned \(money(cents: reward?.amountCents ?? 10))")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(CaptroReceiptPalette.reward)
+          Text("Your receipt earnings are private and visible only in your account.")
+            .font(.system(size: 14, weight: .regular))
+            .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+
+        if let reward {
+          VStack(spacing: 6) {
+            Text("AVAILABLE BALANCE")
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+            Text(money(cents: reward.availableBalanceCents))
+              .font(.system(size: 30, weight: .semibold, design: .rounded))
+              .foregroundStyle(CaptroReceiptPalette.ink)
+          }
+          .padding(.top, 18)
+        }
+      }
+      .frame(maxWidth: 420)
+      .padding(.horizontal, 28)
+      Spacer()
+
+      Button(action: resetFlow) {
+        Text("Scan Another").captroReceiptPrimaryButton()
+      }
+      .buttonStyle(.miraPress)
+      .padding(.horizontal, 20)
+      .padding(.bottom, 18)
+    }
+  }
+
+  private var feedbackQuestions: [CaptroFeedbackQuestion] {
+    switch review?.category ?? .general {
+    case .restaurantFood:
+      return [
+        .init(key: "cleanliness", title: "How clean was it?"),
+        .init(key: "speed", title: "How fast was the service?"),
+        .init(key: "quality", title: "How was the food quality?"),
+        .init(key: "service", title: "How was the staff and service?"),
+        .init(key: "overall", title: "Overall experience?"),
+      ]
+    case .productRetail:
+      return [
+        .init(key: "quality", title: "How was the product quality?"),
+        .init(key: "value", title: "Was the item worth the price?"),
+        .init(key: "organization", title: "How clean and organized was the place?"),
+        .init(key: "speed", title: "How fast was checkout?"),
+        .init(key: "overall", title: "Overall experience?"),
+      ]
+    case .grocery:
+      return [
+        .init(key: "freshness", title: "How fresh were the items?"),
+        .init(key: "cleanliness", title: "How clean was the store?"),
+        .init(key: "speed", title: "How fast was checkout?"),
+        .init(key: "value", title: "Were prices reasonable?"),
+        .init(key: "overall", title: "Overall experience?"),
+      ]
+    case .serviceBusiness:
+      return [
+        .init(key: "speed", title: "How fast was the service?"),
+        .init(key: "professionalism", title: "How professional was the staff?"),
+        .init(key: "satisfaction", title: "How satisfied were you?"),
+        .init(key: "overall", title: "Overall experience?"),
+      ]
+    case .general:
+      return [
+        .init(key: "quality", title: "How was the purchase quality?"),
+        .init(key: "value", title: "Was it worth the price?"),
+        .init(key: "service", title: "How was the service?"),
+        .init(key: "overall", title: "Overall experience?"),
+      ]
+    }
+  }
+
+  private var allQuestionsAnswered: Bool {
+    feedbackQuestions.allSatisfy { ratings[$0.key] != nil }
   }
 
   private var errorBinding: Binding<Bool> {
@@ -740,17 +624,17 @@ public struct CaptroScanView: View {
     showingImporter = true
   }
 
-  private func handleScannedPages(_ scanResult: Result<[Data], Error>) {
+  private func handleScannedPages(_ result: Result<[Data], Error>) {
     do {
-      select(try CaptroLocalDocument.scanned(pages: scanResult.get()))
+      select(try CaptroLocalDocument.scanned(pages: result.get()))
     } catch {
       errorMessage = error.localizedDescription
     }
   }
 
-  private func handleImportedURLs(_ importResult: Result<[URL], Error>) {
+  private func handleImportedURLs(_ result: Result<[URL], Error>) {
     do {
-      guard let url = try importResult.get().first else { return }
+      guard let url = try result.get().first else { return }
       select(try CaptroLocalDocument.imported(url: url))
     } catch {
       errorMessage = error.localizedDescription
@@ -772,185 +656,152 @@ public struct CaptroScanView: View {
   private func select(_ document: CaptroLocalDocument) {
     selectedDocument = document
     detectedType = nil
-    result = nil
-    proof = nil
-    idempotencyKey = "scan:\(document.sha256Hex):\(UUID().uuidString)"
+    review = nil
+    reward = nil
+    ratings = [:]
+    note = ""
+    reviewIdempotencyKey = "receipt-review:\(document.sha256Hex):\(UUID().uuidString)"
+    feedbackIdempotencyKey = nil
+    stage = .review
     isDetecting = true
     Task {
       let type = await CaptroDocumentTypeDetector.detect(document)
       guard selectedDocument?.id == document.id else { return }
       detectedType = type
       isDetecting = false
+      guard type != .unsupported else { return }
+      processReview(document, detectedType: type)
     }
   }
 
-  private func clearSelection() {
-    selectedDocument = nil
-    detectedType = nil
-    idempotencyKey = nil
-    selectedPhoto = nil
-    result = nil
-    proof = nil
-    isDetecting = false
-    isVerifying = false
-  }
-
-  private func beginVerification() {
-    guard !isVerifying, detectedType == .receipt || detectedType == .invoice else { return }
-    if purchase.balanceCents < purchase.verificationPriceCents {
-      showingCreditPurchase = true
-      return
-    }
-    submitVerification()
-  }
-
-  private func purchaseCreditsAndVerify() {
-    guard !isPurchasing else { return }
-    isPurchasing = true
+  private func processReview(_ document: CaptroLocalDocument, detectedType: CaptroDetectedDocumentType) {
+    guard !isProcessingReview, let reviewIdempotencyKey else { return }
+    isProcessingReview = true
     Task {
-      defer { isPurchasing = false }
+      defer { isProcessingReview = false }
       do {
-        let purchased = try await purchase.purchaseCreditPack()
-        guard purchased else { return }
-        showingCreditPurchase = false
-        submitVerification()
-      } catch {
-        showingCreditPurchase = false
-        errorMessage = error.localizedDescription
-      }
-    }
-  }
-
-  private func submitVerification() {
-    guard let document = selectedDocument,
-          let detectedType,
-          detectedType != .unsupported,
-          let idempotencyKey,
-          !isVerifying else { return }
-    isVerifying = true
-    Task {
-      defer { isVerifying = false }
-      do {
-        var response = try await api.verifyCaptroDocument(
+        review = try await api.reviewCaptroReceipt(
           document,
           detectedType: detectedType,
-          idempotencyKey: idempotencyKey
+          idempotencyKey: reviewIdempotencyKey
         )
-        if !response.isComplete {
-          response = try await awaitCompletedVerification(response)
-        }
-        result = response
-        try? await purchase.refreshBalance()
-      } catch {
-        if creditsRequired(error) {
-          try? await purchase.refreshBalance()
-          showingCreditPurchase = true
-        } else {
-          errorMessage = error.localizedDescription
-          try? await purchase.refreshBalance()
-        }
-      }
-    }
-  }
-
-  private func awaitCompletedVerification(_ initial: CaptroScanVerificationResult) async throws -> CaptroScanVerificationResult {
-    var latest = initial
-    for _ in 0..<20 {
-      try await Task.sleep(nanoseconds: 1_500_000_000)
-      latest = try await api.captroScanVerification(id: initial.verificationId)
-      if latest.isComplete { return latest }
-    }
-    return latest
-  }
-
-  private func creditsRequired(_ error: Error) -> Bool {
-    guard let apiError = error as? MIRAAPIError,
-          case .server(let status, let code, _) = apiError else { return false }
-    return status == 402 || code == "SCAN_CREDITS_REQUIRED"
-  }
-
-  private func loadProof(_ proofID: String) {
-    Task {
-      do {
-        proof = try await api.captroScanProof(id: proofID)
-        showingProof = true
       } catch {
         errorMessage = error.localizedDescription
       }
     }
   }
 
-  private func displayAddress(_ address: CaptroScanAddress?) -> String? {
-    guard let address else { return nil }
-    if let original = address.original?.nonEmpty { return original }
-    let locality = [address.city?.nonEmpty, address.state?.nonEmpty, address.postalCode?.nonEmpty]
+  private func continueToFeedback() {
+    guard review?.rewardEligible == true else { return }
+    feedbackIdempotencyKey = feedbackIdempotencyKey ?? "receipt-feedback:\(review?.receiptId ?? UUID().uuidString):\(UUID().uuidString)"
+    stage = .feedback
+  }
+
+  private func submitFeedback() {
+    guard let review, let feedbackIdempotencyKey, allQuestionsAnswered, !isSubmittingFeedback else { return }
+    isSubmittingFeedback = true
+    Task {
+      defer { isSubmittingFeedback = false }
+      do {
+        reward = try await api.submitCaptroReceiptFeedback(
+          receiptId: review.receiptId,
+          ratings: ratings,
+          note: note,
+          idempotencyKey: feedbackIdempotencyKey
+        )
+        CaptroHaptics.success()
+        stage = .success
+      } catch {
+        errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  private func resetFlow() {
+    stage = .capture
+    selectedDocument = nil
+    detectedType = nil
+    review = nil
+    reward = nil
+    selectedPhoto = nil
+    ratings = [:]
+    note = ""
+    reviewIdempotencyKey = nil
+    feedbackIdempotencyKey = nil
+    isDetecting = false
+    isProcessingReview = false
+    isSubmittingFeedback = false
+  }
+
+  private func purchaseDateLine(_ review: CaptroReceiptReview) -> String? {
+    [review.purchaseDate?.nonEmpty, review.purchaseTime?.nonEmpty]
       .compactMap { $0 }
-      .joined(separator: " ")
-    return [address.street?.nonEmpty, locality.nonEmpty, address.country?.nonEmpty]
-      .compactMap { $0 }
-      .joined(separator: "\n")
+      .joined(separator: " at ")
       .nonEmpty
   }
 
-  private func documentTypeName(_ type: String) -> String {
-    type == "invoice" ? "Invoice" : "Receipt"
-  }
-
-  private func joinedDateTime(_ date: String?, time: String?) -> String? {
-    [date?.nonEmpty, time?.nonEmpty].compactMap { $0 }.joined(separator: " · ").nonEmpty
-  }
-
-  private func money(_ value: String?, currency: String?) -> String {
-    guard let value = value?.nonEmpty else { return "—" }
-    guard let number = Decimal(string: value) else { return value }
+  private func money(_ value: String, currency: String?) -> String {
+    guard let decimal = Decimal(string: value) else { return value }
     let formatter = NumberFormatter()
     formatter.numberStyle = .currency
     formatter.currencyCode = currency?.nonEmpty ?? "USD"
     formatter.maximumFractionDigits = 2
-    return formatter.string(from: number as NSDecimalNumber) ?? "\(currency ?? "") \(value)".trimmingCharacters(in: .whitespaces)
+    return formatter.string(from: decimal as NSDecimalNumber) ?? value
   }
 
-  private func billingCopy(_ state: String) -> String {
-    switch state {
-    case "refunded": return "Verification credit restored"
-    case "credited": return "Existing verification · no new charge"
-    case "not_charged": return "Not charged"
-    default: return "Billing status: \(state.replacingOccurrences(of: "_", with: " "))"
-    }
+  private func money(cents: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = "USD"
+    formatter.minimumFractionDigits = 2
+    formatter.maximumFractionDigits = 2
+    return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "$0.00"
   }
 }
 
-private enum CaptroScanPalette {
-  static let background = Color(red: 0.952, green: 0.953, blue: 0.978)
-  static let canvas = Color(red: 0.985, green: 0.982, blue: 0.965)
+private enum CaptroReceiptStage {
+  case capture
+  case review
+  case feedback
+  case success
+}
+
+private struct CaptroFeedbackQuestion: Identifiable {
+  let key: String
+  let title: String
+  var id: String { key }
+}
+
+private enum CaptroReceiptPalette {
+  static let background = Color(red: 0.988, green: 0.988, blue: 0.982)
+  static let surface = Color(red: 0.965, green: 0.966, blue: 0.958)
   static let paper = Color.white
   static let ink = Color(red: 0.07, green: 0.07, blue: 0.065)
-  static let secondaryInk = Color(red: 0.33, green: 0.34, blue: 0.36)
-  static let forest = Color(red: 0.08, green: 0.24, blue: 0.15)
+  static let secondaryInk = Color(red: 0.37, green: 0.38, blue: 0.38)
+  static let reward = Color(red: 0.08, green: 0.24, blue: 0.15)
   static let line = Color.black.opacity(0.10)
-  static let dot = Color(red: 0.57, green: 0.58, blue: 0.63).opacity(0.45)
 }
 
 private extension View {
-  func captroPrimaryButtonLabel() -> some View {
+  func captroReceiptPrimaryButton() -> some View {
     self
-      .font(.system(size: 16, weight: .bold))
+      .font(.system(size: 16, weight: .semibold))
       .foregroundStyle(Color.white)
       .frame(maxWidth: .infinity)
       .frame(height: 54)
-      .background(CaptroScanPalette.forest)
+      .background(CaptroReceiptPalette.reward)
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 
-  func captroSecondaryButtonLabel() -> some View {
+  func captroReceiptSecondaryButton() -> some View {
     self
       .font(.system(size: 15, weight: .semibold))
-      .foregroundStyle(CaptroScanPalette.ink)
+      .foregroundStyle(CaptroReceiptPalette.ink)
       .frame(maxWidth: .infinity)
       .frame(height: 50)
-      .background(CaptroScanPalette.paper)
+      .background(CaptroReceiptPalette.paper)
       .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroScanPalette.line, lineWidth: 1))
+      .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroReceiptPalette.line, lineWidth: 1))
   }
 }
 
