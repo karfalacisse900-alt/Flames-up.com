@@ -8,6 +8,9 @@ struct CaptroMediaPager: View {
   let onOpenPost: () -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @GestureState private var isStampTemporarilyHidden = false
+  @State private var suppressTapAfterStampPeek = false
+  @State private var stampTapResetTask: Task<Void, Never>?
 
   private var mediaURLs: [String] { post.feedMediaURLs }
 
@@ -17,7 +20,7 @@ struct CaptroMediaPager: View {
         mediaContent
           .frame(width: proxy.size.width, height: proxy.size.height)
           .contentShape(Rectangle())
-          .onTapGesture(perform: onOpenPost)
+          .onTapGesture(perform: openPostUnlessPeeking)
 
         overlayContent(mediaWidth: proxy.size.width)
 
@@ -33,6 +36,7 @@ struct CaptroMediaPager: View {
         }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
+      .simultaneousGesture(stampPeekGesture)
     }
     .aspectRatio(4.0 / 5.0, contentMode: .fit)
     .background(MIRATheme.Color.mediaPlaceholder)
@@ -49,6 +53,12 @@ struct CaptroMediaPager: View {
     }
     .onChange(of: selectedMediaIndex) { _, _ in
       prefetchCarouselNeighbors()
+    }
+    .onChange(of: isStampTemporarilyHidden) { _, isHidden in
+      updateStampPeekTapSuppression(isHidden: isHidden)
+    }
+    .onDisappear {
+      stampTapResetTask?.cancel()
     }
   }
 
@@ -97,13 +107,50 @@ struct CaptroMediaPager: View {
 
       CaptroPostStamp(
         content: post.captroStampContent,
-        onOpen: onOpenPost,
-        onAction: onOpenPost
+        onOpen: openPostUnlessPeeking,
+        onAction: openPostUnlessPeeking
       )
       .frame(width: mediaWidth * 0.72, alignment: .leading)
       .padding(.bottom, mediaURLs.count > 1 ? 24 : 0)
+      .opacity(isStampTemporarilyHidden ? 0 : 1)
+      .allowsHitTesting(!isStampTemporarilyHidden)
+      .animation(stampPeekAnimation, value: isStampTemporarilyHidden)
     }
     .padding(16)
+  }
+
+  private var stampPeekGesture: some Gesture {
+    LongPressGesture(minimumDuration: 0.18, maximumDistance: 22)
+      .updating($isStampTemporarilyHidden) { isRecognized, state, _ in
+        state = isRecognized
+      }
+  }
+
+  private var stampPeekAnimation: Animation? {
+    guard !reduceMotion else { return nil }
+    return isStampTemporarilyHidden
+      ? .easeOut(duration: 0.11)
+      : .easeIn(duration: 0.16)
+  }
+
+  private func openPostUnlessPeeking() {
+    guard !suppressTapAfterStampPeek else { return }
+    onOpenPost()
+  }
+
+  private func updateStampPeekTapSuppression(isHidden: Bool) {
+    stampTapResetTask?.cancel()
+    if isHidden {
+      suppressTapAfterStampPeek = true
+      return
+    }
+
+    guard suppressTapAfterStampPeek else { return }
+    stampTapResetTask = Task { @MainActor in
+      try? await Task.sleep(nanoseconds: 220_000_000)
+      guard !Task.isCancelled, !isStampTemporarilyHidden else { return }
+      suppressTapAfterStampPeek = false
+    }
   }
 
   private var mediaAccessibilityLabel: String {

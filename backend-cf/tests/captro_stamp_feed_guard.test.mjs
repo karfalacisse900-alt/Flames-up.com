@@ -45,6 +45,18 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
 });
 
+test('holding Home media temporarily reveals the unobstructed photo', () => {
+  assert.match(mediaPager, /@GestureState private var isStampTemporarilyHidden = false/);
+  assert.match(mediaPager, /LongPressGesture\(minimumDuration: 0\.18, maximumDistance: 22\)/);
+  assert.match(mediaPager, /\.simultaneousGesture\(stampPeekGesture\)/);
+  assert.match(mediaPager, /\.opacity\(isStampTemporarilyHidden \? 0 : 1\)/);
+  assert.match(mediaPager, /\.allowsHitTesting\(!isStampTemporarilyHidden\)/);
+  assert.match(mediaPager, /\.easeOut\(duration: 0\.11\)/);
+  assert.match(mediaPager, /\.easeIn\(duration: 0\.16\)/);
+  assert.match(mediaPager, /guard !suppressTapAfterStampPeek else \{ return \}/);
+  assert.doesNotMatch(mediaPager, /if !isStampTemporarilyHidden \{[\s\S]*CaptroPostStamp/);
+});
+
 test('composer persists the selected stamp and previews the production component', () => {
   assert.match(composer, /@State private var selectedStampKind: CaptroStampKind = \.social/);
   assert.match(composer, /ForEach\(CaptroStampKind\.creationCases\)/);
