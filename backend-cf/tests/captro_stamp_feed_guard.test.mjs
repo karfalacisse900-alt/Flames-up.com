@@ -45,19 +45,26 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
 });
 
-test('holding Home media temporarily reveals the unobstructed photo', () => {
-  assert.match(mediaPager, /@GestureState private var isHoldingPhoto = false/);
+test('holding the Home stamp temporarily reveals the unobstructed photo', () => {
+  assert.match(mediaPager, /@GestureState private var isHoldingStamp = false/);
   assert.match(mediaPager, /LongPressGesture\(minimumDuration: 0\.25, maximumDistance: 10\)/);
   assert.match(mediaPager, /\.sequenced\(before: DragGesture\(minimumDistance: 0\)\)/);
   assert.match(mediaPager, /case let \.second\(true, drag\):/);
   assert.match(mediaPager, /hypot\(drag\.translation\.width, drag\.translation\.height\) <= 22/);
-  assert.match(mediaPager, /\.simultaneousGesture\(stampPeekGesture\)/);
-  assert.match(mediaPager, /\.opacity\(isHoldingPhoto \? 0 : 1\)/);
-  assert.match(mediaPager, /\.allowsHitTesting\(!isHoldingPhoto\)/);
+  assert.match(
+    mediaPager,
+    /CaptroPostStamp\([\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(isHoldingStamp \? 0 : 1\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
+  );
+  assert.doesNotMatch(
+    mediaPager,
+    /\.frame\(width: proxy\.size\.width, height: proxy\.size\.height\)\s*\.simultaneousGesture\(stampPeekGesture\)/,
+  );
+  assert.doesNotMatch(mediaPager, /\.allowsHitTesting\(!isHoldingStamp\)/);
+  assert.match(mediaPager, /\.onTapGesture\(perform: openPostUnlessPeeking\)/);
   assert.match(mediaPager, /\.easeOut\(duration: 0\.20\)/);
   assert.match(mediaPager, /\.easeInOut\(duration: 0\.24\)/);
   assert.match(mediaPager, /guard !suppressTapAfterStampPeek else \{ return \}/);
-  assert.doesNotMatch(mediaPager, /if !isHoldingPhoto \{[\s\S]*CaptroPostStamp/);
+  assert.doesNotMatch(mediaPager, /if !isHoldingStamp \{[\s\S]*CaptroPostStamp/);
 });
 
 test('Home carousel locks each touch to horizontal or vertical intent', () => {
