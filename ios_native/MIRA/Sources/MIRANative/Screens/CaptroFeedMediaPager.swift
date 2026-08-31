@@ -10,14 +10,19 @@ struct CaptroMediaPager: View {
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @GestureState private var isHoldingStamp = false
+  @State private var measuredCoverHeightToWidthRatio: CGFloat?
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
 
   private var mediaURLs: [String] { post.feedMediaURLs }
   private var mediaHeightToWidthRatio: CGFloat {
-    MIRAMediaSizing.mainFeedDisplayRatio(
-      for: mediaURLs,
-      aspectRatios: post.mediaHeightToWidthRatios
+    boundedHomeMediaRatio(
+      declaredCoverHeightToWidthRatio
+        ?? measuredCoverHeightToWidthRatio
+        ?? MIRAMediaSizing.mainFeedDisplayRatio(
+          for: mediaURLs,
+          aspectRatios: post.mediaHeightToWidthRatios
+        )
     )
   }
   private var mediaWidthToHeightRatio: CGFloat { 1 / mediaHeightToWidthRatio }
@@ -60,6 +65,7 @@ struct CaptroMediaPager: View {
     .accessibilityHint("Opens the post detail screen")
     .onAppear(perform: prefetchCarouselNeighbors)
     .onChange(of: mediaURLs) { _, urls in
+      measuredCoverHeightToWidthRatio = nil
       if selectedMediaIndex >= urls.count {
         selectedMediaIndex = max(0, urls.count - 1)
       }
@@ -98,13 +104,38 @@ struct CaptroMediaPager: View {
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: .fill,
+      contentMode: .fit,
       shouldPlay: isVideoActive && (mediaURLs.count == 1 || selectedMediaIndex == index),
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
-      placeholderColor: MIRATheme.Color.mediaPlaceholder
+      placeholderColor: MIRATheme.Color.mediaPlaceholder,
+      onMeasuredRatio: { ratio in
+        guard index == 0 else { return }
+        let boundedRatio = boundedHomeMediaRatio(ratio)
+        guard abs((measuredCoverHeightToWidthRatio ?? 0) - boundedRatio) > 0.001 else { return }
+        measuredCoverHeightToWidthRatio = boundedRatio
+      }
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
+  }
+
+  private var declaredCoverHeightToWidthRatio: CGFloat? {
+    guard let dimensions = post.mediaDimensions?.values.first else { return nil }
+    if let width = dimensions.originalWidth,
+       let height = dimensions.originalHeight,
+       width > 0,
+       height > 0 {
+      return CGFloat(height / width)
+    }
+    if let ratio = dimensions.originalAspectRatio, ratio > 0 {
+      return CGFloat(1 / ratio)
+    }
+    return nil
+  }
+
+  private func boundedHomeMediaRatio(_ ratio: CGFloat) -> CGFloat {
+    guard ratio.isFinite, ratio > 0 else { return 4.0 / 3.0 }
+    return min(max(ratio, 9.0 / 16.0), 3.0 / 2.0)
   }
 
   private func overlayContent(mediaWidth: CGFloat) -> some View {

@@ -34,7 +34,8 @@ struct CaptroFeedPostView: View {
           selectedMediaIndex: $selectedMediaIndex,
           onOpenPost: onOpenPost
         )
-        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 14)
       } else {
         CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost)
           .padding(.horizontal, 16)

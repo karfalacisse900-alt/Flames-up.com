@@ -37,14 +37,22 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
 });
 
 test('Home media follows each upload aspect ratio within editorial bounds', () => {
-  assert.match(mediaPager, /MIRAMediaSizing\.mainFeedDisplayRatio\([\s\S]*?post\.mediaHeightToWidthRatios/);
+  assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?measuredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.match(mediaPager, /\.aspectRatio\(mediaWidthToHeightRatio, contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
-  assert.match(mediaPager, /mediaHeightToWidthRatio < 0\.9 \? 14/);
-  assert.match(postView, /CaptroMediaPager\([\s\S]*?\.padding\(\.horizontal, 16\)/);
-  assert.match(mediaSizing, /feedLandscapeRatio: CGFloat = 3\.0 \/ 4\.0/);
-  assert.match(mediaSizing, /min\(max\(ratio, feedLandscapeRatio\), feedTallRatio\)/);
-  assert.match(mediaModels, /if let originalWidth, let originalHeight[\s\S]*?boundedFeedHeightToWidthRatio/);
+  assert.match(mediaPager, /contentMode: \.fit/);
+  assert.match(mediaPager, /guard index == 0 else \{ return \}/);
+  assert.match(mediaPager, /min\(max\(ratio, 9\.0 \/ 16\.0\), 3\.0 \/ 2\.0\)/);
+  assert.match(postView, /CaptroMediaPager\([\s\S]*?\.frame\(maxWidth: \.infinity\)[\s\S]*?\.padding\(\.horizontal, 14\)/);
+
+  const screenWidth = 390;
+  const mediaWidth = screenWidth - (14 * 2);
+  assert.equal(mediaWidth, 362);
+  assert.ok(mediaWidth / screenWidth >= 0.92 && mediaWidth / screenWidth <= 0.94);
+  assert.equal(Math.round(mediaWidth * (5 / 4)), 453);
+  assert.equal(Math.round(mediaWidth), 362);
+  assert.equal(Math.round(mediaWidth * (3 / 4)), 272);
+  assert.equal(Math.round(mediaWidth * (4 / 3)), 483);
 });
 
 test('Captro uses a purpose-built family of stamp types and actions', () => {
