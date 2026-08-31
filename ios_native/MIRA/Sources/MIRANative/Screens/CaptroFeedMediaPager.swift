@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 struct CaptroMediaPager: View {
   let post: MIRAPost
@@ -71,6 +72,7 @@ struct CaptroMediaPager: View {
       TabView(selection: $selectedMediaIndex) {
         ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
           mediaView(url: url, index: index)
+            .background(CaptroCarouselDirectionGateInstaller())
             .tag(index)
         }
       }
@@ -120,7 +122,7 @@ struct CaptroMediaPager: View {
   }
 
   private var stampPeekGesture: some Gesture {
-    LongPressGesture(minimumDuration: 0.25, maximumDistance: 22)
+    LongPressGesture(minimumDuration: 0.25, maximumDistance: 10)
       .sequenced(before: DragGesture(minimumDistance: 0))
       .updating($isHoldingPhoto) { phase, state, _ in
         switch phase {
@@ -139,8 +141,8 @@ struct CaptroMediaPager: View {
   private var stampPeekAnimation: Animation? {
     guard !reduceMotion else { return nil }
     return isHoldingPhoto
-      ? .easeOut(duration: 0.11)
-      : .easeIn(duration: 0.16)
+      ? .easeOut(duration: 0.20)
+      : .easeInOut(duration: 0.24)
   }
 
   private func openPostUnlessPeeking() {
@@ -241,6 +243,118 @@ struct CaptroMediaPager: View {
       let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
       return !trimmed.isEmpty && seen.insert(trimmed).inserted ? trimmed : nil
     }
+  }
+}
+
+private struct CaptroCarouselDirectionGateInstaller: UIViewRepresentable {
+  func makeUIView(context: Context) -> UIView {
+    let marker = UIView(frame: .zero)
+    marker.isUserInteractionEnabled = false
+    DispatchQueue.main.async {
+      installDirectionGate(from: marker)
+    }
+    return marker
+  }
+
+  func updateUIView(_ uiView: UIView, context: Context) {
+    DispatchQueue.main.async {
+      installDirectionGate(from: uiView)
+    }
+  }
+
+  private func installDirectionGate(from marker: UIView) {
+    guard let scrollView = pagingScrollView(above: marker) else { return }
+    scrollView.isDirectionalLockEnabled = true
+
+    if scrollView.gestureRecognizers?.contains(where: { $0 is CaptroVerticalIntentGestureRecognizer }) == true {
+      return
+    }
+
+    let directionGate = CaptroVerticalIntentGestureRecognizer(threshold: 10)
+    scrollView.addGestureRecognizer(directionGate)
+    scrollView.panGestureRecognizer.require(toFail: directionGate)
+  }
+
+  private func pagingScrollView(above marker: UIView) -> UIScrollView? {
+    var ancestor = marker.superview
+    while let view = ancestor {
+      if let scrollView = view as? UIScrollView {
+        let hasHorizontalContent = scrollView.contentSize.width > scrollView.bounds.width + 1
+        if scrollView.isPagingEnabled || scrollView.alwaysBounceHorizontal || hasHorizontalContent {
+          return scrollView
+        }
+      }
+      ancestor = view.superview
+    }
+    return nil
+  }
+}
+
+private final class CaptroVerticalIntentGestureRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+  private let threshold: CGFloat
+  private var initialPoint: CGPoint?
+
+  init(threshold: CGFloat) {
+    self.threshold = threshold
+    super.init(target: nil, action: nil)
+    delegate = self
+    cancelsTouchesInView = false
+    delaysTouchesBegan = false
+    delaysTouchesEnded = false
+  }
+
+  override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesBegan(touches, with: event)
+    guard touches.count == 1, let touch = touches.first, let view else {
+      state = .failed
+      return
+    }
+    initialPoint = touch.location(in: view)
+  }
+
+  override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesMoved(touches, with: event)
+    guard state == .possible,
+          let touch = touches.first,
+          let view,
+          let initialPoint else { return }
+
+    let point = touch.location(in: view)
+    let horizontalDistance = abs(point.x - initialPoint.x)
+    let verticalDistance = abs(point.y - initialPoint.y)
+    guard max(horizontalDistance, verticalDistance) >= threshold else { return }
+
+    // Vertical intent blocks the pager; failing releases its existing horizontal pan.
+    state = verticalDistance >= horizontalDistance ? .began : .failed
+  }
+
+  override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesEnded(touches, with: event)
+    switch state {
+    case .began, .changed:
+      state = .ended
+    case .possible:
+      state = .failed
+    default:
+      break
+    }
+  }
+
+  override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+    super.touchesCancelled(touches, with: event)
+    state = .cancelled
+  }
+
+  override func reset() {
+    initialPoint = nil
+    super.reset()
+  }
+
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+  ) -> Bool {
+    true
   }
 }
 
