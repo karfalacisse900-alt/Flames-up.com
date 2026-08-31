@@ -14,6 +14,19 @@ struct CaptroMediaPager: View {
   @State private var stampTapResetTask: Task<Void, Never>?
 
   private var mediaURLs: [String] { post.feedMediaURLs }
+  private var mediaHeightToWidthRatio: CGFloat {
+    MIRAMediaSizing.mainFeedDisplayRatio(
+      for: mediaURLs,
+      aspectRatios: post.mediaHeightToWidthRatios
+    )
+  }
+  private var mediaWidthToHeightRatio: CGFloat { 1 / mediaHeightToWidthRatio }
+  private var mediaCornerRadius: CGFloat {
+    mediaHeightToWidthRatio < 0.9 ? 14 : (mediaHeightToWidthRatio > 1.35 ? 16 : 18)
+  }
+  private var stampWidthFraction: CGFloat {
+    mediaHeightToWidthRatio < 0.9 ? 0.68 : (mediaHeightToWidthRatio > 1.35 ? 0.74 : 0.72)
+  }
 
   var body: some View {
     GeometryReader { proxy in
@@ -38,10 +51,10 @@ struct CaptroMediaPager: View {
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
     }
-    .aspectRatio(4.0 / 5.0, contentMode: .fit)
+    .aspectRatio(mediaWidthToHeightRatio, contentMode: .fit)
     .background(MIRATheme.Color.mediaPlaceholder)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
+    .contentShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
     .accessibilityElement(children: .contain)
     .accessibilityLabel(mediaAccessibilityLabel)
     .accessibilityHint("Opens the post detail screen")
@@ -111,7 +124,7 @@ struct CaptroMediaPager: View {
         onOpen: openPostUnlessPeeking,
         onAction: openPostUnlessPeeking
       )
-      .frame(width: mediaWidth * 0.72, alignment: .leading)
+      .frame(width: mediaWidth * stampWidthFraction, alignment: .leading)
       .contentShape(Rectangle())
       .opacity(isHoldingStamp ? 0 : 1)
       .animation(stampPeekAnimation, value: isHoldingStamp)

@@ -933,6 +933,7 @@ public struct CreatePostNativeView: View {
   @State private var bodyText = ""
   @State private var mediaItems: [MIRAPickedMedia] = []
   @State private var pickerItems: [PhotosPickerItem] = []
+  @State private var composerUser: MIRAUser?
   @State private var showPreview = false
   @State private var isEditingPostDetails = false
   @State private var isPosting = false
@@ -1098,126 +1099,234 @@ public struct CreatePostNativeView: View {
   }
 
   private var mediaFirstPage: some View {
-    ZStack {
-      MIRAStoryLiveCameraView(
-        editedMedia: editedCameraMedia,
-        showsMusicButton: false,
-        showsGridOverlay: false,
-        dismissesOnCapture: false,
-        dismissesOnCancel: false,
-        onCapture: { media in
-          addCapturedMediaAndContinue(media)
-        },
-        onCancel: {
-          close()
-        },
-        onMusic: {
-          // Feed posts no longer use music in the post creation flow.
-        },
-        onGallerySelection: { media in
-          addGalleryMedia(media)
-        },
-        onEdit: { media, _ in
-          editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
-        },
-        onReviewStateChange: { isReviewing in
-          isCameraReviewingMedia = isReviewing
-        }
-      )
-      .ignoresSafeArea()
+    GeometryReader { proxy in
+      VStack(spacing: 0) {
+        composerTopBar
 
-      VStack {
-        Spacer()
-        firstPageMediaRail
-          .padding(.horizontal, 20)
-          .padding(.bottom, 124)
-      }
-      .allowsHitTesting(true)
+        ScrollView(showsIndicators: false) {
+          VStack(alignment: .leading, spacing: 20) {
+            composerPrompt
 
-      if !mediaItems.isEmpty && !isCameraReviewingMedia {
-        VStack {
-          Spacer()
-          HStack {
-            Spacer()
-            firstPageNextButton
-              .padding(.trailing, 28)
-              .padding(.bottom, 40)
-          }
-        }
-        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-      }
-
-      if isLoadingMedia {
-        ProgressView()
-          .tint(.white)
-          .scaleEffect(1.12)
-      }
-    }
-    .background(Color.black.ignoresSafeArea())
-  }
-
-  private var firstPageNextButton: some View {
-    Button {
-      continueToPostDetails()
-    } label: {
-      Text("Next")
-        .font(.system(size: 16, weight: .semibold))
-        .foregroundStyle(.white)
-        .frame(width: 86, height: 52)
-        .background(MIRATheme.Color.forest)
-        .clipShape(Capsule())
-        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 8)
-    }
-    .buttonStyle(.miraPress)
-    .accessibilityLabel("Next")
-  }
-
-  private var firstPageMediaRail: some View {
-    HStack(spacing: 10) {
-      if mediaItems.count > 1 {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 10) {
-            ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
-              firstPageMediaTile(item, index: index)
+            if let first = mediaItems.first {
+              composerMediaPreview(first)
+              composerMediaRail
             }
-          }
-          .padding(.horizontal, 4)
-        }
-      }
 
+            if let errorMessage {
+              Text(errorMessage)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.red.opacity(0.9))
+            }
+
+            Spacer(minLength: max(80, proxy.size.height * 0.12))
+          }
+          .padding(.horizontal, 16)
+          .padding(.top, 14)
+          .padding(.bottom, 24)
+        }
+
+        composerToolBar
+      }
+      .background(MIRATheme.Color.surface.ignoresSafeArea())
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 8)
-    .background(.black.opacity(mediaItems.count > 1 ? 0.34 : 0), in: Capsule())
-    .opacity(mediaItems.count > 1 ? 1 : 0)
-    .allowsHitTesting(mediaItems.count > 1)
   }
 
-  private func firstPageMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
-    LocalMediaThumb(media: media, width: 70, height: 70, cornerRadius: 13)
+  private var composerTopBar: some View {
+    HStack {
+      Button("Cancel") {
+        close()
+      }
+      .font(.system(size: 17, weight: .regular))
+      .foregroundStyle(MIRATheme.Color.textSecondary)
+      .frame(minWidth: 54, minHeight: 44, alignment: .leading)
+
+      Spacer()
+
+      Button {
+        Task { await submit() }
+      } label: {
+        HStack(spacing: 7) {
+          if isPosting {
+            ProgressView()
+              .tint(.white)
+              .scaleEffect(0.72)
+          }
+          Text(isPosting ? "Posting" : "Post")
+            .font(.system(size: 16, weight: .semibold))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .frame(height: 44)
+        .background(canPost && !isPosting && !isLoadingMedia ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.42))
+        .clipShape(Capsule())
+      }
+      .buttonStyle(.plain)
+      .disabled(isPosting || isLoadingMedia || !canPost)
+    }
+    .padding(.horizontal, 16)
+    .padding(.top, 8)
+    .frame(height: 68)
+  }
+
+  private var composerPrompt: some View {
+    HStack(alignment: .top, spacing: 12) {
+      RemoteAvatar(url: composerUser?.profileImage, size: 46)
+        .accessibilityLabel("Your profile photo")
+
+      ZStack(alignment: .topLeading) {
+        if bodyText.isEmpty {
+          Text("What do you want to share?")
+            .font(.system(size: 18, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 8)
+            .allowsHitTesting(false)
+        }
+
+        TextEditor(text: $bodyText)
+          .font(.system(size: 18, weight: .regular))
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .scrollContentBackground(.hidden)
+          .focused($focusedPostDetailsField, equals: .caption)
+          .frame(minHeight: mediaItems.isEmpty ? 180 : 96, alignment: .top)
+          .accessibilityLabel("What do you want to share?")
+      }
+    }
+  }
+
+  private func composerMediaPreview(_ media: MIRAPickedMedia) -> some View {
+    let width = max(1, UIScreen.main.bounds.width - 32)
+    let height = width * media.composerHeightToWidthRatio
+    return LocalMediaThumb(media: media, width: width, height: height, cornerRadius: 16)
+      .background(MIRATheme.Color.mediaPlaceholder)
+      .overlay(alignment: .topLeading) {
+        Button {
+          removeMedia(at: 0)
+        } label: {
+          Image(systemName: "xmark")
+            .font(.system(size: 11, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(.black.opacity(0.52))
+            .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .padding(10)
+        .accessibilityLabel("Remove selected photo")
+      }
+      .overlay(alignment: .topTrailing) {
+        if mediaItems.count > 1 {
+          Text("1 of \(mediaItems.count)")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(.black.opacity(0.52))
+            .clipShape(Capsule())
+            .padding(10)
+        }
+      }
+      .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .onTapGesture {
+        editingMedia = MIRAEditorPresentation(media: media, replacementIndex: 0)
+      }
+      .accessibilityLabel("Edit selected photo")
+  }
+
+  @ViewBuilder
+  private var composerMediaRail: some View {
+    if mediaItems.count > 1 {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 10) {
+          ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+            composerMediaTile(item, index: index)
+          }
+        }
+      }
+    }
+  }
+
+  private func composerMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
+    LocalMediaThumb(media: media, width: 64, height: 64, cornerRadius: 10)
       .overlay {
-        RoundedRectangle(cornerRadius: 13, style: .continuous)
-          .stroke(index == 0 ? Color.white : Color.white.opacity(0.18), lineWidth: index == 0 ? 2 : 1)
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .stroke(index == 0 ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: index == 0 ? 2 : 1)
           .allowsHitTesting(false)
       }
       .overlay(alignment: .topTrailing) {
         Button {
           removeMedia(at: index)
         } label: {
-          Image(systemName: "xmark")
-            .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 22, height: 22)
-            .background(.black.opacity(0.62))
-            .clipShape(Circle())
+            Image(systemName: "xmark")
+              .font(.system(size: 9, weight: .bold))
+              .foregroundStyle(.white)
+              .frame(width: 20, height: 20)
+              .background(.black.opacity(0.62))
+              .clipShape(Circle())
         }
         .buttonStyle(.plain)
         .padding(5)
       }
-      .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+      .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
       .onTapGesture {
         editingMedia = MIRAEditorPresentation(media: media, replacementIndex: index)
       }
+  }
+
+  private var composerToolBar: some View {
+    HStack(spacing: 8) {
+      PhotosPicker(
+        selection: $pickerItems,
+        maxSelectionCount: max(1, 10 - mediaItems.count),
+        matching: .images,
+        preferredItemEncoding: .current
+      ) {
+        composerToolLabel(icon: "photo.on.rectangle.angled", title: "Photos")
+      }
+      .disabled(isLoadingMedia || mediaItems.count >= 10)
+
+      Menu {
+        ForEach(CaptroStampKind.creationCases) { kind in
+          Button {
+            selectedStampKind = kind
+            continueToPostDetails()
+          } label: {
+            Label(kind.displayName, systemImage: kind == selectedStampKind ? "checkmark" : "seal")
+          }
+        }
+      } label: {
+        composerToolLabel(icon: "seal", title: "Add Stamp")
+      }
+
+      Spacer(minLength: 8)
+
+      if isLoadingMedia {
+        ProgressView()
+          .tint(MIRATheme.Color.forest)
+          .frame(width: 44, height: 44)
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
+    .overlay(alignment: .top) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline.opacity(0.75))
+        .frame(height: 0.7)
+    }
+  }
+
+  private func composerToolLabel(icon: String, title: String) -> some View {
+    HStack(spacing: 7) {
+      Image(systemName: icon)
+        .font(.system(size: 18, weight: .medium))
+      Text(title)
+        .font(.system(size: 14, weight: .semibold))
+    }
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .padding(.horizontal, 12)
+    .frame(height: 44)
+    .background(MIRATheme.Color.surfaceSoft)
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 
   private var finalPostPage: some View {
@@ -1819,7 +1928,8 @@ public struct CreatePostNativeView: View {
     } else {
       errorMessage = nil
     }
-    mediaItems.append(contentsOf: loaded)
+    let remainingSlots = max(0, 10 - mediaItems.count)
+    mediaItems.append(contentsOf: loaded.prefix(remainingSlots))
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
@@ -1849,7 +1959,6 @@ public struct CreatePostNativeView: View {
   }
 
   private func continueToPostDetails() {
-    guard !mediaItems.isEmpty else { return }
     editedCameraMedia = nil
     isCameraReviewingMedia = false
     withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
@@ -1901,7 +2010,7 @@ public struct CreatePostNativeView: View {
     selectedDiscoverCategory = draft.selectedDiscoverCategory
     mediaItems = restoredMedia
     draftMediaSnapshots = draft.media
-    if draft.isEditingPostDetails == true || !restoredMedia.isEmpty {
+    if draft.isEditingPostDetails == true {
       isEditingPostDetails = true
     }
     if let message = draft.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
@@ -1958,6 +2067,7 @@ public struct CreatePostNativeView: View {
     selectedStampKind = .social
     mediaItems = []
     pickerItems = []
+    composerUser = nil
     showPreview = false
     isEditingPostDetails = false
     isLoadingMedia = false
@@ -2021,6 +2131,7 @@ public struct CreatePostNativeView: View {
     hasLoadedBroadLocation = true
     do {
       let user: MIRAUser = try await api.get("/auth/me")
+      composerUser = user
       let location = parseProfileCity(user.city)
       broadLocation = location
     } catch {
@@ -4077,6 +4188,18 @@ private struct LocalMediaThumb: View {
   }
 }
 
+private extension MIRAPickedMedia {
+  var composerHeightToWidthRatio: CGFloat {
+    guard kind == .image,
+          let image = UIImage(data: data),
+          image.size.width > 0,
+          image.size.height > 0 else {
+      return MIRAMediaSizing.feedPreviewRatio
+    }
+    return MIRAMediaSizing.boundedFeedHeightToWidthRatio(image.size.height / image.size.width)
+  }
+}
+
 private struct ComposerPreviewSheet: View {
   let title: String
   let bodyText: String
@@ -4091,12 +4214,13 @@ private struct ComposerPreviewSheet: View {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
           if let first = mediaItems.first {
             let width = UIScreen.main.bounds.width - 32
-            let height = min(width * (first.kind == .video ? 16.0 / 9.0 : 1.25), UIScreen.main.bounds.height * 0.74)
+            let height = min(width * first.composerHeightToWidthRatio, UIScreen.main.bounds.height * 0.74)
+            let stampWidthFraction = first.composerHeightToWidthRatio < 0.9 ? 0.68 : 0.72
             ZStack(alignment: .bottomLeading) {
               LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 18)
 
               CaptroPostStamp(content: previewStampContent)
-                .frame(width: width * 0.72, alignment: .leading)
+                .frame(width: width * stampWidthFraction, alignment: .leading)
                 .padding(16)
             }
             .frame(width: width, height: height)

@@ -666,23 +666,27 @@ public struct MIRAMediaDimension: Codable, Hashable {
   }
 
   public var heightToWidthRatio: CGFloat? {
-    if let formatRatio = MIRASupportedPostAspectRatio.from(format: format) {
-      return formatRatio.heightToWidthRatio
+    if let originalWidth, let originalHeight, originalWidth > 0, originalHeight > 0 {
+      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(originalHeight / originalWidth))
+    }
+    if let originalAspectRatio, originalAspectRatio > 0 {
+      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / originalAspectRatio))
+    }
+    if let width, let height, width > 0, height > 0 {
+      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(height / width))
     }
     if let displayAspectRatio, displayAspectRatio > 0 {
-      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: displayAspectRatio).heightToWidthRatio
+      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / displayAspectRatio))
     }
     if let feedAspectRatio, feedAspectRatio > 0 {
-      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: feedAspectRatio).heightToWidthRatio
-    }
-    let widthValue = feedWidth ?? width ?? originalWidth ?? 0
-    let heightValue = feedHeight ?? height ?? originalHeight ?? 0
-    if widthValue > 0, heightValue > 0 {
-      return MIRASupportedPostAspectRatio.nearest(width: widthValue, height: heightValue).heightToWidthRatio
+      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / feedAspectRatio))
     }
     if let ratio, ratio > 0 {
       // Backend stores ratio as width / height. Feed sizing needs height / width.
-      return MIRASupportedPostAspectRatio.nearest(widthToHeightRatio: ratio).heightToWidthRatio
+      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / ratio))
+    }
+    if let formatRatio = MIRASupportedPostAspectRatio.from(format: format) {
+      return formatRatio.heightToWidthRatio
     }
     return MIRAMediaSizing.heightToWidthRatio(forFormat: format)
   }

@@ -50,21 +50,24 @@ public struct MIRAPickedMedia: Hashable {
 
     let width = Double(size.width)
     let height = Double(size.height)
-    let supportedRatio = MIRASupportedPostAspectRatio.nearest(width: width, height: height)
+    let maxSide = Double(MIRAMediaSizing.feedTargetHeight)
+    let scale = min(1, maxSide / max(width, height))
+    let feedWidth = max(1, (width * scale).rounded())
+    let feedHeight = max(1, (height * scale).rounded())
     return MIRAMediaDimension(
       width: width,
       height: height,
       ratio: width / height,
-      format: supportedRatio.rawValue,
+      format: nil,
       type: kind.rawValue,
       originalWidth: width,
       originalHeight: height,
       originalAspectRatio: width / height,
-      feedWidth: supportedRatio.feedWidth,
-      feedHeight: supportedRatio.feedHeight,
-      feedAspectRatio: supportedRatio.widthToHeightRatio,
-      displayAspectRatio: supportedRatio.widthToHeightRatio,
-      cropMode: "center_crop",
+      feedWidth: feedWidth,
+      feedHeight: feedHeight,
+      feedAspectRatio: width / height,
+      displayAspectRatio: width / height,
+      cropMode: "preserve_aspect",
       mediaType: kind.rawValue
     )
   }
@@ -377,32 +380,25 @@ public final class MIRAMediaUploadService {
   private func prepareFeedImage(_ data: Data) async -> Data? {
     await Task.detached(priority: .userInitiated) {
       guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
-      let selectedRatio = MIRASupportedPostAspectRatio.nearest(
-        width: Double(image.size.width),
-        height: Double(image.size.height)
-      )
-      let targetSize = CGSize(width: CGFloat(selectedRatio.feedWidth), height: CGFloat(selectedRatio.feedHeight))
-      let scale = max(targetSize.width / image.size.width, targetSize.height / image.size.height)
-      let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-      let drawOrigin = CGPoint(
-        x: (targetSize.width - drawSize.width) / 2,
-        y: (targetSize.height - drawSize.height) / 2
+      let maxSide = MIRAMediaSizing.feedTargetHeight
+      let scale = min(1, maxSide / max(image.size.width, image.size.height))
+      let targetSize = CGSize(
+        width: max(1, (image.size.width * scale).rounded()),
+        height: max(1, (image.size.height * scale).rounded())
       )
       let format = UIGraphicsImageRendererFormat()
       format.scale = 1
       format.opaque = true
       let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
       let rendered = renderer.image { _ in
-        UIColor.black.setFill()
-        UIBezierPath(rect: CGRect(origin: .zero, size: targetSize)).fill()
-        image.draw(in: CGRect(origin: drawOrigin, size: drawSize))
+        image.draw(in: CGRect(origin: .zero, size: targetSize))
       }
       let renderedData = rendered.jpegData(compressionQuality: 0.94)
       #if DEBUG
       if let renderedData {
         print(
           "CaptroCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
-          "feed=\(Int(targetSize.width))x\(Int(targetSize.height)) ratio=\(selectedRatio.rawValue) bytes=\(renderedData.count) compression=0.94"
+          "feed=\(Int(targetSize.width))x\(Int(targetSize.height)) mode=preserve_aspect bytes=\(renderedData.count) compression=0.94"
         )
       }
       #endif

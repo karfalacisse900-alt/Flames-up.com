@@ -13,6 +13,9 @@ const postView = readIOS('Screens/CaptroFeedPostView.swift');
 const mediaPager = readIOS('Screens/CaptroFeedMediaPager.swift');
 const stamps = readIOS('Screens/CaptroFeedPostOverlays.swift');
 const composer = readIOS('Screens/NotificationLibrarySearchCreateViews.swift');
+const mediaSizing = readIOS('Components/MIRAComponents.swift');
+const mediaModels = readIOS('Models/MIRAModels.swift');
+const mediaUpload = readIOS('Services/MIRAMediaUploadService.swift');
 
 test('guest Home reads only the public feed and keeps an isolated cache', () => {
   assert.match(rootView, /isGuest: authSession\.isGuest/);
@@ -29,8 +32,19 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroPostStamp\(/);
-  assert.match(mediaPager, /mediaWidth \* 0\.72/);
+  assert.match(mediaPager, /mediaWidth \* stampWidthFraction/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
+});
+
+test('Home media follows each upload aspect ratio within editorial bounds', () => {
+  assert.match(mediaPager, /MIRAMediaSizing\.mainFeedDisplayRatio\([\s\S]*?post\.mediaHeightToWidthRatios/);
+  assert.match(mediaPager, /\.aspectRatio\(mediaWidthToHeightRatio, contentMode: \.fit\)/);
+  assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
+  assert.match(mediaPager, /mediaHeightToWidthRatio < 0\.9 \? 14/);
+  assert.match(postView, /CaptroMediaPager\([\s\S]*?\.padding\(\.horizontal, 16\)/);
+  assert.match(mediaSizing, /feedLandscapeRatio: CGFloat = 3\.0 \/ 4\.0/);
+  assert.match(mediaSizing, /min\(max\(ratio, feedLandscapeRatio\), feedTallRatio\)/);
+  assert.match(mediaModels, /if let originalWidth, let originalHeight[\s\S]*?boundedFeedHeightToWidthRatio/);
 });
 
 test('Captro uses a purpose-built family of stamp types and actions', () => {
@@ -84,4 +98,27 @@ test('composer persists the selected stamp and previews the production component
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
   assert.match(composer, /ComposerPreviewSheet\([\s\S]*?stampKind: selectedStampKind/);
   assert.match(composer, /CaptroPostStamp\(content: previewStampContent\)/);
+});
+
+test('post creation is Photos-first and keeps selected media proportions', () => {
+  const firstPageStart = composer.indexOf('private var mediaFirstPage');
+  const firstPageEnd = composer.indexOf('private var finalPostPage');
+  const firstPage = composer.slice(firstPageStart, firstPageEnd);
+
+  assert.ok(firstPageStart >= 0 && firstPageEnd > firstPageStart);
+  assert.match(firstPage, /Text\("What do you want to share\?"\)/);
+  assert.match(firstPage, /PhotosPicker\([\s\S]*?matching: \.images/);
+  assert.match(firstPage, /title: "Photos"/);
+  assert.match(firstPage, /title: "Add Stamp"/);
+  assert.match(firstPage, /media\.composerHeightToWidthRatio/);
+  assert.doesNotMatch(firstPage, /MIRAStoryLiveCameraView/);
+  assert.doesNotMatch(firstPage, /Color\.black\.ignoresSafeArea/);
+  assert.match(composer, /let remainingSlots = max\(0, 10 - mediaItems\.count\)/);
+});
+
+test('feed uploads preserve image proportions instead of center-cropping', () => {
+  assert.match(mediaUpload, /cropMode: "preserve_aspect"/);
+  assert.match(mediaUpload, /let scale = min\(1, maxSide \/ max\(image\.size\.width, image\.size\.height\)\)/);
+  assert.match(mediaUpload, /image\.draw\(in: CGRect\(origin: \.zero, size: targetSize\)\)/);
+  assert.doesNotMatch(mediaUpload, /let drawOrigin = CGPoint/);
 });
