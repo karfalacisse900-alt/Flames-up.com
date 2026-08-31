@@ -22,10 +22,9 @@ struct CaptroMediaPager: View {
         ?? MIRAMediaSizing.mainFeedDisplayRatio(
           for: mediaURLs,
           aspectRatios: post.mediaHeightToWidthRatios
-        )
+      )
     )
   }
-  private var mediaWidthToHeightRatio: CGFloat { 1 / mediaHeightToWidthRatio }
   private var mediaCornerRadius: CGFloat {
     mediaHeightToWidthRatio < 0.9 ? 14 : (mediaHeightToWidthRatio > 1.35 ? 16 : 18)
   }
@@ -34,29 +33,30 @@ struct CaptroMediaPager: View {
   }
 
   var body: some View {
-    GeometryReader { proxy in
-      ZStack {
-        mediaContent
-          .frame(width: proxy.size.width, height: proxy.size.height)
-          .contentShape(Rectangle())
-          .onTapGesture(perform: openPostUnlessPeeking)
+    CaptroNaturalMediaLayout(heightToWidthRatio: mediaHeightToWidthRatio) {
+      GeometryReader { proxy in
+        ZStack {
+          mediaContent
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: openPostUnlessPeeking)
 
-        overlayContent(mediaWidth: proxy.size.width)
+          overlayContent(mediaWidth: proxy.size.width)
 
-        if mediaURLs.count > 1 {
-          CaptroCarouselDots(
-            total: mediaURLs.count,
-            current: selectedMediaIndex,
-            reduceMotion: reduceMotion
-          )
-          .padding(.bottom, 12)
-          .frame(maxHeight: .infinity, alignment: .bottom)
-          .allowsHitTesting(false)
+          if mediaURLs.count > 1 {
+            CaptroCarouselDots(
+              total: mediaURLs.count,
+              current: selectedMediaIndex,
+              reduceMotion: reduceMotion
+            )
+            .padding(.bottom, 12)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
+          }
         }
+        .frame(width: proxy.size.width, height: proxy.size.height)
       }
-      .frame(width: proxy.size.width, height: proxy.size.height)
     }
-    .aspectRatio(mediaWidthToHeightRatio, contentMode: .fit)
     .background(MIRATheme.Color.mediaPlaceholder)
     .clipShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
     .contentShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
@@ -416,6 +416,35 @@ private struct CaptroCarouselCounter: View {
       .clipShape(Capsule())
       .overlay(Capsule().stroke(Color.white.opacity(0.72), lineWidth: 1))
       .accessibilityLabel("Photo \(current) of \(total)")
+  }
+}
+
+private struct CaptroNaturalMediaLayout: Layout {
+  let heightToWidthRatio: CGFloat
+
+  func sizeThatFits(
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) -> CGSize {
+    guard let subview = subviews.first else { return .zero }
+    let fallbackSize = subview.sizeThatFits(.unspecified)
+    let width = proposal.width ?? fallbackSize.width
+    return CGSize(width: width, height: width * heightToWidthRatio)
+  }
+
+  func placeSubviews(
+    in bounds: CGRect,
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) {
+    guard let subview = subviews.first else { return }
+    subview.place(
+      at: bounds.origin,
+      anchor: .topLeading,
+      proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+    )
   }
 }
 

@@ -38,7 +38,8 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
 
 test('Home media follows each upload aspect ratio within editorial bounds', () => {
   assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?measuredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
-  assert.match(mediaPager, /\.aspectRatio\(mediaWidthToHeightRatio, contentMode: \.fit\)/);
+  assert.match(mediaPager, /CaptroNaturalMediaLayout\(heightToWidthRatio: mediaHeightToWidthRatio\)/);
+  assert.match(mediaPager, /CGSize\(width: width, height: width \* heightToWidthRatio\)/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
   assert.match(mediaPager, /contentMode: \.fit/);
   assert.match(mediaPager, /guard index == 0 else \{ return \}/);
