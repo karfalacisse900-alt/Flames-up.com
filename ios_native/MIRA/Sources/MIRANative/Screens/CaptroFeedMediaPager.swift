@@ -8,7 +8,7 @@ struct CaptroMediaPager: View {
   let onOpenPost: () -> Void
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @GestureState private var isStampTemporarilyHidden = false
+  @GestureState private var isHoldingPhoto = false
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
 
@@ -54,7 +54,7 @@ struct CaptroMediaPager: View {
     .onChange(of: selectedMediaIndex) { _, _ in
       prefetchCarouselNeighbors()
     }
-    .onChange(of: isStampTemporarilyHidden) { _, isHidden in
+    .onChange(of: isHoldingPhoto) { _, isHidden in
       updateStampPeekTapSuppression(isHidden: isHidden)
     }
     .onDisappear {
@@ -112,23 +112,33 @@ struct CaptroMediaPager: View {
       )
       .frame(width: mediaWidth * 0.72, alignment: .leading)
       .padding(.bottom, mediaURLs.count > 1 ? 24 : 0)
-      .opacity(isStampTemporarilyHidden ? 0 : 1)
-      .allowsHitTesting(!isStampTemporarilyHidden)
-      .animation(stampPeekAnimation, value: isStampTemporarilyHidden)
+      .opacity(isHoldingPhoto ? 0 : 1)
+      .allowsHitTesting(!isHoldingPhoto)
+      .animation(stampPeekAnimation, value: isHoldingPhoto)
     }
     .padding(16)
   }
 
   private var stampPeekGesture: some Gesture {
-    LongPressGesture(minimumDuration: 0.18, maximumDistance: 22)
-      .updating($isStampTemporarilyHidden) { isRecognized, state, _ in
-        state = isRecognized
+    LongPressGesture(minimumDuration: 0.25, maximumDistance: 22)
+      .sequenced(before: DragGesture(minimumDistance: 0))
+      .updating($isHoldingPhoto) { phase, state, _ in
+        switch phase {
+        case let .second(true, drag):
+          guard let drag else {
+            state = true
+            return
+          }
+          state = hypot(drag.translation.width, drag.translation.height) <= 22
+        default:
+          state = false
+        }
       }
   }
 
   private var stampPeekAnimation: Animation? {
     guard !reduceMotion else { return nil }
-    return isStampTemporarilyHidden
+    return isHoldingPhoto
       ? .easeOut(duration: 0.11)
       : .easeIn(duration: 0.16)
   }
@@ -148,7 +158,7 @@ struct CaptroMediaPager: View {
     guard suppressTapAfterStampPeek else { return }
     stampTapResetTask = Task { @MainActor in
       try? await Task.sleep(nanoseconds: 220_000_000)
-      guard !Task.isCancelled, !isStampTemporarilyHidden else { return }
+      guard !Task.isCancelled, !isHoldingPhoto else { return }
       suppressTapAfterStampPeek = false
     }
   }
