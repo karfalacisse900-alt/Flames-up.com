@@ -529,7 +529,7 @@ public struct MIRANativeMediaEditorView: View {
   private var availableRatios: [MIRANativeEditorAspectRatio] {
     switch mode {
     case .post:
-      return [.portrait4x5, .square1x1, .portrait3x4, .landscape16x9]
+      return [.landscape4x3, .portraitPointSixFive, .portrait4x5, .portrait3x4, .square1x1]
     case .story:
       return [.story9x16, .portrait3x4, .portrait4x5, .portrait2x3]
     }

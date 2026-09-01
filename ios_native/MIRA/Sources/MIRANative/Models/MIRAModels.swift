@@ -504,24 +504,27 @@ public struct MIRATaggedUserPayload: Codable, Hashable, Identifiable {
 }
 
 public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashable {
+  case landscapeFourThree = "4:3"
+  case portraitPointSixFive = "0.65:1"
   case fourFive = "4:5"
-  case square = "1:1"
   case threeFour = "3:4"
-  case landscape16x9 = "16:9"
+  case square = "1:1"
 
   public static let defaultRatio: MIRASupportedPostAspectRatio = .threeFour
 
   public var feedWidth: Double {
     switch self {
-    case .landscape16x9: return 1920
+    case .landscapeFourThree: return 1440
+    case .portraitPointSixFive: return 999
     case .fourFive, .square, .threeFour: return 1080
     }
   }
 
   public var feedHeight: Double {
     switch self {
+    case .landscapeFourThree, .square: return 1080
+    case .portraitPointSixFive: return 1536
     case .fourFive: return 1350
-    case .square, .landscape16x9: return 1080
     case .threeFour: return 1440
     }
   }
@@ -671,23 +674,26 @@ public struct MIRAMediaDimension: Codable, Hashable {
   }
 
   public var heightToWidthRatio: CGFloat? {
-    if let originalWidth, let originalHeight, originalWidth > 0, originalHeight > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(originalHeight / originalWidth))
-    }
-    if let originalAspectRatio, originalAspectRatio > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / originalAspectRatio))
-    }
-    if let width, let height, width > 0, height > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(height / width))
-    }
     if let formatRatio = MIRASupportedPostAspectRatio.from(format: format) {
       return formatRatio.heightToWidthRatio
+    }
+    if let feedWidth, let feedHeight, feedWidth > 0, feedHeight > 0 {
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(feedHeight / feedWidth))
     }
     if let displayAspectRatio, displayAspectRatio > 0 {
       return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / displayAspectRatio))
     }
     if let feedAspectRatio, feedAspectRatio > 0 {
       return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / feedAspectRatio))
+    }
+    if let width, let height, width > 0, height > 0 {
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(height / width))
+    }
+    if let originalWidth, let originalHeight, originalWidth > 0, originalHeight > 0 {
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(originalHeight / originalWidth))
+    }
+    if let originalAspectRatio, originalAspectRatio > 0 {
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / originalAspectRatio))
     }
     if let ratio, ratio > 0 {
       // Backend stores ratio as width / height. Feed sizing needs height / width.

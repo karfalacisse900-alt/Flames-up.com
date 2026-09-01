@@ -1635,22 +1635,24 @@ public struct MIRAAdaptiveMediaView: View {
 }
 
 public enum MIRAMediaSizing {
-  public static let feedTargetWidth: CGFloat = 1080
-  public static let feedTargetHeight: CGFloat = 1440
+  public static let feedTargetWidth: CGFloat = 1440
+  public static let feedTargetHeight: CGFloat = 1536
   public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
-  public static let feedLandscapeRatio: CGFloat = 9.0 / 16.0
+  public static let feedLandscapeRatio: CGFloat = 3.0 / 4.0
+  public static let feedTallPortraitRatio: CGFloat = 1536.0 / 999.0
   public static let feedSquareRatio: CGFloat = 1
   public static let feedShortPortraitRatio: CGFloat = 5.0 / 4.0
-  public static let feedTallRatio: CGFloat = 4.0 / 3.0
-  public static let feedImmersiveRatio: CGFloat = 4.0 / 3.0
+  public static let feedTallRatio: CGFloat = feedTallPortraitRatio
+  public static let feedImmersiveRatio: CGFloat = feedTallPortraitRatio
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
   public static let supportedPostHeightToWidthRatios: [CGFloat] = [
-    feedShortPortraitRatio,
-    feedSquareRatio,
-    feedPreviewRatio,
     feedLandscapeRatio,
+    feedTallPortraitRatio,
+    feedShortPortraitRatio,
+    feedPreviewRatio,
+    feedSquareRatio,
   ]
 
   public static func feedHeight(
@@ -1677,9 +1679,7 @@ public enum MIRAMediaSizing {
     screenHeight: CGFloat = UIScreen.main.bounds.height
   ) -> CGFloat {
     let displayRatio = mainFeedDisplayRatio(for: urls, aspectRatios: aspectRatios)
-    let height = width * displayRatio
-    guard displayRatio > feedPreviewRatio else { return height }
-    return min(height, screenHeight * maxMainFeedScreenHeightFraction)
+    return width * displayRatio
   }
 
   public static func mainFeedDisplayRatio(
@@ -1735,7 +1735,7 @@ public enum MIRAMediaSizing {
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
     let minHeight = width * feedLandscapeRatio
-    let maxHeight = min(width * feedTallRatio, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
+    let maxHeight = width * feedTallRatio
     return min(max(height, minHeight), maxHeight)
   }
 
@@ -1792,10 +1792,11 @@ public enum MIRAMediaSizing {
       .lowercased()
       .replacingOccurrences(of: "×", with: "x")
       .replacingOccurrences(of: "Ã—", with: "x")
+    if containsRatio("4", "3", in: decoded) { return 3.0 / 4.0 }
+    if containsRatio("0.65", "1", in: decoded) { return 1536.0 / 999.0 }
     if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
-    if containsRatio("1", "1", in: decoded) { return 1 }
     if containsRatio("3", "4", in: decoded) { return 4.0 / 3.0 }
-    if containsRatio("16", "9", in: decoded) { return 9.0 / 16.0 }
+    if containsRatio("1", "1", in: decoded) { return 1 }
     if decoded.contains("portrait") { return feedPreviewRatio }
     return nil
   }
