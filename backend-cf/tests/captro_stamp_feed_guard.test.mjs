@@ -36,6 +36,19 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
 
+test('Home post is a full-width feed section without an outer card', () => {
+  const postBodyStart = postView.indexOf('var body: some View');
+  const postBodyEnd = postView.indexOf('private func visibleRatio');
+  const postBody = postView.slice(postBodyStart, postBodyEnd);
+
+  assert.ok(postBodyStart >= 0 && postBodyEnd > postBodyStart);
+  assert.match(postBody, /\.frame\(maxWidth: \.infinity, alignment: \.topLeading\)/);
+  assert.match(postBody, /\.containerRelativeFrame\(\.horizontal, alignment: \.leading\)/);
+  assert.doesNotMatch(postBody, /\.background\(MIRATheme\.Color\.surface\)/);
+  assert.doesNotMatch(postBody, /\.clipShape\(RoundedRectangle|\.cornerRadius\(|\.shadow\(/);
+  assert.match(mainFeed, /LazyVStack\(spacing: 0\)[\s\S]*?\.frame\(maxWidth: \.infinity, alignment: \.leading\)[\s\S]*?\.padding\(\.bottom, 112\)/);
+});
+
 test('Home media follows each upload aspect ratio within editorial bounds', () => {
   assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?measuredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.match(mediaPager, /CaptroNaturalMediaLayout\(heightToWidthRatio: mediaHeightToWidthRatio\)/);

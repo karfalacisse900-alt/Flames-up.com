@@ -841,6 +841,7 @@ public struct MainFeedView: View {
               }
             }
           }
+          .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.bottom, 112)
         }
         .coordinateSpace(name: "mainFeedScroll")

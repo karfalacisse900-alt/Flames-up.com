@@ -48,7 +48,7 @@ struct CaptroFeedPostView: View {
         .padding(.top, 24)
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .background(MIRATheme.Color.surface)
+    .containerRelativeFrame(.horizontal, alignment: .leading)
     .background {
       GeometryReader { proxy in
         Color.clear.preference(
