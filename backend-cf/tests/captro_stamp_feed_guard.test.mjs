@@ -16,6 +16,8 @@ const composer = readIOS('Screens/NotificationLibrarySearchCreateViews.swift');
 const mediaSizing = readIOS('Components/MIRAComponents.swift');
 const mediaModels = readIOS('Models/MIRAModels.swift');
 const mediaUpload = readIOS('Services/MIRAMediaUploadService.swift');
+const mediaEditor = readIOS('Services/MIRANativeMediaEditor.swift');
+const mediaEditorView = readIOS('Screens/MIRANativeMediaEditorView.swift');
 const worker = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 
 test('guest Home reads only the public feed and keeps an isolated cache', () => {
@@ -74,14 +76,15 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(mainFeed, /LazyVStack\(spacing: 0\)[\s\S]*?\.frame\(maxWidth: \.infinity, alignment: \.leading\)[\s\S]*?\.padding\(\.bottom, 112\)/);
 });
 
-test('Home media is a full-width rectangular frame that follows the cover ratio', () => {
+test('Home media is a full-width rectangular frame using exactly four supported ratios', () => {
   assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?measuredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
   assert.match(mediaPager, /contentMode: \.fill/);
   assert.match(mediaPager, /guard index == 0 else \{ return \}/);
-  assert.match(mediaPager, /min\(max\(ratio, 9\.0 \/ 16\.0\), 16\.0 \/ 9\.0\)/);
+  assert.match(mediaPager, /MIRAMediaSizing\.supportedPostHeightToWidthRatio\(ratio\)/);
+  assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
   const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
   const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
@@ -101,10 +104,30 @@ test('Home media is a full-width rectangular frame that follows the cover ratio'
   assert.equal(mediaWidth / screenWidth, 1);
   assert.equal(Math.round(mediaWidth * (5 / 4)), 488);
   assert.equal(Math.round(mediaWidth), 390);
-  assert.equal(Math.round(mediaWidth * (3 / 4)), 293);
   assert.equal(Math.round(mediaWidth * (4 / 3)), 520);
-  assert.equal(Math.round(mediaWidth * (3 / 2)), 585);
-  assert.equal(Math.round(mediaWidth * (16 / 9)), 693);
+  assert.equal(Math.round(mediaWidth * (9 / 16)), 219);
+
+  const swiftRatioStart = mediaModels.indexOf('public enum MIRASupportedPostAspectRatio');
+  const swiftRatioEnd = mediaModels.indexOf('public struct MIRAMediaDimension', swiftRatioStart);
+  const swiftRatios = mediaModels.slice(swiftRatioStart, swiftRatioEnd);
+  assert.ok(swiftRatioStart >= 0 && swiftRatioEnd > swiftRatioStart);
+  const expectedRatios = ['4:5', '1:1', '3:4', '16:9'];
+  const swiftRatioValues = [...swiftRatios.matchAll(/case\s+\w+\s*=\s*"([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(swiftRatioValues, expectedRatios);
+  assert.doesNotMatch(swiftRatios, /2:3|1620/);
+
+  const workerRatioStart = worker.indexOf('const SUPPORTED_FEED_MEDIA_RATIOS');
+  const workerRatioEnd = worker.indexOf('function supportedFeedMediaVariant', workerRatioStart);
+  const workerRatios = worker.slice(workerRatioStart, workerRatioEnd);
+  assert.ok(workerRatioStart >= 0 && workerRatioEnd > workerRatioStart);
+  const workerRatioValues = [...workerRatios.matchAll(/format:\s*'([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(workerRatioValues, expectedRatios);
+  assert.match(workerRatios, /'4:5'[\s\S]*?1080[\s\S]*?1350/);
+  assert.match(workerRatios, /'1:1'[\s\S]*?1080[\s\S]*?1080/);
+  assert.match(workerRatios, /'3:4'[\s\S]*?1080[\s\S]*?1440/);
+  assert.match(workerRatios, /'16:9'[\s\S]*?1920[\s\S]*?1080/);
+  assert.doesNotMatch(workerRatios, /'2:3'|1620/);
+  assert.match(mediaSizing, /supportedPostHeightToWidthRatios:[\s\S]*?feedShortPortraitRatio[\s\S]*?feedSquareRatio[\s\S]*?feedPreviewRatio[\s\S]*?feedLandscapeRatio/);
 });
 
 test('Captro uses a purpose-built family of stamp types and actions', () => {
@@ -117,6 +140,9 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(stamps, /case \.group: return "ACCESS"/);
   assert.match(stamps, /background\(Color\.white\.opacity\(0\.96\)\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
+  assert.match(mediaPager, /mediaHeightToWidthRatio < 0\.8 \? 0\.56 : \(mediaHeightToWidthRatio > 1\.3 \? 0\.52 : 0\.54\)/);
+  assert.match(mediaPager, /CaptroPostStamp\([\s\S]*?compact: true/);
+  assert.match(stamps, /\.lineLimit\(compact \? 3 : 4\)/);
 });
 
 test('holding the Home stamp temporarily reveals the unobstructed photo', () => {
@@ -174,11 +200,18 @@ test('post creation is Photos-first and keeps selected media proportions', () =>
   assert.doesNotMatch(firstPage, /MIRAStoryLiveCameraView/);
   assert.doesNotMatch(firstPage, /Color\.black\.ignoresSafeArea/);
   assert.match(composer, /let remainingSlots = max\(0, 10 - mediaItems\.count\)/);
+  assert.match(composer, /mediaDimensions\.append\(await item\.postMediaDimension\(\)\)/);
+  assert.match(mediaUpload, /if target == \.feedPost \{[\s\S]*?dimensions = await media\.postMediaDimension\(\)/);
+  assert.match(mediaEditorView, /case \.post:[\s\S]*?return \[\.portrait4x5, \.square1x1, \.portrait3x4, \.landscape16x9\]/);
+  assert.match(mediaEditor, /case square1x1 = "1:1"/);
+  assert.match(mediaEditor, /case landscape16x9 = "16:9"/);
+  assert.match(mediaEditorView, /postAspectRatio: \.nearest\(width: Double\(image\.size\.width\), height: Double\(image\.size\.height\)\)/);
 });
 
-test('feed uploads preserve image proportions instead of center-cropping', () => {
-  assert.match(mediaUpload, /cropMode: "preserve_aspect"/);
-  assert.match(mediaUpload, /let scale = min\(1, maxSide \/ max\(image\.size\.width, image\.size\.height\)\)/);
-  assert.match(mediaUpload, /image\.draw\(in: CGRect\(origin: \.zero, size: targetSize\)\)/);
-  assert.doesNotMatch(mediaUpload, /let drawOrigin = CGPoint/);
+test('feed image uploads are rendered into the selected supported ratio', () => {
+  assert.match(mediaUpload, /cropMode: "center_crop"/);
+  assert.match(mediaUpload, /width: CGFloat\(supported\.feedWidth\),[\s\S]*?height: CGFloat\(supported\.feedHeight\)/);
+  assert.match(mediaUpload, /let scale = max\(targetSize\.width \/ image\.size\.width, targetSize\.height \/ image\.size\.height\)/);
+  assert.match(mediaUpload, /let drawOrigin = CGPoint/);
+  assert.match(mediaUpload, /image\.draw\(in: CGRect\(origin: drawOrigin, size: drawSize\)\)/);
 });

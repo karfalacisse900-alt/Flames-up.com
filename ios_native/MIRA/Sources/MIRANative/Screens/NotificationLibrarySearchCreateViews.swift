@@ -1809,7 +1809,7 @@ public struct CreatePostNativeView: View {
           mediaAssetIds.append(mediaAssetId)
         }
         mediaTypes.append(item.kind.rawValue)
-        mediaDimensions.append(await item.mediaDimension())
+        mediaDimensions.append(await item.postMediaDimension())
       }
       let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
       let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), tagLine]
@@ -4215,11 +4215,11 @@ private struct ComposerPreviewSheet: View {
           if let first = mediaItems.first {
             let width = UIScreen.main.bounds.width - 32
             let height = min(width * first.composerHeightToWidthRatio, UIScreen.main.bounds.height * 0.74)
-            let stampWidthFraction = first.composerHeightToWidthRatio < 0.9 ? 0.68 : 0.72
+            let stampWidthFraction = first.composerHeightToWidthRatio < 0.8 ? 0.56 : (first.composerHeightToWidthRatio > 1.3 ? 0.52 : 0.54)
             ZStack(alignment: .bottomLeading) {
               LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 18)
 
-              CaptroPostStamp(content: previewStampContent)
+              CaptroPostStamp(content: previewStampContent, compact: true)
                 .frame(width: width * stampWidthFraction, alignment: .leading)
                 .padding(16)
             }

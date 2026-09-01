@@ -5113,33 +5113,33 @@ const FEED_MEDIA_WIDTH = 1080;
 const FEED_MEDIA_HEIGHT = 1440;
 const FEED_MEDIA_ASPECT_RATIO = FEED_MEDIA_WIDTH / FEED_MEDIA_HEIGHT;
 const SUPPORTED_FEED_MEDIA_RATIOS = [
-  { format: '3:4', feed_width: 1080, feed_height: 1440, feed_aspect_ratio: 1080 / 1440 },
   { format: '4:5', feed_width: 1080, feed_height: 1350, feed_aspect_ratio: 1080 / 1350 },
-  { format: '2:3', feed_width: 1080, feed_height: 1620, feed_aspect_ratio: 1080 / 1620 },
+  { format: '1:1', feed_width: 1080, feed_height: 1080, feed_aspect_ratio: 1 },
+  { format: '3:4', feed_width: 1080, feed_height: 1440, feed_aspect_ratio: 1080 / 1440 },
+  { format: '16:9', feed_width: 1920, feed_height: 1080, feed_aspect_ratio: 1920 / 1080 },
 ];
-const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[0];
+const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[2];
 
 function supportedFeedMediaVariant(source: any = {}) {
   const format = cleanText(source?.format, 16);
   const explicit = SUPPORTED_FEED_MEDIA_RATIOS.find((item) => item.format === format);
-  if (explicit) return explicit;
   const width = Number(source?.original_width || source?.originalWidth || source?.width || 0);
   const height = Number(source?.original_height || source?.originalHeight || source?.height || 0);
   const ratio = Number(
-    source?.display_aspect_ratio
-    || source?.displayAspectRatio
-    || source?.feed_aspect_ratio
-    || source?.feedAspectRatio
-    || source?.original_aspect_ratio
+    source?.original_aspect_ratio
     || source?.originalAspectRatio
     || source?.aspect_ratio
     || source?.aspectRatio
     || source?.ratio
     || (width > 0 && height > 0 ? width / height : 0)
+    || source?.display_aspect_ratio
+    || source?.displayAspectRatio
+    || source?.feed_aspect_ratio
+    || source?.feedAspectRatio
   );
-  if (!Number.isFinite(ratio) || ratio <= 0 || ratio >= 1) return DEFAULT_FEED_MEDIA_RATIO;
+  if (!Number.isFinite(ratio) || ratio <= 0) return explicit || DEFAULT_FEED_MEDIA_RATIO;
   return SUPPORTED_FEED_MEDIA_RATIOS.reduce((best, candidate) => (
-    Math.abs(candidate.feed_aspect_ratio - ratio) < Math.abs(best.feed_aspect_ratio - ratio) ? candidate : best
+    Math.abs(Math.log(candidate.feed_aspect_ratio / ratio)) < Math.abs(Math.log(best.feed_aspect_ratio / ratio)) ? candidate : best
   ), DEFAULT_FEED_MEDIA_RATIO);
 }
 

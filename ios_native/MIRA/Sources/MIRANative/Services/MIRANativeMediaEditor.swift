@@ -13,16 +13,29 @@ public enum MIRANativeEditorAspectRatio: String, Codable, Hashable, CaseIterable
   case original
   case portrait3x4 = "3:4"
   case portrait4x5 = "4:5"
+  case square1x1 = "1:1"
+  case landscape16x9 = "16:9"
   case portrait2x3 = "2:3"
   case story9x16 = "9:16"
 
   public var id: String { rawValue }
+
+  public init(postAspectRatio: MIRASupportedPostAspectRatio) {
+    switch postAspectRatio {
+    case .fourFive: self = .portrait4x5
+    case .square: self = .square1x1
+    case .threeFour: self = .portrait3x4
+    case .landscape16x9: self = .landscape16x9
+    }
+  }
 
   public var title: String {
     switch self {
     case .original: return "Original"
     case .portrait3x4: return "3:4"
     case .portrait4x5: return "4:5"
+    case .square1x1: return "1:1"
+    case .landscape16x9: return "16:9"
     case .portrait2x3: return "2:3"
     case .story9x16: return "Story"
     }
@@ -33,6 +46,8 @@ public enum MIRANativeEditorAspectRatio: String, Codable, Hashable, CaseIterable
     case .original: return nil
     case .portrait3x4: return 3 / 4
     case .portrait4x5: return 4 / 5
+    case .square1x1: return 1
+    case .landscape16x9: return 16 / 9
     case .portrait2x3: return 2 / 3
     case .story9x16: return 9 / 16
     }
@@ -43,6 +58,8 @@ public enum MIRANativeEditorAspectRatio: String, Codable, Hashable, CaseIterable
     case .original: return nil
     case .portrait3x4: return CGSize(width: 1080, height: 1440)
     case .portrait4x5: return CGSize(width: 1080, height: 1350)
+    case .square1x1: return CGSize(width: 1080, height: 1080)
+    case .landscape16x9: return CGSize(width: 1920, height: 1080)
     case .portrait2x3: return CGSize(width: 1080, height: 1620)
     case .story9x16: return CGSize(width: 1080, height: 1920)
     }

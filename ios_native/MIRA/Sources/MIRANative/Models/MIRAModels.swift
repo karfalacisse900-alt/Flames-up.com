@@ -504,19 +504,25 @@ public struct MIRATaggedUserPayload: Codable, Hashable, Identifiable {
 }
 
 public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashable {
-  case threeFour = "3:4"
   case fourFive = "4:5"
-  case twoThree = "2:3"
+  case square = "1:1"
+  case threeFour = "3:4"
+  case landscape16x9 = "16:9"
 
   public static let defaultRatio: MIRASupportedPostAspectRatio = .threeFour
 
-  public var feedWidth: Double { 1080 }
+  public var feedWidth: Double {
+    switch self {
+    case .landscape16x9: return 1920
+    case .fourFive, .square, .threeFour: return 1080
+    }
+  }
 
   public var feedHeight: Double {
     switch self {
-    case .threeFour: return 1440
     case .fourFive: return 1350
-    case .twoThree: return 1620
+    case .square, .landscape16x9: return 1080
+    case .threeFour: return 1440
     }
   }
 
@@ -531,16 +537,15 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
   public static func nearest(width: Double?, height: Double?, preferred: MIRASupportedPostAspectRatio = .threeFour) -> MIRASupportedPostAspectRatio {
     guard let width, let height, width > 0, height > 0 else { return preferred }
     let original = width / height
-    guard original < 1 else { return preferred }
     return allCases.min { lhs, rhs in
-      abs(lhs.widthToHeightRatio - original) < abs(rhs.widthToHeightRatio - original)
+      abs(log(lhs.widthToHeightRatio / original)) < abs(log(rhs.widthToHeightRatio / original))
     } ?? preferred
   }
 
   public static func nearest(widthToHeightRatio ratio: Double?) -> MIRASupportedPostAspectRatio {
-    guard let ratio, ratio.isFinite, ratio > 0, ratio < 1 else { return defaultRatio }
+    guard let ratio, ratio.isFinite, ratio > 0 else { return defaultRatio }
     return allCases.min { lhs, rhs in
-      abs(lhs.widthToHeightRatio - ratio) < abs(rhs.widthToHeightRatio - ratio)
+      abs(log(lhs.widthToHeightRatio / ratio)) < abs(log(rhs.widthToHeightRatio / ratio))
     } ?? defaultRatio
   }
 
@@ -667,26 +672,26 @@ public struct MIRAMediaDimension: Codable, Hashable {
 
   public var heightToWidthRatio: CGFloat? {
     if let originalWidth, let originalHeight, originalWidth > 0, originalHeight > 0 {
-      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(originalHeight / originalWidth))
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(originalHeight / originalWidth))
     }
     if let originalAspectRatio, originalAspectRatio > 0 {
-      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / originalAspectRatio))
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / originalAspectRatio))
     }
     if let width, let height, width > 0, height > 0 {
-      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(height / width))
-    }
-    if let displayAspectRatio, displayAspectRatio > 0 {
-      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / displayAspectRatio))
-    }
-    if let feedAspectRatio, feedAspectRatio > 0 {
-      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / feedAspectRatio))
-    }
-    if let ratio, ratio > 0 {
-      // Backend stores ratio as width / height. Feed sizing needs height / width.
-      return MIRAMediaSizing.boundedFeedHeightToWidthRatio(CGFloat(1 / ratio))
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(height / width))
     }
     if let formatRatio = MIRASupportedPostAspectRatio.from(format: format) {
       return formatRatio.heightToWidthRatio
+    }
+    if let displayAspectRatio, displayAspectRatio > 0 {
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / displayAspectRatio))
+    }
+    if let feedAspectRatio, feedAspectRatio > 0 {
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / feedAspectRatio))
+    }
+    if let ratio, ratio > 0 {
+      // Backend stores ratio as width / height. Feed sizing needs height / width.
+      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / ratio))
     }
     return MIRAMediaSizing.heightToWidthRatio(forFormat: format)
   }

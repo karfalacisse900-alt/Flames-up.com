@@ -26,7 +26,7 @@ struct CaptroMediaPager: View {
     )
   }
   private var stampWidthFraction: CGFloat {
-    mediaHeightToWidthRatio < 0.9 ? 0.68 : (mediaHeightToWidthRatio > 1.35 ? 0.74 : 0.72)
+    mediaHeightToWidthRatio < 0.8 ? 0.56 : (mediaHeightToWidthRatio > 1.3 ? 0.52 : 0.54)
   }
 
   var body: some View {
@@ -115,22 +115,11 @@ struct CaptroMediaPager: View {
   }
 
   private var declaredCoverHeightToWidthRatio: CGFloat? {
-    guard let dimensions = post.mediaDimensions?.values.first else { return nil }
-    if let width = dimensions.originalWidth,
-       let height = dimensions.originalHeight,
-       width > 0,
-       height > 0 {
-      return CGFloat(height / width)
-    }
-    if let ratio = dimensions.originalAspectRatio, ratio > 0 {
-      return CGFloat(1 / ratio)
-    }
-    return nil
+    post.mediaDimensions?.values.first?.heightToWidthRatio
   }
 
   private func boundedHomeMediaRatio(_ ratio: CGFloat) -> CGFloat {
-    guard ratio.isFinite, ratio > 0 else { return 4.0 / 3.0 }
-    return min(max(ratio, 9.0 / 16.0), 16.0 / 9.0)
+    MIRAMediaSizing.supportedPostHeightToWidthRatio(ratio)
   }
 
   private func overlayContent(mediaWidth: CGFloat) -> some View {
@@ -148,7 +137,8 @@ struct CaptroMediaPager: View {
       CaptroPostStamp(
         content: post.captroStampContent,
         onOpen: openPostUnlessPeeking,
-        onAction: openPostUnlessPeeking
+        onAction: openPostUnlessPeeking,
+        compact: true
       )
       .frame(width: mediaWidth * stampWidthFraction, alignment: .leading)
       .contentShape(Rectangle())

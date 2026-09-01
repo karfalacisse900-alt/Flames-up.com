@@ -1638,13 +1638,20 @@ public enum MIRAMediaSizing {
   public static let feedTargetWidth: CGFloat = 1080
   public static let feedTargetHeight: CGFloat = 1440
   public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
-  public static let feedLandscapeRatio: CGFloat = 3.0 / 4.0
+  public static let feedLandscapeRatio: CGFloat = 9.0 / 16.0
+  public static let feedSquareRatio: CGFloat = 1
   public static let feedShortPortraitRatio: CGFloat = 5.0 / 4.0
-  public static let feedTallRatio: CGFloat = 3.0 / 2.0
-  public static let feedImmersiveRatio: CGFloat = 3.0 / 2.0
+  public static let feedTallRatio: CGFloat = 4.0 / 3.0
+  public static let feedImmersiveRatio: CGFloat = 4.0 / 3.0
   public static let profileGridRatio: CGFloat = 5.0 / 4.0
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
+  public static let supportedPostHeightToWidthRatios: [CGFloat] = [
+    feedShortPortraitRatio,
+    feedSquareRatio,
+    feedPreviewRatio,
+    feedLandscapeRatio,
+  ]
 
   public static func feedHeight(
     for urls: [String],
@@ -1696,7 +1703,7 @@ public enum MIRAMediaSizing {
   ) -> CGFloat {
     let ideal = feedHeight(for: urls, aspectRatios: aspectRatios, width: width)
     // Detail pages need room for the title/caption and the fixed action/comment bar.
-    // Tall 2:3 media is still displayed large, but it cannot push controls off-screen.
+    // Portrait media is still displayed large, but it cannot push controls off-screen.
     let readableDetailHeight = UIScreen.main.bounds.height * 0.48
     return min(ideal, readableDetailHeight)
   }
@@ -1733,12 +1740,18 @@ public enum MIRAMediaSizing {
   }
 
   private static func supportedFeedHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {
-    boundedFeedHeightToWidthRatio(ratio)
+    supportedPostHeightToWidthRatio(ratio)
+  }
+
+  public static func supportedPostHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {
+    guard ratio.isFinite, ratio > 0 else { return feedPreviewRatio }
+    return supportedPostHeightToWidthRatios.min { lhs, rhs in
+      abs(log(lhs / ratio)) < abs(log(rhs / ratio))
+    } ?? feedPreviewRatio
   }
 
   public static func boundedFeedHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {
-    guard ratio.isFinite, ratio > 0 else { return feedPreviewRatio }
-    return min(max(ratio, feedLandscapeRatio), feedTallRatio)
+    supportedPostHeightToWidthRatio(ratio)
   }
 
   private static func dimensionsRatio(in value: String) -> CGFloat? {
@@ -1780,8 +1793,9 @@ public enum MIRAMediaSizing {
       .replacingOccurrences(of: "×", with: "x")
       .replacingOccurrences(of: "Ã—", with: "x")
     if containsRatio("4", "5", in: decoded) { return 5.0 / 4.0 }
+    if containsRatio("1", "1", in: decoded) { return 1 }
     if containsRatio("3", "4", in: decoded) { return 4.0 / 3.0 }
-    if containsRatio("2", "3", in: decoded) { return 3.0 / 2.0 }
+    if containsRatio("16", "9", in: decoded) { return 9.0 / 16.0 }
     if decoded.contains("portrait") { return feedPreviewRatio }
     return nil
   }

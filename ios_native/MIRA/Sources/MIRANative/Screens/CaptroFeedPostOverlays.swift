@@ -65,11 +65,12 @@ struct CaptroPostStamp: View {
   let content: CaptroStampContent
   var onOpen: (() -> Void)? = nil
   var onAction: (() -> Void)? = nil
+  var compact = false
 
   var body: some View {
     stampLayout
-      .padding(.horizontal, 14)
-      .padding(.vertical, 12)
+      .padding(.horizontal, compact ? 12 : 14)
+      .padding(.vertical, compact ? 10 : 12)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(Color.white.opacity(0.96))
       .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
@@ -165,7 +166,7 @@ struct CaptroPostStamp: View {
         .font(.system(size: 12, weight: .regular))
         .foregroundStyle(Color.black.opacity(0.78))
         .lineSpacing(2)
-        .lineLimit(4)
+        .lineLimit(compact ? 3 : 4)
         .fixedSize(horizontal: false, vertical: true)
     }
   }

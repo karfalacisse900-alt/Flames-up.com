@@ -27,6 +27,7 @@ public struct MIRANativeMediaEditorView: View {
   @State private var draftText = ""
   @State private var isExporting = false
   @State private var errorMessage: String?
+  @State private var didManuallySelectAspectRatio = false
 
   public init(
     media: MIRAPickedMedia,
@@ -39,11 +40,21 @@ public struct MIRANativeMediaEditorView: View {
     self.onClose = onClose
     self.onComplete = onComplete
     let mediaType: MIRANativeEditorMediaType = media.kind == .video ? .video : .photo
+    let initialAspectRatio: MIRANativeEditorAspectRatio
+    if mode == .story {
+      initialAspectRatio = .story9x16
+    } else if let image = UIImage(data: media.data), image.size.width > 0, image.size.height > 0 {
+      initialAspectRatio = MIRANativeEditorAspectRatio(
+        postAspectRatio: .nearest(width: Double(image.size.width), height: Double(image.size.height))
+      )
+    } else {
+      initialAspectRatio = .portrait3x4
+    }
     _recipe = State(initialValue: MIRANativeEditRecipe(
       mediaType: mediaType,
-      aspectRatio: mode == .story ? .story9x16 : .portrait3x4
+      aspectRatio: initialAspectRatio
     ))
-    _activePanel = State(initialValue: mode == .post ? .adjustments : .crop)
+    _activePanel = State(initialValue: .crop)
   }
 
   public var body: some View {
@@ -253,7 +264,7 @@ public struct MIRANativeMediaEditorView: View {
   }
 
   private var availableEditorPanels: [EditorPanel] {
-    var panels: [EditorPanel] = mode == .post ? [.adjustments, .filters] : [.crop, .adjustments, .filters]
+    var panels: [EditorPanel] = [.crop, .adjustments, .filters]
     if media.kind == .video {
       panels.append(.trim)
     } else if mode == .story {
@@ -268,6 +279,7 @@ public struct MIRANativeMediaEditorView: View {
         HStack(spacing: 10) {
           ForEach(availableRatios, id: \.self) { ratio in
             Button {
+              didManuallySelectAspectRatio = true
               recipe.aspectRatio = ratio
             } label: {
               Text(ratio.title)
@@ -517,7 +529,7 @@ public struct MIRANativeMediaEditorView: View {
   private var availableRatios: [MIRANativeEditorAspectRatio] {
     switch mode {
     case .post:
-      return [.portrait3x4, .portrait4x5, .portrait2x3]
+      return [.portrait4x5, .square1x1, .portrait3x4, .landscape16x9]
     case .story:
       return [.story9x16, .portrait3x4, .portrait4x5, .portrait2x3]
     }
@@ -559,6 +571,20 @@ public struct MIRANativeMediaEditorView: View {
       let duration = try await asset.load(.duration)
       let seconds = max(0, CMTimeGetSeconds(duration))
       videoDurationSeconds = seconds
+      if mode == .post,
+         !didManuallySelectAspectRatio,
+         let track = try await asset.loadTracks(withMediaType: .video).first {
+        let naturalSize = try await track.load(.naturalSize)
+        let transform = try await track.load(.preferredTransform)
+        let transformed = naturalSize.applying(transform)
+        let width = abs(transformed.width)
+        let height = abs(transformed.height)
+        if width > 0, height > 0 {
+          recipe.aspectRatio = MIRANativeEditorAspectRatio(
+            postAspectRatio: .nearest(width: Double(width), height: Double(height))
+          )
+        }
+      }
       if recipe.trimEndSeconds <= recipe.trimStartSeconds {
         recipe.trimEndSeconds = seconds
       }
