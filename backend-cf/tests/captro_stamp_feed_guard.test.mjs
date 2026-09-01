@@ -12,6 +12,7 @@ const mainFeed = readIOS('Screens/MainFeedView.swift');
 const postView = readIOS('Screens/CaptroFeedPostView.swift');
 const mediaPager = readIOS('Screens/CaptroFeedMediaPager.swift');
 const stamps = readIOS('Screens/CaptroFeedPostOverlays.swift');
+const visualFixture = readIOS('Screens/CaptroHomeFeedVisualTestView.swift');
 const composer = readIOS('Screens/NotificationLibrarySearchCreateViews.swift');
 const mediaSizing = readIOS('Components/MIRAComponents.swift');
 const mediaModels = readIOS('Models/MIRAModels.swift');
@@ -32,7 +33,9 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroPostStamp\(/);
-  assert.match(mediaPager, /mediaWidth \* stampWidthFraction/);
+  assert.match(mediaPager, /venueReviewStampWidth\(mediaWidth:/);
+  assert.match(mediaPager, /guideCoverStampWidth\(mediaWidth:/);
+  assert.match(mediaPager, /simplePostStampWidth\(mediaWidth:/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
 
@@ -77,8 +80,32 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(stamps, /case \.event: return "ATTEND"/);
   assert.match(stamps, /case \.deal, \.localOffer: return "CLAIM"/);
   assert.match(stamps, /case \.group: return "ACCESS"/);
-  assert.match(stamps, /background\(Color\.white\.opacity\(0\.96\)\)/);
+  assert.match(stamps, /background\(Color\.white\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
+});
+
+test('Home stamps use distinct editorial venue, guide, and simple overlays', () => {
+  assert.match(stamps, /private var venueReviewOverlay: some View/);
+  assert.match(stamps, /private var guideCoverOverlay: some View/);
+  assert.match(stamps, /private var simplePostOverlay: some View/);
+  assert.match(stamps, /private var actionPostOverlay: some View/);
+  assert.match(stamps, /usesCompactTypography \? 24 : 28/);
+  assert.match(stamps, /CaptroStampPalette\.savesPink/);
+  assert.match(stamps, /creatorUsername: cleanedCaptroFeedValue\(userUsername\)/);
+  assert.match(stamps, /creatorProfileImage: cleanedCaptroFeedValue\(userProfileImage\)/);
+  assert.match(stamps, /RoundedRectangle\(cornerRadius: 2[\s\S]*?lineWidth: 1\.25/);
+  assert.match(stamps, /RoundedRectangle\(cornerRadius: 1[\s\S]*?lineWidth: 1\.25/);
+  assert.doesNotMatch(stamps, /cornerRadius: (?:9|1[0-9]|[2-9][0-9])/);
+
+  assert.match(mediaPager, /case \.place:[\s\S]*?\.padding\(\.leading, 22\)[\s\S]*?\.padding\(\.bottom, mediaURLs\.count > 1 \? 38 : 28\)/);
+  assert.match(mediaPager, /case \.guide:[\s\S]*?\.offset\(y: -mediaHeight \* 0\.09\)/);
+  assert.match(mediaPager, /CaptroContributorAvatars\([\s\S]*?avatarSize: 34/);
+  assert.match(mediaPager, /descriptionLength > 110 \? 0\.72 : \(descriptionLength > 54 \? 0\.68 : 0\.62\)/);
+  assert.match(mediaPager, /title\.count > 36 \? 0\.78 : 0\.72/);
+
+  assert.match(visualFixture, /"id": "home-feed-visual-place"/);
+  assert.match(visualFixture, /"id": "home-feed-visual-guide"/);
+  assert.match(visualFixture, /"id": "home-feed-visual-moment"/);
 });
 
 test('holding the Home stamp temporarily reveals the unobstructed photo', () => {

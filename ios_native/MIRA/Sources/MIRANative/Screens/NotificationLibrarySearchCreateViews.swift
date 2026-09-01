@@ -4260,7 +4260,10 @@ private struct ComposerPreviewSheet: View {
       description: cleanBody.isEmpty ? nil : cleanBody,
       footer: footerValues.isEmpty ? nil : footerValues.joined(separator: " · "),
       actionTitle: stampKind.actionTitle,
-      contributors: []
+      contributors: [],
+      savesCount: nil,
+      creatorUsername: nil,
+      creatorProfileImage: nil
     )
   }
 

@@ -78,10 +78,41 @@ private enum CaptroHomeFeedVisualFixtures {
     decode(
       """
       {
+        "id": "home-feed-visual-place",
+        "userFullName": "Maya Chen",
+        "userUsername": "mayawanders",
+        "userProfileImage": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=160&q=80",
+        "title": "Riverside Room",
+        "caption": "A small neighborhood room with thoughtful food and the kind of atmosphere that makes a quick stop turn into the whole evening.",
+        "images": [
+          "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=1080&q=85"
+        ],
+        "feedMediaUrls": [
+          "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=1080&q=85"
+        ],
+        "location": "East Village, New York",
+        "displayCity": "New York",
+        "displayRegion": "New York",
+        "displayLocationLabel": "East Village",
+        "displayLocationVisibility": "city",
+        "placeName": "Riverside Room",
+        "placeCity": "New York",
+        "postType": "place",
+        "createdAt": "2026-08-28T10:15:00Z",
+        "savesCount": 469,
+        "likesCount": 24,
+        "isLiked": false
+      }
+      """
+    ),
+    decode(
+      """
+      {
         "id": "home-feed-visual-guide",
-        "userFullName": "Captro",
-        "userUsername": "captro",
-        "title": "City at Blue Hour",
+        "userFullName": "Jon Bell",
+        "userUsername": "joncollects",
+        "userProfileImage": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=160&q=80",
+        "title": "After Dark: Small Rooms Worth Knowing",
         "caption": "A quiet walk through the city after the rain. The light kept changing from one block to the next, turning familiar streets into places worth seeing again.",
         "images": [
           "https://images.unsplash.com/photo-1522083165195-3424ed129620?auto=format&fit=crop&w=1080&q=85",
@@ -99,6 +130,26 @@ private enum CaptroHomeFeedVisualFixtures {
         "placeName": "Brooklyn",
         "placeCity": "Brooklyn",
         "postType": "guide",
+        "taggedUsers": [
+          {
+            "id": "visual-contributor-one",
+            "username": "maya",
+            "fullName": "Maya Chen",
+            "profileImage": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=160&q=80"
+          },
+          {
+            "id": "visual-contributor-two",
+            "username": "noah",
+            "fullName": "Noah Williams",
+            "profileImage": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=160&q=80"
+          },
+          {
+            "id": "visual-contributor-three",
+            "username": "nia",
+            "fullName": "Nia Reed",
+            "profileImage": "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=160&q=80"
+          }
+        ],
         "createdAt": "2026-08-28T09:41:00Z",
         "likesCount": 18,
         "isLiked": false
@@ -109,8 +160,10 @@ private enum CaptroHomeFeedVisualFixtures {
       """
       {
         "id": "home-feed-visual-moment",
-        "userFullName": "Captro",
-        "userUsername": "captro",
+        "userFullName": "Noah Williams",
+        "userUsername": "noahframes",
+        "userProfileImage": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=160&q=80",
+        "title": "Morning Walk",
         "caption": "Morning light across the neighborhood.",
         "images": [
           "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1080&q=85"

@@ -28,9 +28,6 @@ struct CaptroMediaPager: View {
   private var mediaCornerRadius: CGFloat {
     mediaHeightToWidthRatio < 0.9 ? 14 : (mediaHeightToWidthRatio > 1.35 ? 16 : 18)
   }
-  private var stampWidthFraction: CGFloat {
-    mediaHeightToWidthRatio < 0.9 ? 0.68 : (mediaHeightToWidthRatio > 1.35 ? 0.74 : 0.72)
-  }
 
   var body: some View {
     CaptroNaturalMediaLayout(heightToWidthRatio: mediaHeightToWidthRatio) {
@@ -41,7 +38,7 @@ struct CaptroMediaPager: View {
             .contentShape(Rectangle())
             .onTapGesture(perform: openPostUnlessPeeking)
 
-          overlayContent(mediaWidth: proxy.size.width)
+          overlayContent(mediaWidth: proxy.size.width, mediaHeight: proxy.size.height)
 
           if mediaURLs.count > 1 {
             CaptroCarouselDots(
@@ -138,31 +135,135 @@ struct CaptroMediaPager: View {
     return min(max(ratio, 9.0 / 16.0), 3.0 / 2.0)
   }
 
-  private func overlayContent(mediaWidth: CGFloat) -> some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack {
-        Spacer(minLength: 0)
+  private func overlayContent(mediaWidth: CGFloat, mediaHeight: CGFloat) -> some View {
+    ZStack {
+      stampOverlay(mediaWidth: mediaWidth, mediaHeight: mediaHeight)
 
-        if mediaURLs.count > 1 {
-          CaptroCarouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
+      if mediaURLs.count > 1 {
+        VStack(spacing: 0) {
+          HStack {
+            Spacer(minLength: 0)
+            CaptroCarouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
+          }
+          Spacer(minLength: 0)
+        }
+        .padding(16)
+        .allowsHitTesting(false)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func stampOverlay(mediaWidth: CGFloat, mediaHeight: CGFloat) -> some View {
+    switch post.captroStampKind {
+    case .place:
+      VStack(spacing: 0) {
+        Spacer(minLength: 0)
+        HStack(spacing: 0) {
+          peekableStamp(
+            width: venueReviewStampWidth(mediaWidth: mediaWidth),
+            usesCompactTypography: mediaHeight < mediaWidth * 0.90
+          )
+          Spacer(minLength: 0)
+        }
+      }
+      .padding(.leading, 22)
+      .padding(.trailing, 16)
+      .padding(.bottom, mediaURLs.count > 1 ? 38 : 28)
+
+    case .guide:
+      ZStack {
+        peekableStamp(
+          width: guideCoverStampWidth(mediaWidth: mediaWidth),
+          usesCompactTypography: mediaHeight < mediaWidth * 0.90
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .offset(y: -mediaHeight * 0.09)
+
+        if !post.captroGuideContributors.isEmpty {
+          VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            HStack(spacing: 0) {
+              CaptroContributorAvatars(
+                contributors: post.captroGuideContributors,
+                avatarSize: 34
+              )
+              Spacer(minLength: 0)
+            }
+          }
+          .padding(.leading, 22)
+          .padding(.bottom, mediaURLs.count > 1 ? 34 : 22)
+          .opacity(isHoldingStamp ? 0 : 1)
+          .animation(stampPeekAnimation, value: isHoldingStamp)
+          .allowsHitTesting(false)
         }
       }
 
-      Spacer(minLength: 12)
+    case .social:
+      VStack(spacing: 0) {
+        Spacer(minLength: 0)
+        HStack(spacing: 0) {
+          peekableStamp(
+            width: simplePostStampWidth(mediaWidth: mediaWidth),
+            usesCompactTypography: mediaHeight < mediaWidth * 0.90
+          )
+          Spacer(minLength: 0)
+        }
+      }
+      .padding(.leading, 18)
+      .padding(.trailing, 16)
+      .padding(.bottom, mediaURLs.count > 1 ? 36 : 24)
 
-      CaptroPostStamp(
-        content: post.captroStampContent,
-        onOpen: openPostUnlessPeeking,
-        onAction: openPostUnlessPeeking
-      )
-      .frame(width: mediaWidth * stampWidthFraction, alignment: .leading)
-      .contentShape(Rectangle())
-      .opacity(isHoldingStamp ? 0 : 1)
-      .animation(stampPeekAnimation, value: isHoldingStamp)
-      .simultaneousGesture(stampPeekGesture)
-      .padding(.bottom, mediaURLs.count > 1 ? 24 : 0)
+    case .club, .group, .meetup, .event, .deal, .localOffer:
+      VStack(spacing: 0) {
+        Spacer(minLength: 0)
+        HStack(spacing: 0) {
+          peekableStamp(
+            width: actionPostStampWidth(mediaWidth: mediaWidth),
+            usesCompactTypography: mediaHeight < mediaWidth * 0.90
+          )
+          Spacer(minLength: 0)
+        }
+      }
+      .padding(.leading, 20)
+      .padding(.trailing, 16)
+      .padding(.bottom, mediaURLs.count > 1 ? 38 : 26)
     }
-    .padding(16)
+  }
+
+  private func peekableStamp(width: CGFloat, usesCompactTypography: Bool) -> some View {
+    CaptroPostStamp(
+      content: post.captroStampContent,
+      onOpen: openPostUnlessPeeking,
+      onAction: openPostUnlessPeeking,
+      usesCompactTypography: usesCompactTypography
+    )
+    .frame(width: width, alignment: .leading)
+    .contentShape(Rectangle())
+    .opacity(isHoldingStamp ? 0 : 1)
+    .animation(stampPeekAnimation, value: isHoldingStamp)
+    .simultaneousGesture(stampPeekGesture)
+  }
+
+  private func venueReviewStampWidth(mediaWidth: CGFloat) -> CGFloat {
+    let descriptionLength = post.captroStampContent.description?.count ?? 0
+    let fraction: CGFloat = descriptionLength > 110 ? 0.72 : (descriptionLength > 54 ? 0.68 : 0.62)
+    return mediaWidth * fraction
+  }
+
+  private func guideCoverStampWidth(mediaWidth: CGFloat) -> CGFloat {
+    let fraction: CGFloat = post.captroStampContent.title.count > 36 ? 0.78 : 0.72
+    return mediaWidth * fraction
+  }
+
+  private func simplePostStampWidth(mediaWidth: CGFloat) -> CGFloat {
+    let descriptionLength = post.captroStampContent.description?.count ?? 0
+    return mediaWidth * (descriptionLength > 90 ? 0.68 : 0.60)
+  }
+
+  private func actionPostStampWidth(mediaWidth: CGFloat) -> CGFloat {
+    let descriptionLength = post.captroStampContent.description?.count ?? 0
+    return mediaWidth * (descriptionLength > 80 ? 0.72 : 0.66)
   }
 
   private var stampPeekGesture: some Gesture {
