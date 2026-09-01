@@ -49,26 +49,35 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(mainFeed, /LazyVStack\(spacing: 0\)[\s\S]*?\.frame\(maxWidth: \.infinity, alignment: \.leading\)[\s\S]*?\.padding\(\.bottom, 112\)/);
 });
 
-test('Home media follows each upload aspect ratio within editorial bounds', () => {
+test('Home media is a full-width rectangular frame that follows the cover ratio', () => {
   assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?measuredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
-  assert.match(mediaPager, /contentMode: \.fit/);
+  assert.match(mediaPager, /contentMode: \.fill/);
   assert.match(mediaPager, /guard index == 0 else \{ return \}/);
   assert.match(mediaPager, /min\(max\(ratio, 9\.0 \/ 16\.0\), 3\.0 \/ 2\.0\)/);
-  assert.match(postView, /private static let mediaHorizontalMargin: CGFloat = 14/);
-  assert.match(postView, /CaptroMediaPager\([\s\S]*?\.containerRelativeFrame\(\.horizontal\)[\s\S]*?availableWidth - \(Self\.mediaHorizontalMargin \* 2\)[\s\S]*?\.frame\(maxWidth: \.infinity\)/);
-  assert.doesNotMatch(postView, /CaptroMediaPager\([\s\S]*?\.padding\(\.horizontal, 14\)/);
+  const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
+  const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
+  const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
+  assert.ok(mediaBranchStart >= 0 && mediaBranchEnd > mediaBranchStart);
+  assert.match(mediaBranch, /CaptroMediaPager\([\s\S]*?\.containerRelativeFrame\(\.horizontal\)/);
+  assert.doesNotMatch(mediaBranch, /\.padding\(\.horizontal|mediaHorizontalMargin|RoundedRectangle|cornerRadius/);
+
+  const pagerBodyStart = mediaPager.indexOf('var body: some View');
+  const pagerBodyEnd = mediaPager.indexOf('@ViewBuilder');
+  const pagerBody = mediaPager.slice(pagerBodyStart, pagerBodyEnd);
+  assert.ok(pagerBodyStart >= 0 && pagerBodyEnd > pagerBodyStart);
+  assert.match(pagerBody, /\.clipped\(\)[\s\S]*?\.contentShape\(Rectangle\(\)\)/);
+  assert.doesNotMatch(pagerBody, /RoundedRectangle|mediaPlaceholder|cornerRadius/);
 
   const screenWidth = 390;
-  const mediaWidth = screenWidth - (14 * 2);
-  assert.equal(mediaWidth, 362);
-  assert.ok(mediaWidth / screenWidth >= 0.92 && mediaWidth / screenWidth <= 0.94);
-  assert.equal(Math.round(mediaWidth * (5 / 4)), 453);
-  assert.equal(Math.round(mediaWidth), 362);
-  assert.equal(Math.round(mediaWidth * (3 / 4)), 272);
-  assert.equal(Math.round(mediaWidth * (4 / 3)), 483);
+  const mediaWidth = screenWidth;
+  assert.equal(mediaWidth / screenWidth, 1);
+  assert.equal(Math.round(mediaWidth * (5 / 4)), 488);
+  assert.equal(Math.round(mediaWidth), 390);
+  assert.equal(Math.round(mediaWidth * (3 / 4)), 293);
+  assert.equal(Math.round(mediaWidth * (4 / 3)), 520);
 });
 
 test('Captro uses a purpose-built family of stamp types and actions', () => {

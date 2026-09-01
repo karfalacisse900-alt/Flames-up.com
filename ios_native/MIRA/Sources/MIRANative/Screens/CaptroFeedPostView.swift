@@ -2,8 +2,6 @@ import Foundation
 import SwiftUI
 
 struct CaptroFeedPostView: View {
-  private static let mediaHorizontalMargin: CGFloat = 14
-
   let post: MIRAPost
   let api: MIRAAPIClient
   let isVideoActive: Bool
@@ -36,10 +34,7 @@ struct CaptroFeedPostView: View {
           selectedMediaIndex: $selectedMediaIndex,
           onOpenPost: onOpenPost
         )
-        .containerRelativeFrame(.horizontal) { availableWidth, _ in
-          max(0, availableWidth - (Self.mediaHorizontalMargin * 2))
-        }
-        .frame(maxWidth: .infinity)
+        .containerRelativeFrame(.horizontal)
       } else {
         CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost)
           .padding(.horizontal, 16)

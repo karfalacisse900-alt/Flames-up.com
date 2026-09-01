@@ -25,9 +25,6 @@ struct CaptroMediaPager: View {
       )
     )
   }
-  private var mediaCornerRadius: CGFloat {
-    mediaHeightToWidthRatio < 0.9 ? 14 : (mediaHeightToWidthRatio > 1.35 ? 16 : 18)
-  }
   private var stampWidthFraction: CGFloat {
     mediaHeightToWidthRatio < 0.9 ? 0.68 : (mediaHeightToWidthRatio > 1.35 ? 0.74 : 0.72)
   }
@@ -56,9 +53,8 @@ struct CaptroMediaPager: View {
       .frame(width: proxy.size.width, height: proxy.size.height)
     }
     .aspectRatio(CGSize(width: 1, height: mediaHeightToWidthRatio), contentMode: .fit)
-    .background(MIRATheme.Color.mediaPlaceholder)
-    .clipShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
-    .contentShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
+    .clipped()
+    .contentShape(Rectangle())
     .accessibilityElement(children: .contain)
     .accessibilityLabel(mediaAccessibilityLabel)
     .accessibilityHint("Opens the post detail screen")
@@ -103,7 +99,7 @@ struct CaptroMediaPager: View {
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: .fit,
+      contentMode: .fill,
       shouldPlay: isVideoActive && (mediaURLs.count == 1 || selectedMediaIndex == index),
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: MIRATheme.Color.mediaPlaceholder,
