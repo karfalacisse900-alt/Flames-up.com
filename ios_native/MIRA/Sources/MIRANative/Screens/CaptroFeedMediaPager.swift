@@ -28,32 +28,34 @@ struct CaptroMediaPager: View {
   private var mediaCornerRadius: CGFloat {
     mediaHeightToWidthRatio < 0.9 ? 14 : (mediaHeightToWidthRatio > 1.35 ? 16 : 18)
   }
+  private var stampWidthFraction: CGFloat {
+    mediaHeightToWidthRatio < 0.9 ? 0.68 : (mediaHeightToWidthRatio > 1.35 ? 0.74 : 0.72)
+  }
 
   var body: some View {
-    CaptroNaturalMediaLayout(heightToWidthRatio: mediaHeightToWidthRatio) {
-      GeometryReader { proxy in
-        ZStack {
-          mediaContent
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: openPostUnlessPeeking)
+    GeometryReader { proxy in
+      ZStack {
+        mediaContent
+          .frame(width: proxy.size.width, height: proxy.size.height)
+          .contentShape(Rectangle())
+          .onTapGesture(perform: openPostUnlessPeeking)
 
-          overlayContent(mediaWidth: proxy.size.width, mediaHeight: proxy.size.height)
+        overlayContent(mediaWidth: proxy.size.width)
 
-          if mediaURLs.count > 1 {
-            CaptroCarouselDots(
-              total: mediaURLs.count,
-              current: selectedMediaIndex,
-              reduceMotion: reduceMotion
-            )
-            .padding(.bottom, 12)
-            .frame(maxHeight: .infinity, alignment: .bottom)
-            .allowsHitTesting(false)
-          }
+        if mediaURLs.count > 1 {
+          CaptroCarouselDots(
+            total: mediaURLs.count,
+            current: selectedMediaIndex,
+            reduceMotion: reduceMotion
+          )
+          .padding(.bottom, 12)
+          .frame(maxHeight: .infinity, alignment: .bottom)
+          .allowsHitTesting(false)
         }
-        .frame(width: proxy.size.width, height: proxy.size.height)
       }
+      .frame(width: proxy.size.width, height: proxy.size.height)
     }
+    .aspectRatio(CGSize(width: 1, height: mediaHeightToWidthRatio), contentMode: .fit)
     .background(MIRATheme.Color.mediaPlaceholder)
     .clipShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
     .contentShape(RoundedRectangle(cornerRadius: mediaCornerRadius, style: .continuous))
@@ -135,135 +137,31 @@ struct CaptroMediaPager: View {
     return min(max(ratio, 9.0 / 16.0), 3.0 / 2.0)
   }
 
-  private func overlayContent(mediaWidth: CGFloat, mediaHeight: CGFloat) -> some View {
-    ZStack {
-      stampOverlay(mediaWidth: mediaWidth, mediaHeight: mediaHeight)
+  private func overlayContent(mediaWidth: CGFloat) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      HStack {
+        Spacer(minLength: 0)
 
-      if mediaURLs.count > 1 {
-        VStack(spacing: 0) {
-          HStack {
-            Spacer(minLength: 0)
-            CaptroCarouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
-          }
-          Spacer(minLength: 0)
+        if mediaURLs.count > 1 {
+          CaptroCarouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
         }
-        .padding(16)
-        .allowsHitTesting(false)
       }
+
+      Spacer(minLength: 12)
+
+      CaptroPostStamp(
+        content: post.captroStampContent,
+        onOpen: openPostUnlessPeeking,
+        onAction: openPostUnlessPeeking
+      )
+      .frame(width: mediaWidth * stampWidthFraction, alignment: .leading)
+      .contentShape(Rectangle())
+      .opacity(isHoldingStamp ? 0 : 1)
+      .animation(stampPeekAnimation, value: isHoldingStamp)
+      .simultaneousGesture(stampPeekGesture)
+      .padding(.bottom, mediaURLs.count > 1 ? 24 : 0)
     }
-  }
-
-  @ViewBuilder
-  private func stampOverlay(mediaWidth: CGFloat, mediaHeight: CGFloat) -> some View {
-    switch post.captroStampKind {
-    case .place:
-      VStack(spacing: 0) {
-        Spacer(minLength: 0)
-        HStack(spacing: 0) {
-          peekableStamp(
-            width: venueReviewStampWidth(mediaWidth: mediaWidth),
-            usesCompactTypography: mediaHeight < mediaWidth * 0.90
-          )
-          Spacer(minLength: 0)
-        }
-      }
-      .padding(.leading, 22)
-      .padding(.trailing, 16)
-      .padding(.bottom, mediaURLs.count > 1 ? 38 : 28)
-
-    case .guide:
-      ZStack {
-        peekableStamp(
-          width: guideCoverStampWidth(mediaWidth: mediaWidth),
-          usesCompactTypography: mediaHeight < mediaWidth * 0.90
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .offset(y: -mediaHeight * 0.09)
-
-        if !post.captroGuideContributors.isEmpty {
-          VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            HStack(spacing: 0) {
-              CaptroContributorAvatars(
-                contributors: post.captroGuideContributors,
-                avatarSize: 34
-              )
-              Spacer(minLength: 0)
-            }
-          }
-          .padding(.leading, 22)
-          .padding(.bottom, mediaURLs.count > 1 ? 34 : 22)
-          .opacity(isHoldingStamp ? 0 : 1)
-          .animation(stampPeekAnimation, value: isHoldingStamp)
-          .allowsHitTesting(false)
-        }
-      }
-
-    case .social:
-      VStack(spacing: 0) {
-        Spacer(minLength: 0)
-        HStack(spacing: 0) {
-          peekableStamp(
-            width: simplePostStampWidth(mediaWidth: mediaWidth),
-            usesCompactTypography: mediaHeight < mediaWidth * 0.90
-          )
-          Spacer(minLength: 0)
-        }
-      }
-      .padding(.leading, 18)
-      .padding(.trailing, 16)
-      .padding(.bottom, mediaURLs.count > 1 ? 36 : 24)
-
-    case .club, .group, .meetup, .event, .deal, .localOffer:
-      VStack(spacing: 0) {
-        Spacer(minLength: 0)
-        HStack(spacing: 0) {
-          peekableStamp(
-            width: actionPostStampWidth(mediaWidth: mediaWidth),
-            usesCompactTypography: mediaHeight < mediaWidth * 0.90
-          )
-          Spacer(minLength: 0)
-        }
-      }
-      .padding(.leading, 20)
-      .padding(.trailing, 16)
-      .padding(.bottom, mediaURLs.count > 1 ? 38 : 26)
-    }
-  }
-
-  private func peekableStamp(width: CGFloat, usesCompactTypography: Bool) -> some View {
-    CaptroPostStamp(
-      content: post.captroStampContent,
-      onOpen: openPostUnlessPeeking,
-      onAction: openPostUnlessPeeking,
-      usesCompactTypography: usesCompactTypography
-    )
-    .frame(width: width, alignment: .leading)
-    .contentShape(Rectangle())
-    .opacity(isHoldingStamp ? 0 : 1)
-    .animation(stampPeekAnimation, value: isHoldingStamp)
-    .simultaneousGesture(stampPeekGesture)
-  }
-
-  private func venueReviewStampWidth(mediaWidth: CGFloat) -> CGFloat {
-    let descriptionLength = post.captroStampContent.description?.count ?? 0
-    let fraction: CGFloat = descriptionLength > 110 ? 0.72 : (descriptionLength > 54 ? 0.68 : 0.62)
-    return mediaWidth * fraction
-  }
-
-  private func guideCoverStampWidth(mediaWidth: CGFloat) -> CGFloat {
-    let fraction: CGFloat = post.captroStampContent.title.count > 36 ? 0.78 : 0.72
-    return mediaWidth * fraction
-  }
-
-  private func simplePostStampWidth(mediaWidth: CGFloat) -> CGFloat {
-    let descriptionLength = post.captroStampContent.description?.count ?? 0
-    return mediaWidth * (descriptionLength > 90 ? 0.68 : 0.60)
-  }
-
-  private func actionPostStampWidth(mediaWidth: CGFloat) -> CGFloat {
-    let descriptionLength = post.captroStampContent.description?.count ?? 0
-    return mediaWidth * (descriptionLength > 80 ? 0.72 : 0.66)
+    .padding(16)
   }
 
   private var stampPeekGesture: some Gesture {
@@ -517,35 +415,6 @@ private struct CaptroCarouselCounter: View {
       .clipShape(Capsule())
       .overlay(Capsule().stroke(Color.white.opacity(0.72), lineWidth: 1))
       .accessibilityLabel("Photo \(current) of \(total)")
-  }
-}
-
-private struct CaptroNaturalMediaLayout: Layout {
-  let heightToWidthRatio: CGFloat
-
-  func sizeThatFits(
-    proposal: ProposedViewSize,
-    subviews: Subviews,
-    cache: inout ()
-  ) -> CGSize {
-    guard let subview = subviews.first else { return .zero }
-    let fallbackSize = subview.sizeThatFits(.unspecified)
-    let width = proposal.width ?? fallbackSize.width
-    return CGSize(width: width, height: width * heightToWidthRatio)
-  }
-
-  func placeSubviews(
-    in bounds: CGRect,
-    proposal: ProposedViewSize,
-    subviews: Subviews,
-    cache: inout ()
-  ) {
-    guard let subview = subviews.first else { return }
-    subview.place(
-      at: bounds.origin,
-      anchor: .topLeading,
-      proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
-    )
   }
 }
 

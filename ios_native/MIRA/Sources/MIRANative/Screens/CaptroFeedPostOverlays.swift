@@ -59,19 +59,24 @@ struct CaptroStampContent {
   let footer: String?
   let actionTitle: String?
   let contributors: [MIRATaggedUserPayload]
-  let savesCount: Int?
-  let creatorUsername: String?
-  let creatorProfileImage: String?
 }
 
 struct CaptroPostStamp: View {
   let content: CaptroStampContent
   var onOpen: (() -> Void)? = nil
   var onAction: (() -> Void)? = nil
-  var usesCompactTypography = false
 
   var body: some View {
-    editorialOverlay
+    stampLayout
+      .padding(.horizontal, 14)
+      .padding(.vertical, 12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.white.opacity(0.96))
+      .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+      .overlay(
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+          .stroke(Color.black.opacity(0.12), lineWidth: 0.75)
+      )
       .contentShape(Rectangle())
       .onTapGesture { onOpen?() }
       .accessibilityElement(children: .contain)
@@ -80,188 +85,87 @@ struct CaptroPostStamp: View {
   }
 
   @ViewBuilder
-  private var editorialOverlay: some View {
+  private var stampLayout: some View {
     switch content.kind {
     case .social:
-      simplePostOverlay
+      VStack(alignment: .leading, spacing: 7) {
+        stampTitle
+        stampDescription
+        stampFooter
+      }
+
     case .place:
-      venueReviewOverlay
-    case .guide:
-      guideCoverOverlay
-    case .club, .group, .meetup, .event, .deal, .localOffer:
-      actionPostOverlay
+      VStack(alignment: .leading, spacing: 7) {
+        stampTitle
+        stampMetadata
+        Rectangle()
+          .fill(Color.black.opacity(0.16))
+          .frame(height: 0.75)
+        stampDescription
+        stampFooter
+      }
+
+    case .club, .group, .guide:
+      VStack(alignment: .leading, spacing: 7) {
+        stampMetadata
+        stampTitle
+        if !content.contributors.isEmpty {
+          CaptroContributorAvatars(contributors: content.contributors)
+        }
+        stampDescription
+        stampActionFooter
+      }
+
+    case .meetup, .event:
+      VStack(alignment: .leading, spacing: 7) {
+        stampTitle
+        stampMetadata
+        stampDescription
+        Rectangle()
+          .fill(Color.black.opacity(0.14))
+          .frame(height: 0.75)
+        stampActionFooter
+      }
+
+    case .deal, .localOffer:
+      VStack(alignment: .leading, spacing: 7) {
+        stampMetadata
+        stampTitle
+        stampDescription
+        stampActionFooter
+      }
     }
   }
 
-  private var venueReviewOverlay: some View {
-    VStack(alignment: .leading, spacing: usesCompactTypography ? 8 : 11) {
-      Text(content.title)
-        .font(.system(size: usesCompactTypography ? 24 : 28, weight: .bold))
-        .foregroundStyle(Color.black)
-        .lineLimit(2)
-        .minimumScaleFactor(0.76)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
-
-      if let metadata = content.metadata {
-        Text(metadata.uppercased())
-          .font(.system(size: usesCompactTypography ? 10 : 12, weight: .semibold))
-          .tracking(0.7)
-          .foregroundStyle(Color.black.opacity(0.88))
-          .lineLimit(2)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      if let savesLabel {
-        Text(savesLabel)
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(Color.black.opacity(0.90))
-          .padding(.horizontal, 9)
-          .frame(height: 27)
-          .background(CaptroStampPalette.savesPink)
-          .clipShape(RoundedRectangle(cornerRadius: 1, style: .continuous))
-          .overlay(
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
-              .stroke(Color.black.opacity(0.82), lineWidth: 1)
-          )
-      }
-
-      if let description = content.description {
-        Text(description)
-          .font(.system(size: usesCompactTypography ? 15 : 16, weight: .regular))
-          .foregroundStyle(Color.black.opacity(0.92))
-          .lineSpacing(2)
-          .lineLimit(usesCompactTypography ? 3 : 5)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      creatorRow
-    }
-    .padding(.horizontal, usesCompactTypography ? 15 : 19)
-    .padding(.vertical, usesCompactTypography ? 14 : 18)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.white)
-    .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 2, style: .continuous)
-        .stroke(Color.black.opacity(0.82), lineWidth: 1.25)
-    )
-  }
-
-  private var guideCoverOverlay: some View {
+  private var stampTitle: some View {
     Text(content.title.uppercased())
-      .font(.system(size: usesCompactTypography ? 24 : 27, weight: .black, design: .rounded))
-      .foregroundStyle(Color.black)
-      .lineSpacing(0)
-      .lineLimit(6)
-      .minimumScaleFactor(0.72)
+      .font(.system(size: 18, weight: .semibold))
+      .foregroundStyle(Color.black.opacity(0.88))
+      .lineLimit(2)
+      .minimumScaleFactor(0.84)
       .fixedSize(horizontal: false, vertical: true)
-      .padding(.horizontal, usesCompactTypography ? 15 : 18)
-      .padding(.vertical, usesCompactTypography ? 14 : 17)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Color.white)
-      .clipShape(RoundedRectangle(cornerRadius: 1, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 1, style: .continuous)
-          .stroke(Color.black.opacity(0.88), lineWidth: 1.25)
-      )
       .accessibilityAddTraits(.isHeader)
-  }
-
-  private var simplePostOverlay: some View {
-    VStack(alignment: .leading, spacing: 9) {
-      Text(content.title.uppercased())
-        .font(.system(size: usesCompactTypography ? 18 : 20, weight: .bold))
-        .foregroundStyle(Color.black.opacity(0.90))
-        .lineLimit(2)
-        .minimumScaleFactor(0.82)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
-
-      editorialDescription(fontSize: usesCompactTypography ? 13 : 14, lineLimit: 5)
-      stampFooter
-    }
-    .padding(.horizontal, usesCompactTypography ? 13 : 16)
-    .padding(.vertical, usesCompactTypography ? 12 : 15)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.white)
-    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 4, style: .continuous)
-        .stroke(Color.black.opacity(0.62), lineWidth: 1)
-    )
-  }
-
-  private var actionPostOverlay: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      stampMetadata
-
-      Text(content.title.uppercased())
-        .font(.system(size: usesCompactTypography ? 18 : 21, weight: .bold))
-        .foregroundStyle(Color.black.opacity(0.92))
-        .lineLimit(2)
-        .minimumScaleFactor(0.80)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
-
-      editorialDescription(fontSize: usesCompactTypography ? 12 : 13, lineLimit: 4)
-
-      Rectangle()
-        .fill(Color.black.opacity(0.22))
-        .frame(height: 1)
-
-      stampActionFooter
-    }
-    .padding(.horizontal, usesCompactTypography ? 13 : 16)
-    .padding(.vertical, usesCompactTypography ? 12 : 15)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Color.white)
-    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-    .overlay(
-      RoundedRectangle(cornerRadius: 3, style: .continuous)
-        .stroke(Color.black.opacity(0.68), lineWidth: 1)
-    )
-  }
-
-  @ViewBuilder
-  private func editorialDescription(fontSize: CGFloat, lineLimit: Int) -> some View {
-    if let description = content.description {
-      Text(description)
-        .font(.system(size: fontSize, weight: .regular))
-        .foregroundStyle(Color.black.opacity(0.82))
-        .lineSpacing(2)
-        .lineLimit(lineLimit)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  @ViewBuilder
-  private var creatorRow: some View {
-    if creatorHandle != nil || creatorProfileImage != nil {
-      HStack(spacing: 9) {
-        if let creatorProfileImage {
-          RemoteAvatar(url: creatorProfileImage, size: 32)
-        }
-
-        if let creatorHandle {
-          Text(creatorHandle)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Color.black.opacity(0.90))
-            .lineLimit(1)
-            .minimumScaleFactor(0.80)
-        }
-      }
-    }
   }
 
   @ViewBuilder
   private var stampMetadata: some View {
     if let metadata = content.metadata {
       Text(metadata.uppercased())
-        .font(.system(size: 10, weight: .semibold))
-        .tracking(0.5)
-        .foregroundStyle(Color.black.opacity(0.62))
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(Color.black.opacity(0.58))
         .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+  }
+
+  @ViewBuilder
+  private var stampDescription: some View {
+    if let description = content.description {
+      Text(description)
+        .font(.system(size: 12, weight: .regular))
+        .foregroundStyle(Color.black.opacity(0.78))
+        .lineSpacing(2)
+        .lineLimit(4)
         .fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -271,7 +175,7 @@ struct CaptroPostStamp: View {
     if let footer = content.footer {
       Text(footer.uppercased())
         .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(Color.black.opacity(0.58))
+        .foregroundStyle(Color.black.opacity(0.56))
         .lineLimit(1)
         .minimumScaleFactor(0.82)
     }
@@ -282,7 +186,7 @@ struct CaptroPostStamp: View {
       if let footer = content.footer {
         Text(footer.uppercased())
           .font(.system(size: 10, weight: .medium))
-          .foregroundStyle(Color.black.opacity(0.58))
+          .foregroundStyle(Color.black.opacity(0.56))
           .lineLimit(1)
           .minimumScaleFactor(0.78)
       }
@@ -293,7 +197,7 @@ struct CaptroPostStamp: View {
         if let onAction {
           Button(action: onAction) {
             Text(actionTitle)
-              .font(.system(size: 13, weight: .semibold))
+              .font(.system(size: 12, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.forest)
               .frame(minWidth: 44, minHeight: 32, alignment: .trailing)
               .contentShape(Rectangle())
@@ -302,54 +206,22 @@ struct CaptroPostStamp: View {
           .accessibilityLabel(actionTitle.capitalized)
         } else {
           Text(actionTitle)
-            .font(.system(size: 13, weight: .semibold))
+            .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.forest)
         }
       }
     }
   }
 
-  private var savesLabel: String? {
-    guard let count = content.savesCount, count >= 0 else { return nil }
-    let value = NumberFormatter.localizedString(from: NSNumber(value: count), number: .decimal)
-    return "\(value) SAVES"
-  }
-
-  private var creatorHandle: String? {
-    let value = content.creatorUsername?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-      .trimmingCharacters(in: CharacterSet(charactersIn: "@")) ?? ""
-    return value.isEmpty ? nil : "@\(value)"
-  }
-
-  private var creatorProfileImage: String? {
-    let value = content.creatorProfileImage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return value.isEmpty ? nil : value
-  }
-
   private var accessibilityLabel: String {
-    [
-      content.kind.displayName,
-      content.title,
-      content.metadata,
-      savesLabel,
-      content.description,
-      creatorHandle,
-      content.footer,
-      content.actionTitle,
-    ]
+    [content.kind.displayName, content.title, content.metadata, content.description, content.footer, content.actionTitle]
       .compactMap { $0 }
       .joined(separator: ", ")
   }
 }
 
-private enum CaptroStampPalette {
-  static let savesPink = Color(red: 0.97, green: 0.72, blue: 0.86)
-}
-
-struct CaptroContributorAvatars: View {
+private struct CaptroContributorAvatars: View {
   let contributors: [MIRATaggedUserPayload]
-  var avatarSize: CGFloat = 30
 
   private var visibleContributors: [MIRATaggedUserPayload] {
     Array(contributors.prefix(3))
@@ -358,7 +230,7 @@ struct CaptroContributorAvatars: View {
   var body: some View {
     HStack(spacing: -8) {
       ForEach(Array(visibleContributors.enumerated()), id: \.element.id) { index, contributor in
-        RemoteAvatar(url: contributor.profileImage, size: avatarSize)
+        RemoteAvatar(url: contributor.profileImage, size: 30)
           .overlay(Circle().stroke(Color.white, lineWidth: 2))
           .zIndex(Double(visibleContributors.count - index))
       }
@@ -367,7 +239,7 @@ struct CaptroContributorAvatars: View {
         Text("+\(contributors.count - visibleContributors.count)")
           .font(.caption.weight(.semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: avatarSize, height: avatarSize)
+          .frame(width: 30, height: 30)
           .background(MIRATheme.Color.surfaceSoft)
           .clipShape(Circle())
           .overlay(Circle().stroke(Color.white, lineWidth: 2))
@@ -452,10 +324,7 @@ extension MIRAPost {
       description: captroFeedCaptionText,
       footer: captroCapturedStampText ?? captroAuthorStampFooter,
       actionTitle: kind.actionTitle,
-      contributors: captroGuideContributors,
-      savesCount: savesCount,
-      creatorUsername: cleanedCaptroFeedValue(userUsername),
-      creatorProfileImage: cleanedCaptroFeedValue(userProfileImage)
+      contributors: captroGuideContributors
     )
   }
 
