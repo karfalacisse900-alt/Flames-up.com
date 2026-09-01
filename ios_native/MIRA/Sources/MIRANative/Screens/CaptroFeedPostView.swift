@@ -205,14 +205,6 @@ private struct CaptroAuthorHeader: View {
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
         .truncationMode(.tail)
-
-      if let location = post.captroFeedHeaderLocation {
-        Text(location)
-          .font(.system(size: 14, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(1)
-          .truncationMode(.tail)
-      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())

@@ -28,6 +28,9 @@ struct CaptroMediaPager: View {
   private var stampWidthFraction: CGFloat {
     mediaHeightToWidthRatio < 0.8 ? 0.56 : (mediaHeightToWidthRatio > 1.3 ? 0.52 : 0.54)
   }
+  private var showsStampOnCurrentSlide: Bool {
+    selectedMediaIndex == 0
+  }
 
   var body: some View {
     GeometryReader { proxy in
@@ -142,7 +145,9 @@ struct CaptroMediaPager: View {
       )
       .frame(width: mediaWidth * stampWidthFraction, alignment: .leading)
       .contentShape(Rectangle())
-      .opacity(isHoldingStamp ? 0 : 1)
+      .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
+      .allowsHitTesting(showsStampOnCurrentSlide)
+      .accessibilityHidden(!showsStampOnCurrentSlide)
       .animation(stampPeekAnimation, value: isHoldingStamp)
       .simultaneousGesture(stampPeekGesture)
       .padding(.bottom, mediaURLs.count > 1 ? 24 : 0)

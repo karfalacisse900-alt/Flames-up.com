@@ -42,6 +42,10 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
 test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.doesNotMatch(mainFeed, /photoFeedPosts/);
   assert.match(mainFeed, /let sorted = await sortedByNativeScore\(loaded\)/);
+  assert.match(mainFeed, /interleavePostFormats\(merged\)/);
+  assert.match(mainFeed, /let mediaPosts = rankedPosts\.filter \{ !\$0\.feedMediaURLs\.isEmpty \}/);
+  assert.match(mainFeed, /let textPosts = rankedPosts\.filter \{ \$0\.feedMediaURLs\.isEmpty \}/);
+  assert.match(mainFeed, /wantsMedia\.toggle\(\)/);
   assert.match(mainFeed, /let loaded = await fetchFeedPage\(skip: skip\)/);
   assert.match(mainFeed, /ForEach\(model\.posts\)/);
   assert.match(
@@ -61,6 +65,15 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   const homeRoute = worker.slice(homeStart, homeEnd);
   assert.ok(homeStart >= 0 && homeEnd > homeStart);
   assert.doesNotMatch(homeRoute, /photoOnly:\s*true/);
+});
+
+test('Home creator header omits the post location line', () => {
+  const headerStart = postView.indexOf('private struct CaptroAuthorHeader');
+  const headerEnd = postView.indexOf('struct CaptroFeedPostVisibility', headerStart);
+  const header = postView.slice(headerStart, headerEnd);
+  assert.ok(headerStart >= 0 && headerEnd > headerStart);
+  assert.doesNotMatch(header, /captroFeedHeaderLocation/);
+  assert.doesNotMatch(header, /Text\(location\)/);
 });
 
 test('Home post is a full-width feed section without an outer card', () => {
@@ -153,7 +166,7 @@ test('holding the Home stamp temporarily reveals the unobstructed photo', () => 
   assert.match(mediaPager, /hypot\(drag\.translation\.width, drag\.translation\.height\) <= 22/);
   assert.match(
     mediaPager,
-    /CaptroPostStamp\([\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(isHoldingStamp \? 0 : 1\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
+    /CaptroPostStamp\([\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
   );
   assert.doesNotMatch(
     mediaPager,
@@ -165,6 +178,13 @@ test('holding the Home stamp temporarily reveals the unobstructed photo', () => 
   assert.match(mediaPager, /\.easeInOut\(duration: 0\.24\)/);
   assert.match(mediaPager, /guard !suppressTapAfterStampPeek else \{ return \}/);
   assert.doesNotMatch(mediaPager, /if !isHoldingStamp \{[\s\S]*CaptroPostStamp/);
+});
+
+test('Home carousel stamp appears only on its first slide', () => {
+  assert.match(mediaPager, /private var showsStampOnCurrentSlide: Bool \{[\s\S]*?selectedMediaIndex == 0[\s\S]*?\}/);
+  assert.match(mediaPager, /\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)/);
+  assert.match(mediaPager, /\.allowsHitTesting\(showsStampOnCurrentSlide\)/);
+  assert.match(mediaPager, /\.accessibilityHidden\(!showsStampOnCurrentSlide\)/);
 });
 
 test('Home carousel locks each touch to horizontal or vertical intent', () => {

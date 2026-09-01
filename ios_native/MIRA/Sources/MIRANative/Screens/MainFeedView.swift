@@ -115,8 +115,9 @@ final class MainFeedModel: ObservableObject {
         pageLimit: firstPageLimit
       )
     }
-    if posts != merged {
-      posts = merged
+    let mixed = interleavePostFormats(merged)
+    if posts != mixed {
+      posts = mixed
     }
     canLoadMore = loaded.count >= firstPageLimit
     await persistCurrentFeed()
@@ -148,9 +149,9 @@ final class MainFeedModel: ObservableObject {
     }
     guard let cached else { return }
     if isGuestFeedMode {
-      posts = cached
+      posts = interleavePostFormats(cached)
     } else {
-      posts = await MIRAPostEngagementSync.apply(to: cached)
+      posts = interleavePostFormats(await MIRAPostEngagementSync.apply(to: cached))
     }
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
@@ -296,7 +297,7 @@ final class MainFeedModel: ObservableObject {
       return
     }
 
-    posts.append(contentsOf: await sortedByNativeScore(unique))
+    posts.append(contentsOf: interleavePostFormats(await sortedByNativeScore(unique)))
     canLoadMore = loaded.count >= firstPageLimit || unique.count >= firstPageLimit
     MIRAPerformanceTimeline.mark("home_load_more_done", detail: "added=\(unique.count) total=\(posts.count)")
     cacheCurrentPosts()
@@ -740,6 +741,37 @@ final class MainFeedModel: ObservableObject {
         .sorted { $0.1 > $1.1 }
         .map(\.0)
     }.value
+  }
+
+  private func interleavePostFormats(_ rankedPosts: [MIRAPost]) -> [MIRAPost] {
+    let mediaPosts = rankedPosts.filter { !$0.feedMediaURLs.isEmpty }
+    let textPosts = rankedPosts.filter { $0.feedMediaURLs.isEmpty }
+    guard !mediaPosts.isEmpty, !textPosts.isEmpty else { return rankedPosts }
+
+    var mediaIndex = 0
+    var textIndex = 0
+    var wantsMedia = !rankedPosts[0].feedMediaURLs.isEmpty
+    var mixed: [MIRAPost] = []
+    mixed.reserveCapacity(rankedPosts.count)
+
+    while mediaIndex < mediaPosts.count || textIndex < textPosts.count {
+      if wantsMedia, mediaIndex < mediaPosts.count {
+        mixed.append(mediaPosts[mediaIndex])
+        mediaIndex += 1
+      } else if !wantsMedia, textIndex < textPosts.count {
+        mixed.append(textPosts[textIndex])
+        textIndex += 1
+      } else if mediaIndex < mediaPosts.count {
+        mixed.append(mediaPosts[mediaIndex])
+        mediaIndex += 1
+      } else {
+        mixed.append(textPosts[textIndex])
+        textIndex += 1
+      }
+      wantsMedia.toggle()
+    }
+
+    return mixed
   }
 
   nonisolated private static func ageHours(from value: String?, formatter: ISO8601DateFormatter) -> Double {
