@@ -16,6 +16,7 @@ const composer = readIOS('Screens/NotificationLibrarySearchCreateViews.swift');
 const mediaSizing = readIOS('Components/MIRAComponents.swift');
 const mediaModels = readIOS('Models/MIRAModels.swift');
 const mediaUpload = readIOS('Services/MIRAMediaUploadService.swift');
+const worker = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 
 test('guest Home reads only the public feed and keeps an isolated cache', () => {
   assert.match(rootView, /isGuest: authSession\.isGuest/);
@@ -34,6 +35,30 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.match(mediaPager, /CaptroPostStamp\(/);
   assert.match(mediaPager, /mediaWidth \* stampWidthFraction/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
+});
+
+test('Home keeps text, note, image, and video posts in the same feed', () => {
+  assert.doesNotMatch(mainFeed, /photoFeedPosts/);
+  assert.match(mainFeed, /let sorted = await sortedByNativeScore\(loaded\)/);
+  assert.match(mainFeed, /let loaded = await fetchFeedPage\(skip: skip\)/);
+  assert.match(mainFeed, /ForEach\(model\.posts\)/);
+  assert.match(
+    postView,
+    /if !post\.feedMediaURLs\.isEmpty \{[\s\S]*?CaptroMediaPager\([\s\S]*?\} else \{[\s\S]*?CaptroPostStamp\(content: post\.captroStampContent/,
+  );
+
+  const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
+  const readEnd = worker.indexOf('function postgrestInFilter', readStart);
+  const readVisiblePosts = worker.slice(readStart, readEnd);
+  assert.ok(readStart >= 0 && readEnd > readStart);
+  assert.match(readVisiblePosts, /const photoOnly = options\.photoOnly === true \|\| isDiscoverQuery/);
+  assert.match(readVisiblePosts, /photoOnly \? feedPhotoPostsOnly\(ordered\) : ordered/);
+
+  const homeStart = worker.indexOf("api.get('/posts/feed'");
+  const homeEnd = worker.indexOf("api.get('/posts/world-board'", homeStart);
+  const homeRoute = worker.slice(homeStart, homeEnd);
+  assert.ok(homeStart >= 0 && homeEnd > homeStart);
+  assert.doesNotMatch(homeRoute, /photoOnly:\s*true/);
 });
 
 test('Home post is a full-width feed section without an outer card', () => {
@@ -56,7 +81,7 @@ test('Home media is a full-width rectangular frame that follows the cover ratio'
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
   assert.match(mediaPager, /contentMode: \.fill/);
   assert.match(mediaPager, /guard index == 0 else \{ return \}/);
-  assert.match(mediaPager, /min\(max\(ratio, 9\.0 \/ 16\.0\), 3\.0 \/ 2\.0\)/);
+  assert.match(mediaPager, /min\(max\(ratio, 9\.0 \/ 16\.0\), 16\.0 \/ 9\.0\)/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
   const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
   const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
@@ -78,6 +103,8 @@ test('Home media is a full-width rectangular frame that follows the cover ratio'
   assert.equal(Math.round(mediaWidth), 390);
   assert.equal(Math.round(mediaWidth * (3 / 4)), 293);
   assert.equal(Math.round(mediaWidth * (4 / 3)), 520);
+  assert.equal(Math.round(mediaWidth * (3 / 2)), 585);
+  assert.equal(Math.round(mediaWidth * (16 / 9)), 693);
 });
 
 test('Captro uses a purpose-built family of stamp types and actions', () => {

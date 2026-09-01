@@ -130,7 +130,7 @@ struct CaptroMediaPager: View {
 
   private func boundedHomeMediaRatio(_ ratio: CGFloat) -> CGFloat {
     guard ratio.isFinite, ratio > 0 else { return 4.0 / 3.0 }
-    return min(max(ratio, 9.0 / 16.0), 3.0 / 2.0)
+    return min(max(ratio, 9.0 / 16.0), 16.0 / 9.0)
   }
 
   private func overlayContent(mediaWidth: CGFloat) -> some View {

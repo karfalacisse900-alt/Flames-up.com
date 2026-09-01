@@ -5524,6 +5524,7 @@ type SupabasePostReadOptions = {
   postIds?: string[];
   ownerId?: string;
   category?: DiscoverCategory | 'all';
+  photoOnly?: boolean;
   search?: string;
   limit?: number;
   offset?: number;
@@ -6951,8 +6952,9 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   });
 
   const isDiscoverQuery = options.category !== undefined;
+  const photoOnly = options.photoOnly === true || isDiscoverQuery;
   const candidateRows = rows.filter((row) => {
-    if (!supabaseAppPostHasRenderablePhotoMedia(row) || !supabaseAppPostMatchesCategory(row, options.category)) return false;
+    if ((photoOnly && !supabaseAppPostHasRenderablePhotoMedia(row)) || !supabaseAppPostMatchesCategory(row, options.category)) return false;
     if (!isDiscoverQuery) return true;
     const metadata = parseJsonObject(row?.metadata);
     return !cleanText((metadata as any).discover_blocked_at, 80);
@@ -6992,7 +6994,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const ordered = postIds.length
     ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
     : mapped;
-  return overlaySupabaseViewerEngagement(c, feedPhotoPostsOnly(ordered), viewerId);
+  return overlaySupabaseViewerEngagement(c, photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
 }
 
 function postgrestInFilter(values: string[]): string {
@@ -16042,7 +16044,7 @@ api.get('/discover/trending', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const limit = clampNumber(c.req.query('limit') || '20', 1, 40, 20);
   try {
-    const rows = await supabaseReadVisiblePosts(c, userId, { limit, order: 'trending' });
+    const rows = await supabaseReadVisiblePosts(c, userId, { photoOnly: true, limit, order: 'trending' });
     const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;
@@ -16062,7 +16064,7 @@ api.get('/discover/search', authMiddleware, async (c) => {
   const limit = clampNumber(c.req.query('limit') || '20', 1, 30, 20);
   try {
     const [posts, users] = await Promise.all([
-      supabaseReadVisiblePosts(c, userId, { search: q, limit, order: 'newest' }),
+      supabaseReadVisiblePosts(c, userId, { photoOnly: true, search: q, limit, order: 'newest' }),
       supabaseAdminQueryRows(c, 'app_users', {
         select: 'id,username,full_name,avatar_url,bio,city,is_private,is_verified,counts,profile,metadata',
         filters: {

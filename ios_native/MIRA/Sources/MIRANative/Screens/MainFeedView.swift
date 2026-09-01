@@ -104,7 +104,7 @@ final class MainFeedModel: ObservableObject {
       }
       return
     }
-    let sorted = await sortedByNativeScore(photoFeedPosts(loaded))
+    let sorted = await sortedByNativeScore(loaded)
     let merged: [MIRAPost]
     if isGuestFeedMode {
       merged = mergePublicFirstPage(existing: posts, fresh: sorted)
@@ -148,9 +148,9 @@ final class MainFeedModel: ObservableObject {
     }
     guard let cached else { return }
     if isGuestFeedMode {
-      posts = photoFeedPosts(cached)
+      posts = cached
     } else {
-      posts = await MIRAPostEngagementSync.apply(to: photoFeedPosts(cached))
+      posts = await MIRAPostEngagementSync.apply(to: cached)
     }
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
@@ -281,7 +281,7 @@ final class MainFeedModel: ObservableObject {
 
     let skip = posts.count
     MIRAPerformanceTimeline.mark("home_load_more_start", detail: "\(reason) skip=\(skip)")
-    let loaded = photoFeedPosts(await fetchFeedPage(skip: skip))
+    let loaded = await fetchFeedPage(skip: skip)
     guard !loaded.isEmpty else {
       canLoadMore = false
       MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
@@ -694,13 +694,6 @@ final class MainFeedModel: ObservableObject {
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "public skip=\(skip)")
     }
     return []
-  }
-
-  private func photoFeedPosts(_ values: [MIRAPost]) -> [MIRAPost] {
-    values.filter {
-      !$0.containsVideoMedia &&
-        ($0.postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != "note"
-    }
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
