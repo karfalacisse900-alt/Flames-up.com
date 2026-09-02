@@ -7,6 +7,8 @@ struct CaptroMediaPager: View {
   let isVideoActive: Bool
   @Binding var selectedMediaIndex: Int
   let onOpenPost: () -> Void
+  let usesExternalPaging: Bool
+  let externalDragOffset: CGFloat
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @GestureState private var isHoldingStamp = false
@@ -84,6 +86,8 @@ struct CaptroMediaPager: View {
     if mediaURLs.count == 1, let url = mediaURLs.first {
       mediaView(url: url, index: 0)
         .allowsHitTesting(false)
+    } else if usesExternalPaging {
+      externallyPagedMediaContent
     } else {
       TabView(selection: $selectedMediaIndex) {
         ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
@@ -96,13 +100,39 @@ struct CaptroMediaPager: View {
     }
   }
 
+  private var externallyPagedMediaContent: some View {
+    GeometryReader { proxy in
+      ZStack {
+        if let targetIndex = externalTargetMediaIndex {
+          mediaView(url: mediaURLs[targetIndex], index: targetIndex)
+            .offset(
+              x: externalDragOffset + (targetIndex > selectedMediaIndex ? proxy.size.width : -proxy.size.width)
+            )
+        }
+
+        if mediaURLs.indices.contains(selectedMediaIndex) {
+          mediaView(url: mediaURLs[selectedMediaIndex], index: selectedMediaIndex)
+            .offset(x: externalDragOffset)
+        }
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
+      .clipped()
+    }
+  }
+
+  private var externalTargetMediaIndex: Int? {
+    guard usesExternalPaging, abs(externalDragOffset) > 0.01 else { return nil }
+    let target = selectedMediaIndex + (externalDragOffset < 0 ? 1 : -1)
+    return mediaURLs.indices.contains(target) ? target : nil
+  }
+
   private func mediaView(url: String, index: Int) -> some View {
     RemoteMediaView(
       url: url,
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: .fill,
+      contentMode: usesExternalPaging ? .fit : .fill,
       shouldPlay: isVideoActive && (mediaURLs.count == 1 || selectedMediaIndex == index),
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: MIRATheme.Color.mediaPlaceholder,

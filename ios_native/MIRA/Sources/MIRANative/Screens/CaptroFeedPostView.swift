@@ -11,11 +11,30 @@ struct CaptroFeedPostView: View {
   let onCreate: () -> Void
   let onOpenPost: () -> Void
   let canFollowAuthor: Bool
+  let pageSize: CGSize?
+  @Binding var selectedMediaIndex: Int
+  let usesExternalMediaPaging: Bool
+  let externalMediaDragOffset: CGFloat
 
   @Environment(\.displayScale) private var displayScale
-  @State private var selectedMediaIndex = 0
 
   var body: some View {
+    Group {
+      if let pageSize {
+        postContent
+          .frame(width: pageSize.width, height: pageSize.height, alignment: .topLeading)
+          .clipped()
+      } else {
+        postContent
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .onChange(of: post.id) { _, _ in
+      selectedMediaIndex = 0
+    }
+  }
+
+  private var postContent: some View {
     VStack(alignment: .leading, spacing: 0) {
       CaptroAuthorHeader(
         post: post,
@@ -28,16 +47,24 @@ struct CaptroFeedPostView: View {
       )
 
       if !post.feedMediaURLs.isEmpty {
-        CaptroMediaPager(
-          post: post,
-          isVideoActive: isVideoActive,
-          selectedMediaIndex: $selectedMediaIndex,
-          onOpenPost: onOpenPost
-        )
-        .containerRelativeFrame(.horizontal)
+        mediaPager
       } else {
         CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost)
           .padding(.horizontal, 16)
+      }
+
+      if showsMoreButton {
+        HStack {
+          Spacer(minLength: 0)
+          Button("More", action: onOpenPost)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .frame(minWidth: 52, minHeight: 44)
+            .contentShape(Rectangle())
+            .accessibilityHint("Opens the full post")
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
       }
 
       Rectangle()
@@ -47,31 +74,49 @@ struct CaptroFeedPostView: View {
         .padding(.top, 24)
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .containerRelativeFrame(.horizontal, alignment: .leading)
-    .background {
-      GeometryReader { proxy in
-        Color.clear.preference(
-          key: CaptroFeedPostVisibilityPreferenceKey.self,
-          value: [
-            CaptroFeedPostVisibility(
-              id: post.id,
-              visibleRatio: visibleRatio(in: proxy),
-              hasVideo: post.feedMediaURLs.contains { $0.isVideoURL }
-            )
-          ]
-        )
-      }
-    }
-    .onChange(of: post.id) { _, _ in
-      selectedMediaIndex = 0
+  }
+
+  @ViewBuilder
+  private var mediaPager: some View {
+    let pager = CaptroMediaPager(
+      post: post,
+      isVideoActive: isVideoActive,
+      selectedMediaIndex: $selectedMediaIndex,
+      onOpenPost: onOpenPost,
+      usesExternalPaging: usesExternalMediaPaging,
+      externalDragOffset: externalMediaDragOffset
+    )
+
+    if let mediaSize = pageMediaSize {
+      pager
+        .frame(width: mediaSize.width, height: mediaSize.height)
+        .frame(maxWidth: .infinity, alignment: .center)
+    } else {
+      pager
+        .frame(maxWidth: .infinity)
     }
   }
 
-  private func visibleRatio(in proxy: GeometryProxy) -> CGFloat {
-    let frame = proxy.frame(in: .global)
-    let screen = UIScreen.main.bounds
-    let visibleHeight = min(frame.maxY, screen.maxY) - max(frame.minY, screen.minY)
-    return max(0, min(1, visibleHeight / max(frame.height, 1)))
+  private var pageMediaSize: CGSize? {
+    guard let pageSize, !post.feedMediaURLs.isEmpty else { return nil }
+    let ratio = MIRAMediaSizing.supportedPostHeightToWidthRatio(
+      post.mediaDimensions?.values.first?.heightToWidthRatio
+        ?? MIRAMediaSizing.mainFeedDisplayRatio(
+          for: post.feedMediaURLs,
+          aspectRatios: post.mediaHeightToWidthRatios
+        )
+    )
+    let fixedVerticalContent: CGFloat = 66 + 25 + (showsMoreButton ? 44 : 0)
+    let availableMediaHeight = max(120, pageSize.height - fixedVerticalContent)
+    let width = min(pageSize.width, availableMediaHeight / max(ratio, 0.01))
+    return CGSize(width: width, height: width * ratio)
+  }
+
+  private var showsMoreButton: Bool {
+    guard let caption = post.captroFeedCaptionText?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+      return false
+    }
+    return caption.count > 110 || caption.split(separator: "\n", omittingEmptySubsequences: false).count > 3
   }
 }
 
@@ -228,19 +273,5 @@ private struct CaptroAuthorHeader: View {
         isSubmittingFollow = false
       }
     }
-  }
-}
-
-struct CaptroFeedPostVisibility: Equatable {
-  let id: String
-  let visibleRatio: CGFloat
-  let hasVideo: Bool
-}
-
-struct CaptroFeedPostVisibilityPreferenceKey: PreferenceKey {
-  static var defaultValue: [CaptroFeedPostVisibility] = []
-
-  static func reduce(value: inout [CaptroFeedPostVisibility], nextValue: () -> [CaptroFeedPostVisibility]) {
-    value.append(contentsOf: nextValue())
   }
 }

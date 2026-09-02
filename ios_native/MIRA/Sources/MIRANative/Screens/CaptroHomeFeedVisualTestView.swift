@@ -4,6 +4,7 @@ import SwiftUI
 
 public struct CaptroHomeFeedVisualTestView: View {
   @State private var selectedTab = 0
+  @State private var selectedMediaIndices: [String: Int] = [:]
   private let api = MIRAAPIClient()
   private let posts = CaptroHomeFeedVisualFixtures.posts
 
@@ -30,7 +31,11 @@ public struct CaptroHomeFeedVisualTestView: View {
                   onOpenOptions: {},
                   onCreate: {},
                   onOpenPost: {},
-                  canFollowAuthor: false
+                  canFollowAuthor: false,
+                  pageSize: nil,
+                  selectedMediaIndex: mediaSelectionBinding(for: post),
+                  usesExternalMediaPaging: false,
+                  externalMediaDragOffset: 0
                 )
               }
             }
@@ -70,6 +75,13 @@ public struct CaptroHomeFeedVisualTestView: View {
         .font(.system(size: 28, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textSecondary)
     }
+  }
+
+  private func mediaSelectionBinding(for post: MIRAPost) -> Binding<Int> {
+    Binding(
+      get: { selectedMediaIndices[post.id] ?? 0 },
+      set: { selectedMediaIndices[post.id] = $0 }
+    )
   }
 }
 

@@ -12,18 +12,6 @@ private struct MainFeedMediaPreloadPlan: Sendable {
   }
 }
 
-private final class MainFeedScrollState {
-  var previousMinY: CGFloat?
-  var intentDistance: CGFloat = 0
-  var intentDirection = 0
-
-  func reset() {
-    previousMinY = nil
-    intentDistance = 0
-    intentDirection = 0
-  }
-}
-
 @MainActor
 final class MainFeedModel: ObservableObject {
   @Published var posts: [MIRAPost] = []
@@ -165,12 +153,12 @@ final class MainFeedModel: ObservableObject {
     let ratioTriggerIndex = max(0, Int((Double(max(posts.count - 1, 0)) * paginationTriggerRatio).rounded(.down)))
     let isNearEnd = posts.suffix(paginationTriggerWindow).contains(where: { $0.id == post.id })
     guard index >= ratioTriggerIndex || isNearEnd else { return }
-    await loadNextPage(reason: "scroll")
+    await loadNextPage(reason: "pager")
   }
 
-  func prefetchMedia(around post: MIRAPost, scrollDirection: Int = 1) {
+  func prefetchMedia(around post: MIRAPost) {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
-    let plan = makeMediaPreloadPlan(focusIndex: index, scrollDirection: scrollDirection)
+    let plan = makeMediaPreloadPlan(focusIndex: index)
     guard !plan.isEmpty else { return }
 
     if !plan.videoPrewarmURLs.isEmpty {
@@ -201,14 +189,13 @@ final class MainFeedModel: ObservableObject {
 
   private func prefetchInitialMediaWindow() {
     guard let firstPost = posts.first else { return }
-    prefetchMedia(around: firstPost, scrollDirection: 1)
+    prefetchMedia(around: firstPost)
   }
 
-  private func makeMediaPreloadPlan(focusIndex: Int, scrollDirection: Int) -> MainFeedMediaPreloadPlan {
+  private func makeMediaPreloadPlan(focusIndex: Int) -> MainFeedMediaPreloadPlan {
     guard posts.indices.contains(focusIndex) else { return MainFeedMediaPreloadPlan() }
 
-    let direction = scrollDirection < 0 ? -1 : 1
-    let orderedIndices = mediaPreloadIndices(from: focusIndex, direction: direction, limit: 16)
+    let orderedIndices = mediaPreloadIndices(from: focusIndex)
     var previewURLs: [String] = []
     var feedImageURLs: [String] = []
     var videoPrewarmURLs: [String] = []
@@ -247,21 +234,9 @@ final class MainFeedModel: ObservableObject {
     )
   }
 
-  private func mediaPreloadIndices(from focusIndex: Int, direction: Int, limit: Int) -> [Int] {
-    var result: [Int] = [focusIndex]
-    var cursor = focusIndex + direction
-    while posts.indices.contains(cursor), result.count < limit {
-      result.append(cursor)
-      cursor += direction
-    }
-
-    let oppositeDirection = -direction
-    cursor = focusIndex + oppositeDirection
-    while posts.indices.contains(cursor), result.count < min(limit + 3, posts.count) {
-      result.append(cursor)
-      cursor += oppositeDirection
-    }
-    return result
+  private func mediaPreloadIndices(from focusIndex: Int) -> [Int] {
+    [focusIndex, focusIndex + 1, focusIndex + 2, focusIndex - 1]
+      .filter { posts.indices.contains($0) }
   }
 
   private func orderedMediaURLs(_ values: [String]) -> [String] {
@@ -783,6 +758,31 @@ final class MainFeedModel: ObservableObject {
 private struct MainPostVisibilityUpdateBody: Encodable {
   let visibility: String
 }
+private enum MainFeedPagerDirection {
+  case previous
+  case next
+
+  var offsetSign: CGFloat {
+    switch self {
+    case .previous: return 1
+    case .next: return -1
+    }
+  }
+
+  var indexDelta: Int {
+    switch self {
+    case .previous: return -1
+    case .next: return 1
+    }
+  }
+}
+
+private enum MainFeedPagerDragTarget {
+  case media(MainFeedPagerDirection)
+  case post(MainFeedPagerDirection)
+  case edge(MainFeedPagerDirection)
+  case ignored
+}
 
 public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
@@ -791,9 +791,14 @@ public struct MainFeedView: View {
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
-  @State private var scrollState = MainFeedScrollState()
   @State private var activeVideoPostID: String?
-  @State private var isHeaderHidden = false
+  @State private var selectedPostID: String?
+  @State private var selectedPostFallbackIndex = 0
+  @State private var selectedMediaIndices: [String: Int] = [:]
+  @State private var postDragOffset: CGFloat = 0
+  @State private var mediaDragOffset: CGFloat = 0
+  @State private var pagerDragTarget: MainFeedPagerDragTarget?
+  @State private var isPagerTransitioning = false
   @State private var isShowingCreatePost = false
   @State private var detailPost: MIRAPost?
   @State private var postOptionsTarget: MIRAPost?
@@ -816,67 +821,8 @@ public struct MainFeedView: View {
 
   public var body: some View {
     NavigationStack {
-      ZStack(alignment: .top) {
-        ScrollView(showsIndicators: false) {
-          GeometryReader { proxy in
-            Color.clear.preference(key: MainFeedScrollOffsetPreferenceKey.self, value: proxy.frame(in: .named("mainFeedScroll")).minY)
-          }
-          .frame(height: 1)
-
-          LazyVStack(spacing: 0) {
-            if model.isLoading && model.posts.isEmpty {
-              ForEach(0..<4, id: \.self) { _ in MainPostSkeleton() }
-            } else if model.posts.isEmpty {
-              MIRAEmptyState(title: localization.string("feed.empty.title"), message: localization.string("feed.empty.message"), systemImage: "sparkles")
-                .padding(.top, 80)
-            } else {
-              ForEach(model.posts) { post in
-                CaptroFeedPostView(
-                  post: post,
-                  api: model.api,
-                  isVideoActive: post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
-                  showsFeedControls: !isGuest && post.id == model.posts.first?.id,
-                  onFollow: { await model.followAuthor(post) },
-                  onOpenOptions: { presentPostOptions(for: post) },
-                  onCreate: {
-                    CaptroHaptics.light()
-                    isShowingCreatePost = true
-                  },
-                  onOpenPost: {
-                    CaptroHaptics.light()
-                    detailPost = post
-                  },
-                  canFollowAuthor: !isGuest && model.canFollowAuthor(post)
-                )
-                .onAppear {
-                  MIRAApplePerformanceLogger.event("post_cell_appear", detail: post.feedMediaURLs.first?.isVideoURL == true ? "video" : "image")
-                  Task { await model.loadMoreIfNeeded(after: post) }
-                  model.prefetchMedia(around: post, scrollDirection: scrollState.intentDirection)
-                }
-              }
-              if model.isLoadingMore {
-                MainPostSkeleton()
-              }
-              if !model.isLoading, let lastPost = model.posts.last {
-                Color.clear
-                  .frame(height: 1)
-                  .task(id: "\(lastPost.id)-\(model.posts.count)") {
-                    await model.loadMoreIfNeeded(after: lastPost)
-                  }
-              }
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(.bottom, 112)
-        }
-        .coordinateSpace(name: "mainFeedScroll")
-        .scrollIndicators(.hidden)
-        .miraScrollFeel(.feed)
-        .simultaneousGesture(
-          DragGesture(minimumDistance: 6, coordinateSpace: .local)
-            .onChanged(handleScrollDrag)
-        )
-
+      GeometryReader { proxy in
+        feedContent(size: proxy.size)
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
@@ -949,18 +895,25 @@ public struct MainFeedView: View {
         guard phase == .active, !model.posts.isEmpty else { return }
         Task { await model.load(forceRefresh: true) }
       }
-      .onPreferenceChange(MainFeedScrollOffsetPreferenceKey.self, perform: handleScroll)
-      .onPreferenceChange(CaptroFeedPostVisibilityPreferenceKey.self, perform: updateActiveVideo)
       .onChange(of: isMediaPlaybackSuppressed) { _, suppressed in
         if suppressed {
           MIRAPlaybackCoordinator.pauseAll(reason: "home_feed_overlay")
         } else {
+          activateCurrentPost(reason: "home_feed_overlay_closed")
           MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_overlay_closed")
         }
       }
+      .onChange(of: model.posts.map(\.id)) { _, _ in
+        reconcileCurrentPostSelection()
+      }
+      .onChange(of: selectedPostID) { _, _ in
+        activateCurrentPost(reason: "home_post_changed")
+      }
       .onAppear {
+        reconcileCurrentPostSelection()
         MIRAApplePerformanceLogger.event("feed_render", detail: model.posts.isEmpty ? "empty" : "posts")
         if !isMediaPlaybackSuppressed {
+          activateCurrentPost(reason: "home_feed_appeared")
           MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_appeared")
         }
       }
@@ -970,85 +923,330 @@ public struct MainFeedView: View {
     }
   }
 
-  private func handleScroll(_ minY: CGFloat) {
-    guard let previousMinY = scrollState.previousMinY else {
-      scrollState.previousMinY = minY
-      return
-    }
-
-    let delta = minY - previousMinY
-    scrollState.previousMinY = minY
-    guard abs(delta) > 1 else { return }
-
-    if minY > -6 {
-      if isHeaderHidden {
-        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-          isHeaderHidden = false
-        }
-      }
-      scrollState.intentDistance = 0
-      scrollState.intentDirection = 0
-      return
-    }
-
-    let direction = delta < 0 ? 1 : -1
-    if direction != scrollState.intentDirection {
-      scrollState.intentDirection = direction
-      scrollState.intentDistance = abs(delta)
+  @ViewBuilder
+  private func feedContent(size: CGSize) -> some View {
+    if model.isLoading && model.posts.isEmpty {
+      MainPostSkeleton()
+        .frame(width: size.width, height: size.height, alignment: .top)
+        .clipped()
+    } else if model.posts.isEmpty {
+      MIRAEmptyState(
+        title: localization.string("feed.empty.title"),
+        message: localization.string("feed.empty.message"),
+        systemImage: "sparkles"
+      )
+      .frame(width: size.width, height: size.height)
     } else {
-      scrollState.intentDistance += abs(delta)
-    }
-
-    if direction == 1 && minY < -8 && scrollState.intentDistance > 5 {
-      if !isHeaderHidden {
-        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-          isHeaderHidden = true
-        }
-      }
-      scrollState.intentDistance = 0
-    } else if direction == -1 && scrollState.intentDistance > 10 {
-      if isHeaderHidden {
-        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-          isHeaderHidden = false
-        }
-      }
-      scrollState.intentDistance = 0
+      horizontalPostPager(size: size)
     }
   }
 
-  private func updateActiveVideo(_ visibility: [CaptroFeedPostVisibility]) {
-    guard !isMediaPlaybackSuppressed else { return }
-    let candidate = visibility
-      .filter { $0.hasVideo && $0.visibleRatio >= 0.60 }
-      .max { $0.visibleRatio < $1.visibleRatio }
-    let nextID = candidate?.id
-    if activeVideoPostID != nextID {
+  private func horizontalPostPager(size: CGSize) -> some View {
+    ZStack(alignment: .topLeading) {
+      ForEach(visiblePostIndices, id: \.self) { index in
+        let post = model.posts[index]
+        let isCurrent = index == currentPostIndex
+
+        feedPage(post: post, size: size, isCurrent: isCurrent)
+          .frame(width: size.width, height: size.height, alignment: .topLeading)
+          .offset(
+            x: CGFloat(index - currentPostIndex) * size.width + postDragOffset,
+            y: 0
+          )
+          .zIndex(isCurrent ? 1 : 0)
+          .allowsHitTesting(isCurrent && !isPagerTransitioning)
+          .accessibilityHidden(!isCurrent)
+      }
+    }
+    .frame(width: size.width, height: size.height, alignment: .topLeading)
+    .background(MIRATheme.Color.appBackground)
+    .clipped()
+    .contentShape(Rectangle())
+    .simultaneousGesture(horizontalPagerGesture(pageWidth: size.width))
+  }
+
+  private func feedPage(post: MIRAPost, size: CGSize, isCurrent: Bool) -> some View {
+    CaptroFeedPostView(
+      post: post,
+      api: model.api,
+      isVideoActive: isCurrent && post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
+      showsFeedControls: !isGuest && post.id == model.posts.first?.id,
+      onFollow: { await model.followAuthor(post) },
+      onOpenOptions: { presentPostOptions(for: post) },
+      onCreate: {
+        CaptroHaptics.light()
+        isShowingCreatePost = true
+      },
+      onOpenPost: {
+        CaptroHaptics.light()
+        detailPost = post
+      },
+      canFollowAuthor: !isGuest && model.canFollowAuthor(post),
+      pageSize: size,
+      selectedMediaIndex: mediaSelectionBinding(for: post),
+      usesExternalMediaPaging: true,
+      externalMediaDragOffset: isCurrent ? mediaDragOffset : 0
+    )
+  }
+
+  private var currentPostIndex: Int {
+    if let selectedPostID,
+       let index = model.posts.firstIndex(where: { $0.id == selectedPostID }) {
+      return index
+    }
+    return min(max(selectedPostFallbackIndex, 0), max(model.posts.count - 1, 0))
+  }
+
+  private var currentPost: MIRAPost? {
+    guard model.posts.indices.contains(currentPostIndex) else { return nil }
+    return model.posts[currentPostIndex]
+  }
+
+  private var visiblePostIndices: [Int] {
+    guard !model.posts.isEmpty else { return [] }
+    return [currentPostIndex - 1, currentPostIndex, currentPostIndex + 1]
+      .filter { model.posts.indices.contains($0) }
+  }
+
+  private func mediaSelectionBinding(for post: MIRAPost) -> Binding<Int> {
+    Binding(
+      get: { selectedMediaIndex(for: post) },
+      set: { newValue in
+        let upperBound = max(post.feedMediaURLs.count - 1, 0)
+        selectedMediaIndices[post.id] = min(max(newValue, 0), upperBound)
+      }
+    )
+  }
+
+  private func selectedMediaIndex(for post: MIRAPost) -> Int {
+    let upperBound = max(post.feedMediaURLs.count - 1, 0)
+    return min(max(selectedMediaIndices[post.id] ?? 0, 0), upperBound)
+  }
+
+  private func horizontalPagerGesture(pageWidth: CGFloat) -> some Gesture {
+    DragGesture(minimumDistance: 10, coordinateSpace: .local)
+      .onChanged { value in
+        handlePagerDragChanged(value, pageWidth: pageWidth)
+      }
+      .onEnded { value in
+        handlePagerDragEnded(value, pageWidth: pageWidth)
+      }
+  }
+
+  private func handlePagerDragChanged(_ value: DragGesture.Value, pageWidth: CGFloat) {
+    guard !isPagerTransitioning else { return }
+    let horizontal = value.translation.width
+    let vertical = value.translation.height
+
+    if pagerDragTarget == nil {
+      guard max(abs(horizontal), abs(vertical)) >= 10 else { return }
+      guard abs(horizontal) > abs(vertical) else {
+        pagerDragTarget = .ignored
+        return
+      }
+      let direction: MainFeedPagerDirection = horizontal < 0 ? .next : .previous
+      pagerDragTarget = dragTarget(for: direction)
+      if case .edge(.next)? = pagerDragTarget, let currentPost {
+        Task { await model.loadMoreIfNeeded(after: currentPost) }
+      }
+    }
+
+    guard let pagerDragTarget else { return }
+    switch pagerDragTarget {
+    case let .media(direction):
+      mediaDragOffset = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
+      postDragOffset = 0
+    case let .post(direction):
+      postDragOffset = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
+      mediaDragOffset = 0
+    case let .edge(direction):
+      let directional = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
+      postDragOffset = min(max(directional * 0.18, -38), 38)
+      mediaDragOffset = 0
+    case .ignored:
+      postDragOffset = 0
+      mediaDragOffset = 0
+    }
+  }
+
+  private func handlePagerDragEnded(_ value: DragGesture.Value, pageWidth: CGFloat) {
+    guard !isPagerTransitioning else { return }
+    guard let target = pagerDragTarget else {
+      resetPagerOffsets()
+      return
+    }
+
+    switch target {
+    case let .media(direction):
+      if shouldCommitSwipe(value, direction: direction, pageWidth: pageWidth) {
+        commitMediaSwipe(direction: direction, pageWidth: pageWidth)
+      } else {
+        resetPagerOffsets()
+      }
+    case let .post(direction):
+      if shouldCommitSwipe(value, direction: direction, pageWidth: pageWidth) {
+        commitPostSwipe(direction: direction, pageWidth: pageWidth)
+      } else {
+        resetPagerOffsets()
+      }
+    case .edge(_), .ignored:
+      resetPagerOffsets()
+    }
+  }
+
+  private func dragTarget(for direction: MainFeedPagerDirection) -> MainFeedPagerDragTarget {
+    guard let post = currentPost else { return .ignored }
+    let mediaIndex = selectedMediaIndex(for: post)
+    let mediaCount = post.feedMediaURLs.count
+
+    switch direction {
+    case .next where mediaIndex + 1 < mediaCount:
+      return .media(.next)
+    case .previous where mediaIndex > 0:
+      return .media(.previous)
+    default:
+      let nextPostIndex = currentPostIndex + direction.indexDelta
+      return model.posts.indices.contains(nextPostIndex) ? .post(direction) : .edge(direction)
+    }
+  }
+
+  private func boundedTranslation(
+    _ horizontal: CGFloat,
+    direction: MainFeedPagerDirection,
+    pageWidth: CGFloat
+  ) -> CGFloat {
+    let directional: CGFloat
+    switch direction {
+    case .previous:
+      directional = max(0, horizontal)
+    case .next:
+      directional = min(0, horizontal)
+    }
+    return min(max(directional, -pageWidth), pageWidth)
+  }
+
+  private func shouldCommitSwipe(
+    _ value: DragGesture.Value,
+    direction: MainFeedPagerDirection,
+    pageWidth: CGFloat
+  ) -> Bool {
+    let distance = direction.offsetSign * value.translation.width
+    let predictedDistance = direction.offsetSign * value.predictedEndTranslation.width
+    let threshold = min(max(pageWidth * 0.16, 44), 72)
+    return distance >= threshold || predictedDistance >= pageWidth * 0.34
+  }
+
+  private func commitMediaSwipe(direction: MainFeedPagerDirection, pageWidth: CGFloat) {
+    guard let post = currentPost else {
+      resetPagerOffsets()
+      return
+    }
+    let destination = selectedMediaIndex(for: post) + direction.indexDelta
+    guard post.feedMediaURLs.indices.contains(destination) else {
+      resetPagerOffsets()
+      return
+    }
+
+    isPagerTransitioning = true
+    withAnimation(pagerSnapAnimation, completionCriteria: .logicallyComplete) {
+      mediaDragOffset = direction.offsetSign * pageWidth
+    } completion: {
       var transaction = Transaction()
-      transaction.animation = nil
+      transaction.disablesAnimations = true
       withTransaction(transaction) {
-        activeVideoPostID = nextID
+        selectedMediaIndices[post.id] = destination
+        mediaDragOffset = 0
+        postDragOffset = 0
+        pagerDragTarget = nil
+        isPagerTransitioning = false
+      }
+    }
+  }
+
+  private func commitPostSwipe(direction: MainFeedPagerDirection, pageWidth: CGFloat) {
+    let destination = currentPostIndex + direction.indexDelta
+    guard model.posts.indices.contains(destination) else {
+      resetPagerOffsets()
+      return
+    }
+    let destinationPostID = model.posts[destination].id
+
+    isPagerTransitioning = true
+    withAnimation(pagerSnapAnimation, completionCriteria: .logicallyComplete) {
+      postDragOffset = direction.offsetSign * pageWidth
+    } completion: {
+      var transaction = Transaction()
+      transaction.disablesAnimations = true
+      withTransaction(transaction) {
+        selectedPostFallbackIndex = destination
+        selectedPostID = destinationPostID
+        postDragOffset = 0
+        mediaDragOffset = 0
+        pagerDragTarget = nil
+        isPagerTransitioning = false
+      }
+    }
+  }
+
+  private func resetPagerOffsets() {
+    withAnimation(pagerReturnAnimation) {
+      postDragOffset = 0
+      mediaDragOffset = 0
+    }
+    pagerDragTarget = nil
+  }
+
+  private var pagerSnapAnimation: Animation {
+    reduceMotion ? .linear(duration: 0.01) : .easeOut(duration: 0.24)
+  }
+
+  private var pagerReturnAnimation: Animation {
+    reduceMotion ? .linear(duration: 0.01) : .easeOut(duration: 0.18)
+  }
+
+  private func reconcileCurrentPostSelection() {
+    guard !model.posts.isEmpty else {
+      selectedPostID = nil
+      selectedPostFallbackIndex = 0
+      activeVideoPostID = nil
+      return
+    }
+
+    if let selectedPostID,
+       let index = model.posts.firstIndex(where: { $0.id == selectedPostID }) {
+      selectedPostFallbackIndex = index
+    } else {
+      let index = min(max(selectedPostFallbackIndex, 0), model.posts.count - 1)
+      selectedPostID = model.posts[index].id
+      selectedPostFallbackIndex = index
+    }
+
+    let livePostIDs = Set(model.posts.map(\.id))
+    selectedMediaIndices = selectedMediaIndices.filter { livePostIDs.contains($0.key) }
+  }
+
+  private func activateCurrentPost(reason _: String) {
+    guard let post = currentPost else {
+      activeVideoPostID = nil
+      return
+    }
+
+    let shouldPlayVideo = !isMediaPlaybackSuppressed && post.feedMediaURLs.contains(where: { $0.isVideoURL })
+    if activeVideoPostID != (shouldPlayVideo ? post.id : nil) {
+      var transaction = Transaction()
+      transaction.disablesAnimations = true
+      withTransaction(transaction) {
+        activeVideoPostID = shouldPlayVideo ? post.id : nil
       }
       MIRAMemoryMetrics.log("main_feed_video_switch")
     }
-  }
 
-  private func handleScrollDrag(_ value: DragGesture.Value) {
-    let vertical = value.translation.height
-    let horizontal = abs(value.translation.width)
-    guard abs(vertical) > max(8, horizontal * 0.65) else { return }
-    if vertical < -8 {
-      if !isHeaderHidden {
-        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-          isHeaderHidden = true
-        }
-      }
-    } else if vertical > 10 {
-      if isHeaderHidden {
-        withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-          isHeaderHidden = false
-        }
-      }
-    }
+    MIRAApplePerformanceLogger.event(
+      "post_cell_appear",
+      detail: post.feedMediaURLs.first?.isVideoURL == true ? "video" : "image"
+    )
+    model.prefetchMedia(around: post)
+    Task { await model.loadMoreIfNeeded(after: post) }
   }
 
   private func pauseVisibleMedia(reason: String) {
@@ -2348,14 +2546,6 @@ private struct MainPostVisibilityPreferenceKey: PreferenceKey {
 
 private struct MainPostWidthPreferenceKey: PreferenceKey {
   static var defaultValue: CGFloat = UIScreen.main.bounds.width
-
-  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-    value = nextValue()
-  }
-}
-
-private struct MainFeedScrollOffsetPreferenceKey: PreferenceKey {
-  static var defaultValue: CGFloat = 0
 
   static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
     value = nextValue()
