@@ -35,16 +35,6 @@ struct CaptroFeedPostView: View {
 
   private var postContent: some View {
     VStack(alignment: .leading, spacing: 0) {
-      CaptroAuthorHeader(
-        post: post,
-        api: api,
-        showsFeedControls: showsFeedControls,
-        canFollowAuthor: canFollowAuthor,
-        onFollow: onFollow,
-        onCreate: onCreate,
-        onOpenOptions: onOpenOptions
-      )
-
       if !post.feedMediaURLs.isEmpty {
         mediaPager
       } else {
@@ -97,14 +87,8 @@ struct CaptroFeedPostView: View {
 
   private var pageMediaSize: CGSize? {
     guard let pageSize, !post.feedMediaURLs.isEmpty else { return nil }
-    let ratio = MIRAMediaSizing.supportedPostHeightToWidthRatio(
-      post.mediaDimensions?.values.first?.heightToWidthRatio
-        ?? MIRAMediaSizing.mainFeedDisplayRatio(
-          for: post.feedMediaURLs,
-          aspectRatios: post.mediaHeightToWidthRatios
-        )
-    )
-    let fixedVerticalContent: CGFloat = 66 + 25 + (showsMoreButton ? 44 : 0)
+    let ratio = MIRAMediaSizing.feedPreviewRatio
+    let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0)
     let availableMediaHeight = max(120, pageSize.height - fixedVerticalContent)
     let width = min(pageSize.width, availableMediaHeight / max(ratio, 0.01))
     return CGSize(width: width, height: width * ratio)

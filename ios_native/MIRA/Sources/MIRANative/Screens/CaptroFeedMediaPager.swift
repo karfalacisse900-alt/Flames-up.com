@@ -16,7 +16,7 @@ struct CaptroMediaPager: View {
   @State private var stampTapResetTask: Task<Void, Never>?
 
   private var mediaURLs: [String] { post.feedMediaURLs }
-  private var mediaHeightToWidthRatio: CGFloat {
+  private var naturalMediaHeightToWidthRatio: CGFloat {
     boundedHomeMediaRatio(
       declaredCoverHeightToWidthRatio
         ?? measuredCoverHeightToWidthRatio
@@ -26,8 +26,11 @@ struct CaptroMediaPager: View {
       )
     )
   }
+  private var mediaHeightToWidthRatio: CGFloat {
+    showsCoverMediaOnly ? MIRAMediaSizing.feedPreviewRatio : naturalMediaHeightToWidthRatio
+  }
   private var stampWidthFraction: CGFloat {
-    mediaHeightToWidthRatio < 0.8 ? 0.62 : (mediaHeightToWidthRatio > 1.3 ? 0.64 : 0.66)
+    naturalMediaHeightToWidthRatio < 0.8 ? 0.62 : (naturalMediaHeightToWidthRatio > 1.3 ? 0.64 : 0.66)
   }
   private var showsStampOnCurrentSlide: Bool {
     showsCoverMediaOnly || selectedMediaIndex == 0
