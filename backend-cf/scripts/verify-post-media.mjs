@@ -20,7 +20,11 @@ async function api(path, token, options = {}) {
     headers: { Authorization: `Bearer ${token}`, ...options.headers },
     signal: AbortSignal.timeout(60_000),
   });
-  const body = await response.json().catch(() => ({}));
+  const responseText = await response.text();
+  // Stream DELETE succeeds without a JSON envelope.
+  if (response.ok && options.method === 'DELETE' && !responseText.trim()) return;
+  let body = {};
+  try { body = JSON.parse(responseText) || {}; } catch { /* Report status without raw response data. */ }
   // Never log upload URLs, playback tokens, or raw provider responses.
   const reason = String(body.errors?.[0]?.message || '')
     .replace(/https?:\/\/\S+|[A-Za-z0-9_-]{40,}/g, '[redacted]').slice(0, 240);
@@ -111,6 +115,9 @@ try {
   if (videoId) cleanup.push(api(`/stream/${videoId}`, streamToken, { method: 'DELETE' }));
   const results = await Promise.allSettled(cleanup);
   await rm(temporary, { recursive: true, force: true });
+  for (const result of results) {
+    if (result.status === 'rejected') console.error(result.reason.message);
+  }
   assert.ok(results.every((result) => result.status === 'fulfilled'), 'Cloudflare temporary fixture cleanup failed');
   console.log('Temporary release media deleted; no posts or user content changed.');
 }
