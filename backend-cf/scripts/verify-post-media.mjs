@@ -35,7 +35,12 @@ async function upload(url, file, mime) {
   const data = new FormData();
   data.append('file', new Blob([await readFile(file)], { type: mime }), file.endsWith('.png') ? 'captro-smoke.png' : 'captro-smoke.mp4');
   const response = await fetch(url, { method: 'POST', body: data, signal: AbortSignal.timeout(90_000) });
-  assert.ok(response.ok, `Direct ${mime} upload failed: HTTP ${response.status}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    const reason = String(payload.errors?.[0]?.message || payload.error || payload.message || 'no JSON error')
+      .replace(/https?:\/\/\S+|[A-Za-z0-9_-]{40,}/g, '[redacted]').slice(0, 240);
+    throw new Error(`Direct ${mime} upload failed: HTTP ${response.status}, provider code ${payload.errors?.[0]?.code || 'unknown'}, ${reason}, response type ${response.headers.get('content-type')}, challenge ${response.headers.get('cf-mitigated') || 'none'}`);
+  }
 }
 
 try {
@@ -44,6 +49,8 @@ try {
   fixture(['-f', 'lavfi', '-i', 'testsrc2=size=320x400:rate=1', '-frames:v', '1', '-threads', '1', photo]);
   fixture(['-f', 'lavfi', '-i', 'testsrc2=size=320x400:rate=24', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', movie]);
 
+  const failures = [];
+  try {
   const imageIntent = new FormData();
   imageIntent.append('requireSignedURLs', 'true');
   imageIntent.append('metadata', JSON.stringify({ source: 'captro-release-smoke', temporary: true }));
@@ -55,7 +62,12 @@ try {
   assert.notEqual(storedImage.draft, true, 'Image upload is still a draft');
   assert.equal(storedImage.requireSignedURLs, true, 'Smoke-test image must remain private');
   console.log('PASS Cloudflare Images: direct upload and stored image confirmed.');
+  } catch (error) {
+    console.error(error.message);
+    failures.push('Cloudflare Images');
+  }
 
+  try {
   const video = await api('/stream/direct_upload', streamToken, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ maxDurationSeconds: 60, requireSignedURLs: true, meta: { name: 'Captro temporary release smoke' } }),
@@ -86,6 +98,11 @@ try {
   const playback = await fetch(manifest, { signal: AbortSignal.timeout(30_000) });
   assert.ok(playback.ok && (await playback.text()).startsWith('#EXTM3U'), 'Stream HLS manifest is not playable');
   console.log('PASS Cloudflare Stream: direct upload, encoding, 4:5 dimensions, and signed HLS playback confirmed.');
+  } catch (error) {
+    console.error(error.message);
+    failures.push('Cloudflare Stream');
+  }
+  assert.equal(failures.length, 0, `Media verification failed: ${failures.join(', ')}`);
 } finally {
   const cleanup = [];
   if (imageId) cleanup.push(api(`/images/v1/${imageId}`, imagesToken, { method: 'DELETE' }));
