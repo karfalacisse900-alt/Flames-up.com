@@ -13,8 +13,7 @@ struct CaptroFeedPostView: View {
   let canFollowAuthor: Bool
   let pageSize: CGSize?
   @Binding var selectedMediaIndex: Int
-  let usesExternalMediaPaging: Bool
-  let externalMediaDragOffset: CGFloat
+  let showsCoverMediaOnly: Bool
 
   @Environment(\.displayScale) private var displayScale
 
@@ -83,8 +82,7 @@ struct CaptroFeedPostView: View {
       isVideoActive: isVideoActive,
       selectedMediaIndex: $selectedMediaIndex,
       onOpenPost: onOpenPost,
-      usesExternalPaging: usesExternalMediaPaging,
-      externalDragOffset: externalMediaDragOffset
+      showsCoverMediaOnly: showsCoverMediaOnly
     )
 
     if let mediaSize = pageMediaSize {

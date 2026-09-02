@@ -210,12 +210,9 @@ final class MainFeedModel: ObservableObject {
       let imageURLs = orderedMediaURLs(mediaURLs + post.fallbackMediaURLs).filter { !$0.isVideoURL }
       let videoURLs = mediaURLs.filter { $0.isVideoURL }
 
-      if rank == 0 {
-        // Visible carousel: preload every optimized/fallback image before the user swipes.
-        feedImageURLs.append(contentsOf: imageURLs)
-        videoPrewarmURLs.append(contentsOf: videoURLs.prefix(2))
-      } else if rank <= 3 {
-        feedImageURLs.append(contentsOf: imageURLs.prefix(2))
+      if rank <= 3 {
+        // Home renders one cover per post; detail screens own the full media carousel.
+        feedImageURLs.append(contentsOf: imageURLs.prefix(1))
         videoPrewarmURLs.append(contentsOf: videoURLs.prefix(1))
       } else if rank <= 6 {
         feedImageURLs.append(contentsOf: imageURLs.prefix(1))
@@ -777,8 +774,12 @@ private enum MainFeedPagerDirection {
   }
 }
 
+private enum MainFeedSection: String {
+  case forYou
+  case friends
+}
+
 private enum MainFeedPagerDragTarget {
-  case media(MainFeedPagerDirection)
   case post(MainFeedPagerDirection)
   case edge(MainFeedPagerDirection)
   case ignored
@@ -794,9 +795,9 @@ public struct MainFeedView: View {
   @State private var activeVideoPostID: String?
   @State private var selectedPostID: String?
   @State private var selectedPostFallbackIndex = 0
-  @State private var selectedMediaIndices: [String: Int] = [:]
+  @State private var selectedFeedSection: MainFeedSection = .forYou
+  @AppStorage("captro.home.selectedCity") private var selectedCity = "NYC"
   @State private var postDragOffset: CGFloat = 0
-  @State private var mediaDragOffset: CGFloat = 0
   @State private var pagerDragTarget: MainFeedPagerDragTarget?
   @State private var isPagerTransitioning = false
   @State private var isShowingCreatePost = false
@@ -806,6 +807,8 @@ public struct MainFeedView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
+
+  private let homeCities = ["NYC", "LA", "CHI", "MIA", "SF"]
 
   public init(api: MIRAAPIClient, isGuest: Bool = false) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -822,13 +825,19 @@ public struct MainFeedView: View {
   public var body: some View {
     NavigationStack {
       GeometryReader { proxy in
-        feedContent(size: proxy.size)
+        VStack(spacing: 0) {
+          homeTopBar
+
+          GeometryReader { feedProxy in
+            feedContent(size: feedProxy.size)
+          }
+        }
+        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
       }
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.tab)
       .toolbar(.hidden, for: .navigationBar)
       .toolbar(feedTabBarVisibility, for: .tabBar)
-      .statusBarHidden(true)
       .navigationDestination(item: $detailPost) { post in
         DiscoverPostDetailNativeView(post: post, api: model.api)
           .miraHideTabBarOnAppear()
@@ -903,7 +912,13 @@ public struct MainFeedView: View {
           MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_overlay_closed")
         }
       }
-      .onChange(of: model.posts.map(\.id)) { _, _ in
+      .onChange(of: displayedPosts.map(\.id)) { _, _ in
+        reconcileCurrentPostSelection()
+      }
+      .onChange(of: selectedFeedSection) { _, _ in
+        selectedPostID = nil
+        selectedPostFallbackIndex = 0
+        resetPagerOffsets()
         reconcileCurrentPostSelection()
       }
       .onChange(of: selectedPostID) { _, _ in
@@ -923,17 +938,128 @@ public struct MainFeedView: View {
     }
   }
 
+  private var homeTopBar: some View {
+    HStack(spacing: 0) {
+      Menu {
+        ForEach(homeCities, id: \.self) { city in
+          Button {
+            selectedCity = city
+          } label: {
+            if selectedCity == city {
+              Label(city, systemImage: "checkmark")
+            } else {
+              Text(city)
+            }
+          }
+        }
+      } label: {
+        HStack(spacing: 4) {
+          Text(selectedCity)
+            .font(.system(size: 17, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .lineLimit(1)
+
+          Image(systemName: "chevron.down")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .menuIndicator(.hidden)
+      .frame(width: 92, alignment: .leading)
+      .accessibilityLabel("Selected city, \(selectedCity)")
+
+      HStack(spacing: 24) {
+        homeSectionButton(title: "for you", section: .forYou)
+        homeSectionButton(title: "friends", section: .friends)
+      }
+      .frame(maxWidth: .infinity)
+
+      HStack(spacing: 4) {
+        if let currentPost {
+          ShareLink(item: mainFeedShareURL(for: currentPost)) {
+            Image(systemName: "paperplane")
+              .font(.system(size: 21, weight: .medium))
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .frame(width: 40, height: 44)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Share post")
+        } else {
+          Image(systemName: "paperplane")
+            .font(.system(size: 21, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+            .frame(width: 40, height: 44)
+            .accessibilityHidden(true)
+        }
+
+        NavigationLink(destination: NotificationNativeView(api: model.api)) {
+          Image(systemName: "bell")
+            .font(.system(size: 21, weight: .medium))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(width: 40, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Notifications")
+      }
+      .frame(width: 92, alignment: .trailing)
+    }
+    .padding(.horizontal, 14)
+    .frame(height: 64)
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) {
+      Rectangle()
+        .fill(MIRATheme.Color.hairline)
+        .frame(height: 0.5)
+    }
+    .zIndex(10)
+  }
+
+  private func homeSectionButton(title: String, section: MainFeedSection) -> some View {
+    Button {
+      guard selectedFeedSection != section else { return }
+      CaptroHaptics.light()
+      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
+        selectedFeedSection = section
+      }
+    } label: {
+      VStack(spacing: 8) {
+        Text(title)
+          .font(.system(size: 17, weight: selectedFeedSection == section ? .bold : .semibold))
+          .foregroundStyle(
+            selectedFeedSection == section
+              ? MIRATheme.Color.textPrimary
+              : MIRATheme.Color.textMuted
+          )
+          .lineLimit(1)
+
+        Capsule()
+          .fill(selectedFeedSection == section ? MIRATheme.Color.textPrimary : Color.clear)
+          .frame(width: 42, height: 3)
+      }
+      .frame(minHeight: 44, alignment: .bottom)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selectedFeedSection == section ? .isSelected : [])
+  }
+
   @ViewBuilder
   private func feedContent(size: CGSize) -> some View {
     if model.isLoading && model.posts.isEmpty {
       MainPostSkeleton()
         .frame(width: size.width, height: size.height, alignment: .top)
         .clipped()
-    } else if model.posts.isEmpty {
+    } else if displayedPosts.isEmpty {
       MIRAEmptyState(
-        title: localization.string("feed.empty.title"),
-        message: localization.string("feed.empty.message"),
-        systemImage: "sparkles"
+        title: selectedFeedSection == .friends ? "No friends posts yet" : localization.string("feed.empty.title"),
+        message: selectedFeedSection == .friends
+          ? "Posts from people you follow will appear here."
+          : localization.string("feed.empty.message"),
+        systemImage: selectedFeedSection == .friends ? "person.2" : "sparkles"
       )
       .frame(width: size.width, height: size.height)
     } else {
@@ -944,7 +1070,7 @@ public struct MainFeedView: View {
   private func horizontalPostPager(size: CGSize) -> some View {
     ZStack(alignment: .topLeading) {
       ForEach(visiblePostIndices, id: \.self) { index in
-        let post = model.posts[index]
+        let post = displayedPosts[index]
         let isCurrent = index == currentPostIndex
 
         feedPage(post: post, size: size, isCurrent: isCurrent)
@@ -970,7 +1096,7 @@ public struct MainFeedView: View {
       post: post,
       api: model.api,
       isVideoActive: isCurrent && post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
-      showsFeedControls: !isGuest && post.id == model.posts.first?.id,
+      showsFeedControls: false,
       onFollow: { await model.followAuthor(post) },
       onOpenOptions: { presentPostOptions(for: post) },
       onCreate: {
@@ -983,44 +1109,37 @@ public struct MainFeedView: View {
       },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       pageSize: size,
-      selectedMediaIndex: mediaSelectionBinding(for: post),
-      usesExternalMediaPaging: true,
-      externalMediaDragOffset: isCurrent ? mediaDragOffset : 0
+      selectedMediaIndex: .constant(0),
+      showsCoverMediaOnly: true
     )
+  }
+
+  private var displayedPosts: [MIRAPost] {
+    switch selectedFeedSection {
+    case .forYou:
+      return model.posts
+    case .friends:
+      return model.posts.filter(\.viewerFollowing)
+    }
   }
 
   private var currentPostIndex: Int {
     if let selectedPostID,
-       let index = model.posts.firstIndex(where: { $0.id == selectedPostID }) {
+       let index = displayedPosts.firstIndex(where: { $0.id == selectedPostID }) {
       return index
     }
-    return min(max(selectedPostFallbackIndex, 0), max(model.posts.count - 1, 0))
+    return min(max(selectedPostFallbackIndex, 0), max(displayedPosts.count - 1, 0))
   }
 
   private var currentPost: MIRAPost? {
-    guard model.posts.indices.contains(currentPostIndex) else { return nil }
-    return model.posts[currentPostIndex]
+    guard displayedPosts.indices.contains(currentPostIndex) else { return nil }
+    return displayedPosts[currentPostIndex]
   }
 
   private var visiblePostIndices: [Int] {
-    guard !model.posts.isEmpty else { return [] }
+    guard !displayedPosts.isEmpty else { return [] }
     return [currentPostIndex - 1, currentPostIndex, currentPostIndex + 1]
-      .filter { model.posts.indices.contains($0) }
-  }
-
-  private func mediaSelectionBinding(for post: MIRAPost) -> Binding<Int> {
-    Binding(
-      get: { selectedMediaIndex(for: post) },
-      set: { newValue in
-        let upperBound = max(post.feedMediaURLs.count - 1, 0)
-        selectedMediaIndices[post.id] = min(max(newValue, 0), upperBound)
-      }
-    )
-  }
-
-  private func selectedMediaIndex(for post: MIRAPost) -> Int {
-    let upperBound = max(post.feedMediaURLs.count - 1, 0)
-    return min(max(selectedMediaIndices[post.id] ?? 0, 0), upperBound)
+      .filter { displayedPosts.indices.contains($0) }
   }
 
   private func horizontalPagerGesture(pageWidth: CGFloat) -> some Gesture {
@@ -1053,19 +1172,13 @@ public struct MainFeedView: View {
 
     guard let pagerDragTarget else { return }
     switch pagerDragTarget {
-    case let .media(direction):
-      mediaDragOffset = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
-      postDragOffset = 0
     case let .post(direction):
       postDragOffset = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
-      mediaDragOffset = 0
     case let .edge(direction):
       let directional = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
       postDragOffset = min(max(directional * 0.18, -38), 38)
-      mediaDragOffset = 0
     case .ignored:
       postDragOffset = 0
-      mediaDragOffset = 0
     }
   }
 
@@ -1077,12 +1190,6 @@ public struct MainFeedView: View {
     }
 
     switch target {
-    case let .media(direction):
-      if shouldCommitSwipe(value, direction: direction, pageWidth: pageWidth) {
-        commitMediaSwipe(direction: direction, pageWidth: pageWidth)
-      } else {
-        resetPagerOffsets()
-      }
     case let .post(direction):
       if shouldCommitSwipe(value, direction: direction, pageWidth: pageWidth) {
         commitPostSwipe(direction: direction, pageWidth: pageWidth)
@@ -1095,19 +1202,9 @@ public struct MainFeedView: View {
   }
 
   private func dragTarget(for direction: MainFeedPagerDirection) -> MainFeedPagerDragTarget {
-    guard let post = currentPost else { return .ignored }
-    let mediaIndex = selectedMediaIndex(for: post)
-    let mediaCount = post.feedMediaURLs.count
-
-    switch direction {
-    case .next where mediaIndex + 1 < mediaCount:
-      return .media(.next)
-    case .previous where mediaIndex > 0:
-      return .media(.previous)
-    default:
-      let nextPostIndex = currentPostIndex + direction.indexDelta
-      return model.posts.indices.contains(nextPostIndex) ? .post(direction) : .edge(direction)
-    }
+    guard currentPost != nil else { return .ignored }
+    let nextPostIndex = currentPostIndex + direction.indexDelta
+    return displayedPosts.indices.contains(nextPostIndex) ? .post(direction) : .edge(direction)
   }
 
   private func boundedTranslation(
@@ -1136,40 +1233,13 @@ public struct MainFeedView: View {
     return distance >= threshold || predictedDistance >= pageWidth * 0.34
   }
 
-  private func commitMediaSwipe(direction: MainFeedPagerDirection, pageWidth: CGFloat) {
-    guard let post = currentPost else {
-      resetPagerOffsets()
-      return
-    }
-    let destination = selectedMediaIndex(for: post) + direction.indexDelta
-    guard post.feedMediaURLs.indices.contains(destination) else {
-      resetPagerOffsets()
-      return
-    }
-
-    isPagerTransitioning = true
-    withAnimation(pagerSnapAnimation, completionCriteria: .logicallyComplete) {
-      mediaDragOffset = direction.offsetSign * pageWidth
-    } completion: {
-      var transaction = Transaction()
-      transaction.disablesAnimations = true
-      withTransaction(transaction) {
-        selectedMediaIndices[post.id] = destination
-        mediaDragOffset = 0
-        postDragOffset = 0
-        pagerDragTarget = nil
-        isPagerTransitioning = false
-      }
-    }
-  }
-
   private func commitPostSwipe(direction: MainFeedPagerDirection, pageWidth: CGFloat) {
     let destination = currentPostIndex + direction.indexDelta
-    guard model.posts.indices.contains(destination) else {
+    guard displayedPosts.indices.contains(destination) else {
       resetPagerOffsets()
       return
     }
-    let destinationPostID = model.posts[destination].id
+    let destinationPostID = displayedPosts[destination].id
 
     isPagerTransitioning = true
     withAnimation(pagerSnapAnimation, completionCriteria: .logicallyComplete) {
@@ -1181,7 +1251,6 @@ public struct MainFeedView: View {
         selectedPostFallbackIndex = destination
         selectedPostID = destinationPostID
         postDragOffset = 0
-        mediaDragOffset = 0
         pagerDragTarget = nil
         isPagerTransitioning = false
       }
@@ -1191,7 +1260,6 @@ public struct MainFeedView: View {
   private func resetPagerOffsets() {
     withAnimation(pagerReturnAnimation) {
       postDragOffset = 0
-      mediaDragOffset = 0
     }
     pagerDragTarget = nil
   }
@@ -1205,7 +1273,7 @@ public struct MainFeedView: View {
   }
 
   private func reconcileCurrentPostSelection() {
-    guard !model.posts.isEmpty else {
+    guard !displayedPosts.isEmpty else {
       selectedPostID = nil
       selectedPostFallbackIndex = 0
       activeVideoPostID = nil
@@ -1213,16 +1281,13 @@ public struct MainFeedView: View {
     }
 
     if let selectedPostID,
-       let index = model.posts.firstIndex(where: { $0.id == selectedPostID }) {
+       let index = displayedPosts.firstIndex(where: { $0.id == selectedPostID }) {
       selectedPostFallbackIndex = index
     } else {
-      let index = min(max(selectedPostFallbackIndex, 0), model.posts.count - 1)
-      selectedPostID = model.posts[index].id
+      let index = min(max(selectedPostFallbackIndex, 0), displayedPosts.count - 1)
+      selectedPostID = displayedPosts[index].id
       selectedPostFallbackIndex = index
     }
-
-    let livePostIDs = Set(model.posts.map(\.id))
-    selectedMediaIndices = selectedMediaIndices.filter { livePostIDs.contains($0.key) }
   }
 
   private func activateCurrentPost(reason _: String) {

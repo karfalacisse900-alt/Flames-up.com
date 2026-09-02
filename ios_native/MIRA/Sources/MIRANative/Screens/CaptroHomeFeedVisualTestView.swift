@@ -4,7 +4,6 @@ import SwiftUI
 
 public struct CaptroHomeFeedVisualTestView: View {
   @State private var selectedTab = 0
-  @State private var selectedMediaIndices: [String: Int] = [:]
   private let api = MIRAAPIClient()
   private let posts = CaptroHomeFeedVisualFixtures.posts
 
@@ -21,21 +20,20 @@ public struct CaptroHomeFeedVisualTestView: View {
                 .foregroundStyle(MIRATheme.Color.textPrimary)
                 .padding(24)
             } else {
-              ForEach(Array(posts.enumerated()), id: \.element.id) { index, post in
+              ForEach(posts) { post in
                 CaptroFeedPostView(
                   post: post,
                   api: api,
                   isVideoActive: false,
-                  showsFeedControls: index == 0,
+                  showsFeedControls: false,
                   onFollow: { false },
                   onOpenOptions: {},
                   onCreate: {},
                   onOpenPost: {},
                   canFollowAuthor: false,
                   pageSize: nil,
-                  selectedMediaIndex: mediaSelectionBinding(for: post),
-                  usesExternalMediaPaging: false,
-                  externalMediaDragOffset: 0
+                  selectedMediaIndex: .constant(0),
+                  showsCoverMediaOnly: true
                 )
               }
             }
@@ -53,19 +51,14 @@ public struct CaptroHomeFeedVisualTestView: View {
         .tag(1)
         .tabItem { Label("Scan", systemImage: "doc.viewfinder.fill") }
 
-      visualTestTab(systemImage: "bubble.left.and.bubble.right.fill")
-        .tag(2)
-        .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
-
       visualTestTab(systemImage: "person.fill")
-        .tag(3)
-        .tabItem { Label("Profile", systemImage: "person.fill") }
+        .tag(2)
+        .tabItem { Label("Me", systemImage: "person.fill") }
     }
     .tint(MIRATheme.Color.forest)
     .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
-    .statusBarHidden(true)
   }
 
   private func visualTestTab(systemImage: String) -> some View {
@@ -77,12 +70,6 @@ public struct CaptroHomeFeedVisualTestView: View {
     }
   }
 
-  private func mediaSelectionBinding(for post: MIRAPost) -> Binding<Int> {
-    Binding(
-      get: { selectedMediaIndices[post.id] ?? 0 },
-      set: { selectedMediaIndices[post.id] = $0 }
-    )
-  }
 }
 
 private enum CaptroHomeFeedVisualFixtures {

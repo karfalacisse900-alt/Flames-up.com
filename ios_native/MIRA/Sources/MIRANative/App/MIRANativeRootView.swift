@@ -281,7 +281,7 @@ public struct MIRANativeRootView: View {
   }
 
   private var shouldHideStatusBar: Bool {
-    startup.isSplashMounted || featureStatusBarHidden || ((authSession.user != nil || authSession.isGuest) && selectedTab == .main)
+    startup.isSplashMounted || featureStatusBarHidden
   }
 
   @ViewBuilder
@@ -331,21 +331,6 @@ public struct MIRANativeRootView: View {
         .tag(MIRATab.scan)
         .tabItem { Label("Scan", systemImage: "doc.viewfinder.fill") }
 
-      lazyTab(.chat) {
-        if authSession.isGuest {
-          GuestSignInRequiredView(
-            title: "Sign in to use Chat",
-            message: "Create an account or sign in to start and continue conversations.",
-            systemImage: "bubble.left.and.bubble.right.fill",
-            onSignIn: leaveGuestModeForSignIn
-          )
-        } else {
-          ChatNativeView(api: api, currentUserId: authSession.user?.id ?? "", model: startup.chatModel)
-        }
-      }
-        .tag(MIRATab.chat)
-        .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
-
       lazyTab(.profile) {
         if authSession.isGuest {
           GuestSignInRequiredView(
@@ -359,7 +344,7 @@ public struct MIRANativeRootView: View {
         }
       }
         .tag(MIRATab.profile)
-        .tabItem { Label("Profile", systemImage: "person.fill") }
+        .tabItem { Label("Me", systemImage: "person.fill") }
     }
     .tint(MIRATheme.Color.forest)
     .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)

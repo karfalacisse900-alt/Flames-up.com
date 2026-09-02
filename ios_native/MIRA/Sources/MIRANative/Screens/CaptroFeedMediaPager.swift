@@ -7,8 +7,7 @@ struct CaptroMediaPager: View {
   let isVideoActive: Bool
   @Binding var selectedMediaIndex: Int
   let onOpenPost: () -> Void
-  let usesExternalPaging: Bool
-  let externalDragOffset: CGFloat
+  let showsCoverMediaOnly: Bool
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @GestureState private var isHoldingStamp = false
@@ -28,10 +27,10 @@ struct CaptroMediaPager: View {
     )
   }
   private var stampWidthFraction: CGFloat {
-    mediaHeightToWidthRatio < 0.8 ? 0.56 : (mediaHeightToWidthRatio > 1.3 ? 0.52 : 0.54)
+    mediaHeightToWidthRatio < 0.8 ? 0.62 : (mediaHeightToWidthRatio > 1.3 ? 0.64 : 0.66)
   }
   private var showsStampOnCurrentSlide: Bool {
-    selectedMediaIndex == 0
+    showsCoverMediaOnly || selectedMediaIndex == 0
   }
 
   var body: some View {
@@ -44,7 +43,7 @@ struct CaptroMediaPager: View {
 
         overlayContent(mediaWidth: proxy.size.width)
 
-        if mediaURLs.count > 1 {
+        if mediaURLs.count > 1 && !showsCoverMediaOnly {
           CaptroCarouselDots(
             total: mediaURLs.count,
             current: selectedMediaIndex,
@@ -83,11 +82,9 @@ struct CaptroMediaPager: View {
 
   @ViewBuilder
   private var mediaContent: some View {
-    if mediaURLs.count == 1, let url = mediaURLs.first {
+    if let url = mediaURLs.first, showsCoverMediaOnly || mediaURLs.count == 1 {
       mediaView(url: url, index: 0)
         .allowsHitTesting(false)
-    } else if usesExternalPaging {
-      externallyPagedMediaContent
     } else {
       TabView(selection: $selectedMediaIndex) {
         ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
@@ -100,40 +97,14 @@ struct CaptroMediaPager: View {
     }
   }
 
-  private var externallyPagedMediaContent: some View {
-    GeometryReader { proxy in
-      ZStack {
-        if let targetIndex = externalTargetMediaIndex {
-          mediaView(url: mediaURLs[targetIndex], index: targetIndex)
-            .offset(
-              x: externalDragOffset + (targetIndex > selectedMediaIndex ? proxy.size.width : -proxy.size.width)
-            )
-        }
-
-        if mediaURLs.indices.contains(selectedMediaIndex) {
-          mediaView(url: mediaURLs[selectedMediaIndex], index: selectedMediaIndex)
-            .offset(x: externalDragOffset)
-        }
-      }
-      .frame(width: proxy.size.width, height: proxy.size.height)
-      .clipped()
-    }
-  }
-
-  private var externalTargetMediaIndex: Int? {
-    guard usesExternalPaging, abs(externalDragOffset) > 0.01 else { return nil }
-    let target = selectedMediaIndex + (externalDragOffset < 0 ? 1 : -1)
-    return mediaURLs.indices.contains(target) ? target : nil
-  }
-
   private func mediaView(url: String, index: Int) -> some View {
     RemoteMediaView(
       url: url,
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: usesExternalPaging ? .fit : .fill,
-      shouldPlay: isVideoActive && (mediaURLs.count == 1 || selectedMediaIndex == index),
+      contentMode: .fill,
+      shouldPlay: isVideoActive && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: MIRATheme.Color.mediaPlaceholder,
       onMeasuredRatio: { ratio in
@@ -160,7 +131,7 @@ struct CaptroMediaPager: View {
       HStack {
         Spacer(minLength: 0)
 
-        if mediaURLs.count > 1 {
+        if mediaURLs.count > 1 && !showsCoverMediaOnly {
           CaptroCarouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
         }
       }
@@ -180,7 +151,7 @@ struct CaptroMediaPager: View {
       .accessibilityHidden(!showsStampOnCurrentSlide)
       .animation(stampPeekAnimation, value: isHoldingStamp)
       .simultaneousGesture(stampPeekGesture)
-      .padding(.bottom, mediaURLs.count > 1 ? 24 : 0)
+      .padding(.bottom, mediaURLs.count > 1 && !showsCoverMediaOnly ? 24 : 0)
     }
     .padding(16)
   }
@@ -230,7 +201,7 @@ struct CaptroMediaPager: View {
   }
 
   private var mediaAccessibilityLabel: String {
-    guard mediaURLs.count > 1 else { return "Post photo" }
+    guard mediaURLs.count > 1 && !showsCoverMediaOnly else { return "Post photo" }
     return "Post photo \(min(selectedMediaIndex + 1, mediaURLs.count)) of \(mediaURLs.count)"
   }
 
@@ -254,7 +225,7 @@ struct CaptroMediaPager: View {
   }
 
   private func prefetchCarouselNeighbors() {
-    guard mediaURLs.count > 1 else { return }
+    guard !showsCoverMediaOnly, mediaURLs.count > 1 else { return }
     let selected = min(max(selectedMediaIndex, 0), mediaURLs.count - 1)
     var previews: [String] = []
     var priorityImages: [String] = []
