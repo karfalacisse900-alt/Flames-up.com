@@ -2,6 +2,7 @@ import AVFoundation
 import CoreTransferable
 import Foundation
 import PhotosUI
+import SwiftUI
 import UniformTypeIdentifiers
 
 enum CaptroPostVideoLimits {
