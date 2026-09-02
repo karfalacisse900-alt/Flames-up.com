@@ -933,10 +933,13 @@ public struct CreatePostNativeView: View {
   @State private var bodyText = ""
   @State private var mediaItems: [MIRAPickedMedia] = []
   @State private var pickerItems: [PhotosPickerItem] = []
+  @State private var coverMediaRatio = MIRAMediaSizing.feedPreviewRatio
   @State private var composerUser: MIRAUser?
   @State private var showPreview = false
   @State private var isEditingPostDetails = false
   @State private var isPosting = false
+  @State private var postUploader: MIRAMediaUploadService?
+  @State private var postRequestID = UUID().uuidString
   @State private var isLoadingMedia = false
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
@@ -988,7 +991,13 @@ public struct CreatePostNativeView: View {
       await preparePostComposerForDisplay()
     }
     .onChange(of: pickerItems) { _, newItems in
+      guard !newItems.isEmpty else { return }
       Task { await loadPickerItems(newItems) }
+    }
+    .task(id: mediaItems.first) {
+      guard let cover = mediaItems.first else { return }
+      let dimensions = await cover.postMediaDimension()
+      coverMediaRatio = dimensions.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio
     }
     .onChange(of: title) { _, _ in cacheComposerDraft() }
     .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
@@ -1196,7 +1205,7 @@ public struct CreatePostNativeView: View {
 
   private func composerMediaPreview(_ media: MIRAPickedMedia) -> some View {
     let width = max(1, UIScreen.main.bounds.width - 32)
-    let height = width * media.composerHeightToWidthRatio
+    let height = width * coverMediaRatio
     return LocalMediaThumb(media: media, width: width, height: height, cornerRadius: 16)
       .background(MIRATheme.Color.mediaPlaceholder)
       .overlay(alignment: .topLeading) {
@@ -1212,7 +1221,7 @@ public struct CreatePostNativeView: View {
         }
         .buttonStyle(.plain)
         .padding(10)
-        .accessibilityLabel("Remove selected photo")
+        .accessibilityLabel("Remove selected media")
       }
       .overlay(alignment: .topTrailing) {
         if mediaItems.count > 1 {
@@ -1228,9 +1237,11 @@ public struct CreatePostNativeView: View {
       }
       .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
       .onTapGesture {
-        editingMedia = MIRAEditorPresentation(media: media, replacementIndex: 0)
+        if media.kind == .image {
+          editingMedia = MIRAEditorPresentation(media: media, replacementIndex: 0)
+        }
       }
-      .accessibilityLabel("Edit selected photo")
+      .accessibilityLabel(media.kind == .image ? "Edit selected photo" : "Preview selected video")
   }
 
   @ViewBuilder
@@ -1278,12 +1289,12 @@ public struct CreatePostNativeView: View {
       PhotosPicker(
         selection: $pickerItems,
         maxSelectionCount: max(1, 10 - mediaItems.count),
-        matching: .images,
+        matching: .any(of: [.images, .videos]),
         preferredItemEncoding: .current
       ) {
-        composerToolLabel(icon: "photo.on.rectangle.angled", title: "Photos")
+        composerToolLabel(icon: "photo.on.rectangle.angled", title: "Photos & Videos")
       }
-      .disabled(isLoadingMedia || mediaItems.count >= 10)
+      .disabled(isPosting || isLoadingMedia || mediaItems.count >= 10)
 
       Menu {
         ForEach(CaptroStampKind.creationCases) { kind in
@@ -1321,6 +1332,8 @@ public struct CreatePostNativeView: View {
         .font(.system(size: 18, weight: .medium))
       Text(title)
         .font(.system(size: 14, weight: .semibold))
+        .lineLimit(1)
+        .minimumScaleFactor(0.85)
     }
     .foregroundStyle(MIRATheme.Color.textPrimary)
     .padding(.horizontal, 12)
@@ -1778,15 +1791,13 @@ public struct CreatePostNativeView: View {
   }
 
   private func submit() async {
-    guard !mediaItems.contains(where: { $0.kind == .video }) else {
-      errorMessage = "Feed posts are photo-only. Share videos to Stories."
-      return
-    }
+    guard !isPosting, !isLoadingMedia, canPost else { return }
     isPosting = true
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
     do {
-      let uploader = MIRAMediaUploadService(api: api, target: .feedPost)
+      let uploader = postUploader ?? MIRAMediaUploadService(api: api, target: .feedPost)
+      postUploader = uploader
       let cleanedTags = hashtags
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
         .filter { !$0.isEmpty }
@@ -1864,7 +1875,7 @@ public struct CreatePostNativeView: View {
         audioStartTime: nil,
         audioDuration: nil,
         visibility: "public",
-        clientRequestId: UUID().uuidString
+        clientRequestId: postRequestID
       )
       let _: MIRAPost = try await api.post("/posts", body: body)
       await MIRAAppCacheStore.shared.clearPostDraft()
@@ -1908,23 +1919,17 @@ public struct CreatePostNativeView: View {
     }
     var loaded: [MIRAPickedMedia] = []
     var failedCount = 0
-    var skippedVideos = 0
+    var firstError: String?
     for item in items {
-      guard let data = try? await item.loadTransferable(type: Data.self) else {
+      do {
+        loaded.append(try await CaptroPostMediaPicker.load(item))
+      } catch {
         failedCount += 1
-        continue
+        if firstError == nil { firstError = (error as? MIRAAPIError)?.errorDescription }
       }
-      let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
-      guard kind == .image else {
-        skippedVideos += 1
-        continue
-      }
-      loaded.append(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
     }
-    if skippedVideos > 0 {
-      errorMessage = "Feed posts are photo-only. Share videos to Stories."
-    } else if failedCount > 0 {
-      errorMessage = failedCount == 1 ? "One media item could not be loaded." : "\(failedCount) media items could not be loaded."
+    if failedCount > 0 {
+      errorMessage = firstError ?? (failedCount == 1 ? "One media item could not be loaded." : "\(failedCount) media items could not be loaded.")
     } else {
       errorMessage = nil
     }
@@ -1933,10 +1938,6 @@ public struct CreatePostNativeView: View {
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
-    guard media.kind == .image else {
-      errorMessage = "Feed posts are photo-only. Share videos to Stories."
-      return
-    }
     editedCameraMedia = nil
     isCameraReviewingMedia = false
     mediaItems.append(media)
@@ -1946,15 +1947,11 @@ public struct CreatePostNativeView: View {
   }
 
   private func addGalleryMedia(_ media: [MIRAPickedMedia]) {
-    let photos = media.filter { $0.kind == .image }
-    guard !photos.isEmpty else {
-      errorMessage = "Feed posts are photo-only. Share videos to Stories."
-      return
-    }
+    guard !media.isEmpty else { return }
     editedCameraMedia = nil
     isCameraReviewingMedia = false
     withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-      mediaItems.append(contentsOf: photos.prefix(max(0, 10 - mediaItems.count)))
+      mediaItems.append(contentsOf: media.prefix(max(0, 10 - mediaItems.count)))
     }
   }
 
@@ -4207,6 +4204,7 @@ private struct ComposerPreviewSheet: View {
   let stampKind: CaptroStampKind
   let location: String?
   @Environment(\.dismiss) private var dismiss
+  @State private var coverRatio = MIRAMediaSizing.feedPreviewRatio
 
   var body: some View {
     NavigationStack {
@@ -4214,8 +4212,8 @@ private struct ComposerPreviewSheet: View {
         VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
           if let first = mediaItems.first {
             let width = UIScreen.main.bounds.width - 32
-            let height = min(width * first.composerHeightToWidthRatio, UIScreen.main.bounds.height * 0.74)
-            let stampWidthFraction = first.composerHeightToWidthRatio < 0.8 ? 0.56 : (first.composerHeightToWidthRatio > 1.3 ? 0.52 : 0.54)
+            let height = width * coverRatio
+            let stampWidthFraction = coverRatio < 0.8 ? 0.56 : (coverRatio > 1.3 ? 0.52 : 0.54)
             ZStack(alignment: .bottomLeading) {
               LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 18)
 
@@ -4235,6 +4233,11 @@ private struct ComposerPreviewSheet: View {
       }
       .background(MIRATheme.Color.appBackground)
       .navigationTitle("Preview")
+      .task(id: mediaItems.first) {
+        guard let first = mediaItems.first else { return }
+        let dimensions = await first.postMediaDimension()
+        coverRatio = dimensions.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio
+      }
       .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
     }
   }

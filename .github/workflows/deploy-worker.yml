@@ -27,6 +27,27 @@ jobs:
         working-directory: ./backend-cf
         run: npx tsc --noEmit
 
+      - name: Test backend media and feed contracts
+        working-directory: ./backend-cf
+        run: node --experimental-strip-types --test tests/*.test.mjs
+
+      - name: Verify Cloudflare photo and video uploads
+        working-directory: ./backend-cf
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_MEDIA_API_TOKEN: ${{ secrets.CLOUDFLARE_MEDIA_API_TOKEN }}
+          CLOUDFLARE_IMAGES_TOKEN: ${{ secrets.CLOUDFLARE_IMAGES_TOKEN }}
+          CLOUDFLARE_STREAM_TOKEN: ${{ secrets.CLOUDFLARE_STREAM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          node scripts/verify-post-media.mjs
+
       - name: Check required Supabase production secrets
         shell: bash
         env:

@@ -25,7 +25,7 @@ test('guest Home reads only the public feed and keeps an isolated cache', () => 
   assert.match(mainFeed, /private let publicFeedCacheKey = "native\.main\.public\.feed\.v1"/);
   assert.match(mainFeed, /func configureGuestMode\(_ isGuest: Bool\)/);
   assert.match(mainFeed, /if isGuestFeedMode \{[\s\S]*?\/posts\/world-board\?limit=/);
-  assert.match(mainFeed, /showsFeedControls: !isGuest/);
+  assert.match(mainFeed, /showsFeedControls: false/);
   assert.match(mainFeed, /canFollowAuthor: !isGuest/);
 });
 
@@ -47,10 +47,10 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /let textPosts = rankedPosts\.filter \{ \$0\.feedMediaURLs\.isEmpty \}/);
   assert.match(mainFeed, /wantsMedia\.toggle\(\)/);
   assert.match(mainFeed, /let loaded = await fetchFeedPage\(skip: skip\)/);
-  assert.match(mainFeed, /ForEach\(model\.posts\)/);
+  assert.match(mainFeed, /ForEach\(visiblePostIndices, id: \\.self\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{[\s\S]*?CaptroMediaPager\([\s\S]*?\} else \{[\s\S]*?CaptroPostStamp\(content: post\.captroStampContent/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?CaptroPostStamp\(content: post\.captroStampContent/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -67,26 +67,26 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.doesNotMatch(homeRoute, /photoOnly:\s*true/);
 });
 
-test('Home creator header omits the post location line', () => {
-  const headerStart = postView.indexOf('private struct CaptroAuthorHeader');
-  const headerEnd = postView.indexOf('struct CaptroFeedPostVisibility', headerStart);
-  const header = postView.slice(headerStart, headerEnd);
-  assert.ok(headerStart >= 0 && headerEnd > headerStart);
-  assert.doesNotMatch(header, /captroFeedHeaderLocation/);
-  assert.doesNotMatch(header, /Text\(location\)/);
+test('Home preview omits the separate creator and location header', () => {
+  const contentStart = postView.indexOf('private var postContent');
+  const contentEnd = postView.indexOf('@ViewBuilder', contentStart);
+  const content = postView.slice(contentStart, contentEnd);
+  assert.ok(contentStart >= 0 && contentEnd > contentStart);
+  assert.doesNotMatch(content, /CaptroAuthorHeader|captroFeedHeaderLocation/);
 });
 
 test('Home post is a full-width feed section without an outer card', () => {
   const postBodyStart = postView.indexOf('var body: some View');
-  const postBodyEnd = postView.indexOf('private func visibleRatio');
+  const postBodyEnd = postView.indexOf('private var pageMediaSize');
   const postBody = postView.slice(postBodyStart, postBodyEnd);
 
   assert.ok(postBodyStart >= 0 && postBodyEnd > postBodyStart);
   assert.match(postBody, /\.frame\(maxWidth: \.infinity, alignment: \.topLeading\)/);
-  assert.match(postBody, /\.containerRelativeFrame\(\.horizontal, alignment: \.leading\)/);
+  assert.match(postBody, /\.frame\(width: pageSize\.width, height: pageSize\.height, alignment: \.topLeading\)/);
   assert.doesNotMatch(postBody, /\.background\(MIRATheme\.Color\.surface\)/);
   assert.doesNotMatch(postBody, /\.clipShape\(RoundedRectangle|\.cornerRadius\(|\.shadow\(/);
-  assert.match(mainFeed, /LazyVStack\(spacing: 0\)[\s\S]*?\.frame\(maxWidth: \.infinity, alignment: \.leading\)[\s\S]*?\.padding\(\.bottom, 112\)/);
+  assert.match(mainFeed, /\.simultaneousGesture\(horizontalPagerGesture\(pageWidth: size\.width\)\)/);
+  assert.match(mainFeed, /showsCoverMediaOnly: true/);
 });
 
 test('Home media is a full-width rectangular frame using exactly five supported ratios', () => {
@@ -102,7 +102,8 @@ test('Home media is a full-width rectangular frame using exactly five supported 
   const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
   const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
   assert.ok(mediaBranchStart >= 0 && mediaBranchEnd > mediaBranchStart);
-  assert.match(mediaBranch, /CaptroMediaPager\([\s\S]*?\.containerRelativeFrame\(\.horizontal\)/);
+  assert.match(mediaBranch, /mediaPager/);
+  assert.match(postView, /pager\s*\.frame\(width: mediaSize\.width, height: mediaSize\.height\)/);
   assert.doesNotMatch(mediaBranch, /\.padding\(\.horizontal|mediaHorizontalMargin|RoundedRectangle|cornerRadius/);
 
   const pagerBodyStart = mediaPager.indexOf('var body: some View');
@@ -157,7 +158,7 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(stamps, /case \.group: return "ACCESS"/);
   assert.match(stamps, /background\(Color\.white\.opacity\(0\.96\)\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /mediaHeightToWidthRatio < 0\.8 \? 0\.56 : \(mediaHeightToWidthRatio > 1\.3 \? 0\.52 : 0\.54\)/);
+  assert.match(mediaPager, /naturalMediaHeightToWidthRatio < 0\.8 \? 0\.62 : \(naturalMediaHeightToWidthRatio > 1\.3 \? 0\.64 : 0\.66\)/);
   assert.match(mediaPager, /CaptroPostStamp\([\s\S]*?compact: true/);
   assert.match(stamps, /\.lineLimit\(compact \? 3 : 4\)/);
 });
@@ -177,7 +178,8 @@ test('holding the Home stamp temporarily reveals the unobstructed photo', () => 
     /\.frame\(width: proxy\.size\.width, height: proxy\.size\.height\)\s*\.simultaneousGesture\(stampPeekGesture\)/,
   );
   assert.doesNotMatch(mediaPager, /\.allowsHitTesting\(!isHoldingStamp\)/);
-  assert.match(mediaPager, /\.onTapGesture\(perform: openPostUnlessPeeking\)/);
+  assert.match(mediaPager, /\.onTapGesture\(perform: handleMediaTap\)/);
+  assert.match(mediaPager, /private func handleMediaTap\(\) \{\s*guard !suppressTapAfterStampPeek/);
   assert.match(mediaPager, /\.easeOut\(duration: 0\.20\)/);
   assert.match(mediaPager, /\.easeInOut\(duration: 0\.24\)/);
   assert.match(mediaPager, /guard !suppressTapAfterStampPeek else \{ return \}/);
@@ -217,10 +219,10 @@ test('post creation is Photos-first and keeps selected media proportions', () =>
 
   assert.ok(firstPageStart >= 0 && firstPageEnd > firstPageStart);
   assert.match(firstPage, /Text\("What do you want to share\?"\)/);
-  assert.match(firstPage, /PhotosPicker\([\s\S]*?matching: \.images/);
-  assert.match(firstPage, /title: "Photos"/);
+  assert.match(firstPage, /PhotosPicker\([\s\S]*?matching: \.any\(of: \[\.images, \.videos\]\)/);
+  assert.match(firstPage, /title: "Photos & Videos"/);
   assert.match(firstPage, /title: "Add Stamp"/);
-  assert.match(firstPage, /media\.composerHeightToWidthRatio/);
+  assert.match(firstPage, /width \* coverMediaRatio/);
   assert.doesNotMatch(firstPage, /MIRAStoryLiveCameraView/);
   assert.doesNotMatch(firstPage, /Color\.black\.ignoresSafeArea/);
   assert.match(composer, /let remainingSlots = max\(0, 10 - mediaItems\.count\)/);

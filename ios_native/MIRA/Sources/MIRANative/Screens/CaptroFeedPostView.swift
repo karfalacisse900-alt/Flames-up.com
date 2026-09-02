@@ -87,7 +87,10 @@ struct CaptroFeedPostView: View {
 
   private var pageMediaSize: CGSize? {
     guard let pageSize, !post.feedMediaURLs.isEmpty else { return nil }
-    let ratio = MIRAMediaSizing.feedPreviewRatio
+    let ratio = MIRAMediaSizing.supportedPostHeightToWidthRatio(
+      post.mediaDimensions?.values.first?.heightToWidthRatio
+        ?? MIRAMediaSizing.mainFeedDisplayRatio(for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
+    )
     let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0)
     let availableMediaHeight = max(120, pageSize.height - fixedVerticalContent)
     let width = min(pageSize.width, availableMediaHeight / max(ratio, 0.01))
@@ -95,6 +98,7 @@ struct CaptroFeedPostView: View {
   }
 
   private var showsMoreButton: Bool {
+    if post.containsVideoMedia { return true }
     guard let caption = post.captroFeedCaptionText?.trimmingCharacters(in: .whitespacesAndNewlines) else {
       return false
     }

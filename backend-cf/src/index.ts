@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import { createCaptroScanRoutes } from './scan';
+import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -5255,9 +5256,7 @@ function posterDeliveryUrl(url: string, mediaType: string, variant: string, env?
 }
 
 function cloudflareStreamUid(url: string): string {
-  const clean = String(url || '').trim();
-  if (!clean.startsWith('cfstream:')) return '';
-  return clean.replace('cfstream:', '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+  return streamUID(url);
 }
 
 function streamThumbnailUrl(url: string): string {
@@ -11248,8 +11247,8 @@ function normalizeMediaAssetType(value: unknown): CaptroMediaType | '' {
 
 function mediaModerationMaxBytes(env: Env, mediaType: CaptroMediaType): number {
   const raw = Number(mediaType === 'video' ? env.MEDIA_MAX_VIDEO_BYTES : env.MEDIA_MAX_IMAGE_BYTES);
-  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, mediaType === 'video' ? 500_000_000 : 50_000_000);
-  return mediaType === 'video' ? 250_000_000 : 25_000_000;
+  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, mediaType === 'video' ? DIRECT_VIDEO_MAX_BYTES : 50_000_000);
+  return mediaType === 'video' ? DIRECT_VIDEO_MAX_BYTES : 25_000_000;
 }
 
 function isUnsafeUploadExtension(filename: unknown): boolean {
@@ -11282,6 +11281,10 @@ function validatePrePublishUploadInput(env: Env, body: any): { ok: true; mediaTy
     return { ok: false, detail: 'This upload is too large.', code: 'file_too_large', status: 413 };
   }
 
+  const duration = body.duration_seconds ?? body.durationSeconds;
+  if (mediaType === 'video' && duration != null && (!Number.isFinite(Number(duration)) || Number(duration) <= 0 || Number(duration) > POST_VIDEO_MAX_SECONDS)) {
+    return { ok: false, detail: 'Choose a video up to 60 seconds long.', code: 'video_duration', status: 400 };
+  }
   return { ok: true, mediaType, mimeType, filename, fileSize };
 }
 
@@ -11955,6 +11958,7 @@ async function approvedMediaAssetsForPost(c: any, userId: string, requestedMedia
       if (assets.length !== requestedMediaIds.length) {
         return { ok: false, status: 404, detail: 'One upload was not found. Please upload again.', code: 'MEDIA_NOT_FOUND', assets };
       }
+      assets = orderPostMediaAssets(assets, requestedMediaIds);
     } else if (imageUrls.length) {
       const imageIds = imageUrls
         .map((url) => cloudflareImageIdFromDeliveryUrl(c.env, safeMediaReference(url)))
@@ -14268,24 +14272,10 @@ api.post('/posts', authMiddleware, async (c) => {
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
   let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
-  const requestedPostType = String(b.post_type || b.postType || b.media_type || b.mediaType || '').toLowerCase();
-  const hasVideoMedia = requestedPostType.includes('video') || mediaTypes.includes('video') || imageUrls.some(isVideoMediaUrl);
-  if (hasVideoMedia) {
-    return c.json({
-      detail: 'Feed posts support photos only. Share videos to Stories instead.',
-      code: 'FEED_POSTS_PHOTO_ONLY',
-    }, 400);
-  }
   const mediaAssetIds = parseMediaAssetIds(b);
   const mediaApproval = await approvedMediaAssetsForPost(c, userId, mediaAssetIds, imageUrls);
   if (!mediaApproval.ok) {
     return c.json({ detail: mediaApproval.detail, code: mediaApproval.code }, mediaApproval.status as any);
-  }
-  if (mediaApproval.assets.some((asset: any) => normalizeMediaAssetType(asset.media_type) === 'video')) {
-    return c.json({
-      detail: 'Feed posts support photos only. Share videos to Stories instead.',
-      code: 'FEED_POSTS_PHOTO_ONLY',
-    }, 400);
   }
   const approvedMediaAssetIds = Array.from(new Set([
     ...mediaAssetIds,
@@ -14297,7 +14287,7 @@ api.post('/posts', authMiddleware, async (c) => {
   if (moderatedImageUrls.length) {
     imageUrls = moderatedImageUrls;
     primaryImage = imageUrls[0] || null;
-    mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
+    mediaTypes = mediaApproval.assets.map((asset: any) => normalizeMediaAssetType(asset.media_type) || 'image');
   }
   const explicitTags = sanitizeAutoCategoryTags([...(parseJsonArray(b.tags)), ...(parseJsonArray(b.hashtags))]);
   const mediaTypeHint = mediaTypes.includes('video') ? 'video' : 'image';
@@ -16200,7 +16190,7 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     storageKey = cleanText(data.result?.id, 220);
     storageProvider = 'images';
   } else {
-    const maxDurationSeconds = clampNumber(body.duration_seconds || body.durationSeconds || 60, 1, 60, 60);
+    const maxDurationSeconds = POST_VIDEO_MAX_SECONDS;
     const requireSignedURLs = cloudflareStreamRequireSignedUrls(c.env);
     const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
       method: 'POST',
@@ -16286,6 +16276,35 @@ api.post('/media/complete', authMiddleware, async (c) => {
     });
   }
 
+  // Stream upload completion is not encoding completion. Never moderate missing frames.
+  let streamVideo: any = null;
+  if (asset.storage_provider === 'stream') {
+    if (currentStatus === 'pending_moderation' && asset.upload_status === 'uploaded') {
+      return c.json({ media_id: mediaId, upload_status: 'uploaded', moderation_status: currentStatus, public_url: '' }, 202);
+    }
+    const accountId = cloudflareAccountId(c.env);
+    const token = cloudflareStreamToken(c.env);
+    if (!accountId || !token) return c.json({ detail: 'Video processing is not configured.' }, 503);
+    const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/${encodeURIComponent(asset.storage_key)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const provider: any = await response.json().catch(() => ({}));
+    if (!response.ok || !provider.success || !provider.result) {
+      return c.json({ detail: 'Could not check video processing. Try again.', code: 'VIDEO_STATUS_UNAVAILABLE' }, 502);
+    }
+    streamVideo = provider.result;
+    const processing = streamProcessingState(streamVideo);
+    if (processing === 'failed' || Number(streamVideo.duration || 0) > POST_VIDEO_MAX_SECONDS) {
+      return c.json({
+        media_id: mediaId, upload_status: 'failed', moderation_status: 'failed', public_url: '',
+        rejection_code: 'VIDEO_PROCESSING_FAILED', rejection_message: 'This video could not be processed. Choose another video up to 60 seconds long.',
+      }, 200);
+    }
+    if (processing !== 'ready') {
+      return c.json({ media_id: mediaId, upload_status: 'processing', moderation_status: 'uploading', public_url: '' }, 202);
+    }
+  }
+
   const sha256Hash = cleanText(body.sha256_hash || body.sha256Hash || asset.sha256_hash, 80).toLowerCase();
   if (sha256Hash && !/^[a-f0-9]{64}$/.test(sha256Hash)) return c.json({ detail: 'Invalid upload checksum.', code: 'invalid_checksum' }, 400);
   const ts = now();
@@ -16297,6 +16316,11 @@ api.post('/media/complete', authMiddleware, async (c) => {
     ...(body.width == null ? {} : { width: clampNumber(body.width, 1, 10000, 0) }),
     ...(body.height == null ? {} : { height: clampNumber(body.height, 1, 10000, 0) }),
     ...(body.duration_seconds == null && body.durationSeconds == null ? {} : { duration_seconds: clampFloat(body.duration_seconds ?? body.durationSeconds, 0, 3600, 0) }),
+    ...(streamVideo ? {
+      ...(Number(streamVideo.input?.width) > 0 ? { width: clampNumber(streamVideo.input.width, 1, 10000, 1) } : {}),
+      ...(Number(streamVideo.input?.height) > 0 ? { height: clampNumber(streamVideo.input.height, 1, 10000, 1) } : {}),
+      duration_seconds: clampFloat(streamVideo.duration, 0, POST_VIDEO_MAX_SECONDS, 0),
+    } : {}),
     updated_at: ts,
   };
   await supabaseAdminPatchRows(c, 'app_media_assets', { id: postgrestEqFilter(mediaId), user_id: postgrestEqFilter(userId) }, updatePatch);
@@ -16307,7 +16331,11 @@ api.post('/media/complete', authMiddleware, async (c) => {
     requestId: c.get?.('requestId') || '',
   });
   const moderationCaption = cleanMultilineText(body.caption || body.content || body.title || '', 1000);
-  const jobId = await createMediaModerationJob(c, mediaId, userId, moderationCaption, { enqueue: false });
+  const isStreamVideo = asset.storage_provider === 'stream';
+  const jobId = await createMediaModerationJob(c, mediaId, userId, moderationCaption, { enqueue: isStreamVideo });
+  if (isStreamVideo) {
+    return c.json({ media_id: mediaId, job_id: jobId, upload_status: 'uploaded', moderation_status: 'pending_moderation', public_url: '' }, 202);
+  }
   try {
     await processMediaModerationJob(c.env, { jobId, mediaId, userId, reason: 'upload_complete', caption: moderationCaption }, c.get?.('requestId') || '');
   } catch (error: any) {

@@ -165,6 +165,14 @@ public final class MIRAAPIClient {
   }()
 
   public let baseURL: URL
+
+  private static let directMediaUploadSession: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 120
+    configuration.timeoutIntervalForResource = 900
+    configuration.waitsForConnectivity = true
+    return URLSession(configuration: configuration)
+  }()
   private let sessionProvider: MIRASessionProviding?
   private let session: URLSession
   private let decoder: JSONDecoder
@@ -261,11 +269,12 @@ public final class MIRAAPIClient {
       trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
     }
 
-    let metric = await MIRAPerformanceMetric.begin(category: "network", label: "UPLOAD \(absoluteURL.path)")
+    let metric = await MIRAPerformanceMetric.begin(category: "network", label: authorize ? "UPLOAD \(absoluteURL.path)" : "UPLOAD direct-media")
     let responseData: Data
     let response: URLResponse
     do {
-      (responseData, response) = try await session.data(for: request)
+      let uploadSession = authorize ? session : Self.directMediaUploadSession
+      (responseData, response) = try await uploadSession.data(for: request)
     } catch {
       await metric.finish(status: "error")
       throw error

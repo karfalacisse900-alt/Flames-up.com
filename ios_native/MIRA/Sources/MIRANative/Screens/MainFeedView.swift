@@ -995,15 +995,18 @@ public struct MainFeedView: View {
             .accessibilityHidden(true)
         }
 
-        NavigationLink(destination: NotificationNativeView(api: model.api)) {
-          Image(systemName: "bell")
+        Button {
+          CaptroHaptics.light()
+          isShowingCreatePost = true
+        } label: {
+          Image(systemName: "square.and.pencil")
             .font(.system(size: 21, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .frame(width: 40, height: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Notifications")
+        .accessibilityLabel("Create post")
       }
       .frame(width: 92, alignment: .trailing)
     }
@@ -1296,7 +1299,7 @@ public struct MainFeedView: View {
       return
     }
 
-    let shouldPlayVideo = !isMediaPlaybackSuppressed && post.feedMediaURLs.contains(where: { $0.isVideoURL })
+    let shouldPlayVideo = !isMediaPlaybackSuppressed && post.feedMediaURLs.first?.isVideoURL == true
     if activeVideoPostID != (shouldPlayVideo ? post.id : nil) {
       var transaction = Transaction()
       transaction.disablesAnimations = true
@@ -1401,7 +1404,7 @@ public struct MainFeedView: View {
   }
 
   private var isMediaPlaybackSuppressed: Bool {
-    !isTabActive || isFeedOverlayPresented
+    !isTabActive || scenePhase != .active || detailPost != nil || isFeedOverlayPresented
   }
 
   private var isFeedOverlayPresented: Bool {

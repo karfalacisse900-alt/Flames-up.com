@@ -1068,7 +1068,6 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var player: AVPlayer?
   @State private var thumbnailURL: String?
   @State private var failed = false
-  @State private var endObserver: NSObjectProtocol?
   @State private var loadedVideoURL: String?
   @State private var videoMetric: MIRAPerformanceMetric?
   @State private var generatedThumbnail: UIImage?
@@ -1100,7 +1099,6 @@ private struct MIRAResolvedVideoPlayer: View {
           .onAppear { syncPlayback(player) }
           .onDisappear {
             player.pause()
-            removeLoopObserver()
             stopVideoMetric(status: "disappear")
           }
       }
@@ -1139,6 +1137,12 @@ private struct MIRAResolvedVideoPlayer: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackMayResume)) { _ in
       resumeAfterGlobalInterruption()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
+      guard let player, let item = notification.object as? AVPlayerItem,
+            item === player.currentItem, shouldPlay, !globallyPaused else { return }
+      player.seek(to: .zero)
+      syncPlayback(player)
     }
   }
 
@@ -1180,7 +1184,6 @@ private struct MIRAResolvedVideoPlayer: View {
   private func configurePlayer() async {
     if loadedVideoURL != url {
       player?.pause()
-      removeLoopObserver()
       stopVideoMetric(status: "url_changed")
       player = nil
       thumbnailURL = nil
@@ -1192,7 +1195,6 @@ private struct MIRAResolvedVideoPlayer: View {
       loadedVideoURL = url
     } else if failed && shouldPlay {
       player?.pause()
-      removeLoopObserver()
       player = nil
       isPlayerReady = false
       failed = false
@@ -1397,7 +1399,6 @@ private struct MIRAResolvedVideoPlayer: View {
       await MainActor.run {
         guard shouldPlay, loadedVideoURL == expectedURL, videoRetryAttempt == attempt else { return }
         player?.pause()
-        removeLoopObserver()
         player = nil
         isPlayerReady = false
         failed = false
@@ -1468,17 +1469,6 @@ private struct MIRAResolvedVideoPlayer: View {
     if let item = player.currentItem {
       configurePlayerItemForFastStoryPlayback(item)
     }
-    removeLoopObserver()
-    endObserver = NotificationCenter.default.addObserver(
-      forName: .AVPlayerItemDidPlayToEndTime,
-      object: player.currentItem,
-      queue: .main
-    ) { _ in
-      player.seek(to: .zero)
-      if shouldPlay {
-        player.playImmediately(atRate: 1)
-      }
-    }
   }
 
   @MainActor
@@ -1511,13 +1501,6 @@ private struct MIRAResolvedVideoPlayer: View {
     item.preferredMaximumResolution = CGSize(width: 1080, height: 1920)
   }
 
-  @MainActor
-  private func removeLoopObserver() {
-    if let endObserver {
-      NotificationCenter.default.removeObserver(endObserver)
-      self.endObserver = nil
-    }
-  }
 }
 
 private struct MIRAVideoPlayerView: UIViewRepresentable {
@@ -1976,16 +1959,13 @@ private struct MIRASaveCollectionOption: Identifiable {
 extension String {
   var isVideoURL: Bool {
     let lower = lowercased()
+    let url = URL(string: self)
+    let host = url?.host?.lowercased() ?? ""
+    let isStreamHost = host == "videodelivery.net" || host.hasSuffix(".videodelivery.net")
+      || host == "cloudflarestream.com" || host.hasSuffix(".cloudflarestream.com")
     return lower.hasPrefix("cfstream:")
-      || lower.contains(".mp4")
-      || lower.contains(".mov")
-      || lower.contains(".m4v")
-      || lower.contains(".webm")
-      || lower.contains(".m3u8")
-      || lower.contains("videodelivery.net")
-      || lower.contains("cloudflarestream.com")
-      || lower.contains("stream")
-      || lower.contains("tiktok")
+      || ["mp4", "mov", "m4v", "webm", "m3u8"].contains(url?.pathExtension.lowercased() ?? "")
+      || (isStreamHost && !lower.contains("/thumbnails/"))
   }
 }
 

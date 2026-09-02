@@ -14,6 +14,8 @@ struct CaptroMediaPager: View {
   @State private var measuredCoverHeightToWidthRatio: CGFloat?
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
+  @State private var isVideoPaused = false
+  @State private var isVideoMuted = true
 
   private var mediaURLs: [String] { post.feedMediaURLs }
   private var naturalMediaHeightToWidthRatio: CGFloat {
@@ -27,7 +29,7 @@ struct CaptroMediaPager: View {
     )
   }
   private var mediaHeightToWidthRatio: CGFloat {
-    showsCoverMediaOnly ? MIRAMediaSizing.feedPreviewRatio : naturalMediaHeightToWidthRatio
+    naturalMediaHeightToWidthRatio
   }
   private var stampWidthFraction: CGFloat {
     naturalMediaHeightToWidthRatio < 0.8 ? 0.62 : (naturalMediaHeightToWidthRatio > 1.3 ? 0.64 : 0.66)
@@ -42,9 +44,15 @@ struct CaptroMediaPager: View {
         mediaContent
           .frame(width: proxy.size.width, height: proxy.size.height)
           .contentShape(Rectangle())
-          .onTapGesture(perform: openPostUnlessPeeking)
+          .onTapGesture(perform: handleMediaTap)
 
         overlayContent(mediaWidth: proxy.size.width)
+
+        if currentMediaIsVideo {
+          videoControls
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            .padding(12)
+        }
 
         if mediaURLs.count > 1 && !showsCoverMediaOnly {
           CaptroCarouselDots(
@@ -64,7 +72,8 @@ struct CaptroMediaPager: View {
     .contentShape(Rectangle())
     .accessibilityElement(children: .contain)
     .accessibilityLabel(mediaAccessibilityLabel)
-    .accessibilityHint("Opens the post detail screen")
+    .accessibilityHint(currentMediaIsVideo ? "Tap to pause or play video" : "Opens the post detail screen")
+    .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
     .onAppear(perform: prefetchCarouselNeighbors)
     .onChange(of: mediaURLs) { _, urls in
       measuredCoverHeightToWidthRatio = nil
@@ -73,7 +82,19 @@ struct CaptroMediaPager: View {
       }
     }
     .onChange(of: selectedMediaIndex) { _, _ in
+      isVideoPaused = false
+      isVideoMuted = true
       prefetchCarouselNeighbors()
+    }
+    .onChange(of: post.id) { _, _ in
+      isVideoPaused = false
+      isVideoMuted = true
+    }
+    .onChange(of: isVideoActive) { _, active in
+      if !active {
+        isVideoPaused = false
+        isVideoMuted = true
+      }
     }
     .onChange(of: isHoldingStamp) { _, isHidden in
       updateStampPeekTapSuppression(isHidden: isHidden)
@@ -107,7 +128,8 @@ struct CaptroMediaPager: View {
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
       contentMode: .fill,
-      shouldPlay: isVideoActive && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
+      shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
+      videoMuted: isVideoMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: MIRATheme.Color.mediaPlaceholder,
       onMeasuredRatio: { ratio in
@@ -188,6 +210,45 @@ struct CaptroMediaPager: View {
     onOpenPost()
   }
 
+  private var currentMediaIsVideo: Bool {
+    let index = showsCoverMediaOnly ? 0 : selectedMediaIndex
+    return mediaURLs.indices.contains(index) && mediaURLs[index].isVideoURL
+  }
+
+  private func handleMediaTap() {
+    guard !suppressTapAfterStampPeek else { return }
+    if currentMediaIsVideo {
+      isVideoPaused.toggle()
+    } else {
+      onOpenPost()
+    }
+  }
+
+  private var videoControls: some View {
+    HStack(spacing: 0) {
+      videoButton(icon: isVideoPaused ? "play.fill" : "pause.fill", label: isVideoPaused ? "Play video" : "Pause video") {
+        isVideoPaused.toggle()
+      }
+      videoButton(icon: isVideoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill", label: isVideoMuted ? "Turn sound on" : "Mute video") {
+        isVideoMuted.toggle()
+      }
+    }
+  }
+
+  private func videoButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Image(systemName: icon)
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(width: 30, height: 30)
+        .background(.black.opacity(0.48), in: Circle())
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(label)
+  }
+
   private func updateStampPeekTapSuppression(isHidden: Bool) {
     stampTapResetTask?.cancel()
     if isHidden {
@@ -204,8 +265,9 @@ struct CaptroMediaPager: View {
   }
 
   private var mediaAccessibilityLabel: String {
-    guard mediaURLs.count > 1 && !showsCoverMediaOnly else { return "Post photo" }
-    return "Post photo \(min(selectedMediaIndex + 1, mediaURLs.count)) of \(mediaURLs.count)"
+    let kind = currentMediaIsVideo ? "video" : "photo"
+    guard mediaURLs.count > 1 && !showsCoverMediaOnly else { return "Post \(kind)" }
+    return "Post \(kind) \(min(selectedMediaIndex + 1, mediaURLs.count)) of \(mediaURLs.count)"
   }
 
   private func mediaPlaceholderURL(for index: Int, mediaURL: String) -> String? {
