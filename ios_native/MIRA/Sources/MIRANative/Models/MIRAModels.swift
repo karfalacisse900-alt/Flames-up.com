@@ -182,6 +182,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let saved: FlexibleBool?
   public let following: FlexibleBool?
   public let followed: FlexibleBool?
+  public var detail: CaptroPostDetails? = nil
 
   public var titleText: String {
     if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -405,7 +406,8 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       isFollowing: following ?? isFollowing,
       saved: saved.map(FlexibleBool.init) ?? self.saved,
       following: self.following,
-      followed: self.followed
+      followed: self.followed,
+      detail: detail
     )
   }
 
@@ -484,7 +486,8 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       isFollowing: isFollowing,
       saved: saved,
       following: following,
-      followed: followed
+      followed: followed,
+      detail: detail
     )
   }
 }
