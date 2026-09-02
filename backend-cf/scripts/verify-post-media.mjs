@@ -22,7 +22,9 @@ async function api(path, token, options = {}) {
   });
   const body = await response.json().catch(() => ({}));
   // Never log upload URLs, playback tokens, or raw provider responses.
-  assert.ok(response.ok && body.success, `Cloudflare ${options.method || 'GET'} ${path.split('/').slice(0, 3).join('/')} failed: HTTP ${response.status}, code ${body.errors?.[0]?.code || 'unknown'}`);
+  const reason = String(body.errors?.[0]?.message || '')
+    .replace(/https?:\/\/\S+|[A-Za-z0-9_-]{40,}/g, '[redacted]').slice(0, 240);
+  assert.ok(response.ok && body.success, `Cloudflare ${options.method || 'GET'} ${path.split('/').slice(0, 3).join('/')} failed: HTTP ${response.status}, code ${body.errors?.[0]?.code || 'unknown'}, ${reason}`);
   return body.result;
 }
 

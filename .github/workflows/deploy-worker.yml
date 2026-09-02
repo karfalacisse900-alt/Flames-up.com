@@ -42,6 +42,13 @@ jobs:
           CLOUDFLARE_STREAM_TOKEN: ${{ secrets.CLOUDFLARE_STREAM_TOKEN }}
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          import os, tomllib
+          with open('wrangler.toml', 'rb') as config_file:
+              config = tomllib.load(config_file)
+          assert os.environ['CLOUDFLARE_ACCOUNT_ID'] == config['env']['production']['vars']['CLOUDFLARE_ACCOUNT_ID'], 'Release media account differs from the production Worker account'
+          print('Release media account matches the production Worker account.')
+          PY
           if ! command -v ffmpeg >/dev/null; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq ffmpeg
