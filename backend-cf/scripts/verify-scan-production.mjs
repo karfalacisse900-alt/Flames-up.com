@@ -23,8 +23,9 @@ async function session() {
   users.push(user.id);
   const auth = await json(`${base}/auth/v1/token?grant_type=password`, { method: 'POST',
     headers: { apikey: process.env.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
-  await json(`${api}/auth/supabase`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ access_token: auth.access_token }) });
-  return { ...clientHeaders, Authorization: `Bearer ${auth.access_token}` };
+  const headers = { ...clientHeaders, Authorization: `Bearer ${auth.access_token}` };
+  await json(`${api}/auth/me`, { headers });
+  return headers;
 }
 try {
   const owner = await session();
