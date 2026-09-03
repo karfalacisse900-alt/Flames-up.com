@@ -90,6 +90,22 @@ test('Veryfi errors redact configured credentials and personal values', () => {
   assert.match(value, /Invalid/);
 });
 
+test('confidence-enriched Veryfi fields normalize identically to plain fields', () => {
+  const plain = providerDocument();
+  const detailed = { ...plain,
+    vendor: { name: { value: 'Example Market', score: 0.99 }, address: plain.vendor.address },
+    date: { value: plain.date, score: 0.99 },
+    total: { value: 10.8, score: 0.99 }, subtotal: { value: 10, score: 0.99 }, tax: { value: 0.8, score: 0.99 },
+    line_items: [{ description: { value: 'Item', score: 1 }, quantity: { value: 1, score: 1 },
+      price: { value: 10, score: 1 }, total: { value: 10, score: 1 } }],
+  };
+  const result = captroScanTestSupport.normalizeProviderDocument(detailed);
+  assert.equal(result.business.name, 'Example Market');
+  assert.equal(result.total, '10.8');
+  assert.equal(result.items[0].total, '10');
+  assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(result), true);
+});
+
 test('provider sends actual bytes, checks status and rejects malformed success', async () => {
   const original = globalThis.fetch;
   const bytes = new Uint8Array(300); bytes.set([0xff, 0xd8, 0xff]);

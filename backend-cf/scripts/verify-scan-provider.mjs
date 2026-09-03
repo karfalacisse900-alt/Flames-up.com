@@ -12,6 +12,8 @@ assert.equal(response.status, 200, 'Veryfi public receipt fixture could not be l
 const bytes = new Uint8Array(await response.arrayBuffer());
 const result = await scan.providerVerify(env, bytes, 'provider-smoke.jpg', `captro-provider-smoke:${crypto.randomUUID()}`);
 const extracted = scan.normalizeProviderDocument(result);
+console.log(JSON.stringify({ event: 'veryfi_response_shape', merchantField: typeof result.vendor?.name,
+  totalField: typeof result.total, merchantPresent: !!extracted.business.name, totalPresent: !!extracted.total }));
 assert.ok(extracted.providerRequestId, 'Provider document ID is missing');
 assert.equal(extracted.type, 'receipt');
 assert.ok(extracted.business.name, 'Merchant extraction failed');

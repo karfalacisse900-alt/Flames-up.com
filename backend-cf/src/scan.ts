@@ -425,7 +425,18 @@ function providerSignals(document: any) {
   };
 }
 
-function normalizeProviderDocument(document: any) {
+function unwrapProviderFields(value: any): any {
+  if (Array.isArray(value)) return value.map(unwrapProviderFields);
+  if (!value || typeof value !== 'object') return value;
+  if (Object.hasOwn(value, 'value') && (Object.keys(value).length === 1
+    || ['score', 'ocr_score', 'bounding_box', 'bounding_region', 'enriched'].some(key => Object.hasOwn(value, key)))) {
+    return unwrapProviderFields(value.value);
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, unwrapProviderFields(nested)]));
+}
+
+function normalizeProviderDocument(providerDocument: any) {
+  const document = unwrapProviderFields(providerDocument);
   const type = providerDocumentType(document);
   const address = normalizedAddress(document);
   const items = normalizedLineItems(document);
@@ -973,10 +984,10 @@ async function storePrivateReceipt(
   return path;
 }
 
-async function signedPrivateReceiptUrl(env: CaptroScanEnv, storagePath: string): Promise<string> {
+export async function signedPrivateObjectUrl(env: CaptroScanEnv, storagePath: string, bucket: 'captro-private-receipts' | 'captro-private-tickets' = PRIVATE_RECEIPT_BUCKET): Promise<string> {
   const { url } = supabaseConfiguration(env);
   const encodedPath = storagePath.split('/').map(encodeURIComponent).join('/');
-  const response = await fetch(`${url}/storage/v1/object/sign/${PRIVATE_RECEIPT_BUCKET}/${encodedPath}`, {
+  const response = await fetch(`${url}/storage/v1/object/sign/${bucket}/${encodedPath}`, {
     method: 'POST',
     headers: supabaseHeaders(env),
     body: JSON.stringify({ expiresIn: 300 }),
@@ -985,7 +996,11 @@ async function signedPrivateReceiptUrl(env: CaptroScanEnv, storagePath: string):
   if (!response.ok) throw new Error(`SCAN_PRIVATE_STORAGE_SIGN_FAILED:${response.status}`);
   const signed = cleanText(data?.signedURL || data?.signedUrl || data?.signed_url, 4000);
   if (!signed) throw new Error('SCAN_PRIVATE_STORAGE_SIGN_FAILED');
-  return signed.startsWith('http') ? signed : `${url}${signed.startsWith('/') ? '' : '/'}${signed}`;
+  if (signed.startsWith('http')) {
+    if (new URL(signed).origin !== new URL(url).origin) throw new Error('SCAN_PRIVATE_STORAGE_SIGN_FAILED');
+    return signed;
+  }
+  return `${url}${signed.startsWith('/storage/v1/') ? '' : '/storage/v1'}${signed.startsWith('/') ? '' : '/'}${signed}`;
 }
 
 function extractedProviderText(document: any): string | null {
@@ -1241,7 +1256,8 @@ export function createCaptroScanRoutes(
       if (!row) return c.json({ detail: 'Receipt not found.', code: 'SCAN_RECEIPT_NOT_FOUND' }, 404);
       const storagePath = cleanText(row.private_storage_path, 1200);
       if (!storagePath) return c.json({ detail: 'Original document is unavailable.', code: 'SCAN_ORIGINAL_UNAVAILABLE' }, 404);
-      return c.json({ signedUrl: await signedPrivateReceiptUrl(c.env, storagePath), expiresIn: 300 });
+      c.header('Cache-Control', 'private, no-store');
+      return c.json({ signedUrl: await signedPrivateObjectUrl(c.env, storagePath), expiresIn: 300 });
     } catch {
       return c.json({ detail: 'Original document is temporarily unavailable.', code: 'SCAN_PRIVATE_STORAGE_UNAVAILABLE' }, 503);
     }
