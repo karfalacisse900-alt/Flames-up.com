@@ -732,7 +732,7 @@ async function providerVerify(
   const started = Date.now();
   try {
     const response = await fetch(veryfiEndpoint(env), {
-      method: 'POST', headers, body: JSON.stringify(request), signal: controller.signal, redirect: 'error',
+      method: 'POST', headers, body: JSON.stringify(request), signal: controller.signal, redirect: 'manual',
     });
     console.info(JSON.stringify({ event: 'veryfi_response', scanId: externalId, httpStatus: response.status, elapsedMs: Date.now() - started }));
     const responseBytes = await readBoundedResponse(response);
@@ -754,7 +754,10 @@ async function providerVerify(
     return document;
   } catch (error) {
     if (controller.signal.aborted) throw new Error('SCAN_PROVIDER_TIMEOUT');
-    throw error;
+    if (/^SCAN_[A-Z_]+(?::\d+)?$/.test(errorCode(error))) throw error;
+    console.warn(JSON.stringify({ event: 'veryfi_transport_error', scanId: externalId,
+      providerError: safeProviderError({ message: errorCode(error) }, env) }));
+    throw new Error('SCAN_PROVIDER_TRANSPORT_FAILED');
   } finally {
     clearTimeout(timeout);
   }
@@ -1218,7 +1221,8 @@ export function createCaptroScanRoutes(
       if (!completed) throw new Error('SCAN_RECEIPT_RESULT_MISSING');
       return c.json(receiptReviewPayload(completed));
     } catch (error: any) {
-      const code = errorCode(error).split(':')[0];
+      const rawCode = errorCode(error).split(':')[0];
+      const code = /^SCAN_[A-Z_]+$/.test(rawCode) ? rawCode : 'SCAN_PROCESSING_FAILED';
       console.warn(JSON.stringify({ event: 'receipt_review_failed', scanId: receiptId || null, code }));
       if (receiptId) {
         await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
@@ -1231,7 +1235,7 @@ export function createCaptroScanRoutes(
         }).catch(() => null);
       }
       const unavailable = code.includes('PROVIDER') || code.includes('STORAGE') || code.includes('DATABASE')
-        || code.includes('RPC') || code.includes('UPDATE');
+        || code.includes('RPC') || code.includes('UPDATE') || code === 'SCAN_PROCESSING_FAILED';
       return c.json({
         detail: unavailable ? 'Receipt processing is temporarily unavailable. Please try again.' : 'Captro could not process this document.',
         code,

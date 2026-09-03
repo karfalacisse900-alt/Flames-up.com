@@ -118,6 +118,7 @@ test('provider sends actual bytes, checks status and rejects malformed success',
       assert.equal(body.file_name, 'wrong.jpg');
       assert.equal(body.document_type, null);
       assert.ok(init.signal);
+      assert.equal(init.redirect, 'manual', 'Workers must reject redirects without forwarding provider credentials');
       return Response.json(providerDocument(), { status: 201 });
     };
     assert.equal((await captroScanTestSupport.providerVerify(env, bytes, 'wrong.pdf', 'scan-test')).id, 'provider-document-1');
@@ -127,6 +128,8 @@ test('provider sends actual bytes, checks status and rejects malformed success',
     }
     globalThis.fetch = async () => new Response('<html>unavailable</html>', { status: 200 });
     await assert.rejects(captroScanTestSupport.providerVerify(env, bytes, 'receipt.jpg', 'scan-test'), /MALFORMED_RESPONSE/);
+    globalThis.fetch = async () => new Response(null, { status: 302, headers: { Location: 'https://elsewhere.example/' } });
+    await assert.rejects(captroScanTestSupport.providerVerify(env, bytes, 'receipt.jpg', 'scan-test'), /REJECTED:302/);
   } finally { globalThis.fetch = original; }
 });
 
@@ -291,7 +294,7 @@ test('corrected receipt migration stores configured rewards and provider-owned v
 
 test('consumer verdict vocabulary excludes accusation and score labels', async () => {
   const source = await readFile(path.join(repositoryRoot, 'backend-cf', 'src', 'scan.ts'), 'utf8');
-  assert.match(source, /verdict: row\.status === 'verified' \? 'Verified' : row\.status === 'couldnt_verify' \? "Couldn't Verify"/);
+  assert.match(source, /verdict: row\.status === 'verified' \? 'Verified' : row\.status === 'couldnt_verify' \? 'Unable to Verify'/);
   assert.doesNotMatch(source, /verdict:\s*['"](?:Fraud|Fake|Scam|Suspicious|Level 1|Level 2)/i);
   assert.match(source, /https:\/\/api\.storekit\.apple\.com/);
   assert.match(source, /https:\/\/api\.storekit-sandbox\.apple\.com/);
