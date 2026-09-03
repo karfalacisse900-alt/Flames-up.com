@@ -1,6 +1,9 @@
 name: Verify Captro scan provider
 on:
   workflow_dispatch:
+  push:
+    branches: [fix/oauth-guest-access]
+    paths: ['.github/workflows/verify-scan-provider.yml', 'backend-cf/scripts/verify-scan-provider.mjs']
 jobs:
   verify:
     runs-on: ubuntu-latest
