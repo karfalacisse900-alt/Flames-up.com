@@ -10,6 +10,10 @@ on:
         type: boolean
         default: false
         description: 'Diagnose the production Worker separately from custom-domain edge rules'
+      inspect_edge:
+        type: boolean
+        default: false
+        description: 'Read API-domain challenge settings without modifying Cloudflare security'
   push:
     branches: [fix/oauth-guest-access]
     paths: ['.github/workflows/verify-scan-provider.yml', 'backend-cf/scripts/verify-scan-provider.mjs']
@@ -25,8 +29,14 @@ jobs:
           cache-dependency-path: backend-cf/package-lock.json
       - run: npm ci
         working-directory: backend-cf
+      - name: Inspect API edge challenge configuration
+        if: ${{ inputs.inspect_edge == true }}
+        working-directory: backend-cf
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: node scripts/inspect-scan-edge.mjs
       - name: Check private storage and real Veryfi processing
-        if: ${{ inputs.production != true }}
+        if: ${{ inputs.production != true && inputs.inspect_edge != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -37,7 +47,7 @@ jobs:
           VERYFI_API_KEY: ${{ secrets.VERYFI_API_KEY }}
         run: node --experimental-strip-types scripts/verify-scan-provider.mjs
       - name: Verify deployed scan pipeline
-        if: ${{ inputs.production == true }}
+        if: ${{ inputs.production == true && inputs.inspect_edge != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
