@@ -18,6 +18,13 @@ assert.ok(extracted.providerRequestId, 'Provider document ID is missing');
 assert.equal(extracted.type, 'receipt');
 assert.ok(extracted.business.name, 'Merchant extraction failed');
 assert.ok(extracted.total, 'Total extraction failed');
+console.log(JSON.stringify({ event: 'veryfi_risk_response',
+  color: ['green', 'yellow', 'red'].includes(extracted.signals.color) ? extracted.signals.color : 'not_returned',
+  decisionPresent: Boolean(extracted.signals.decision), score: extracted.signals.score,
+  digitalTampering: extracted.signals.digitalTampering, aiGenerated: extracted.signals.aiGenerated,
+  screenPhoto: extracted.signals.screenPhoto, fraudulentPdf: extracted.signals.fraudulentPdf,
+  otherIndicators: extracted.signals.otherIndicators,
+  feedbackEligible: scan.receiptAcceptedForFeedback(extracted) }));
 console.log(JSON.stringify({ event: 'veryfi_live_smoke_passed', providerDocumentId: extracted.providerRequestId,
   documentType: extracted.type, merchantPresent: !!extracted.business.name, totalPresent: !!extracted.total,
   checks: scan.buildChecks(extracted).map(({ key, status }) => ({ key, status })),

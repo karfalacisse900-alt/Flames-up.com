@@ -50,6 +50,11 @@ try {
   paths.push(record.private_storage_path);
   assert.equal(record.provider_request_id, review.providerDocumentId);
   assert.ok(record.verification_checks.length);
+  const providerCheck = record.verification_checks.find(check => check.key === 'provider_document_signal');
+  if (providerCheck?.status !== 'passed') {
+    assert.notEqual(review.verdict, 'Verified', 'Missing or uncertain risk evidence was labeled Verified');
+    assert.equal(review.rewardEligible, false, 'Missing or uncertain risk evidence enabled a reward');
+  }
   const persisted = await json(`${api}/scan/receipts/${receiptId}`, { headers: owner });
   assert.equal(persisted.providerDocumentId, review.providerDocumentId);
   const link = await json(`${api}/scan/receipts/${receiptId}/original`, { headers: owner });

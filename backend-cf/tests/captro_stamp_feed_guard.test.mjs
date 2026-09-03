@@ -214,13 +214,13 @@ test('composer persists the selected stamp and previews the production component
 
 test('post creation is Photos-first and keeps selected media proportions', () => {
   const firstPageStart = composer.indexOf('private var mediaFirstPage');
-  const firstPageEnd = composer.indexOf('private var finalPostPage');
+  const firstPageEnd = composer.indexOf('private func removeMedia(');
   const firstPage = composer.slice(firstPageStart, firstPageEnd);
 
   assert.ok(firstPageStart >= 0 && firstPageEnd > firstPageStart);
   assert.match(firstPage, /Text\("What do you want to share\?"\)/);
   assert.match(firstPage, /PhotosPicker\([\s\S]*?matching: \.any\(of: \[\.images, \.videos\]\)/);
-  assert.match(firstPage, /title: "Photos & Videos"/);
+  assert.match(firstPage, /title: "Photos and videos"/);
   assert.match(firstPage, /title: "Add Stamp"/);
   assert.match(firstPage, /width \* coverMediaRatio/);
   assert.doesNotMatch(firstPage, /MIRAStoryLiveCameraView/);
@@ -234,6 +234,20 @@ test('post creation is Photos-first and keeps selected media proportions', () =>
   assert.match(mediaEditor, /case square1x1 = "1:1"/);
   assert.doesNotMatch(mediaEditorView, /case \.post:[\s\S]*?landscape16x9/);
   assert.match(mediaEditorView, /postAspectRatio: \.nearest\(width: Double\(image\.size\.width\), height: Double\(image\.size\.height\)\)/);
+});
+
+test('composer stays on a single writing page with compact tools and optional stamp sheet', () => {
+  const root = composer.slice(composer.indexOf('private var composerPage:'), composer.indexOf('private var postDetailSheetPresentedBinding:'));
+  assert.match(root, /mediaFirstPage/);
+  assert.doesNotMatch(root, /if isEditingPostDetails|finalPostPage|AnyView/);
+  const tool = composer.slice(composer.indexOf('private func composerToolLabel'), composer.indexOf('private func stampOptionsSheet'));
+  assert.match(tool, /Image\(systemName: icon\)/);
+  assert.match(tool, /accessibilityLabel\(title\)/);
+  assert.doesNotMatch(tool, /Text\(title\)|background\(|clipShape\(/);
+  assert.match(composer, /miraBottomSheet\(isPresented: \$isEditingPostDetails/);
+  assert.match(composer, /matching: \.videos/);
+  assert.match(composer, /scrollDismissesKeyboard\(\.interactively\)/);
+  assert.doesNotMatch(composer, /private var finalPostPage/);
 });
 
 test('feed image uploads are rendered into the selected supported ratio', () => {

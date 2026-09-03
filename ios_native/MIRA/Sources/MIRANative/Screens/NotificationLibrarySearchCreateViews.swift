@@ -972,15 +972,6 @@ public struct CreatePostNativeView: View {
   public var body: some View {
     composerPage
     .toolbar(.hidden, for: .navigationBar)
-    .toolbar {
-      ToolbarItemGroup(placement: .keyboard) {
-        Spacer()
-        Button("Done") {
-          focusedPostDetailsField = nil
-        }
-        .font(.system(size: 16, weight: .semibold))
-      }
-    }
     .miraHideTabBarOnAppear()
     .miraScreenEnter(.modal)
     .navigationBarBackButtonHidden(true)
@@ -989,6 +980,7 @@ public struct CreatePostNativeView: View {
     }
     .task {
       await preparePostComposerForDisplay()
+      focusedPostDetailsField = .caption
     }
     .onChange(of: pickerItems) { _, newItems in
       guard !newItems.isEmpty else { return }
@@ -1018,6 +1010,9 @@ public struct CreatePostNativeView: View {
     }
     .onChange(of: scenePhase) { _, phase in
       handleComposerScenePhaseChange(phase)
+    }
+    .miraBottomSheet(isPresented: $isEditingPostDetails, preferredHeightFraction: 0.56) { closeSheet in
+      stampOptionsSheet(onClose: closeSheet)
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
       ComposerPreviewSheet(
@@ -1079,11 +1074,8 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private var composerPage: AnyView {
-    if isEditingPostDetails {
-      return AnyView(finalPostPage)
-    }
-    return AnyView(mediaFirstPage)
+  private var composerPage: some View {
+    mediaFirstPage
   }
 
   private var postDetailSheetPresentedBinding: Binding<Bool> {
@@ -1108,36 +1100,36 @@ public struct CreatePostNativeView: View {
   }
 
   private var mediaFirstPage: some View {
-    GeometryReader { proxy in
-      VStack(spacing: 0) {
-        composerTopBar
-
+    VStack(spacing: 0) {
+      composerTopBar
+      GeometryReader { proxy in
         ScrollView(showsIndicators: false) {
           VStack(alignment: .leading, spacing: 20) {
-            composerPrompt
+            composerPrompt(minimumHeight: mediaItems.isEmpty ? max(160, proxy.size.height - 32) : 112)
 
             if let first = mediaItems.first {
               composerMediaPreview(first)
               composerMediaRail
             }
 
-            if let errorMessage {
-              Text(errorMessage)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.red.opacity(0.9))
-            }
-
-            Spacer(minLength: max(80, proxy.size.height * 0.12))
           }
           .padding(.horizontal, 16)
           .padding(.top, 14)
-          .padding(.bottom, 24)
+          .padding(.bottom, 16)
         }
-
-        composerToolBar
+        .scrollDismissesKeyboard(.interactively)
       }
-      .background(MIRATheme.Color.surface.ignoresSafeArea())
+      if let errorMessage {
+        Text(errorMessage)
+          .font(.system(size: 13, weight: .medium))
+          .foregroundStyle(.red.opacity(0.9))
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 8)
+      }
+      composerToolBar
     }
+    .background(MIRATheme.Color.surface.ignoresSafeArea())
   }
 
   private var composerTopBar: some View {
@@ -1177,7 +1169,7 @@ public struct CreatePostNativeView: View {
     .frame(height: 68)
   }
 
-  private var composerPrompt: some View {
+  private func composerPrompt(minimumHeight: CGFloat) -> some View {
     HStack(alignment: .top, spacing: 12) {
       RemoteAvatar(url: composerUser?.profileImage, size: 46)
         .accessibilityLabel("Your profile photo")
@@ -1197,7 +1189,7 @@ public struct CreatePostNativeView: View {
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .scrollContentBackground(.hidden)
           .focused($focusedPostDetailsField, equals: .caption)
-          .frame(minHeight: mediaItems.isEmpty ? 180 : 96, alignment: .top)
+          .frame(height: minimumHeight, alignment: .top)
           .accessibilityLabel("What do you want to share?")
       }
     }
@@ -1292,22 +1284,27 @@ public struct CreatePostNativeView: View {
         matching: .any(of: [.images, .videos]),
         preferredItemEncoding: .current
       ) {
-        composerToolLabel(icon: "photo.on.rectangle.angled", title: "Photos & Videos")
+        composerToolLabel(icon: "photo", title: "Photos and videos")
       }
       .disabled(isPosting || isLoadingMedia || mediaItems.count >= 10)
 
-      Menu {
-        ForEach(CaptroStampKind.creationCases) { kind in
-          Button {
-            selectedStampKind = kind
-            continueToPostDetails()
-          } label: {
-            Label(kind.displayName, systemImage: kind == selectedStampKind ? "checkmark" : "seal")
-          }
-        }
+      PhotosPicker(
+        selection: $pickerItems,
+        maxSelectionCount: max(1, 10 - mediaItems.count),
+        matching: .videos,
+        preferredItemEncoding: .current
+      ) {
+        composerToolLabel(icon: "play.circle", title: "Videos")
+      }
+      .disabled(isPosting || isLoadingMedia || mediaItems.count >= 10)
+
+      Button {
+        focusedPostDetailsField = nil
+        continueToPostDetails()
       } label: {
         composerToolLabel(icon: "seal", title: "Add Stamp")
       }
+      .disabled(isPosting)
 
       Spacer(minLength: 8)
 
@@ -1316,7 +1313,16 @@ public struct CreatePostNativeView: View {
           .tint(MIRATheme.Color.forest)
           .frame(width: 44, height: 44)
       }
+
+      if focusedPostDetailsField != nil {
+        Button {
+          focusedPostDetailsField = nil
+        } label: {
+          composerToolLabel(icon: "keyboard.chevron.compact.down", title: "Dismiss keyboard")
+        }
+      }
     }
+    .buttonStyle(.plain)
     .padding(.horizontal, 16)
     .padding(.vertical, 10)
     .overlay(alignment: .top) {
@@ -1327,173 +1333,51 @@ public struct CreatePostNativeView: View {
   }
 
   private func composerToolLabel(icon: String, title: String) -> some View {
-    HStack(spacing: 7) {
-      Image(systemName: icon)
-        .font(.system(size: 18, weight: .medium))
-      Text(title)
-        .font(.system(size: 14, weight: .semibold))
-        .lineLimit(1)
-        .minimumScaleFactor(0.85)
-    }
-    .foregroundStyle(MIRATheme.Color.textPrimary)
-    .padding(.horizontal, 12)
-    .frame(height: 44)
-    .background(MIRATheme.Color.surfaceSoft)
-    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    Image(systemName: icon)
+      .font(.system(size: 23, weight: .regular))
+      .foregroundStyle(MIRATheme.Color.forest)
+      .frame(width: 44, height: 44)
+      .contentShape(Rectangle())
+      .accessibilityLabel(title)
+      .help(title)
   }
 
-  private var finalPostPage: some View {
-    GeometryReader { proxy in
-      VStack(spacing: 0) {
-        postDetailsTopBar
-
-        ScrollView(showsIndicators: false) {
-          VStack(alignment: .leading, spacing: 0) {
-            postDetailsMediaStrip
-              .padding(.top, 14)
-
-            postDetailsTextFields
-              .padding(.top, 22)
-
-            Spacer(minLength: max(70, proxy.size.height * 0.13))
-
-            Rectangle()
-              .fill(MIRATheme.Color.hairline.opacity(0.75))
-              .frame(height: 0.7)
-              .padding(.top, 16)
-
-            stampTypeMenu
-
-            postOptionRow(
-              icon: "mappin.circle",
-              title: selectedPlace?.displayName ?? "Add place",
-              subtitle: selectedPlace?.addressText ?? "Restaurant, gym, cafe, park, or venue",
-              action: { activePostDetailSheet = .location }
-            )
-            broadLocationOptionRow
-          }
-          .padding(.horizontal, 16)
-          .padding(.bottom, max(proxy.safeAreaInsets.bottom + 28, 52))
-        }
-      }
-      .background(MIRATheme.Color.surface.ignoresSafeArea())
-    }
-  }
-
-  private var postDetailsTopBar: some View {
-    HStack {
-      Button {
-        returnToCapture()
-      } label: {
-        Image(systemName: "chevron.left")
-          .font(.system(size: 34, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 54, height: 54)
-      }
-      .buttonStyle(.plain)
-
-      Spacer()
-
-      HStack(spacing: 10) {
+  private func stampOptionsSheet(onClose: @escaping () -> Void) -> some View {
+    VStack(spacing: 0) {
+      HStack {
+        Text("Stamp")
+          .font(.system(size: 18, weight: .semibold))
+        Spacer()
         Button { showPreview = true } label: {
-          HStack(spacing: 6) {
-            Text("Preview")
-              .font(.system(size: 17, weight: .semibold))
-            Image(systemName: "eye")
-              .font(.system(size: 15, weight: .semibold))
-          }
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .padding(.horizontal, 15)
-          .frame(height: 46)
-          .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
-          .clipShape(Capsule())
+          Image(systemName: "eye")
+            .frame(width: 44, height: 44)
         }
-        .buttonStyle(.plain)
-
-        Button {
-          Task { await submit() }
-        } label: {
-          HStack(spacing: 7) {
-            if isPosting {
-              ProgressView()
-                .tint(.white)
-                .scaleEffect(0.72)
-            }
-            Text(isPosting ? "Posting" : "Post")
-              .font(.system(size: 17, weight: .semibold))
-          }
-          .foregroundStyle(.white)
-          .padding(.horizontal, 19)
-          .frame(height: 46)
-          .background(canPost && !isPosting ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.45))
-          .clipShape(Capsule())
-          .shadow(color: MIRATheme.Color.forest.opacity(canPost ? 0.18 : 0), radius: 16, x: 0, y: 8)
+        .accessibilityLabel("Preview post")
+        .help("Preview post")
+        Button("Done", action: onClose)
+          .font(.system(size: 16, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .frame(minHeight: 44)
+      }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 12) {
+          TextField("Stamp title", text: $title, axis: .vertical)
+            .font(.system(size: 21, weight: .semibold))
+            .lineLimit(1...3)
+          stampTypeMenu
+          postOptionRow(
+            icon: "mappin.circle",
+            title: selectedPlace?.displayName ?? "Add place",
+            subtitle: selectedPlace?.addressText,
+            action: { activePostDetailSheet = .location }
+          )
+          broadLocationOptionRow
         }
-        .buttonStyle(.plain)
-        .disabled(isPosting || !canPost)
       }
     }
     .padding(.horizontal, 16)
-    .padding(.top, 10)
-    .frame(height: 82)
-  }
-
-  private var postDetailsMediaStrip: some View {
-    ScrollView(.horizontal, showsIndicators: false) {
-      HStack(spacing: 10) {
-        ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
-          postDetailsMediaTile(item, index: index)
-        }
-      }
-      .padding(.horizontal, 1)
-    }
-  }
-
-  private func postDetailsMediaTile(_ media: MIRAPickedMedia, index: Int) -> some View {
-    postComposerMedia(media, width: 88, height: 92, cornerRadius: 13)
-      .overlay(alignment: .topTrailing) {
-        if media.kind == .video {
-          Image(systemName: "play.fill")
-            .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 26, height: 26)
-            .background(.black.opacity(0.58))
-            .clipShape(Circle())
-            .padding(8)
-        }
-      }
-      .overlay(alignment: .bottomLeading) {
-        Text(index == 0 ? "Cover" : "\(index + 1)")
-          .font(.system(size: 11, weight: .semibold))
-          .foregroundStyle(.white)
-          .padding(.horizontal, 10)
-          .frame(height: 26)
-          .background(.black.opacity(0.52))
-          .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-          .padding(8)
-          .allowsHitTesting(false)
-      }
-      .overlay(alignment: .topLeading) {
-        if mediaItems.count > 1 {
-          Button {
-            removeMedia(at: index)
-          } label: {
-            Image(systemName: "xmark")
-              .font(.system(size: 10, weight: .bold))
-              .foregroundStyle(.white)
-              .frame(width: 24, height: 24)
-              .background(.black.opacity(0.58))
-              .clipShape(Circle())
-          }
-          .buttonStyle(.plain)
-          .padding(8)
-        }
-      }
-      .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-      .onTapGesture {
-        editingMedia = MIRAEditorPresentation(media: media, replacementIndex: index)
-      }
-      .accessibilityLabel(index == 0 ? "Edit cover media" : "Edit media \(index + 1)")
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .background(MIRATheme.Color.surface)
   }
 
   private func removeMedia(at index: Int) {
@@ -1502,32 +1386,6 @@ public struct CreatePostNativeView: View {
       mediaItems.remove(at: index)
       if mediaItems.isEmpty {
         isEditingPostDetails = false
-      }
-    }
-  }
-
-  private var postDetailsTextFields: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      TextField("Stamp title", text: $title)
-        .font(.system(size: 21, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .submitLabel(.next)
-        .focused($focusedPostDetailsField, equals: .title)
-
-      Rectangle()
-        .fill(MIRATheme.Color.hairline.opacity(0.78))
-        .frame(height: 0.7)
-
-      TextField("Write on the stamp...", text: $bodyText, axis: .vertical)
-        .font(.system(size: 16, weight: .regular))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .lineLimit(3...6)
-        .focused($focusedPostDetailsField, equals: .caption)
-
-      if let errorMessage {
-        Text(errorMessage)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(.red.opacity(0.9))
       }
     }
   }
@@ -1963,14 +1821,6 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private func returnToCapture() {
-    editedCameraMedia = nil
-    isCameraReviewingMedia = false
-    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-      isEditingPostDetails = false
-    }
-  }
-
   private func editorUploadMetadata() -> [MIRAEditorUploadMetadata]? {
     let metadata = mediaItems.enumerated().compactMap { index, item -> MIRAEditorUploadMetadata? in
       guard let editorMetadata = item.editorMetadata else { return nil }
@@ -2007,9 +1857,7 @@ public struct CreatePostNativeView: View {
     selectedDiscoverCategory = draft.selectedDiscoverCategory
     mediaItems = restoredMedia
     draftMediaSnapshots = draft.media
-    if draft.isEditingPostDetails == true {
-      isEditingPostDetails = true
-    }
+    isEditingPostDetails = false
     if let message = draft.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
       errorMessage = message
     }

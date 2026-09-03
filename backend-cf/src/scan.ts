@@ -403,23 +403,40 @@ function paymentDetails(document: any) {
 function providerSignals(document: any) {
   const fraud = first(document, ['meta.fraud', 'fraud', 'fraud_info']) || {};
   const details = fraud?.details && typeof fraud.details === 'object' ? fraud.details : {};
-  const types = Array.isArray(fraud?.types) ? fraud.types.map((value: unknown) => String(value).toLowerCase()) : null;
-  const signal = (label: string, paths: string[]): boolean | null => {
-    const explicit = firstBool(document, paths);
-    const key = label.replace(/ /g, '_');
-    if (explicit === true || details[key] === true || (details[key] && typeof details[key] === 'object')
-      || types?.includes(label) || types?.includes(key)) return true;
-    if (explicit === false || types !== null) return false;
+  const normalizedLabel = (value: unknown) => cleanText(value, 80).toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  const types = Array.isArray(fraud?.types) ? fraud.types.map(normalizedLabel).filter(Boolean) : [];
+  const signal = (labels: string[], paths: string[]): boolean | null => {
+    const explicit = firstBool(fraud, paths);
+    const fired = labels.some(label => {
+      const detail = details[label.replace(/ /g, '_')];
+      return types.includes(label) || detail === true
+        || (detail && typeof detail === 'object' && Object.keys(detail).length > 0);
+    });
+    if (explicit === true || fired) return true;
+    // An absent type is not evidence that the account ran that detector.
+    if (explicit === false) return false;
     return null;
   };
+  const pages = Array.isArray(fraud.pages) ? fraud.pages : Array.isArray(fraud.images) ? fraud.images : [];
+  const tamperedFields = first(document, ['meta.digital_tampering_fields', 'meta.fraud.digital_tampering_fields', 'fraud.digital_tampering_fields']);
+  const handwrittenTamperedFields = first(document, ['meta.handwritten_tampered_fields', 'meta.fraud.handwritten_tampered_fields']);
   return {
-    decision: firstText(document, ['meta.fraud.decision', 'fraud.decision', 'fraud_info.decision'], 60).toLowerCase(),
-    digitalTampering: signal('digital tampering', ['fraud.digital_tampering', 'fraud.digitalTampering']),
-    aiGenerated: signal('ai generated', ['fraud.ai_generated', 'fraud.aiGenerated']),
-    screenshot: signal('screenshot', ['fraud.screenshot', 'fraud.is_screenshot']),
-    invalidQr: signal('invalid qr data', ['fraud.invalid_qr_data', 'fraud.invalidQrData']),
-    vendorLayoutMismatch: signal('vendor layout mismatch', ['fraud.vendor_layout_mismatch', 'fraud.vendorLayoutMismatch']),
-    notADocument: signal('not a document', ['fraud.not_a_document', 'fraud.notADocument']),
+    decision: normalizedLabel(fraud.decision),
+    color: normalizedLabel(fraud.color),
+    score: decimalNumber(fraud.score),
+    digitalTampering: Array.isArray(tamperedFields) && tamperedFields.length > 0
+      ? true : signal(['digital tampering'], ['digital_tampering', 'digitalTampering']),
+    aiGenerated: signal(['generated document', 'ai generated'], ['generated_document', 'ai_generated', 'aiGenerated']),
+    screenPhoto: pages.some((page: any) => page?.is_lcd === true)
+      ? true : signal(['lcd photo'], ['is_lcd']),
+    handwrittenTampering: Array.isArray(handwrittenTamperedFields) && handwrittenTamperedFields.length > 0,
+    fraudulentPdf: signal(['fraudulent pdf'], []),
+    screenshot: signal(['screenshot'], ['screenshot', 'is_screenshot']),
+    invalidQr: signal(['invalid qr data'], ['invalid_qr_data', 'invalidQrData']),
+    vendorLayoutMismatch: signal(['vendor layout mismatch'], ['vendor_layout_mismatch', 'vendorLayoutMismatch']),
+    notADocument: signal(['not a document'], ['not_a_document', 'notADocument']),
+    // Digital receipts are supported; other reported indicators require review.
+    otherIndicators: types.some((type: string) => type !== 'screenshot'),
     duplicate: firstBool(document, ['is_duplicate']),
     duplicateOf: firstText(document, ['duplicate_of'], 160) || null,
   };
@@ -623,21 +640,30 @@ function providerAuthenticityCheck(extracted: any): VerificationCheck {
   const values = [
     signals.digitalTampering,
     signals.aiGenerated,
+    signals.screenPhoto,
+    signals.handwrittenTampering,
+    signals.fraudulentPdf,
     signals.invalidQr,
     signals.vendorLayoutMismatch,
     signals.notADocument,
   ];
   const blocking = values.some((value) => value === true);
-  const explicitClear = values.every((value) => value === false);
-  const acceptedDecision = ['green', 'accept', 'accepted', 'pass', 'passed', 'verified'].includes(signals.decision);
-  const rejectedDecision = ['red', 'declined', 'deny', 'denied', 'fail', 'failed', 'rejected'].includes(signals.decision);
+  const acceptedDecision = ['green', 'not fraud', 'accept', 'accepted', 'pass', 'passed', 'verified'].includes(signals.decision);
+  const rejectedDecision = ['fraud', 'red', 'declined', 'deny', 'denied', 'fail', 'failed', 'rejected'].includes(signals.decision)
+    || signals.color === 'red';
   if (blocking || rejectedDecision) {
     return { key: 'provider_document_signal', status: 'failed', detail: 'The external document check did not accept the submitted file.' };
   }
-  if (acceptedDecision || explicitClear) {
-    return { key: 'provider_document_signal', status: 'passed', detail: 'The external document check found no blocking inconsistency.' };
+  const needsReview = signals.otherIndicators || signals.color === 'yellow'
+    || (signals.color && signals.color !== 'green')
+    || (signals.decision && !acceptedDecision)
+    || (signals.score !== null && (signals.score < 0 || signals.score > 0.5));
+  if (!needsReview && (acceptedDecision || signals.color === 'green')) {
+    return { key: 'provider_document_signal', status: 'passed', detail: 'Veryfi document-risk checks passed. This does not confirm payment with the merchant.' };
   }
-  return { key: 'provider_document_signal', status: 'unavailable', detail: 'The provider did not return an authenticity signal.' };
+  return { key: 'provider_document_signal', status: 'unavailable', detail: needsReview
+    ? 'The provider result needs further review. The document cannot be verified automatically.'
+    : 'Veryfi did not return a completed document-risk decision. Extraction alone is not verification.' };
 }
 
 function buildChecks(extracted: any, duplicateStatus: VerificationCheck['status'] = 'unavailable'): VerificationCheck[] {
@@ -718,6 +744,7 @@ async function providerVerify(
     async: false,
     auto_delete: true,
     confidence_details: true,
+    compute: false,
     parse_address: true,
     allowed_async_enrichments: [],
   };
@@ -1208,6 +1235,11 @@ export function createCaptroScanRoutes(
       }
       const checks = buildChecks(extracted, semanticDuplicate ? 'failed' : duplicateChecked ? 'passed' : 'unavailable');
       const accepted = candidateAccepted && verdictFromChecks(checks) === 'verified';
+      console.info(JSON.stringify({ event: 'veryfi_document_checks', scanId: receiptId,
+        providerDocumentId: extracted.providerRequestId, documentType: extracted.type,
+        providerRiskCheck: checks.find(check => check.key === 'provider_document_signal')?.status,
+        duplicateCheck: checks.find(check => check.key === 'duplicate_check')?.status,
+        rewardEligible: accepted && !semanticDuplicate }));
       const completedAt = new Date().toISOString();
       await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
         receipt_type: extracted.type,

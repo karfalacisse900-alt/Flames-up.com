@@ -73,6 +73,63 @@ test('one clear provider signal does not clear all missing checks', () => {
   assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(extracted), false);
 });
 
+test('an empty indicator list or false flags alone do not prove a completed risk assessment', () => {
+  for (const fraud of [{ types: [] }, { ...providerDocument().fraud, decision: null },
+    { types: [], decision: 'unknown', color: 'green' }, { types: [], decision: 'processing' }]) {
+    const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({ fraud }));
+    assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(extracted), false);
+    assert.equal(captroScanTestSupport.verdictFromChecks(captroScanTestSupport.buildChecks(extracted, 'passed')), 'couldnt_verify');
+  }
+});
+
+test('Veryfi meta.fraud green decision is accepted but yellow, red and conflicting decisions are not', () => {
+  for (const [fraud, accepted] of [
+    [{ color: 'green', decision: 'not fraud', types: [], score: 0.1 }, true],
+    [{ color: 'green', types: [] }, true],
+    [{ color: 'yellow', decision: 'not fraud', types: [] }, false],
+    [{ color: 'red', types: [] }, false],
+    [{ color: 'green', decision: 'Fraud', types: [] }, false],
+    [{ color: 'green', decision: 'unknown', types: [] }, false],
+    [{ color: 'green', score: 0.8, types: [] }, false],
+  ]) {
+    const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({ meta: { fraud } }));
+    assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(extracted), accepted, JSON.stringify(fraud));
+  }
+});
+
+test('generated, screen-photographed, manipulated and uncertain documents never qualify for rewards', () => {
+  for (const type of ['generated document', 'generated_document', 'ai generated', 'LCD photo',
+    'digital tampering', 'fraudulent pdf', 'not a document', 'invalid qr data', 'vendor layout mismatch',
+    'stopwords', 'handwritten characters', 'similar documents', 'unknown new risk signal']) {
+    const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({
+      meta: { fraud: { color: 'green', decision: 'not fraud', types: [type] } },
+    }));
+    assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(extracted), false, type);
+    assert.equal(captroScanTestSupport.verdictFromChecks(captroScanTestSupport.buildChecks(extracted, 'passed')), 'couldnt_verify', type);
+  }
+});
+
+test('page-level LCD and field tampering evidence override even a green summary', () => {
+  for (const meta of [
+    { fraud: { pages: [{ is_lcd: { value: true, score: 0.98 } }] } },
+    { fraud: { details: { generated_document: { description: 'Detected' } } } },
+    { fraud: { details: { digital_tampering: { description: 'Detected' } } } },
+    { digital_tampering_fields: ['total'] },
+    { handwritten_tampered_fields: ['total'] },
+  ]) {
+    meta.fraud = { color: 'green', types: [], ...meta.fraud };
+    const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({ meta }));
+    assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(extracted), false, JSON.stringify(meta));
+  }
+});
+
+test('digital receipt imports can pass only with an explicit acceptable risk decision', () => {
+  const document = providerDocument({ meta: { fraud: { color: 'green', types: ['screenshot'] } } });
+  assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(captroScanTestSupport.normalizeProviderDocument(document)), true);
+  delete document.meta.fraud.color;
+  assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(captroScanTestSupport.normalizeProviderDocument(document)), false);
+});
+
 test('invoice fields and date-embedded time are extracted without client guesses', () => {
   const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({
     document_type: 'invoice', invoice_number: 'INV-42', due_date: '2026-09-15',
@@ -117,6 +174,10 @@ test('provider sends actual bytes, checks status and rejects malformed success',
       assert.equal(Buffer.from(body.file_data, 'base64').length, 300);
       assert.equal(body.file_name, 'wrong.jpg');
       assert.equal(body.document_type, null);
+      assert.equal(body.compute, false, 'Do not synthesize missing amounts then verify their arithmetic');
+      assert.equal(body.boost_mode, false);
+      assert.equal(body.async, false);
+      assert.deepEqual(body.allowed_async_enrichments, [], 'Risk enrichments must finish inline before acceptance');
       assert.ok(init.signal);
       assert.equal(init.redirect, 'manual', 'Workers must reject redirects without forwarding provider credentials');
       return Response.json(providerDocument(), { status: 201 });
