@@ -15,7 +15,7 @@ struct CaptroMediaPager: View {
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
   @State private var isVideoPaused = false
-  @State private var isVideoMuted = true
+  @State private var isVideoMuted = false
 
   private var mediaURLs: [String] { post.feedMediaURLs }
   private var naturalMediaHeightToWidthRatio: CGFloat {
@@ -83,17 +83,16 @@ struct CaptroMediaPager: View {
     }
     .onChange(of: selectedMediaIndex) { _, _ in
       isVideoPaused = false
-      isVideoMuted = true
+      isVideoMuted = false
       prefetchCarouselNeighbors()
     }
     .onChange(of: post.id) { _, _ in
       isVideoPaused = false
-      isVideoMuted = true
+      isVideoMuted = false
     }
     .onChange(of: isVideoActive) { _, active in
       if !active {
         isVideoPaused = false
-        isVideoMuted = true
       }
     }
     .onChange(of: isHoldingStamp) { _, isHidden in

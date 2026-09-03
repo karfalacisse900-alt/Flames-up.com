@@ -881,8 +881,8 @@ public struct MainFeedView: View {
           Color.clear
         }
       }
-      .miraFullScreenOverlay(isPresented: $isShowingCreatePost, background: .black) { dismiss in
-        CreatePostNativeView(api: model.api, onClose: dismiss)
+      .fullScreenCover(isPresented: $isShowingCreatePost) {
+        CreatePostNativeView(api: model.api, onClose: { isShowingCreatePost = false })
       }
       .task(id: isGuest) {
         model.configureGuestMode(isGuest)
@@ -891,6 +891,12 @@ public struct MainFeedView: View {
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { notification in
+        guard let post = notification.object as? MIRAPost,
+              let index = model.posts.firstIndex(where: { $0.id == post.id }) else { return }
+        model.posts[index].detail = post.detail
+        Task { await MIRAAppCacheStore.shared.saveFeed(model.posts) }
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
         guard let update = MIRAPostRemovalSync.update(from: notification) else { return }

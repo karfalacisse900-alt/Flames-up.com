@@ -209,7 +209,7 @@ test('composer persists the selected stamp and previews the production component
   assert.match(composer, /ForEach\(CaptroStampKind\.creationCases\)/);
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
   assert.match(composer, /ComposerPreviewSheet\([\s\S]*?stampKind: selectedStampKind/);
-  assert.match(composer, /CaptroPostStamp\(content: previewStampContent\)/);
+  assert.match(composer, /CaptroPostStamp\(content: previewStampContent, onOpen: onEditStamp/);
 });
 
 test('post creation is Photos-first and keeps selected media proportions', () => {

@@ -67,6 +67,18 @@ final class PostDetailModel: ObservableObject {
     }
   }
 
+  var canEditEvent: Bool {
+    post.detailKind == .event && post.detail?.event?.creatorEditable != false
+      && currentUserId != nil && currentUserId == post.userId
+  }
+
+  func updateEvent(_ input: CaptroEventInput) async throws {
+    guard canEditEvent else { throw MIRAAPIError.badStatus(403) }
+    let updated: MIRAPost = try await api.put("/posts/\(post.id)/event", body: input)
+    post = updated
+    NotificationCenter.default.post(name: .captroPostDetailsUpdated, object: updated)
+  }
+
   func loadComments() async {
     commentsError = nil
     if comments.isEmpty, let cached = await MIRAAppCacheStore.shared.loadComments(postId: post.id) {
@@ -444,6 +456,7 @@ public struct PostDetailNativeView: View {
   @State private var reportComment: MIRAComment?
   @State private var isReportSheetPresented = false
   @State private var isPostOptionsPresented = false
+  @State private var isEditingEvent = false
   @FocusState private var isCommentFocused: Bool
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
@@ -474,7 +487,7 @@ public struct PostDetailNativeView: View {
                 )
               }
 
-              CaptroPostDetailSections(model: model, onOpenOptions: { isPostOptionsPresented = true })
+              CaptroPostDetailSections(model: model, onOpenOptions: { isPostOptionsPresented = true }, onEditEvent: { isEditingEvent = true })
               if model.isLoadingObject {
                 ProgressView().frame(maxWidth: .infinity).padding(16)
               } else if let error = model.objectError {
@@ -512,9 +525,11 @@ public struct PostDetailNativeView: View {
     .toolbar(.hidden, for: .navigationBar)
     .miraHideTabBarOnAppear()
     .confirmationDialog("Post", isPresented: $isPostOptionsPresented, titleVisibility: .hidden) {
+      if model.canEditEvent { Button("Edit event") { isEditingEvent = true } }
       Button("Report post", role: .destructive) { presentPostReport() }
       Button("Cancel", role: .cancel) {}
     }
+    .sheet(isPresented: $isEditingEvent) { CaptroEventEditSheet(model: model) }
     .alert("Couldn't complete that action", isPresented: Binding(
       get: { model.actionError != nil },
       set: { if !$0 { model.actionError = nil } }
@@ -788,7 +803,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
   @State private var selectedIndex = 0
   @State private var isVisible = false
   @State private var isVideoPaused = false
-  @State private var isMuted = true
+  @State private var isMuted = false
 
   private var visibleDots: [Int] {
     let start = min(max(0, selectedIndex - 3), max(0, urls.count - 7))

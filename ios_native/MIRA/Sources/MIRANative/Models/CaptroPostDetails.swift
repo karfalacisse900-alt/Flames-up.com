@@ -1,6 +1,6 @@
 import Foundation
 
-// Optional server-owned enrichment. Missing facts are not inferred from captions or tags.
+// Optional validated enrichment. Missing facts are not inferred from captions or tags.
 public struct CaptroPostDetails: Codable, Hashable {
   public var visitedCount: Int?
   public var creatorVisited: Bool?
@@ -23,6 +23,15 @@ public struct CaptroEventDetails: Codable, Hashable {
   public var attendees: [MIRATaggedUserPayload]?
   public var viewerGoing: Bool?
   public var attendanceEnabled: Bool?
+  public var creatorEditable: Bool?
+  public var price: String?
+  public var currency: String?
+
+  var priceLabel: String? {
+    guard let price, let amount = Decimal(string: price), amount >= 0 else { return nil }
+    if amount == 0 { return "Free" }
+    return [currency, price].compactMap { $0 }.joined(separator: " ")
+  }
 }
 
 public struct CaptroCollectionDetails: Codable, Hashable {

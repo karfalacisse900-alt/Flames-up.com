@@ -10,6 +10,7 @@ enum CaptroDetailStyle {
 struct CaptroPostDetailSections: View {
   @ObservedObject var model: PostDetailModel
   let onOpenOptions: () -> Void
+  let onEditEvent: () -> Void
 
   private var post: MIRAPost { model.post }
 
@@ -106,51 +107,15 @@ struct CaptroPostDetailSections: View {
 
   private var eventPost: some View {
     VStack(alignment: .leading, spacing: 20) {
-      if let ticket = model.privateObject?.ticket {
-        CaptroEventTicketSection(ticket: ticket, postID: post.id, api: model.api)
+      CaptroEventTicketSection(post: post, ticket: model.privateObject?.ticket, api: model.api)
+      if model.canEditEvent {
+        Button(action: onEditEvent) {
+          Label("Edit event", systemImage: "square.and.pencil")
+            .font(.system(size: 14, weight: .semibold))
+            .frame(minHeight: 44)
+        }.buttonStyle(.plain)
       }
-      HStack(alignment: .top, spacing: 12) {
-        if let event = post.detail?.event, let month = event.month, let day = event.day {
-          VStack(spacing: 4) {
-            Text(month)
-              .font(.system(size: 10, weight: .bold))
-              .frame(maxWidth: .infinity)
-              .padding(.vertical, 4)
-              .background(CaptroDetailStyle.accent.opacity(0.22))
-            Text(day)
-              .font(.system(size: 25, weight: .bold))
-              .padding(.bottom, 6)
-          }
-          .frame(width: 52)
-          .background(Color.black.opacity(0.025))
-          .clipShape(RoundedRectangle(cornerRadius: 4))
-          .accessibilityElement(children: .ignore)
-          .accessibilityLabel(event.calendarDate ?? "")
-        }
-        VStack(alignment: .leading, spacing: 10) {
-          Text(post.captroCleanTitle ?? "Meetup")
-            .font(.system(size: 23, weight: .bold))
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityAddTraits(.isHeader)
-          CaptroDetailCreatorRow(post: post, api: model.api, context: "Hosted by", showsTime: false)
-        }
-      }
-
-      if let event = post.detail?.event, let date = event.calendarDate {
-        detailDivider
-        Label {
-          VStack(alignment: .leading, spacing: 4) {
-            Text(date).font(.system(size: 14, weight: .semibold))
-            if let time = event.timeRange {
-              Text(time).font(.system(size: 14))
-            }
-          }
-        } icon: {
-          Image(systemName: "calendar").font(.system(size: 17))
-        }
-      }
-
-      CaptroDetailLocationSection(post: post, showsDivider: false)
+      CaptroDetailCreatorRow(post: post, api: model.api, context: "Hosted by", showsTime: false)
       fullDescription
 
       if let event = post.detail?.event,

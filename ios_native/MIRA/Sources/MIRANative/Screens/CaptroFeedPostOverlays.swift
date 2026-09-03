@@ -308,7 +308,7 @@ extension MIRAPost {
     switch kind {
     case .event, .meetup:
       let event = detail?.event
-      let facts = [event?.calendarDate, event?.timeRange, event?.venueName].compactMap { $0 }
+      let facts = [event?.calendarDate, event?.timeRange, event?.venueName, event?.priceLabel].compactMap { $0 }
       summary = facts.isEmpty ? captroFeedCaptionText : facts.joined(separator: " · ")
     case .travel:
       summary = [detail?.travel?.duration, detail?.travel?.departure].compactMap { $0 }.joined(separator: " · ")

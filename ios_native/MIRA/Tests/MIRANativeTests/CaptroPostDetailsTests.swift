@@ -2,6 +2,43 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroPostDetailsTests: XCTestCase {
+  func testEventEditorRoundTripsScheduleAndPriceWithoutTicketFields() throws {
+    let post = try decode(["id": "event", "post_type": "meetup", "detail": ["event": [
+      "starts_at": "2026-09-12T23:00:00.000Z", "ends_at": "2026-09-13T02:00:00Z",
+      "time_zone": "America/New_York", "venue_name": "Rooftop", "price": "12.50", "currency": "USD",
+      "attendees_count": 23, "viewer_going": true, "attendance_enabled": true
+    ]]])
+    let draft = CaptroEventDraft(event: post.detail?.event)
+    XCTAssertNil(draft.validationError)
+    XCTAssertTrue(draft.hasSchedule)
+    XCTAssertTrue(draft.hasEndTime)
+    XCTAssertEqual(draft.input.price, "12.50")
+    XCTAssertEqual(draft.input.timeZone, "America/New_York")
+    XCTAssertEqual(post.detail?.event?.priceLabel, "USD 12.50")
+    let data = try JSONEncoder().encode(draft.input)
+    let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    XCTAssertNil(json["attendeesCount"])
+    XCTAssertNil(json["viewerGoing"])
+    XCTAssertNil(json["ticket"])
+    XCTAssertEqual(try JSONDecoder().decode(CaptroEventDraft.self, from: JSONEncoder().encode(draft)), draft)
+  }
+
+  func testEventEditorRejectsInvalidPriceAndTimeAndDoesNotInventSchedule() {
+    var draft = CaptroEventDraft()
+    XCTAssertNil(draft.input.startsAt)
+    XCTAssertNil(draft.input.price)
+    draft.hasPrice = true
+    draft.price = "-2"
+    XCTAssertNotNil(draft.validationError)
+    draft.price = "12,50"
+    XCTAssertNil(draft.validationError)
+    XCTAssertEqual(draft.input.price, "12.50")
+    draft.hasSchedule = true
+    draft.hasEndTime = true
+    draft.endsAt = draft.startsAt.addingTimeInterval(-60)
+    XCTAssertNotNil(draft.validationError)
+  }
+
   func testExplicitTypesSelectSpecializedLayouts() throws {
     let cases: [(String, CaptroPostDetailKind)] = [
       ("place", .placeReview), ("check_in", .placeReview),

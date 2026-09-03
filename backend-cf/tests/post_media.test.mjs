@@ -128,7 +128,8 @@ test('post creation accepts both kinds; Home remains post-only paging', () => {
   assert.match(home, /selectedMediaIndex: \.constant\(0\),\s*showsCoverMediaOnly: true/);
   assert.match(home, /scenePhase != \.active \|\| detailPost != nil/);
   const pager = ios('Screens/CaptroFeedMediaPager.swift');
-  assert.match(pager, /isVideoMuted = true/);
+  assert.match(pager, /isVideoMuted = false/);
+  assert.doesNotMatch(pager, /isVideoMuted = true/);
   assert.match(pager, /shouldPlay: isVideoActive && !isVideoPaused/);
   assert.match(pager, /mediaURLs.count > 1 && !showsCoverMediaOnly/);
   assert.match(pager, /if currentMediaIsVideo \{\s*isVideoPaused.toggle\(\)/);

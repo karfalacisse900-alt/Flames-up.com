@@ -946,6 +946,7 @@ public struct CreatePostNativeView: View {
   @State private var editedCameraMedia: MIRAPickedMedia?
   @State private var activePostDetailSheet: PostDetailSheet?
   @State private var selectedStampKind: CaptroStampKind = .social
+  @State private var eventDraft = CaptroEventDraft()
   @State private var selectedPlace: MIRAExactPostPlace?
   @State private var broadLocation = MIRABroadDisplayLocation()
   @State private var showBroadLocation = false
@@ -998,6 +999,7 @@ public struct CreatePostNativeView: View {
       handleSelectedPlaceChange(place)
     }
     .onChange(of: selectedStampKind) { _, _ in cacheComposerDraft() }
+    .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
     .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedDiscoverCategory) { _, _ in cacheComposerDraft() }
@@ -1011,7 +1013,7 @@ public struct CreatePostNativeView: View {
     .onChange(of: scenePhase) { _, phase in
       handleComposerScenePhaseChange(phase)
     }
-    .miraBottomSheet(isPresented: $isEditingPostDetails, preferredHeightFraction: 0.56) { closeSheet in
+    .miraBottomSheet(isPresented: $isEditingPostDetails, preferredHeightFraction: isEventStamp ? 0.88 : 0.56) { closeSheet in
       stampOptionsSheet(onClose: closeSheet)
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
@@ -1020,7 +1022,9 @@ public struct CreatePostNativeView: View {
         bodyText: bodyText,
         mediaItems: mediaItems,
         stampKind: selectedStampKind,
-        location: selectedPlace?.displayName ?? (shouldPublishBroadLocation ? broadLocation.label : nil)
+        location: selectedPlace?.displayName ?? (shouldPublishBroadLocation ? broadLocation.label : nil),
+        onEditStamp: { showPreview = false; isEditingPostDetails = true },
+        onClose: { showPreview = false }
       )
     }
     .miraBottomSheet(isPresented: postDetailSheetPresentedBinding, preferredHeightFraction: postDetailSheetHeightFraction) { closeSheet in
@@ -1127,8 +1131,8 @@ public struct CreatePostNativeView: View {
           .padding(.horizontal, 16)
           .padding(.vertical, 8)
       }
-      composerToolBar
     }
+    .safeAreaInset(edge: .bottom, spacing: 0) { composerToolBar.background(MIRATheme.Color.surface) }
     .background(MIRATheme.Color.surface.ignoresSafeArea())
   }
 
@@ -1200,6 +1204,15 @@ public struct CreatePostNativeView: View {
     let height = width * coverMediaRatio
     return LocalMediaThumb(media: media, width: width, height: height, cornerRadius: 16)
       .background(MIRATheme.Color.mediaPlaceholder)
+      .overlay(alignment: .bottomLeading) {
+        if selectedStampKind != .social {
+          CaptroPostStamp(content: composerStampContent,
+            onOpen: { focusedPostDetailsField = nil; isEditingPostDetails = true },
+            onAction: { focusedPostDetailsField = nil; isEditingPostDetails = true }, compact: true)
+            .frame(width: min(280, width * 0.68), alignment: .leading)
+            .padding(16)
+        }
+      }
       .overlay(alignment: .topLeading) {
         Button {
           removeMedia(at: 0)
@@ -1372,12 +1385,27 @@ public struct CreatePostNativeView: View {
             action: { activePostDetailSheet = .location }
           )
           broadLocationOptionRow
+          if isEventStamp {
+            CaptroEventEditorFields(draft: $eventDraft)
+              .padding(.vertical, 12)
+          }
         }
       }
+      .scrollDismissesKeyboard(.interactively)
     }
     .padding(.horizontal, 16)
     .foregroundStyle(MIRATheme.Color.textPrimary)
     .background(MIRATheme.Color.surface)
+  }
+
+  private var isEventStamp: Bool { selectedStampKind == .event || selectedStampKind == .meetup }
+
+  private var composerStampContent: CaptroStampContent {
+    CaptroStampContent(kind: selectedStampKind,
+      title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedStampKind.displayName : title,
+      metadata: isEventStamp && !eventDraft.venueName.isEmpty ? eventDraft.venueName : selectedPlace?.displayName,
+      description: bodyText.isEmpty ? nil : bodyText,
+      footer: nil, actionTitle: selectedStampKind.actionTitle, contributors: [])
   }
 
   private func removeMedia(at index: Int) {
@@ -1650,6 +1678,11 @@ public struct CreatePostNativeView: View {
 
   private func submit() async {
     guard !isPosting, !isLoadingMedia, canPost else { return }
+    if isEventStamp, let error = eventDraft.validationError {
+      errorMessage = error
+      isEditingPostDetails = true
+      return
+    }
     isPosting = true
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
@@ -1705,6 +1738,7 @@ public struct CreatePostNativeView: View {
         displayLocationSource: shouldPublishBroadLocation ? broadLocation.source : "none",
         displayLocationVisibility: shouldPublishBroadLocation ? "public" : "hidden",
         postType: selectedStampKind.backendPostType,
+        event: isEventStamp ? eventDraft.input : nil,
         placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
         placeProvider: selectedPlace?.provider,
@@ -1840,6 +1874,7 @@ public struct CreatePostNativeView: View {
     title = draft.title
     bodyText = draft.bodyText
     selectedStampKind = CaptroStampKind(rawValue: draft.stampType ?? "") ?? .social
+    eventDraft = draft.eventDraft ?? CaptroEventDraft()
     hashtags = draft.hashtags
     selectedAudioTrack = draft.selectedAudioTrack
     selectedPlace = draft.place.map(MIRAExactPostPlace.init(snapshot:))
@@ -1889,6 +1924,7 @@ public struct CreatePostNativeView: View {
       title: title,
       bodyText: bodyText,
       stampType: selectedStampKind.rawValue,
+      eventDraft: eventDraft,
       hashtags: hashtags,
       selectedDiscoverCategory: selectedDiscoverCategory,
       selectedAudioTrack: selectedAudioTrack,
@@ -1910,6 +1946,7 @@ public struct CreatePostNativeView: View {
     title = ""
     bodyText = ""
     selectedStampKind = .social
+    eventDraft = CaptroEventDraft()
     mediaItems = []
     pickerItems = []
     composerUser = nil
@@ -4051,7 +4088,8 @@ private struct ComposerPreviewSheet: View {
   let mediaItems: [MIRAPickedMedia]
   let stampKind: CaptroStampKind
   let location: String?
-  @Environment(\.dismiss) private var dismiss
+  let onEditStamp: () -> Void
+  let onClose: () -> Void
   @State private var coverRatio = MIRAMediaSizing.feedPreviewRatio
 
   var body: some View {
@@ -4065,13 +4103,13 @@ private struct ComposerPreviewSheet: View {
             ZStack(alignment: .bottomLeading) {
               LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 18)
 
-              CaptroPostStamp(content: previewStampContent, compact: true)
+              CaptroPostStamp(content: previewStampContent, onOpen: onEditStamp, onAction: onEditStamp, compact: true)
                 .frame(width: width * stampWidthFraction, alignment: .leading)
                 .padding(16)
             }
             .frame(width: width, height: height)
           } else {
-            CaptroPostStamp(content: previewStampContent)
+            CaptroPostStamp(content: previewStampContent, onOpen: onEditStamp, onAction: onEditStamp)
               .padding(16)
               .background(MIRATheme.Color.surfaceSoft)
               .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -4086,7 +4124,7 @@ private struct ComposerPreviewSheet: View {
         let dimensions = await first.postMediaDimension()
         coverRatio = dimensions.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio
       }
-      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done", action: onClose) } }
     }
   }
 

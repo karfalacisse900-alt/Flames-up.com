@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
-import { attachPublicPostObjects, privateTicketPayload } from './post-objects';
+import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
 
 type MediaModerationJobMessage = {
@@ -6842,6 +6842,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   return {
     id: publicId(row?.legacy_post_id || row?.id, 120),
     supabase_post_id: isUuidText(row?.id),
+    detail: creatorEventDetails(metadata, row?.post_type),
     user_id: appUserId,
     user_username: author?.username,
     user_full_name: author?.full_name,
@@ -10960,6 +10961,7 @@ function supabasePrimaryPostCreatePayload(input: any) {
     tagged_users: parseJsonArray(input.taggedUsers),
     metadata: {
       source: 'cloudflare_worker_supabase_primary',
+      creator_event: input.creatorEvent,
       image: mediaUrls[0] || '',
       client_request_id: cleanText(input.clientRequestId, 120),
       media_backup_ids: parseJsonArray(input.backupIds),
@@ -14245,6 +14247,15 @@ api.post('/posts', authMiddleware, async (c) => {
   if (postType === 'note') {
     return c.json({ detail: 'Notes are no longer supported.', code: 'NOTES_RETIRED' }, 410);
   }
+  let creatorEvent: Record<string, any> | undefined;
+  if (b.event != null) {
+    if (!isEventPostType(postType)) return c.json({ detail: 'Event details require a meetup or event post.' }, 400);
+    try { creatorEvent = validateCreatorEvent(b.event); }
+    catch (error: any) { return c.json({ detail: error.message }, 400); }
+    if (looksLikePrivatePlace(creatorEvent.venueName || '', creatorEvent.address || '', '')) {
+      return c.json({ detail: 'Use a public venue for this event.' }, 400);
+    }
+  }
   const placeProvider = normalizeAppleMapKitProvider(b.place_provider || b.provider) || (b.place_name ? 'apple_mapkit' : '');
   const placeProviderId = cleanText(b.place_provider_id || b.place_id, 160);
   const placeName = cleanText(b.place_name, 180);
@@ -14340,6 +14351,7 @@ api.post('/posts', authMiddleware, async (c) => {
   const supabaseInput = {
     id,
     userId,
+    creatorEvent,
     authUserId: supabaseAuthorRow?.supabase_user_id || userId,
     postTitle,
     postContent,
@@ -14557,6 +14569,53 @@ api.post('/posts/:postId/attendance', authMiddleware, async (c) => {
     c.header('Cache-Control', 'private, no-store');
     return c.json({ event: await postAttendanceDetails(c, post, userId) });
   } catch { return c.json({ detail: "Couldn't update your RSVP. Please try again." }, 503); }
+});
+
+api.put('/posts/:postId/event', authMiddleware, async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const phoneGate = await requirePhoneVerified(c, 'edit events');
+  if (phoneGate) return phoneGate;
+  const bodyTooLarge = rejectLargeRequest(c, 12000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const userId = getUserId(c);
+  const primary = requireSupabasePrimaryDatabase(c, 'event_edit');
+  if (primary) return primary;
+  const limited = await enforceRateLimit(c, 'event_edit', userId, 30, 60);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'posting');
+  if (restricted) return restricted;
+  try {
+    const owned = await supabaseOwnedAppPost(c, c.req.param('postId'), userId);
+    if (owned.status !== 200) return c.json(owned.body, owned.status);
+    if (owned.row.status !== 'active') return c.json({ detail: 'Post unavailable.' }, 404);
+    if (!isEventPostType(owned.row.post_type)) return c.json({ detail: 'This is not an event post.' }, 400);
+    // An imported, issuer-managed event cannot be rewritten by a post author.
+    const linked = await supabaseAdminSelectRows(c, 'app_post_objects', { post_id: postgrestEqFilter(owned.row.id) }, 'post_id', 1);
+    if (linked.length) return c.json({ detail: 'This event is managed by its ticket provider.' }, 409);
+    let event: Record<string, any>;
+    try { event = validateCreatorEvent(await c.req.json()); }
+    catch (error: any) { return c.json({ detail: error.message || 'Invalid event details.' }, 400); }
+    if (looksLikePrivatePlace(event.venueName || '', event.address || '', '')) return c.json({ detail: 'Use a public venue for this event.' }, 400);
+    const url = new URL(`${getSupabaseUrl(c)}/rest/v1/app_posts`);
+    url.searchParams.set('id', postgrestEqFilter(owned.row.id));
+    url.searchParams.set('status', 'eq.active');
+    // Avoid overwriting simultaneous metadata edits (visibility, moderation, etc.).
+    url.searchParams.set('updated_at', owned.row.updated_at ? postgrestEqFilter(owned.row.updated_at) : 'is.null');
+    const key = getSupabaseServiceRoleKey(c);
+    const saved = await fetch(url, { method: 'PATCH', headers: {
+      apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Prefer: 'return=representation',
+    }, body: JSON.stringify({ metadata: { ...parseJsonObject(owned.row.metadata), creator_event: event }, updated_at: now() }) });
+    if (!saved.ok) throw new Error(`EVENT_SAVE_HTTP_${saved.status}`);
+    const rows = await saved.json() as any[];
+    if (!rows.length) return c.json({ detail: 'Post changed. Reopen it and try again.' }, 409);
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId: c.req.param('postId'), limit: 1 });
+    if (!post) return c.json({ detail: 'Post unavailable.' }, 404);
+    post.detail.event = await postAttendanceDetails(c, post, userId);
+    return c.json(postPayload(post, [], c.env));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'event_edit_failed', code: getErrorCode(error).slice(0, 120) }));
+    return c.json({ detail: "Couldn't save event details. Please try again." }, 503);
+  }
 });
 
 api.get('/posts/:postId/object', authMiddleware, async (c) => {

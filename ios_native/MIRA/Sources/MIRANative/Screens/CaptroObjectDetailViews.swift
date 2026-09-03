@@ -20,29 +20,67 @@ struct CaptroPDFOriginal: UIViewRepresentable {
 }
 
 struct CaptroEventTicketSection: View {
-  let ticket: CaptroOwnedTicket
-  let postID: String
+  let post: MIRAPost
+  let ticket: CaptroOwnedTicket?
   let api: MIRAAPIClient
 
+  private var event: CaptroEventDetails? { post.detail?.event }
+  private var ticketLabel: String {
+    [ticket?.tier, ticket?.section.map { "Section \($0)" }, ticket?.seat.map { "Seat \($0)" }]
+      .compactMap { $0 }.joined(separator: " · ")
+  }
+
   var body: some View {
-    VStack(spacing: 14) {
-      CaptroTicketCode(ticket: ticket)
-      if let tier = ticket.tier {
-        Text(tier.uppercased())
-          .font(.system(size: 12, weight: .bold))
-          .padding(.horizontal, 12).padding(.vertical, 6)
-          .background(CaptroDetailStyle.accent.opacity(0.18))
+    VStack(spacing: 18) {
+      if let ticket { CaptroTicketCode(ticket: ticket) }
+      if !ticketLabel.isEmpty {
+        Label(ticketLabel, systemImage: "ticket.fill")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(Color.white)
+          .padding(.horizontal, 12).padding(.vertical, 7)
+          .background(CaptroDetailStyle.ink)
+          .clipShape(Capsule())
+          .privacySensitive()
       }
-      HStack(spacing: 24) {
-        CaptroObjectField(title: "Section", value: ticket.section)
-        CaptroObjectField(title: "Seat", value: ticket.seat)
+      Text(post.captroCleanTitle ?? "Meetup")
+        .font(.system(size: 24, weight: .bold))
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityAddTraits(.isHeader)
+      VStack(spacing: 11) {
+        ticketFact(event?.timeRange, icon: "clock")
+        ticketFact(event?.calendarDate, icon: "calendar")
+        let venue = [event?.venueName ?? post.placeDisplayName, event?.address, event?.city]
+          .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
+        if !venue.isEmpty { ticketFact(venue, icon: "mappin.and.ellipse") }
+        if let price = event?.priceLabel {
+          Text(price).font(.system(size: 13, weight: .semibold))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(CaptroDetailStyle.accent.opacity(0.12))
+        }
+        if let map = post.detailMapURL {
+          Link(destination: map) {
+            Label("View on map", systemImage: "arrow.up.right")
+              .font(.system(size: 13, weight: .medium)).frame(minHeight: 36)
+          }.foregroundStyle(CaptroDetailStyle.accent)
+        }
       }
-      if ticket.downloadable { CaptroTicketDownload(postID: postID, title: "View Ticket", api: api) }
+      if ticket?.downloadable == true { CaptroTicketDownload(postID: post.id, title: "View Ticket", api: api) }
+      CaptroTicketPerforation().padding(.top, 8)
     }
     .frame(maxWidth: .infinity)
-    .padding(.vertical, 16)
-    .privacySensitive()
-    .overlay(alignment: .bottom) { CaptroTicketPerforation() }
+    .padding(.top, 24)
+    .background(Color.white)
+  }
+
+  @ViewBuilder private func ticketFact(_ value: String?, icon: String) -> some View {
+    if let value, !value.isEmpty {
+      Label(value, systemImage: icon)
+        .font(.system(size: 14))
+        .foregroundStyle(CaptroDetailStyle.secondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+    }
   }
 }
 
@@ -50,66 +88,131 @@ struct CaptroTravelDetailSection: View {
   let post: MIRAPost
   let ticket: CaptroOwnedTicket?
   let api: MIRAAPIClient
+  @State private var headerHeight: CGFloat = 76
 
   private var travel: CaptroTravelDetails? { post.detail?.travel }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 20) {
-      HStack(alignment: .top, spacing: 12) {
-        Text(travel?.operator ?? post.titleText)
-          .font(.system(size: 24, weight: .bold))
-          .frame(maxWidth: .infinity, alignment: .leading)
-        if let price = travel?.price {
-          Text([travel?.currency, price].compactMap { $0 }.joined(separator: " "))
-            .font(.system(size: 16, weight: .semibold))
-        }
-      }
-      CaptroTicketPerforation()
-      HStack(alignment: .top, spacing: 12) {
-        routeStop(code: travel?.originCode, city: travel?.originCity)
-        VStack(spacing: 6) {
-          Image(systemName: "arrow.right").font(.system(size: 18))
-          if let duration = travel?.duration { Text(duration).font(.system(size: 11, weight: .semibold)) }
-        }.padding(.top, 6)
-        routeStop(code: travel?.destinationCode, city: travel?.destinationCity)
-      }
-      if let ticket {
-        VStack(alignment: .leading, spacing: 4) {
-          CaptroObjectField(title: "Passenger", value: ticket.passengerName)
-          if let email = ticket.passengerEmail {
-            Text(email).font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
-          }
-        }.privacySensitive()
-      }
-      LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 20) {
-        CaptroObjectField(title: "Service", value: ticket?.serviceNumber ?? travel?.serviceNumber)
-        CaptroObjectField(title: "Class", value: ticket?.travelClass ?? travel?.travelClass)
-        CaptroObjectField(title: "Departure", value: ticket?.departure ?? travel?.departure)
-        CaptroObjectField(title: "Arrival", value: ticket?.arrival ?? travel?.arrival)
-        CaptroObjectField(title: "Terminal", value: ticket?.terminal)
-        CaptroObjectField(title: "Gate", value: ticket?.gate)
-        CaptroObjectField(title: "Seat", value: ticket?.seat)
-      }
-      if let ticket {
-        CaptroTicketPerforation()
-        CaptroTicketCode(ticket: ticket).frame(maxWidth: .infinity)
-        if ticket.downloadable { CaptroTicketDownload(postID: post.id, title: "Download Ticket", api: api) }
-      }
+    VStack(alignment: .leading, spacing: 18) {
+      boardingPass
       if !post.detailCaption.isEmpty {
         Text(post.detailCaption).font(.system(size: 15)).lineSpacing(4)
       }
       CaptroDetailCreatorRow(post: post, api: api)
     }
-    .padding(20)
-    .background(Color.white)
+    .padding(16)
     .foregroundStyle(CaptroDetailStyle.ink)
   }
 
-  private func routeStop(code: String?, city: String?) -> some View {
-    VStack(alignment: .leading, spacing: 5) {
-      if let code { Text(code).font(.system(size: 28, weight: .bold)).minimumScaleFactor(0.7) }
-      if let city { Text(city).font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary) }
-    }.frame(maxWidth: .infinity, alignment: .leading)
+  private var boardingPass: some View {
+    VStack(spacing: 0) {
+      HStack(alignment: .top, spacing: 12) {
+        Image(systemName: "ticket")
+          .font(.system(size: 18))
+          .frame(width: 36, height: 36)
+          .background(CaptroDetailStyle.accent.opacity(0.14))
+          .clipShape(Circle())
+        Text(travel?.operator ?? post.titleText)
+          .font(.system(size: 20, weight: .bold))
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        if let price = travel?.price {
+          Text([travel?.currency, price].compactMap { $0 }.joined(separator: " "))
+            .font(.system(size: 16, weight: .semibold))
+        }
+      }.padding(20)
+        .background(GeometryReader { geometry in
+          Color.clear.preference(key: CaptroTicketHeaderHeight.self, value: geometry.size.height)
+        })
+      CaptroTicketPerforation().padding(.horizontal, 12)
+      VStack(alignment: .leading, spacing: 24) {
+        if travel?.originCode != nil || travel?.originCity != nil || travel?.destinationCode != nil || travel?.destinationCity != nil {
+          HStack(alignment: .top, spacing: 8) {
+            routeStop(code: travel?.originCode, city: travel?.originCity)
+            VStack(spacing: 6) {
+              Image(systemName: "arrow.right").font(.system(size: 17))
+              if let duration = travel?.duration {
+                Text(duration).font(.system(size: 11, weight: .semibold)).multilineTextAlignment(.center)
+              }
+            }.frame(maxWidth: .infinity).padding(.top, 6)
+            routeStop(code: travel?.destinationCode, city: travel?.destinationCity, alignment: .trailing)
+          }
+        }
+        if let ticket {
+          HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+              CaptroObjectField(title: "Passenger", value: ticket.passengerName)
+              if let email = ticket.passengerEmail {
+                Text(email).font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+              }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            CaptroObjectField(title: "Seat", value: ticket.seat)
+          }.privacySensitive()
+        }
+        pairedFields("Service", ticket?.serviceNumber ?? travel?.serviceNumber, "Class", ticket?.travelClass ?? travel?.travelClass)
+        pairedFields("Departure", ticket?.departure ?? travel?.departure, "Arrival", ticket?.arrival ?? travel?.arrival)
+        pairedFields("Terminal", ticket?.terminal, "Gate", ticket?.gate)
+      }
+      .padding(20)
+      if let ticket {
+        CaptroTicketCode(ticket: ticket)
+          .frame(maxWidth: .infinity).padding(.vertical, 12)
+          .background(CaptroDetailStyle.accent.opacity(0.06))
+        if ticket.downloadable {
+          CaptroTicketDownload(postID: post.id, title: "Download Ticket", api: api).padding(16)
+        }
+      }
+    }
+    .background(Color.white)
+    .clipShape(CaptroBoardingPassShape(notchY: headerHeight))
+    .overlay(CaptroBoardingPassShape(notchY: headerHeight).stroke(CaptroDetailStyle.divider, lineWidth: 1))
+    .onPreferenceChange(CaptroTicketHeaderHeight.self) { headerHeight = $0 }
+  }
+
+  @ViewBuilder private func pairedFields(_ left: String, _ leftValue: String?, _ right: String, _ rightValue: String?) -> some View {
+    if leftValue != nil || rightValue != nil {
+      HStack(alignment: .top, spacing: 20) {
+        CaptroObjectField(title: left, value: leftValue).frame(maxWidth: .infinity, alignment: .leading)
+        CaptroObjectField(title: right, value: rightValue).frame(maxWidth: .infinity, alignment: .trailing)
+      }
+    }
+  }
+
+  private func routeStop(code: String?, city: String?, alignment: HorizontalAlignment = .leading) -> some View {
+    VStack(alignment: alignment, spacing: 5) {
+      if let code { Text(code).font(.system(size: 28, weight: .bold)).lineLimit(1).minimumScaleFactor(0.65) }
+      if let city { Text(city).font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary).fixedSize(horizontal: false, vertical: true) }
+    }.frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .trailing)
+  }
+}
+
+private struct CaptroTicketHeaderHeight: PreferenceKey {
+  static var defaultValue: CGFloat = 76
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+private struct CaptroBoardingPassShape: Shape {
+  var notchY: CGFloat
+  func path(in rect: CGRect) -> Path {
+    let w = rect.width, h = rect.height
+    let y = min(max(16, notchY), max(16, h - 16))
+    var path = Path()
+    path.move(to: CGPoint(x: 8, y: 0))
+    path.addLine(to: CGPoint(x: w - 8, y: 0))
+    path.addQuadCurve(to: CGPoint(x: w, y: 8), control: CGPoint(x: w, y: 0))
+    path.addLine(to: CGPoint(x: w, y: y - 8))
+    path.addCurve(to: CGPoint(x: w, y: y + 8), control1: CGPoint(x: w - 12, y: y - 8), control2: CGPoint(x: w - 12, y: y + 8))
+    path.addLine(to: CGPoint(x: w, y: h - 8))
+    path.addQuadCurve(to: CGPoint(x: w - 8, y: h), control: CGPoint(x: w, y: h))
+    path.addLine(to: CGPoint(x: 8, y: h))
+    path.addQuadCurve(to: CGPoint(x: 0, y: h - 8), control: CGPoint(x: 0, y: h))
+    path.addLine(to: CGPoint(x: 0, y: y + 8))
+    path.addCurve(to: CGPoint(x: 0, y: y - 8), control1: CGPoint(x: 12, y: y + 8), control2: CGPoint(x: 12, y: y - 8))
+    path.addLine(to: CGPoint(x: 0, y: 8))
+    path.addQuadCurve(to: CGPoint(x: 8, y: 0), control: .zero)
+    path.closeSubpath()
+    return path
   }
 }
 
@@ -238,7 +341,12 @@ private struct CaptroObjectField: View {
 
 private struct CaptroTicketPerforation: View {
   var body: some View {
-    Rectangle().fill(CaptroDetailStyle.divider).frame(height: 1)
+    GeometryReader { geometry in
+      Path { path in
+        path.move(to: .zero)
+        path.addLine(to: CGPoint(x: geometry.size.width, y: 0))
+      }.stroke(CaptroDetailStyle.divider, style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+    }.frame(height: 1)
   }
 }
 

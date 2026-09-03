@@ -383,3 +383,11 @@ jobs:
                   )
           print("Production Apple and Google routes reach provider validation; OAuth runtime dependencies are configured.")
           PY
+
+      - name: Verify event creation and owner editing against deployed API
+        working-directory: ./backend-cf
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/verify-event-editor.mjs
