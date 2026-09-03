@@ -10,6 +10,7 @@ let receiptId;
 const clientHeaders = { Accept: 'application/json', 'User-Agent': 'Captro-Release-Smoke/1.0' };
 async function json(url, init = {}) {
   const response = await fetch(url, { ...init, headers: { ...clientHeaders, ...init.headers }, signal: AbortSignal.timeout(120_000) });
+  if (url.startsWith(`${api}/scan/`)) assert.match(response.headers.get('cache-control') || '', /private.*no-store/);
   if (!response.headers.get('content-type')?.includes('application/json')) {
     throw new Error(`Live scan check received non-JSON: HTTP ${response.status} at ${new URL(url).pathname}`);
   }
@@ -35,11 +36,11 @@ try {
   assert.equal(fixture.status, 200);
   const bytes = await fixture.arrayBuffer();
   const key = `scan-smoke:${crypto.randomUUID()}`;
-  const upload = () => {
+  const upload = (headers = owner, idempotencyKey = key) => {
     const body = new FormData();
     body.set('file', new Blob([bytes], { type: 'image/jpeg' }), 'Veryfi public sample.jpg');
-    body.set('source', 'files'); body.set('idempotencyKey', key);
-    return json(`${api}/scan/receipts/review`, { method: 'POST', headers: owner, body });
+    body.set('source', 'files'); body.set('idempotencyKey', idempotencyKey);
+    return json(`${api}/scan/receipts/review`, { method: 'POST', headers, body });
   };
   const review = await upload();
   receiptId = review.receiptId;
@@ -60,11 +61,15 @@ try {
     const denied = await fetch(`${api}/scan/receipts/${receiptId}${suffix}`, { headers: stranger });
     assert.equal(denied.status, 404, 'Another account could read private receipt data');
   }
+  const duplicate = await upload(stranger, `scan-smoke:${crypto.randomUUID()}`);
+  assert.equal(duplicate.status, 'duplicate', 'Cross-account document resubmission was not detected');
+  assert.equal(duplicate.rewardEligible, false);
   const rewards = await json(`${base}/rest/v1/receipt_rewards?receipt_id=eq.${receiptId}&select=id`, { headers: admin });
   assert.equal(rewards.length, 0, 'Provider test must not issue a reward');
   console.log(JSON.stringify({ event: 'production_scan_pipeline_passed', apiHost: new URL(api).host, receiptId,
     providerDocumentId: review.providerDocumentId, status: review.status, verdict: review.verdict,
-    privateOriginalRead: true, persistedReadback: true, retryIdempotent: true, otherAccountDenied: true, rewards: 0,
+    privateOriginalRead: true, persistedReadback: true, retryIdempotent: true, otherAccountDenied: true,
+    crossAccountDuplicateBlocked: true, rewards: 0,
     checks: record.verification_checks.map(({ key, status }) => ({ key, status })) }));
   console.log(JSON.stringify({ event: 'public_fixture_arithmetic', subtotal: review.subtotal,
     tax: review.tax, fees: review.fees, discount: review.discount, total: review.total }));

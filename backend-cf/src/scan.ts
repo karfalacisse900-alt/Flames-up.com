@@ -574,11 +574,19 @@ function arithmeticCheck(extracted: any): VerificationCheck {
     return { key: 'total_arithmetic', status: 'unavailable', detail: 'The document did not contain enough totals to perform this check.' };
   }
   const expected = roundedCurrency(subtotal + (tax ?? 0) + fees - discount);
-  const passed = Math.abs(expected - total) <= 0.02;
+  // Retail savings often describe discounted item prices already included in subtotal.
+  // Require the complete item sum as corroboration before treating savings as informational.
+  const itemTotals = extracted.items.map((item: any) => decimalNumber(item.total));
+  const hasNetItemSubtotal = itemTotals.length > 0 && itemTotals.every((value: number | null) => value !== null)
+    && Math.abs(roundedCurrency(itemTotals.reduce((sum: number, value: number) => sum + value, 0)) - subtotal) <= 0.02;
+  const savingsAlreadyIncluded = discount > 0 && hasNetItemSubtotal
+    && Math.abs(roundedCurrency(subtotal + (tax ?? 0) + fees) - total) <= 0.02;
+  const passed = Math.abs(expected - total) <= 0.02 || savingsAlreadyIncluded;
   return {
     key: 'total_arithmetic',
     status: passed ? 'passed' : 'failed',
-    detail: passed ? 'Subtotal, adjustments, tax, and total are consistent.' : 'The printed totals are not arithmetically consistent.',
+    detail: savingsAlreadyIncluded ? 'Item amounts already include savings; subtotal, tax, and total are consistent.'
+      : passed ? 'Subtotal, adjustments, tax, and total are consistent.' : 'The extracted totals could not be reconciled.',
   };
 }
 
@@ -1097,6 +1105,10 @@ export function createCaptroScanRoutes(
 ) {
   const scan = new Hono<any>();
   scan.use('*', authMiddleware);
+  scan.use('*', async (c, next) => {
+    c.header('Cache-Control', 'private, no-store');
+    await next();
+  });
 
   scan.post('/receipts/review', async (c) => {
     const userId = getUserId(c);

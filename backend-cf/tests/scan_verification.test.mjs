@@ -183,6 +183,17 @@ test('failed arithmetic prevents a Verified verdict', () => {
   assert.equal(checks.find((check) => check.key === 'total_arithmetic')?.status, 'failed');
 });
 
+test('savings already included in item prices are not deducted from subtotal twice', () => {
+  const status = (overrides) => captroScanTestSupport.buildChecks(
+    captroScanTestSupport.normalizeProviderDocument(providerDocument(overrides)), 'passed',
+  ).find(check => check.key === 'total_arithmetic').status;
+  assert.equal(status({ discount: 1.2, total: 10.8 }), 'passed');
+  assert.equal(status({ discount: 1.2, total: 9.6 }), 'passed');
+  assert.equal(status({ discount: 1.2, total: 9.9 }), 'failed');
+  assert.equal(status({ discount: 1.2, total: 10.8, line_items: [] }), 'failed');
+  assert.equal(status({ discount: 1.2, total: 10.8, line_items: [{ total: 9 }] }), 'failed');
+});
+
 test('receipt feedback eligibility requires consistent core purchase data', () => {
   const accepted = captroScanTestSupport.normalizeProviderDocument(providerDocument());
   const missingMerchant = captroScanTestSupport.normalizeProviderDocument(providerDocument({ vendor: {} }));
