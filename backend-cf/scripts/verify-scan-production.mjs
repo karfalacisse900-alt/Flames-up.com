@@ -6,8 +6,12 @@ const admin = { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `B
 const users = [];
 const paths = [];
 let receiptId;
+const clientHeaders = { Accept: 'application/json', 'User-Agent': 'Captro-Release-Smoke/1.0' };
 async function json(url, init = {}) {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(120_000) });
+  const response = await fetch(url, { ...init, headers: { ...clientHeaders, ...init.headers }, signal: AbortSignal.timeout(120_000) });
+  if (!response.headers.get('content-type')?.includes('application/json')) {
+    throw new Error(`Live scan check received non-JSON: HTTP ${response.status} at ${new URL(url).pathname}`);
+  }
   const body = await response.json();
   if (!response.ok) throw new Error(`Live scan check failed: ${response.status}, ${body.code || body.error_code || 'request rejected'}`);
   return body;
@@ -20,7 +24,7 @@ async function session() {
   const auth = await json(`${base}/auth/v1/token?grant_type=password`, { method: 'POST',
     headers: { apikey: process.env.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
   await json(`${api}/auth/supabase`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ access_token: auth.access_token }) });
-  return { Authorization: `Bearer ${auth.access_token}` };
+  return { ...clientHeaders, Authorization: `Bearer ${auth.access_token}` };
 }
 try {
   const owner = await session();

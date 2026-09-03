@@ -805,7 +805,7 @@ function rowPayload(row: any) {
     verificationId: row.id,
     documentType: row.document_type,
     status: row.status,
-    verdict: row.status === 'verified' ? 'Verified' : row.status === 'couldnt_verify' ? "Couldn't Verify" : null,
+    verdict: row.status === 'verified' ? 'Verified' : row.status === 'couldnt_verify' ? 'Unable to Verify' : null,
     business: extracted.business || null,
     customer: extracted.customer || null,
     documentNumber: row.document_number || extracted.documentNumber || null,
@@ -905,7 +905,7 @@ function receiptHistoryPayload(row: any) {
     status: row.status,
     verdict: row.verification_status === 'verified'
       ? 'Verified'
-      : row.verification_status === 'couldnt_verify' ? "Couldn't Verify" : null,
+      : row.verification_status === 'couldnt_verify' ? 'Unable to Verify' : null,
     merchantName: row.merchant_name || extracted.business?.name || null,
     purchaseDate: row.purchase_date || extracted.issueDate || null,
     total: row.total_amount === null || row.total_amount === undefined ? extracted.total || null : String(row.total_amount),

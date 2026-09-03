@@ -436,7 +436,7 @@ public struct CaptroScanView: View {
       }
     } else if review != nil {
       VStack(spacing: 6) {
-        statusLine("Couldn't Verify", systemImage: "exclamationmark.circle")
+        statusLine("Unable to Verify", systemImage: "exclamationmark.circle")
         Text("Captro couldn't verify this document with the available information.")
           .font(.system(size: 12, weight: .regular))
           .foregroundStyle(CaptroReceiptPalette.secondaryInk)

@@ -761,7 +761,7 @@ private struct CaptroReceiptSubmissionDetailView: View {
     if submission.duplicate { return "Already submitted" }
     switch submission.status {
     case "completed": return "Completed"
-    case "failed", "unsupported": return "Couldn't Verify"
+    case "failed", "unsupported": return "Unable to Verify"
     default: return "Processing"
     }
   }
