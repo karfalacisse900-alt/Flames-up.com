@@ -317,8 +317,23 @@ async function veryfiSignature(secret: string, request: Record<string, unknown>,
 async function readBoundedResponse(response: Response): Promise<Uint8Array> {
   const declared = Number(response.headers.get('content-length') || 0);
   if (Number.isFinite(declared) && declared > MAX_PROVIDER_RESPONSE_BYTES) throw new Error('SCAN_PROVIDER_RESPONSE_TOO_LARGE');
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > MAX_PROVIDER_RESPONSE_BYTES) throw new Error('SCAN_PROVIDER_RESPONSE_TOO_LARGE');
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > MAX_PROVIDER_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error('SCAN_PROVIDER_RESPONSE_TOO_LARGE');
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   return bytes;
 }
 
@@ -392,7 +407,8 @@ function providerSignals(document: any) {
   const signal = (label: string, paths: string[]): boolean | null => {
     const explicit = firstBool(document, paths);
     const key = label.replace(/ /g, '_');
-    if (explicit === true || details[key] === true || types?.includes(label)) return true;
+    if (explicit === true || details[key] === true || (details[key] && typeof details[key] === 'object')
+      || types?.includes(label) || types?.includes(key)) return true;
     if (explicit === false || types !== null) return false;
     return null;
   };
@@ -449,7 +465,8 @@ function normalizeProviderDocument(document: any) {
     orderNumber: firstText(document, ['purchase_order_number', 'order_number', 'po_number'], 160) || null,
     issueDate: firstText(document, ['date', 'created_date', 'invoice_date'], 80) || null,
     dueDate: firstText(document, ['due_date'], 80) || null,
-    time: firstText(document, ['time'], 40) || null,
+    time: firstText(document, ['time'], 40)
+      || firstText(document, ['date'], 80).match(/[T ](\d{2}:\d{2}(?::\d{2})?)/)?.[1] || null,
     items,
     subtotal: decimalText(document?.subtotal) || null,
     tax: decimalText(document?.tax) || null,
@@ -587,13 +604,12 @@ function providerAuthenticityCheck(extracted: any): VerificationCheck {
   const values = [
     signals.digitalTampering,
     signals.aiGenerated,
-    signals.screenshot,
     signals.invalidQr,
     signals.vendorLayoutMismatch,
     signals.notADocument,
   ];
   const blocking = values.some((value) => value === true);
-  const explicitClear = values.some((value) => value === false);
+  const explicitClear = values.every((value) => value === false);
   const acceptedDecision = ['green', 'accept', 'accepted', 'pass', 'passed', 'verified'].includes(signals.decision);
   const rejectedDecision = ['red', 'declined', 'deny', 'denied', 'fail', 'failed', 'rejected'].includes(signals.decision);
   if (blocking || rejectedDecision) {
@@ -605,13 +621,16 @@ function providerAuthenticityCheck(extracted: any): VerificationCheck {
   return { key: 'provider_document_signal', status: 'unavailable', detail: 'The provider did not return an authenticity signal.' };
 }
 
-function buildChecks(extracted: any): VerificationCheck[] {
+function buildChecks(extracted: any, duplicateStatus: VerificationCheck['status'] = 'unavailable'): VerificationCheck[] {
   const structurePassed = extracted.isDocument !== false
     && ['receipt', 'invoice'].includes(extracted.type)
     && Boolean(extracted.business.name && extracted.total && extracted.issueDate);
   const address = extracted.business.address;
   const addressPerformed = Boolean(address.original || address.street || address.city || address.postalCode);
   return [
+    { key: 'document_processed', status: extracted.providerRequestId ? 'passed' : 'unavailable', detail: 'Provider document processing result.' },
+    { key: 'merchant_extracted', status: extracted.business.name ? 'passed' : 'unavailable', detail: 'Merchant or vendor data extracted.' },
+    { key: 'amount_extracted', status: decimalNumber(extracted.total) !== null ? 'passed' : 'unavailable', detail: 'Total amount extracted.' },
     {
       key: 'document_structure',
       status: structurePassed ? 'passed' : 'failed',
@@ -636,7 +655,9 @@ function buildChecks(extracted: any): VerificationCheck[] {
       status: extracted.barcodes.length ? 'passed' : 'unavailable',
       detail: extracted.barcodes.length ? 'Barcode or QR information was read.' : 'No barcode or QR information was available.',
     },
-    { key: 'duplicate_check', status: 'passed', detail: 'No matching prior verification was found.' },
+    { key: 'duplicate_check', status: duplicateStatus, detail: duplicateStatus === 'passed'
+      ? 'No matching prior submission was found.' : duplicateStatus === 'failed'
+        ? 'This document has already been submitted.' : 'A duplicate check has not completed.' },
   ];
 }
 
@@ -646,6 +667,8 @@ function verdictFromChecks(checks: VerificationCheck[]): 'verified' | 'couldnt_v
   const criticalFailed = checks.some((check) => ['document_structure', 'provider_document_signal', 'date_validity', 'total_arithmetic', 'line_item_arithmetic']
     .includes(check.key) && check.status === 'failed');
   return status('document_structure') === 'passed'
+    && status('document_processed') === 'passed'
+    && status('duplicate_check') === 'passed'
     && status('provider_document_signal') === 'passed'
     && status('date_validity') === 'passed'
     && arithmeticPassed
@@ -660,9 +683,15 @@ async function providerVerify(
   fileName: string,
   externalId: string,
 ): Promise<any> {
+  const mimeType = detectedContentType(bytes);
+  console.info(JSON.stringify({ event: 'veryfi_request_started', scanId: externalId,
+    documentType: 'auto_receipt_or_invoice', mimeType, fileBytes: bytes.length,
+    credentials: { clientId: Boolean(env.VERYFI_CLIENT_ID?.trim()), apiKey: Boolean(env.VERYFI_API_KEY?.trim()),
+      username: Boolean(env.VERYFI_USERNAME?.trim()), signingSecret: Boolean(env.VERYFI_CLIENT_SECRET?.trim()) } }));
   if (!providerConfigured(env)) throw new Error('SCAN_PROVIDER_UNAVAILABLE');
+  if (!mimeType || bytes.length < 250 || bytes.length > MAX_DOCUMENT_BYTES) throw new Error('SCAN_DOCUMENT_TYPE_INVALID');
   const request = {
-    file_name: fileName,
+    file_name: `${safeFilename(fileName, mimeType).replace(/\.[^.]+$/, '')}.${fileExtension(mimeType)}`,
     file_data: bytesToBase64(bytes),
     external_id: externalId,
     document_type: null,
@@ -687,14 +716,46 @@ async function providerVerify(
     headers.set('x-veryfi-request-timestamp', String(timestamp));
     headers.set('x-veryfi-request-signature', await veryfiSignature(secret, request, timestamp));
   }
-  const response = await fetch(veryfiEndpoint(env), { method: 'POST', headers, body: JSON.stringify(request) });
-  const responseBytes = await readBoundedResponse(response);
-  if (response.status !== 201) {
-    if (response.status === 429) throw new Error('SCAN_PROVIDER_RATE_LIMITED');
-    if (response.status === 401 || response.status === 403) throw new Error('SCAN_PROVIDER_AUTH_FAILED');
-    throw new Error(`SCAN_PROVIDER_REJECTED:${response.status}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const started = Date.now();
+  try {
+    const response = await fetch(veryfiEndpoint(env), {
+      method: 'POST', headers, body: JSON.stringify(request), signal: controller.signal, redirect: 'error',
+    });
+    console.info(JSON.stringify({ event: 'veryfi_response', scanId: externalId, httpStatus: response.status, elapsedMs: Date.now() - started }));
+    const responseBytes = await readBoundedResponse(response);
+    let document: any;
+    try { document = JSON.parse(new TextDecoder().decode(responseBytes)); } catch {
+      if (response.ok) throw new Error('SCAN_PROVIDER_MALFORMED_RESPONSE');
+    }
+    if (!response.ok) {
+      console.warn(JSON.stringify({ event: 'veryfi_provider_error', scanId: externalId, httpStatus: response.status,
+        providerError: safeProviderError(document, env) }));
+      if (response.status === 429) throw new Error('SCAN_PROVIDER_RATE_LIMITED');
+      if (response.status === 401 || response.status === 403) throw new Error('SCAN_PROVIDER_AUTH_FAILED');
+      throw new Error(`SCAN_PROVIDER_REJECTED:${response.status}`);
+    }
+    if (!document || Array.isArray(document) || typeof document !== 'object'
+      || !firstText(document, ['id', 'document_id'], 160)) throw new Error('SCAN_PROVIDER_MALFORMED_RESPONSE');
+    console.info(JSON.stringify({ event: 'veryfi_document_processed', scanId: externalId,
+      providerDocumentId: firstText(document, ['id', 'document_id'], 160), documentType: providerDocumentType(document) }));
+    return document;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('SCAN_PROVIDER_TIMEOUT');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return JSON.parse(new TextDecoder().decode(responseBytes));
+}
+
+function safeProviderError(document: any, env: CaptroScanEnv): string {
+  let message = firstText(document, ['error.message', 'message', 'error', 'detail', 'code'], 600) || 'Provider returned no readable error message';
+  for (const secret of [env.VERYFI_CLIENT_ID, env.VERYFI_CLIENT_SECRET, env.VERYFI_USERNAME, env.VERYFI_API_KEY]) {
+    if (secret?.trim()) message = message.split(secret.trim()).join('[redacted]');
+  }
+  return message.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted]')
+    .replace(/[A-Za-z0-9+/=_-]{40,}/g, '[redacted]').replace(/[\r\n]/g, ' ');
 }
 
 async function findSemanticDuplicate(env: CaptroScanEnv, userId: string, currentId: string, extracted: any): Promise<any | null> {
@@ -788,7 +849,7 @@ async function receiptRow(env: CaptroScanEnv, id: string, userId: string): Promi
   }, { limit: 1 }))[0] || null;
 }
 
-function receiptReviewPayload(row: any) {
+export function receiptReviewPayload(row: any) {
   const extracted = row?.extracted_data && typeof row.extracted_data === 'object' ? row.extracted_data : {};
   return {
     receiptId: row.id,
@@ -799,6 +860,14 @@ function receiptReviewPayload(row: any) {
     business: extracted.business || null,
     documentNumber: extracted.documentNumber || null,
     transactionReference: extracted.transactionReference || null,
+    customer: extracted.customer || null,
+    dueDate: extracted.dueDate || null,
+    paymentTerms: extracted.paymentTerms || null,
+    fees: extracted.fees || null,
+    discount: extracted.discount || null,
+    checks: Array.isArray(row.verification_checks) ? row.verification_checks : [],
+    verificationId: row.provider_request_id ? row.id : null,
+    providerDocumentId: row.provider_request_id || null,
     purchaseDate: row.purchase_date || extracted.issueDate || null,
     purchaseTime: row.purchase_time || extracted.time || null,
     items: extracted.items || [],
@@ -808,7 +877,7 @@ function receiptReviewPayload(row: any) {
     currency: row.currency || extracted.currency || null,
     verdict: row.verification_status === 'verified'
       ? 'Verified'
-      : row.verification_status === 'couldnt_verify' ? "Couldn't Verify" : null,
+      : row.verification_status === 'couldnt_verify' ? 'Unable to Verify' : 'Processing',
     rewardEligible: Boolean(row.reward_eligible),
     duplicate: row.status === 'duplicate',
     rewardCents: Math.max(0, Number(row.reward_amount_cents || 0)),
@@ -845,10 +914,16 @@ async function ensurePrivateReceiptBucket(env: CaptroScanEnv): Promise<void> {
     const lookup = await fetch(`${url}/storage/v1/bucket/${PRIVATE_RECEIPT_BUCKET}`, {
       headers: supabaseHeaders(env),
     });
-    if (lookup.ok) return;
-    if (lookup.status !== 404) {
-      const text = await lookup.text().catch(() => '');
-      throw new Error(`SCAN_PRIVATE_STORAGE_LOOKUP_FAILED:${lookup.status}:${text.slice(0, 300)}`);
+    if (lookup.ok) {
+      const bucket: any = await lookup.json();
+      if (bucket.public !== false) throw new Error('SCAN_PRIVATE_STORAGE_NOT_PRIVATE');
+      return;
+    }
+    const lookupError: any = await lookup.json().catch(() => ({}));
+    const missing = lookup.status === 404 || lookupError.code === 'NoSuchBucket'
+      || String(lookupError.statusCode) === '404' || lookupError.message === 'Bucket not found';
+    if (!missing) {
+      throw new Error(`SCAN_PRIVATE_STORAGE_LOOKUP_FAILED:${lookup.status}`);
     }
     const create = await fetch(`${url}/storage/v1/bucket`, {
       method: 'POST',
@@ -992,6 +1067,9 @@ export const captroScanTestSupport = Object.freeze({
   veryfiSignature,
   veryfiSignaturePayload,
   normalizeProviderDocument,
+  providerVerify,
+  safeProviderError,
+  ensurePrivateReceiptBucket,
 });
 
 export function createCaptroScanRoutes(
@@ -1082,10 +1160,11 @@ export function createCaptroScanRoutes(
       }
 
       const category = purchaseCategory(providerDocument, extracted);
-      const accepted = receiptAcceptedForFeedback(extracted);
+      const candidateAccepted = receiptAcceptedForFeedback(extracted) && Boolean(extracted.providerRequestId);
       const rewardAmountCents = configuredRewardCents(c.env, extracted.type);
       let semanticDuplicate = extracted.signals?.duplicate === true || Boolean(extracted.signals?.duplicateOf);
-      if (accepted && !semanticDuplicate) {
+      let duplicateChecked = semanticDuplicate;
+      if (!semanticDuplicate) {
         const fingerprint = await receiptRewardFingerprint(extracted);
         if (fingerprint) {
           const claim = await supabaseRpc(c.env, 'captro_claim_receipt_reward_fingerprint', {
@@ -1094,8 +1173,11 @@ export function createCaptroScanRoutes(
             p_reward_fingerprint: fingerprint,
           });
           semanticDuplicate = claim?.claimed === false;
+          duplicateChecked = typeof claim?.claimed === 'boolean';
         }
       }
+      const checks = buildChecks(extracted, semanticDuplicate ? 'failed' : duplicateChecked ? 'passed' : 'unavailable');
+      const accepted = candidateAccepted && verdictFromChecks(checks) === 'verified';
       const completedAt = new Date().toISOString();
       await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
         receipt_type: extracted.type,
@@ -1110,6 +1192,8 @@ export function createCaptroScanRoutes(
         provider_request_id: extracted.providerRequestId || null,
         status: semanticDuplicate ? 'duplicate' : accepted ? 'feedback_pending' : 'review_ready',
         verification_status: accepted ? 'verified' : 'couldnt_verify',
+        verification_checks: checks,
+        failure_code: null,
         reward_amount_cents: rewardAmountCents,
         reward_eligible: accepted && !semanticDuplicate,
         updated_at: completedAt,
@@ -1120,11 +1204,13 @@ export function createCaptroScanRoutes(
       return c.json(receiptReviewPayload(completed));
     } catch (error: any) {
       const code = errorCode(error).split(':')[0];
+      console.warn(JSON.stringify({ event: 'receipt_review_failed', scanId: receiptId || null, code }));
       if (receiptId) {
         await patchRows(c.env, 'scanned_receipts', { id: `eq.${receiptId}`, user_id: `eq.${userId}` }, {
           status: 'failed',
           verification_status: 'couldnt_verify',
           reward_eligible: false,
+          failure_code: code,
           updated_at: new Date().toISOString(),
           completed_at: new Date().toISOString(),
         }).catch(() => null);
@@ -1368,6 +1454,8 @@ export function createCaptroScanRoutes(
 
       const checks = buildChecks(extracted);
       const semanticDuplicate = await findSemanticDuplicate(c.env, userId, verificationId, extracted);
+      const duplicateCheck = checks.find((check) => check.key === 'duplicate_check');
+      if (duplicateCheck) duplicateCheck.status = semanticDuplicate ? 'failed' : 'passed';
       if (semanticDuplicate) {
         const duplicateCheck = checks.find((check) => check.key === 'duplicate_check');
         if (duplicateCheck) {

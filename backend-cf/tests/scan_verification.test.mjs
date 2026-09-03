@@ -54,10 +54,83 @@ test('recognition alone never becomes Verified', () => {
 
 test('a supported document needs real provider, date, and arithmetic checks', () => {
   const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument());
-  const checks = captroScanTestSupport.buildChecks(extracted);
+  const checks = captroScanTestSupport.buildChecks(extracted, 'passed');
   assert.equal(captroScanTestSupport.verdictFromChecks(checks), 'verified');
   assert.equal(checks.find((check) => check.key === 'total_arithmetic')?.status, 'passed');
   assert.equal(checks.find((check) => check.key === 'line_item_arithmetic')?.status, 'passed');
+});
+
+test('duplicate clearance is never invented by extraction', () => {
+  const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument());
+  const checks = captroScanTestSupport.buildChecks(extracted);
+  assert.equal(checks.find(check => check.key === 'duplicate_check').status, 'unavailable');
+  assert.equal(captroScanTestSupport.verdictFromChecks(checks), 'couldnt_verify');
+  assert.equal(captroScanTestSupport.verdictFromChecks(captroScanTestSupport.buildChecks(extracted, 'failed')), 'couldnt_verify');
+});
+
+test('one clear provider signal does not clear all missing checks', () => {
+  const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({ fraud: { ai_generated: false } }));
+  assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(extracted), false);
+});
+
+test('invoice fields and date-embedded time are extracted without client guesses', () => {
+  const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({
+    document_type: 'invoice', invoice_number: 'INV-42', due_date: '2026-09-15',
+    bill_to: { name: 'Test customer' }, date: '2026-09-02 17:42:00', time: null,
+  }));
+  assert.equal(extracted.type, 'invoice');
+  assert.equal(extracted.documentNumber, 'INV-42');
+  assert.equal(extracted.time, '17:42:00');
+  assert.equal(extracted.customer.name, 'Test customer');
+});
+
+test('Veryfi errors redact configured credentials and personal values', () => {
+  const value = captroScanTestSupport.safeProviderError({ message: 'Invalid secret-key for test@example.com' }, { VERYFI_API_KEY: 'secret-key' });
+  assert.doesNotMatch(value, /secret-key|test@example/);
+  assert.match(value, /Invalid/);
+});
+
+test('provider sends actual bytes, checks status and rejects malformed success', async () => {
+  const original = globalThis.fetch;
+  const bytes = new Uint8Array(300); bytes.set([0xff, 0xd8, 0xff]);
+  const env = { VERYFI_CLIENT_ID: 'test-id', VERYFI_API_KEY: 'test-key', VERYFI_USERNAME: 'test-user' };
+  try {
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, 'https://api.veryfi.com/api/v8/partner/documents');
+      const body = JSON.parse(init.body);
+      assert.equal(Buffer.from(body.file_data, 'base64').length, 300);
+      assert.equal(body.file_name, 'wrong.jpg');
+      assert.equal(body.document_type, null);
+      assert.ok(init.signal);
+      return Response.json(providerDocument(), { status: 201 });
+    };
+    assert.equal((await captroScanTestSupport.providerVerify(env, bytes, 'wrong.pdf', 'scan-test')).id, 'provider-document-1');
+    for (const [status, error] of [[401, 'AUTH_FAILED'], [403, 'AUTH_FAILED'], [422, 'REJECTED'], [429, 'RATE_LIMITED']]) {
+      globalThis.fetch = async () => Response.json({ message: 'Request rejected' }, { status });
+      await assert.rejects(captroScanTestSupport.providerVerify(env, bytes, 'receipt.jpg', 'scan-test'), new RegExp(error));
+    }
+    globalThis.fetch = async () => new Response('<html>unavailable</html>', { status: 200 });
+    await assert.rejects(captroScanTestSupport.providerVerify(env, bytes, 'receipt.jpg', 'scan-test'), /MALFORMED_RESPONSE/);
+  } finally { globalThis.fetch = original; }
+});
+
+test('legacy Supabase missing-bucket response provisions private storage', async () => {
+  const original = globalThis.fetch;
+  let created = false;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      if (init.method === 'POST') {
+        const bucket = JSON.parse(init.body);
+        assert.equal(bucket.public, false);
+        assert.ok(bucket.allowed_mime_types.includes('application/pdf'));
+        created = true;
+        return Response.json(bucket);
+      }
+      return Response.json({ statusCode: '404', error: 'not_found', message: 'Bucket not found' }, { status: 400 });
+    };
+    await captroScanTestSupport.ensurePrivateReceiptBucket({ SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'test' });
+    assert.equal(created, true);
+  } finally { globalThis.fetch = original; }
 });
 
 test('failed arithmetic prevents a Verified verdict', () => {
