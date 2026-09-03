@@ -6,6 +6,10 @@ on:
         type: boolean
         default: false
         description: 'Exercise the deployed API, real storage, and database with a temporary test account'
+      direct_worker:
+        type: boolean
+        default: false
+        description: 'Diagnose the production Worker separately from custom-domain edge rules'
   push:
     branches: [fix/oauth-guest-access]
     paths: ['.github/workflows/verify-scan-provider.yml', 'backend-cf/scripts/verify-scan-provider.mjs']
@@ -39,4 +43,5 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          CAPTRO_SCAN_SMOKE_BASE_URL: ${{ inputs.direct_worker && 'https://flames-up-api.karfalacisse900.workers.dev/api' || 'https://api.flames-up.com/api' }}
         run: node scripts/verify-scan-production.mjs

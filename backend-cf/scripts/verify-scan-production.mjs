@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 
 const base = `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co`;
-const api = 'https://api.flames-up.com/api';
+const api = process.env.CAPTRO_SCAN_SMOKE_BASE_URL || 'https://api.flames-up.com/api';
+assert.ok(['https://api.flames-up.com/api', 'https://flames-up-api.karfalacisse900.workers.dev/api'].includes(api));
 const admin = { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' };
 const users = [];
 const paths = [];
@@ -61,7 +62,7 @@ try {
   }
   const rewards = await json(`${base}/rest/v1/receipt_rewards?receipt_id=eq.${receiptId}&select=id`, { headers: admin });
   assert.equal(rewards.length, 0, 'Provider test must not issue a reward');
-  console.log(JSON.stringify({ event: 'production_scan_pipeline_passed', receiptId,
+  console.log(JSON.stringify({ event: 'production_scan_pipeline_passed', apiHost: new URL(api).host, receiptId,
     providerDocumentId: review.providerDocumentId, status: review.status, verdict: review.verdict,
     privateOriginalRead: true, persistedReadback: true, retryIdempotent: true, otherAccountDenied: true, rewards: 0,
     checks: record.verification_checks.map(({ key, status }) => ({ key, status })) }));
