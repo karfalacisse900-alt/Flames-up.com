@@ -130,6 +130,17 @@ test('digital receipt imports can pass only with an explicit acceptable risk dec
   assert.equal(captroScanTestSupport.receiptAcceptedForFeedback(captroScanTestSupport.normalizeProviderDocument(document)), false);
 });
 
+test('legacy risk verdict repair cannot debit existing rewards or remove submissions', async () => {
+  const migration = await readFile(path.join(repositoryRoot,
+    'supabase/migrations/20260903040010_captro_correct_provider_risk_verdicts.sql'), 'utf8');
+  assert.match(migration, /decision in \('fraud', 'red'/);
+  assert.match(migration, /verification_status = 'couldnt_verify'/);
+  assert.match(migration, /reward_eligible = false/);
+  assert.match(migration, /receipt\.status = 'feedback_pending' then 'review_ready' else receipt\.status/);
+  assert.doesNotMatch(migration, /(?:update|delete from|insert into)\s+public\.(?:receipt_rewards|user_reward_balance)/i);
+  assert.doesNotMatch(migration, /delete from public\.scanned_receipts/i);
+});
+
 test('invoice fields and date-embedded time are extracted without client guesses', () => {
   const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({
     document_type: 'invoice', invoice_number: 'INV-42', due_date: '2026-09-15',
