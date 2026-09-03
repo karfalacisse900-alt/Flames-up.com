@@ -249,6 +249,16 @@ test('semantic reward fingerprint survives a different photograph of the same re
   assert.notEqual(await captroScanTestSupport.receiptRewardFingerprint(first), await captroScanTestSupport.receiptRewardFingerprint(differentTotal));
 });
 
+test('database serializes exact file duplicates across accounts independently of OCR', async () => {
+  const migration = await readFile(path.join(repositoryRoot, 'supabase', 'migrations',
+    '20260903025014_captro_exact_document_duplicate_guard.sql'), 'utf8');
+  assert.match(migration, /pg_advisory_xact_lock\(hashtextextended\('captro-document-hash:'/);
+  assert.match(migration, /document_sha256 = v_current\.document_sha256 or reward_fingerprint = p_reward_fingerprint/);
+  assert.match(migration, /status = 'duplicate', reward_eligible = false/);
+  const duplicateQuery = migration.split('select * into v_duplicate')[1].split('if found')[0];
+  assert.doesNotMatch(duplicateQuery, /user_id\s*=/);
+});
+
 test('migration locks billing to ten cents and makes retries idempotent', async () => {
   const migrationDirectory = path.join(repositoryRoot, 'supabase', 'migrations');
   const files = await import('node:fs/promises').then(({ readdir }) => readdir(migrationDirectory));
