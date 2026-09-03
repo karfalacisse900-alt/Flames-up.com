@@ -11,6 +11,9 @@ enum CaptroStampKind: String, Identifiable {
   case deal
   case localOffer = "local_offer"
   case guide
+  case travel
+  case receipt
+  case invoice
 
   static let creationCases: [CaptroStampKind] = [
     .social,
@@ -37,6 +40,9 @@ enum CaptroStampKind: String, Identifiable {
     case .deal: return "Deal"
     case .localOffer: return "Local Offer"
     case .guide: return "Guide"
+    case .travel: return "Trip"
+    case .receipt: return "Receipt"
+    case .invoice: return "Invoice"
     }
   }
 
@@ -46,7 +52,7 @@ enum CaptroStampKind: String, Identifiable {
     case .event: return "ATTEND"
     case .deal, .localOffer: return "CLAIM"
     case .group: return "ACCESS"
-    case .social, .place, .guide: return nil
+    case .social, .place, .guide, .travel, .receipt, .invoice: return nil
     }
   }
 }
@@ -59,6 +65,7 @@ struct CaptroStampContent {
   let footer: String?
   let actionTitle: String?
   let contributors: [MIRATaggedUserPayload]
+  var highlight: String? = nil
 }
 
 struct CaptroPostStamp: View {
@@ -87,54 +94,22 @@ struct CaptroPostStamp: View {
 
   @ViewBuilder
   private var stampLayout: some View {
-    switch content.kind {
-    case .social:
-      VStack(alignment: .leading, spacing: 7) {
-        stampTitle
-        stampDescription
-        stampFooter
+    VStack(alignment: .leading, spacing: 7) {
+      stampTitle
+      stampMetadata
+      if let highlight = content.highlight {
+        Text(highlight)
+          .font(.system(size: 10, weight: .semibold))
+          .foregroundStyle(.black)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 4)
+          .background(MIRATheme.Color.like.opacity(0.20))
       }
-
-    case .place:
-      VStack(alignment: .leading, spacing: 7) {
-        stampTitle
-        stampMetadata
-        Rectangle()
-          .fill(Color.black.opacity(0.16))
-          .frame(height: 0.75)
-        stampDescription
-        stampFooter
+      if content.metadata != nil || content.highlight != nil {
+        Rectangle().fill(Color.black.opacity(0.16)).frame(height: 0.75)
       }
-
-    case .club, .group, .guide:
-      VStack(alignment: .leading, spacing: 7) {
-        stampMetadata
-        stampTitle
-        if !content.contributors.isEmpty {
-          CaptroContributorAvatars(contributors: content.contributors)
-        }
-        stampDescription
-        stampActionFooter
-      }
-
-    case .meetup, .event:
-      VStack(alignment: .leading, spacing: 7) {
-        stampTitle
-        stampMetadata
-        stampDescription
-        Rectangle()
-          .fill(Color.black.opacity(0.14))
-          .frame(height: 0.75)
-        stampActionFooter
-      }
-
-    case .deal, .localOffer:
-      VStack(alignment: .leading, spacing: 7) {
-        stampMetadata
-        stampTitle
-        stampDescription
-        stampActionFooter
-      }
+      stampDescription
+      if content.actionTitle != nil { stampActionFooter } else { stampFooter }
     }
   }
 
@@ -280,14 +255,17 @@ extension MIRAPost {
   var captroStampKind: CaptroStampKind {
     let value = postType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
     switch value {
-    case "place", "location": return .place
+    case "place", "location", "review", "check_in", "checkin": return .place
     case "club": return .club
     case "group", "access", "group_access": return .group
     case "meetup": return .meetup
-    case "event": return .event
+    case "event", "concert", "show": return .event
+    case "travel", "trip", "ticket", "boarding_pass", "train", "flight", "bus": return .travel
+    case "receipt": return .receipt
+    case "invoice": return .invoice
     case "deal": return .deal
     case "offer", "local_offer", "local-offer": return .localOffer
-    case "guide", "album", "collaborative_album", "collaborative-album": return .guide
+    case "guide", "collection", "list", "album", "collaborative_album", "collaborative-album": return .guide
     default:
       if value.contains("collab") { return .guide }
       if cleanedCaptroFeedValue(placeDisplayName) != nil { return .place }
@@ -302,6 +280,10 @@ extension MIRAPost {
     switch kind {
     case .place:
       title = cleanedCaptroFeedValue(placeDisplayName) ?? captroCleanTitle ?? kind.displayName
+    case .travel:
+      title = detail?.travel?.operator ?? captroCleanTitle ?? kind.displayName
+    case .receipt, .invoice:
+      title = detail?.document?.merchantName ?? captroCleanTitle ?? kind.displayName
     default:
       title = captroCleanTitle ?? kind.displayName
     }
@@ -314,18 +296,37 @@ extension MIRAPost {
       metadata = cleanedCaptroFeedValue(displayLocationText) ?? cleanedCaptroFeedValue(placeCity)
     case .guide:
       metadata = location ?? (feedMediaURLs.count > 1 ? "\(feedMediaURLs.count) photos" : nil)
+    case .travel:
+      metadata = detail?.travel?.route
+    case .receipt, .invoice:
+      metadata = kind.displayName
     default:
       metadata = location
+    }
+
+    let summary: String?
+    switch kind {
+    case .event, .meetup:
+      let event = detail?.event
+      let facts = [event?.calendarDate, event?.timeRange, event?.venueName].compactMap { $0 }
+      summary = facts.isEmpty ? captroFeedCaptionText : facts.joined(separator: " · ")
+    case .travel:
+      summary = [detail?.travel?.duration, detail?.travel?.departure].compactMap { $0 }.joined(separator: " · ")
+    case .receipt, .invoice:
+      summary = [detail?.document?.total.map { [detail?.document?.currency, $0].compactMap { $0 }.joined(separator: " ") },
+        detail?.document?.verdict].compactMap { $0 }.joined(separator: "\n")
+    default: summary = captroFeedCaptionText
     }
 
     return CaptroStampContent(
       kind: kind,
       title: title,
       metadata: metadata,
-      description: captroFeedCaptionText,
-      footer: captroCapturedStampText ?? captroAuthorStampFooter,
+      description: summary,
+      footer: captroAuthorStampFooter,
       actionTitle: kind.actionTitle,
-      contributors: captroGuideContributors
+      contributors: captroGuideContributors,
+      highlight: kind == .place ? savesCount.map { "\(max(0, $0)) SAVES" } : nil
     )
   }
 

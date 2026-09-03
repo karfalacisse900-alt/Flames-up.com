@@ -149,6 +149,30 @@ test('legacy Supabase missing-bucket response provisions private storage', async
   } finally { globalThis.fetch = original; }
 });
 
+test('PNG and PDF uploads keep their bytes and use provider-detected document types', async () => {
+  const original = globalThis.fetch;
+  const env = { VERYFI_CLIENT_ID: 'test-id', VERYFI_API_KEY: 'test-key', VERYFI_USERNAME: 'test-user' };
+  try {
+    for (const [extension, header, type] of [
+      ['png', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 'receipt'],
+      ['pdf', [...Buffer.from('%PDF-1.7')], 'invoice'],
+    ]) {
+      const bytes = new Uint8Array(300); bytes.set(header);
+      globalThis.fetch = async (_url, init) => {
+        const body = JSON.parse(init.body);
+        assert.deepEqual(new Uint8Array(Buffer.from(body.file_data, 'base64')), bytes);
+        assert.equal(body.file_name, `document.${extension}`);
+        assert.equal(body.document_type, null);
+        return Response.json(providerDocument({ document_type: type, invoice_number: 'INV-100' }), { status: 201 });
+      };
+      const result = await captroScanTestSupport.providerVerify(env, bytes, 'document.jpg', 'file-type-test');
+      const extracted = captroScanTestSupport.normalizeProviderDocument(result);
+      assert.equal(extracted.type, type);
+      if (type === 'invoice') assert.equal(extracted.documentNumber, 'INV-100');
+    }
+  } finally { globalThis.fetch = original; }
+});
+
 test('failed arithmetic prevents a Verified verdict', () => {
   const extracted = captroScanTestSupport.normalizeProviderDocument(providerDocument({ total: 19.99 }));
   const checks = captroScanTestSupport.buildChecks(extracted);

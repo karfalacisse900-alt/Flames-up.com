@@ -680,6 +680,7 @@ private struct CaptroReceiptSubmissionDetailView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
+        CaptroPrivateReceiptOriginal(receiptID: submission.receiptId, api: api)
         VStack(alignment: .leading, spacing: 7) {
           Text(review?.verdict ?? submission.verdict ?? statusTitle)
             .font(.system(size: 24, weight: .semibold))
@@ -695,36 +696,7 @@ private struct CaptroReceiptSubmissionDetailView: View {
         }
 
         if let review {
-          VStack(spacing: 0) {
-            detailRow(review.documentType == "invoice" ? "Invoice" : "Receipt", value: review.documentNumber)
-            detailRow("Purchased", value: [review.purchaseDate, review.purchaseTime].compactMap { $0 }.joined(separator: " - "))
-            detailRow("Subtotal", value: review.subtotal)
-            detailRow("Tax", value: review.tax)
-            detailRow("Total", value: review.total, emphasized: true)
-          }
-          .padding(.horizontal, 16)
-          .background(MIRATheme.Color.surface)
-          .overlay(alignment: .top) { Divider().overlay(MIRATheme.Color.hairline) }
-          .overlay(alignment: .bottom) { Divider().overlay(MIRATheme.Color.hairline) }
-
-          if !review.items.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-              Text("Items")
-                .font(.system(size: 17, weight: .semibold))
-              ForEach(review.items) { item in
-                HStack(alignment: .firstTextBaseline) {
-                  Text(item.description ?? "Item")
-                    .font(.system(size: 13, weight: .regular))
-                  Spacer(minLength: 12)
-                  if let total = item.total ?? item.unitPrice {
-                    Text(total)
-                      .font(.system(size: 13, weight: .medium))
-                      .monospacedDigit()
-                  }
-                }
-              }
-            }
-          }
+          CaptroDocumentFacts(review: review)
         } else if errorMessage == nil {
           ProgressView("Loading submission...")
             .frame(maxWidth: .infinity)

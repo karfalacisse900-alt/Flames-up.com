@@ -21,6 +21,7 @@ public struct CaptroScanView: View {
   @State private var isSubmittingFeedback = false
   @State private var showingImporter = false
   @State private var showingOriginal = false
+  @State private var showingDocumentDetails = false
   @State private var captureRequestID = 0
   @State private var torchEnabled = false
   @State private var cameraAvailable = true
@@ -53,6 +54,24 @@ public struct CaptroScanView: View {
     .sheet(isPresented: $showingOriginal) {
       if let selectedDocument {
         CaptroLocalDocumentViewer(document: selectedDocument)
+      }
+    }
+    .sheet(isPresented: $showingDocumentDetails) {
+      if let review {
+        NavigationStack {
+          ScrollView {
+            VStack(spacing: 20) {
+              if let image = selectedDocument?.firstPageImage {
+                Image(uiImage: image).resizable().scaledToFit()
+              }
+              CaptroDocumentFacts(review: review).padding(20)
+            }
+          }
+          .background(Color.white)
+          .navigationTitle(review.documentType == "invoice" ? "Invoice" : "Receipt")
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { showingDocumentDetails = false } } }
+        }
       }
     }
     .alert("Captro Scan", isPresented: errorBinding) {
@@ -226,6 +245,11 @@ public struct CaptroScanView: View {
               }
               .buttonStyle(.plain)
               .accessibilityHint("Opens the privately stored document preview")
+              Button { showingDocumentDetails = true } label: {
+                Label("Document details", systemImage: "list.bullet.rectangle")
+                  .font(.system(size: 13, weight: .medium))
+                  .frame(minHeight: 44)
+              }.buttonStyle(.plain)
             }
             Spacer(minLength: 28)
           }
@@ -886,7 +910,7 @@ private enum CaptroReceiptPalette {
   static let line = Color.black.opacity(0.10)
 }
 
-private struct CaptroLocalDocumentViewer: View {
+struct CaptroLocalDocumentViewer: View {
   let document: CaptroLocalDocument
   @Environment(\.dismiss) private var dismiss
   @State private var scale: CGFloat = 1
@@ -894,7 +918,26 @@ private struct CaptroLocalDocumentViewer: View {
 
   var body: some View {
     NavigationStack {
-      ScrollView([.horizontal, .vertical]) {
+      Group {
+        if document.mediaType == "application/pdf", let data = document.pages.first {
+          CaptroPDFOriginal(data: data)
+        } else {
+          imagePreview
+        }
+      }
+      .background(CaptroReceiptPalette.background)
+      .navigationTitle("Original document")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Done") { dismiss() }
+        }
+      }
+    }
+  }
+
+  private var imagePreview: some View {
+    ScrollView([.horizontal, .vertical]) {
         Group {
           if let image = document.firstPageImage {
             Image(uiImage: image)
@@ -914,15 +957,6 @@ private struct CaptroLocalDocumentViewer: View {
             .onChanged { value in scale = min(max(baseScale * value.magnification, 1), 5) }
             .onEnded { _ in baseScale = scale }
         )
-      }
-      .background(CaptroReceiptPalette.background)
-      .navigationTitle("Original document")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { dismiss() }
-        }
-      }
     }
   }
 }

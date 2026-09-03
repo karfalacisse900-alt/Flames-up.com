@@ -32,7 +32,7 @@ struct CaptroMediaPager: View {
     naturalMediaHeightToWidthRatio
   }
   private var stampWidthFraction: CGFloat {
-    naturalMediaHeightToWidthRatio < 0.8 ? 0.62 : (naturalMediaHeightToWidthRatio > 1.3 ? 0.64 : 0.66)
+    naturalMediaHeightToWidthRatio < 0.8 ? 0.66 : (naturalMediaHeightToWidthRatio > 1.3 ? 0.68 : 0.70)
   }
   private var showsStampOnCurrentSlide: Bool {
     showsCoverMediaOnly || selectedMediaIndex == 0

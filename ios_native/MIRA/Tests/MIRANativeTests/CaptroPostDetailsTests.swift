@@ -2,17 +2,32 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroPostDetailsTests: XCTestCase {
-  func testExplicitTypesSelectTheFourLayouts() throws {
+  func testExplicitTypesSelectSpecializedLayouts() throws {
     let cases: [(String, CaptroPostDetailKind)] = [
       ("place", .placeReview), ("check_in", .placeReview),
       ("general", .regular), ("video", .regular), ("note", .regular),
       ("meetup", .event), ("event", .event),
+      ("concert", .event), ("travel", .travel), ("boarding_pass", .travel),
+      ("receipt", .receipt), ("invoice", .invoice),
       ("collection", .collection), ("list", .collection), ("guide", .collection),
     ]
     for (type, expected) in cases {
       let post = try decode(["id": "post", "post_type": type])
       XCTAssertEqual(post.detailKind, expected, type)
     }
+  }
+
+  func testTravelAndDocumentStampsContainOnlyPreviewFacts() throws {
+    let travel = try decode(["id": "travel", "post_type": "travel", "user_username": "traveler",
+      "detail": ["travel": ["operator": "Rail operator", "origin_code": "AAA", "destination_code": "BBB",
+        "duration": "1h", "departure": "10:30 AM", "passenger_email": "private@example.com", "code": "PRIVATE"]]])
+    XCTAssertEqual(travel.captroStampContent.title, "Rail operator")
+    XCTAssertEqual(travel.captroStampContent.metadata, "AAA → BBB")
+    XCTAssertFalse(travel.captroStampContent.description?.contains("PRIVATE") ?? true)
+    let receipt = try decode(["id": "receipt", "post_type": "receipt", "detail": ["document": [
+      "merchant_name": "Market", "total": "20.02", "currency": "USD", "verdict": "Unable to Verify"]]])
+    XCTAssertEqual(receipt.captroStampContent.title, "Market")
+    XCTAssertEqual(receipt.captroStampContent.description, "USD 20.02\nUnable to Verify")
   }
 
   func testRegularPostWithTaggedPlaceIsStillRegular() throws {

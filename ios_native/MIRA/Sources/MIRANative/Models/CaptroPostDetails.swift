@@ -6,6 +6,8 @@ public struct CaptroPostDetails: Codable, Hashable {
   public var creatorVisited: Bool?
   public var event: CaptroEventDetails?
   public var collection: CaptroCollectionDetails?
+  public var travel: CaptroTravelDetails?
+  public var document: CaptroDocumentPreview?
 }
 
 public struct CaptroEventDetails: Codable, Hashable {
@@ -14,6 +16,7 @@ public struct CaptroEventDetails: Codable, Hashable {
   public var timeZone: String?
   public var venueName: String?
   public var address: String?
+  public var city: String?
   public var latitude: Double?
   public var longitude: Double?
   public var attendeesCount: Int?
@@ -31,13 +34,19 @@ enum CaptroPostDetailKind: Equatable {
   case regular
   case event
   case collection
+  case travel
+  case receipt
+  case invoice
 }
 
 extension MIRAPost {
   var detailKind: CaptroPostDetailKind {
     switch postType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "" {
     case "place", "location", "review", "check_in", "checkin": return .placeReview
-    case "meetup", "event": return .event
+    case "meetup", "event", "concert", "show": return .event
+    case "travel", "trip", "ticket", "boarding_pass", "train", "flight", "bus": return .travel
+    case "receipt": return .receipt
+    case "invoice": return .invoice
     case "collection", "list", "guide", "album", "collaborative_album", "collaborative-album": return .collection
     case "general", "social", "photo", "image", "video", "note", "text": return .regular
     default: return placeDisplayName == nil ? .regular : .placeReview
@@ -78,6 +87,58 @@ extension MIRAPost {
     components.queryItems = items
     return components.url
   }
+}
+
+public struct CaptroTravelDetails: Codable, Hashable {
+  public var `operator`: String?
+  public var originCode: String?
+  public var destinationCode: String?
+  public var originCity: String?
+  public var destinationCity: String?
+  public var duration: String?
+  public var departure: String?
+  public var arrival: String?
+  public var serviceNumber: String?
+  public var travelClass: String?
+  public var price: String?
+  public var currency: String?
+
+  var route: String? {
+    guard let origin = originCode ?? originCity, let destination = destinationCode ?? destinationCity else { return nil }
+    return origin + " → " + destination
+  }
+}
+
+public struct CaptroDocumentPreview: Codable, Hashable {
+  public var documentType: String?
+  public var merchantName: String?
+  public var total: String?
+  public var currency: String?
+  public var verdict: String?
+}
+
+// Never cached in MIRAPost or the feed. Loaded from an owner-authorized endpoint.
+struct CaptroPrivatePostObject: Decodable {
+  let ticket: CaptroOwnedTicket?
+  let document: CaptroReceiptReview?
+}
+
+struct CaptroOwnedTicket: Decodable {
+  let id: String
+  let tier: String?
+  let seat: String?
+  let section: String?
+  let passengerName: String?
+  let passengerEmail: String?
+  let terminal: String?
+  let gate: String?
+  let serviceNumber: String?
+  let travelClass: String?
+  let departure: String?
+  let arrival: String?
+  let code: String?
+  let codeFormat: String?
+  let downloadable: Bool
 }
 
 extension CaptroEventDetails {

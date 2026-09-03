@@ -1,6 +1,11 @@
 name: Verify Captro scan provider
 on:
   workflow_dispatch:
+    inputs:
+      production:
+        type: boolean
+        default: false
+        description: 'Exercise the deployed API, real storage, and database with a temporary test account'
   push:
     branches: [fix/oauth-guest-access]
     paths: ['.github/workflows/verify-scan-provider.yml', 'backend-cf/scripts/verify-scan-provider.mjs']
@@ -17,6 +22,7 @@ jobs:
       - run: npm ci
         working-directory: backend-cf
       - name: Check private storage and real Veryfi processing
+        if: ${{ inputs.production != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -26,3 +32,11 @@ jobs:
           VERYFI_USERNAME: ${{ secrets.VERYFI_USERNAME }}
           VERYFI_API_KEY: ${{ secrets.VERYFI_API_KEY }}
         run: node --experimental-strip-types scripts/verify-scan-provider.mjs
+      - name: Verify deployed scan pipeline
+        if: ${{ inputs.production == true }}
+        working-directory: backend-cf
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/verify-scan-production.mjs

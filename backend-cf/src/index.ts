@@ -3,7 +3,8 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
-import { createCaptroScanRoutes } from './scan';
+import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
+import { attachPublicPostObjects, privateTicketPayload } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
 
 type MediaModerationJobMessage = {
@@ -6995,6 +6996,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const ordered = postIds.length
     ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
     : mapped;
+  await attachPublicPostObjects(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   return overlaySupabaseViewerEngagement(c, photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
 }
 
@@ -14507,6 +14509,11 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   try {
     const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
     if (!post) return c.json({ detail: 'Post not found' }, 404);
+    if (post.detail?.event) post.detail.event = await postAttendanceDetails(c, post, userId);
+    if (post.detail?.collection?.itemIds?.length) {
+      const items = await supabaseReadVisiblePosts(c, userId, { postIds: post.detail.collection.itemIds, limit: 50 });
+      post.detail.collection = { items: items.filter(item => item.id !== post.id).map(item => ({ ...postPayload(item, [], c.env), detail: undefined })) };
+    }
     const response = c.json(postPayload(post, [], c.env));
     response.headers.set('cache-control', 'no-store');
     return response;
@@ -14514,6 +14521,76 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
     console.warn(JSON.stringify({ event: 'supabase_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load post.' }, 500);
   }
+});
+
+async function postAttendanceDetails(c: any, post: any, viewerId: string) {
+  const authId = await supabaseAuthUserIdForAppUserId(c, viewerId);
+  const filter = { post_id: postgrestEqFilter(post.supabase_post_id) };
+  const count = await supabaseAdminCountRows(c, 'app_post_attendance', filter);
+  const mine = authId ? await supabaseAdminSelectRows(c, 'app_post_attendance', { ...filter, user_id: postgrestEqFilter(authId) }, 'user_id', 1) : [];
+  const people = await supabaseAdminQueryRows(c, 'app_post_attendance', { filters: filter, order: 'created_at.desc', limit: 5 });
+  const users = await supabaseUsersByAnyIds(c, people.map(person => person.user_id));
+  return { ...post.detail.event, attendeesCount: count, viewerGoing: mine.length > 0,
+    attendees: people.flatMap(person => {
+      const user = users.get(person.user_id);
+      return user ? [{ id: user.id, username: publicUsernameFor(user), profileImage: safeMediaReference(user.avatar_url) }] : [];
+    }) };
+}
+
+api.post('/posts/:postId/attendance', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'post_attendance', userId, 30, 60);
+  if (limited) return limited;
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId: c.req.param('postId'), limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found' }, 404);
+    if (post.detail?.event?.attendanceEnabled !== true) return c.json({ detail: 'RSVP unavailable' }, 409);
+    const authId = await supabaseAuthUserIdForAppUserId(c, userId);
+    if (!authId) return c.json({ detail: 'Sign in to join' }, 401);
+    const body: any = await c.req.json();
+    if (typeof body.going !== 'boolean') return c.json({ detail: 'Choose an attendance status' }, 400);
+    if (body.going) {
+      await supabaseAdminUpsert(c, 'app_post_attendance', [{ post_id: post.supabase_post_id, user_id: authId }], 'post_id,user_id');
+    } else {
+      await supabaseAdminDeleteRows(c, 'app_post_attendance', { post_id: postgrestEqFilter(post.supabase_post_id), user_id: postgrestEqFilter(authId) });
+    }
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ event: await postAttendanceDetails(c, post, userId) });
+  } catch { return c.json({ detail: "Couldn't update your RSVP. Please try again." }, 503); }
+});
+
+api.get('/posts/:postId/object', authMiddleware, async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  const userId = getUserId(c);
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId: c.req.param('postId'), limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found' }, 404);
+    const authId = await supabaseAuthUserIdForAppUserId(c, userId);
+    const [linked] = await supabaseAdminSelectRows(c, 'app_post_objects', { post_id: postgrestEqFilter(post.supabase_post_id) }, '*', 1);
+    const [ownedReceipt] = linked?.receipt_id ? await supabaseAdminSelectRows(c, 'scanned_receipts', {
+      id: postgrestEqFilter(linked.receipt_id), user_id: postgrestEqFilter(userId),
+    }, '*', 1) : [];
+    const [ticketRow] = authId ? await supabaseAdminSelectRows(c, 'app_post_tickets', {
+      post_id: postgrestEqFilter(post.supabase_post_id), user_id: postgrestEqFilter(authId), status: 'eq.active',
+    }, '*', 1) : [];
+    return c.json({ ticket: privateTicketPayload(ticketRow, authId),
+      document: ownedReceipt ? receiptReviewPayload(ownedReceipt) : null });
+  } catch { return c.json({ detail: 'Private details are temporarily unavailable.' }, 503); }
+});
+
+api.get('/posts/:postId/ticket', authMiddleware, async (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  try {
+    const userId = getUserId(c);
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId: c.req.param('postId'), limit: 1 });
+    if (!post) return c.json({ detail: 'Ticket not found' }, 404);
+    const authId = await supabaseAuthUserIdForAppUserId(c, userId);
+    const [ticket] = authId ? await supabaseAdminSelectRows(c, 'app_post_tickets', {
+      post_id: postgrestEqFilter(post.supabase_post_id), user_id: postgrestEqFilter(authId), status: 'eq.active',
+    }, '*', 1) : [];
+    if (!privateTicketPayload(ticket, authId) || !ticket.private_storage_path) return c.json({ detail: 'Ticket not found' }, 404);
+    return c.json({ signedUrl: await signedPrivateObjectUrl(c.env, ticket.private_storage_path, 'captro-private-tickets'), expiresIn: 300 });
+  } catch { return c.json({ detail: 'Ticket download is temporarily unavailable.' }, 503); }
 });
 
 api.post('/posts/:postId/like', authMiddleware, async (c) => {

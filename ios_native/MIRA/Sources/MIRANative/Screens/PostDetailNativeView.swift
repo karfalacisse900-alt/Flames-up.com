@@ -11,6 +11,9 @@ final class PostDetailModel: ObservableObject {
   @Published var isUpdatingAttendance = false
   @Published var actionError: String?
   @Published var commentsError: String?
+  @Published var privateObject: CaptroPrivatePostObject?
+  @Published var isLoadingObject = false
+  @Published var objectError: String?
 
   let api: MIRAAPIClient
   private var likeMutationVersions: [String: Int] = [:]
@@ -49,6 +52,19 @@ final class PostDetailModel: ObservableObject {
       }
       publishEngagement()
     } catch {}
+  }
+
+  func loadPrivateObject() async {
+    guard [.event, .travel, .receipt, .invoice].contains(post.detailKind) else { return }
+    isLoadingObject = true
+    objectError = nil
+    defer { isLoadingObject = false }
+    do {
+      privateObject = try await api.get("/posts/\(post.id)/object")
+    } catch {
+      privateObject = nil
+      objectError = "Couldn't load private details. Try again."
+    }
   }
 
   func loadComments() async {
@@ -446,7 +462,9 @@ public struct PostDetailNativeView: View {
         ScrollViewReader { scroll in
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-              if !detailMediaURLs.isEmpty {
+              if let document = model.privateObject?.document {
+                CaptroPrivateReceiptOriginal(receiptID: document.receiptId, api: model.api)
+              } else if !detailMediaURLs.isEmpty {
                 PostDetailOptimizedMediaCarousel(
                   urls: detailMediaURLs,
                   post: model.post,
@@ -457,6 +475,13 @@ public struct PostDetailNativeView: View {
               }
 
               CaptroPostDetailSections(model: model, onOpenOptions: { isPostOptionsPresented = true })
+              if model.isLoadingObject {
+                ProgressView().frame(maxWidth: .infinity).padding(16)
+              } else if let error = model.objectError {
+                Button { Task { await model.loadPrivateObject() } } label: {
+                  Label(error, systemImage: "arrow.clockwise").font(.system(size: 13)).padding(16)
+                }
+              }
               reactionRow {
                 withAnimation { scroll.scrollTo("post-comments", anchor: .top) }
                 isCommentFocused = true
@@ -518,6 +543,7 @@ public struct PostDetailNativeView: View {
     .task {
       await model.hydrateFromLocalCache()
       await model.refreshPost()
+      await model.loadPrivateObject()
       await model.loadComments()
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in

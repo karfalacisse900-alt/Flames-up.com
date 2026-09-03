@@ -20,6 +20,17 @@ struct CaptroPostDetailSections: View {
       case .regular: regularPost
       case .event: eventPost
       case .collection: collectionPost
+      case .travel:
+        CaptroTravelDetailSection(post: post, ticket: model.privateObject?.ticket, api: model.api)
+      case .receipt, .invoice:
+        if let document = model.privateObject?.document {
+          CaptroDocumentFacts(review: document).padding(16)
+        } else if !model.isLoadingObject && model.objectError == nil {
+          VStack(alignment: .leading, spacing: 12) {
+            Text(post.detail?.document?.merchantName ?? post.titleText).font(.system(size: 24, weight: .bold))
+            Label("Document details are private", systemImage: "lock").font(.system(size: 14))
+          }.padding(16)
+        }
       }
     }
     .foregroundStyle(CaptroDetailStyle.ink)
@@ -95,6 +106,9 @@ struct CaptroPostDetailSections: View {
 
   private var eventPost: some View {
     VStack(alignment: .leading, spacing: 20) {
+      if let ticket = model.privateObject?.ticket {
+        CaptroEventTicketSection(ticket: ticket, postID: post.id, api: model.api)
+      }
       HStack(alignment: .top, spacing: 12) {
         if let event = post.detail?.event, let month = event.month, let day = event.day {
           VStack(spacing: 4) {

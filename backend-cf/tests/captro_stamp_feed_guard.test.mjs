@@ -158,7 +158,7 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(stamps, /case \.group: return "ACCESS"/);
   assert.match(stamps, /background\(Color\.white\.opacity\(0\.96\)\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /naturalMediaHeightToWidthRatio < 0\.8 \? 0\.62 : \(naturalMediaHeightToWidthRatio > 1\.3 \? 0\.64 : 0\.66\)/);
+  assert.match(mediaPager, /naturalMediaHeightToWidthRatio < 0\.8 \? 0\.66 : \(naturalMediaHeightToWidthRatio > 1\.3 \? 0\.68 : 0\.70\)/);
   assert.match(mediaPager, /CaptroPostStamp\([\s\S]*?compact: true/);
   assert.match(stamps, /\.lineLimit\(compact \? 3 : 4\)/);
 });

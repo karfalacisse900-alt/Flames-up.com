@@ -137,6 +137,13 @@ struct CaptroLocalDocument: Identifiable {
     )
   }
 
+  static func privateDownload(data: Data) throws -> Self {
+    guard !data.isEmpty else { throw CaptroLocalDocumentError.empty }
+    guard data.count <= maximumBytes else { throw CaptroLocalDocumentError.tooLarge }
+    let mediaType = try detectAndValidate(data)
+    return try make(source: .fileImport, filename: "Original document", mediaType: mediaType, pages: [data])
+  }
+
   private static func make(
     source: CaptroLocalDocumentSource,
     filename: String,
@@ -351,6 +358,14 @@ struct CaptroReceiptReview: Decodable, Identifiable {
   let business: CaptroScanBusiness?
   let documentNumber: String?
   let transactionReference: String?
+  let customer: CaptroScanCustomer?
+  let dueDate: String?
+  let paymentTerms: String?
+  let fees: String?
+  let discount: String?
+  let checks: [CaptroScanCheck]?
+  let verificationId: String?
+  let providerDocumentId: String?
   let purchaseDate: String?
   let purchaseTime: String?
   let items: [CaptroScanLineItem]
