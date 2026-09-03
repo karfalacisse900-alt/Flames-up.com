@@ -33,6 +33,10 @@ try {
   const create = () => request(`${api}/posts`, { method: 'POST', headers: owner, body: JSON.stringify(body) });
   const post = await create();
   assert.ok(post.id);
+  const records = await request(`${base}/rest/v1/app_posts?legacy_post_id=eq.${post.id}&select=post_type,metadata`, { headers: admin });
+  console.log(JSON.stringify({ event: 'event_editor_create_readback', responseType: post.post_type,
+    responseHasEvent: Boolean(post.detail?.event), storedType: records[0]?.post_type,
+    storedEvent: records[0]?.metadata?.creator_event, metadataKeys: Object.keys(records[0]?.metadata || {}) }));
   assert.equal(post.detail.event.price, '12.50');
   assert.equal((await create()).id, post.id, 'Duplicate post created on retry');
   const read = () => request(`${api}/posts/${post.id}`, { headers: owner });
