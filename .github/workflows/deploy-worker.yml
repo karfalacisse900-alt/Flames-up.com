@@ -358,12 +358,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          response="$(curl --fail-with-body --silent --show-error \
+          response_file="$RUNNER_TEMP/captro-stripe-connect-bootstrap.json"
+          http_status="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
             --request POST \
+            --header "Accept: application/json" \
+            --header "User-Agent: Captro-Release-Smoke/1.0" \
             --header "X-Captro-Bootstrap-Token: $STRIPE_CONNECT_BOOTSTRAP_TOKEN" \
             --header "Content-Type: application/json" \
             --data '{}' \
             https://api.flames-up.com/api/internal/stripe/connect-webhook/bootstrap)"
+          response="$(cat "$response_file")"
+          if [[ ! "$http_status" =~ ^2 ]]; then
+            detail="$(jq -r '.detail // "No JSON error detail returned"' <<<"$response" 2>/dev/null || printf 'No readable JSON error detail returned')"
+            code="$(jq -r '.code // "HTTP_ERROR"' <<<"$response" 2>/dev/null || printf 'HTTP_ERROR')"
+            echo "Stripe connected-account webhook bootstrap failed with HTTP $http_status: $code - $detail"
+            exit 1
+          fi
           configured="$(jq -r '.configured // false' <<<"$response")"
           signing_secret="$(jq -r '.signingSecret // empty' <<<"$response")"
           if [ "$configured" != "true" ]; then
