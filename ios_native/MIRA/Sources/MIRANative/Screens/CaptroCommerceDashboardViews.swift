@@ -388,6 +388,7 @@ struct CaptroEarningsView: View {
   @State private var isLoading = false
   @State private var errorMessage: String?
   @State private var hostedDestination: CaptroCheckoutDestination?
+  @State private var showingWithdrawal = false
 
   var body: some View {
     ScrollView {
@@ -421,6 +422,9 @@ struct CaptroEarningsView: View {
     .sheet(item: $hostedDestination, onDismiss: { Task { await load() } }) { destination in
       CaptroCheckoutBrowser(url: destination.url).ignoresSafeArea()
     }
+    .sheet(isPresented: $showingWithdrawal, onDismiss: { Task { await load() } }) {
+      CaptroWithdrawView(api: api)
+    }
     .alert("Couldn't open payouts", isPresented: Binding(
       get: { errorMessage != nil && response != nil },
       set: { if !$0 { errorMessage = nil } }
@@ -437,12 +441,20 @@ struct CaptroEarningsView: View {
           balanceValue("Available", amount: available, currency: value.balance.currency)
           balanceValue("Pending", amount: pending, currency: value.balance.currency)
         }
+        if value.account.ready, (value.balance.instantAvailable ?? 0) > 0 {
+          Button { showingWithdrawal = true } label: {
+            Label("Withdraw", systemImage: "creditcard")
+              .frame(maxWidth: .infinity, minHeight: 44)
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(CaptroDetailStyle.accent)
+        }
       } else {
         VStack(alignment: .leading, spacing: 5) {
           Text("Balance unavailable").font(.system(size: 20, weight: .bold))
           Text(value.account.status == "not_started"
-               ? "Set up payouts to receive money from paid posts."
-               : "Stripe could not provide a current balance. Try again shortly.")
+               ? "Set up earnings to receive money from paid posts."
+               : "Could not retrieve your current balance. Try again shortly.")
             .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
         }
       }
@@ -452,7 +464,7 @@ struct CaptroEarningsView: View {
 
   private func payoutAccountSection(_ account: CaptroPayoutAccount) -> some View {
     VStack(alignment: .leading, spacing: 14) {
-      sectionHeading("PAYOUT ACCOUNT")
+      sectionHeading("PAYOUT METHOD")
       if account.ready {
         HStack {
           Text("Status").foregroundStyle(CaptroDetailStyle.secondary)
@@ -462,19 +474,20 @@ struct CaptroEarningsView: View {
             .foregroundStyle(CaptroDetailStyle.accent)
         }
         .font(.system(size: 13))
-        if let bank = account.bank {
-          detailRow("Bank", "\(bank.name) ···· \(bank.last4)")
+        if let card = account.payoutCard {
+          detailRow("Debit Card", "\(card.brand) ···· \(card.last4)")
+          if card.instantPayoutEligible {
+            Label("Instant payout eligible", systemImage: "checkmark.circle")
+              .font(.caption).foregroundStyle(CaptroDetailStyle.accent)
+          }
         }
-        if let schedule = account.payoutSchedule {
-          detailRow("Payout schedule", schedule.capitalized)
-        }
-        Button("Manage Payout Account") { openHostedAccount(manage: true) }
+        Button("Replace Card") { openHostedAccount(manage: true) }
           .buttonStyle(CaptroOutlineButtonStyle())
         NavigationLink {
           CaptroPayoutsView(api: api)
         } label: {
           HStack {
-            Text("View Payouts")
+            Text("Payout History")
             Spacer()
             Image(systemName: "chevron.right")
           }
@@ -483,10 +496,12 @@ struct CaptroEarningsView: View {
         }
         .buttonStyle(.plain)
       } else {
-        Text(account.status == "not_started" ? "Connect your payout account to receive money from sales." : "Finish Stripe's secure setup before publishing paid posts.")
+        Text(account.identityRequirementsComplete == true
+             ? "Add an eligible debit card to receive your Captro earnings."
+             : "Verify your identity and add a debit card to receive earnings from sales.")
           .font(.system(size: 14)).foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Button(account.status == "not_started" ? "Set Up Payouts" : "Finish Payout Setup") {
+        Button(account.identityRequirementsComplete == true ? "Add Debit Card" : "Set Up Earnings") {
           openHostedAccount(manage: false)
         }
         .font(.system(size: 14, weight: .semibold))
@@ -614,7 +629,7 @@ private struct CaptroPayoutsView: View {
         .listStyle(.plain)
         .overlay {
           if response.payouts.isEmpty {
-            ContentUnavailableView("No payouts yet", systemImage: "building.columns", description: Text("Stripe payout activity will appear here."))
+            ContentUnavailableView("No payouts yet", systemImage: "creditcard", description: Text("Your debit-card payouts will appear here."))
           }
         }
       } else if let errorMessage {

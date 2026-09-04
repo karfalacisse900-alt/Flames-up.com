@@ -1,4 +1,5 @@
 import SwiftUI
+import StripePayments
 import Darwin
 import Foundation
 import GoogleSignIn
@@ -274,6 +275,7 @@ public struct MIRANativeRootView: View {
       registerPushToken(token)
     }
     .onOpenURL { url in
+      if StripeAPI.handleURLCallback(with: url) { return }
       let googleHandled = GIDSignIn.sharedInstance.handle(url)
       MIRAAuthDiagnostics.callbackReceived(url, googleHandled: googleHandled)
       authSession.handleIncomingURL(url)

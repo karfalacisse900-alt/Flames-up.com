@@ -11,7 +11,8 @@ let package = Package(
     .library(name: "MIRACoreCpp", targets: ["MIRACoreCpp"])
   ],
   dependencies: [
-    .package(url: "https://github.com/google/GoogleSignIn-iOS.git", exact: "9.1.0")
+    .package(url: "https://github.com/google/GoogleSignIn-iOS.git", exact: "9.1.0"),
+    .package(url: "https://github.com/stripe/stripe-ios.git", exact: "26.9.0")
   ],
   targets: [
     .target(
@@ -22,7 +23,9 @@ let package = Package(
       name: "MIRANative",
       dependencies: [
         "MIRACoreCpp",
-        .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS")
+        .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS"),
+        .product(name: "StripePaymentSheet", package: "stripe-ios"),
+        .product(name: "StripePayments", package: "stripe-ios")
       ]
     ),
     .testTarget(

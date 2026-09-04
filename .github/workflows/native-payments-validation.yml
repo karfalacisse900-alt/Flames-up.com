@@ -1,0 +1,42 @@
+name: Validate Native Payments
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/oauth-guest-access]
+    paths:
+      - 'ios_native/MIRA/**'
+      - 'backend-cf/**'
+      - 'supabase/migrations/**'
+      - '.github/workflows/native-payments-validation.yml'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend-cf/package-lock.json
+      - run: npm ci
+        working-directory: backend-cf
+      - run: npx tsc --noEmit && npm test
+        working-directory: backend-cf
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Build simulator without signing or publishing
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/CaptroBuild" \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/native-payments-build.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-payments-build-log
+          path: ${{ runner.temp }}/native-payments-build.log

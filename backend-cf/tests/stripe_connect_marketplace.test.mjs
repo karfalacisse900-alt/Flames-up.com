@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const worker = source('../src/index.ts');
+const money = source('../src/stripe-money.ts');
 const migration = source('../../supabase/migrations/20260904221545_stripe_connect_creator_earnings.sql');
 const indexMigration = source('../../supabase/migrations/20260904221847_stripe_connect_fk_indexes.sql');
 const commerceModels = source('../../ios_native/MIRA/Sources/MIRANative/Models/CaptroCommerce.swift');
@@ -40,8 +41,8 @@ test('paid posts create reusable Stripe products and prices only after payout re
 test('buyer fees are configurable while the creator receives the full listed item amount', () => {
   assert.match(worker, /CAPTRO_SERVICE_FEE_BPS/);
   assert.match(worker, /CAPTRO_SERVICE_FEE_FIXED_CENTS/);
-  assert.match(worker, /creatorAmount: item/);
-  assert.match(worker, /buyerTotal: item \+ serviceFeeAmount \+ tax/);
+  assert.match(money, /creatorAmount: cents\(item - creatorDeduction\)/);
+  assert.match(money, /buyerTotal: cents\(item \+ serviceFeeAmount/);
   assert.match(worker, /'payment_intent_data\[transfer_data\]\[destination\]'/);
   assert.match(worker, /'payment_intent_data\[transfer_data\]\[amount\]'/);
   assert.match(worker, /'metadata\[captro_tax_amount\]': tax/);
@@ -110,10 +111,10 @@ test('Earnings UI is backed by private live endpoints and never invents balances
   assert.match(commerceModels, /get\("\/commerce\/earnings"\)/);
   assert.match(commerceModels, /get\("\/commerce\/payouts"\)/);
   assert.match(commerceModels, /post\("\/commerce\/payout-account\/onboarding-link"/);
-  assert.match(worker, /stripeApiGet\(c, '\/balance', account\.provider_account_id\)/);
+  assert.match(worker, /stripeApiGet\(c, '\/balance\?expand\[\]=instant_available\.net_available', account\.provider_account_id\)/);
   assert.match(worker, /stripeApiGet\(c, '\/payouts\?limit=100', account\.provider_account_id\)/);
   assert.match(earnings, /Text\("Balance unavailable"\)/);
-  assert.match(earnings, /"Set Up Payouts"/);
+  assert.match(earnings, /"Set Up Earnings"/);
   assert.doesNotMatch(earnings, /Available\s*\$72|Pending\s*\$16|\+ \$8\.00/);
 });
 

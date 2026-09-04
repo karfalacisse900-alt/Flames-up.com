@@ -7,6 +7,7 @@ import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } 
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
 import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } from './commerce';
+import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote } from './stripe-money';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -18,6 +19,9 @@ type MediaModerationJobMessage = {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
+  STRIPE_MODE?: string;
+  CAPTRO_PAYOUT_FEE_POLICY?: string;
+  CAPTRO_APPLE_PAY_MERCHANT_ID?: string;
   DB: D1Database;
   KV?: KVNamespace;
   HYPERDRIVE?: any;
@@ -8238,14 +8242,17 @@ function getStripeConfig(c: any) {
   const defaultPriceId = String(c.env.STRIPE_DEFAULT_PRICE_ID || '').trim();
   const webhookSecret = String(c.env.STRIPE_WEBHOOK_SECRET || '').trim();
   const connectWebhookSecret = String(c.env.STRIPE_CONNECT_WEBHOOK_SECRET || '').trim();
+  let mode: 'test' | 'live' | null = null;
+  try { mode = stripeMode(c.env); } catch {}
   return {
     secretKey,
     publishableKey,
     defaultPriceId,
     webhookSecret,
     connectWebhookSecret,
-    configured: secretKey.startsWith('sk_') || secretKey.startsWith('rk_'),
-    liveMode: secretKey.startsWith('sk_live_') || secretKey.startsWith('rk_live_'),
+    mode,
+    configured: mode !== null,
+    liveMode: mode === 'live',
     webhookConfigured: webhookSecret.startsWith('whsec_'),
     connectWebhookConfigured: connectWebhookSecret.startsWith('whsec_'),
   };
@@ -8273,25 +8280,21 @@ function getMarketplaceFeeConfig(c: any) {
     basisPoints: integer(c.env.CAPTRO_SERVICE_FEE_BPS, 500, 0, 10_000),
     fixedAmount: integer(c.env.CAPTRO_SERVICE_FEE_FIXED_CENTS, 30, 0, 100_000),
     minimumAmount: integer(c.env.CAPTRO_SERVICE_FEE_MINIMUM_CENTS, 0, 0, 100_000),
+    buyerPaysPlatformFee: c.env.CAPTRO_PLATFORM_FEE_BUYER_PAYS !== 'false',
+    creatorPaysPlatformFee: c.env.CAPTRO_PLATFORM_FEE_CREATOR_PAYS === 'true',
   };
 }
 
 function marketplaceAmounts(c: any, itemAmount: number, taxAmount = 0) {
-  const item = Math.max(0, Math.trunc(itemAmount));
-  const tax = Math.max(0, Math.trunc(taxAmount));
-  if (item === 0) {
-    return { itemAmount: 0, serviceFeeAmount: 0, creatorAmount: 0, taxAmount: 0, buyerTotal: 0 };
-  }
-  const fee = getMarketplaceFeeConfig(c);
-  const percentage = Math.ceil((item * fee.basisPoints) / 10_000);
-  const serviceFeeAmount = Math.max(fee.minimumAmount, percentage + fee.fixedAmount);
-  return {
-    itemAmount: item,
-    serviceFeeAmount,
-    creatorAmount: item,
-    taxAmount: tax,
-    buyerTotal: item + serviceFeeAmount + tax,
-  };
+  return saleAmounts(itemAmount, getMarketplaceFeeConfig(c), taxAmount);
+}
+
+async function requireStripeDatabaseMode(c: any) {
+  const mode = stripeMode(c.env);
+  if (c.get?.('stripeDatabaseMode') === mode) return;
+  const rows = await supabaseAdminSelectRows(c, 'app_payment_environment', { id: 'eq.true' }, '*', 1);
+  if (rows[0]?.stripe_mode !== mode) throw new Error('STRIPE_DATABASE_MODE_MISMATCH');
+  c.set?.('stripeDatabaseMode', mode);
 }
 
 function getFrontendUrl(c: any): string {
@@ -8330,6 +8333,7 @@ async function stripeApiRequest(
     return { ok: false, status: 503, data: { detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' } };
   }
 
+  await requireStripeDatabaseMode(c);
   const body = new URLSearchParams();
   for (const [key, value] of Object.entries(params || {})) {
     if (value === undefined || value === null || value === '') continue;
@@ -8345,6 +8349,7 @@ async function stripeApiRequest(
     method: 'POST',
     headers,
     body,
+    signal: AbortSignal.timeout(20_000),
   });
   const data: any = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, data };
@@ -8355,9 +8360,11 @@ async function stripeApiGet(c: any, path: string, connectedAccountId?: string | 
   if (!stripe.configured) {
     return { ok: false, status: 503, data: { detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' } };
   }
+  await requireStripeDatabaseMode(c);
   const response = await fetch(`https://api.stripe.com/v1${path}`, {
     method: 'GET',
     headers: stripeRequestHeaders(c, { connectedAccountId }),
+    signal: AbortSignal.timeout(20_000),
   });
   const data: any = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, data };
@@ -8947,7 +8954,7 @@ function connectedAccountStatus(account: any): string {
 
 function connectedAccountSafePatch(account: any) {
   const external = Array.isArray(account?.external_accounts?.data)
-    ? account.external_accounts.data.find((item: any) => item?.object === 'bank_account' || item?.object === 'card')
+    ? account.external_accounts.data.find((item: any) => eligibleDebitCard(item, account.default_currency || 'usd'))
     : null;
   return {
     provider_account_id: cleanText(account?.id, 180),
@@ -8963,6 +8970,8 @@ function connectedAccountSafePatch(account: any) {
     external_account_type: cleanText(external?.object, 40) || null,
     external_account_name: cleanText(external?.bank_name || external?.brand, 80) || null,
     external_account_last4: /^\d{4}$/.test(String(external?.last4 || '')) ? String(external.last4) : null,
+    eligible_debit_card_exists: !!external,
+    payout_card: external ? payoutCardMetadata(external) : null,
     payout_schedule: cleanText(account?.settings?.payouts?.schedule?.interval, 40) || null,
     last_provider_sync_at: now(),
     updated_at: now(),
@@ -9003,8 +9012,11 @@ async function refreshConnectedAccount(c: any, row: any): Promise<any> {
   if (!response.ok) {
     console.warn(JSON.stringify({ event: 'stripe_connect_account_sync_failed', status: response.status,
       code: cleanText(response.data?.error?.code || response.data?.error?.type, 100) }));
-    return row;
+    throw stripeProviderError(response, 'STRIPE_CONNECT_ACCOUNT_SYNC_FAILED');
   }
+  const cards = await stripeApiGet(c, `/accounts/${encodeURIComponent(providerAccountId)}/external_accounts?object=card&limit=100`);
+  if (!cards.ok) throw stripeProviderError(cards, 'STRIPE_PAYOUT_CARDS_READ_FAILED');
+  response.data.external_accounts = cards.data;
   return await syncConnectedAccountFromStripe(c, response.data, row) || row;
 }
 
@@ -9017,7 +9029,9 @@ async function connectedAccountForUser(c: any, authUserId: string, refresh = fal
 }
 
 function connectedAccountIsReady(row: any): boolean {
-  return row?.status === 'ready' && row?.charges_enabled === true && row?.payouts_enabled === true;
+  return row?.status === 'ready' && row?.charges_enabled === true && row?.payouts_enabled === true
+    && row?.details_submitted === true && row?.eligible_debit_card_exists === true
+    && Array.isArray(row?.requirements_currently_due) && row.requirements_currently_due.length === 0;
 }
 
 function connectedAccountPublicPayload(c: any, row: any) {
@@ -9028,11 +9042,8 @@ function connectedAccountPublicPayload(c: any, row: any) {
     detailsSubmitted: row?.details_submitted === true,
     chargesEnabled: row?.charges_enabled === true,
     payoutsEnabled: row?.payouts_enabled === true,
-    bank: row?.external_account_last4 ? {
-      type: cleanText(row.external_account_type, 40) || 'bank_account',
-      name: cleanText(row.external_account_name, 80) || 'Bank',
-      last4: String(row.external_account_last4),
-    } : null,
+    payoutCard: row?.payout_card || null,
+    identityRequirementsComplete: row?.details_submitted === true && row?.requirements_currently_due?.length === 0,
     payoutSchedule: cleanText(row?.payout_schedule, 40) || null,
     requirementsCount: Array.isArray(row?.requirements_currently_due) ? row.requirements_currently_due.length : 0,
   };
@@ -9050,10 +9061,11 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
     email: email && !isInternalOAuthEmail(email) ? email : undefined,
     'capabilities[card_payments][requested]': true,
     'capabilities[transfers][requested]': true,
+    'settings[payouts][schedule][interval]': 'manual',
     'business_profile[product_description]': 'Sales and paid access through Captro',
     'metadata[captro_auth_user_id]': authUserId,
     'metadata[captro_app_user_id]': appUserId,
-  }, `captro-connect-account-${authUserId}`);
+  }, `captro-connect-account-${getStripeConfig(c).mode}-${authUserId}`);
   if (!account.ok || !String(account.data?.id || '').startsWith('acct_')) {
     throw stripeProviderError(account, 'STRIPE_CONNECT_ACCOUNT_CREATE_FAILED');
   }
@@ -9393,6 +9405,76 @@ async function completeCommercePurchaseFromSession(c: any, eventId: string, sess
     p_payload_digest: digest,
   });
   return { processed: true, purchase };
+}
+
+async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = false) {
+  const stripe = getStripeConfig(c);
+  if (!stripe.configured || !stripe.webhookConfigured) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
+  if (purchase.status !== 'payment_pending' || purchase.payment_interface !== 'native') throw new Error('CAPTRO_PURCHASE_NOT_PAYABLE');
+  const connected = forExpiry ? await connectedAccountForUser(c, purchase.creator_id)
+    : await requireReadyConnectedAccount(c, purchase.creator_id);
+  if (!connected) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  if (connected.provider_account_id !== purchase.stripe_destination_account_id) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  const params = {
+    amount: cents(purchase.total_amount, 1), currency: purchase.currency.toLowerCase(),
+    'automatic_payment_methods[enabled]': true,
+    'transfer_data[destination]': connected.provider_account_id,
+    'transfer_data[amount]': cents(purchase.creator_amount, 1),
+    'metadata[source]': 'captro_commerce',
+    'metadata[captro_purchase_id]': purchase.id,
+    'metadata[captro_tax_amount]': purchase.tax_amount,
+    'metadata[captro_mode]': stripe.mode,
+    description: cleanText(purchase.item_title, 180),
+  };
+  const result = purchase.provider_payment_id
+    ? await stripeApiGet(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`)
+    : await stripeApiRequest(c, '/payment_intents', params, `payment:${purchase.id}`);
+  if (!result.ok || !result.data?.id) throw stripeProviderError(result, 'STRIPE_PAYMENT_CREATE_FAILED');
+  const intent = result.data;
+  if (intent.livemode !== stripe.liveMode || intent.amount !== purchase.total_amount
+      || intent.currency !== purchase.currency.toLowerCase()
+      || intent.transfer_data?.destination !== connected.provider_account_id
+      || intent.transfer_data?.amount !== purchase.creator_amount) throw new Error('STRIPE_PAYMENT_MISMATCH');
+  await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
+    provider_payment_id: intent.id, payment_provider: 'stripe', updated_at: now(),
+  });
+  purchase.provider_payment_id = intent.id;
+  return {
+    purchaseId: purchase.id, publishableKey: stripe.publishableKey,
+    paymentIntentClientSecret: intent.client_secret,
+    mode: stripe.mode, merchantDisplayName: 'Captro', returnURL: 'captro://stripe-redirect',
+    applePayMerchantId: cleanText(c.env.CAPTRO_APPLE_PAY_MERCHANT_ID, 160) || null,
+    merchantCountryCode: 'US',
+  };
+}
+
+async function completeCommercePurchaseFromIntent(c: any, eventId: string, object: any) {
+  if (object?.metadata?.source !== 'captro_commerce') return;
+  const purchaseId = isUuidText(object?.metadata?.captro_purchase_id);
+  if (!purchaseId) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
+  const rows = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(purchaseId) }, '*', 1);
+  const purchase = rows[0];
+  if (!purchase) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
+  if (purchase.payment_interface !== 'native') return;
+  const result = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(object.id)}?expand[]=latest_charge.balance_transaction`);
+  if (!result.ok) throw stripeProviderError(result, 'STRIPE_PAYMENT_CONFIRM_FAILED');
+  const intent = result.data;
+  if (intent.status !== 'succeeded' || intent.livemode !== getStripeConfig(c).liveMode
+      || intent.id !== purchase.provider_payment_id || intent.amount_received !== purchase.total_amount
+      || intent.transfer_data?.destination !== purchase.stripe_destination_account_id
+      || intent.transfer_data?.amount !== purchase.creator_amount) throw new Error('STRIPE_PAYMENT_MISMATCH');
+  const charge = intent.latest_charge;
+  if (!charge?.balance_transaction?.id || !charge?.transfer) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
+    p_purchase_id: purchaseId, p_provider_event_id: eventId, p_provider_checkout_id: null,
+    p_provider_payment_id: intent.id, p_provider_charge_id: charge.id,
+    p_provider_transfer_id: typeof charge.transfer === 'string' ? charge.transfer : charge.transfer.id,
+    p_amount: intent.amount_received, p_processing_amount: cents(charge.balance_transaction.fee),
+    p_tax_amount: purchase.tax_amount, p_currency: intent.currency.toUpperCase(),
+    // Platform settlement time is not the connected account's available balance.
+    p_available_at: null,
+    p_payload_digest: await sha256Hex(JSON.stringify({ eventId, intentId: intent.id, amount: intent.amount_received })),
+  });
 }
 
 async function cancelCommercePurchaseFromSession(c: any, session: any) {
@@ -17580,7 +17662,7 @@ api.get('/commerce/posts/:postId', authMiddleware, async (c) => {
   }
 });
 
-api.post('/commerce/purchases', authMiddleware, async (c) => {
+const beginCommercePurchaseHandler = async (c: any) => {
   const bodyTooLarge = rejectLargeRequest(c, 20_000);
   if (bodyTooLarge) return bodyTooLarge;
   const buyerAppUserId = getUserId(c);
@@ -17588,7 +17670,7 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
   if (limited) return limited;
   try {
     const body: any = await c.req.json().catch(() => ({}));
-    const postId = publicId(body.post_id || body.postId, 120);
+    const postId = publicId(body.contentId || body.post_id || body.postId, 120);
     const purchasableId = isUuidText(body.purchasable_id || body.purchasableId || '');
     let post: any = null;
     let purchasable: any = null;
@@ -17603,6 +17685,7 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
       if (purchasable) [post] = await supabaseReadVisiblePosts(c, buyerAppUserId, { postId: purchasable.post_id, limit: 1 });
     }
     if (!post || !purchasable) return c.json({ detail: 'This item is no longer available.', code: 'CAPTRO_ITEM_UNAVAILABLE' }, 404);
+    if (body.contentType && body.contentType !== purchasable.content_type) return c.json({ detail: 'Post type does not match.', code: 'CAPTRO_ITEM_MISMATCH' }, 400);
     const buyerAuthId = await supabaseAuthUserIdForAppUserId(c, buyerAppUserId);
     if (!buyerAuthId) return c.json({ detail: 'Reconnect your account before joining or buying.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
     if (purchasable.audience === 'followers') {
@@ -17612,7 +17695,7 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
     if (purchasable.audience === 'friends' && !await supabaseFriendshipExists(c, buyerAppUserId, purchasable.creator_app_user_id)) {
       return c.json({ detail: 'This is available to friends only.', code: 'COMMERCE_AUDIENCE_RESTRICTED' }, 403);
     }
-    let priceId = isUuidText(body.price_id || body.priceId || '');
+    let priceId = isUuidText(body.selectedPriceId || body.price_id || body.priceId || '');
     const priceFilters: Record<string, string> = {
       purchasable_id: postgrestEqFilter(purchasable.id),
       active: postgrestEqFilter('true'),
@@ -17622,7 +17705,8 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
     const price = priceRows[0];
     if (!price) return c.json({ detail: 'That price is no longer available.', code: 'CAPTRO_PRICE_UNAVAILABLE' }, 409);
     priceId = price.id;
-    const quantity = clampNumber(body.quantity, 1, 20, 1);
+    const quantity = body.quantity ?? 1;
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) return c.json({ detail: 'Choose a valid quantity.', code: 'CAPTRO_QUANTITY_INVALID' }, 400);
     if (purchasable.payment_model === 'paid' && purchasable.commerce_class === 'digital') {
       return c.json({
         detail: 'Digital-only access must use an App Store purchase. This creator has not configured one yet.',
@@ -17648,7 +17732,8 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
     );
     const idempotencyKey = cleanText(body.idempotency_key || body.idempotencyKey, 120) || `purchase-${uuid()}`;
     const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity);
-    let purchase: any = await supabaseAdminRpc(c, 'captro_begin_marketplace_purchase', {
+    const native = c.req.path.endsWith('/payments/create') || body.paymentInterface === 'native';
+    let purchase: any = await supabaseAdminRpc(c, 'captro_begin_marketplace_purchase_v2', {
       p_buyer_id: buyerAuthId,
       p_buyer_app_user_id: buyerAppUserId,
       p_purchasable_id: purchasable.id,
@@ -17658,16 +17743,23 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
       p_selection: selection,
       p_service_fee_amount: amounts.serviceFeeAmount,
       p_tax_amount: amounts.taxAmount,
+      p_creator_fee_amount: amounts.itemAmount - amounts.creatorAmount,
+      p_payment_interface: native ? 'native' : 'checkout',
     });
     if (Array.isArray(purchase)) purchase = purchase[0];
     let checkoutUrl: string | null = null;
+    let paymentSheet: any = null;
     if (purchase?.status === 'payment_pending') {
       try {
-        const session = await createCommerceCheckoutSession(c, purchase);
-        checkoutUrl = safeExternalUrl(session.url) || null;
-        purchase.provider_checkout_id = session.id;
+        if (purchase.payment_interface === 'native') {
+          paymentSheet = await createCommercePaymentIntent(c, purchase);
+        } else {
+          const session = await createCommerceCheckoutSession(c, purchase);
+          checkoutUrl = safeExternalUrl(session.url) || null;
+          purchase.provider_checkout_id = session.id;
+        }
       } catch (error) {
-        await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', {
+        if (purchase.payment_interface !== 'native') await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', {
           p_purchase_id: purchase.id,
           p_checkout_id: purchase.provider_checkout_id || '',
         }).catch(() => undefined);
@@ -17677,12 +17769,26 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
     const entitlements = purchase?.status === 'confirmed'
       ? await supabaseAdminSelectRows(c, 'app_entitlements', { purchase_id: postgrestEqFilter(purchase.id) }, '*', 1) : [];
     c.header('Cache-Control', 'private, no-store');
-    return c.json({ purchase: commercePurchasePayload(purchase, entitlements[0]), checkoutUrl });
+    return c.json({ purchase: commercePurchasePayload(purchase, entitlements[0]), checkoutUrl, paymentSheet });
   } catch (error: any) {
     const code = commerceErrorCode(error);
     console.warn(JSON.stringify({ event: 'commerce_purchase_begin_failed', code, request_id: c.get?.('requestId') || '' }));
     return c.json({ detail: code === 'COMMERCE_REQUEST_FAILED' ? 'Could not begin this purchase.' : 'This item could not be reserved.', code }, commerceErrorStatus(code) as any);
   }
+};
+api.post('/commerce/purchases', authMiddleware, beginCommercePurchaseHandler);
+api.post('/payments/create', authMiddleware, beginCommercePurchaseHandler);
+
+api.get('/payments/purchases/:purchaseId', authMiddleware, async (c) => {
+  const authId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
+  const purchaseId = isUuidText(c.req.param('purchaseId'));
+  if (!authId || !purchaseId) return c.json({ detail: 'Purchase not found.' }, 404);
+  const rows = await supabaseAdminSelectRows(c, 'app_purchases', {
+    id: postgrestEqFilter(purchaseId), buyer_id: postgrestEqFilter(authId),
+  }, '*', 1);
+  if (!rows[0]) return c.json({ detail: 'Purchase not found.' }, 404);
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({ purchase: commercePurchasePayload(rows[0]) });
 });
 
 api.post('/commerce/purchases/:purchaseId/checkout', authMiddleware, async (c) => {
@@ -17701,6 +17807,11 @@ api.post('/commerce/purchases/:purchaseId/checkout', authMiddleware, async (c) =
     if (purchase.status !== 'payment_pending') return c.json({ purchase: commercePurchasePayload(purchase), checkoutUrl: null });
     const purchasables = await supabaseAdminSelectRows(c, 'app_purchasables', { id: postgrestEqFilter(purchase.purchasable_id) }, '*', 1);
     if (purchasables[0]?.commerce_class === 'digital') return c.json({ detail: 'App Store checkout is required.', code: 'COMMERCE_STOREKIT_REQUIRED' }, 409);
+    if (purchase.payment_interface === 'native') {
+      const paymentSheet = await createCommercePaymentIntent(c, purchase);
+      c.header('Cache-Control', 'private, no-store');
+      return c.json({ purchase: commercePurchasePayload(purchase), paymentSheet });
+    }
     const session = await createCommerceCheckoutSession(c, purchase);
     c.header('Cache-Control', 'private, no-store');
     return c.json({ purchase: commercePurchasePayload(purchase), checkoutUrl: safeExternalUrl(session.url) || null });
@@ -17953,6 +18064,104 @@ api.post('/commerce/payout-account/manage-link', authMiddleware, async (c) => {
   }
 });
 
+async function creatorInstantPayoutState(c: any, authUserId: string) {
+  const account = await requireReadyConnectedAccount(c, authUserId);
+  const currency = String(account.default_currency || '').toUpperCase();
+  const card = account.payout_card;
+  if (!card?.instantPayoutEligible || !String(card.id).startsWith('card_')) throw new Error('CAPTRO_ELIGIBLE_DEBIT_CARD_REQUIRED');
+  const result = await stripeApiGet(c, '/balance?expand[]=instant_available.net_available', account.provider_account_id);
+  if (!result.ok) throw stripeProviderError(result, 'STRIPE_BALANCE_UNAVAILABLE');
+  return { account, card, currency, balance: result.data, available: instantBalance(result.data, card.id, currency) };
+}
+
+api.post('/creator/payouts/quote', authMiddleware, async (c) => {
+  const limited = await enforceRateLimit(c, 'creator_payout_quote', getUserId(c), 20, 60);
+  if (limited) return limited;
+  try {
+    const authId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
+    if (!authId) return c.json({ detail: 'Sign in to continue.' }, 401);
+    const body: any = await c.req.json();
+    const requestKey = isUuidText(body.requestId);
+    if (!requestKey) return c.json({ detail: 'A payout request ID is required.' }, 400);
+    const state = await creatorInstantPayoutState(c, authId);
+    const quote = payoutQuote(body.amount, state.balance, state.card.id, state.currency, c.env);
+    const existing = await supabaseAdminSelectRows(c, 'app_payout_requests', {
+      creator_id: postgrestEqFilter(authId), request_key: postgrestEqFilter(requestKey),
+    }, '*', 1);
+    let row = existing[0];
+    if (row && (row.amount !== quote.amount || row.external_account_id !== state.card.id)) throw new Error('CAPTRO_IDEMPOTENCY_CONFLICT');
+    if (!row) {
+      const inserted = await supabaseAdminInsertRows(c, 'app_payout_requests', [{
+        creator_id: authId, connected_account_id: state.account.id,
+        provider_account_id: state.account.provider_account_id, external_account_id: state.card.id,
+        card_snapshot: state.card, request_key: requestKey,
+        amount: quote.amount, fee: quote.fee, net_amount: quote.netAmount,
+        currency: quote.currency, fee_policy: quote.feePolicy,
+      }]);
+      row = inserted[0];
+    }
+    if (!row) throw new Error('CAPTRO_PAYOUT_QUOTE_FAILED');
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ id: row.id, amount: row.amount, fee: row.fee, netAmount: row.net_amount,
+      currency: row.currency, card: row.card_snapshot, expiresAt: row.expires_at });
+  } catch (error) {
+    return c.json({ detail: 'This amount cannot currently be sent to your debit card.', code: getErrorCode(error) }, 409);
+  }
+});
+
+api.post('/creator/payouts', authMiddleware, async (c) => {
+  const limited = await enforceRateLimit(c, 'creator_payout_create', getUserId(c), 10, 60);
+  if (limited) return limited;
+  try {
+    const authId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
+    const body: any = await c.req.json();
+    const quoteId = isUuidText(body.quoteId);
+    if (!authId || !quoteId) return c.json({ detail: 'Payout request not found.' }, 404);
+    const rows = await supabaseAdminSelectRows(c, 'app_payout_requests', {
+      id: postgrestEqFilter(quoteId), creator_id: postgrestEqFilter(authId),
+    }, '*', 1);
+    const quote = rows[0];
+    if (!quote) return c.json({ detail: 'Payout request not found.' }, 404);
+    let result: any;
+    if (quote.provider_payout_id) {
+      result = await stripeApiGet(c, `/payouts/${encodeURIComponent(quote.provider_payout_id)}`, quote.provider_account_id);
+    } else {
+      if (quote.status === 'quoted') {
+        if (Date.parse(quote.expires_at) <= Date.now()) throw new Error('CAPTRO_PAYOUT_QUOTE_EXPIRED');
+        const state = await creatorInstantPayoutState(c, authId);
+        if (state.card.id !== quote.external_account_id || state.account.id !== quote.connected_account_id) throw new Error('CAPTRO_PAYOUT_CARD_CHANGED');
+        const verified = payoutQuote(quote.amount, state.balance, state.card.id, state.currency, c.env);
+        if (verified.fee !== quote.fee || verified.feePolicy !== quote.fee_policy) throw new Error('CAPTRO_PAYOUT_QUOTE_EXPIRED');
+        await supabaseAdminPatchRows(c, 'app_payout_requests', { id: postgrestEqFilter(quote.id), status: 'eq.quoted' }, {
+          status: 'submitting', updated_at: now(),
+        });
+      } else if (quote.status !== 'submitting' || Date.now() - Date.parse(quote.created_at) > 23 * 60 * 60 * 1000) {
+        throw new Error('CAPTRO_PAYOUT_RECONCILIATION_REQUIRED');
+      }
+      // Persist before the network call; retries reuse exactly the same Stripe key and parameters.
+      result = await stripeApiRequest(c, '/payouts', {
+        amount: quote.net_amount, currency: quote.currency.toLowerCase(), method: 'instant',
+        destination: quote.external_account_id,
+        'metadata[captro_payout_request_id]': quote.id,
+      }, `payout:${authId}:${quote.id}`, quote.provider_account_id);
+    }
+    if (!result.ok || !result.data?.id) throw stripeProviderError(result, 'STRIPE_PAYOUT_CREATE_FAILED');
+    if (result.data.livemode !== getStripeConfig(c).liveMode || result.data.destination !== quote.external_account_id
+        || result.data.amount !== quote.net_amount) throw new Error('STRIPE_PAYOUT_MISMATCH');
+    await supabaseAdminPatchRows(c, 'app_payout_requests', { id: postgrestEqFilter(quote.id) }, {
+      status: 'submitted', provider_payout_id: result.data.id, updated_at: now(),
+    });
+    await syncStripePayout(c, quote.provider_account_id, result.data);
+    const payouts = await supabaseAdminSelectRows(c, 'app_payouts', { provider_payout_id: postgrestEqFilter(result.data.id) }, '*', 1);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ payout: payoutPublicPayload(payouts[0]) });
+  } catch (error) {
+    const code = getErrorCode(error);
+    console.warn(JSON.stringify({ event: 'creator_payout_failed', code }));
+    return c.json({ detail: 'Payout was not confirmed. Retry this request or check Payout History.', code }, 409);
+  }
+});
+
 api.get('/commerce/earnings', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_earnings', appUserId, 120, 60);
@@ -17975,12 +18184,14 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
     const currency = cleanText(account?.default_currency || earnings[0]?.currency || 'USD', 3).toUpperCase();
     let available: number | null = null;
     let pending: number | null = null;
+    let instantAvailable: number | null = null;
     let balanceStatus: 'not_connected' | 'available' | 'unavailable' = account ? 'unavailable' : 'not_connected';
     if (account && getStripeConfig(c).configured) {
-      const balance = await stripeApiGet(c, '/balance', account.provider_account_id);
+      const balance = await stripeApiGet(c, '/balance?expand[]=instant_available.net_available', account.provider_account_id);
       if (balance.ok) {
         available = stripeBalanceAmount(balance.data?.available, currency);
         pending = stripeBalanceAmount(balance.data?.pending, currency);
+        instantAvailable = account.payout_card ? instantBalance(balance.data, account.payout_card.id, currency) : 0;
         balanceStatus = 'available';
       }
     }
@@ -17988,15 +18199,12 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
       const purchase = purchases.find(item => item.id === row.purchase_id);
       const buyer = buyers.find(item => item.id === purchase?.buyer_app_user_id);
       const payload = creatorEarningPayload(row, purchase, buyer);
-      if (payload.status === 'pending' && payload.availableAt && Date.parse(payload.availableAt) <= Date.now()) {
-        payload.status = 'available';
-      }
       return payload;
     });
     c.header('Cache-Control', 'private, no-store');
     return c.json({
       account: connectedAccountPublicPayload(c, account),
-      balance: { status: balanceStatus, currency, available, pending },
+      balance: { status: balanceStatus, currency, available, pending, instantAvailable },
       recent,
     });
   } catch (error: any) {
@@ -18322,6 +18530,14 @@ const stripeWebhookHandler = async (c: any) => {
   let event: any = null;
   try {
     event = JSON.parse(rawBody);
+    await requireStripeDatabaseMode(c);
+    if (event.livemode !== getStripeConfig(c).liveMode || !/^evt_/.test(event.id || '')) {
+      return c.json({ detail: 'Wrong payment environment.', code: 'STRIPE_EVENT_MODE_MISMATCH' }, 400);
+    }
+    const processedEvents = await supabaseAdminSelectRows(c, 'app_payment_webhook_events', {
+      provider_event_id: postgrestEqFilter(event.id), status: postgrestEqFilter('processed'),
+    }, 'id', 1);
+    if (processedEvents.length) return c.json({ received: true });
     const object = event?.data?.object || {};
     if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
       const source = cleanText(object?.metadata?.source, 80);
@@ -18346,6 +18562,13 @@ const stripeWebhookHandler = async (c: any) => {
     } else if (['charge.refunded', 'refund.created', 'refund.updated'].includes(event.type)) {
       const commerceRefund = await refundCommercePurchaseFromCharge(c, cleanText(event?.id, 180), object);
       if (!commerceRefund.processed) await refundCoinPurchase(c, object);
+    } else if (event.type === 'payment_intent.succeeded') {
+      await completeCommercePurchaseFromIntent(c, event.id, object);
+    } else if (event.type === 'payment_intent.canceled' && object?.metadata?.source === 'captro_commerce') {
+      const rows = await supabaseAdminSelectRows(c, 'app_purchases', { provider_payment_id: postgrestEqFilter(object.id) }, '*', 1);
+      if (rows[0]?.payment_interface === 'native') await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', {
+        p_purchase_id: rows[0].id, p_checkout_id: '',
+      });
     } else if (event.type === 'payment_intent.payment_failed') {
       await recordMarketplacePaymentFailure(c, cleanText(event?.id, 180), object);
     } else if (event.type === 'account.updated') {
@@ -18366,7 +18589,13 @@ const stripeWebhookHandler = async (c: any) => {
         if (rows[0]) await refreshConnectedAccount(c, rows[0]);
       }
     } else if (event.type.startsWith('payout.')) {
-      await syncStripePayout(c, cleanText(event?.account, 180), object);
+      const current = await stripeApiGet(c, `/payouts/${encodeURIComponent(object.id)}`, cleanText(event.account, 180));
+      if (!current.ok) throw stripeProviderError(current, 'STRIPE_PAYOUT_SYNC_FAILED');
+      await syncStripePayout(c, cleanText(event?.account, 180), current.data);
+      if (current.data?.metadata?.captro_payout_request_id) await supabaseAdminPatchRows(c, 'app_payout_requests', {
+        id: postgrestEqFilter(current.data.metadata.captro_payout_request_id),
+        provider_account_id: postgrestEqFilter(event.account),
+      }, { status: 'submitted', provider_payout_id: current.data.id, updated_at: now() });
     } else if (event.type.startsWith('charge.dispute.')) {
       await recordStripeDispute(c, cleanText(event?.id, 180), object);
     }
@@ -23091,12 +23320,40 @@ async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJob
   }
 }
 
+async function expireNativePaymentHolds(env: Env) {
+  const c: any = { env };
+  if (!getStripeConfig(c).configured) return;
+  await requireStripeDatabaseMode(c);
+  const rows = await supabaseAdminQueryRows(c, 'app_purchases', {
+    filters: { status: 'eq.payment_pending', payment_interface: 'eq.native', hold_expires_at: `lt.${now()}` },
+    order: 'hold_expires_at.asc', limit: 40,
+  });
+  for (const purchase of rows) {
+    try {
+      // Resolve a timed-out create using the original idempotency key before releasing inventory.
+      if (!purchase.provider_payment_id) await createCommercePaymentIntent(c, purchase, true);
+      const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`);
+      if (!intent.ok) throw stripeProviderError(intent, 'STRIPE_PAYMENT_EXPIRY_READ_FAILED');
+      if (['succeeded', 'processing'].includes(intent.data.status)) continue;
+      if (intent.data.status !== 'canceled') {
+        const canceled = await stripeApiRequest(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}/cancel`,
+          {}, `payment-expire:${purchase.id}`);
+        if (!canceled.ok || canceled.data.status !== 'canceled') continue;
+      }
+      await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', { p_purchase_id: purchase.id, p_checkout_id: '' });
+    } catch (error) {
+      console.warn(JSON.stringify({ event: 'native_payment_expiry_failed', purchase_id: purchase.id, code: getErrorCode(error) }));
+    }
+  }
+}
+
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext) {
     return app.fetch(request, env, ctx);
   },
   queue: handleMediaModerationQueue,
-  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(processAccountDeletionQueue(env));
+  scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    if (controller.cron === '17 5 * * *') ctx.waitUntil(processAccountDeletionQueue(env));
+    if (controller.cron === '*/5 * * * *') ctx.waitUntil(expireNativePaymentHolds(env));
   },
 };

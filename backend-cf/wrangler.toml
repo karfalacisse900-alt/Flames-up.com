@@ -33,7 +33,7 @@ enabled = true
 head_sampling_rate = 1
 
 [triggers]
-crons = ["17 5 * * *"]
+crons = ["17 5 * * *", "*/5 * * * *"]
 
 [ai]
 binding = "AI"
@@ -97,7 +97,7 @@ enabled = true
 head_sampling_rate = 1
 
 [env.production.triggers]
-crons = ["17 5 * * *"]
+crons = ["17 5 * * *", "*/5 * * * *"]
 
 [env.production.ai]
 binding = "AI"

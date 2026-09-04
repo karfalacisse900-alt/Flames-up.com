@@ -350,6 +350,19 @@ public struct CaptroEntitlementSummary: Decodable, Hashable, Identifiable {
 public struct CaptroCommerceActionResponse: Decodable {
   public let purchase: CaptroCommercePurchase
   public let checkoutUrl: String?
+  public let paymentSheet: CaptroPaymentConfiguration?
+}
+
+public struct CaptroPaymentConfiguration: Decodable, Identifiable {
+  public var id: String { purchaseId }
+  public let purchaseId: String
+  public let publishableKey: String
+  public let paymentIntentClientSecret: String
+  public let mode: String
+  public let merchantDisplayName: String
+  public let returnURL: String
+  public let applePayMerchantId: String?
+  public let merchantCountryCode: String
 }
 
 public struct CaptroCommercePostResponse: Decodable {
@@ -425,15 +438,19 @@ public struct CaptroPayoutAccount: Decodable, Hashable {
   public let detailsSubmitted: Bool
   public let chargesEnabled: Bool
   public let payoutsEnabled: Bool
-  public let bank: CaptroPayoutBank?
+  public let payoutCard: CaptroPayoutCard?
+  public let identityRequirementsComplete: Bool?
   public let payoutSchedule: String?
   public let requirementsCount: Int
 }
 
-public struct CaptroPayoutBank: Decodable, Hashable {
-  public let type: String
-  public let name: String
+public struct CaptroPayoutCard: Decodable, Hashable {
+  public let id: String
+  public let brand: String
   public let last4: String
+  public let expirationMonth: Int
+  public let expirationYear: Int
+  public let instantPayoutEligible: Bool
 }
 
 public struct CaptroPayoutAccountResponse: Decodable {
@@ -452,7 +469,20 @@ public struct CaptroEarningsBalance: Decodable, Hashable {
   public let currency: String
   public let available: Int?
   public let pending: Int?
+  public let instantAvailable: Int?
 }
+
+public struct CaptroPayoutQuote: Decodable, Identifiable {
+  public let id: String
+  public let amount: Int
+  public let fee: Int
+  public let netAmount: Int
+  public let currency: String
+  public let card: CaptroPayoutCard
+  public let expiresAt: String
+}
+
+public struct CaptroPayoutResult: Decodable { public let payout: CaptroPayout }
 
 public struct CaptroCreatorEarning: Decodable, Hashable, Identifiable {
   public let id: String
@@ -521,14 +551,15 @@ extension MIRAAPIClient {
     commerce: CaptroCommerceDetails,
     priceId: String,
     quantity: Int = 1,
-    selection: CaptroCommerceSelection = CaptroCommerceSelection()
+    selection: CaptroCommerceSelection = CaptroCommerceSelection(),
+    idempotencyKey: String
   ) async throws -> CaptroCommerceActionResponse {
-    try await post("/commerce/purchases", body: CaptroCommercePurchaseRequest(
+    try await post("/payments/create", body: CaptroCommercePurchaseRequest(
       postId: postId,
       purchasableId: commerce.id,
       priceId: priceId,
       quantity: quantity,
-      idempotencyKey: UUID().uuidString,
+      idempotencyKey: idempotencyKey,
       selection: selection
     ))
   }
@@ -571,6 +602,16 @@ extension MIRAAPIClient {
 
   public func loadCreatorPayouts() async throws -> CaptroPayoutsResponse {
     try await get("/commerce/payouts")
+  }
+
+  public func quotePayout(amount: Int, requestId: String) async throws -> CaptroPayoutQuote {
+    struct Input: Encodable { let amount: Int; let requestId: String }
+    return try await post("/creator/payouts/quote", body: Input(amount: amount, requestId: requestId))
+  }
+
+  public func withdraw(quoteId: String) async throws -> CaptroPayoutResult {
+    struct Input: Encodable { let quoteId: String }
+    return try await post("/creator/payouts", body: Input(quoteId: quoteId))
   }
 
   public func decideCommercePurchase(purchaseId: String, approved: Bool) async throws -> CaptroCommerceActionResponse {

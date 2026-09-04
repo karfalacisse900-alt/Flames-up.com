@@ -18,12 +18,15 @@ final class PostDetailModel: ObservableObject {
   @Published var commercePurchase: CaptroCommercePurchase?
   @Published var commercePass: CaptroCommercePass?
   @Published var checkoutDestination: CaptroCheckoutDestination?
+  @Published var paymentConfiguration: CaptroPaymentConfiguration?
   @Published var isUpdatingCommerce = false
   @Published var commerceError: String?
 
   let api: MIRAAPIClient
   private var likeMutationVersions: [String: Int] = [:]
   private var likingCommentIds = Set<String>()
+  private var paymentRequestKey: String?
+  private var paymentStorageKey: String?
 
   init(post: MIRAPost, api: MIRAAPIClient) {
     self.post = post
@@ -96,18 +99,30 @@ final class PostDetailModel: ObservableObject {
       if commerce.requiresPaymentContinuation, let purchaseId = commerce.viewerPurchaseId {
         response = try await api.continueCommerceCheckout(purchaseId: purchaseId)
       } else {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let selectionKey = (try encoder.encode(selection)).base64EncodedString()
+        let storageKey = "captro.pendingPayment.\(currentUserId ?? "session").\(post.id).\(priceId).\(quantity).\(selectionKey)"
+        paymentStorageKey = storageKey
+        paymentRequestKey = UserDefaults.standard.string(forKey: storageKey) ?? UUID().uuidString
+        UserDefaults.standard.set(paymentRequestKey, forKey: storageKey)
         response = try await api.beginCommercePurchase(
           postId: post.id,
           commerce: commerce,
           priceId: priceId,
           quantity: quantity,
-          selection: selection
+          selection: selection,
+          idempotencyKey: paymentRequestKey!
         )
       }
       commercePurchase = response.purchase
-      if let checkout = response.checkoutUrl, let url = URL(string: checkout) {
+      if let configuration = response.paymentSheet {
+        paymentConfiguration = configuration
+      } else if let checkout = response.checkoutUrl, let url = URL(string: checkout) {
         checkoutDestination = CaptroCheckoutDestination(url: url)
       } else {
+        if let paymentStorageKey { UserDefaults.standard.removeObject(forKey: paymentStorageKey) }
+        paymentRequestKey = nil
         await loadCommerce()
       }
     } catch {
@@ -119,7 +134,11 @@ final class PostDetailModel: ObservableObject {
     for delay in [1, 2, 4] {
       try? await Task.sleep(for: .seconds(delay))
       await loadCommerce()
-      if commerce?.isActiveForViewer == true || commerce?.needsApproval == true { return }
+      if commerce?.isActiveForViewer == true || commerce?.needsApproval == true {
+        if let paymentStorageKey { UserDefaults.standard.removeObject(forKey: paymentStorageKey) }
+        paymentRequestKey = nil
+        return
+      }
     }
   }
 
@@ -606,6 +625,13 @@ public struct PostDetailNativeView: View {
       Button("Cancel", role: .cancel) {}
     }
     .sheet(isPresented: $isEditingEvent) { CaptroEventEditSheet(model: model) }
+    .sheet(item: $model.paymentConfiguration, onDismiss: {
+      Task { await model.refreshCommerceAfterCheckout() }
+    }) { configuration in
+      if let purchase = model.commercePurchase {
+        CaptroPaymentSheetView(api: api, configuration: configuration, purchase: purchase)
+      }
+    }
     .sheet(item: $model.checkoutDestination, onDismiss: {
       Task { await model.refreshCommerceAfterCheckout() }
     }) { destination in
