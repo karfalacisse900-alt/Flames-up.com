@@ -368,7 +368,7 @@ jobs:
             --header "X-Captro-Bootstrap-Token: $STRIPE_CONNECT_BOOTSTRAP_TOKEN" \
             --header "Content-Type: application/json" \
             --data '{}' \
-            https://api.flames-up.com/api/internal/stripe/connect-webhook/bootstrap)"
+            https://flames-up-api.karfalacisse900.workers.dev/api/internal/stripe/connect-webhook/bootstrap)"
           response="$(cat "$response_file")"
           if [[ ! "$http_status" =~ ^2 ]]; then
             detail="$(jq -r '.detail // "No JSON error detail returned"' <<<"$response" 2>/dev/null || printf 'No readable JSON error detail returned')"
