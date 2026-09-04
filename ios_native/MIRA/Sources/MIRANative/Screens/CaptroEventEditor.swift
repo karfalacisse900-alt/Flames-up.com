@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CaptroEventEditorFields: View {
   @Binding var draft: CaptroEventDraft
+  var showsLegacyPriceAndAttendance = true
 
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
@@ -23,19 +24,21 @@ struct CaptroEventEditorFields: View {
       field("Venue", text: $draft.venueName)
       field("Public venue address", text: $draft.address)
       field("City", text: $draft.city)
-      Divider()
-      Toggle("Entry price", isOn: $draft.hasPrice)
-      if draft.hasPrice {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-          TextField("0.00", text: $draft.price)
-            .keyboardType(.decimalPad)
-            .accessibilityLabel("Entry price")
-          Picker("Currency", selection: $draft.currency) {
-            ForEach(Locale.commonISOCurrencyCodes, id: \.self) { Text($0).tag($0) }
-          }.pickerStyle(.menu)
+      if showsLegacyPriceAndAttendance {
+        Divider()
+        Toggle("Entry price", isOn: $draft.hasPrice)
+        if draft.hasPrice {
+          HStack(alignment: .firstTextBaseline, spacing: 12) {
+            TextField("0.00", text: $draft.price)
+              .keyboardType(.decimalPad)
+              .accessibilityLabel("Entry price")
+            Picker("Currency", selection: $draft.currency) {
+              ForEach(Locale.commonISOCurrencyCodes, id: \.self) { Text($0).tag($0) }
+            }.pickerStyle(.menu)
+          }
         }
+        Toggle("Allow people to join", isOn: $draft.attendanceEnabled)
       }
-      Toggle("Allow people to join", isOn: $draft.attendanceEnabled)
       if let error = draft.validationError {
         Text(error).font(.system(size: 13)).foregroundStyle(MIRATheme.Color.textMuted)
       }

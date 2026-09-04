@@ -15,6 +15,7 @@ final class ProfileNativeModel: ObservableObject {
   @Published var posts: [MIRAPost] = []
   @Published var receiptEarnings: CaptroReceiptRewardBalance?
   @Published var receiptSubmissions: [CaptroReceiptSubmission] = []
+  @Published var commerceDashboard: CaptroCommerceDashboard?
   @Published var profileError: String?
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v5"
@@ -43,6 +44,9 @@ final class ProfileNativeModel: ObservableObject {
     }
     if let submissions = try? await api.captroReceiptSubmissionHistory(), receiptSubmissions != submissions {
       receiptSubmissions = submissions
+    }
+    if let dashboard = try? await api.loadCommerceDashboard() {
+      commerceDashboard = dashboard
     }
 
     guard let freshUser: MIRAUser = try? await api.get("/auth/me") else { return }
@@ -171,6 +175,16 @@ final class ProfileNativeModel: ObservableObject {
     }
   }
 
+  func decideCommercePurchase(id: String, approved: Bool) async {
+    do {
+      _ = try await api.decideCommercePurchase(purchaseId: id, approved: approved)
+      commerceDashboard = try await api.loadCommerceDashboard()
+      profileError = nil
+    } catch {
+      profileError = (error as? MIRAAPIError)?.errorDescription ?? "Could not update this request."
+    }
+  }
+
   private func postsCacheKey(for userID: String) -> String {
     "native.profile.posts.\(userID).v6"
   }
@@ -248,6 +262,14 @@ public struct ProfileNativeView: View {
           }
           if !model.receiptSubmissions.isEmpty {
             receiptSubmissionsSection(model.receiptSubmissions)
+          }
+          if let dashboard = model.commerceDashboard,
+             !dashboard.myStuff.isEmpty || !dashboard.created.isEmpty || !dashboard.pendingRequests.isEmpty {
+            CaptroCommerceDashboardView(
+              dashboard: dashboard,
+              api: model.api,
+              onDecision: { id, approved in await model.decideCommercePurchase(id: id, approved: approved) }
+            )
           }
           if model.posts.isEmpty && model.user == nil {
             ProfileGridSkeleton()

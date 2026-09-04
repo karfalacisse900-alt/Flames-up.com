@@ -8,6 +8,9 @@ enum CaptroStampKind: String, Identifiable {
   case group
   case meetup
   case event
+  case party
+  case ticket
+  case booking
   case deal
   case localOffer = "local_offer"
   case guide
@@ -22,6 +25,9 @@ enum CaptroStampKind: String, Identifiable {
     .group,
     .meetup,
     .event,
+    .party,
+    .ticket,
+    .booking,
     .deal,
     .localOffer,
   ]
@@ -37,6 +43,9 @@ enum CaptroStampKind: String, Identifiable {
     case .group: return "Group"
     case .meetup: return "Meetup"
     case .event: return "Event"
+    case .party: return "Party"
+    case .ticket: return "Ticket / Pass"
+    case .booking: return "Booking"
     case .deal: return "Deal"
     case .localOffer: return "Local Offer"
     case .guide: return "Guide"
@@ -49,9 +58,27 @@ enum CaptroStampKind: String, Identifiable {
   var actionTitle: String? {
     switch self {
     case .club, .meetup: return "JOIN"
+    case .party: return "JOIN"
     case .event: return "ATTEND"
+    case .ticket: return "GET TICKET"
+    case .booking: return "BOOK"
     case .deal, .localOffer: return "CLAIM"
     case .group: return "ACCESS"
+    case .social, .place, .guide, .travel, .receipt, .invoice: return nil
+    }
+  }
+
+  var commerceContentType: String? {
+    switch self {
+    case .club: return "club"
+    case .group: return "group"
+    case .meetup: return "meetup"
+    case .event: return "event"
+    case .party: return "party"
+    case .ticket: return "ticket"
+    case .booking: return "booking"
+    case .deal: return "deal"
+    case .localOffer: return "offer"
     case .social, .place, .guide, .travel, .receipt, .invoice: return nil
     }
   }
@@ -260,7 +287,10 @@ extension MIRAPost {
     case "group", "access", "group_access": return .group
     case "meetup": return .meetup
     case "event", "concert", "show": return .event
-    case "travel", "trip", "ticket", "boarding_pass", "train", "flight", "bus": return .travel
+    case "party": return .party
+    case "ticket", "access_pass": return detail?.travel == nil ? .ticket : .travel
+    case "booking", "reservation": return .booking
+    case "travel", "trip", "boarding_pass", "train", "flight", "bus": return .travel
     case "receipt": return .receipt
     case "invoice": return .invoice
     case "deal": return .deal
@@ -275,7 +305,8 @@ extension MIRAPost {
 
   var captroStampContent: CaptroStampContent {
     let kind = captroStampKind
-    let location = captroFeedLocationText
+    let commerce = detail?.commerce
+    let location = commerce?.displayLocation ?? captroFeedLocationText
     let title: String
     switch kind {
     case .place:
@@ -285,7 +316,7 @@ extension MIRAPost {
     case .receipt, .invoice:
       title = detail?.document?.merchantName ?? captroCleanTitle ?? kind.displayName
     default:
-      title = captroCleanTitle ?? kind.displayName
+      title = commerce?.title ?? captroCleanTitle ?? kind.displayName
     }
 
     let metadata: String?
@@ -306,9 +337,11 @@ extension MIRAPost {
 
     let summary: String?
     switch kind {
-    case .event, .meetup:
+    case .event, .meetup, .party, .ticket, .booking, .club, .group, .deal, .localOffer:
       let event = detail?.event
-      let facts = [event?.calendarDate, event?.timeRange, event?.venueName, event?.priceLabel].compactMap { $0 }
+      let price = commerce?.lowestPrice.map { $0.unitAmount == 0 ? "FREE" : $0.money }
+      let facts = [commerce?.scheduleLabel, event?.calendarDate, event?.timeRange, commerce?.locationName,
+        event?.venueName, price, event?.priceLabel, commerce?.compactAvailabilityLabel].compactMap { $0 }
       summary = facts.isEmpty ? captroFeedCaptionText : facts.joined(separator: " · ")
     case .travel:
       summary = [detail?.travel?.duration, detail?.travel?.departure].compactMap { $0 }.joined(separator: " · ")

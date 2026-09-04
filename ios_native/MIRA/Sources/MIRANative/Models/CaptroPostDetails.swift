@@ -2,12 +2,13 @@ import Foundation
 
 // Optional validated enrichment. Missing facts are not inferred from captions or tags.
 public struct CaptroPostDetails: Codable, Hashable {
-  public var visitedCount: Int?
-  public var creatorVisited: Bool?
-  public var event: CaptroEventDetails?
-  public var collection: CaptroCollectionDetails?
-  public var travel: CaptroTravelDetails?
-  public var document: CaptroDocumentPreview?
+  public var visitedCount: Int? = nil
+  public var creatorVisited: Bool? = nil
+  public var event: CaptroEventDetails? = nil
+  public var collection: CaptroCollectionDetails? = nil
+  public var travel: CaptroTravelDetails? = nil
+  public var document: CaptroDocumentPreview? = nil
+  public var commerce: CaptroCommerceDetails? = nil
 }
 
 public struct CaptroEventDetails: Codable, Hashable {
@@ -52,8 +53,9 @@ extension MIRAPost {
   var detailKind: CaptroPostDetailKind {
     switch postType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "" {
     case "place", "location", "review", "check_in", "checkin": return .placeReview
-    case "meetup", "event", "concert", "show": return .event
-    case "travel", "trip", "ticket", "boarding_pass", "train", "flight", "bus": return .travel
+    case "meetup", "event", "party", "concert", "show", "access_pass": return .event
+    case "ticket": return detail?.travel == nil ? .event : .travel
+    case "travel", "trip", "boarding_pass", "train", "flight", "bus": return .travel
     case "receipt": return .receipt
     case "invoice": return .invoice
     case "collection", "list", "guide", "album", "collaborative_album", "collaborative-album": return .collection

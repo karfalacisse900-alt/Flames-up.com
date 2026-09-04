@@ -232,6 +232,21 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           OAUTH_FALLBACK_SECRET: ${{ secrets.OAUTH_FALLBACK_SECRET }}
 
+      - name: Sync Captro commerce pass-signing secret
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${#CAPTRO_TICKET_SIGNING_SECRET}" -lt 32 ]; then
+            echo "CAPTRO_TICKET_SIGNING_SECRET must contain at least 32 characters."
+            exit 1
+          fi
+          printf '%s' "$CAPTRO_TICKET_SIGNING_SECRET" | npx wrangler secret put CAPTRO_TICKET_SIGNING_SECRET --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CAPTRO_TICKET_SIGNING_SECRET: ${{ secrets.CAPTRO_TICKET_SIGNING_SECRET }}
+
       - name: Sync Scan verification provider secrets
         working-directory: ./backend-cf
         shell: bash

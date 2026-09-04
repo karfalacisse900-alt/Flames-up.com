@@ -16,21 +16,25 @@ struct CaptroPostDetailSections: View {
 
   var body: some View {
     Group {
-      switch post.detailKind {
-      case .placeReview: placeReview
-      case .regular: regularPost
-      case .event: eventPost
-      case .collection: collectionPost
-      case .travel:
-        CaptroTravelDetailSection(post: post, ticket: model.privateObject?.ticket, api: model.api)
-      case .receipt, .invoice:
-        if let document = model.privateObject?.document {
-          CaptroDocumentFacts(review: document).padding(16)
-        } else if !model.isLoadingObject && model.objectError == nil {
-          VStack(alignment: .leading, spacing: 12) {
-            Text(post.detail?.document?.merchantName ?? post.titleText).font(.system(size: 24, weight: .bold))
-            Label("Document details are private", systemImage: "lock").font(.system(size: 14))
-          }.padding(16)
+      if model.commerce != nil || post.detail?.commerce != nil {
+        CaptroCommerceDetailSection(model: model)
+      } else {
+        switch post.detailKind {
+        case .placeReview: placeReview
+        case .regular: regularPost
+        case .event: eventPost
+        case .collection: collectionPost
+        case .travel:
+          CaptroTravelDetailSection(post: post, ticket: model.privateObject?.ticket, api: model.api)
+        case .receipt, .invoice:
+          if let document = model.privateObject?.document {
+            CaptroDocumentFacts(review: document).padding(16)
+          } else if !model.isLoadingObject && model.objectError == nil {
+            VStack(alignment: .leading, spacing: 12) {
+              Text(post.detail?.document?.merchantName ?? post.titleText).font(.system(size: 24, weight: .bold))
+              Label("Document details are private", systemImage: "lock").font(.system(size: 14))
+            }.padding(16)
+          }
         }
       }
     }
@@ -304,7 +308,7 @@ struct CaptroDetailLocationSection: View {
   }
 }
 
-private struct CaptroEventAttendees: View {
+struct CaptroEventAttendees: View {
   let event: CaptroEventDetails
   let api: MIRAAPIClient
 

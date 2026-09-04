@@ -1443,6 +1443,7 @@ public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
 
 public struct CreatePostBody: Encodable {
   public let event: CaptroEventInput?
+  public let commerce: CaptroCommerceInput?
   public let title: String
   public let content: String
   public let image: String?
@@ -1507,6 +1508,7 @@ public struct CreatePostBody: Encodable {
     displayLocationVisibility: String? = nil,
     postType: String? = nil,
     event: CaptroEventInput? = nil,
+    commerce: CaptroCommerceInput? = nil,
     placeId: String? = nil,
     placeName: String? = nil,
     placeProvider: String? = nil,
@@ -1554,6 +1556,7 @@ public struct CreatePostBody: Encodable {
     self.displayLocationVisibility = displayLocationVisibility
     self.postType = postType
     self.event = event
+    self.commerce = commerce
     self.placeId = placeId
     self.placeName = placeName
     self.placeProvider = placeProvider

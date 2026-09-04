@@ -14,6 +14,12 @@ final class PostDetailModel: ObservableObject {
   @Published var privateObject: CaptroPrivatePostObject?
   @Published var isLoadingObject = false
   @Published var objectError: String?
+  @Published var commerce: CaptroCommerceDetails?
+  @Published var commercePurchase: CaptroCommercePurchase?
+  @Published var commercePass: CaptroCommercePass?
+  @Published var checkoutDestination: CaptroCheckoutDestination?
+  @Published var isUpdatingCommerce = false
+  @Published var commerceError: String?
 
   let api: MIRAAPIClient
   private var likeMutationVersions: [String: Int] = [:]
@@ -22,6 +28,7 @@ final class PostDetailModel: ObservableObject {
   init(post: MIRAPost, api: MIRAAPIClient) {
     self.post = post
     self.api = api
+    self.commerce = post.detail?.commerce
   }
 
   func hydrateFromLocalCache() async {
@@ -45,6 +52,7 @@ final class PostDetailModel: ObservableObject {
         following: refreshed.isFollowing ?? refreshed.following?.value ?? refreshed.followed?.value ?? current.viewerFollowing
       )
       if merged.detail == nil { merged.detail = current.detail }
+      if merged.detail?.commerce == nil { merged.detail?.commerce = commerce ?? current.detail?.commerce }
       var transaction = Transaction()
       transaction.animation = nil
       withTransaction(transaction) {
@@ -52,6 +60,79 @@ final class PostDetailModel: ObservableObject {
       }
       publishEngagement()
     } catch {}
+  }
+
+  func loadCommerce() async {
+    guard commerce != nil || post.detail?.commerce != nil || post.captroStampKind.commerceContentType != nil else { return }
+    do {
+      let response = try await api.loadCommerce(postId: post.id)
+      commerce = response.commerce
+      var updated = post
+      if updated.detail == nil { updated.detail = CaptroPostDetails() }
+      updated.detail?.commerce = response.commerce
+      post = updated
+      commerceError = nil
+      if let entitlementId = response.commerce.viewerEntitlementId,
+         response.commerce.isActiveForViewer,
+         ["ticket", "redemption"].contains(response.commerce.fulfillmentType) || response.commerce.passRequired {
+        await loadCommercePass(entitlementId: entitlementId)
+      }
+    } catch {
+      commerceError = "Could not refresh access details."
+    }
+  }
+
+  func performCommerceAction(
+    priceId: String,
+    quantity: Int,
+    selection: CaptroCommerceSelection
+  ) async {
+    guard let commerce, !isUpdatingCommerce else { return }
+    isUpdatingCommerce = true
+    commerceError = nil
+    defer { isUpdatingCommerce = false }
+    do {
+      let response: CaptroCommerceActionResponse
+      if commerce.requiresPaymentContinuation, let purchaseId = commerce.viewerPurchaseId {
+        response = try await api.continueCommerceCheckout(purchaseId: purchaseId)
+      } else {
+        response = try await api.beginCommercePurchase(
+          postId: post.id,
+          commerce: commerce,
+          priceId: priceId,
+          quantity: quantity,
+          selection: selection
+        )
+      }
+      commercePurchase = response.purchase
+      if let checkout = response.checkoutUrl, let url = URL(string: checkout) {
+        checkoutDestination = CaptroCheckoutDestination(url: url)
+      } else {
+        await loadCommerce()
+      }
+    } catch {
+      commerceError = (error as? MIRAAPIError)?.errorDescription ?? "Could not complete this request."
+    }
+  }
+
+  func refreshCommerceAfterCheckout() async {
+    for delay in [1, 2, 4] {
+      try? await Task.sleep(for: .seconds(delay))
+      await loadCommerce()
+      if commerce?.isActiveForViewer == true || commerce?.needsApproval == true { return }
+    }
+  }
+
+  func loadCommercePass(entitlementId: String? = nil) async {
+    guard let entitlementId = entitlementId ?? commerce?.viewerEntitlementId else { return }
+    do {
+      let response = try await api.loadCommercePass(entitlementId: entitlementId)
+      commercePurchase = response.purchase
+      commercePass = response.pass
+      commerceError = nil
+    } catch {
+      commerceError = "Could not load this pass."
+    }
   }
 
   func loadPrivateObject() async {
@@ -530,6 +611,12 @@ public struct PostDetailNativeView: View {
       Button("Cancel", role: .cancel) {}
     }
     .sheet(isPresented: $isEditingEvent) { CaptroEventEditSheet(model: model) }
+    .sheet(item: $model.checkoutDestination, onDismiss: {
+      Task { await model.refreshCommerceAfterCheckout() }
+    }) { destination in
+      CaptroCheckoutBrowser(url: destination.url)
+        .ignoresSafeArea()
+    }
     .alert("Couldn't complete that action", isPresented: Binding(
       get: { model.actionError != nil },
       set: { if !$0 { model.actionError = nil } }
@@ -558,6 +645,7 @@ public struct PostDetailNativeView: View {
     .task {
       await model.hydrateFromLocalCache()
       await model.refreshPost()
+      await model.loadCommerce()
       await model.loadPrivateObject()
       await model.loadComments()
     }

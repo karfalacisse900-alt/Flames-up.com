@@ -947,6 +947,7 @@ public struct CreatePostNativeView: View {
   @State private var activePostDetailSheet: PostDetailSheet?
   @State private var selectedStampKind: CaptroStampKind = .social
   @State private var eventDraft = CaptroEventDraft()
+  @State private var commerceDraft = CaptroCommerceDraft()
   @State private var selectedPlace: MIRAExactPostPlace?
   @State private var broadLocation = MIRABroadDisplayLocation()
   @State private var showBroadLocation = false
@@ -998,7 +999,15 @@ public struct CreatePostNativeView: View {
     .onChange(of: selectedPlace) { _, place in
       handleSelectedPlaceChange(place)
     }
-    .onChange(of: selectedStampKind) { _, _ in cacheComposerDraft() }
+    .onChange(of: selectedStampKind) { _, kind in
+      if kind.commerceContentType != nil {
+        commerceDraft.enabled = true
+        commerceDraft.configureDefaults(for: kind)
+      } else {
+        commerceDraft.enabled = false
+      }
+      cacheComposerDraft()
+    }
     .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
     .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
@@ -1013,7 +1022,7 @@ public struct CreatePostNativeView: View {
     .onChange(of: scenePhase) { _, phase in
       handleComposerScenePhaseChange(phase)
     }
-    .miraBottomSheet(isPresented: $isEditingPostDetails, preferredHeightFraction: isEventStamp ? 0.88 : 0.56) { closeSheet in
+    .miraBottomSheet(isPresented: $isEditingPostDetails, preferredHeightFraction: selectedStampKind.commerceContentType != nil || isEventStamp ? 0.90 : 0.56) { closeSheet in
       stampOptionsSheet(onClose: closeSheet)
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
@@ -1386,8 +1395,17 @@ public struct CreatePostNativeView: View {
           )
           broadLocationOptionRow
           if isEventStamp {
-            CaptroEventEditorFields(draft: $eventDraft)
-              .padding(.vertical, 12)
+            if selectedStampKind.commerceContentType == nil {
+              CaptroEventEditorFields(draft: $eventDraft)
+                .padding(.vertical, 12)
+            } else {
+              CaptroEventEditorFields(draft: $eventDraft, showsLegacyPriceAndAttendance: false)
+                .padding(.vertical, 12)
+            }
+          }
+          if selectedStampKind.commerceContentType != nil {
+            CaptroCommerceEditorFields(kind: selectedStampKind, draft: $commerceDraft)
+              .padding(.bottom, 20)
           }
         }
       }
@@ -1398,7 +1416,9 @@ public struct CreatePostNativeView: View {
     .background(MIRATheme.Color.surface)
   }
 
-  private var isEventStamp: Bool { selectedStampKind == .event || selectedStampKind == .meetup }
+  private var isEventStamp: Bool {
+    [.event, .meetup, .party, .ticket, .booking].contains(selectedStampKind)
+  }
 
   private var composerStampContent: CaptroStampContent {
     CaptroStampContent(kind: selectedStampKind,
@@ -1683,6 +1703,12 @@ public struct CreatePostNativeView: View {
       isEditingPostDetails = true
       return
     }
+    if selectedStampKind.commerceContentType != nil, commerceDraft.enabled,
+       let error = commerceDraft.validationError {
+      errorMessage = error
+      isEditingPostDetails = true
+      return
+    }
     isPosting = true
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
@@ -1721,6 +1747,16 @@ public struct CreatePostNativeView: View {
       let taggedPayload = taggedUsers.map {
         MIRATaggedUserPayload(id: $0.id, username: $0.username, fullName: $0.fullName, profileImage: $0.profileImage)
       }
+      let eventInput = isEventStamp ? eventDraft.input : nil
+      let commerceInput = commerceDraft.input(
+        kind: selectedStampKind,
+        title: title,
+        description: postContent,
+        event: eventInput,
+        locationName: selectedPlace?.displayName,
+        address: selectedPlace?.addressText,
+        city: selectedPlace?.city ?? (shouldPublishBroadLocation ? broadLocation.city : nil)
+      )
       let body = CreatePostBody(
         title: title,
         content: postContent,
@@ -1739,6 +1775,7 @@ public struct CreatePostNativeView: View {
         displayLocationVisibility: shouldPublishBroadLocation ? "public" : "hidden",
         postType: selectedStampKind.backendPostType,
         event: isEventStamp ? eventDraft.input : nil,
+        commerce: commerceInput,
         placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
         placeProvider: selectedPlace?.provider,

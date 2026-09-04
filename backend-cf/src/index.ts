@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
+import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } from './commerce';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -94,6 +95,7 @@ interface Env {
   STRIPE_SUCCESS_URL?: string;
   STRIPE_CANCEL_URL?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  CAPTRO_TICKET_SIGNING_SECRET?: string;
   VERYFI_CLIENT_ID?: string;
   VERYFI_CLIENT_SECRET?: string;
   VERYFI_USERNAME?: string;
@@ -6998,6 +7000,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
     : mapped;
   await attachPublicPostObjects(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
+  await attachPublicCommerce(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   return overlaySupabaseViewerEngagement(c, photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
 }
 
@@ -8251,6 +8254,8 @@ function allowedStripeReturnUrl(c: any, value: unknown, fallbackPath: string): s
       new URL(frontendUrl).origin,
       'https://flames-up.com',
       'https://www.flames-up.com',
+      'https://captro.app',
+      'https://www.captro.app',
     ]);
     return allowed.has(url.origin) ? url.toString() : fallback;
   } catch {
@@ -8747,6 +8752,260 @@ async function verifyStripeWebhookSignature(rawBody: string, signatureHeader: st
 
   const expected = await hmacSha256Hex(secret, `${timestamp}.${rawBody}`);
   return signatures.some((signature) => constantTimeEqualHex(signature, expected));
+}
+
+function commerceErrorCode(error: any): string {
+  const value = getErrorCode(error).toUpperCase();
+  const match = value.match(/(?:CAPTRO|COMMERCE|STRIPE)_[A-Z0-9_]+/);
+  return match?.[0] || 'COMMERCE_REQUEST_FAILED';
+}
+
+function commerceErrorStatus(code: string): number {
+  if (['CAPTRO_ITEM_UNAVAILABLE', 'CAPTRO_ITEM_EXPIRED', 'CAPTRO_CAPACITY_REACHED', 'CAPTRO_TIER_SOLD_OUT',
+    'CAPTRO_BOOKING_SLOT_UNAVAILABLE', 'CAPTRO_PASS_ALREADY_USED', 'CAPTRO_PURCHASE_NOT_PAYABLE',
+    'COMMERCE_STOREKIT_REQUIRED'].includes(code)) return 409;
+  if (['CAPTRO_PURCHASE_NOT_FOUND', 'CAPTRO_PASS_NOT_FOUND'].includes(code)) return 404;
+  if (['CAPTRO_PASS_INVALID', 'CAPTRO_CHECKOUT_MISMATCH'].includes(code)) return 403;
+  if (['COMMERCE_PAYMENTS_UNAVAILABLE', 'CAPTRO_TICKET_SIGNING_SECRET_MISSING'].includes(code)) return 503;
+  if (code.startsWith('STRIPE_')) return 502;
+  return 400;
+}
+
+function commercePurchasePayload(row: any, entitlement?: any) {
+  return {
+    id: publicId(row?.id, 120),
+    postId: publicId(row?.post_id, 120),
+    purchasableId: publicId(row?.purchasable_id, 120),
+    contentType: cleanText(row?.content_type, 40),
+    fulfillmentType: cleanText(row?.fulfillment_type, 40),
+    itemTitle: cleanText(row?.item_title, 180),
+    priceLabel: cleanText(row?.price_label, 80),
+    quantity: Math.max(1, Number(row?.quantity || 1)),
+    unitAmount: Math.max(0, Number(row?.unit_amount || 0)),
+    feeAmount: row?.fee_amount == null ? null : Math.max(0, Number(row.fee_amount)),
+    taxAmount: row?.tax_amount == null ? null : Math.max(0, Number(row.tax_amount)),
+    totalAmount: Math.max(0, Number(row?.total_amount || 0)),
+    currency: cleanText(row?.currency || 'USD', 3).toUpperCase(),
+    status: cleanText(row?.status, 40),
+    purchasedAt: row?.confirmed_at || row?.created_at || null,
+    entitlement: entitlement ? {
+      id: publicId(entitlement.id, 120),
+      kind: cleanText(entitlement.kind, 40),
+      status: cleanText(entitlement.status, 40),
+      startsAt: entitlement.starts_at || null,
+      endsAt: entitlement.ends_at || null,
+      destinationId: entitlement.destination_id || null,
+      hasPass: typeof entitlement.has_pass === 'boolean' ? entitlement.has_pass : null,
+    } : null,
+  };
+}
+
+async function commerceViewerState(c: any, purchasableId: string, authUserId: string) {
+  const purchases = await supabaseAdminQueryRows(c, 'app_purchases', {
+    filters: { purchasable_id: postgrestEqFilter(purchasableId), buyer_id: postgrestEqFilter(authUserId) },
+    order: 'created_at.desc',
+    limit: 1,
+  });
+  const purchase = purchases[0];
+  if (!purchase) return null;
+  const entitlements = await supabaseAdminSelectRows(c, 'app_entitlements', { purchase_id: postgrestEqFilter(purchase.id) }, '*', 1);
+  return {
+    purchase_id: purchase.id,
+    purchase_status: purchase.status,
+    entitlement_id: entitlements[0]?.id || null,
+    entitlement_status: entitlements[0]?.status || null,
+    destination_id: null as string | null,
+    purchase,
+    entitlement: entitlements[0] || null,
+  };
+}
+
+async function commerceDetailsForVisiblePost(c: any, post: any, viewerAppUserId: string) {
+  const rows = await supabaseAdminSelectRows(c, 'app_purchasables', { post_id: postgrestEqFilter(post.supabase_post_id) }, '*', 1);
+  const purchasable = rows[0];
+  if (!purchasable) return null;
+  const authUserId = await supabaseAuthUserIdForAppUserId(c, viewerAppUserId);
+  const [prices, viewer] = await Promise.all([
+    supabaseAdminQueryRows(c, 'app_prices', {
+      filters: { purchasable_id: postgrestEqFilter(purchasable.id), active: postgrestEqFilter('true') },
+      order: 'sort_order.asc,created_at.asc',
+      limit: 12,
+    }),
+    authUserId ? commerceViewerState(c, purchasable.id, authUserId) : Promise.resolve(null),
+  ]);
+  if (viewer?.entitlement && ['membership', 'group_access'].includes(viewer.entitlement.kind)) {
+    viewer.destination_id = cleanText(purchasable.private_config?.group_chat_id, 120) || null;
+  }
+  return publicCommercePayload(purchasable, prices, viewer);
+}
+
+function getTicketSigningSecret(c: any): string {
+  const secret = String(c.env.CAPTRO_TICKET_SIGNING_SECRET || '').trim();
+  if (secret.length < 32) throw new Error('CAPTRO_TICKET_SIGNING_SECRET_MISSING');
+  return secret;
+}
+
+async function signedCommercePassToken(c: any, kind: 'ticket' | 'redemption', id: string, version: number): Promise<string> {
+  const payload = `captro:v1:${kind}:${id}:${version}`;
+  const signature = await hmacSha256Hex(getTicketSigningSecret(c), payload);
+  return `${payload}:${signature}`;
+}
+
+async function parseCommercePassToken(c: any, value: unknown): Promise<{ kind: 'ticket' | 'redemption'; id: string; version: number } | null> {
+  const token = cleanText(value, 1000);
+  const parts = token.split(':');
+  if (parts.length !== 6 || parts[0] !== 'captro' || parts[1] !== 'v1' || !['ticket', 'redemption'].includes(parts[2])) return null;
+  const kind = parts[2] as 'ticket' | 'redemption';
+  const id = isUuidText(parts[3]);
+  const version = Number(parts[4]);
+  const signature = parts[5];
+  if (!id || !Number.isInteger(version) || version < 1 || !/^[a-f0-9]{64}$/i.test(signature)) return null;
+  const expected = await hmacSha256Hex(getTicketSigningSecret(c), `captro:v1:${kind}:${id}:${version}`);
+  if (!constantTimeEqualHex(signature, expected)) return null;
+  return { kind, id, version };
+}
+
+async function completeCommercePurchaseFromSession(c: any, eventId: string, session: any) {
+  const purchaseId = isUuidText(session?.metadata?.captro_purchase_id || '');
+  if (!purchaseId || session?.metadata?.source !== 'captro_commerce') return { processed: false };
+  if (session?.payment_status !== 'paid') return { processed: false, pending: true };
+  const paymentIntentId = cleanText(session?.payment_intent, 180);
+  const amount = Math.max(0, Number(session?.amount_total || 0));
+  const tax = Math.max(0, Number(session?.total_details?.amount_tax || 0));
+  let fee = 0;
+  if (paymentIntentId) {
+    const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(paymentIntentId)}?expand[]=latest_charge.balance_transaction`);
+    if (intent.ok) fee = Math.max(0, Number(intent.data?.latest_charge?.balance_transaction?.fee || 0));
+  }
+  const digest = await sha256Hex(JSON.stringify({ id: session?.id, payment_intent: paymentIntentId, amount, currency: session?.currency }));
+  const purchase = await supabaseAdminRpc(c, 'captro_confirm_paid_purchase', {
+    p_purchase_id: purchaseId,
+    p_provider: 'stripe',
+    p_provider_event_id: cleanText(eventId, 180),
+    p_provider_checkout_id: cleanText(session?.id, 180),
+    p_provider_payment_id: paymentIntentId,
+    p_amount: amount,
+    p_fee_amount: fee,
+    p_tax_amount: tax,
+    p_currency: cleanText(session?.currency || 'usd', 3).toUpperCase(),
+    p_payload_digest: digest,
+  });
+  return { processed: true, purchase };
+}
+
+async function cancelCommercePurchaseFromSession(c: any, session: any) {
+  const purchaseId = isUuidText(session?.metadata?.captro_purchase_id || '');
+  if (!purchaseId || session?.metadata?.source !== 'captro_commerce') return { processed: false };
+  await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', {
+    p_purchase_id: purchaseId,
+    p_checkout_id: cleanText(session?.id, 180),
+  });
+  return { processed: true };
+}
+
+async function refundCommercePurchaseFromCharge(c: any, eventId: string, charge: any) {
+  const paymentIntentId = cleanText(charge?.payment_intent, 180);
+  if (!paymentIntentId) return { processed: false };
+  const rows = await supabaseAdminSelectRows(c, 'app_purchases', {
+    provider_payment_id: postgrestEqFilter(paymentIntentId),
+  }, 'id', 1);
+  if (!rows.length) return { processed: false };
+  const amount = Math.max(0, Number(charge?.amount_refunded || charge?.amount || 0));
+  const digest = await sha256Hex(JSON.stringify({ id: charge?.id, payment_intent: paymentIntentId, amount }));
+  await supabaseAdminRpc(c, 'captro_refund_purchase', {
+    p_provider_payment_id: paymentIntentId,
+    p_refund_amount: amount,
+    p_provider_event_id: cleanText(eventId, 180),
+    p_payload_digest: digest,
+  });
+  return { processed: true };
+}
+
+async function createCommerceCheckoutSession(c: any, purchase: any) {
+  const existingSessionId = cleanText(purchase?.provider_checkout_id, 180);
+  if (existingSessionId) {
+    const existing = await stripeApiGet(c, `/checkout/sessions/${encodeURIComponent(existingSessionId)}`);
+    if (existing.ok && existing.data?.status === 'open' && existing.data?.url) return existing.data;
+  }
+  const purchaseId = isUuidText(purchase?.id || '');
+  if (!purchaseId || purchase?.status !== 'payment_pending') throw new Error('CAPTRO_PURCHASE_NOT_PAYABLE');
+  const successUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/success', '/checkout/success');
+  const cancelUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/cancelled', '/checkout/cancelled');
+  const currency = cleanText(purchase.currency || 'USD', 3).toLowerCase();
+  const session = await stripeApiRequest(c, '/checkout/sessions', {
+    mode: 'payment',
+    success_url: `${successUrl}${successUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}`,
+    client_reference_id: purchase.buyer_id,
+    expires_at: Math.floor(Date.now() / 1000) + (35 * 60),
+    'line_items[0][price_data][currency]': currency,
+    'line_items[0][price_data][unit_amount]': Math.max(0, Number(purchase.unit_amount || 0)),
+    'line_items[0][price_data][product_data][name]': cleanText(purchase.item_title, 180),
+    'line_items[0][price_data][product_data][description]': cleanText(`${purchase.content_type} · ${purchase.price_label}`, 180),
+    'line_items[0][quantity]': Math.max(1, Number(purchase.quantity || 1)),
+    'metadata[source]': 'captro_commerce',
+    'metadata[captro_purchase_id]': purchaseId,
+    'metadata[captro_post_id]': publicId(purchase.post_id, 120),
+    'payment_intent_data[metadata][source]': 'captro_commerce',
+    'payment_intent_data[metadata][captro_purchase_id]': purchaseId,
+  }, `captro-commerce-${purchaseId}`);
+  if (!session.ok || !session.data?.id || !session.data?.url) {
+    throw new Error(cleanText(session.data?.error?.code || session.data?.error?.message, 180) || 'STRIPE_CHECKOUT_FAILED');
+  }
+  await supabaseAdminPatchRows(c, 'app_purchases', {
+    id: postgrestEqFilter(purchaseId),
+    buyer_id: postgrestEqFilter(purchase.buyer_id),
+    status: postgrestEqFilter('payment_pending'),
+  }, {
+    payment_provider: 'stripe',
+    provider_checkout_id: session.data.id,
+    updated_at: now(),
+  });
+  return session.data;
+}
+
+function sanitizeCommerceSelection(value: unknown, fulfillmentType: string): Record<string, unknown> {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const result: Record<string, unknown> = {};
+  const fulfillmentMethod = cleanText(input.fulfillmentMethod || input.fulfillment_method, 40);
+  if (fulfillmentMethod) {
+    if (!['pickup', 'delivery', 'service', 'digital_delivery'].includes(fulfillmentMethod)) throw new Error('CAPTRO_FULFILLMENT_METHOD_INVALID');
+    result.fulfillmentMethod = fulfillmentMethod;
+  }
+  if (fulfillmentType === 'reservation') {
+    for (const key of ['startsAt', 'endsAt'] as const) {
+      const snake = key === 'startsAt' ? 'starts_at' : 'ends_at';
+      const raw = cleanText(input[key] || input[snake], 80);
+      if (!raw) continue;
+      const timestamp = Date.parse(raw);
+      if (!Number.isFinite(timestamp)) throw new Error('CAPTRO_BOOKING_TIME_INVALID');
+      result[key] = new Date(timestamp).toISOString();
+    }
+    if (!result.startsAt) throw new Error('CAPTRO_BOOKING_TIME_REQUIRED');
+    if (result.endsAt && String(result.endsAt) <= String(result.startsAt)) throw new Error('CAPTRO_BOOKING_TIME_INVALID');
+  }
+  const option = cleanText(input.option, 160);
+  if (option) result.option = option;
+  return result;
+}
+
+function constrainCommerceSelection(selection: Record<string, unknown>, purchasable: any): Record<string, unknown> {
+  if (purchasable?.fulfillment_type !== 'reservation') return selection;
+  const startsAt = Date.parse(String(selection.startsAt || ''));
+  if (!Number.isFinite(startsAt) || startsAt <= Date.now() + 60_000) throw new Error('CAPTRO_BOOKING_TIME_INVALID');
+  const configuredStart = purchasable.starts_at ? Date.parse(String(purchasable.starts_at)) : NaN;
+  const configuredEnd = purchasable.ends_at ? Date.parse(String(purchasable.ends_at)) : NaN;
+  if (Number.isFinite(configuredStart) && startsAt < configuredStart) throw new Error('CAPTRO_BOOKING_TIME_INVALID');
+  if (Number.isFinite(configuredEnd) && startsAt >= configuredEnd) throw new Error('CAPTRO_BOOKING_TIME_INVALID');
+  const duration = Number(purchasable.public_data?.durationMinutes || purchasable.public_data?.duration_minutes || 0);
+  if (Number.isInteger(duration) && duration >= 5 && duration <= 1440) {
+    selection.endsAt = new Date(startsAt + duration * 60_000).toISOString();
+  }
+  const endsAt = selection.endsAt ? Date.parse(String(selection.endsAt)) : NaN;
+  if (Number.isFinite(endsAt) && Number.isFinite(configuredEnd) && endsAt > configuredEnd) {
+    throw new Error('CAPTRO_BOOKING_TIME_INVALID');
+  }
+  return selection;
 }
 
 async function completeCoinPurchaseFromSession(c: any, session: any) {
@@ -11130,6 +11389,25 @@ async function supabaseAdminInsertRows(c: any, table: string, rows: any[], selec
   }
   const data = await response.json().catch(() => []);
   return Array.isArray(data) ? data : [];
+}
+
+async function supabaseAdminRpc(c: any, functionName: string, body: Record<string, unknown>): Promise<any> {
+  const serviceRoleKey = getSupabaseServiceRoleKey(c);
+  const response = await fetch(`${getSupabaseUrl(c)}/rest/v1/rpc/${encodeURIComponent(functionName)}`, {
+    method: 'POST',
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  const data: any = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = cleanText(data?.message || data?.details || data?.hint || '', 400);
+    throw new Error(`SUPABASE_RPC_FAILED:${functionName}:${response.status}:${message}`);
+  }
+  return data;
 }
 
 async function supabaseAdminUpsertSafe(c: any, table: string, rows: any[], onConflict: string) {
@@ -14347,6 +14625,26 @@ api.post('/posts', authMiddleware, async (c) => {
     if (hidden) return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
 
+  let commerceConfig: ReturnType<typeof validateCommerceInput> = null;
+  try {
+    commerceConfig = validateCommerceInput(b.commerce, {
+      postType: postType === 'local_offer' ? 'offer' : postType,
+      title: postTitle,
+      description: postContent,
+      visibility,
+      location,
+      city: placeCity || displayCity,
+    });
+  } catch (error: any) {
+    return c.json({ detail: cleanText(error?.message, 300) || 'Enter valid purchase details.', code: 'COMMERCE_INPUT_INVALID' }, 400);
+  }
+  const commerceCreatorId = commerceConfig ? isUuidText(supabaseAuthorRow?.supabase_user_id || '') : null;
+  const commerceGroupId = commerceConfig && ['club', 'group'].includes(String(commerceConfig.purchasable.content_type || ''))
+    ? uuid() : null;
+  if (commerceConfig && !commerceCreatorId) {
+    return c.json({ detail: 'Reconnect your account before creating a paid or joinable post.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+  }
+
   const createdAt = now();
   const supabaseInput = {
     id,
@@ -14397,6 +14695,7 @@ api.post('/posts', authMiddleware, async (c) => {
   };
   const supabasePostRow = supabasePrimaryPostCreatePayload(supabaseInput);
   let insertedPostRow = supabasePostRow;
+  let createdCommerce: any = null;
   try {
     const insertedRows = await supabaseAdminInsertRows(c, 'app_posts', [supabasePostRow], SUPABASE_APP_POST_SELECT);
     insertedPostRow = insertedRows[0] || supabasePostRow;
@@ -14410,6 +14709,38 @@ api.post('/posts', authMiddleware, async (c) => {
       });
     }
     await writeSupabasePrimaryPostPlace(c, supabaseInput);
+    if (commerceConfig && commerceCreatorId) {
+      const purchasableRows = await supabaseAdminInsertRows(c, 'app_purchasables', [{
+        ...commerceConfig.purchasable,
+        private_config: commerceGroupId ? { group_chat_id: commerceGroupId } : {},
+        post_id: insertedPostRow.id,
+        creator_id: commerceCreatorId,
+        creator_app_user_id: userId,
+      }]);
+      const purchasable = purchasableRows[0];
+      if (!purchasable?.id) throw new Error('COMMERCE_PURCHASABLE_WRITE_FAILED');
+      const priceRows = await supabaseAdminInsertRows(c, 'app_prices', commerceConfig.prices.map(price => ({
+        ...price,
+        purchasable_id: purchasable.id,
+      })));
+      if (priceRows.length !== commerceConfig.prices.length) throw new Error('COMMERCE_PRICE_WRITE_FAILED');
+      if (commerceGroupId) {
+        await supabaseAdminUpsert(c, 'app_group_chats', [{
+          id: commerceGroupId,
+          name: cleanText(commerceConfig.purchasable.title, 80) || 'Captro group',
+          created_by: userId,
+          metadata: { source: 'captro_commerce', post_id: insertedPostRow.id, purchasable_id: purchasable.id },
+          legacy_created_at: createdAt,
+          created_at: createdAt,
+          updated_at: createdAt,
+        }], 'id');
+        await supabaseAdminUpsert(c, 'app_group_chat_members', [{
+          id: uuid(), group_id: commerceGroupId, user_id: userId, role: 'owner',
+          legacy_created_at: createdAt, created_at: createdAt, updated_at: createdAt,
+        }], 'group_id,user_id');
+      }
+      createdCommerce = publicCommercePayload(purchasable, priceRows);
+    }
     await recordAbuseSignals(c, userId, 'post_create', {
       product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
     });
@@ -14421,6 +14752,13 @@ api.post('/posts', authMiddleware, async (c) => {
     if (clientRequestId && code.includes('23505')) {
       const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
       if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
+    }
+    if (commerceConfig && insertedPostRow?.id) {
+      await supabaseAdminDeleteRows(c, 'app_posts', { id: postgrestEqFilter(insertedPostRow.id) }).catch(() => undefined);
+    }
+    if (commerceGroupId) {
+      await supabaseAdminDeleteRows(c, 'app_group_chat_members', { group_id: postgrestEqFilter(commerceGroupId) }).catch(() => undefined);
+      await supabaseAdminDeleteRows(c, 'app_group_chats', { id: postgrestEqFilter(commerceGroupId) }).catch(() => undefined);
     }
     console.error(JSON.stringify({ event: 'supabase_primary_post_create_failed', post_id: id, user_id: userId, code }));
     return c.json({
@@ -14445,6 +14783,7 @@ api.post('/posts', authMiddleware, async (c) => {
     moderation_status: 'approved',
     moderation_media_ids: JSON.stringify(approvedMediaAssetIds),
   };
+  if (createdCommerce) createdPost.detail = { ...(createdPost.detail || {}), commerce: createdCommerce };
   return c.json(postPayload(createdPost, [], c.env));
 });
 
@@ -16625,6 +16964,314 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
   return c.json({ upload_url: data.result.uploadURL, video_uid: videoUid, media_id: mediaId, moderation_status: 'uploading', requires_moderation: true });
 });
 
+// Captro commerce. Home receives only publicCommercePayload; purchases and
+// entitlements are private, authenticated resources.
+api.get('/commerce/posts/:postId', authMiddleware, async (c) => {
+  const viewerId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_post_read', viewerId, 120, 60);
+  if (limited) return limited;
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, viewerId, { postId: c.req.param('postId'), limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found.', code: 'POST_NOT_FOUND' }, 404);
+    const commerce = await commerceDetailsForVisiblePost(c, post, viewerId);
+    if (!commerce) return c.json({ detail: 'This post is free to view and has no checkout.', code: 'COMMERCE_NOT_AVAILABLE' }, 404);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ commerce });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'commerce_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load access details.', code: 'COMMERCE_READ_FAILED' }, 500);
+  }
+});
+
+api.post('/commerce/purchases', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 20_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const buyerAppUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_purchase_begin', buyerAppUserId, 20, 60);
+  if (limited) return limited;
+  try {
+    const body: any = await c.req.json().catch(() => ({}));
+    const postId = publicId(body.post_id || body.postId, 120);
+    const purchasableId = isUuidText(body.purchasable_id || body.purchasableId || '');
+    let post: any = null;
+    let purchasable: any = null;
+    if (postId) {
+      [post] = await supabaseReadVisiblePosts(c, buyerAppUserId, { postId, limit: 1 });
+      if (!post) return c.json({ detail: 'Post not found.', code: 'POST_NOT_FOUND' }, 404);
+      const rows = await supabaseAdminSelectRows(c, 'app_purchasables', { post_id: postgrestEqFilter(post.supabase_post_id) }, '*', 1);
+      purchasable = rows[0];
+    } else if (purchasableId) {
+      const rows = await supabaseAdminSelectRows(c, 'app_purchasables', { id: postgrestEqFilter(purchasableId) }, '*', 1);
+      purchasable = rows[0];
+      if (purchasable) [post] = await supabaseReadVisiblePosts(c, buyerAppUserId, { postId: purchasable.post_id, limit: 1 });
+    }
+    if (!post || !purchasable) return c.json({ detail: 'This item is no longer available.', code: 'CAPTRO_ITEM_UNAVAILABLE' }, 404);
+    const buyerAuthId = await supabaseAuthUserIdForAppUserId(c, buyerAppUserId);
+    if (!buyerAuthId) return c.json({ detail: 'Reconnect your account before joining or buying.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    if (purchasable.audience === 'followers') {
+      const following = await supabaseFollowingUserIds(c, buyerAppUserId, [purchasable.creator_app_user_id]);
+      if (!following.has(purchasable.creator_app_user_id)) return c.json({ detail: 'This is available to followers only.', code: 'COMMERCE_AUDIENCE_RESTRICTED' }, 403);
+    }
+    if (purchasable.audience === 'friends' && !await supabaseFriendshipExists(c, buyerAppUserId, purchasable.creator_app_user_id)) {
+      return c.json({ detail: 'This is available to friends only.', code: 'COMMERCE_AUDIENCE_RESTRICTED' }, 403);
+    }
+    let priceId = isUuidText(body.price_id || body.priceId || '');
+    const priceFilters: Record<string, string> = {
+      purchasable_id: postgrestEqFilter(purchasable.id),
+      active: postgrestEqFilter('true'),
+    };
+    if (priceId) priceFilters.id = postgrestEqFilter(priceId);
+    const priceRows = await supabaseAdminQueryRows(c, 'app_prices', { filters: priceFilters, order: 'sort_order.asc', limit: 1 });
+    const price = priceRows[0];
+    if (!price) return c.json({ detail: 'That price is no longer available.', code: 'CAPTRO_PRICE_UNAVAILABLE' }, 409);
+    priceId = price.id;
+    const quantity = clampNumber(body.quantity, 1, 20, 1);
+    if (purchasable.payment_model === 'paid' && purchasable.commerce_class === 'digital') {
+      return c.json({
+        detail: 'Digital-only access must use an App Store purchase. This creator has not configured one yet.',
+        code: 'COMMERCE_STOREKIT_REQUIRED',
+      }, 409);
+    }
+    if (Number(price.unit_amount || 0) > 0 && !getStripeConfig(c).configured) {
+      return c.json({ detail: 'Card checkout is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
+    }
+    const selection = constrainCommerceSelection(
+      sanitizeCommerceSelection(body.selection, purchasable.fulfillment_type),
+      purchasable
+    );
+    const idempotencyKey = cleanText(body.idempotency_key || body.idempotencyKey, 120) || `purchase-${uuid()}`;
+    let purchase: any = await supabaseAdminRpc(c, 'captro_begin_purchase', {
+      p_buyer_id: buyerAuthId,
+      p_buyer_app_user_id: buyerAppUserId,
+      p_purchasable_id: purchasable.id,
+      p_price_id: priceId,
+      p_quantity: quantity,
+      p_idempotency_key: idempotencyKey,
+      p_selection: selection,
+    });
+    if (Array.isArray(purchase)) purchase = purchase[0];
+    let checkoutUrl: string | null = null;
+    if (purchase?.status === 'payment_pending') {
+      try {
+        const session = await createCommerceCheckoutSession(c, purchase);
+        checkoutUrl = safeExternalUrl(session.url) || null;
+        purchase.provider_checkout_id = session.id;
+      } catch (error) {
+        await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', {
+          p_purchase_id: purchase.id,
+          p_checkout_id: purchase.provider_checkout_id || '',
+        }).catch(() => undefined);
+        throw error;
+      }
+    }
+    const entitlements = purchase?.status === 'confirmed'
+      ? await supabaseAdminSelectRows(c, 'app_entitlements', { purchase_id: postgrestEqFilter(purchase.id) }, '*', 1) : [];
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ purchase: commercePurchasePayload(purchase, entitlements[0]), checkoutUrl });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    console.warn(JSON.stringify({ event: 'commerce_purchase_begin_failed', code, request_id: c.get?.('requestId') || '' }));
+    return c.json({ detail: code === 'COMMERCE_REQUEST_FAILED' ? 'Could not begin this purchase.' : 'This item could not be reserved.', code }, commerceErrorStatus(code) as any);
+  }
+});
+
+api.post('/commerce/purchases/:purchaseId/checkout', authMiddleware, async (c) => {
+  const buyerAppUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_checkout', buyerAppUserId, 20, 60);
+  if (limited) return limited;
+  try {
+    const buyerAuthId = await supabaseAuthUserIdForAppUserId(c, buyerAppUserId);
+    const purchaseId = isUuidText(c.req.param('purchaseId'));
+    if (!buyerAuthId || !purchaseId) return c.json({ detail: 'Purchase not found.', code: 'CAPTRO_PURCHASE_NOT_FOUND' }, 404);
+    const rows = await supabaseAdminSelectRows(c, 'app_purchases', {
+      id: postgrestEqFilter(purchaseId), buyer_id: postgrestEqFilter(buyerAuthId),
+    }, '*', 1);
+    const purchase = rows[0];
+    if (!purchase) return c.json({ detail: 'Purchase not found.', code: 'CAPTRO_PURCHASE_NOT_FOUND' }, 404);
+    if (purchase.status !== 'payment_pending') return c.json({ purchase: commercePurchasePayload(purchase), checkoutUrl: null });
+    const purchasables = await supabaseAdminSelectRows(c, 'app_purchasables', { id: postgrestEqFilter(purchase.purchasable_id) }, '*', 1);
+    if (purchasables[0]?.commerce_class === 'digital') return c.json({ detail: 'App Store checkout is required.', code: 'COMMERCE_STOREKIT_REQUIRED' }, 409);
+    const session = await createCommerceCheckoutSession(c, purchase);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ purchase: commercePurchasePayload(purchase), checkoutUrl: safeExternalUrl(session.url) || null });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    return c.json({ detail: 'Could not open checkout.', code }, commerceErrorStatus(code) as any);
+  }
+});
+
+api.post('/commerce/purchases/:purchaseId/decision', authMiddleware, async (c) => {
+  const creatorAppUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_purchase_decision', creatorAppUserId, 60, 60);
+  if (limited) return limited;
+  try {
+    const creatorAuthId = await supabaseAuthUserIdForAppUserId(c, creatorAppUserId);
+    const purchaseId = isUuidText(c.req.param('purchaseId'));
+    const body: any = await c.req.json().catch(() => ({}));
+    if (!creatorAuthId || !purchaseId || typeof body.approved !== 'boolean') {
+      return c.json({ detail: 'Choose approve or decline.', code: 'COMMERCE_DECISION_INVALID' }, 400);
+    }
+    let purchase: any = await supabaseAdminRpc(c, 'captro_decide_purchase', {
+      p_purchase_id: purchaseId,
+      p_creator_id: creatorAuthId,
+      p_approved: body.approved,
+    });
+    if (Array.isArray(purchase)) purchase = purchase[0];
+    const entitlements = purchase?.status === 'confirmed'
+      ? await supabaseAdminSelectRows(c, 'app_entitlements', { purchase_id: postgrestEqFilter(purchase.id) }, '*', 1) : [];
+    return c.json({ purchase: commercePurchasePayload(purchase, entitlements[0]) });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    return c.json({ detail: 'Could not update this request.', code }, commerceErrorStatus(code) as any);
+  }
+});
+
+api.get('/commerce/entitlements/:entitlementId/pass', authMiddleware, async (c) => {
+  const holderAppUserId = getUserId(c);
+  try {
+    const holderAuthId = await supabaseAuthUserIdForAppUserId(c, holderAppUserId);
+    const entitlementId = isUuidText(c.req.param('entitlementId'));
+    if (!holderAuthId || !entitlementId) return c.json({ detail: 'Pass not found.', code: 'CAPTRO_PASS_NOT_FOUND' }, 404);
+    const entitlements = await supabaseAdminSelectRows(c, 'app_entitlements', {
+      id: postgrestEqFilter(entitlementId), holder_id: postgrestEqFilter(holderAuthId),
+    }, '*', 1);
+    const entitlement = entitlements[0];
+    if (!entitlement) return c.json({ detail: 'Pass not found.', code: 'CAPTRO_PASS_NOT_FOUND' }, 404);
+    const purchases = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(entitlement.purchase_id) }, '*', 1);
+    const tickets = await supabaseAdminSelectRows(c, 'app_commerce_tickets', { entitlement_id: postgrestEqFilter(entitlement.id) }, '*', 1);
+    const redemptions = await supabaseAdminSelectRows(c, 'app_commerce_redemptions', { entitlement_id: postgrestEqFilter(entitlement.id) }, '*', 1);
+    const ticket = tickets[0];
+    const redemption = redemptions[0];
+    let pass: any = null;
+    if (ticket) pass = {
+      id: ticket.id, kind: 'ticket', code: ticket.ticket_code, tier: ticket.tier,
+      status: ticket.status, token: await signedCommercePassToken(c, 'ticket', ticket.id, Number(ticket.token_version)),
+      usedAt: ticket.checked_in_at || null,
+    };
+    if (redemption) pass = {
+      id: redemption.id, kind: 'redemption', code: redemption.redemption_code,
+      status: redemption.status, token: await signedCommercePassToken(c, 'redemption', redemption.id, Number(redemption.token_version)),
+      usedAt: redemption.redeemed_at || null,
+    };
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ purchase: commercePurchasePayload(purchases[0], entitlement), pass });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    return c.json({ detail: 'Could not load this pass.', code }, code.endsWith('_MISSING') ? 503 : commerceErrorStatus(code) as any);
+  }
+});
+
+api.post('/commerce/passes/consume', authMiddleware, async (c) => {
+  const creatorAppUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_pass_consume', creatorAppUserId, 120, 60);
+  if (limited) return limited;
+  try {
+    const creatorAuthId = await supabaseAuthUserIdForAppUserId(c, creatorAppUserId);
+    const body: any = await c.req.json().catch(() => ({}));
+    const parsed = await parseCommercePassToken(c, body.token);
+    if (!creatorAuthId || !parsed) return c.json({ detail: 'This pass is not valid.', code: 'CAPTRO_PASS_INVALID' }, 403);
+    const functionName = parsed.kind === 'ticket' ? 'captro_consume_ticket' : 'captro_consume_redemption';
+    const prefix = parsed.kind === 'ticket' ? 'p_ticket_id' : 'p_redemption_id';
+    let result: any = await supabaseAdminRpc(c, functionName, {
+      [prefix]: parsed.id,
+      p_creator_id: creatorAuthId,
+      p_token_version: parsed.version,
+      p_request_id: cleanText(c.get?.('requestId') || body.request_id || body.requestId, 160),
+    });
+    if (Array.isArray(result)) result = result[0];
+    return c.json({ status: parsed.kind === 'ticket' ? 'checked_in' : 'used', pass: result });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    return c.json({ detail: code === 'CAPTRO_PASS_ALREADY_USED' ? 'This pass has already been used.' : 'This pass could not be accepted.', code }, commerceErrorStatus(code) as any);
+  }
+});
+
+api.get('/commerce/me', authMiddleware, async (c) => {
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_me', appUserId, 120, 60);
+  if (limited) return limited;
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const [purchases, created] = await Promise.all([
+      supabaseAdminQueryRows(c, 'app_purchases', {
+        filters: { buyer_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 200,
+      }),
+      supabaseAdminQueryRows(c, 'app_purchasables', {
+        filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 200,
+      }),
+    ]);
+    const purchaseIds = purchases.map(row => row.id).filter(Boolean);
+    const buyerPurchasableIds = Array.from(new Set(purchases.map(row => row.purchasable_id).filter(Boolean)));
+    const createdIds = created.map(row => row.id).filter(Boolean);
+    const [entitlements, createdPurchases, prices, creatorEntitlements, buyerItems] = await Promise.all([
+      purchaseIds.length ? supabaseAdminQueryRows(c, 'app_entitlements', {
+        filters: { purchase_id: postgrestInFilter(purchaseIds) }, limit: 200,
+      }) : Promise.resolve([]),
+      createdIds.length ? supabaseAdminQueryRows(c, 'app_purchases', {
+        filters: { purchasable_id: postgrestInFilter(createdIds) }, order: 'created_at.desc', limit: 1000,
+      }) : Promise.resolve([]),
+      createdIds.length ? supabaseAdminQueryRows(c, 'app_prices', {
+        filters: { purchasable_id: postgrestInFilter(createdIds) }, order: 'sort_order.asc', limit: 500,
+      }) : Promise.resolve([]),
+      createdIds.length ? supabaseAdminQueryRows(c, 'app_entitlements', {
+        filters: { purchasable_id: postgrestInFilter(createdIds) }, limit: 1000,
+      }) : Promise.resolve([]),
+      buyerPurchasableIds.length ? supabaseAdminQueryRows(c, 'app_purchasables', {
+        filters: { id: postgrestInFilter(buyerPurchasableIds) }, limit: 200,
+      }) : Promise.resolve([]),
+    ]);
+    const creatorEntitlementIds = creatorEntitlements.map(row => row.id).filter(Boolean);
+    const [creatorTickets, creatorRedemptions] = await Promise.all([
+      creatorEntitlementIds.length ? supabaseAdminQueryRows(c, 'app_commerce_tickets', {
+        filters: { entitlement_id: postgrestInFilter(creatorEntitlementIds) }, limit: 1000,
+      }) : Promise.resolve([]),
+      creatorEntitlementIds.length ? supabaseAdminQueryRows(c, 'app_commerce_redemptions', {
+        filters: { entitlement_id: postgrestInFilter(creatorEntitlementIds) }, limit: 1000,
+      }) : Promise.resolve([]),
+    ]);
+    const myStuff = purchases.map(purchase => {
+      const entitlement = entitlements.find(row => row.purchase_id === purchase.id);
+      const item = buyerItems.find(row => row.id === purchase.purchasable_id);
+      const destinationId = entitlement && ['membership', 'group_access'].includes(entitlement.kind)
+        ? cleanText(item?.private_config?.group_chat_id, 120) || null : null;
+      const hasPass = entitlement
+        ? ['ticket', 'redemption'].includes(entitlement.kind)
+          || (entitlement.kind === 'attendance' && item?.pass_required === true)
+        : false;
+      return commercePurchasePayload(purchase, entitlement ? {
+        ...entitlement,
+        destination_id: destinationId,
+        has_pass: hasPass,
+      } : undefined);
+    });
+    const createdPayload = created.map(item => {
+      const sales = createdPurchases.filter(purchase => purchase.purchasable_id === item.id);
+      const confirmed = sales.filter(purchase => ['confirmed', 'partially_refunded'].includes(purchase.status));
+      const itemEntitlementIds = new Set(creatorEntitlements.filter(row => row.purchasable_id === item.id).map(row => row.id));
+      return {
+        commerce: publicCommercePayload(item, prices),
+        sold: confirmed.reduce((sum, purchase) => sum + Math.max(0, Number(purchase.quantity || 0)), 0),
+        grossAmount: confirmed.reduce((sum, purchase) => sum + Math.max(0, Number(purchase.total_amount || 0)), 0),
+        currency: cleanText(confirmed[0]?.currency || prices.find(price => price.purchasable_id === item.id)?.currency || 'USD', 3).toUpperCase(),
+        pendingApprovals: sales.filter(purchase => purchase.status === 'approval_pending').length,
+        checkedIn: creatorTickets.filter(ticket => itemEntitlementIds.has(ticket.entitlement_id) && ticket.status === 'checked_in').length,
+        redeemed: creatorRedemptions.filter(pass => itemEntitlementIds.has(pass.entitlement_id) && pass.status === 'used').length,
+        paidMembers: item.content_type === 'club' || item.content_type === 'group'
+          ? confirmed.filter(purchase => Number(purchase.unit_amount || 0) > 0)
+            .reduce((sum, purchase) => sum + Math.max(0, Number(purchase.quantity || 0)), 0)
+          : 0,
+      };
+    });
+    const pendingRequests = createdPurchases.filter(purchase => purchase.status === 'approval_pending').map(purchase => commercePurchasePayload(purchase));
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ myStuff, created: createdPayload, pendingRequests });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'commerce_me_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load purchases.', code: 'COMMERCE_READ_FAILED' }, 500);
+  }
+});
+
 // Stripe billing
 api.get('/stripe/config', authMiddleware, async (c) => {
   const stripe = getStripeConfig(c);
@@ -16727,16 +17374,20 @@ api.post('/stripe/webhook', async (c) => {
   try {
     const event = JSON.parse(rawBody);
     const object = event?.data?.object || {};
-    if (event.type === 'checkout.session.completed') {
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
       const source = cleanText(object?.metadata?.source, 80);
-      if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
+      if (source === 'captro_commerce') {
+        await completeCommercePurchaseFromSession(c, cleanText(event?.id, 180), object);
+      } else if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
         await activatePremiumFromCheckoutSession(c, object);
       } else {
         await completeCoinPurchaseFromSession(c, object);
       }
-    } else if (event.type === 'checkout.session.expired') {
+    } else if (event.type === 'checkout.session.expired' || event.type === 'checkout.session.async_payment_failed') {
       const source = cleanText(object?.metadata?.source, 80);
-      if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
+      if (source === 'captro_commerce') {
+        await cancelCommercePurchaseFromSession(c, object);
+      } else if (source === 'captro-premium' || source === 'flames-up-premium' || object?.mode === 'subscription') {
         await expirePremiumCheckout(c, object);
       } else {
         await markCoinPurchaseExpired(c, object);
@@ -16744,7 +17395,8 @@ api.post('/stripe/webhook', async (c) => {
     } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
       await syncPremiumFromSubscription(c, object);
     } else if (event.type === 'charge.refunded' || event.type === 'refund.created') {
-      await refundCoinPurchase(c, object);
+      const commerceRefund = await refundCommercePurchaseFromCharge(c, cleanText(event?.id, 180), object);
+      if (!commerceRefund.processed) await refundCoinPurchase(c, object);
     }
     return c.json({ received: true });
   } catch (error: any) {
