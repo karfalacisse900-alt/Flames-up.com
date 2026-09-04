@@ -973,6 +973,29 @@ public struct CreatePostNativeView: View {
   }
 
   public var body: some View {
+    composerSheetPage
+    .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
+      MIRANativeMediaEditorView(media: item.media, mode: .post, onClose: closeEditor) { edited in
+        if item.returnsToCamera {
+          editedCameraMedia = edited
+        } else if let index = item.replacementIndex, mediaItems.indices.contains(index) {
+          mediaItems[index] = edited
+        } else {
+          mediaItems.append(edited)
+          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
+            isEditingPostDetails = true
+          }
+        }
+      }
+      .ignoresSafeArea()
+    }
+    .sheet(item: $payoutSetupDestination) { destination in
+      CaptroCheckoutBrowser(url: destination.url)
+        .ignoresSafeArea()
+    }
+  }
+
+  private var composerLifecyclePage: some View {
     composerPage
     .toolbar(.hidden, for: .navigationBar)
     .miraHideTabBarOnAppear()
@@ -994,6 +1017,10 @@ public struct CreatePostNativeView: View {
       let dimensions = await cover.postMediaDimension()
       coverMediaRatio = dimensions.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio
     }
+  }
+
+  private var composerDraftObservedPage: some View {
+    composerLifecyclePage
     .onChange(of: title) { _, _ in cacheComposerDraft() }
     .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
     .onChange(of: mediaItems) { _, _ in cacheComposerDraft(includeMedia: true) }
@@ -1024,6 +1051,10 @@ public struct CreatePostNativeView: View {
     .onChange(of: scenePhase) { _, phase in
       handleComposerScenePhaseChange(phase)
     }
+  }
+
+  private var composerSheetPage: some View {
+    composerDraftObservedPage
     .miraBottomSheet(isPresented: $isEditingPostDetails, preferredHeightFraction: selectedStampKind.commerceContentType != nil || isEventStamp ? 0.90 : 0.56) { closeSheet in
       stampOptionsSheet(onClose: closeSheet)
     }
@@ -1071,25 +1102,6 @@ public struct CreatePostNativeView: View {
       case nil:
         Color.clear
       }
-    }
-    .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
-      MIRANativeMediaEditorView(media: item.media, mode: .post, onClose: closeEditor) { edited in
-        if item.returnsToCamera {
-          editedCameraMedia = edited
-        } else if let index = item.replacementIndex, mediaItems.indices.contains(index) {
-          mediaItems[index] = edited
-        } else {
-          mediaItems.append(edited)
-          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-            isEditingPostDetails = true
-          }
-        }
-      }
-      .ignoresSafeArea()
-    }
-    .sheet(item: $payoutSetupDestination) { destination in
-      CaptroCheckoutBrowser(url: destination.url)
-        .ignoresSafeArea()
     }
   }
 
