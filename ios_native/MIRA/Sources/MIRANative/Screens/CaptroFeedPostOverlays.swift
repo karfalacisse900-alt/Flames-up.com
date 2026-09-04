@@ -99,6 +99,8 @@ struct CaptroPostStamp: View {
   let content: CaptroStampContent
   var onOpen: (() -> Void)? = nil
   var onAction: (() -> Void)? = nil
+  var isSaved: Bool? = nil
+  var onSave: (() -> Void)? = nil
   var compact = false
 
   var body: some View {
@@ -141,13 +143,29 @@ struct CaptroPostStamp: View {
   }
 
   private var stampTitle: some View {
-    Text(content.title.uppercased())
-      .font(.system(size: 18, weight: .semibold))
-      .foregroundStyle(Color.black.opacity(0.88))
-      .lineLimit(2)
-      .minimumScaleFactor(0.84)
-      .fixedSize(horizontal: false, vertical: true)
-      .accessibilityAddTraits(.isHeader)
+    HStack(alignment: .top, spacing: 8) {
+      Text(content.title.uppercased())
+        .font(.system(size: 18, weight: .semibold))
+        .foregroundStyle(Color.black.opacity(0.88))
+        .lineLimit(2)
+        .minimumScaleFactor(0.84)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityAddTraits(.isHeader)
+
+      Spacer(minLength: 0)
+
+      if let isSaved, let onSave {
+        Button(action: onSave) {
+          Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.like)
+            .frame(width: 30, height: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isSaved ? "Remove saved post" : "Save post")
+      }
+    }
   }
 
   @ViewBuilder

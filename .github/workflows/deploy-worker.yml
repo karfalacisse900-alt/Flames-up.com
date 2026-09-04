@@ -333,9 +333,47 @@ jobs:
       - name: Skip legacy D1 migrations
         run: echo "Supabase Postgres is Captro's production database; D1 migrations are legacy-only and are not replayed during normal deploys."
 
+      - name: Rotate Stripe Connect bootstrap token
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 48)"
+          echo "::add-mask::$token"
+          printf '%s' "$token" | npx wrangler secret put STRIPE_CONNECT_BOOTSTRAP_TOKEN --env production
+          echo "STRIPE_CONNECT_BOOTSTRAP_TOKEN=$token" >> "$GITHUB_ENV"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Deploy to Cloudflare Workers
         working-directory: ./backend-cf
         run: npx wrangler deploy --env production --keep-vars
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Ensure Stripe connected-account webhook
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "X-Captro-Bootstrap-Token: $STRIPE_CONNECT_BOOTSTRAP_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data '{}' \
+            https://api.flames-up.com/api/internal/stripe/connect-webhook/bootstrap)"
+          configured="$(jq -r '.configured // false' <<<"$response")"
+          signing_secret="$(jq -r '.signingSecret // empty' <<<"$response")"
+          if [ "$configured" != "true" ]; then
+            echo "Stripe connected-account webhook bootstrap did not complete."
+            exit 1
+          fi
+          if [ -n "$signing_secret" ]; then
+            echo "::add-mask::$signing_secret"
+            printf '%s' "$signing_secret" | npx wrangler secret put STRIPE_CONNECT_WEBHOOK_SECRET --env production
+          fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -398,6 +436,14 @@ jobs:
                   )
           print("Production Apple and Google routes reach provider validation; OAuth runtime dependencies are configured.")
           PY
+
+      - name: Verify production Stripe Connect runtime
+        working-directory: ./backend-cf
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/verify-stripe-connect.mjs
 
       - name: Verify event creation and owner editing against deployed API
         working-directory: ./backend-cf

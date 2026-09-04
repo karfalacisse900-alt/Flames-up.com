@@ -30,6 +30,7 @@ public struct CaptroHomeFeedVisualTestView: View {
                   onOpenOptions: {},
                   onCreate: {},
                   onOpenPost: {},
+                  onSave: {},
                   canFollowAuthor: false,
                   pageSize: nil,
                   selectedMediaIndex: .constant(0),

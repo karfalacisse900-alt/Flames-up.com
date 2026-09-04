@@ -576,11 +576,6 @@ public struct PostDetailNativeView: View {
                   Label(error, systemImage: "arrow.clockwise").font(.system(size: 13)).padding(16)
                 }
               }
-              reactionRow {
-                withAnimation { scroll.scrollTo("post-comments", anchor: .top) }
-                isCommentFocused = true
-              }
-
               if model.post.detailKind == .placeReview || model.post.detailKind == .regular {
                 CaptroDetailLocationSection(post: model.post)
                   .padding(.horizontal, 16)

@@ -153,10 +153,18 @@ struct CaptroCommerceDashboardView: View {
         if (item.paidMembers ?? 0) > 0 { metric("Paid", item.paidMembers ?? 0) }
       }
       HStack {
-        Text("Gross sales").font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
+        Text("Sales").font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
         Spacer()
         Text(CaptroMoney.format(minorUnits: item.grossAmount, currency: item.currency))
           .font(.system(size: 13, weight: .semibold))
+      }
+      if let available = item.availableEarningsAmount {
+        HStack {
+          Text("Available earnings").font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
+          Spacer()
+          Text(CaptroMoney.format(minorUnits: available, currency: item.currency))
+            .font(.system(size: 13, weight: .semibold))
+        }
       }
       if item.pendingApprovals > 0 {
         Text("\(item.pendingApprovals) request\(item.pendingApprovals == 1 ? "" : "s") waiting")
@@ -371,5 +379,335 @@ private final class CaptroQRScannerController: UIViewController, AVCaptureMetada
     delivered = true
     session.stopRunning()
     onCode(value)
+  }
+}
+
+struct CaptroEarningsView: View {
+  let api: MIRAAPIClient
+  @State private var response: CaptroEarningsResponse?
+  @State private var isLoading = false
+  @State private var errorMessage: String?
+  @State private var hostedDestination: CaptroCheckoutDestination?
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 0) {
+        if let response {
+          balanceSection(response)
+          divider
+          payoutAccountSection(response.account)
+          divider
+          recentSection(response.recent)
+        } else if isLoading {
+          ProgressView("Loading earnings...")
+            .frame(maxWidth: .infinity, minHeight: 240)
+        } else {
+          ContentUnavailableView(
+            "Earnings unavailable",
+            systemImage: "dollarsign",
+            description: Text(errorMessage ?? "Pull to try again.")
+          )
+          .frame(maxWidth: .infinity, minHeight: 320)
+        }
+      }
+    }
+    .background(Color.white)
+    .foregroundStyle(CaptroDetailStyle.ink)
+    .navigationTitle("Earnings")
+    .navigationBarTitleDisplayMode(.inline)
+    .miraHideTabBarOnAppear()
+    .refreshable { await load() }
+    .task { await load() }
+    .sheet(item: $hostedDestination, onDismiss: { Task { await load() } }) { destination in
+      CaptroCheckoutBrowser(url: destination.url).ignoresSafeArea()
+    }
+    .alert("Couldn't open payouts", isPresented: Binding(
+      get: { errorMessage != nil && response != nil },
+      set: { if !$0 { errorMessage = nil } }
+    )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "") }
+  }
+
+  private func balanceSection(_ value: CaptroEarningsResponse) -> some View {
+    VStack(alignment: .leading, spacing: 16) {
+      sectionHeading("EARNINGS")
+      if value.balance.status == "available",
+         let available = value.balance.available,
+         let pending = value.balance.pending {
+        HStack(spacing: 28) {
+          balanceValue("Available", amount: available, currency: value.balance.currency)
+          balanceValue("Pending", amount: pending, currency: value.balance.currency)
+        }
+      } else {
+        VStack(alignment: .leading, spacing: 5) {
+          Text("Balance unavailable").font(.system(size: 20, weight: .bold))
+          Text(value.account.status == "not_started"
+               ? "Set up payouts to receive money from paid posts."
+               : "Stripe could not provide a current balance. Try again shortly.")
+            .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+        }
+      }
+    }
+    .padding(16)
+  }
+
+  private func payoutAccountSection(_ account: CaptroPayoutAccount) -> some View {
+    VStack(alignment: .leading, spacing: 14) {
+      sectionHeading("PAYOUT ACCOUNT")
+      if account.ready {
+        HStack {
+          Text("Status").foregroundStyle(CaptroDetailStyle.secondary)
+          Spacer(minLength: 12)
+          Label("Payouts Ready", systemImage: "checkmark.circle.fill")
+            .fontWeight(.semibold)
+            .foregroundStyle(CaptroDetailStyle.accent)
+        }
+        .font(.system(size: 13))
+        if let bank = account.bank {
+          detailRow("Bank", "\(bank.name) ···· \(bank.last4)")
+        }
+        if let schedule = account.payoutSchedule {
+          detailRow("Payout schedule", schedule.capitalized)
+        }
+        Button("Manage Payout Account") { openHostedAccount(manage: true) }
+          .buttonStyle(CaptroOutlineButtonStyle())
+        NavigationLink {
+          CaptroPayoutsView(api: api)
+        } label: {
+          HStack {
+            Text("View Payouts")
+            Spacer()
+            Image(systemName: "chevron.right")
+          }
+          .font(.system(size: 14, weight: .semibold))
+          .frame(minHeight: 44)
+        }
+        .buttonStyle(.plain)
+      } else {
+        Text(account.status == "not_started" ? "Connect your payout account to receive money from sales." : "Finish Stripe's secure setup before publishing paid posts.")
+          .font(.system(size: 14)).foregroundStyle(CaptroDetailStyle.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        Button(account.status == "not_started" ? "Set Up Payouts" : "Finish Payout Setup") {
+          openHostedAccount(manage: false)
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, minHeight: 46)
+        .background(CaptroDetailStyle.accent)
+        .buttonStyle(.plain)
+      }
+    }
+    .padding(16)
+  }
+
+  private func recentSection(_ earnings: [CaptroCreatorEarning]) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      sectionHeading("RECENT EARNINGS").padding(.bottom, 8)
+      if earnings.isEmpty {
+        Text("Completed sales will appear here.")
+          .font(.system(size: 14)).foregroundStyle(CaptroDetailStyle.secondary)
+          .padding(.vertical, 20)
+      } else {
+        ForEach(earnings) { earning in
+          NavigationLink {
+            CaptroEarningDetailView(api: api, earningID: earning.id)
+          } label: {
+            HStack(alignment: .center, spacing: 12) {
+              VStack(alignment: .leading, spacing: 4) {
+                Text(earning.title).font(.system(size: 15, weight: .semibold)).lineLimit(2)
+                Text("\(earning.contentType.replacingOccurrences(of: "_", with: " ").capitalized) · \(CaptroCommerceDate.short(earning.purchasedAt))")
+                  .font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
+              }
+              Spacer(minLength: 8)
+              Text("+ \(CaptroMoney.format(minorUnits: earning.netCreatorAmount, currency: earning.currency))")
+                .font(.system(size: 14, weight: .semibold))
+              Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(CaptroDetailStyle.secondary)
+            }
+            .frame(minHeight: 62)
+          }
+          .buttonStyle(.plain)
+          divider
+        }
+      }
+    }
+    .padding(16)
+  }
+
+  private func balanceValue(_ label: String, amount: Int, currency: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(label).font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
+      Text(CaptroMoney.format(minorUnits: amount, currency: currency)).font(.system(size: 25, weight: .bold))
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func detailRow(_ label: String, _ value: String) -> some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text(label).foregroundStyle(CaptroDetailStyle.secondary)
+      Spacer(minLength: 12)
+      Text(value).fontWeight(.semibold).multilineTextAlignment(.trailing)
+    }
+    .font(.system(size: 13))
+  }
+
+  private func sectionHeading(_ value: String) -> some View {
+    Text(value).font(.system(size: 11, weight: .bold)).foregroundStyle(CaptroDetailStyle.secondary)
+  }
+
+  private var divider: some View { Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5) }
+
+  private func openHostedAccount(manage: Bool) {
+    guard !isLoading else { return }
+    isLoading = true
+    Task {
+      defer { isLoading = false }
+      do {
+        let link: CaptroHostedAccountLinkResponse
+        if manage {
+            link = try await api.createPayoutManagementLink()
+        } else {
+            link = try await api.createPayoutOnboardingLink()
+        }
+        guard let url = URL(string: link.url) else { throw URLError(.badURL) }
+        hostedDestination = CaptroCheckoutDestination(url: url)
+      } catch {
+        errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout setup."
+      }
+    }
+  }
+
+  private func load() async {
+    if response == nil { isLoading = true }
+    defer { isLoading = false }
+    do {
+      response = try await api.loadCreatorEarnings()
+      errorMessage = nil
+    } catch {
+      if response == nil { errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not load earnings." }
+    }
+  }
+}
+
+private struct CaptroPayoutsView: View {
+  let api: MIRAAPIClient
+  @State private var response: CaptroPayoutsResponse?
+  @State private var errorMessage: String?
+
+  var body: some View {
+    Group {
+      if let response {
+        List(response.payouts) { payout in
+          VStack(alignment: .leading, spacing: 5) {
+            HStack {
+              Text(CaptroCommerceDate.day(payout.createdAt)).font(.system(size: 14, weight: .semibold))
+              Spacer()
+              Text(CaptroMoney.format(minorUnits: payout.amount, currency: payout.currency)).font(.system(size: 14, weight: .semibold))
+            }
+            Text(payout.status.replacingOccurrences(of: "_", with: " ").capitalized)
+              .font(.system(size: 12, weight: .medium))
+              .foregroundStyle(payout.status == "failed" ? Color.red : CaptroDetailStyle.secondary)
+            if let message = payout.failureMessage, payout.status == "failed" {
+              Text(message).font(.system(size: 12)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          .listRowBackground(Color.white)
+        }
+        .listStyle(.plain)
+        .overlay {
+          if response.payouts.isEmpty {
+            ContentUnavailableView("No payouts yet", systemImage: "building.columns", description: Text("Stripe payout activity will appear here."))
+          }
+        }
+      } else if let errorMessage {
+        ContentUnavailableView("Payouts unavailable", systemImage: "exclamationmark.circle", description: Text(errorMessage))
+      } else {
+        ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+    }
+    .background(Color.white)
+    .navigationTitle("Payouts")
+    .navigationBarTitleDisplayMode(.inline)
+    .task {
+      do { response = try await api.loadCreatorPayouts() }
+      catch { errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not load payouts." }
+    }
+  }
+}
+
+private struct CaptroEarningDetailView: View {
+  let api: MIRAAPIClient
+  let earningID: String
+  @State private var response: CaptroEarningDetailResponse?
+  @State private var errorMessage: String?
+
+  var body: some View {
+    ScrollView {
+      if let response {
+        VStack(alignment: .leading, spacing: 16) {
+          Text(response.earning.title).font(.system(size: 25, weight: .bold))
+          Text(response.earning.contentType.replacingOccurrences(of: "_", with: " ").capitalized + " purchase")
+            .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+          Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
+          earningRow("Buyer", response.earning.buyerHandle.map { "@\($0.trimmingCharacters(in: CharacterSet(charactersIn: "@")))" } ?? "Captro user")
+          earningRow("Item price", CaptroMoney.format(minorUnits: response.earning.itemAmount, currency: response.earning.currency))
+          earningRow("Creator earnings", CaptroMoney.format(minorUnits: response.earning.netCreatorAmount, currency: response.earning.currency))
+          earningRow("Purchased", CaptroCommerceDate.long(response.earning.purchasedAt))
+          earningRow("Payment", response.purchase.status.replacingOccurrences(of: "_", with: " ").capitalized)
+          earningRow("Purchase ID", response.purchaseReference)
+          ForEach(response.refunds) { refund in
+            Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
+            earningRow("Refund", "− \(CaptroMoney.format(minorUnits: refund.creatorReversalAmount, currency: response.earning.currency))")
+          }
+        }
+        .padding(16)
+      } else if let errorMessage {
+        ContentUnavailableView("Earning unavailable", systemImage: "exclamationmark.circle", description: Text(errorMessage))
+          .frame(minHeight: 320)
+      } else {
+        ProgressView().frame(maxWidth: .infinity, minHeight: 320)
+      }
+    }
+    .background(Color.white)
+    .navigationTitle("Earning")
+    .navigationBarTitleDisplayMode(.inline)
+    .task {
+      do { response = try await api.loadCreatorEarning(id: earningID) }
+      catch { errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not load this earning." }
+    }
+  }
+
+  private func earningRow(_ label: String, _ value: String) -> some View {
+    HStack(alignment: .top) {
+      Text(label).font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+      Spacer(minLength: 14)
+      Text(value).font(.system(size: 13, weight: .semibold)).multilineTextAlignment(.trailing)
+    }
+  }
+}
+
+private struct CaptroOutlineButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.system(size: 14, weight: .semibold))
+      .frame(maxWidth: .infinity, minHeight: 44)
+      .foregroundStyle(CaptroDetailStyle.ink)
+      .overlay(Rectangle().stroke(CaptroDetailStyle.divider, lineWidth: 1))
+      .opacity(configuration.isPressed ? 0.6 : 1)
+  }
+}
+
+private enum CaptroCommerceDate {
+  static func short(_ value: String?) -> String { format(value, style: "MMM d") }
+  static func day(_ value: String?) -> String { format(value, style: "MMM d") }
+  static func long(_ value: String?) -> String { format(value, style: "MMM d, yyyy · h:mm a") }
+
+  private static func format(_ value: String?, style: String) -> String {
+    guard let value else { return "" }
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    guard let date = fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value) else { return "" }
+    let formatter = DateFormatter()
+    formatter.locale = .autoupdatingCurrent
+    formatter.dateFormat = style
+    return formatter.string(from: date)
   }
 }

@@ -7,6 +7,7 @@ struct CaptroMediaPager: View {
   let isVideoActive: Bool
   @Binding var selectedMediaIndex: Int
   let onOpenPost: () -> Void
+  let onSave: () -> Void
   let showsCoverMediaOnly: Bool
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -166,6 +167,8 @@ struct CaptroMediaPager: View {
         content: post.captroStampContent,
         onOpen: openPostUnlessPeeking,
         onAction: openPostUnlessPeeking,
+        isSaved: post.viewerSaved,
+        onSave: onSave,
         compact: true
       )
       .frame(width: mediaWidth * stampWidthFraction, alignment: .leading)

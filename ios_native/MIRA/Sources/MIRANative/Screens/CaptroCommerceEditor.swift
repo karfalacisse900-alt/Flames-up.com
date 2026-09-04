@@ -90,6 +90,16 @@ struct CaptroCommerceEditorFields: View {
               .accessibilityLabel("Remove ticket type")
             }
           }
+          if let amount = priceMinorUnits(draft.prices[index].price) {
+            HStack {
+              Text("YOU EARN")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textMuted)
+              Spacer()
+              Text(CaptroMoney.format(minorUnits: amount, currency: draft.currency))
+                .font(.system(size: 13, weight: .semibold))
+            }
+          }
         }
         if index < draft.prices.count - 1 { Divider() }
       }
@@ -183,5 +193,11 @@ struct CaptroCommerceEditorFields: View {
         .accessibilityLabel(title)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func priceMinorUnits(_ value: String) -> Int? {
+    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
+    guard let decimal = Decimal(string: clean), decimal >= Decimal(string: "0.50")! else { return nil }
+    return NSDecimalNumber(decimal: decimal * Decimal(100)).intValue
   }
 }

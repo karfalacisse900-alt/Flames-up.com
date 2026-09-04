@@ -1116,6 +1116,12 @@ public struct MainFeedView: View {
         CaptroHaptics.light()
         detailPost = post
       },
+      onSave: {
+        Task {
+          if post.viewerSaved { await model.unsave(post) }
+          else { await model.save(post, to: "saved") }
+        }
+      },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       pageSize: size,
       selectedMediaIndex: .constant(0),

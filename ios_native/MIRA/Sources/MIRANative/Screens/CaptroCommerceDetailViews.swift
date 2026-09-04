@@ -212,6 +212,10 @@ struct CaptroCommerceDetailSection: View {
           .font(.system(size: 14, weight: .medium))
       }
 
+      if selectedPrice?.unitAmount ?? 0 > 0 {
+        orderSummary(commerce)
+      }
+
       if commerce.isActiveForViewer,
          ["membership", "group_access"].contains(commerce.fulfillmentType),
          let destinationId = commerce.viewerDestinationId {
@@ -256,6 +260,48 @@ struct CaptroCommerceDetailSection: View {
   private var maxQuantity: Int {
     let remaining = selectedPrice?.remaining ?? commerce?.remaining ?? 20
     return max(1, min(20, remaining))
+  }
+
+  private func orderSummary(_ commerce: CaptroCommerceDetails) -> some View {
+    let amounts = displayedAmounts(commerce)
+    return VStack(alignment: .leading, spacing: 9) {
+      Text(isCreator ? "CREATOR EARNINGS" : "ORDER SUMMARY")
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(CaptroDetailStyle.secondary)
+      if isCreator {
+        amountRow("Sale", amount: amounts.item, currency: amounts.currency)
+        amountRow("You earn", amount: amounts.item, currency: amounts.currency, emphasized: true)
+      } else {
+        amountRow("\(selectedPrice?.label ?? commerce.title)\(quantity > 1 ? " × \(quantity)" : "")", amount: amounts.item, currency: amounts.currency)
+        amountRow("Tax", amount: amounts.tax, currency: amounts.currency)
+        amountRow("Service fee", amount: amounts.fee, currency: amounts.currency)
+        Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
+        amountRow("TOTAL", amount: amounts.total, currency: amounts.currency, emphasized: true)
+      }
+    }
+    .padding(.vertical, 4)
+  }
+
+  private func amountRow(_ title: String, amount: Int, currency: String, emphasized: Bool = false) -> some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text(title)
+      Spacer(minLength: 12)
+      Text(CaptroMoney.format(minorUnits: amount, currency: currency))
+    }
+    .font(.system(size: emphasized ? 15 : 13, weight: emphasized ? .bold : .regular))
+  }
+
+  private func displayedAmounts(_ commerce: CaptroCommerceDetails) -> (item: Int, fee: Int, tax: Int, total: Int, currency: String) {
+    guard let price = selectedPrice else { return (0, 0, 0, 0, "USD") }
+    let item = max(0, price.unitAmount * quantity)
+    guard item > 0 else { return (0, 0, 0, 0, price.currency) }
+    let basisPoints = max(0, commerce.serviceFeeBasisPoints ?? 0)
+    let fixed = max(0, commerce.serviceFeeFixedAmount ?? 0)
+    let minimum = max(0, commerce.serviceFeeMinimumAmount ?? 0)
+    let percentage = (item * basisPoints + 9_999) / 10_000
+    let fee = max(minimum, percentage + fixed)
+    let tax = max(0, (price.taxAmount ?? 0) * quantity)
+    return (item, fee, tax, item + fee + tax, price.currency)
   }
 
   private func commerceActionLabel(title: String, disabled: Bool) -> some View {

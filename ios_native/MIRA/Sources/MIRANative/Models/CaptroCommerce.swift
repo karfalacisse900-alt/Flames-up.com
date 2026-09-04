@@ -31,6 +31,9 @@ public struct CaptroCommerceDetails: Codable, Hashable, Identifiable {
   public let viewerPurchaseId: String?
   public let viewerEntitlementId: String?
   public let viewerDestinationId: String?
+  public let serviceFeeBasisPoints: Int?
+  public let serviceFeeFixedAmount: Int?
+  public let serviceFeeMinimumAmount: Int?
 
   public var isPaid: Bool { paymentModel == "paid" || (lowestPrice?.unitAmount ?? 0) > 0 }
   public var isActiveForViewer: Bool { ["active", "confirmed", "used"].contains(viewerStatus ?? "") }
@@ -114,6 +117,10 @@ public struct CaptroCommercePrice: Codable, Hashable, Identifiable {
   public let capacity: Int?
   public let remaining: Int?
   public let active: Bool
+  public let creatorAmount: Int?
+  public let serviceFeeAmount: Int?
+  public let taxAmount: Int?
+  public let buyerTotal: Int?
 
   public var money: String { CaptroMoney.format(minorUnits: unitAmount, currency: currency) }
 }
@@ -314,6 +321,11 @@ public struct CaptroCommercePurchase: Decodable, Hashable, Identifiable {
   public let priceLabel: String
   public let quantity: Int
   public let unitAmount: Int
+  public let itemAmount: Int?
+  public let serviceFeeAmount: Int?
+  public let creatorAmount: Int?
+  public let platformFeeAmount: Int?
+  public let processingAmount: Int?
   public let feeAmount: Int?
   public let taxAmount: Int?
   public let totalAmount: Int
@@ -370,6 +382,8 @@ public struct CaptroCreatedCommerce: Decodable, Identifiable {
   public let commerce: CaptroCommerceDetails
   public let sold: Int
   public let grossAmount: Int
+  public let creatorEarningsAmount: Int?
+  public let availableEarningsAmount: Int?
   public let currency: String
   public let pendingApprovals: Int
   public let checkedIn: Int?
@@ -404,6 +418,103 @@ public struct CaptroCommerceConsumeResponse: Decodable {
   public let status: String
 }
 
+public struct CaptroPayoutAccount: Decodable, Hashable {
+  public let stripeConfigured: Bool
+  public let status: String
+  public let ready: Bool
+  public let detailsSubmitted: Bool
+  public let chargesEnabled: Bool
+  public let payoutsEnabled: Bool
+  public let bank: CaptroPayoutBank?
+  public let payoutSchedule: String?
+  public let requirementsCount: Int
+}
+
+public struct CaptroPayoutBank: Decodable, Hashable {
+  public let type: String
+  public let name: String
+  public let last4: String
+}
+
+public struct CaptroPayoutAccountResponse: Decodable {
+  public let account: CaptroPayoutAccount
+}
+
+public struct CaptroHostedAccountLinkResponse: Decodable, Identifiable {
+  public var id: String { url }
+  public let account: CaptroPayoutAccount
+  public let url: String
+  public let expiresAt: String?
+}
+
+public struct CaptroEarningsBalance: Decodable, Hashable {
+  public let status: String
+  public let currency: String
+  public let available: Int?
+  public let pending: Int?
+}
+
+public struct CaptroCreatorEarning: Decodable, Hashable, Identifiable {
+  public let id: String
+  public let purchaseId: String
+  public let postId: String
+  public let contentType: String
+  public let title: String
+  public let priceLabel: String?
+  public let buyerHandle: String?
+  public let currency: String
+  public let itemAmount: Int
+  public let creatorAmount: Int
+  public let platformFee: Int
+  public let processingAmount: Int
+  public let taxAmount: Int
+  public let buyerTotal: Int
+  public let refundedAmount: Int
+  public let status: String
+  public let createdAt: String?
+  public let availableAt: String?
+  public let purchasedAt: String?
+
+  public var netCreatorAmount: Int { max(0, creatorAmount - refundedAmount) }
+}
+
+public struct CaptroEarningsResponse: Decodable {
+  public let account: CaptroPayoutAccount
+  public let balance: CaptroEarningsBalance
+  public let recent: [CaptroCreatorEarning]
+}
+
+public struct CaptroPayout: Decodable, Hashable, Identifiable {
+  public let id: String
+  public let amount: Int
+  public let currency: String
+  public let status: String
+  public let arrivalAt: String?
+  public let paidAt: String?
+  public let failureMessage: String?
+  public let createdAt: String?
+}
+
+public struct CaptroPayoutsResponse: Decodable {
+  public let account: CaptroPayoutAccount
+  public let payouts: [CaptroPayout]
+}
+
+public struct CaptroEarningRefund: Decodable, Hashable, Identifiable {
+  public let id: String
+  public let amount: Int
+  public let creatorReversalAmount: Int
+  public let status: String
+  public let createdAt: String?
+}
+
+public struct CaptroEarningDetailResponse: Decodable {
+  public let earning: CaptroCreatorEarning
+  public let purchase: CaptroCommercePurchase
+  public let purchaseReference: String
+  public let refunds: [CaptroEarningRefund]
+}
+
 extension MIRAAPIClient {
   public func beginCommercePurchase(
     postId: String,
@@ -436,6 +547,30 @@ extension MIRAAPIClient {
 
   public func loadCommerceDashboard() async throws -> CaptroCommerceDashboard {
     try await get("/commerce/me")
+  }
+
+  public func loadPayoutAccount() async throws -> CaptroPayoutAccountResponse {
+    try await get("/commerce/payout-account")
+  }
+
+  public func createPayoutOnboardingLink() async throws -> CaptroHostedAccountLinkResponse {
+    try await post("/commerce/payout-account/onboarding-link", body: EmptyBody())
+  }
+
+  public func createPayoutManagementLink() async throws -> CaptroHostedAccountLinkResponse {
+    try await post("/commerce/payout-account/manage-link", body: EmptyBody())
+  }
+
+  public func loadCreatorEarnings() async throws -> CaptroEarningsResponse {
+    try await get("/commerce/earnings")
+  }
+
+  public func loadCreatorEarning(id: String) async throws -> CaptroEarningDetailResponse {
+    try await get("/commerce/earnings/\(id)")
+  }
+
+  public func loadCreatorPayouts() async throws -> CaptroPayoutsResponse {
+    try await get("/commerce/payouts")
   }
 
   public func decideCommercePurchase(purchaseId: String, approved: Bool) async throws -> CaptroCommerceActionResponse {

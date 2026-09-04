@@ -95,6 +95,11 @@ interface Env {
   STRIPE_SUCCESS_URL?: string;
   STRIPE_CANCEL_URL?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  STRIPE_CONNECT_WEBHOOK_SECRET?: string;
+  STRIPE_CONNECT_BOOTSTRAP_TOKEN?: string;
+  CAPTRO_SERVICE_FEE_BPS?: string;
+  CAPTRO_SERVICE_FEE_FIXED_CENTS?: string;
+  CAPTRO_SERVICE_FEE_MINIMUM_CENTS?: string;
   CAPTRO_TICKET_SIGNING_SECRET?: string;
   VERYFI_CLIENT_ID?: string;
   VERYFI_CLIENT_SECRET?: string;
@@ -8231,11 +8236,61 @@ function getStripeConfig(c: any) {
   const secretKey = String(c.env.STRIPE_SECRET_KEY || '').trim();
   const publishableKey = String(c.env.STRIPE_PUBLISHABLE_KEY || '').trim();
   const defaultPriceId = String(c.env.STRIPE_DEFAULT_PRICE_ID || '').trim();
+  const webhookSecret = String(c.env.STRIPE_WEBHOOK_SECRET || '').trim();
+  const connectWebhookSecret = String(c.env.STRIPE_CONNECT_WEBHOOK_SECRET || '').trim();
   return {
     secretKey,
     publishableKey,
     defaultPriceId,
+    webhookSecret,
+    connectWebhookSecret,
     configured: secretKey.startsWith('sk_') || secretKey.startsWith('rk_'),
+    liveMode: secretKey.startsWith('sk_live_') || secretKey.startsWith('rk_live_'),
+    webhookConfigured: webhookSecret.startsWith('whsec_'),
+    connectWebhookConfigured: connectWebhookSecret.startsWith('whsec_'),
+  };
+}
+
+type StripeRequestOptions = {
+  idempotencyKey?: string | null;
+  connectedAccountId?: string | null;
+};
+
+function stripeRequestHeaders(c: any, options: StripeRequestOptions = {}): Record<string, string> {
+  const stripe = getStripeConfig(c);
+  const headers: Record<string, string> = { Authorization: `Bearer ${stripe.secretKey}` };
+  if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
+  if (options.connectedAccountId) headers['Stripe-Account'] = options.connectedAccountId;
+  return headers;
+}
+
+function getMarketplaceFeeConfig(c: any) {
+  const integer = (value: unknown, fallback: number, minimum: number, maximum: number) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
+  };
+  return {
+    basisPoints: integer(c.env.CAPTRO_SERVICE_FEE_BPS, 500, 0, 10_000),
+    fixedAmount: integer(c.env.CAPTRO_SERVICE_FEE_FIXED_CENTS, 30, 0, 100_000),
+    minimumAmount: integer(c.env.CAPTRO_SERVICE_FEE_MINIMUM_CENTS, 0, 0, 100_000),
+  };
+}
+
+function marketplaceAmounts(c: any, itemAmount: number, taxAmount = 0) {
+  const item = Math.max(0, Math.trunc(itemAmount));
+  const tax = Math.max(0, Math.trunc(taxAmount));
+  if (item === 0) {
+    return { itemAmount: 0, serviceFeeAmount: 0, creatorAmount: 0, taxAmount: 0, buyerTotal: 0 };
+  }
+  const fee = getMarketplaceFeeConfig(c);
+  const percentage = Math.ceil((item * fee.basisPoints) / 10_000);
+  const serviceFeeAmount = Math.max(fee.minimumAmount, percentage + fee.fixedAmount);
+  return {
+    itemAmount: item,
+    serviceFeeAmount,
+    creatorAmount: item,
+    taxAmount: tax,
+    buyerTotal: item + serviceFeeAmount + tax,
   };
 }
 
@@ -8263,7 +8318,13 @@ function allowedStripeReturnUrl(c: any, value: unknown, fallbackPath: string): s
   }
 }
 
-async function stripeApiRequest(c: any, path: string, params?: Record<string, string | number | boolean | null | undefined>, idempotencyKey?: string | null) {
+async function stripeApiRequest(
+  c: any,
+  path: string,
+  params?: Record<string, string | number | boolean | null | undefined>,
+  idempotencyKey?: string | null,
+  connectedAccountId?: string | null
+) {
   const stripe = getStripeConfig(c);
   if (!stripe.configured) {
     return { ok: false, status: 503, data: { detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' } };
@@ -8276,10 +8337,9 @@ async function stripeApiRequest(c: any, path: string, params?: Record<string, st
   }
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${stripe.secretKey}`,
+    ...stripeRequestHeaders(c, { idempotencyKey, connectedAccountId }),
     'Content-Type': 'application/x-www-form-urlencoded',
   };
-  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 
   const response = await fetch(`https://api.stripe.com/v1${path}`, {
     method: 'POST',
@@ -8290,14 +8350,14 @@ async function stripeApiRequest(c: any, path: string, params?: Record<string, st
   return { ok: response.ok, status: response.status, data };
 }
 
-async function stripeApiGet(c: any, path: string) {
+async function stripeApiGet(c: any, path: string, connectedAccountId?: string | null) {
   const stripe = getStripeConfig(c);
   if (!stripe.configured) {
     return { ok: false, status: 503, data: { detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' } };
   }
   const response = await fetch(`https://api.stripe.com/v1${path}`, {
     method: 'GET',
-    headers: { Authorization: `Bearer ${stripe.secretKey}` },
+    headers: stripeRequestHeaders(c, { connectedAccountId }),
   });
   const data: any = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, data };
@@ -8763,7 +8823,7 @@ function commerceErrorCode(error: any): string {
 function commerceErrorStatus(code: string): number {
   if (['CAPTRO_ITEM_UNAVAILABLE', 'CAPTRO_ITEM_EXPIRED', 'CAPTRO_CAPACITY_REACHED', 'CAPTRO_TIER_SOLD_OUT',
     'CAPTRO_BOOKING_SLOT_UNAVAILABLE', 'CAPTRO_PASS_ALREADY_USED', 'CAPTRO_PURCHASE_NOT_PAYABLE',
-    'COMMERCE_STOREKIT_REQUIRED'].includes(code)) return 409;
+    'CAPTRO_PAYOUTS_NOT_READY', 'PAYOUT_SETUP_REQUIRED', 'COMMERCE_STOREKIT_REQUIRED'].includes(code)) return 409;
   if (['CAPTRO_PURCHASE_NOT_FOUND', 'CAPTRO_PASS_NOT_FOUND'].includes(code)) return 404;
   if (['CAPTRO_PASS_INVALID', 'CAPTRO_CHECKOUT_MISMATCH'].includes(code)) return 403;
   if (['COMMERCE_PAYMENTS_UNAVAILABLE', 'CAPTRO_TICKET_SIGNING_SECRET_MISSING'].includes(code)) return 503;
@@ -8782,6 +8842,11 @@ function commercePurchasePayload(row: any, entitlement?: any) {
     priceLabel: cleanText(row?.price_label, 80),
     quantity: Math.max(1, Number(row?.quantity || 1)),
     unitAmount: Math.max(0, Number(row?.unit_amount || 0)),
+    itemAmount: Math.max(0, Number(row?.item_amount ?? (Number(row?.unit_amount || 0) * Number(row?.quantity || 1)))),
+    serviceFeeAmount: Math.max(0, Number(row?.service_fee_amount || 0)),
+    creatorAmount: Math.max(0, Number(row?.creator_amount ?? (Number(row?.unit_amount || 0) * Number(row?.quantity || 1)))),
+    platformFeeAmount: Math.max(0, Number(row?.platform_fee_amount || 0)),
+    processingAmount: Math.max(0, Number(row?.processing_amount || row?.fee_amount || 0)),
     feeAmount: row?.fee_amount == null ? null : Math.max(0, Number(row.fee_amount)),
     taxAmount: row?.tax_amount == null ? null : Math.max(0, Number(row.tax_amount)),
     totalAmount: Math.max(0, Number(row?.total_amount || 0)),
@@ -8836,7 +8901,431 @@ async function commerceDetailsForVisiblePost(c: any, post: any, viewerAppUserId:
   if (viewer?.entitlement && ['membership', 'group_access'].includes(viewer.entitlement.kind)) {
     viewer.destination_id = cleanText(purchasable.private_config?.group_chat_id, 120) || null;
   }
-  return publicCommercePayload(purchasable, prices, viewer);
+  return commercePayloadWithPricing(c, publicCommercePayload(purchasable, prices, viewer));
+}
+
+function commercePayloadWithPricing(c: any, payload: any) {
+  if (!payload) return payload;
+  const fee = getMarketplaceFeeConfig(c);
+  const prices = Array.isArray(payload.prices) ? payload.prices.map((price: any) => {
+    const amounts = marketplaceAmounts(c, Number(price?.unitAmount || 0));
+    return {
+      ...price,
+      creatorAmount: amounts.creatorAmount,
+      serviceFeeAmount: amounts.serviceFeeAmount,
+      taxAmount: amounts.taxAmount,
+      buyerTotal: amounts.buyerTotal,
+    };
+  }) : [];
+  const lowestPrice = payload.lowestPrice
+    ? prices.find((price: any) => price.id === payload.lowestPrice.id) || payload.lowestPrice
+    : null;
+  return {
+    ...payload,
+    prices,
+    lowestPrice,
+    serviceFeeBasisPoints: fee.basisPoints,
+    serviceFeeFixedAmount: fee.fixedAmount,
+    serviceFeeMinimumAmount: fee.minimumAmount,
+  };
+}
+
+function stripeProviderError(result: any, fallback: string): Error {
+  const code = cleanText(result?.data?.error?.code || result?.data?.code, 100);
+  const type = cleanText(result?.data?.error?.type, 100);
+  return new Error(code || type || fallback);
+}
+
+function connectedAccountStatus(account: any): string {
+  if (account?.charges_enabled === true && account?.payouts_enabled === true) return 'ready';
+  if (account?.requirements?.disabled_reason) return 'restricted';
+  if (Array.isArray(account?.requirements?.currently_due) && account.requirements.currently_due.length > 0) {
+    return account?.details_submitted === true ? 'restricted' : 'onboarding';
+  }
+  return account?.details_submitted === true ? 'pending' : 'onboarding';
+}
+
+function connectedAccountSafePatch(account: any) {
+  const external = Array.isArray(account?.external_accounts?.data)
+    ? account.external_accounts.data.find((item: any) => item?.object === 'bank_account' || item?.object === 'card')
+    : null;
+  return {
+    provider_account_id: cleanText(account?.id, 180),
+    country: cleanText(account?.country, 2).toUpperCase() || null,
+    default_currency: cleanText(account?.default_currency, 3).toUpperCase() || null,
+    status: connectedAccountStatus(account),
+    details_submitted: account?.details_submitted === true,
+    charges_enabled: account?.charges_enabled === true,
+    payouts_enabled: account?.payouts_enabled === true,
+    requirements_currently_due: Array.isArray(account?.requirements?.currently_due) ? account.requirements.currently_due.slice(0, 100) : [],
+    requirements_eventually_due: Array.isArray(account?.requirements?.eventually_due) ? account.requirements.eventually_due.slice(0, 100) : [],
+    disabled_reason: cleanText(account?.requirements?.disabled_reason, 180) || null,
+    external_account_type: cleanText(external?.object, 40) || null,
+    external_account_name: cleanText(external?.bank_name || external?.brand, 80) || null,
+    external_account_last4: /^\d{4}$/.test(String(external?.last4 || '')) ? String(external.last4) : null,
+    payout_schedule: cleanText(account?.settings?.payouts?.schedule?.interval, 40) || null,
+    last_provider_sync_at: now(),
+    updated_at: now(),
+  };
+}
+
+async function syncConnectedAccountFromStripe(c: any, account: any, knownRow?: any): Promise<any | null> {
+  const providerAccountId = cleanText(account?.id, 180);
+  if (!providerAccountId.startsWith('acct_')) return null;
+  let row = knownRow;
+  if (!row) {
+    const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+      provider_account_id: postgrestEqFilter(providerAccountId),
+    }, '*', 1);
+    row = rows[0];
+  }
+  const patch = connectedAccountSafePatch(account);
+  if (!row) {
+    const authUserId = isUuidText(account?.metadata?.captro_auth_user_id || '');
+    const appUserId = publicId(account?.metadata?.captro_app_user_id, 120);
+    if (!authUserId || !appUserId) return null;
+    const inserted = await supabaseAdminInsertRows(c, 'app_connected_accounts', [{
+      user_id: authUserId,
+      app_user_id: appUserId,
+      account_type: cleanText(account?.type || 'express', 20),
+      ...patch,
+    }]);
+    return inserted[0] || null;
+  }
+  await supabaseAdminPatchRows(c, 'app_connected_accounts', { id: postgrestEqFilter(row.id) }, patch);
+  return { ...row, ...patch };
+}
+
+async function refreshConnectedAccount(c: any, row: any): Promise<any> {
+  const providerAccountId = cleanText(row?.provider_account_id, 180);
+  if (!providerAccountId.startsWith('acct_')) return row;
+  const response = await stripeApiGet(c, `/accounts/${encodeURIComponent(providerAccountId)}?expand[]=external_accounts`);
+  if (!response.ok) {
+    console.warn(JSON.stringify({ event: 'stripe_connect_account_sync_failed', status: response.status,
+      code: cleanText(response.data?.error?.code || response.data?.error?.type, 100) }));
+    return row;
+  }
+  return await syncConnectedAccountFromStripe(c, response.data, row) || row;
+}
+
+async function connectedAccountForUser(c: any, authUserId: string, refresh = false): Promise<any | null> {
+  const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+    user_id: postgrestEqFilter(authUserId),
+  }, '*', 1);
+  if (!rows[0]) return null;
+  return refresh ? refreshConnectedAccount(c, rows[0]) : rows[0];
+}
+
+function connectedAccountIsReady(row: any): boolean {
+  return row?.status === 'ready' && row?.charges_enabled === true && row?.payouts_enabled === true;
+}
+
+function connectedAccountPublicPayload(c: any, row: any) {
+  return {
+    stripeConfigured: getStripeConfig(c).configured,
+    status: row?.status || 'not_started',
+    ready: connectedAccountIsReady(row),
+    detailsSubmitted: row?.details_submitted === true,
+    chargesEnabled: row?.charges_enabled === true,
+    payoutsEnabled: row?.payouts_enabled === true,
+    bank: row?.external_account_last4 ? {
+      type: cleanText(row.external_account_type, 40) || 'bank_account',
+      name: cleanText(row.external_account_name, 80) || 'Bank',
+      last4: String(row.external_account_last4),
+    } : null,
+    payoutSchedule: cleanText(row?.payout_schedule, 40) || null,
+    requirementsCount: Array.isArray(row?.requirements_currently_due) ? row.requirements_currently_due.length : 0,
+  };
+}
+
+async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserId: string, userRow: any): Promise<any> {
+  const existing = await connectedAccountForUser(c, authUserId, true);
+  if (existing) return existing;
+  const countryCandidate = cleanText(userRow?.country || userRow?.country_code, 2).toUpperCase();
+  const country = /^[A-Z]{2}$/.test(countryCandidate) ? countryCandidate : 'US';
+  const email = normalizeOptionalEmail(userRow?.email);
+  const account = await stripeApiRequest(c, '/accounts', {
+    type: 'express',
+    country,
+    email: email && !isInternalOAuthEmail(email) ? email : undefined,
+    'capabilities[card_payments][requested]': true,
+    'capabilities[transfers][requested]': true,
+    'business_profile[product_description]': 'Sales and paid access through Captro',
+    'metadata[captro_auth_user_id]': authUserId,
+    'metadata[captro_app_user_id]': appUserId,
+  }, `captro-connect-account-${authUserId}`);
+  if (!account.ok || !String(account.data?.id || '').startsWith('acct_')) {
+    throw stripeProviderError(account, 'STRIPE_CONNECT_ACCOUNT_CREATE_FAILED');
+  }
+  const inserted = await supabaseAdminInsertRows(c, 'app_connected_accounts', [{
+    user_id: authUserId,
+    app_user_id: appUserId,
+    account_type: 'express',
+    ...connectedAccountSafePatch(account.data),
+  }]);
+  if (!inserted[0]) throw new Error('STRIPE_CONNECT_ACCOUNT_SAVE_FAILED');
+  return inserted[0];
+}
+
+async function requireReadyConnectedAccount(c: any, creatorAuthUserId: string): Promise<any> {
+  const row = await connectedAccountForUser(c, creatorAuthUserId, true);
+  if (!connectedAccountIsReady(row)) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  return row;
+}
+
+async function ensureStripeProductAndPrice(c: any, purchasable: any, price: any): Promise<string> {
+  let productId = cleanText(purchasable?.stripe_product_id, 180);
+  if (!productId.startsWith('prod_')) {
+    const product = await stripeApiRequest(c, '/products', {
+      name: cleanText(purchasable?.title, 180) || 'Captro item',
+      description: cleanText(purchasable?.description, 500),
+      'metadata[captro_purchasable_id]': publicId(purchasable?.id, 120),
+      'metadata[captro_post_id]': publicId(purchasable?.post_id, 120),
+      'metadata[captro_content_type]': cleanText(purchasable?.content_type, 40),
+    }, `captro-product-${publicId(purchasable?.id, 120)}`);
+    if (!product.ok || !String(product.data?.id || '').startsWith('prod_')) {
+      throw stripeProviderError(product, 'STRIPE_PRODUCT_CREATE_FAILED');
+    }
+    productId = product.data.id;
+    await supabaseAdminPatchRows(c, 'app_purchasables', { id: postgrestEqFilter(purchasable.id) }, {
+      stripe_product_id: productId,
+      updated_at: now(),
+    });
+    purchasable.stripe_product_id = productId;
+  }
+
+  let stripePriceId = cleanText(price?.stripe_price_id, 180);
+  if (!stripePriceId.startsWith('price_')) {
+    const stripePrice = await stripeApiRequest(c, '/prices', {
+      product: productId,
+      currency: cleanText(price?.currency || 'USD', 3).toLowerCase(),
+      unit_amount: Math.max(0, Number(price?.unit_amount || 0)),
+      'metadata[captro_price_id]': publicId(price?.id, 120),
+      'metadata[captro_purchasable_id]': publicId(purchasable?.id, 120),
+      'metadata[captro_price_label]': cleanText(price?.label, 80),
+    }, `captro-price-${publicId(price?.id, 120)}`);
+    if (!stripePrice.ok || !String(stripePrice.data?.id || '').startsWith('price_')) {
+      throw stripeProviderError(stripePrice, 'STRIPE_PRICE_CREATE_FAILED');
+    }
+    stripePriceId = stripePrice.data.id;
+    await supabaseAdminPatchRows(c, 'app_prices', { id: postgrestEqFilter(price.id) }, {
+      stripe_price_id: stripePriceId,
+      updated_at: now(),
+    });
+    price.stripe_price_id = stripePriceId;
+  }
+  return stripePriceId;
+}
+
+function stripeBalanceAmount(rows: any, currency: string): number {
+  if (!Array.isArray(rows)) return 0;
+  return rows
+    .filter((row: any) => cleanText(row?.currency, 3).toUpperCase() === currency)
+    .reduce((sum: number, row: any) => sum + Math.trunc(Number(row?.amount || 0)), 0);
+}
+
+function creatorEarningPayload(row: any, purchase?: any, buyer?: any) {
+  return {
+    id: publicId(row?.id, 120),
+    purchaseId: publicId(row?.purchase_id, 120),
+    postId: publicId(row?.post_id, 120),
+    contentType: cleanText(row?.content_type, 40),
+    title: cleanText(purchase?.item_title, 180) || 'Captro sale',
+    priceLabel: cleanText(purchase?.price_label, 80) || null,
+    buyerHandle: cleanText(buyer?.username, 80) || null,
+    currency: cleanText(row?.currency || 'USD', 3).toUpperCase(),
+    itemAmount: Math.max(0, Number(row?.item_amount || 0)),
+    creatorAmount: Math.max(0, Number(row?.creator_amount || 0)),
+    platformFee: Math.max(0, Number(row?.platform_fee || 0)),
+    processingAmount: Math.max(0, Number(row?.processing_amount || 0)),
+    taxAmount: Math.max(0, Number(row?.tax_amount || 0)),
+    buyerTotal: Math.max(0, Number(row?.buyer_total || 0)),
+    refundedAmount: Math.max(0, Number(row?.refunded_amount || 0)),
+    status: cleanText(row?.status, 40),
+    createdAt: row?.created_at || null,
+    availableAt: row?.available_at || null,
+    purchasedAt: purchase?.confirmed_at || purchase?.created_at || row?.created_at || null,
+  };
+}
+
+function stripePayoutStatus(value: unknown): 'pending' | 'in_transit' | 'paid' | 'failed' | 'cancelled' {
+  const status = cleanText(value, 40).toLowerCase();
+  if (status === 'paid') return 'paid';
+  if (status === 'failed') return 'failed';
+  if (status === 'canceled' || status === 'cancelled') return 'cancelled';
+  if (status === 'in_transit') return 'in_transit';
+  return 'pending';
+}
+
+async function syncStripePayout(c: any, providerAccountId: string, payout: any): Promise<boolean> {
+  const payoutId = cleanText(payout?.id, 180);
+  if (!providerAccountId.startsWith('acct_') || !payoutId.startsWith('po_')) return false;
+  const accounts = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+    provider_account_id: postgrestEqFilter(providerAccountId),
+  }, '*', 1);
+  const account = accounts[0];
+  if (!account) return false;
+  await supabaseAdminUpsert(c, 'app_payouts', [{
+    connected_account_id: account.id,
+    creator_id: account.user_id,
+    provider_payout_id: payoutId,
+    currency: cleanText(payout?.currency || account.default_currency || 'USD', 3).toUpperCase(),
+    amount: Math.max(0, Number(payout?.amount || 0)),
+    status: stripePayoutStatus(payout?.status),
+    arrival_at: stripeUnixToIso(payout?.arrival_date) || null,
+    paid_at: payout?.status === 'paid' ? stripeUnixToIso(payout?.arrival_date) || now() : null,
+    failure_code: cleanText(payout?.failure_code, 100) || null,
+    failure_message: cleanText(payout?.failure_message, 300) || null,
+    updated_at: now(),
+  }], 'provider_payout_id');
+  return true;
+}
+
+async function recordStripeDispute(c: any, eventId: string, dispute: any): Promise<boolean> {
+  const disputeId = cleanText(dispute?.id, 180);
+  const paymentIntentId = cleanText(dispute?.payment_intent?.id || dispute?.payment_intent, 180);
+  if (!disputeId.startsWith('dp_') || !paymentIntentId) return false;
+  const purchases = await supabaseAdminSelectRows(c, 'app_purchases', {
+    provider_payment_id: postgrestEqFilter(paymentIntentId),
+  }, '*', 1);
+  const purchase = purchases[0];
+  if (!purchase) return false;
+  const status = cleanText(dispute?.status, 80) || 'unknown';
+  await supabaseAdminUpsert(c, 'app_payment_disputes', [{
+    purchase_id: purchase.id,
+    creator_id: purchase.creator_id,
+    provider_dispute_id: disputeId,
+    provider_payment_id: paymentIntentId,
+    currency: cleanText(dispute?.currency || purchase.currency || 'USD', 3).toUpperCase(),
+    amount: Math.max(0, Number(dispute?.amount || 0)),
+    status,
+    reason: cleanText(dispute?.reason, 180) || null,
+    provider_event_id: cleanText(eventId, 180) || null,
+    updated_at: now(),
+  }], 'provider_dispute_id');
+
+  if (status === 'won') {
+    const earnings = await supabaseAdminSelectRows(c, 'app_creator_earnings', {
+      purchase_id: postgrestEqFilter(purchase.id),
+    }, 'available_at', 1);
+    const availableAt = earnings[0]?.available_at;
+    await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
+      status: 'confirmed', updated_at: now(),
+    });
+    await supabaseAdminPatchRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(purchase.id) }, {
+      status: availableAt && Date.parse(availableAt) <= Date.now() ? 'available' : 'pending',
+      disputed_amount: 0,
+      updated_at: now(),
+    });
+  } else {
+    await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
+      status: 'disputed', updated_at: now(),
+    });
+    await supabaseAdminPatchRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(purchase.id) }, {
+      status: status === 'lost' ? 'reversed' : 'disputed',
+      disputed_amount: Math.min(Math.max(0, Number(dispute?.amount || 0)), Math.max(0, Number(purchase.creator_amount || 0))),
+      updated_at: now(),
+    });
+    if (status === 'lost') {
+      const entitlements = await supabaseAdminSelectRows(c, 'app_entitlements', {
+        purchase_id: postgrestEqFilter(purchase.id),
+      }, '*', 1);
+      const entitlement = entitlements[0];
+      if (entitlement) {
+        await supabaseAdminPatchRows(c, 'app_entitlements', { id: postgrestEqFilter(entitlement.id) }, {
+          status: 'revoked', updated_at: now(),
+        });
+        if (entitlement.kind === 'ticket') {
+          await supabaseAdminPatchRows(c, 'app_commerce_tickets', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'revoked', updated_at: now() });
+        } else if (entitlement.kind === 'redemption') {
+          await supabaseAdminPatchRows(c, 'app_commerce_redemptions', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'revoked', updated_at: now() });
+        } else if (['membership', 'group_access'].includes(entitlement.kind)) {
+          await supabaseAdminPatchRows(c, 'app_commerce_memberships', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'revoked', updated_at: now() });
+        } else if (entitlement.kind === 'attendance') {
+          await supabaseAdminPatchRows(c, 'app_commerce_attendance', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'cancelled', updated_at: now() });
+        } else if (entitlement.kind === 'reservation') {
+          await supabaseAdminPatchRows(c, 'app_commerce_bookings', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'cancelled', updated_at: now() });
+        } else if (entitlement.kind === 'order') {
+          await supabaseAdminPatchRows(c, 'app_commerce_orders', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'cancelled', updated_at: now() });
+        }
+      }
+    }
+  }
+  return true;
+}
+
+async function recordMarketplacePaymentFailure(c: any, eventId: string, intent: any): Promise<boolean> {
+  if (intent?.metadata?.source !== 'captro_commerce') return false;
+  const purchaseId = isUuidText(intent?.metadata?.captro_purchase_id || '');
+  if (!purchaseId) return false;
+  const digest = await sha256Hex(JSON.stringify({ id: intent?.id, status: intent?.status,
+    error: intent?.last_payment_error?.code || intent?.last_payment_error?.decline_code || '' }));
+  await supabaseAdminRpc(c, 'captro_record_marketplace_payment_failure', {
+    p_purchase_id: purchaseId,
+    p_provider_event_id: cleanText(eventId, 180),
+    p_provider_payment_id: cleanText(intent?.id, 180),
+    p_error_code: cleanText(intent?.last_payment_error?.code || intent?.last_payment_error?.decline_code, 100),
+    p_payload_digest: digest,
+  });
+  return true;
+}
+
+async function recordStripeWebhookEvent(c: any, event: any, status: 'processed' | 'failed', errorCode = '') {
+  const eventId = cleanText(event?.id, 180);
+  if (!eventId) return;
+  const digest = await sha256Hex(JSON.stringify({ id: eventId, type: event?.type, account: event?.account || '' }));
+  await supabaseAdminUpsert(c, 'app_payment_webhook_events', [{
+    provider: 'stripe',
+    provider_event_id: eventId,
+    event_type: cleanText(event?.type, 180) || 'unknown',
+    provider_account_id: cleanText(event?.account, 180) || null,
+    status,
+    payload_digest: digest,
+    error_code: cleanText(errorCode, 180) || null,
+    updated_at: now(),
+  }], 'provider,provider_event_id');
+}
+
+async function createConnectedAccountOnboardingLink(c: any, account: any, body: any = {}) {
+  const accountId = cleanText(account?.provider_account_id, 180);
+  if (!accountId.startsWith('acct_')) throw new Error('STRIPE_CONNECT_ACCOUNT_REQUIRED');
+  const refreshUrl = allowedStripeReturnUrl(c, body.refreshUrl || body.refresh_url, '/earnings/payouts/refresh');
+  const returnUrl = allowedStripeReturnUrl(c, body.returnUrl || body.return_url, '/earnings/payouts/complete');
+  const result = await stripeApiRequest(c, '/account_links', {
+    account: accountId,
+    refresh_url: refreshUrl,
+    return_url: returnUrl,
+    type: 'account_onboarding',
+    'collection_options[fields]': 'eventually_due',
+  });
+  if (!result.ok || !safeExternalUrl(result.data?.url)) {
+    throw stripeProviderError(result, 'STRIPE_CONNECT_ONBOARDING_FAILED');
+  }
+  return { url: safeExternalUrl(result.data.url), expiresAt: stripeUnixToIso(result.data?.expires_at) || null };
+}
+
+async function createConnectedAccountManagementLink(c: any, account: any, body: any = {}) {
+  const refreshed = await refreshConnectedAccount(c, account);
+  if (!connectedAccountIsReady(refreshed)) return createConnectedAccountOnboardingLink(c, refreshed, body);
+  const accountId = cleanText(refreshed?.provider_account_id, 180);
+  const result = await stripeApiRequest(c, `/accounts/${encodeURIComponent(accountId)}/login_links`);
+  if (!result.ok || !safeExternalUrl(result.data?.url)) {
+    throw stripeProviderError(result, 'STRIPE_CONNECT_MANAGEMENT_FAILED');
+  }
+  return { url: safeExternalUrl(result.data.url), expiresAt: null };
+}
+
+function payoutPublicPayload(row: any) {
+  return {
+    id: publicId(row?.id, 120),
+    amount: Math.trunc(Number(row?.amount || 0)),
+    currency: cleanText(row?.currency || 'USD', 3).toUpperCase(),
+    status: cleanText(row?.status, 40),
+    arrivalAt: row?.arrival_at || null,
+    paidAt: row?.paid_at || null,
+    failureMessage: cleanText(row?.failure_message, 300) || null,
+    createdAt: row?.created_at || null,
+  };
 }
 
 function getTicketSigningSecret(c: any): string {
@@ -8869,25 +9358,38 @@ async function completeCommercePurchaseFromSession(c: any, eventId: string, sess
   const purchaseId = isUuidText(session?.metadata?.captro_purchase_id || '');
   if (!purchaseId || session?.metadata?.source !== 'captro_commerce') return { processed: false };
   if (session?.payment_status !== 'paid') return { processed: false, pending: true };
-  const paymentIntentId = cleanText(session?.payment_intent, 180);
+  const paymentIntentId = cleanText(session?.payment_intent?.id || session?.payment_intent, 180);
   const amount = Math.max(0, Number(session?.amount_total || 0));
-  const tax = Math.max(0, Number(session?.total_details?.amount_tax || 0));
+  const tax = Math.max(0, Math.trunc(Number(
+    session?.metadata?.captro_tax_amount ?? session?.total_details?.amount_tax ?? 0
+  ) || 0));
   let fee = 0;
+  let chargeId = '';
+  let transferId = '';
+  let availableAt = '';
   if (paymentIntentId) {
     const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(paymentIntentId)}?expand[]=latest_charge.balance_transaction`);
-    if (intent.ok) fee = Math.max(0, Number(intent.data?.latest_charge?.balance_transaction?.fee || 0));
+    if (intent.ok) {
+      const charge = intent.data?.latest_charge;
+      fee = Math.max(0, Number(charge?.balance_transaction?.fee || 0));
+      chargeId = cleanText(charge?.id || charge, 180);
+      transferId = cleanText(charge?.transfer?.id || charge?.transfer, 180);
+      availableAt = stripeUnixToIso(charge?.balance_transaction?.available_on);
+    }
   }
   const digest = await sha256Hex(JSON.stringify({ id: session?.id, payment_intent: paymentIntentId, amount, currency: session?.currency }));
-  const purchase = await supabaseAdminRpc(c, 'captro_confirm_paid_purchase', {
+  const purchase = await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
     p_purchase_id: purchaseId,
-    p_provider: 'stripe',
     p_provider_event_id: cleanText(eventId, 180),
     p_provider_checkout_id: cleanText(session?.id, 180),
     p_provider_payment_id: paymentIntentId,
+    p_provider_charge_id: chargeId,
+    p_provider_transfer_id: transferId,
     p_amount: amount,
-    p_fee_amount: fee,
+    p_processing_amount: fee,
     p_tax_amount: tax,
     p_currency: cleanText(session?.currency || 'usd', 3).toUpperCase(),
+    p_available_at: availableAt || null,
     p_payload_digest: digest,
   });
   return { processed: true, purchase };
@@ -8903,25 +9405,80 @@ async function cancelCommercePurchaseFromSession(c: any, session: any) {
   return { processed: true };
 }
 
-async function refundCommercePurchaseFromCharge(c: any, eventId: string, charge: any) {
-  const paymentIntentId = cleanText(charge?.payment_intent, 180);
+function marketplaceRefundStatus(value: unknown): 'pending' | 'succeeded' | 'failed' | 'cancelled' {
+  const status = cleanText(value, 40).toLowerCase();
+  if (status === 'succeeded') return 'succeeded';
+  if (status === 'failed') return 'failed';
+  if (status === 'canceled' || status === 'cancelled') return 'cancelled';
+  return 'pending';
+}
+
+async function recordCommerceRefund(c: any, eventId: string, refund: any) {
+  const paymentIntentId = cleanText(refund?.payment_intent?.id || refund?.payment_intent, 180);
   if (!paymentIntentId) return { processed: false };
   const rows = await supabaseAdminSelectRows(c, 'app_purchases', {
     provider_payment_id: postgrestEqFilter(paymentIntentId),
-  }, 'id', 1);
-  if (!rows.length) return { processed: false };
-  const amount = Math.max(0, Number(charge?.amount_refunded || charge?.amount || 0));
-  const digest = await sha256Hex(JSON.stringify({ id: charge?.id, payment_intent: paymentIntentId, amount }));
-  await supabaseAdminRpc(c, 'captro_refund_purchase', {
+  }, '*', 1);
+  const purchase = rows[0];
+  if (!purchase) return { processed: false };
+  const amount = Math.max(0, Number(refund?.amount || 0));
+  if (!amount) return { processed: false };
+  const refundId = cleanText(refund?.id, 180) || `charge-refund-${paymentIntentId}-${amount}`;
+  const creatorAmount = Math.max(0, Number(purchase.creator_amount || purchase.item_amount || 0));
+  const buyerTotal = Math.max(1, Number(purchase.total_amount || 0));
+  const creatorReversal = amount >= buyerTotal
+    ? creatorAmount
+    : Math.min(creatorAmount, Math.round((amount * creatorAmount) / buyerTotal));
+  const serviceFeeRefund = Math.min(
+    Math.max(0, Number(purchase.service_fee_amount || 0)),
+    Math.max(0, amount - creatorReversal)
+  );
+  const digest = await sha256Hex(JSON.stringify({ id: refundId, payment_intent: paymentIntentId, amount, status: refund?.status }));
+  await supabaseAdminRpc(c, 'captro_record_marketplace_refund', {
     p_provider_payment_id: paymentIntentId,
+    p_provider_refund_id: refundId,
     p_refund_amount: amount,
+    p_creator_reversal_amount: creatorReversal,
+    p_service_fee_refund_amount: serviceFeeRefund,
     p_provider_event_id: cleanText(eventId, 180),
+    p_status: marketplaceRefundStatus(refund?.status),
+    p_reason: cleanText(refund?.reason || refund?.failure_reason, 180),
     p_payload_digest: digest,
   });
   return { processed: true };
 }
 
+async function refundCommercePurchaseFromCharge(c: any, eventId: string, charge: any) {
+  if (charge?.object === 'refund') return recordCommerceRefund(c, eventId, charge);
+  const refunds = Array.isArray(charge?.refunds?.data) ? charge.refunds.data : [];
+  if (refunds.length) {
+    for (const refund of refunds) await recordCommerceRefund(c, eventId, refund);
+    return { processed: true };
+  }
+  return recordCommerceRefund(c, eventId, {
+    id: `charge-refund-${cleanText(charge?.id, 180)}-${Math.max(0, Number(charge?.amount_refunded || 0))}`,
+    object: 'refund',
+    payment_intent: charge?.payment_intent,
+    amount: charge?.amount_refunded,
+    status: charge?.refunded === true ? 'succeeded' : 'pending',
+  });
+}
+
 async function createCommerceCheckoutSession(c: any, purchase: any) {
+  const purchasableRows = await supabaseAdminSelectRows(c, 'app_purchasables', {
+    id: postgrestEqFilter(purchase?.purchasable_id),
+  }, '*', 1);
+  const priceRows = await supabaseAdminSelectRows(c, 'app_prices', {
+    id: postgrestEqFilter(purchase?.price_id),
+  }, '*', 1);
+  const purchasable = purchasableRows[0];
+  const price = priceRows[0];
+  if (!purchasable || !price) throw new Error('CAPTRO_PRICE_UNAVAILABLE');
+  const connected = await requireReadyConnectedAccount(c, purchase.creator_id);
+  if (connected.id !== purchase.connected_account_id
+      || connected.provider_account_id !== purchase.stripe_destination_account_id) {
+    throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  }
   const existingSessionId = cleanText(purchase?.provider_checkout_id, 180);
   if (existingSessionId) {
     const existing = await stripeApiGet(c, `/checkout/sessions/${encodeURIComponent(existingSessionId)}`);
@@ -8932,23 +9489,45 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
   const successUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/success', '/checkout/success');
   const cancelUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/cancelled', '/checkout/cancelled');
   const currency = cleanText(purchase.currency || 'USD', 3).toLowerCase();
-  const session = await stripeApiRequest(c, '/checkout/sessions', {
+  const stripePriceId = await ensureStripeProductAndPrice(c, purchasable, price);
+  const serviceFee = Math.max(0, Math.trunc(Number(purchase.service_fee_amount || 0)));
+  const tax = Math.max(0, Math.trunc(Number(purchase.tax_amount || 0)));
+  const params: Record<string, string | number | boolean | null | undefined> = {
     mode: 'payment',
     success_url: `${successUrl}${successUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}`,
     client_reference_id: purchase.buyer_id,
     expires_at: Math.floor(Date.now() / 1000) + (35 * 60),
-    'line_items[0][price_data][currency]': currency,
-    'line_items[0][price_data][unit_amount]': Math.max(0, Number(purchase.unit_amount || 0)),
-    'line_items[0][price_data][product_data][name]': cleanText(purchase.item_title, 180),
-    'line_items[0][price_data][product_data][description]': cleanText(`${purchase.content_type} · ${purchase.price_label}`, 180),
+    'line_items[0][price]': stripePriceId,
     'line_items[0][quantity]': Math.max(1, Number(purchase.quantity || 1)),
     'metadata[source]': 'captro_commerce',
     'metadata[captro_purchase_id]': purchaseId,
     'metadata[captro_post_id]': publicId(purchase.post_id, 120),
+    'metadata[captro_creator_id]': publicId(purchase.creator_id, 120),
+    'metadata[captro_service_fee_amount]': serviceFee,
+    'metadata[captro_tax_amount]': tax,
     'payment_intent_data[metadata][source]': 'captro_commerce',
     'payment_intent_data[metadata][captro_purchase_id]': purchaseId,
-  }, `captro-commerce-${purchaseId}`);
+    'payment_intent_data[metadata][captro_creator_id]': publicId(purchase.creator_id, 120),
+    'payment_intent_data[metadata][captro_service_fee_amount]': serviceFee,
+    'payment_intent_data[metadata][captro_tax_amount]': tax,
+    'payment_intent_data[transfer_data][destination]': cleanText(connected.provider_account_id, 180),
+    'payment_intent_data[transfer_data][amount]': Math.max(0, Number(purchase.creator_amount || purchase.item_amount || 0)),
+  };
+  if (serviceFee > 0) {
+    params['line_items[1][price_data][currency]'] = currency;
+    params['line_items[1][price_data][unit_amount]'] = serviceFee;
+    params['line_items[1][price_data][product_data][name]'] = 'Captro service fee';
+    params['line_items[1][quantity]'] = 1;
+  }
+  if (tax > 0) {
+    const index = serviceFee > 0 ? 2 : 1;
+    params[`line_items[${index}][price_data][currency]`] = currency;
+    params[`line_items[${index}][price_data][unit_amount]`] = tax;
+    params[`line_items[${index}][price_data][product_data][name]`] = 'Tax';
+    params[`line_items[${index}][quantity]`] = 1;
+  }
+  const session = await stripeApiRequest(c, '/checkout/sessions', params, `captro-commerce-${purchaseId}`);
   if (!session.ok || !session.data?.id || !session.data?.url) {
     throw new Error(cleanText(session.data?.error?.code || session.data?.error?.message, 180) || 'STRIPE_CHECKOUT_FAILED');
   }
@@ -14644,6 +15223,20 @@ api.post('/posts', authMiddleware, async (c) => {
   if (commerceConfig && !commerceCreatorId) {
     return c.json({ detail: 'Reconnect your account before creating a paid or joinable post.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
   }
+  if (commerceConfig?.purchasable.payment_model === 'paid'
+      && commerceConfig.purchasable.commerce_class === 'outside_app') {
+    if (!getStripeConfig(c).configured) {
+      return c.json({ detail: 'Card payments are temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
+    }
+    try {
+      await requireReadyConnectedAccount(c, commerceCreatorId!);
+    } catch {
+      return c.json({
+        detail: 'Finish setting up payouts to publish this paid post.',
+        code: 'PAYOUT_SETUP_REQUIRED',
+      }, 409);
+    }
+  }
 
   const createdAt = now();
   const supabaseInput = {
@@ -14724,6 +15317,10 @@ api.post('/posts', authMiddleware, async (c) => {
         purchasable_id: purchasable.id,
       })));
       if (priceRows.length !== commerceConfig.prices.length) throw new Error('COMMERCE_PRICE_WRITE_FAILED');
+      if (commerceConfig.purchasable.payment_model === 'paid'
+          && commerceConfig.purchasable.commerce_class === 'outside_app') {
+        for (const price of priceRows) await ensureStripeProductAndPrice(c, purchasable, price);
+      }
       if (commerceGroupId) {
         await supabaseAdminUpsert(c, 'app_group_chats', [{
           id: commerceGroupId,
@@ -14739,7 +15336,7 @@ api.post('/posts', authMiddleware, async (c) => {
           legacy_created_at: createdAt, created_at: createdAt, updated_at: createdAt,
         }], 'group_id,user_id');
       }
-      createdCommerce = publicCommercePayload(purchasable, priceRows);
+      createdCommerce = commercePayloadWithPricing(c, publicCommercePayload(purchasable, priceRows));
     }
     await recordAbuseSignals(c, userId, 'post_create', {
       product_links: editorOverlays.filter((item: any) => item?.type === 'product' && item.link).map((item: any) => item.link),
@@ -17035,12 +17632,23 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
     if (Number(price.unit_amount || 0) > 0 && !getStripeConfig(c).configured) {
       return c.json({ detail: 'Card checkout is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
     }
+    if (Number(price.unit_amount || 0) > 0) {
+      try {
+        await requireReadyConnectedAccount(c, purchasable.creator_id);
+      } catch {
+        return c.json({
+          detail: 'The creator is still finishing payout setup. No payment was started.',
+          code: 'CAPTRO_PAYOUTS_NOT_READY',
+        }, 409);
+      }
+    }
     const selection = constrainCommerceSelection(
       sanitizeCommerceSelection(body.selection, purchasable.fulfillment_type),
       purchasable
     );
     const idempotencyKey = cleanText(body.idempotency_key || body.idempotencyKey, 120) || `purchase-${uuid()}`;
-    let purchase: any = await supabaseAdminRpc(c, 'captro_begin_purchase', {
+    const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity);
+    let purchase: any = await supabaseAdminRpc(c, 'captro_begin_marketplace_purchase', {
       p_buyer_id: buyerAuthId,
       p_buyer_app_user_id: buyerAppUserId,
       p_purchasable_id: purchasable.id,
@@ -17048,6 +17656,8 @@ api.post('/commerce/purchases', authMiddleware, async (c) => {
       p_quantity: quantity,
       p_idempotency_key: idempotencyKey,
       p_selection: selection,
+      p_service_fee_amount: amounts.serviceFeeAmount,
+      p_tax_amount: amounts.taxAmount,
     });
     if (Array.isArray(purchase)) purchase = purchase[0];
     let checkoutUrl: string | null = null;
@@ -17186,6 +17796,326 @@ api.post('/commerce/passes/consume', authMiddleware, async (c) => {
   }
 });
 
+api.get('/commerce/stripe-capabilities', authMiddleware, async (c) => {
+  const stripe = getStripeConfig(c);
+  if (!stripe.configured) {
+    return c.json({
+      configured: false,
+      liveMode: false,
+      webhookConfigured: stripe.webhookConfigured,
+      connectWebhookConfigured: stripe.connectWebhookConfigured,
+      apiReachable: false,
+      connectAvailable: false,
+    });
+  }
+  const [platform, accounts] = await Promise.all([
+    stripeApiGet(c, '/account'),
+    stripeApiGet(c, '/accounts?limit=1'),
+  ]);
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({
+    configured: true,
+    liveMode: stripe.liveMode,
+    webhookConfigured: stripe.webhookConfigured,
+    connectWebhookConfigured: stripe.connectWebhookConfigured,
+    apiReachable: platform.ok,
+    connectAvailable: accounts.ok,
+  }, platform.ok && accounts.ok ? 200 : 503);
+});
+
+api.post('/internal/stripe/connect-webhook/bootstrap', async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 1_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const expected = String(c.env.STRIPE_CONNECT_BOOTSTRAP_TOKEN || '').trim();
+  const supplied = String(c.req.header('X-Captro-Bootstrap-Token') || '').trim();
+  if (expected.length < 32 || supplied.length < 32) {
+    return c.json({ detail: 'Not found.', code: 'NOT_FOUND' }, 404);
+  }
+  const [expectedDigest, suppliedDigest] = await Promise.all([sha256Hex(expected), sha256Hex(supplied)]);
+  if (!constantTimeEqualHex(expectedDigest, suppliedDigest)) {
+    return c.json({ detail: 'Not found.', code: 'NOT_FOUND' }, 404);
+  }
+
+  const stripe = getStripeConfig(c);
+  if (!stripe.configured || !stripe.liveMode) {
+    return c.json({ detail: 'Live Stripe must be configured first.', code: 'STRIPE_LIVE_MODE_REQUIRED' }, 409);
+  }
+  if (stripe.connectWebhookConfigured) {
+    return c.json({ configured: true, created: false });
+  }
+
+  const endpointUrl = 'https://api.flames-up.com/api/stripe/connect-webhook';
+  const listed = await stripeApiGet(c, '/webhook_endpoints?limit=100');
+  if (!listed.ok) {
+    const code = cleanText(listed.data?.error?.code || listed.data?.error?.type, 100) || 'STRIPE_WEBHOOK_LIST_FAILED';
+    return c.json({ detail: 'Could not inspect Stripe webhook destinations.', code }, 502);
+  }
+  const existing = (Array.isArray(listed.data?.data) ? listed.data.data : [])
+    .find((endpoint: any) => endpoint?.status === 'enabled' && endpoint?.url === endpointUrl);
+  if (existing) {
+    return c.json({
+      detail: 'A Stripe webhook already uses this URL, but its connected-account signing secret is not loaded.',
+      code: 'STRIPE_CONNECT_WEBHOOK_SECRET_REQUIRED',
+    }, 409);
+  }
+
+  const events = [
+    'account.updated',
+    'account.application.deauthorized',
+    'account.external_account.created',
+    'account.external_account.deleted',
+    'account.external_account.updated',
+    'capability.updated',
+    'payout.created',
+    'payout.updated',
+    'payout.paid',
+    'payout.failed',
+    'payout.canceled',
+  ];
+  const params: Record<string, string | number | boolean> = {
+    url: endpointUrl,
+    connect: true,
+    description: 'Captro connected-account payouts and account status',
+    'metadata[captro_source]': 'connected_account_events',
+  };
+  events.forEach((event, index) => { params[`enabled_events[${index}]`] = event; });
+  const created = await stripeApiRequest(c, '/webhook_endpoints', params,
+    'captro-connect-webhook-v1');
+  const signingSecret = cleanText(created.data?.secret, 300);
+  if (!created.ok || !signingSecret.startsWith('whsec_')) {
+    const code = cleanText(created.data?.error?.code || created.data?.error?.type, 100) || 'STRIPE_CONNECT_WEBHOOK_CREATE_FAILED';
+    return c.json({ detail: 'Could not create the Stripe connected-account webhook.', code }, 502);
+  }
+  c.header('Cache-Control', 'no-store');
+  return c.json({ configured: true, created: true, signingSecret });
+});
+
+api.get('/commerce/payout-account', authMiddleware, async (c) => {
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_payout_account', appUserId, 60, 60);
+  if (limited) return limited;
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const account = await connectedAccountForUser(c, authUserId, true);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ account: connectedAccountPublicPayload(c, account) });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'commerce_payout_account_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load your payout account.', code: 'PAYOUT_ACCOUNT_READ_FAILED' }, 500);
+  }
+});
+
+api.post('/commerce/payout-account/onboarding-link', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 10_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_payout_onboarding', appUserId, 10, 60);
+  if (limited) return limited;
+  try {
+    if (!getStripeConfig(c).configured) {
+      return c.json({ detail: 'Payout setup is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
+    }
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const userRows = await supabaseAdminSelectRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, '*', 1);
+    const account = await createOrLoadConnectedAccount(c, authUserId, appUserId, userRows[0] || {});
+    const body: any = await c.req.json().catch(() => ({}));
+    const destination = await createConnectedAccountOnboardingLink(c, account, body);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_ONBOARDING_FAILED';
+    console.warn(JSON.stringify({ event: 'stripe_connect_onboarding_failed', code }));
+    return c.json({ detail: 'Could not open secure payout setup.', code }, 502);
+  }
+});
+
+api.post('/commerce/payout-account/manage-link', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 10_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_payout_manage', appUserId, 10, 60);
+  if (limited) return limited;
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const account = await connectedAccountForUser(c, authUserId, true);
+    if (!account) return c.json({ detail: 'Set up payouts first.', code: 'PAYOUT_SETUP_REQUIRED' }, 409);
+    const body: any = await c.req.json().catch(() => ({}));
+    const destination = await createConnectedAccountManagementLink(c, account, body);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_MANAGEMENT_FAILED';
+    console.warn(JSON.stringify({ event: 'stripe_connect_management_failed', code }));
+    return c.json({ detail: 'Could not open payout account management.', code }, 502);
+  }
+});
+
+api.get('/commerce/earnings', authMiddleware, async (c) => {
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_earnings', appUserId, 120, 60);
+  if (limited) return limited;
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const account = await connectedAccountForUser(c, authUserId, true);
+    const earnings = await supabaseAdminQueryRows(c, 'app_creator_earnings', {
+      filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 200,
+    });
+    const purchaseIds = earnings.map(row => row.purchase_id).filter(Boolean);
+    const purchases = purchaseIds.length ? await supabaseAdminQueryRows(c, 'app_purchases', {
+      filters: { id: postgrestInFilter(purchaseIds) }, limit: 200,
+    }) : [];
+    const buyerIds = Array.from(new Set(purchases.map(row => publicId(row.buyer_app_user_id, 120)).filter(Boolean)));
+    const buyers = buyerIds.length ? await supabaseAdminQueryRows(c, 'app_users', {
+      filters: { id: postgrestInFilter(buyerIds) }, select: 'id,username', limit: 200,
+    }) : [];
+    const currency = cleanText(account?.default_currency || earnings[0]?.currency || 'USD', 3).toUpperCase();
+    let available: number | null = null;
+    let pending: number | null = null;
+    let balanceStatus: 'not_connected' | 'available' | 'unavailable' = account ? 'unavailable' : 'not_connected';
+    if (account && getStripeConfig(c).configured) {
+      const balance = await stripeApiGet(c, '/balance', account.provider_account_id);
+      if (balance.ok) {
+        available = stripeBalanceAmount(balance.data?.available, currency);
+        pending = stripeBalanceAmount(balance.data?.pending, currency);
+        balanceStatus = 'available';
+      }
+    }
+    const recent = earnings.map(row => {
+      const purchase = purchases.find(item => item.id === row.purchase_id);
+      const buyer = buyers.find(item => item.id === purchase?.buyer_app_user_id);
+      const payload = creatorEarningPayload(row, purchase, buyer);
+      if (payload.status === 'pending' && payload.availableAt && Date.parse(payload.availableAt) <= Date.now()) {
+        payload.status = 'available';
+      }
+      return payload;
+    });
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({
+      account: connectedAccountPublicPayload(c, account),
+      balance: { status: balanceStatus, currency, available, pending },
+      recent,
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'commerce_earnings_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load earnings.', code: 'EARNINGS_READ_FAILED' }, 500);
+  }
+});
+
+api.get('/commerce/earnings/:earningId', authMiddleware, async (c) => {
+  const appUserId = getUserId(c);
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    const earningId = isUuidText(c.req.param('earningId'));
+    if (!authUserId || !earningId) return c.json({ detail: 'Earning not found.', code: 'EARNING_NOT_FOUND' }, 404);
+    const earnings = await supabaseAdminSelectRows(c, 'app_creator_earnings', {
+      id: postgrestEqFilter(earningId), creator_id: postgrestEqFilter(authUserId),
+    }, '*', 1);
+    const earning = earnings[0];
+    if (!earning) return c.json({ detail: 'Earning not found.', code: 'EARNING_NOT_FOUND' }, 404);
+    const purchases = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(earning.purchase_id) }, '*', 1);
+    const purchase = purchases[0];
+    const buyers = purchase?.buyer_app_user_id ? await supabaseAdminSelectRows(c, 'app_users', {
+      id: postgrestEqFilter(purchase.buyer_app_user_id),
+    }, 'id,username', 1) : [];
+    const refunds = await supabaseAdminQueryRows(c, 'app_refunds', {
+      filters: { purchase_id: postgrestEqFilter(earning.purchase_id) }, order: 'created_at.desc', limit: 100,
+    });
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({
+      earning: creatorEarningPayload(earning, purchase, buyers[0]),
+      purchase: commercePurchasePayload(purchase),
+      purchaseReference: `CAP-${String(purchase.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+      refunds: refunds.map(row => ({
+        id: publicId(row.id, 120),
+        amount: Math.max(0, Number(row.amount || 0)),
+        creatorReversalAmount: Math.max(0, Number(row.creator_reversal_amount || 0)),
+        status: cleanText(row.status, 40),
+        createdAt: row.created_at || null,
+      })),
+    });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'commerce_earning_detail_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load this earning.', code: 'EARNING_READ_FAILED' }, 500);
+  }
+});
+
+api.get('/commerce/payouts', authMiddleware, async (c) => {
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_payouts', appUserId, 60, 60);
+  if (limited) return limited;
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const account = await connectedAccountForUser(c, authUserId, true);
+    if (!account) {
+      c.header('Cache-Control', 'private, no-store');
+      return c.json({ account: connectedAccountPublicPayload(c, null), payouts: [] });
+    }
+    const stripePayouts = await stripeApiGet(c, '/payouts?limit=100', account.provider_account_id);
+    if (!stripePayouts.ok) throw stripeProviderError(stripePayouts, 'STRIPE_PAYOUTS_READ_FAILED');
+    for (const payout of Array.isArray(stripePayouts.data?.data) ? stripePayouts.data.data : []) {
+      await syncStripePayout(c, account.provider_account_id, payout);
+    }
+    const payouts = await supabaseAdminQueryRows(c, 'app_payouts', {
+      filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 100,
+    });
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ account: connectedAccountPublicPayload(c, account), payouts: payouts.map(payoutPublicPayload) });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'commerce_payouts_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load payouts.', code: 'PAYOUTS_READ_FAILED' }, 502);
+  }
+});
+
+api.post('/commerce/purchases/:purchaseId/refund', authMiddleware, async (c) => {
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_refund', appUserId, 10, 60);
+  if (limited) return limited;
+  try {
+    const creatorAuthId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    const purchaseId = isUuidText(c.req.param('purchaseId'));
+    if (!creatorAuthId || !purchaseId) return c.json({ detail: 'Purchase not found.', code: 'CAPTRO_PURCHASE_NOT_FOUND' }, 404);
+    const purchases = await supabaseAdminSelectRows(c, 'app_purchases', {
+      id: postgrestEqFilter(purchaseId), creator_id: postgrestEqFilter(creatorAuthId),
+    }, '*', 1);
+    const purchase = purchases[0];
+    if (!purchase || !cleanText(purchase.provider_payment_id, 180).startsWith('pi_')) {
+      return c.json({ detail: 'This purchase cannot be refunded.', code: 'CAPTRO_PURCHASE_NOT_REFUNDABLE' }, 409);
+    }
+    const prior = await supabaseAdminQueryRows(c, 'app_refunds', {
+      filters: { purchase_id: postgrestEqFilter(purchaseId), status: postgrestEqFilter('succeeded') }, limit: 100,
+    });
+    const alreadyRefunded = prior.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
+    const refundable = Math.max(0, Number(purchase.total_amount || 0) - alreadyRefunded);
+    const body: any = await c.req.json().catch(() => ({}));
+    const requested = body.amount == null ? refundable : Math.trunc(Number(body.amount));
+    if (!Number.isInteger(requested) || requested <= 0 || requested > refundable) {
+      return c.json({ detail: 'Enter an amount no greater than the remaining payment.', code: 'CAPTRO_REFUND_AMOUNT_INVALID' }, 400);
+    }
+    const refund = await stripeApiRequest(c, '/refunds', {
+      payment_intent: purchase.provider_payment_id,
+      amount: requested,
+      reverse_transfer: true,
+      reason: body.reason === 'fraudulent' || body.reason === 'duplicate' ? body.reason : 'requested_by_customer',
+      'metadata[source]': 'captro_commerce',
+      'metadata[captro_purchase_id]': purchaseId,
+    }, `captro-refund-${purchaseId}-${alreadyRefunded}-${requested}`);
+    if (!refund.ok) throw stripeProviderError(refund, 'STRIPE_REFUND_FAILED');
+    await recordCommerceRefund(c, `api-refund-${cleanText(refund.data?.id, 180)}`, refund.data);
+    const updated = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(purchaseId) }, '*', 1);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ purchase: commercePurchasePayload(updated[0] || purchase) });
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_REFUND_FAILED';
+    console.warn(JSON.stringify({ event: 'commerce_refund_failed', code }));
+    return c.json({ detail: 'Could not refund this purchase.', code }, 502);
+  }
+});
+
 api.get('/commerce/me', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_me', appUserId, 120, 60);
@@ -17193,12 +18123,15 @@ api.get('/commerce/me', authMiddleware, async (c) => {
   try {
     const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
-    const [purchases, created] = await Promise.all([
+    const [purchases, created, creatorEarnings] = await Promise.all([
       supabaseAdminQueryRows(c, 'app_purchases', {
         filters: { buyer_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 200,
       }),
       supabaseAdminQueryRows(c, 'app_purchasables', {
         filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 200,
+      }),
+      supabaseAdminQueryRows(c, 'app_creator_earnings', {
+        filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 1000,
       }),
     ]);
     const purchaseIds = purchases.map(row => row.id).filter(Boolean);
@@ -17248,11 +18181,18 @@ api.get('/commerce/me', authMiddleware, async (c) => {
     const createdPayload = created.map(item => {
       const sales = createdPurchases.filter(purchase => purchase.purchasable_id === item.id);
       const confirmed = sales.filter(purchase => ['confirmed', 'partially_refunded'].includes(purchase.status));
+      const itemEarnings = creatorEarnings.filter(earning => earning.purchasable_id === item.id);
       const itemEntitlementIds = new Set(creatorEntitlements.filter(row => row.purchasable_id === item.id).map(row => row.id));
       return {
-        commerce: publicCommercePayload(item, prices),
+        commerce: commercePayloadWithPricing(c, publicCommercePayload(item, prices)),
         sold: confirmed.reduce((sum, purchase) => sum + Math.max(0, Number(purchase.quantity || 0)), 0),
-        grossAmount: confirmed.reduce((sum, purchase) => sum + Math.max(0, Number(purchase.total_amount || 0)), 0),
+        grossAmount: confirmed.reduce((sum, purchase) => sum + Math.max(0, Number(purchase.item_amount ?? (Number(purchase.unit_amount || 0) * Number(purchase.quantity || 1)))), 0),
+        creatorEarningsAmount: itemEarnings
+          .filter(earning => !['reversed', 'refunded'].includes(cleanText(earning.status, 40)))
+          .reduce((sum, earning) => sum + Math.max(0, Number(earning.creator_amount || 0) - Number(earning.refunded_amount || 0)), 0),
+        availableEarningsAmount: itemEarnings
+          .filter(earning => ['available', 'paid'].includes(cleanText(earning.status, 40)))
+          .reduce((sum, earning) => sum + Math.max(0, Number(earning.creator_amount || 0) - Number(earning.refunded_amount || 0)), 0),
         currency: cleanText(confirmed[0]?.currency || prices.find(price => price.purchasable_id === item.id)?.currency || 'USD', 3).toUpperCase(),
         pendingApprovals: sales.filter(purchase => purchase.status === 'approval_pending').length,
         checkedIn: creatorTickets.filter(ticket => itemEntitlementIds.has(ticket.entitlement_id) && ticket.status === 'checked_in').length,
@@ -17356,23 +18296,32 @@ api.post('/stripe/checkout/sessions', authMiddleware, async (c) => {
   }
 });
 
-api.post('/stripe/webhook', async (c) => {
+const stripeWebhookHandler = async (c: any) => {
   const bodyTooLarge = rejectLargeRequest(c, 500_000);
   if (bodyTooLarge) return bodyTooLarge;
-  const secret = String(c.env.STRIPE_WEBHOOK_SECRET || '').trim();
-  if (!secret.startsWith('whsec_')) {
+  const stripe = getStripeConfig(c);
+  const secrets = Array.from(new Set([stripe.webhookSecret, stripe.connectWebhookSecret]
+    .filter((secret: string) => secret.startsWith('whsec_'))));
+  if (!secrets.length) {
     return c.json({ detail: 'Stripe webhook is not configured.', code: 'STRIPE_WEBHOOK_NOT_CONFIGURED' }, 503);
   }
 
   const rawBody = await c.req.text();
   const signature = String(c.req.header('Stripe-Signature') || '');
-  const valid = await verifyStripeWebhookSignature(rawBody, signature, secret);
+  let valid = false;
+  for (const secret of secrets) {
+    if (await verifyStripeWebhookSignature(rawBody, signature, secret)) {
+      valid = true;
+      break;
+    }
+  }
   if (!valid) {
     return c.json({ detail: 'Invalid Stripe signature.', code: 'STRIPE_SIGNATURE_INVALID' }, 400);
   }
 
+  let event: any = null;
   try {
-    const event = JSON.parse(rawBody);
+    event = JSON.parse(rawBody);
     const object = event?.data?.object || {};
     if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
       const source = cleanText(object?.metadata?.source, 80);
@@ -17394,16 +18343,45 @@ api.post('/stripe/webhook', async (c) => {
       }
     } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
       await syncPremiumFromSubscription(c, object);
-    } else if (event.type === 'charge.refunded' || event.type === 'refund.created') {
+    } else if (['charge.refunded', 'refund.created', 'refund.updated'].includes(event.type)) {
       const commerceRefund = await refundCommercePurchaseFromCharge(c, cleanText(event?.id, 180), object);
       if (!commerceRefund.processed) await refundCoinPurchase(c, object);
+    } else if (event.type === 'payment_intent.payment_failed') {
+      await recordMarketplacePaymentFailure(c, cleanText(event?.id, 180), object);
+    } else if (event.type === 'account.updated') {
+      await syncConnectedAccountFromStripe(c, object);
+    } else if (event.type === 'account.application.deauthorized') {
+      const accountId = cleanText(object?.id || event?.account, 180);
+      if (accountId.startsWith('acct_')) {
+        await supabaseAdminPatchRows(c, 'app_connected_accounts', {
+          provider_account_id: postgrestEqFilter(accountId),
+        }, { status: 'disabled', charges_enabled: false, payouts_enabled: false, updated_at: now() });
+      }
+    } else if (event.type === 'capability.updated' || event.type.startsWith('account.external_account.')) {
+      const accountId = cleanText(event?.account || object?.account, 180);
+      if (accountId.startsWith('acct_')) {
+        const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+          provider_account_id: postgrestEqFilter(accountId),
+        }, '*', 1);
+        if (rows[0]) await refreshConnectedAccount(c, rows[0]);
+      }
+    } else if (event.type.startsWith('payout.')) {
+      await syncStripePayout(c, cleanText(event?.account, 180), object);
+    } else if (event.type.startsWith('charge.dispute.')) {
+      await recordStripeDispute(c, cleanText(event?.id, 180), object);
     }
+    await recordStripeWebhookEvent(c, event, 'processed');
     return c.json({ received: true });
   } catch (error: any) {
-    console.error('Stripe webhook failed:', getErrorCode(error), error?.message || error);
+    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_WEBHOOK_FAILED';
+    if (event) await recordStripeWebhookEvent(c, event, 'failed', code).catch(() => undefined);
+    console.error(JSON.stringify({ event: 'stripe_webhook_failed', type: cleanText(event?.type, 180), code }));
     return c.json({ detail: 'Webhook processing failed.', code: 'STRIPE_WEBHOOK_FAILED' }, 500);
   }
-});
+};
+
+api.post('/stripe/webhook', stripeWebhookHandler);
+api.post('/stripe/connect-webhook', stripeWebhookHandler);
 
 // Reports
 api.post('/reports', authMiddleware, async (c) => {

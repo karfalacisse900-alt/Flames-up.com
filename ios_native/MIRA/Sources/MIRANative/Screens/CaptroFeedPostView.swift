@@ -10,6 +10,7 @@ struct CaptroFeedPostView: View {
   let onOpenOptions: () -> Void
   let onCreate: () -> Void
   let onOpenPost: () -> Void
+  let onSave: () -> Void
   let canFollowAuthor: Bool
   let pageSize: CGSize?
   @Binding var selectedMediaIndex: Int
@@ -38,7 +39,7 @@ struct CaptroFeedPostView: View {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
       } else {
-        CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost)
+        CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost, isSaved: post.viewerSaved, onSave: onSave)
           .padding(.horizontal, 16)
       }
 
@@ -72,6 +73,7 @@ struct CaptroFeedPostView: View {
       isVideoActive: isVideoActive,
       selectedMediaIndex: $selectedMediaIndex,
       onOpenPost: onOpenPost,
+      onSave: onSave,
       showsCoverMediaOnly: showsCoverMediaOnly
     )
 

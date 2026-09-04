@@ -964,6 +964,7 @@ public struct CreatePostNativeView: View {
   @State private var isRestoringPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
   @State private var isCameraReviewingMedia = false
+  @State private var payoutSetupDestination: CaptroCheckoutDestination?
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
@@ -1009,6 +1010,7 @@ public struct CreatePostNativeView: View {
       cacheComposerDraft()
     }
     .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
+    .onChange(of: commerceDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
     .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedDiscoverCategory) { _, _ in cacheComposerDraft() }
@@ -1084,6 +1086,10 @@ public struct CreatePostNativeView: View {
         }
       }
       .ignoresSafeArea()
+    }
+    .sheet(item: $payoutSetupDestination) { destination in
+      CaptroCheckoutBrowser(url: destination.url)
+        .ignoresSafeArea()
     }
   }
 
@@ -1709,6 +1715,9 @@ public struct CreatePostNativeView: View {
       isEditingPostDetails = true
       return
     }
+    if commerceDraft.enabled && commerceDraft.isPaid && commerceDraft.isUsedOutsideApp {
+      guard await preparePayoutAccountForPublishing() else { return }
+    }
     isPosting = true
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
     defer { isPosting = false }
@@ -1912,6 +1921,7 @@ public struct CreatePostNativeView: View {
     bodyText = draft.bodyText
     selectedStampKind = CaptroStampKind(rawValue: draft.stampType ?? "") ?? .social
     eventDraft = draft.eventDraft ?? CaptroEventDraft()
+    commerceDraft = draft.commerceDraft ?? CaptroCommerceDraft()
     hashtags = draft.hashtags
     selectedAudioTrack = draft.selectedAudioTrack
     selectedPlace = draft.place.map(MIRAExactPostPlace.init(snapshot:))
@@ -1962,6 +1972,7 @@ public struct CreatePostNativeView: View {
       bodyText: bodyText,
       stampType: selectedStampKind.rawValue,
       eventDraft: eventDraft,
+      commerceDraft: commerceDraft,
       hashtags: hashtags,
       selectedDiscoverCategory: selectedDiscoverCategory,
       selectedAudioTrack: selectedAudioTrack,
@@ -1984,6 +1995,7 @@ public struct CreatePostNativeView: View {
     bodyText = ""
     selectedStampKind = .social
     eventDraft = CaptroEventDraft()
+    commerceDraft = CaptroCommerceDraft()
     mediaItems = []
     pickerItems = []
     composerUser = nil
@@ -2013,7 +2025,27 @@ public struct CreatePostNativeView: View {
       !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
       !mediaItems.isEmpty ||
       !hashtags.isEmpty ||
-      selectedPlace != nil
+      selectedPlace != nil ||
+      commerceDraft.enabled
+  }
+
+  @MainActor
+  private func preparePayoutAccountForPublishing() async -> Bool {
+    do {
+      let account = try await api.loadPayoutAccount().account
+      if account.ready { return true }
+      await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
+      let link = try await api.createPayoutOnboardingLink()
+      guard let url = URL(string: link.url) else { throw MIRAAPIError.badURL }
+      payoutSetupDestination = CaptroCheckoutDestination(url: url)
+      errorMessage = nil
+      return false
+    } catch {
+      let message = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout setup."
+      errorMessage = message
+      await persistComposerDraft(uploadStatus: "draft", errorMessage: message, includeMedia: true)
+      return false
+    }
   }
 
   private var draftPlaceSnapshot: MIRADraftPlaceSnapshot? {
