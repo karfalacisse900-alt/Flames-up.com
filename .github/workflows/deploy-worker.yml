@@ -247,6 +247,21 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CAPTRO_TICKET_SIGNING_SECRET: ${{ secrets.CAPTRO_TICKET_SIGNING_SECRET }}
 
+      - name: Sync Stripe connected-account webhook secret
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${STRIPE_CONNECT_WEBHOOK_SECRET:-}" != whsec_* ]]; then
+            echo "STRIPE_CONNECT_WEBHOOK_SECRET is required for creator account and payout events."
+            exit 1
+          fi
+          printf '%s' "$STRIPE_CONNECT_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_CONNECT_WEBHOOK_SECRET --env production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STRIPE_CONNECT_WEBHOOK_SECRET: ${{ secrets.STRIPE_CONNECT_WEBHOOK_SECRET }}
+
       - name: Sync Scan verification provider secrets
         working-directory: ./backend-cf
         shell: bash
