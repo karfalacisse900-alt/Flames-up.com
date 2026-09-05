@@ -195,6 +195,22 @@ jobs:
                   request_json(f"{base}/admin/users/{user_id}", method="DELETE", headers=admin_headers)
           PY
 
+      - name: Check required live Stripe payment inputs
+        shell: bash
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ "${STRIPE_SECRET_KEY:-}" != sk_live_* && "${STRIPE_SECRET_KEY:-}" != rk_live_* ]]; then
+            echo "A live STRIPE_SECRET_KEY is required before native payments can be deployed."
+            exit 1
+          fi
+          if [[ "${STRIPE_PUBLISHABLE_KEY:-}" != pk_live_* ]]; then
+            echo "A matching live STRIPE_PUBLISHABLE_KEY is required before native payments can be deployed."
+            exit 1
+          fi
+
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
         with:
@@ -247,19 +263,47 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CAPTRO_TICKET_SIGNING_SECRET: ${{ secrets.CAPTRO_TICKET_SIGNING_SECRET }}
 
-      - name: Sync Stripe connected-account webhook secret
+      - name: Sync Stripe payment API secrets
         working-directory: ./backend-cf
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${STRIPE_CONNECT_WEBHOOK_SECRET:-}" != whsec_* ]]; then
-            echo "STRIPE_CONNECT_WEBHOOK_SECRET is required for creator account and payout events."
+          if [[ "${STRIPE_SECRET_KEY:-}" != sk_live_* && "${STRIPE_SECRET_KEY:-}" != rk_live_* ]]; then
+            echo "A live STRIPE_SECRET_KEY is required."
             exit 1
           fi
-          printf '%s' "$STRIPE_CONNECT_WEBHOOK_SECRET" | npx wrangler secret put STRIPE_CONNECT_WEBHOOK_SECRET --env production
+          if [[ "${STRIPE_PUBLISHABLE_KEY:-}" != pk_live_* ]]; then
+            echo "A live STRIPE_PUBLISHABLE_KEY is required."
+            exit 1
+          fi
+          printf '%s' "$STRIPE_SECRET_KEY" | npx wrangler secret put STRIPE_SECRET_KEY --env production
+          printf '%s' "$STRIPE_PUBLISHABLE_KEY" | npx wrangler secret put STRIPE_PUBLISHABLE_KEY --env production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+
+      - name: Sync persisted Stripe webhook secrets
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in STRIPE_WEBHOOK_SECRET STRIPE_CONNECT_WEBHOOK_SECRET; do
+            value="${!name:-}"
+            if [ -z "$value" ]; then
+              continue
+            fi
+            if [[ "$value" != whsec_* ]]; then
+              echo "$name must be a Stripe webhook signing secret."
+              exit 1
+            fi
+            printf '%s' "$value" | npx wrangler secret put "$name" --env production
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           STRIPE_CONNECT_WEBHOOK_SECRET: ${{ secrets.STRIPE_CONNECT_WEBHOOK_SECRET }}
 
       - name: Sync Scan verification provider secrets
@@ -368,12 +412,12 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Ensure Stripe connected-account webhook
+      - name: Provision Stripe payment webhooks and bind live database
         working-directory: ./backend-cf
         shell: bash
         run: |
           set -euo pipefail
-          response_file="$RUNNER_TEMP/captro-stripe-connect-bootstrap.json"
+          response_file="$RUNNER_TEMP/captro-stripe-payment-bootstrap.json"
           http_status="$(curl --silent --show-error \
             --output "$response_file" \
             --write-out '%{http_code}' \
@@ -388,18 +432,23 @@ jobs:
           if [[ ! "$http_status" =~ ^2 ]]; then
             detail="$(jq -r '.detail // "No JSON error detail returned"' <<<"$response" 2>/dev/null || printf 'No readable JSON error detail returned')"
             code="$(jq -r '.code // "HTTP_ERROR"' <<<"$response" 2>/dev/null || printf 'HTTP_ERROR')"
-            echo "Stripe connected-account webhook bootstrap failed with HTTP $http_status: $code - $detail"
+            echo "Stripe payment bootstrap failed with HTTP $http_status: $code - $detail"
             exit 1
           fi
           configured="$(jq -r '.configured // false' <<<"$response")"
-          signing_secret="$(jq -r '.signingSecret // empty' <<<"$response")"
           if [ "$configured" != "true" ]; then
-            echo "Stripe connected-account webhook bootstrap did not complete."
+            echo "Stripe payment bootstrap did not complete."
             exit 1
           fi
-          if [ -n "$signing_secret" ]; then
-            echo "::add-mask::$signing_secret"
-            printf '%s' "$signing_secret" | npx wrangler secret put STRIPE_CONNECT_WEBHOOK_SECRET --env production
+          platform_signing_secret="$(jq -r '.platformSigningSecret // empty' <<<"$response")"
+          connect_signing_secret="$(jq -r '.connectSigningSecret // empty' <<<"$response")"
+          if [ -n "$platform_signing_secret" ]; then
+            echo "::add-mask::$platform_signing_secret"
+            printf '%s' "$platform_signing_secret" | npx wrangler secret put STRIPE_WEBHOOK_SECRET --env production
+          fi
+          if [ -n "$connect_signing_secret" ]; then
+            echo "::add-mask::$connect_signing_secret"
+            printf '%s' "$connect_signing_secret" | npx wrangler secret put STRIPE_CONNECT_WEBHOOK_SECRET --env production
           fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

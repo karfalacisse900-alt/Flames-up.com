@@ -19,12 +19,18 @@ async function main() {
   });
   assert.equal(migration.status, 200, 'Payment migrations must be applied to the local stack');
   assert.deepEqual(await migration.json(), [], 'A fresh database must not inherit a payment mode or money records');
-  const provision = await fetch(new URL('/rest/v1/app_payment_environment', api), {
+  const provision = await fetch(new URL('/rest/v1/rpc/captro_configure_payment_environment', api), {
     method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: true, stripe_mode: 'test' }),
+    body: JSON.stringify({ p_stripe_mode: 'test' }),
     signal: AbortSignal.timeout(30_000), redirect: 'error',
   });
-  assert.equal(provision.status, 201);
+  assert.equal(provision.status, 200);
+  const mismatch = await fetch(new URL('/rest/v1/rpc/captro_configure_payment_environment', api), {
+    method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_stripe_mode: 'live' }),
+    signal: AbortSignal.timeout(30_000), redirect: 'error',
+  });
+  assert.equal(mismatch.status, 400, 'A Stripe database cannot switch between test and live');
   for (const path of ['/account', '/accounts?limit=1']) {
     const result = await fetch(`https://api.stripe.com/v1${path}`, {
       headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },

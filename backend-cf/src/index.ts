@@ -18065,54 +18065,89 @@ api.post('/internal/stripe/connect-webhook/bootstrap', async (c) => {
   if (!stripe.configured || !stripe.liveMode) {
     return c.json({ detail: 'Live Stripe must be configured first.', code: 'STRIPE_LIVE_MODE_REQUIRED' }, 409);
   }
-  if (stripe.connectWebhookConfigured) {
-    return c.json({ configured: true, created: false });
+  try {
+    await supabaseAdminRpc(c, 'captro_configure_payment_environment', { p_stripe_mode: stripe.mode });
+    await requireStripeDatabaseMode(c);
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_DATABASE_MODE_MISMATCH';
+    return c.json({ detail: 'The payments database is already bound to another Stripe environment.', code }, 409);
   }
 
-  const endpointUrl = 'https://api.flames-up.com/api/stripe/connect-webhook';
   const listed = await stripeApiGet(c, '/webhook_endpoints?limit=100');
   if (!listed.ok) {
     const code = cleanText(listed.data?.error?.code || listed.data?.error?.type, 100) || 'STRIPE_WEBHOOK_LIST_FAILED';
     return c.json({ detail: 'Could not inspect Stripe webhook destinations.', code }, 502);
   }
-  const existing = (Array.isArray(listed.data?.data) ? listed.data.data : [])
-    .find((endpoint: any) => endpoint?.status === 'enabled' && endpoint?.url === endpointUrl);
-  if (existing) {
-    return c.json({
-      detail: 'A Stripe webhook already uses this URL, but its connected-account signing secret is not loaded.',
-      code: 'STRIPE_CONNECT_WEBHOOK_SECRET_REQUIRED',
-    }, 409);
-  }
-
-  const events = [
-    'account.updated',
-    'account.application.deauthorized',
-    'account.external_account.created',
-    'account.external_account.deleted',
-    'account.external_account.updated',
-    'capability.updated',
-    'payout.created',
-    'payout.updated',
-    'payout.paid',
-    'payout.failed',
-    'payout.canceled',
+  const existingEndpoints = Array.isArray(listed.data?.data) ? listed.data.data : [];
+  const destinations = [
+    {
+      key: 'platform',
+      endpointUrl: 'https://api.flames-up.com/api/stripe/webhook',
+      configured: stripe.webhookConfigured,
+      connect: false,
+      description: 'Captro marketplace payments, refunds, disputes, and subscriptions',
+      idempotencyKey: 'captro-platform-webhook-v1',
+      events: [
+        'payment_intent.succeeded', 'payment_intent.payment_failed', 'payment_intent.canceled',
+        'charge.refunded', 'refund.created', 'refund.updated',
+        'charge.dispute.created', 'charge.dispute.updated', 'charge.dispute.closed',
+        'checkout.session.completed', 'checkout.session.async_payment_succeeded',
+        'checkout.session.async_payment_failed', 'checkout.session.expired',
+        'customer.subscription.updated', 'customer.subscription.deleted',
+      ],
+    },
+    {
+      key: 'connect',
+      endpointUrl: 'https://api.flames-up.com/api/stripe/connect-webhook',
+      configured: stripe.connectWebhookConfigured,
+      connect: true,
+      description: 'Captro connected-account status, cards, balances, and payouts',
+      idempotencyKey: 'captro-connect-webhook-v1',
+      events: [
+        'account.updated', 'account.application.deauthorized',
+        'account.external_account.created', 'account.external_account.deleted', 'account.external_account.updated',
+        'capability.updated', 'balance.available',
+        'payout.created', 'payout.updated', 'payout.paid', 'payout.failed', 'payout.canceled',
+      ],
+    },
   ];
-  const params: Record<string, string | number | boolean> = {
-    url: endpointUrl,
-    connect: true,
-    description: 'Captro connected-account payouts and account status',
-    'metadata[captro_source]': 'connected_account_events',
-  };
-  events.forEach((event, index) => { params[`enabled_events[${index}]`] = event; });
-  const created = await stripeApiRequest(c, '/webhook_endpoints', params,
-    'captro-connect-webhook-v1');
-  const signingSecret = cleanText(created.data?.secret, 300);
-  if (!created.ok || !signingSecret.startsWith('whsec_')) {
-    const code = cleanText(created.data?.error?.code || created.data?.error?.type, 100) || 'STRIPE_CONNECT_WEBHOOK_CREATE_FAILED';
-    return c.json({ detail: 'Could not create the Stripe connected-account webhook.', code }, 502);
+  const signingSecrets: Record<string, string> = {};
+
+  for (const destination of destinations) {
+    const existing = existingEndpoints.find((endpoint: any) =>
+      endpoint?.status === 'enabled' && endpoint?.url === destination.endpointUrl
+    );
+    if (existing && !destination.configured) {
+      return c.json({
+        detail: 'A Stripe webhook already uses this URL, but its signing secret is not loaded.',
+        code: destination.key === 'platform' ? 'STRIPE_WEBHOOK_SECRET_REQUIRED' : 'STRIPE_CONNECT_WEBHOOK_SECRET_REQUIRED',
+      }, 409);
+    }
+    if (existing) continue;
+
+    const params: Record<string, string | number | boolean> = {
+      url: destination.endpointUrl,
+      connect: destination.connect,
+      description: destination.description,
+      'metadata[captro_source]': `${destination.key}_events`,
+    };
+    destination.events.forEach((event, index) => { params[`enabled_events[${index}]`] = event; });
+    const created = await stripeApiRequest(c, '/webhook_endpoints', params, destination.idempotencyKey);
+    const signingSecret = cleanText(created.data?.secret, 300);
+    if (!created.ok || !signingSecret.startsWith('whsec_')) {
+      const code = cleanText(created.data?.error?.code || created.data?.error?.type, 100)
+        || 'STRIPE_WEBHOOK_CREATE_FAILED';
+      return c.json({ detail: 'Could not create a required Stripe webhook.', code }, 502);
+    }
+    signingSecrets[destination.key] = signingSecret;
   }
   c.header('Cache-Control', 'no-store');
-  return c.json({ configured: true, created: true, signingSecret });
+  return c.json({
+    configured: true,
+    created: Object.keys(signingSecrets).length > 0,
+    platformSigningSecret: signingSecrets.platform || null,
+    connectSigningSecret: signingSecrets.connect || null,
+  });
 });
 
 api.get('/commerce/payout-account', authMiddleware, async (c) => {

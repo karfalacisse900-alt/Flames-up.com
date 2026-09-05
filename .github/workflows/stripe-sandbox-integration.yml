@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/stripe-sandbox-integration.yml'
       - 'backend-cf/scripts/stripe-sandbox-*.mjs'
+      - 'backend-cf/src/**'
+      - 'supabase/migrations/**'
 permissions:
   contents: read
 concurrency:

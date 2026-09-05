@@ -199,10 +199,18 @@ Do not dispatch the production deploy or TestFlight workflow until sandbox
 acceptance is recorded and the release target has matching API/database/Stripe
 configuration. The current TestFlight app targets production, not the sandbox.
 
-Provision production explicitly with `STRIPE_MODE=live`, live keys, live Connect,
-enabled live webhook destinations, its own signing secrets and a `live` database
-singleton. Confirm existing accounts and migrations before rollout. Production
-mode must never be inferred from Swift's Release build configuration.
+The production Worker fixes `STRIPE_MODE=live` and the platform-absorbs payout
+policy in its production configuration. The deployment workflow requires matching
+live Stripe API keys, binds an empty production ledger to `live`, and provisions
+the platform and connected-account webhook destinations before checkout is
+available. If either webhook URL already exists without its signing secret loaded,
+the deployment stops rather than silently accepting unsigned events. Store existing
+signing secrets as GitHub repository secrets before rerunning in that case.
+
+Complete Connect marketplace setup in the live Stripe Dashboard first, then provide
+the live `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY` only through GitHub
+Actions secrets. Confirm existing accounts and migrations before rollout.
+Production mode must never be inferred from Swift's Release build configuration.
 
 The previous live endpoint was disabled and Connect/API permissions were not
 ready when checked. Recheck the actual account before rollout; merely possessing
