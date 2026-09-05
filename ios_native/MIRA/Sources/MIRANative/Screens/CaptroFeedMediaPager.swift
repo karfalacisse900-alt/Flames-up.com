@@ -9,6 +9,7 @@ struct CaptroMediaPager: View {
   let onOpenPost: () -> Void
   let onSave: () -> Void
   let showsCoverMediaOnly: Bool
+  var frameSize: CGSize? = nil
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @GestureState private var isHoldingStamp = false
@@ -40,6 +41,53 @@ struct CaptroMediaPager: View {
   }
 
   var body: some View {
+    sizedMedia
+      .clipped()
+      .contentShape(Rectangle())
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("home.post.media")
+      .accessibilityLabel(mediaAccessibilityLabel)
+      .accessibilityHint(currentMediaIsVideo ? "Tap to pause or play video" : "Opens the post detail screen")
+      .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
+      .onAppear(perform: prefetchCarouselNeighbors)
+      .onChange(of: mediaURLs) { _, urls in
+        measuredCoverHeightToWidthRatio = nil
+        if selectedMediaIndex >= urls.count {
+          selectedMediaIndex = max(0, urls.count - 1)
+        }
+      }
+      .onChange(of: selectedMediaIndex) { _, _ in
+        isVideoPaused = false
+        isVideoMuted = false
+        prefetchCarouselNeighbors()
+      }
+      .onChange(of: post.id) { _, _ in
+        isVideoPaused = false
+        isVideoMuted = false
+      }
+      .onChange(of: isVideoActive) { _, active in
+        if !active {
+          isVideoPaused = false
+        }
+      }
+      .onChange(of: isHoldingStamp) { _, isHidden in
+        updateStampPeekTapSuppression(isHidden: isHidden)
+      }
+      .onDisappear {
+        stampTapResetTask?.cancel()
+      }
+  }
+
+  @ViewBuilder
+  private var sizedMedia: some View {
+    if let frameSize {
+      mediaLayers.frame(width: frameSize.width, height: frameSize.height)
+    } else {
+      mediaLayers.aspectRatio(CGSize(width: 1, height: mediaHeightToWidthRatio), contentMode: .fit)
+    }
+  }
+
+  private var mediaLayers: some View {
     GeometryReader { proxy in
       ZStack {
         mediaContent
@@ -67,40 +115,6 @@ struct CaptroMediaPager: View {
         }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
-    }
-    .aspectRatio(CGSize(width: 1, height: mediaHeightToWidthRatio), contentMode: .fit)
-    .clipped()
-    .contentShape(Rectangle())
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(mediaAccessibilityLabel)
-    .accessibilityHint(currentMediaIsVideo ? "Tap to pause or play video" : "Opens the post detail screen")
-    .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
-    .onAppear(perform: prefetchCarouselNeighbors)
-    .onChange(of: mediaURLs) { _, urls in
-      measuredCoverHeightToWidthRatio = nil
-      if selectedMediaIndex >= urls.count {
-        selectedMediaIndex = max(0, urls.count - 1)
-      }
-    }
-    .onChange(of: selectedMediaIndex) { _, _ in
-      isVideoPaused = false
-      isVideoMuted = false
-      prefetchCarouselNeighbors()
-    }
-    .onChange(of: post.id) { _, _ in
-      isVideoPaused = false
-      isVideoMuted = false
-    }
-    .onChange(of: isVideoActive) { _, active in
-      if !active {
-        isVideoPaused = false
-      }
-    }
-    .onChange(of: isHoldingStamp) { _, isHidden in
-      updateStampPeekTapSuppression(isHidden: isHidden)
-    }
-    .onDisappear {
-      stampTapResetTask?.cancel()
     }
   }
 

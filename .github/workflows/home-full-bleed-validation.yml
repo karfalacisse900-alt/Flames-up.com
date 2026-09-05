@@ -1,0 +1,54 @@
+name: Validate Home Full Bleed
+on:
+  workflow_dispatch:
+  push:
+    branches: [release/home-full-bleed-20260904]
+    paths:
+      - 'ios_native/MIRA/**'
+      - 'backend-cf/**'
+      - 'supabase/migrations/**'
+      - '.github/workflows/home-full-bleed-validation.yml'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend-cf/package-lock.json
+      - run: npm ci
+        working-directory: backend-cf
+      - run: npx tsc --noEmit && npm test
+        working-directory: backend-cf
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Build simulator without signing or publishing
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/CaptroBuild" \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/home-full-bleed-build.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: home-full-bleed-build-log
+          path: ${{ runner.temp }}/home-full-bleed-build.log
+      - name: Install video fixture encoder
+        run: brew install ffmpeg
+      - name: Verify Home photo and video edges on small and large iPhones
+        working-directory: ios_native/MIRA
+        run: python3 scripts/home-full-bleed-qa.py > "$RUNNER_TEMP/home-full-bleed.log" 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: home-full-bleed-simulator-evidence
+          path: |
+            ${{ runner.temp }}/home-full-bleed/
+            ${{ runner.temp }}/home-full-bleed.log
