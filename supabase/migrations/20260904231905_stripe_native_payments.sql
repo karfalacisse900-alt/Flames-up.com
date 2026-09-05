@@ -447,3 +447,27 @@ $$;
 
 revoke all on function public.captro_begin_marketplace_purchase_v2(uuid,text,uuid,uuid,integer,text,jsonb,integer,integer,integer,text) from public,anon,authenticated;
 grant execute on function public.captro_begin_marketplace_purchase_v2(uuid,text,uuid,uuid,integer,text,jsonb,integer,integer,integer,text) to service_role;
+
+-- A concurrent failed retry must not overwrite a successfully processed event.
+create function public.captro_record_stripe_webhook_event(
+  p_event_id text, p_event_type text, p_account_id text, p_status text,
+  p_payload_digest text, p_error_code text
+)
+returns void
+language sql
+set search_path = public
+as $$
+  insert into public.app_payment_webhook_events (
+    provider, provider_event_id, event_type, provider_account_id, status, payload_digest, error_code
+  ) values (
+    'stripe', p_event_id, p_event_type, p_account_id, p_status, p_payload_digest,
+    case when p_status = 'failed' then p_error_code else null end
+  ) on conflict (provider, provider_event_id) do update set
+    status = excluded.status,
+    payload_digest = excluded.payload_digest,
+    error_code = excluded.error_code,
+    updated_at = now()
+  where app_payment_webhook_events.status <> 'processed';
+$$;
+revoke all on function public.captro_record_stripe_webhook_event(text,text,text,text,text,text) from public,anon,authenticated;
+grant execute on function public.captro_record_stripe_webhook_event(text,text,text,text,text,text) to service_role;

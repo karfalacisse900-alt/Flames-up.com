@@ -52,6 +52,15 @@ jobs:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
         run: node scripts/stripe-sandbox-bootstrap.mjs
+      - name: Install pinned Stripe webhook forwarding CLI
+        run: npm install --global @stripe/cli@1.50.10
+      - name: Exercise Captro auth and Connect against the real sandbox
+        working-directory: backend-cf
+        env:
+          STRIPE_MODE: ${{ vars.STRIPE_MODE }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+        run: node scripts/stripe-sandbox-runtime.mjs
       - name: Stop only this runner's disposable stack
         if: always()
         run: supabase stop --workdir "$RUNNER_TEMP/captro-sandbox" --no-backup

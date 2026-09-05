@@ -56,8 +56,17 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
     assert.equal((await one('select status from app_entitlements')).status,'refunded');
     assert.equal((await one('select refunded_amount from app_creator_earnings')).refunded_amount,2000);
     assert.equal((await one('select status from app_refunds')).status,'succeeded');
+    const record = status => one(`select captro_record_stripe_webhook_event('evt_delivery','payment_intent.succeeded',null,$1,'digest','timeout')`, [status]);
+    await record('failed');
+    assert.equal((await one("select status from app_payment_webhook_events where provider_event_id='evt_delivery'")).status, 'failed');
+    await record('processed');
+    await record('failed');
+    const delivered = await one("select * from app_payment_webhook_events where provider_event_id='evt_delivery'");
+    assert.equal(delivered.status, 'processed');
+    assert.equal(delivered.error_code, null);
     await db.exec('set role authenticated');
     await assert.rejects(db.exec('select * from app_payout_requests'), /permission denied/);
     await assert.rejects(db.exec('select * from app_payment_reconciliation_issues'), /permission denied/);
+    await assert.rejects(record('processed'), /permission denied/);
   } finally { await db.close(); }
 });

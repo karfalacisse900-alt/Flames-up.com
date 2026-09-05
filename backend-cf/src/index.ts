@@ -8,6 +8,7 @@ import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, val
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
 import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } from './commerce';
 import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote, proportionalAmount } from './stripe-money';
+import { supabaseRuntimeURL } from './runtime-urls';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -9337,16 +9338,14 @@ async function recordStripeWebhookEvent(c: any, event: any, status: 'processed' 
   const eventId = cleanText(event?.id, 180);
   if (!eventId) return;
   const digest = await sha256Hex(JSON.stringify({ id: eventId, type: event?.type, account: event?.account || '' }));
-  await supabaseAdminUpsert(c, 'app_payment_webhook_events', [{
-    provider: 'stripe',
-    provider_event_id: eventId,
-    event_type: cleanText(event?.type, 180) || 'unknown',
-    provider_account_id: cleanText(event?.account, 180) || null,
-    status,
-    payload_digest: digest,
-    error_code: cleanText(errorCode, 180) || null,
-    updated_at: now(),
-  }], 'provider,provider_event_id');
+  await supabaseAdminRpc(c, 'captro_record_stripe_webhook_event', {
+    p_event_id: eventId,
+    p_event_type: cleanText(event?.type, 180) || 'unknown',
+    p_account_id: cleanText(event?.account, 180) || null,
+    p_status: status,
+    p_payload_digest: digest,
+    p_error_code: cleanText(errorCode, 180) || null,
+  });
 }
 
 async function createConnectedAccountOnboardingLink(c: any, account: any, body: any = {}) {
@@ -10824,9 +10823,7 @@ async function mirrorOAuthUserToSupabaseAuth(c: any, user: any, provider: 'googl
 
 // ═══════════════════════════════════════════════════════════════════════════════
 function getSupabaseUrl(c: any): string {
-  const url = String(c.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  if (!url || !url.startsWith('https://')) throw new Error('SUPABASE_NOT_CONFIGURED');
-  return url;
+  return supabaseRuntimeURL(c.env);
 }
 
 async function verifySupabaseAccessToken(c: any, accessToken: string) {
