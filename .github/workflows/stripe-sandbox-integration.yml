@@ -1,0 +1,48 @@
+name: Stripe Sandbox Integration
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/oauth-guest-access]
+    paths:
+      - '.github/workflows/stripe-sandbox-integration.yml'
+      - 'backend-cf/scripts/stripe-sandbox-*.mjs'
+permissions:
+  contents: read
+concurrency:
+  group: captro-stripe-sandbox-integration
+  cancel-in-progress: false
+jobs:
+  sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: captro-payments-test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend-cf/package-lock.json
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.116.0
+      - run: npm ci
+        working-directory: backend-cf
+      - name: Start an ephemeral local database, never a linked project
+        run: |
+          supabase init
+          supabase start --exclude studio,postgres-meta,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,mailpit > "$RUNNER_TEMP/supabase-start.log" 2>&1 || {
+            tail -n 100 "$RUNNER_TEMP/supabase-start.log"
+            exit 1
+          }
+          supabase status -o json > "$RUNNER_TEMP/supabase-status.json"
+      - name: Verify isolated runtime and sandbox credentials
+        working-directory: backend-cf
+        env:
+          STRIPE_MODE: ${{ vars.STRIPE_MODE }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+        run: node scripts/stripe-sandbox-bootstrap.mjs
+      - name: Stop only this runner's disposable stack
+        if: always()
+        run: supabase stop --no-backup
