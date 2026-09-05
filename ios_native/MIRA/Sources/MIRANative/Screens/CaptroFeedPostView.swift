@@ -74,7 +74,8 @@ struct CaptroFeedPostView: View {
       selectedMediaIndex: $selectedMediaIndex,
       onOpenPost: onOpenPost,
       onSave: onSave,
-      showsCoverMediaOnly: showsCoverMediaOnly
+      showsCoverMediaOnly: showsCoverMediaOnly,
+      frameSize: pageMediaSize
     )
 
     if let mediaSize = pageMediaSize {
@@ -94,9 +95,9 @@ struct CaptroFeedPostView: View {
         ?? MIRAMediaSizing.mainFeedDisplayRatio(for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
     )
     let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0)
-    let availableMediaHeight = max(120, pageSize.height - fixedVerticalContent)
-    let width = min(pageSize.width, availableMediaHeight / max(ratio, 0.01))
-    return CGSize(width: width, height: width * ratio)
+    let availableMediaHeight = max(0, pageSize.height - fixedVerticalContent)
+    // A short page may crop the photo vertically, but must never narrow the post.
+    return CGSize(width: pageSize.width, height: min(availableMediaHeight, pageSize.width * ratio))
   }
 
   private var showsMoreButton: Bool {

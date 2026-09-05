@@ -63,6 +63,18 @@ targets:
           SWIFT_COMPILATION_MODE: wholemodule
           SWIFT_OPTIMIZATION_LEVEL: -O
 
+  CaptroLayoutUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: LayoutUITests
+    dependencies:
+      - target: Captro
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.captro.layout-tests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Captro:
     build:
@@ -72,5 +84,7 @@ schemes:
       config: Debug
     test:
       config: Debug
+      targets:
+        - CaptroLayoutUITests
     archive:
       config: Release

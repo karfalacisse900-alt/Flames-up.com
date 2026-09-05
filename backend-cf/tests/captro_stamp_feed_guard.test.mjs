@@ -148,6 +148,17 @@ test('Home media is a full-width rectangular frame using exactly five supported 
   assert.match(worker, /const explicit = SUPPORTED_FEED_MEDIA_RATIOS\.find[\s\S]*?if \(explicit\) return explicit;/);
 });
 
+test('viewport height can crop Home media but never reduce its width', () => {
+  const sizing = postView.slice(postView.indexOf('private var pageMediaSize:'), postView.indexOf('private var showsMoreButton:'));
+  assert.match(sizing, /CGSize\(width: pageSize\.width, height: min\(availableMediaHeight, pageSize\.width \* ratio\)\)/);
+  assert.doesNotMatch(sizing, /availableMediaHeight\s*\/|min\(pageSize\.width/);
+  assert.match(postView, /frameSize: pageMediaSize/);
+  const fixedFrame = mediaPager.slice(mediaPager.indexOf('if let frameSize {'), mediaPager.indexOf('} else {', mediaPager.indexOf('if let frameSize {')));
+  assert.match(fixedFrame, /mediaLayers\.frame\(width: frameSize\.width, height: frameSize\.height\)/);
+  assert.doesNotMatch(fixedFrame, /aspectRatio|padding|cornerRadius/);
+  assert.match(mainFeed, /feedContent\(size: feedProxy\.size\)\s*\}\s*\.ignoresSafeArea\(\.container, edges: \.horizontal\)/);
+});
+
 test('Captro uses a purpose-built family of stamp types and actions', () => {
   for (const kind of ['social', 'place', 'club', 'group', 'meetup', 'event', 'deal', 'localOffer']) {
     assert.match(stamps, new RegExp(`case ${kind}(?:\\s|\\s*=)`));

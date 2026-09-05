@@ -1,148 +1,80 @@
 #if DEBUG
 import Foundation
 import SwiftUI
+import UIKit
 
+@MainActor
 public struct CaptroHomeFeedVisualTestView: View {
   @State private var selectedTab = 0
-  private let api = MIRAAPIClient()
-  private let posts = CaptroHomeFeedVisualFixtures.posts
+  @StateObject private var model: MainFeedModel
 
-  public init() {}
+  public init() {
+    let api = MIRAAPIClient()
+    _model = StateObject(wrappedValue: MainFeedModel(api: api, visualPosts: CaptroHomeFeedVisualFixtures.posts()))
+  }
 
   public var body: some View {
     TabView(selection: $selectedTab) {
-      NavigationStack {
-        ScrollView(showsIndicators: false) {
-          LazyVStack(spacing: 24) {
-            if posts.isEmpty {
-              Text("Home feed visual fixture could not load")
-                .font(.headline)
-                .foregroundStyle(MIRATheme.Color.textPrimary)
-                .padding(24)
-            } else {
-              ForEach(posts) { post in
-                CaptroFeedPostView(
-                  post: post,
-                  api: api,
-                  isVideoActive: false,
-                  showsFeedControls: false,
-                  onFollow: { false },
-                  onOpenOptions: {},
-                  onCreate: {},
-                  onOpenPost: {},
-                  onSave: {},
-                  canFollowAuthor: false,
-                  pageSize: nil,
-                  selectedMediaIndex: .constant(0),
-                  showsCoverMediaOnly: true
-                )
-              }
-            }
-          }
-          .padding(.bottom, 112)
-        }
-        .scrollIndicators(.hidden)
-        .toolbar(.hidden, for: .navigationBar)
-        .background(MIRATheme.Color.appBackground)
-      }
-      .tag(0)
-      .tabItem { Label("Home", systemImage: "house.fill") }
-
-      visualTestTab(systemImage: "doc.viewfinder.fill")
+      MainFeedView(api: model.api, model: model)
+        .tag(0)
+        .tabItem { Label("Home", systemImage: "house.fill") }
+      Color.white
         .tag(1)
         .tabItem { Label("Scan", systemImage: "doc.viewfinder.fill") }
-
-      visualTestTab(systemImage: "person.fill")
+      Color.white
         .tag(2)
         .tabItem { Label("Me", systemImage: "person.fill") }
     }
+    .environmentObject(MIRALocalization.shared)
     .tint(MIRATheme.Color.forest)
     .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
   }
-
-  private func visualTestTab(systemImage: String) -> some View {
-    ZStack {
-      MIRATheme.Color.appBackground.ignoresSafeArea()
-      Image(systemName: systemImage)
-        .font(.system(size: 28, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-    }
-  }
-
 }
 
 private enum CaptroHomeFeedVisualFixtures {
-  static let posts: [MIRAPost] = [
-    decode(
-      """
-      {
-        "id": "home-feed-visual-guide",
-        "userFullName": "Captro",
-        "userUsername": "captro",
-        "title": "City at Blue Hour",
-        "caption": "A quiet walk through the city after the rain. The light kept changing from one block to the next, turning familiar streets into places worth seeing again.",
-        "images": [
-          "https://images.unsplash.com/photo-1522083165195-3424ed129620?auto=format&fit=crop&w=1080&q=85",
-          "https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=1080&q=85"
-        ],
-        "feedMediaUrls": [
-          "https://images.unsplash.com/photo-1522083165195-3424ed129620?auto=format&fit=crop&w=1080&q=85",
-          "https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=1080&q=85"
-        ],
-        "location": "Brooklyn, New York",
-        "displayCity": "Brooklyn",
-        "displayRegion": "New York",
-        "displayLocationLabel": "Brooklyn, New York",
-        "displayLocationVisibility": "city",
-        "placeName": "Brooklyn",
-        "placeCity": "Brooklyn",
-        "postType": "guide",
-        "createdAt": "2026-08-28T09:41:00Z",
-        "likesCount": 18,
-        "isLiked": false
-      }
-      """
-    ),
-    decode(
-      """
-      {
-        "id": "home-feed-visual-moment",
-        "userFullName": "Captro",
-        "userUsername": "captro",
-        "caption": "Morning light across the neighborhood.",
-        "images": [
-          "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1080&q=85"
-        ],
-        "feedMediaUrls": [
-          "https://images.unsplash.com/photo-1494526585095-c41746248156?auto=format&fit=crop&w=1080&q=85"
-        ],
-        "location": "New York",
-        "displayCity": "New York",
-        "displayLocationLabel": "New York",
-        "displayLocationVisibility": "city",
-        "placeCity": "New York",
-        "postType": "moment",
-        "createdAt": "2026-08-28T08:20:00Z",
-        "likesCount": 7,
-        "isLiked": true
-      }
-      """
-    )
-  ].compactMap { $0 }
-
-  private static func decode(_ json: String) -> MIRAPost? {
-    let decoder = JSONDecoder()
-    guard let data = json.data(using: .utf8) else {
-      print("[CaptroVisualQA] Fixture is not valid UTF-8")
-      return nil
-    }
+  static func posts() -> [MIRAPost] {
+    let argument = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--captro-visual-size=") }
+    let name = argument?.components(separatedBy: "=").last ?? "portrait"
+    let sizes: [String: CGSize] = [
+      "landscape": CGSize(width: 1440, height: 1080),
+      "portrait": CGSize(width: 999, height: 1536),
+      "fourfive": CGSize(width: 1080, height: 1350),
+      "threefour": CGSize(width: 1080, height: 1440),
+      "square": CGSize(width: 1080, height: 1080),
+    ]
+    let size = sizes[name] ?? sizes["portrait"]!
+    let isVideo = ProcessInfo.processInfo.arguments.contains("--captro-visual-video")
     do {
-      return try decoder.decode(MIRAPost.self, from: data)
+      let mediaURL: URL
+      if isVideo {
+        mediaURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+          .appendingPathComponent("full-bleed-fixture.mp4")
+      } else {
+        mediaURL = FileManager.default.temporaryDirectory.appendingPathComponent("full-bleed-\(name).png")
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let image = renderer.image { context in
+          UIColor(red: 0.08, green: 0.58, blue: 0.64, alpha: 1).setFill()
+          context.fill(CGRect(origin: .zero, size: size))
+          UIColor(red: 0.94, green: 0.24, blue: 0.43, alpha: 1).setFill()
+          context.fill(CGRect(x: size.width * 0.4, y: 0, width: size.width * 0.2, height: size.height))
+        }
+        try image.pngData()!.write(to: mediaURL)
+      }
+      let json: [String: Any] = [
+        "id": "full-bleed-\(name)", "userFullName": "Captro", "userUsername": "captro",
+        "title": "Full-width media", "caption": String(repeating: "Layout fixture. ", count: 10),
+        "images": [mediaURL.absoluteString], "feedMediaUrls": [mediaURL.absoluteString],
+        "mediaDimensions": [["width": size.width, "height": size.height]],
+        "postType": "place", "createdAt": "2026-09-04T09:41:00Z",
+      ]
+      return [try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: json))]
     } catch {
-      print("[CaptroVisualQA] Fixture decode failed: \(error)")
-      return nil
+      assertionFailure("Full-bleed visual fixture failed: \(error)")
+      return []
     }
   }
 }

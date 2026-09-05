@@ -39,12 +39,19 @@ onboarding reached Stripe but account creation returned HTTP 400:
 
 - Request ID: `req_JxzAJpQcvMzv0W`
 - Cause: the sandbox has not signed up for Connect.
-- Connect's marketplace setup is pending in the sandbox dashboard.
+- Connect's marketplace setup was subsequently enabled in the sandbox dashboard.
 
 Listing connected accounts successfully is not proof that creating them is
 enabled. No purchase, ticket, creator earning or payout passed real acceptance
 in this run. No new TestFlight build or production deployment was released.
 Native validation run `33933452281` passed; compiler success is separate evidence.
+
+Retry `33934777282` passed actual account creation and hosted onboarding-link
+creation through Captro. Stripe returned an Express account with real outstanding
+identity/business/external-account requirements and `payoutsReady=false`, matching
+Captro's persisted flags. The disposable empty test account was cleaned up. This
+clears the sandbox activation blocker, but not identity onboarding or payment and
+payout acceptance. The live account still shows Connect's "Continue setup" page.
 
 The ephemeral runtime is API integration coverage only. A persistently isolated
 test backend and sandbox-targeted iOS build are still required for native

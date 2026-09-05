@@ -40,6 +40,18 @@ final class MainFeedModel: ObservableObject {
     self.api = api
   }
 
+#if DEBUG
+  private var isVisualFixture = false
+
+  convenience init(api: MIRAAPIClient, visualPosts: [MIRAPost]) {
+    self.init(api: api)
+    posts = visualPosts
+    isLoading = false
+    canLoadMore = false
+    isVisualFixture = true
+  }
+#endif
+
   func configureGuestMode(_ isGuest: Bool) {
     guard isGuestFeedMode != isGuest else { return }
     isGuestFeedMode = isGuest
@@ -67,6 +79,9 @@ final class MainFeedModel: ObservableObject {
   }
 
   func load(forceRefresh: Bool = false) async {
+#if DEBUG
+    if isVisualFixture { return }
+#endif
     if !isGuestFeedMode && currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
     }
@@ -831,6 +846,7 @@ public struct MainFeedView: View {
           GeometryReader { feedProxy in
             feedContent(size: feedProxy.size)
           }
+          .ignoresSafeArea(.container, edges: .horizontal)
         }
         .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
       }

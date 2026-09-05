@@ -40,3 +40,15 @@ jobs:
         with:
           name: native-payments-build-log
           path: ${{ runner.temp }}/native-payments-build.log
+      - name: Install video fixture encoder
+        run: brew install ffmpeg
+      - name: Verify Home photo and video edges on small and large iPhones
+        working-directory: ios_native/MIRA
+        run: python3 scripts/home-full-bleed-qa.py > "$RUNNER_TEMP/home-full-bleed.log" 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: home-full-bleed-simulator-evidence
+          path: |
+            ${{ runner.temp }}/home-full-bleed/
+            ${{ runner.temp }}/home-full-bleed.log
