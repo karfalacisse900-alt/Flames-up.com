@@ -49,6 +49,8 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
     assert.equal((await one('select status from app_entitlements')).status,'refunded', 'refund must revoke access even if recovery fails');
     await refund('evt_refund_recovered'); await refund('evt_refund_replayed');
     await refund('evt_refund_stale',0,'pending');
+    await confirm(2150,'evt_payment_after_refund');
+    await assert.rejects(confirm(100,'evt_wrong_after_refund'), /AMOUNT_MISMATCH/);
     assert.equal((await one('select quantity_committed from app_purchasables where id=$1',[item])).quantity_committed,1);
     assert.equal((await one('select count(*)::int n from app_refunds')).n,1);
     assert.equal((await one('select status from app_entitlements')).status,'refunded');

@@ -9282,6 +9282,11 @@ async function recordStripeDispute(c: any, eventId: string, dispute: any): Promi
           await supabaseAdminPatchRows(c, 'app_commerce_redemptions', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'revoked', updated_at: now() });
         } else if (['membership', 'group_access'].includes(entitlement.kind)) {
           await supabaseAdminPatchRows(c, 'app_commerce_memberships', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'revoked', updated_at: now() });
+          const items = await supabaseAdminSelectRows(c, 'app_purchasables', { id: postgrestEqFilter(purchase.purchasable_id) }, 'private_config', 1);
+          const groupId = cleanText(items[0]?.private_config?.group_chat_id, 120);
+          if (groupId && purchase.buyer_app_user_id) await supabaseAdminDeleteRows(c, 'app_group_chat_members', {
+            group_id: postgrestEqFilter(groupId), user_id: postgrestEqFilter(purchase.buyer_app_user_id),
+          });
         } else if (entitlement.kind === 'attendance') {
           await supabaseAdminPatchRows(c, 'app_commerce_attendance', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'cancelled', updated_at: now() });
         } else if (entitlement.kind === 'reservation') {

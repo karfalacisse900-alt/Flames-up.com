@@ -219,7 +219,13 @@ declare
 begin
   select * into purchase_row from public.app_purchases where id = p_purchase_id for update;
   if not found then raise exception 'CAPTRO_PURCHASE_NOT_FOUND'; end if;
-  if purchase_row.status in ('confirmed', 'partially_refunded') then return purchase_row; end if;
+  if purchase_row.confirmed_at is not null then
+    if purchase_row.provider_payment_id is distinct from p_provider_payment_id
+       or p_amount <> purchase_row.total_amount or upper(p_currency) <> purchase_row.currency then
+      raise exception 'CAPTRO_PAYMENT_AMOUNT_MISMATCH';
+    end if;
+    return purchase_row;
+  end if;
   if purchase_row.status <> 'payment_pending' then raise exception 'CAPTRO_PURCHASE_NOT_PAYABLE'; end if;
   if length(trim(coalesce(p_provider_event_id, ''))) < 3
      or length(trim(coalesce(p_provider_payment_id, ''))) < 3 then
