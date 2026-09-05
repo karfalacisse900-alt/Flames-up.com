@@ -51,7 +51,11 @@ jobs:
       - name: Generate Xcode project
         if: ${{ !inputs.configure_only }}
         working-directory: ${{ env.IOS_NATIVE_DIR }}
-        run: xcodegen generate --spec project.yml
+        env:
+          CAPTRO_APPLE_PAY_MERCHANT_ID: ${{ vars.CAPTRO_APPLE_PAY_MERCHANT_ID }}
+        run: |
+          python3 scripts/configure-apple-pay.py
+          xcodegen generate --spec project.yml
 
       - name: Prepare App Store Connect API key
         if: ${{ !inputs.configure_only }}
@@ -73,6 +77,7 @@ jobs:
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           IOS_PROVISIONING_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          CAPTRO_APPLE_PAY_MERCHANT_ID: ${{ vars.CAPTRO_APPLE_PAY_MERCHANT_ID }}
         run: |
           set -euo pipefail
 
@@ -112,6 +117,16 @@ jobs:
             echo "::error::Provisioning profile does not contain the Sign in with Apple entitlement."
             exit 1
           fi
+
+          PROFILE_PLIST="$PROFILE_PLIST" python3 - <<'PY'
+          import os, plistlib
+          merchant = os.environ.get("CAPTRO_APPLE_PAY_MERCHANT_ID", "").strip()
+          if merchant:
+              with open(os.environ["PROFILE_PLIST"], "rb") as source:
+                  profile = plistlib.load(source)
+              if merchant not in profile.get("Entitlements", {}).get("com.apple.developer.in-app-payments", []):
+                  raise SystemExit("Signing profile does not authorize the configured Apple Pay merchant.")
+          PY
 
           if [ -n "$IOS_PROVISIONING_PROFILE_NAME" ]; then
             if [ "$IOS_PROVISIONING_PROFILE_NAME" != "$PROFILE_NAME" ]; then
@@ -188,6 +203,9 @@ jobs:
               "Google callback scheme": expected_google_scheme in schemes,
               "Sign in with Apple entitlement": "Default" in entitlements.get("com.apple.developer.applesignin", []),
           }
+          merchant = info.get("CaptroApplePayMerchantIdentifier")
+          if merchant:
+              checks["Apple Pay merchant entitlement"] = merchant in entitlements.get("com.apple.developer.in-app-payments", [])
           failed = [name for name, passed in checks.items() if not passed]
           if failed:
               raise SystemExit("Release auth configuration failed: " + ", ".join(failed))

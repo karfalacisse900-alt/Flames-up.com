@@ -500,12 +500,13 @@ public struct CaptroCreatorEarning: Decodable, Hashable, Identifiable {
   public let taxAmount: Int
   public let buyerTotal: Int
   public let refundedAmount: Int
+  public let disputedAmount: Int?
   public let status: String
   public let createdAt: String?
   public let availableAt: String?
   public let purchasedAt: String?
 
-  public var netCreatorAmount: Int { max(0, creatorAmount - refundedAmount) }
+  public var netCreatorAmount: Int { max(0, creatorAmount - refundedAmount - (status == "reversed" ? disputedAmount ?? 0 : 0)) }
 }
 
 public struct CaptroEarningsResponse: Decodable {

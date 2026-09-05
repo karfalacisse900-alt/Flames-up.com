@@ -10,6 +10,7 @@ struct CaptroWithdrawView: View {
   @State private var requestId = UUID().uuidString
   @State private var working = false
   @State private var error: String?
+  @State private var hostedDestination: CaptroCheckoutDestination?
 
   var body: some View {
     NavigationStack {
@@ -20,6 +21,12 @@ struct CaptroWithdrawView: View {
             Text(payout.status == "paid" ? "Paid" : payout.status == "failed" ? "Payout failed" : payout.status == "cancelled" ? "Cancelled" : "Processing")
               .font(.headline)
             if let failure = payout.failureMessage { Text(failure).font(.subheadline) }
+            if ["failed", "cancelled"].contains(payout.status) {
+              Button { retry() } label: { Label("Try Again", systemImage: "arrow.clockwise") }
+                .disabled(working)
+              Button { changeCard() } label: { Label("Change Card", systemImage: "creditcard") }
+                .disabled(working)
+            }
             Button("Done") { dismiss() }.buttonStyle(.borderedProminent)
           } else if let quote {
             Text("Confirm Payout").font(.title2.bold())
@@ -62,6 +69,20 @@ struct CaptroWithdrawView: View {
         do { earnings = try await api.loadCreatorEarnings() }
         catch { self.error = "Could not retrieve your payout balance." }
       }
+      .sheet(item: $hostedDestination) { destination in
+        CaptroCheckoutBrowser(url: destination.url).ignoresSafeArea()
+      }
+      .task(id: payout?.id) {
+        guard let id = payout?.id else { return }
+        for _ in 0..<10 {
+          guard ["pending", "in_transit"].contains(payout?.status ?? "") else { return }
+          do {
+            try await Task.sleep(for: .seconds(3))
+            let history = try await api.loadCreatorPayouts()
+            if let refreshed = history.payouts.first(where: { $0.id == id }) { payout = refreshed }
+          } catch { return }
+        }
+      }
     }
   }
 
@@ -95,6 +116,30 @@ struct CaptroWithdrawView: View {
       defer { working = false }
       do { payout = try await api.withdraw(quoteId: quote.id).payout }
       catch { self.error = (error as? MIRAAPIError)?.errorDescription ?? "Payout not confirmed. Retry or check Payout History." }
+    }
+  }
+
+  private func retry() {
+    guard !working else { return }
+    working = true; error = nil
+    Task {
+      defer { working = false }
+      do {
+        earnings = try await api.loadCreatorEarnings()
+        payout = nil; quote = nil; requestId = UUID().uuidString
+      } catch { self.error = "Could not refresh your available payout balance." }
+    }
+  }
+
+  private func changeCard() {
+    guard !working else { return }
+    working = true; error = nil
+    Task {
+      defer { working = false }
+      do {
+        let link = try await api.createPayoutManagementLink()
+        if let url = URL(string: link.url) { hostedDestination = CaptroCheckoutDestination(url: url) }
+      } catch { self.error = "Could not open payout method management." }
     }
   }
 }

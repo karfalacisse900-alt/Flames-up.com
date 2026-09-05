@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cents, stripeMode, saleAmounts, eligibleDebitCard, instantBalance, payoutQuote } from '../src/stripe-money.ts';
+import { cents, stripeMode, saleAmounts, eligibleDebitCard, instantBalance, payoutQuote, proportionalAmount } from '../src/stripe-money.ts';
 
 const fees = { basisPoints: 500, fixedAmount: 50, minimumAmount: 0, buyerPaysPlatformFee: true, creatorPaysPlatformFee: false };
 const card = { id: 'card_test', object: 'card', funding: 'debit', currency: 'usd', exp_month: 12, exp_year: 2099, available_payout_methods: ['instant'] };
@@ -19,6 +19,15 @@ test('Stripe mode must be explicit and both keys must match', () => {
   assert.equal(stripeMode({ STRIPE_MODE: 'test', STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_PUBLISHABLE_KEY: 'pk_test_fixture' }), 'test');
   assert.throws(() => stripeMode({ STRIPE_SECRET_KEY: 'sk_live_fixture' }));
   assert.throws(() => stripeMode({ STRIPE_MODE: 'test', STRIPE_SECRET_KEY: 'sk_live_fixture', STRIPE_PUBLISHABLE_KEY: 'pk_test_fixture' }));
+});
+
+test('refund allocations use bounded integer arithmetic', () => {
+  assert.equal(proportionalAmount(2150, 2000, 2150), 2000);
+  assert.equal(proportionalAmount(1075, 2000, 2150), 1000);
+  assert.equal(proportionalAmount(2151, 2000, 2150), 2000);
+  assert.equal(proportionalAmount(99_999_999, 99_999_999, 99_999_999), 99_999_999);
+  assert.throws(() => proportionalAmount(1.5, 2000, 2150));
+  assert.throws(() => proportionalAmount(100, 2000, 0));
 });
 
 test('payout destination must be a currently eligible debit card, never a bank or credit card', () => {

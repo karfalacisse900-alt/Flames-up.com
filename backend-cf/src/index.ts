@@ -9153,6 +9153,7 @@ function creatorEarningPayload(row: any, purchase?: any, buyer?: any) {
     taxAmount: Math.max(0, Number(row?.tax_amount || 0)),
     buyerTotal: Math.max(0, Number(row?.buyer_total || 0)),
     refundedAmount: Math.max(0, Number(row?.refunded_amount || 0)),
+    disputedAmount: Math.max(0, Number(row?.disputed_amount || 0)),
     status: cleanText(row?.status, 40),
     createdAt: row?.created_at || null,
     availableAt: row?.available_at || null,
@@ -9169,7 +9170,7 @@ function stripePayoutStatus(value: unknown): 'pending' | 'in_transit' | 'paid' |
   return 'pending';
 }
 
-async function syncStripePayout(c: any, providerAccountId: string, payout: any): Promise<boolean> {
+async function syncStripePayout(c: any, providerAccountId: string, payout: any, event?: any): Promise<boolean> {
   const payoutId = cleanText(payout?.id, 180);
   if (!providerAccountId.startsWith('acct_') || !payoutId.startsWith('po_')) return false;
   const accounts = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
@@ -9181,6 +9182,9 @@ async function syncStripePayout(c: any, providerAccountId: string, payout: any):
     provider_payout_id: postgrestEqFilter(payoutId), creator_id: postgrestEqFilter(account.user_id),
   }, '*', 1);
   const request = requests[0];
+  const previous = await supabaseAdminSelectRows(c, 'app_payouts', {
+    provider_payout_id: postgrestEqFilter(payoutId),
+  }, 'paid_at,failed_at', 1);
   const destination = cleanText(payout.destination?.id || payout.destination, 180);
   await supabaseAdminUpsert(c, 'app_payouts', [{
     connected_account_id: account.id,
@@ -9194,10 +9198,13 @@ async function syncStripePayout(c: any, providerAccountId: string, payout: any):
     net_amount: cents(payout.amount),
     status: stripePayoutStatus(payout?.status),
     arrival_at: stripeUnixToIso(payout?.arrival_date) || null,
-    paid_at: payout?.status === 'paid' ? stripeUnixToIso(payout?.arrival_date) || now() : null,
+    paid_at: payout.status === 'paid' ? previous[0]?.paid_at
+      || (event?.type === 'payout.paid' ? stripeUnixToIso(event.created) : null) : null,
     failure_code: cleanText(payout?.failure_code, 100) || null,
     failure_message: cleanText(payout?.failure_message, 300) || null,
-    failed_at: payout.status === 'failed' ? now() : null,
+    failed_at: payout.status === 'failed' ? previous[0]?.failed_at
+      || (event?.type === 'payout.failed' ? stripeUnixToIso(event.created) : null) : null,
+    created_at: stripeUnixToIso(payout.created) || now(),
     updated_at: now(),
   }], 'provider_payout_id');
   return true;
@@ -9248,7 +9255,7 @@ async function recordStripeDispute(c: any, eventId: string, dispute: any): Promi
       disputed_amount: 0,
       updated_at: now(),
     });
-    await reconcileCreatorEarnings(c, purchase.stripe_destination_account_id);
+    await reconcileCreatorEarnings(c, purchase.connected_account_id);
     await setPaymentReconciliation(c, purchase, disputeId, 'payment_dispute', true);
   } else {
     await setPaymentReconciliation(c, purchase, disputeId, 'payment_dispute', false);
@@ -9598,7 +9605,8 @@ async function recordCommerceRefund(c: any, eventId: string, refund: any) {
   const buyerTotal = cents(purchase.total_amount, 1);
   let creatorReversal = 0;
   const desiredReversal = proportionalAmount(amount, creatorAmount, buyerTotal);
-  const serviceFeeRefund = proportionalAmount(amount, cents(purchase.service_fee_amount), buyerTotal);
+  let serviceFeeRefund = Math.min(amount - desiredReversal,
+    proportionalAmount(amount, cents(purchase.service_fee_amount), buyerTotal));
   const digest = await sha256Hex(JSON.stringify({ id: refundId, payment_intent: paymentIntentId, amount, status: refund?.status }));
   const record = () => supabaseAdminRpc(c, 'captro_record_marketplace_refund', {
     p_provider_payment_id: paymentIntentId, p_provider_refund_id: refundId,
@@ -9623,6 +9631,7 @@ async function recordCommerceRefund(c: any, eventId: string, refund: any) {
         }, `refund-reversal:${refundId}`);
     if (!reversal.ok) throw stripeProviderError(reversal, 'STRIPE_REFUND_REVERSAL_REQUIRED');
     creatorReversal = cents(reversal.data?.amount);
+    serviceFeeRefund = Math.min(serviceFeeRefund, Math.max(0, amount - creatorReversal));
     await record();
   }
   if (refund.status === 'succeeded') await setPaymentReconciliation(c, purchase, refundId, 'refund_transfer_recovery', true);
@@ -17834,9 +17843,11 @@ const beginCommercePurchaseHandler = async (c: any) => {
       sanitizeCommerceSelection(body.selection, purchasable.fulfillment_type),
       purchasable
     );
-    const idempotencyKey = cleanText(body.idempotency_key || body.idempotencyKey, 120) || `purchase-${uuid()}`;
-    const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity);
     const native = c.req.path.endsWith('/payments/create') || body.paymentInterface === 'native';
+    const suppliedKey = cleanText(body.idempotency_key || body.idempotencyKey, 120);
+    if (native && !isUuidText(suppliedKey)) return c.json({ detail: 'A payment request ID is required.', code: 'CAPTRO_IDEMPOTENCY_KEY_REQUIRED' }, 400);
+    const idempotencyKey = suppliedKey || `purchase-${uuid()}`;
+    const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity);
     let purchase: any = await supabaseAdminRpc(c, 'captro_begin_marketplace_purchase_v2', {
       p_buyer_id: buyerAuthId,
       p_buyer_app_user_id: buyerAppUserId,
@@ -18705,7 +18716,7 @@ const stripeWebhookHandler = async (c: any) => {
     } else if (event.type.startsWith('payout.')) {
       const current = await stripeApiGet(c, `/payouts/${encodeURIComponent(object.id)}`, cleanText(event.account, 180));
       if (!current.ok) throw stripeProviderError(current, 'STRIPE_PAYOUT_SYNC_FAILED');
-      await syncStripePayout(c, cleanText(event?.account, 180), current.data);
+      await syncStripePayout(c, cleanText(event?.account, 180), current.data, event);
       if (current.data?.metadata?.captro_payout_request_id) await supabaseAdminPatchRows(c, 'app_payout_requests', {
         id: postgrestEqFilter(current.data.metadata.captro_payout_request_id),
         provider_account_id: postgrestEqFilter(event.account),

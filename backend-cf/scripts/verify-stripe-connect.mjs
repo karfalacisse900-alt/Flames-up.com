@@ -66,7 +66,7 @@ try {
   const payout = await request(`${api}/commerce/payout-account`, { headers: authHeaders });
   assert.equal(payout.account?.stripeConfigured, true);
   assert.equal(payout.account?.status, 'not_started');
-  assert.equal(payout.account?.bank, null);
+  assert.equal(payout.account?.payoutCard, null);
 
   console.log('Production live Stripe and Connect APIs are reachable; account and connected-account webhook secrets are configured; signatures are enforced.');
 } finally {

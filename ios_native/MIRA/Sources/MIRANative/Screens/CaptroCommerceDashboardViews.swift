@@ -483,18 +483,6 @@ struct CaptroEarningsView: View {
         }
         Button("Replace Card") { openHostedAccount(manage: true) }
           .buttonStyle(CaptroOutlineButtonStyle())
-        NavigationLink {
-          CaptroPayoutsView(api: api)
-        } label: {
-          HStack {
-            Text("Payout History")
-            Spacer()
-            Image(systemName: "chevron.right")
-          }
-          .font(.system(size: 14, weight: .semibold))
-          .frame(minHeight: 44)
-        }
-        .buttonStyle(.plain)
       } else {
         Text(account.identityRequirementsComplete == true
              ? "Add an eligible debit card to receive your Captro earnings."
@@ -510,6 +498,18 @@ struct CaptroEarningsView: View {
         .background(CaptroDetailStyle.accent)
         .buttonStyle(.plain)
       }
+      NavigationLink {
+        CaptroPayoutsView(api: api)
+      } label: {
+        HStack {
+          Text("Payout History")
+          Spacer()
+          Image(systemName: "chevron.right")
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .frame(minHeight: 44)
+      }
+      .buttonStyle(.plain)
     }
     .padding(16)
   }
@@ -530,6 +530,8 @@ struct CaptroEarningsView: View {
               VStack(alignment: .leading, spacing: 4) {
                 Text(earning.title).font(.system(size: 15, weight: .semibold)).lineLimit(2)
                 Text("\(earning.contentType.replacingOccurrences(of: "_", with: " ").capitalized) · \(CaptroCommerceDate.short(earning.purchasedAt))")
+                  .font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
+                Text(earning.status.replacingOccurrences(of: "_", with: " ").capitalized)
                   .font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
               }
               Spacer(minLength: 8)
