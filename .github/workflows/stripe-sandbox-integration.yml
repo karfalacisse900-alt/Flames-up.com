@@ -28,14 +28,23 @@ jobs:
           version: 2.116.0
       - run: npm ci
         working-directory: backend-cf
+      - name: Read the deployed schema without copying any production data
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          supabase db dump --project-ref "$SUPABASE_PROJECT_REF" --schema public,private --file "$RUNNER_TEMP/captro-schema.sql"
       - name: Start an ephemeral local database, never a linked project
         run: |
-          supabase init
-          supabase start --exclude studio,postgres-meta,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,mailpit > "$RUNNER_TEMP/supabase-start.log" 2>&1 || {
-            tail -n 100 "$RUNNER_TEMP/supabase-start.log"
+          mkdir "$RUNNER_TEMP/captro-sandbox"
+          supabase init --workdir "$RUNNER_TEMP/captro-sandbox"
+          supabase migration new deployed_schema_and_native_payments --workdir "$RUNNER_TEMP/captro-sandbox"
+          node backend-cf/scripts/stripe-sandbox-schema.mjs
+          supabase start --workdir "$RUNNER_TEMP/captro-sandbox" --exclude studio,postgres-meta,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,mailpit > "$RUNNER_TEMP/supabase-start.log" 2>&1 || {
+            grep -E 'ERROR:|failed|unhealthy' "$RUNNER_TEMP/supabase-start.log" | head -n 10
             exit 1
           }
-          supabase status -o json > "$RUNNER_TEMP/supabase-status.json"
+          supabase status --workdir "$RUNNER_TEMP/captro-sandbox" -o json > "$RUNNER_TEMP/supabase-status.json"
       - name: Verify isolated runtime and sandbox credentials
         working-directory: backend-cf
         env:
@@ -45,4 +54,4 @@ jobs:
         run: node scripts/stripe-sandbox-bootstrap.mjs
       - name: Stop only this runner's disposable stack
         if: always()
-        run: supabase stop --no-backup
+        run: supabase stop --workdir "$RUNNER_TEMP/captro-sandbox" --no-backup
