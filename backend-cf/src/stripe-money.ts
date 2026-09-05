@@ -21,6 +21,11 @@ export function percentageFee(amount: number, basisPoints: number, fixed: number
   return cents(Number((BigInt(amount) * BigInt(basisPoints) + 9999n) / 10000n) + fixed);
 }
 
+export function proportionalAmount(amount: number, share: number, total: number): number {
+  cents(amount); cents(share); cents(total, 1);
+  return Math.min(share, Number((BigInt(amount) * BigInt(share) + BigInt(Math.floor(total / 2))) / BigInt(total)));
+}
+
 export function saleAmounts(item: number, fee: { basisPoints: number; fixedAmount: number; minimumAmount: number;
   buyerPaysPlatformFee: boolean; creatorPaysPlatformFee: boolean }, tax = 0) {
   cents(item); cents(tax);

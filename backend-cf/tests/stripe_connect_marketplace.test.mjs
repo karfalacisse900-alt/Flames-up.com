@@ -88,7 +88,9 @@ test('refunds and disputes preserve the original sale and reverse access and ear
   assert.match(migration, /refunded_amount = total_creator_reversed/);
   assert.match(migration, /update public\.app_entitlements set status = 'refunded'/);
   assert.match(worker, /charge\.dispute\./);
-  assert.match(worker, /status: status === 'lost' \? 'reversed' : 'disputed'/);
+  assert.match(worker, /STRIPE_DISPUTE_REVERSAL_REQUIRED/);
+  assert.match(worker, /status: 'reversed', disputed_amount: cents\(reversal.data.amount\)/);
+  assert.match(worker, /app_payment_reconciliation_issues/);
   assert.match(worker, /status: 'revoked'/);
 });
 

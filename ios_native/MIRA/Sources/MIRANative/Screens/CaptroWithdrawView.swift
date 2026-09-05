@@ -17,7 +17,7 @@ struct CaptroWithdrawView: View {
         VStack(alignment: .leading, spacing: 20) {
           if let payout {
             Text(CaptroMoney.format(minorUnits: payout.amount, currency: payout.currency)).font(.largeTitle.bold())
-            Text(payout.status == "paid" ? "Paid" : payout.status == "failed" ? "Payout failed" : "Processing")
+            Text(payout.status == "paid" ? "Paid" : payout.status == "failed" ? "Payout failed" : payout.status == "cancelled" ? "Cancelled" : "Processing")
               .font(.headline)
             if let failure = payout.failureMessage { Text(failure).font(.subheadline) }
             Button("Done") { dismiss() }.buttonStyle(.borderedProminent)
@@ -42,6 +42,7 @@ struct CaptroWithdrawView: View {
             TextField("Amount", text: $amount).keyboardType(.decimalPad)
               .font(.title2).padding(.vertical, 12)
               .accessibilityLabel("Withdrawal amount in dollars")
+              .onChange(of: amount) { _, _ in requestId = UUID().uuidString }
             Divider()
             Button { getQuote() } label: {
               Label("Continue", systemImage: "arrow.right").frame(maxWidth: .infinity, minHeight: 44)

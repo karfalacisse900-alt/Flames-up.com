@@ -13,6 +13,16 @@ alter table public.app_connected_accounts
   add column payout_card jsonb;
 alter table public.app_purchases
   add column payment_interface text not null default 'checkout' check (payment_interface in ('checkout', 'native'));
+-- A charge.refunded event can describe several real refunds.
+alter table public.app_refunds drop constraint if exists app_refunds_provider_event_id_key;
+create index app_refunds_provider_event_idx on public.app_refunds(provider_event_id);
+alter table public.app_payment_disputes add column provider_transfer_reversal_id text;
+alter table public.app_payouts
+  add column external_account_id text,
+  add column card_snapshot jsonb,
+  add column fee_amount integer check (fee_amount >= 0),
+  add column net_amount integer check (net_amount >= 0),
+  add column failed_at timestamptz;
 create index app_purchases_native_expiry_idx on public.app_purchases(hold_expires_at)
   where status = 'payment_pending' and payment_interface = 'native';
 
@@ -41,6 +51,21 @@ create index app_payout_requests_connected_idx on public.app_payout_requests(con
 alter table public.app_payout_requests enable row level security;
 revoke all on public.app_payout_requests from anon, authenticated;
 grant all on public.app_payout_requests to service_role;
+
+create table public.app_payment_reconciliation_issues (
+  provider_reference text primary key,
+  purchase_id uuid not null references public.app_purchases(id),
+  creator_id uuid not null references auth.users(id),
+  reason text not null,
+  resolved boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+create index app_payment_reconciliation_creator_idx
+  on public.app_payment_reconciliation_issues(creator_id) where not resolved;
+create index app_payment_reconciliation_purchase_idx on public.app_payment_reconciliation_issues(purchase_id);
+alter table public.app_payment_reconciliation_issues enable row level security;
+revoke all on public.app_payment_reconciliation_issues from anon, authenticated;
+grant all on public.app_payment_reconciliation_issues to service_role;
 
 create or replace function public.captro_begin_marketplace_purchase_v2(
   p_buyer_id uuid,
@@ -320,11 +345,13 @@ begin
   ) on conflict (provider_refund_id) do update set
     provider_event_id = coalesce(excluded.provider_event_id, app_refunds.provider_event_id),
     status = case when app_refunds.status = 'succeeded' then app_refunds.status else excluded.status end,
+    creator_reversal_amount = greatest(app_refunds.creator_reversal_amount, excluded.creator_reversal_amount),
+    service_fee_refund_amount = greatest(app_refunds.service_fee_refund_amount, excluded.service_fee_refund_amount),
     reason = coalesce(excluded.reason, app_refunds.reason),
     payload_digest = excluded.payload_digest,
     updated_at = now();
 
-  if p_status <> 'succeeded' or purchase_row.status = 'refunded' then return purchase_row; end if;
+  if p_status <> 'succeeded' then return purchase_row; end if;
 
   select coalesce(sum(amount), 0), coalesce(sum(creator_reversal_amount), 0),
          coalesce(sum(service_fee_refund_amount), 0)
@@ -343,17 +370,15 @@ begin
     purchase_row.provider_checkout_id, next_status, p_refund_amount, purchase_row.currency, p_payload_digest
   ) on conflict (provider, provider_event_id) where provider_event_id is not null do nothing;
 
-  update public.app_purchases set status = next_status, updated_at = now()
-    where id = purchase_row.id returning * into purchase_row;
   update public.app_creator_earnings set
     refunded_amount = total_creator_reversed,
-    status = case when total_creator_reversed >= creator_amount then 'refunded' else 'partially_refunded' end,
+    status = case when next_status = 'refunded' then 'refunded' else 'partially_refunded' end,
     updated_at = now()
     where purchase_id = purchase_row.id;
   update public.app_platform_fees set refunded_amount = least(amount, total_service_refunded), updated_at = now()
     where purchase_id = purchase_row.id and fee_type = 'service';
 
-  if next_status = 'refunded' then
+  if next_status = 'refunded' and purchase_row.status <> 'refunded' then
     update public.app_purchasables set quantity_committed = greatest(0, quantity_committed - purchase_row.quantity), updated_at = now()
       where id = purchase_row.purchasable_id;
     update public.app_prices set quantity_committed = greatest(0, quantity_committed - purchase_row.quantity), updated_at = now()
@@ -379,6 +404,8 @@ begin
         values (entitlement_row.id, 'refunded', jsonb_build_object('amount', total_refunded));
     end if;
   end if;
+  update public.app_purchases set status = next_status, updated_at = now()
+    where id = purchase_row.id returning * into purchase_row;
   return purchase_row;
 end;
 $$;

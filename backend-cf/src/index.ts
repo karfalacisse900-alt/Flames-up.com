@@ -7,7 +7,7 @@ import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } 
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
 import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } from './commerce';
-import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote } from './stripe-money';
+import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote, proportionalAmount } from './stripe-money';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -9177,20 +9177,37 @@ async function syncStripePayout(c: any, providerAccountId: string, payout: any):
   }, '*', 1);
   const account = accounts[0];
   if (!account) return false;
+  const requests = await supabaseAdminSelectRows(c, 'app_payout_requests', {
+    provider_payout_id: postgrestEqFilter(payoutId), creator_id: postgrestEqFilter(account.user_id),
+  }, '*', 1);
+  const request = requests[0];
+  const destination = cleanText(payout.destination?.id || payout.destination, 180);
   await supabaseAdminUpsert(c, 'app_payouts', [{
     connected_account_id: account.id,
     creator_id: account.user_id,
     provider_payout_id: payoutId,
     currency: cleanText(payout?.currency || account.default_currency || 'USD', 3).toUpperCase(),
     amount: Math.max(0, Number(payout?.amount || 0)),
+    external_account_id: destination || null,
+    card_snapshot: request?.card_snapshot || (account.payout_card?.id === destination ? account.payout_card : null),
+    fee_amount: request?.fee ?? null,
+    net_amount: cents(payout.amount),
     status: stripePayoutStatus(payout?.status),
     arrival_at: stripeUnixToIso(payout?.arrival_date) || null,
     paid_at: payout?.status === 'paid' ? stripeUnixToIso(payout?.arrival_date) || now() : null,
     failure_code: cleanText(payout?.failure_code, 100) || null,
     failure_message: cleanText(payout?.failure_message, 300) || null,
+    failed_at: payout.status === 'failed' ? now() : null,
     updated_at: now(),
   }], 'provider_payout_id');
   return true;
+}
+
+async function setPaymentReconciliation(c: any, purchase: any, reference: string, reason: string, resolved: boolean) {
+  await supabaseAdminUpsert(c, 'app_payment_reconciliation_issues', [{
+    provider_reference: reference, purchase_id: purchase.id, creator_id: purchase.creator_id,
+    reason, resolved, updated_at: now(),
+  }], 'provider_reference');
 }
 
 async function recordStripeDispute(c: any, eventId: string, dispute: any): Promise<boolean> {
@@ -9216,25 +9233,30 @@ async function recordStripeDispute(c: any, eventId: string, dispute: any): Promi
     updated_at: now(),
   }], 'provider_dispute_id');
 
-  if (status === 'won') {
-    const earnings = await supabaseAdminSelectRows(c, 'app_creator_earnings', {
+  if (status === 'won' || status === 'warning_closed') {
+    const refunds = await supabaseAdminSelectRows(c, 'app_refunds', {
       purchase_id: postgrestEqFilter(purchase.id),
-    }, 'available_at', 1);
-    const availableAt = earnings[0]?.available_at;
-    await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
-      status: 'confirmed', updated_at: now(),
+      status: 'eq.succeeded',
+    }, 'amount', 100);
+    const refunded = refunds.reduce((sum: number, row: any) => sum + cents(row.amount), 0);
+    const restoredStatus = refunded >= purchase.total_amount ? 'refunded' : refunded ? 'partially_refunded' : 'confirmed';
+    await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id), status: 'eq.disputed' }, {
+      status: restoredStatus, updated_at: now(),
     });
-    await supabaseAdminPatchRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(purchase.id) }, {
-      status: availableAt && Date.parse(availableAt) <= Date.now() ? 'available' : 'pending',
+    await supabaseAdminPatchRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(purchase.id), status: 'eq.disputed' }, {
+      status: restoredStatus === 'confirmed' ? 'pending' : restoredStatus,
       disputed_amount: 0,
       updated_at: now(),
     });
+    await reconcileCreatorEarnings(c, purchase.stripe_destination_account_id);
+    await setPaymentReconciliation(c, purchase, disputeId, 'payment_dispute', true);
   } else {
+    await setPaymentReconciliation(c, purchase, disputeId, 'payment_dispute', false);
     await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
       status: 'disputed', updated_at: now(),
     });
     await supabaseAdminPatchRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(purchase.id) }, {
-      status: status === 'lost' ? 'reversed' : 'disputed',
+      status: 'disputed',
       disputed_amount: Math.min(Math.max(0, Number(dispute?.amount || 0)), Math.max(0, Number(purchase.creator_amount || 0))),
       updated_at: now(),
     });
@@ -9261,6 +9283,23 @@ async function recordStripeDispute(c: any, eventId: string, dispute: any): Promi
           await supabaseAdminPatchRows(c, 'app_commerce_orders', { entitlement_id: postgrestEqFilter(entitlement.id) }, { status: 'cancelled', updated_at: now() });
         }
       }
+      const desiredReversal = proportionalAmount(cents(dispute.amount), cents(purchase.creator_amount), cents(purchase.total_amount, 1));
+      if (desiredReversal > 0) {
+        if (!purchase.provider_transfer_id) throw new Error('STRIPE_DISPUTE_TRANSFER_REQUIRED');
+        const transferId = encodeURIComponent(purchase.provider_transfer_id);
+        const reversal = await existingRefundReversal(c, transferId, disputeId)
+          || await stripeApiRequest(c, `/transfers/${transferId}/reversals`, {
+            amount: desiredReversal, 'metadata[captro_dispute_id]': disputeId,
+          }, `dispute-reversal:${disputeId}`);
+        if (!reversal.ok) throw stripeProviderError(reversal, 'STRIPE_DISPUTE_REVERSAL_REQUIRED');
+        await supabaseAdminPatchRows(c, 'app_payment_disputes', { provider_dispute_id: postgrestEqFilter(disputeId) }, {
+          provider_transfer_reversal_id: reversal.data.id, updated_at: now(),
+        });
+        await supabaseAdminPatchRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(purchase.id) }, {
+          status: 'reversed', disputed_amount: cents(reversal.data.amount), updated_at: now(),
+        });
+      }
+      await setPaymentReconciliation(c, purchase, disputeId, 'payment_dispute', true);
     }
   }
   return true;
@@ -9337,6 +9376,10 @@ function payoutPublicPayload(row: any) {
     paidAt: row?.paid_at || null,
     failureMessage: cleanText(row?.failure_message, 300) || null,
     createdAt: row?.created_at || null,
+    card: row?.card_snapshot || null,
+    fee: row?.fee_amount ?? null,
+    netAmount: row?.net_amount ?? null,
+    failedAt: row?.failed_at || null,
   };
 }
 
@@ -9475,6 +9518,36 @@ async function completeCommercePurchaseFromIntent(c: any, eventId: string, objec
     p_available_at: null,
     p_payload_digest: await sha256Hex(JSON.stringify({ eventId, intentId: intent.id, amount: intent.amount_received })),
   });
+  await reconcileCreatorEarnings(c, purchase.connected_account_id);
+}
+
+async function reconcileCreatorEarnings(c: any, connectedAccountId: string) {
+  const accounts = await supabaseAdminSelectRows(c, 'app_connected_accounts', { id: postgrestEqFilter(connectedAccountId) }, '*', 1);
+  const account = accounts[0];
+  if (!account) return;
+  const earnings = await supabaseAdminQueryRows(c, 'app_creator_earnings', {
+    filters: { connected_account_id: postgrestEqFilter(account.id), status: 'eq.pending' },
+    order: 'created_at.asc', limit: 25,
+  });
+  for (const earning of earnings) {
+    if (!earning.provider_transfer_id) continue;
+    const transfer = await stripeApiGet(c, `/transfers/${encodeURIComponent(earning.provider_transfer_id)}`);
+    if (!transfer.ok) throw stripeProviderError(transfer, 'STRIPE_TRANSFER_READ_FAILED');
+    if (transfer.data.destination !== account.provider_account_id || !transfer.data.destination_payment) continue;
+    const paymentId = typeof transfer.data.destination_payment === 'string' ? transfer.data.destination_payment : transfer.data.destination_payment.id;
+    const ledger = await stripeApiGet(c, `/balance_transactions?source=${encodeURIComponent(paymentId)}&limit=1`, account.provider_account_id);
+    if (!ledger.ok) throw stripeProviderError(ledger, 'STRIPE_LEDGER_READ_FAILED');
+    const transaction = ledger.data?.data?.[0];
+    if (!transaction || !['pending', 'available'].includes(transaction.status)) continue;
+    if (transaction.amount !== earning.creator_amount || transaction.currency !== earning.currency.toLowerCase()) {
+      console.error(JSON.stringify({ event: 'creator_earning_reconciliation_mismatch', earning_id: earning.id }));
+      continue;
+    }
+    // Update only pending rows so a concurrent refund/dispute cannot be undone.
+    await supabaseAdminPatchRows(c, 'app_creator_earnings', { id: postgrestEqFilter(earning.id), status: 'eq.pending' }, {
+      status: transaction.status, available_at: stripeUnixToIso(transaction.available_on) || null, updated_at: now(),
+    });
+  }
 }
 
 async function cancelCommercePurchaseFromSession(c: any, session: any) {
@@ -9495,6 +9568,20 @@ function marketplaceRefundStatus(value: unknown): 'pending' | 'succeeded' | 'fai
   return 'pending';
 }
 
+async function existingRefundReversal(c: any, transferId: string, refundId: string): Promise<any | null> {
+  let after = '';
+  do {
+    const result = await stripeApiGet(c, `/transfers/${transferId}/reversals?limit=100${after ? `&starting_after=${encodeURIComponent(after)}` : ''}`);
+    if (!result.ok) throw stripeProviderError(result, 'STRIPE_REVERSALS_READ_FAILED');
+    const rows = result.data?.data || [];
+    const found = rows.find((row: any) => row.metadata?.captro_refund_id === refundId
+      || row.metadata?.captro_dispute_id === refundId || row.source_refund === refundId);
+    if (found) return { ok: true, status: 200, data: found };
+    after = result.data?.has_more && rows.length ? rows[rows.length - 1].id : '';
+  } while (after);
+  return null;
+}
+
 async function recordCommerceRefund(c: any, eventId: string, refund: any) {
   const paymentIntentId = cleanText(refund?.payment_intent?.id || refund?.payment_intent, 180);
   if (!paymentIntentId) return { processed: false };
@@ -9503,47 +9590,64 @@ async function recordCommerceRefund(c: any, eventId: string, refund: any) {
   }, '*', 1);
   const purchase = rows[0];
   if (!purchase) return { processed: false };
-  const amount = Math.max(0, Number(refund?.amount || 0));
+  const amount = cents(refund?.amount);
   if (!amount) return { processed: false };
-  const refundId = cleanText(refund?.id, 180) || `charge-refund-${paymentIntentId}-${amount}`;
-  const creatorAmount = Math.max(0, Number(purchase.creator_amount || purchase.item_amount || 0));
-  const buyerTotal = Math.max(1, Number(purchase.total_amount || 0));
-  const creatorReversal = amount >= buyerTotal
-    ? creatorAmount
-    : Math.min(creatorAmount, Math.round((amount * creatorAmount) / buyerTotal));
-  const serviceFeeRefund = Math.min(
-    Math.max(0, Number(purchase.service_fee_amount || 0)),
-    Math.max(0, amount - creatorReversal)
-  );
+  const refundId = cleanText(refund?.id, 180);
+  if (!refundId.startsWith('re_')) throw new Error('STRIPE_REFUND_REFERENCE_INVALID');
+  const creatorAmount = cents(purchase.creator_amount);
+  const buyerTotal = cents(purchase.total_amount, 1);
+  let creatorReversal = 0;
+  const desiredReversal = proportionalAmount(amount, creatorAmount, buyerTotal);
+  const serviceFeeRefund = proportionalAmount(amount, cents(purchase.service_fee_amount), buyerTotal);
   const digest = await sha256Hex(JSON.stringify({ id: refundId, payment_intent: paymentIntentId, amount, status: refund?.status }));
-  await supabaseAdminRpc(c, 'captro_record_marketplace_refund', {
-    p_provider_payment_id: paymentIntentId,
-    p_provider_refund_id: refundId,
-    p_refund_amount: amount,
-    p_creator_reversal_amount: creatorReversal,
-    p_service_fee_refund_amount: serviceFeeRefund,
-    p_provider_event_id: cleanText(eventId, 180),
+  const record = () => supabaseAdminRpc(c, 'captro_record_marketplace_refund', {
+    p_provider_payment_id: paymentIntentId, p_provider_refund_id: refundId,
+    p_refund_amount: amount, p_creator_reversal_amount: creatorReversal,
+    p_service_fee_refund_amount: serviceFeeRefund, p_provider_event_id: cleanText(eventId, 180),
     p_status: marketplaceRefundStatus(refund?.status),
-    p_reason: cleanText(refund?.reason || refund?.failure_reason, 180),
-    p_payload_digest: digest,
+    p_reason: cleanText(refund?.reason || refund?.failure_reason, 180), p_payload_digest: digest,
   });
+  if (refund.status === 'succeeded') {
+    await setPaymentReconciliation(c, purchase, refundId, 'refund_transfer_recovery', false);
+  }
+  // The buyer refund is real even if recovering the creator transfer subsequently fails.
+  await record();
+  if (refund.status === 'succeeded' && desiredReversal > 0) {
+    if (!purchase.provider_transfer_id) throw new Error('STRIPE_REFUND_TRANSFER_REQUIRED');
+    const transferId = encodeURIComponent(purchase.provider_transfer_id);
+    const reversalId = cleanText(refund.transfer_reversal?.id || refund.transfer_reversal, 180);
+    const reversal = reversalId
+      ? await stripeApiGet(c, `/transfers/${transferId}/reversals/${encodeURIComponent(reversalId)}`)
+      : await existingRefundReversal(c, transferId, refundId) || await stripeApiRequest(c, `/transfers/${transferId}/reversals`, {
+          amount: desiredReversal, 'metadata[captro_refund_id]': refundId,
+        }, `refund-reversal:${refundId}`);
+    if (!reversal.ok) throw stripeProviderError(reversal, 'STRIPE_REFUND_REVERSAL_REQUIRED');
+    creatorReversal = cents(reversal.data?.amount);
+    await record();
+  }
+  if (refund.status === 'succeeded') await setPaymentReconciliation(c, purchase, refundId, 'refund_transfer_recovery', true);
   return { processed: true };
 }
 
 async function refundCommercePurchaseFromCharge(c: any, eventId: string, charge: any) {
-  if (charge?.object === 'refund') return recordCommerceRefund(c, eventId, charge);
-  const refunds = Array.isArray(charge?.refunds?.data) ? charge.refunds.data : [];
-  if (refunds.length) {
-    for (const refund of refunds) await recordCommerceRefund(c, eventId, refund);
-    return { processed: true };
+  if (charge?.object === 'refund') {
+    const current = await stripeApiGet(c, `/refunds/${encodeURIComponent(charge.id)}`);
+    if (!current.ok) throw stripeProviderError(current, 'STRIPE_REFUND_READ_FAILED');
+    return recordCommerceRefund(c, eventId, current.data);
   }
-  return recordCommerceRefund(c, eventId, {
-    id: `charge-refund-${cleanText(charge?.id, 180)}-${Math.max(0, Number(charge?.amount_refunded || 0))}`,
-    object: 'refund',
-    payment_intent: charge?.payment_intent,
-    amount: charge?.amount_refunded,
-    status: charge?.refunded === true ? 'succeeded' : 'pending',
-  });
+  let after = '';
+  let processed = false;
+  do {
+    const result = await stripeApiGet(c, `/refunds?charge=${encodeURIComponent(charge.id)}&limit=100${after ? `&starting_after=${encodeURIComponent(after)}` : ''}`);
+    if (!result.ok) throw stripeProviderError(result, 'STRIPE_REFUND_READ_FAILED');
+    const refunds = result.data?.data || [];
+    for (const refund of refunds) {
+      const status = await recordCommerceRefund(c, eventId, refund);
+      processed = processed || status.processed;
+    }
+    after = result.data?.has_more && refunds.length ? refunds[refunds.length - 1].id : '';
+  } while (after);
+  return { processed };
 }
 
 async function createCommerceCheckoutSession(c: any, purchase: any) {
@@ -18066,6 +18170,10 @@ api.post('/commerce/payout-account/manage-link', authMiddleware, async (c) => {
 
 async function creatorInstantPayoutState(c: any, authUserId: string) {
   const account = await requireReadyConnectedAccount(c, authUserId);
+  const unresolved = await supabaseAdminSelectRows(c, 'app_payment_reconciliation_issues', {
+    creator_id: postgrestEqFilter(authUserId), resolved: 'eq.false',
+  }, 'provider_reference', 1);
+  if (unresolved.length) throw new Error('CAPTRO_PAYOUT_RECONCILIATION_REQUIRED');
   const currency = String(account.default_currency || '').toUpperCase();
   const card = account.payout_card;
   if (!card?.instantPayoutEligible || !String(card.id).startsWith('card_')) throw new Error('CAPTRO_ELIGIBLE_DEBIT_CARD_REQUIRED');
@@ -18300,7 +18408,7 @@ api.post('/commerce/purchases/:purchaseId/refund', authMiddleware, async (c) => 
     const alreadyRefunded = prior.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
     const refundable = Math.max(0, Number(purchase.total_amount || 0) - alreadyRefunded);
     const body: any = await c.req.json().catch(() => ({}));
-    const requested = body.amount == null ? refundable : Math.trunc(Number(body.amount));
+    const requested = body.amount == null ? refundable : cents(body.amount, 1);
     if (!Number.isInteger(requested) || requested <= 0 || requested > refundable) {
       return c.json({ detail: 'Enter an amount no greater than the remaining payment.', code: 'CAPTRO_REFUND_AMOUNT_INVALID' }, 400);
     }
@@ -18536,7 +18644,7 @@ const stripeWebhookHandler = async (c: any) => {
     }
     const processedEvents = await supabaseAdminSelectRows(c, 'app_payment_webhook_events', {
       provider_event_id: postgrestEqFilter(event.id), status: postgrestEqFilter('processed'),
-    }, 'id', 1);
+    }, 'provider_event_id', 1);
     if (processedEvents.length) return c.json({ received: true });
     const object = event?.data?.object || {};
     if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
@@ -18572,7 +18680,13 @@ const stripeWebhookHandler = async (c: any) => {
     } else if (event.type === 'payment_intent.payment_failed') {
       await recordMarketplacePaymentFailure(c, cleanText(event?.id, 180), object);
     } else if (event.type === 'account.updated') {
-      await syncConnectedAccountFromStripe(c, object);
+      const current = await stripeApiGet(c, `/accounts/${encodeURIComponent(object.id)}`);
+      if (!current.ok) throw stripeProviderError(current, 'STRIPE_ACCOUNT_SYNC_FAILED');
+      const row = await syncConnectedAccountFromStripe(c, current.data);
+      if (row) await refreshConnectedAccount(c, row);
+    } else if (event.type === 'balance.available' && event.account) {
+      const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', { provider_account_id: postgrestEqFilter(event.account) }, 'id', 1);
+      if (rows[0]) await reconcileCreatorEarnings(c, rows[0].id);
     } else if (event.type === 'account.application.deauthorized') {
       const accountId = cleanText(object?.id || event?.account, 180);
       if (accountId.startsWith('acct_')) {
@@ -18597,7 +18711,9 @@ const stripeWebhookHandler = async (c: any) => {
         provider_account_id: postgrestEqFilter(event.account),
       }, { status: 'submitted', provider_payout_id: current.data.id, updated_at: now() });
     } else if (event.type.startsWith('charge.dispute.')) {
-      await recordStripeDispute(c, cleanText(event?.id, 180), object);
+      const current = await stripeApiGet(c, `/disputes/${encodeURIComponent(object.id)}`);
+      if (!current.ok) throw stripeProviderError(current, 'STRIPE_DISPUTE_SYNC_FAILED');
+      await recordStripeDispute(c, cleanText(event?.id, 180), current.data);
     }
     await recordStripeWebhookEvent(c, event, 'processed');
     return c.json({ received: true });

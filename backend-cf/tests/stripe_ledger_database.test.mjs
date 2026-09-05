@@ -43,13 +43,19 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
     await db.query('update app_prices set unit_amount=9000 where id=$1',[price]);
     assert.equal((await one('select item_amount from app_purchases where id=$1',[first.id])).item_amount,2000);
     await begin('request-two');
-    const refund = event => one(`select * from captro_record_marketplace_refund('pi_fixture','re_fixture',2150,2000,150,$1,'succeeded','','digest')`,[event]);
-    await refund('evt_refund'); await refund('evt_refund_replayed');
+    const refund = (event, reversed = 2000, status = 'succeeded') => one(`select * from captro_record_marketplace_refund('pi_fixture','re_fixture',2150,$2,150,$1,$3,'','digest')`,[event,reversed,status]);
+    await refund('evt_refund',0);
+    assert.equal((await one('select refunded_amount from app_creator_earnings')).refunded_amount,0, 'never claim transfer recovery before it occurs');
+    assert.equal((await one('select status from app_entitlements')).status,'refunded', 'refund must revoke access even if recovery fails');
+    await refund('evt_refund_recovered'); await refund('evt_refund_replayed');
+    await refund('evt_refund_stale',0,'pending');
     assert.equal((await one('select quantity_committed from app_purchasables where id=$1',[item])).quantity_committed,1);
     assert.equal((await one('select count(*)::int n from app_refunds')).n,1);
     assert.equal((await one('select status from app_entitlements')).status,'refunded');
     assert.equal((await one('select refunded_amount from app_creator_earnings')).refunded_amount,2000);
+    assert.equal((await one('select status from app_refunds')).status,'succeeded');
     await db.exec('set role authenticated');
     await assert.rejects(db.exec('select * from app_payout_requests'), /permission denied/);
+    await assert.rejects(db.exec('select * from app_payment_reconciliation_issues'), /permission denied/);
   } finally { await db.close(); }
 });

@@ -620,6 +620,13 @@ private struct CaptroPayoutsView: View {
             Text(payout.status.replacingOccurrences(of: "_", with: " ").capitalized)
               .font(.system(size: 12, weight: .medium))
               .foregroundStyle(payout.status == "failed" ? Color.red : CaptroDetailStyle.secondary)
+            if let card = payout.card {
+              Text("\(card.brand) Debit ···· \(card.last4)").font(.system(size: 12))
+            }
+            if let fee = payout.fee, fee > 0 {
+              Text("Fee: \(CaptroMoney.format(minorUnits: fee, currency: payout.currency))")
+                .font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
+            }
             if let message = payout.failureMessage, payout.status == "failed" {
               Text(message).font(.system(size: 12)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }

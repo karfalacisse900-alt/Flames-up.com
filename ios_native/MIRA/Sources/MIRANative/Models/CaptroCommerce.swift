@@ -523,6 +523,10 @@ public struct CaptroPayout: Decodable, Hashable, Identifiable {
   public let paidAt: String?
   public let failureMessage: String?
   public let createdAt: String?
+  public let card: CaptroPayoutCard?
+  public let fee: Int?
+  public let netAmount: Int?
+  public let failedAt: String?
 }
 
 public struct CaptroPayoutsResponse: Decodable {

@@ -629,7 +629,7 @@ public struct PostDetailNativeView: View {
       Task { await model.refreshCommerceAfterCheckout() }
     }) { configuration in
       if let purchase = model.commercePurchase {
-        CaptroPaymentSheetView(api: api, configuration: configuration, purchase: purchase)
+        CaptroPaymentSheetView(api: model.api, configuration: configuration, purchase: purchase)
       }
     }
     .sheet(item: $model.checkoutDestination, onDismiss: {
