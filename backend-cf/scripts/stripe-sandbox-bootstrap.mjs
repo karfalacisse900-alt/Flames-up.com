@@ -6,8 +6,8 @@ import { join } from 'node:path';
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.equal(process.env.STRIPE_MODE, 'test');
-  assert.match(process.env.STRIPE_SECRET_KEY || '', /^(sk|rk)_test_/);
-  assert.match(process.env.STRIPE_PUBLISHABLE_KEY || '', /^pk_test_/);
+  assert.ok(/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY || ''), 'A sandbox secret key is required');
+  assert.ok(/^pk_test_/.test(process.env.STRIPE_PUBLISHABLE_KEY || ''), 'A sandbox publishable key is required');
   const local = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'supabase-status.json'), 'utf8'));
   const api = new URL(local.API_URL);
   assert.equal(api.protocol, 'http:');

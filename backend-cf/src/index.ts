@@ -9,6 +9,7 @@ import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, s
 import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } from './commerce';
 import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote, proportionalAmount } from './stripe-money';
 import { supabaseRuntimeURL } from './runtime-urls';
+import { decodeStripeResponse, stripeFailureCode } from './stripe-response';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -8352,8 +8353,7 @@ async function stripeApiRequest(
     body,
     signal: AbortSignal.timeout(20_000),
   });
-  const data: any = await response.json().catch(() => ({}));
-  return { ok: response.ok, status: response.status, data };
+  return decodeStripeResponse(response, path);
 }
 
 async function stripeApiGet(c: any, path: string, connectedAccountId?: string | null) {
@@ -8367,8 +8367,7 @@ async function stripeApiGet(c: any, path: string, connectedAccountId?: string | 
     headers: stripeRequestHeaders(c, { connectedAccountId }),
     signal: AbortSignal.timeout(20_000),
   });
-  const data: any = await response.json().catch(() => ({}));
-  return { ok: response.ok, status: response.status, data };
+  return decodeStripeResponse(response, path);
 }
 
 const PREMIUM_PLAN = {
@@ -8939,9 +8938,7 @@ function commercePayloadWithPricing(c: any, payload: any) {
 }
 
 function stripeProviderError(result: any, fallback: string): Error {
-  const code = cleanText(result?.data?.error?.code || result?.data?.code, 100);
-  const type = cleanText(result?.data?.error?.type, 100);
-  return new Error(code || type || fallback);
+  return new Error(stripeFailureCode(result?.data, fallback));
 }
 
 function connectedAccountStatus(account: any): string {

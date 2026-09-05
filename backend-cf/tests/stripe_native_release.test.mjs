@@ -40,3 +40,22 @@ test('test acceptance cannot target the production Worker', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /production Worker/);
 });
+
+test('sandbox CI scripts reject mismatched keys without printing them', () => {
+  for (const name of ['stripe-sandbox-bootstrap.mjs', 'stripe-sandbox-runtime.mjs']) {
+    const script = fileURLToPath(new URL(`../scripts/${name}`, import.meta.url));
+    for (const overrides of [
+      { STRIPE_SECRET_KEY: 'sk_live_do_not_log_this_fixture' },
+      { STRIPE_PUBLISHABLE_KEY: 'pk_live_do_not_log_this_fixture' },
+    ]) {
+      const result = spawnSync(process.execPath, [script], {
+        env: { ...process.env, GITHUB_ACTIONS: 'true', STRIPE_MODE: 'test',
+          STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_PUBLISHABLE_KEY: 'pk_test_fixture', ...overrides },
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /A sandbox (secret|publishable) key is required/);
+      assert.ok(!`${result.stdout}${result.stderr}`.includes('do_not_log_this_fixture'));
+    }
+  }
+});

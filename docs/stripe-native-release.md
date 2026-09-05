@@ -24,6 +24,32 @@ TestFlight distribution. A successful compiler/unit-test run is not payment evid
 
 Home navigation, stamps and post paging are unchanged by this integration.
 
+## Recorded Sandbox Evidence
+
+The protected `captro-payments-test` GitHub environment authenticates with real
+Stripe sandbox keys. CI run `33933211810` started disposable Supabase Auth/Postgres
+on a GitHub runner, applied the native payment schema, and verified the Stripe
+account and connected-account list APIs. It copied only deployed database DDL,
+not production users, purchases, credentials or other rows.
+
+Run `33933452278` additionally started the real Captro Worker and Stripe CLI
+webhook forwarding. Authenticated API access passed, unauthenticated payout
+access returned 401, and an unsigned webhook returned 400. Actual creator
+onboarding reached Stripe but account creation returned HTTP 400:
+
+- Request ID: `req_JxzAJpQcvMzv0W`
+- Cause: the sandbox has not signed up for Connect.
+- Connect's marketplace setup is pending in the sandbox dashboard.
+
+Listing connected accounts successfully is not proof that creating them is
+enabled. No purchase, ticket, creator earning or payout passed real acceptance
+in this run. No new TestFlight build or production deployment was released.
+Native validation run `33933452281` passed; compiler success is separate evidence.
+
+The ephemeral runtime is API integration coverage only. A persistently isolated
+test backend and sandbox-targeted iOS build are still required for native
+PaymentSheet, hosted onboarding, and device acceptance.
+
 ## Provision An Isolated Sandbox
 
 Do not put test purchases in the production Supabase project or point test keys

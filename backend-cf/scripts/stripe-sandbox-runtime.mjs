@@ -31,10 +31,10 @@ async function json(url, init = {}, expected = 200) {
 
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
-  assert.equal(process.platform, 'linux');
   assert.equal(process.env.STRIPE_MODE, 'test');
-  assert.match(process.env.STRIPE_SECRET_KEY || '', /^(sk|rk)_test_/);
-  assert.match(process.env.STRIPE_PUBLISHABLE_KEY || '', /^pk_test_/);
+  assert.ok(/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY || ''), 'A sandbox secret key is required');
+  assert.ok(/^pk_test_/.test(process.env.STRIPE_PUBLISHABLE_KEY || ''), 'A sandbox publishable key is required');
+  assert.equal(process.platform, 'linux');
   const local = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'supabase-status.json'), 'utf8'));
   assert.ok(['127.0.0.1', 'localhost'].includes(new URL(local.API_URL).hostname));
   const api = 'http://127.0.0.1:8788/api';
