@@ -91,6 +91,11 @@ PaymentIntent through Stripe's test API, not through the native iOS PaymentSheet
 Hosted onboarding completion and native device interaction therefore remain manual
 acceptance gates.
 
+Native validation run [`34075309982`](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/34075309982)
+also passed the backend compiler/tests, unsigned simulator build, and full-bleed
+photo/video UI checks across small and large iPhone simulators. It does not submit
+a PaymentSheet payment and therefore is not native checkout acceptance evidence.
+
 The ephemeral runtime is API integration coverage only. A persistently isolated
 test backend and sandbox-targeted iOS build are still required for native
 PaymentSheet, hosted onboarding, and device acceptance.
