@@ -122,14 +122,28 @@ async function createReadyTestConnectedAccount(creator) {
   });
   assert.ok(created.id?.startsWith('acct_'), 'Stripe must create the disposable payment connected account');
   cleanupAccounts.add(created.id);
-  return waitFor('Stripe test connected account readiness', async () => {
+  let lastReadiness = null;
+  for (let attempt = 0; attempt < 90; attempt++) {
     const account = await stripe(`/accounts/${created.id}?expand[]=external_accounts`);
     const cards = account.external_accounts?.data || [];
     const debit = cards.find(card => card.object === 'card' && card.funding === 'debit'
       && card.available_payout_methods?.includes('instant'));
-    return account.details_submitted && account.charges_enabled && account.payouts_enabled
-      && account.requirements?.currently_due?.length === 0 && debit ? { account, debit } : null;
-  }, 30, 1000);
+    if (account.details_submitted && account.charges_enabled && account.payouts_enabled
+        && account.requirements?.currently_due?.length === 0 && debit) return { account, debit };
+    lastReadiness = {
+      detailsSubmitted: account.details_submitted === true,
+      chargesEnabled: account.charges_enabled === true,
+      payoutsEnabled: account.payouts_enabled === true,
+      currentlyDue: (account.requirements?.currently_due || []).map(value => String(value).slice(0, 80)),
+      pendingVerification: (account.requirements?.pending_verification || []).map(value => String(value).slice(0, 80)),
+      disabledReason: String(account.requirements?.disabled_reason || '').slice(0, 80),
+      cardAttached: cards.some(card => card.object === 'card' && card.funding === 'debit'),
+      instantCardEligible: Boolean(debit),
+      capabilities: Object.fromEntries(Object.entries(account.capabilities || {}).map(([key, value]) => [key, String(value).slice(0, 40)])),
+    };
+    await sleep(1000);
+  }
+  throw new Error(`Stripe test connected account not ready: ${JSON.stringify(lastReadiness)}`);
 }
 
 async function main() {
