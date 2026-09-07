@@ -9501,11 +9501,12 @@ async function marketplaceSettlementForIntent(c: any, intent: any, purchase: any
 
   const transferGroup = marketplaceTransferGroup(purchase.id);
   let transferId = stripeExpandableId(charge.transfer, 'tr_');
+  let transfer: any = null;
   if (!transferId && intent.transfer_group === transferGroup) {
     const transfersResult = await stripeApiGet(c,
       `/transfers?transfer_group=${encodeURIComponent(transferGroup)}&limit=10`);
     if (!transfersResult.ok) throw stripeProviderError(transfersResult, 'STRIPE_TRANSFER_READ_FAILED');
-    const transfer = (Array.isArray(transfersResult.data?.data) ? transfersResult.data.data : []).find((item: any) =>
+    transfer = (Array.isArray(transfersResult.data?.data) ? transfersResult.data.data : []).find((item: any) =>
       stripeExpandableId(item?.source_transaction, 'ch_') === chargeId
       && stripeExpandableId(item?.destination, 'acct_') === purchase.stripe_destination_account_id
       && item?.amount === purchase.creator_amount
@@ -9514,11 +9515,28 @@ async function marketplaceSettlementForIntent(c: any, intent: any, purchase: any
     );
     transferId = stripeExpandableId(transfer, 'tr_');
   }
-  if (!transferId) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  if (!transferId) {
+    const created = await stripeApiRequest(c, '/transfers', {
+      amount: cents(purchase.creator_amount, 1),
+      currency: purchase.currency.toLowerCase(),
+      destination: purchase.stripe_destination_account_id,
+      source_transaction: chargeId,
+      transfer_group: transferGroup,
+      'metadata[source]': 'captro_commerce_creator_transfer',
+      'metadata[captro_purchase_id]': purchase.id,
+    }, `transfer:${purchase.id}`);
+    if (!created.ok || !stripeExpandableId(created.data, 'tr_')) {
+      throw stripeProviderError(created, 'STRIPE_TRANSFER_CREATE_FAILED');
+    }
+    transfer = created.data;
+    transferId = stripeExpandableId(transfer, 'tr_');
+  }
 
-  const transferResult = await stripeApiGet(c, `/transfers/${encodeURIComponent(transferId)}`);
-  if (!transferResult.ok) throw stripeProviderError(transferResult, 'STRIPE_TRANSFER_READ_FAILED');
-  const transfer = transferResult.data;
+  if (!transfer) {
+    const transferResult = await stripeApiGet(c, `/transfers/${encodeURIComponent(transferId)}`);
+    if (!transferResult.ok) throw stripeProviderError(transferResult, 'STRIPE_TRANSFER_READ_FAILED');
+    transfer = transferResult.data;
+  }
   if (stripeExpandableId(transfer.destination, 'acct_') !== purchase.stripe_destination_account_id
       || stripeExpandableId(transfer.source_transaction, 'ch_') !== chargeId
       || transfer.amount !== purchase.creator_amount
@@ -9569,8 +9587,11 @@ async function completeCommercePurchaseFromSession(c: any, eventId: string, sess
       || intent.metadata?.source !== 'captro_commerce'
       || intent.metadata?.captro_purchase_id !== purchaseId
       || intent.amount_received !== purchase.total_amount
-      || intent.transfer_data?.destination !== purchase.stripe_destination_account_id
-      || intent.transfer_data?.amount !== purchase.creator_amount || amount !== purchase.total_amount) {
+      || intent.transfer_group !== marketplaceTransferGroup(purchase.id)
+      || (intent.transfer_data?.destination
+        && (intent.transfer_data.destination !== purchase.stripe_destination_account_id
+          || intent.transfer_data.amount !== purchase.creator_amount))
+      || amount !== purchase.total_amount) {
     throw new Error('STRIPE_PAYMENT_MISMATCH');
   }
   const settlement = await waitForMarketplaceSettlement(c, intent, purchase);
@@ -9605,8 +9626,6 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
   const params = {
     amount: cents(purchase.total_amount, 1), currency: purchase.currency.toLowerCase(),
     'automatic_payment_methods[enabled]': true,
-    'transfer_data[destination]': connected.provider_account_id,
-    'transfer_data[amount]': cents(purchase.creator_amount, 1),
     transfer_group: transferGroup,
     'metadata[source]': 'captro_commerce',
     'metadata[captro_purchase_id]': purchase.id,
@@ -9621,9 +9640,10 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
   const intent = result.data;
   if (intent.livemode !== stripe.liveMode || intent.amount !== purchase.total_amount
       || intent.currency !== purchase.currency.toLowerCase()
-      || intent.transfer_data?.destination !== connected.provider_account_id
-      || intent.transfer_data?.amount !== purchase.creator_amount
-      || (intent.transfer_group && intent.transfer_group !== transferGroup)) throw new Error('STRIPE_PAYMENT_MISMATCH');
+      || intent.transfer_group !== transferGroup
+      || (intent.transfer_data?.destination
+        && (intent.transfer_data.destination !== connected.provider_account_id
+          || intent.transfer_data.amount !== purchase.creator_amount))) throw new Error('STRIPE_PAYMENT_MISMATCH');
   await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
     provider_payment_id: intent.id, payment_provider: 'stripe', updated_at: now(),
   });
@@ -9650,8 +9670,10 @@ async function completeCommercePurchaseFromIntent(c: any, eventId: string, objec
   const intent = result.data;
   if (intent.status !== 'succeeded' || intent.livemode !== getStripeConfig(c).liveMode
       || intent.id !== purchase.provider_payment_id || intent.amount_received !== purchase.total_amount
-      || intent.transfer_data?.destination !== purchase.stripe_destination_account_id
-      || intent.transfer_data?.amount !== purchase.creator_amount) throw new Error('STRIPE_PAYMENT_MISMATCH');
+      || intent.transfer_group !== marketplaceTransferGroup(purchase.id)
+      || (intent.transfer_data?.destination
+        && (intent.transfer_data.destination !== purchase.stripe_destination_account_id
+          || intent.transfer_data.amount !== purchase.creator_amount))) throw new Error('STRIPE_PAYMENT_MISMATCH');
   const settlement = await waitForMarketplaceSettlement(c, intent, purchase);
   await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
     p_purchase_id: purchaseId, p_provider_event_id: eventId, p_provider_checkout_id: null,
@@ -9844,8 +9866,6 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
     'payment_intent_data[metadata][captro_creator_id]': publicId(purchase.creator_id, 120),
     'payment_intent_data[metadata][captro_service_fee_amount]': serviceFee,
     'payment_intent_data[metadata][captro_tax_amount]': tax,
-    'payment_intent_data[transfer_data][destination]': cleanText(connected.provider_account_id, 180),
-    'payment_intent_data[transfer_data][amount]': Math.max(0, Number(purchase.creator_amount || purchase.item_amount || 0)),
     'payment_intent_data[transfer_group]': marketplaceTransferGroup(purchaseId),
   };
   if (serviceFee > 0) {

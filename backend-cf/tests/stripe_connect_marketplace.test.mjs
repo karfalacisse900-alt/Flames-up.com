@@ -79,8 +79,12 @@ test('buyer fees are configurable while the creator receives the full listed ite
   assert.match(worker, /CAPTRO_SERVICE_FEE_FIXED_CENTS/);
   assert.match(money, /creatorAmount: cents\(item - creatorDeduction\)/);
   assert.match(money, /buyerTotal: cents\(item \+ serviceFeeAmount/);
-  assert.match(worker, /'payment_intent_data\[transfer_data\]\[destination\]'/);
-  assert.match(worker, /'payment_intent_data\[transfer_data\]\[amount\]'/);
+  assert.doesNotMatch(worker, /'payment_intent_data\[transfer_data\]\[destination\]'/);
+  assert.doesNotMatch(worker, /'payment_intent_data\[transfer_data\]\[amount\]'/);
+  assert.match(worker, /stripeApiRequest\(c, '\/transfers'/);
+  assert.match(worker, /source_transaction: chargeId/);
+  assert.match(worker, /destination: purchase\.stripe_destination_account_id/);
+  assert.match(worker, /`transfer:\$\{purchase\.id\}`/);
   assert.match(worker, /'metadata\[captro_tax_amount\]': tax/);
   assert.match(worker, /session\?\.metadata\?\.captro_tax_amount/);
   assert.match(checkout, /amountRow\("Service fee"/);
