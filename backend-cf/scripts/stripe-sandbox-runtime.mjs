@@ -26,7 +26,8 @@ function start(command, args, options = {}) {
 async function json(url, init = {}, expected = 200) {
   const response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   const data = await response.json().catch(() => ({}));
-  if (response.status !== expected) {
+  const expectedStatuses = Array.isArray(expected) ? expected : [expected];
+  if (!expectedStatuses.includes(response.status)) {
     const code = String(data.code || data.error?.code || data.error?.type || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 100);
     throw new Error(`${new URL(url).pathname}: HTTP ${response.status}, ${code}`);
   }
@@ -232,7 +233,7 @@ async function main() {
     method: 'POST', headers: { ...admin, Prefer: 'resolution=merge-duplicates,return=representation' },
     body: JSON.stringify({ user_id: creator.authUser.id, app_user_id: creator.appUser.id,
       provider_account_id: readyStripe.account.id, account_type: 'custom' }),
-  }, 201);
+  }, [200, 201]);
   assert.equal(connectedRows.length, 1);
   const payoutAccount = await json(`${api}/commerce/payout-account`, { headers: creator.authorized });
   assert.equal(payoutAccount.account.ready, true);

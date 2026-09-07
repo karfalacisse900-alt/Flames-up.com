@@ -70,6 +70,7 @@ test('protected sandbox acceptance is pinned to its configured test account and 
   assert.match(sandboxWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_1T5nhiGSjUOo1Uml/);
   assert.match(sandboxRuntime, /stripe\('\/account'\)/);
   assert.match(sandboxRuntime, /pm_card_bypassPending/);
+  assert.match(sandboxRuntime, /\}, \[200, 201\]\);/);
   assert.match(sandboxRuntime, /signed payment webhook confirmation/);
   assert.match(sandboxRuntime, /app_commerce_tickets/);
   assert.match(sandboxRuntime, /app_creator_earnings/);
