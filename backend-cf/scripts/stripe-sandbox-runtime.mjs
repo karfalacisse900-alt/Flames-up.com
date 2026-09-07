@@ -232,7 +232,7 @@ async function main() {
     method: 'POST', headers: { ...admin, Prefer: 'resolution=merge-duplicates,return=representation' },
     body: JSON.stringify({ user_id: creator.authUser.id, app_user_id: creator.appUser.id,
       provider_account_id: readyStripe.account.id, account_type: 'custom' }),
-  });
+  }, 201);
   assert.equal(connectedRows.length, 1);
   const payoutAccount = await json(`${api}/commerce/payout-account`, { headers: creator.authorized });
   assert.equal(payoutAccount.account.ready, true);
