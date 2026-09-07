@@ -1,8 +1,10 @@
 # Captro Native Payments: Release Gate
 
-Status: implementation under validation. No real Stripe sandbox purchase-to-payout
-acceptance has been recorded, and this update is not cleared for production or
-TestFlight distribution. A successful compiler/unit-test run is not payment evidence.
+Status: the automated backend purchase-to-payout path has passed against a real
+Stripe test account. Native PaymentSheet, hosted onboarding, Apple Pay provisioning,
+and live-mode acceptance remain release gates, so this update is not yet cleared
+for production or TestFlight distribution. Compiler/unit-test success alone is not
+payment evidence.
 
 ## Architecture
 
@@ -63,6 +65,31 @@ signed-webhook boundary checks. It still created no charge, entitlement, earning
 or payout. The Worker also exposes a role-protected admin refund route that uses
 the same Stripe refund and transfer-reversal path as creator refunds and records
 the action in Captro's admin audit log.
+
+Run [`34075309981`](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/34075309981)
+passed the complete automated backend flow on September 6, 2026 against Stripe
+test platform **flames-up sandbox** (`acct_1T5nhiGSjUOo1Uml`) through the protected
+GitHub environment `captro-payments-test`. The run proved all of the following with
+real Stripe test-mode objects and signed webhooks:
+
+- a destination PaymentIntent was created and confirmed;
+- the successful Charge and connected-account Transfer were independently resolved;
+- the purchase was confirmed exactly once and its ticket entitlement was issued;
+- the creator earning was recorded from the server-confirmed purchase;
+- an eligible test debit-card destination and actual instant-available balance were checked;
+- a real test-mode instant Payout was created and its signed payout webhook processed.
+
+The catalog fixture was Product `prod_VDIeqpfDJnjE25`, Price
+`price_1UCs2iGSjUOo1Uml6GWSvFZF`, named **Captro Sandbox Event**. Cleanup archived
+the temporary Price and Product intentionally. In the Stripe Dashboard, enable
+test mode and open Product catalog > Products > Archived to inspect it; it will not
+appear in the default active-product list. This run did not use the separately named
+Stripe sandbox `Captro sandbox` (`acct_1UCpr82KVcRiAcs9`) and touched no live account.
+
+This clears the automated backend Stripe test-flow gate. The runtime confirmed the
+PaymentIntent through Stripe's test API, not through the native iOS PaymentSheet UI.
+Hosted onboarding completion and native device interaction therefore remain manual
+acceptance gates.
 
 The ephemeral runtime is API integration coverage only. A persistently isolated
 test backend and sandbox-targeted iOS build are still required for native
@@ -206,9 +233,10 @@ The PostgreSQL test fixtures are isolated SQL tests, not real Stripe integration
 
 ## Production And TestFlight
 
-Do not dispatch the production deploy or TestFlight workflow until sandbox
-acceptance is recorded and the release target has matching API/database/Stripe
-configuration. The current TestFlight app targets production, not the sandbox.
+Do not dispatch the production deploy or TestFlight workflow until the remaining
+native/device sandbox acceptance is recorded and the release target has matching
+API/database/Stripe configuration. Automated backend sandbox acceptance is recorded
+above, but the current TestFlight app targets production, not this isolated sandbox.
 
 The production Worker fixes `STRIPE_MODE=live` and the platform-absorbs payout
 policy in its production configuration. The deployment workflow requires matching
