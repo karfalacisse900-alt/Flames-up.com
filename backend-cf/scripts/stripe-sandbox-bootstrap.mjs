@@ -40,6 +40,19 @@ async function main() {
     assert.equal(result.status, 200, `Stripe sandbox ${path} must be accessible`);
     const data = await result.json();
     if (path === '/account') {
+      console.log(JSON.stringify({
+        event: 'stripe_platform_status',
+        accountId: data.id,
+        displayName: data.settings?.dashboard?.display_name || data.business_profile?.name || null,
+        country: data.country || null,
+        accountType: data.type || null,
+        chargesEnabled: data.charges_enabled === true,
+        payoutsEnabled: data.payouts_enabled === true,
+        detailsSubmitted: data.details_submitted === true,
+        requirementsCurrentlyDue: Array.isArray(data.requirements?.currently_due)
+          ? data.requirements.currently_due
+          : [],
+      }));
       assert.equal(data.id, process.env.STRIPE_EXPECTED_ACCOUNT_ID, 'Stripe credentials target the wrong platform account');
       assert.equal(data.charges_enabled, true, 'The named Stripe sandbox must be able to create charges');
     } else {
