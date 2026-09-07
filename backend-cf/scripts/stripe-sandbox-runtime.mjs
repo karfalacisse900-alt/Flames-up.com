@@ -29,7 +29,18 @@ async function json(url, init = {}, expected = 200) {
   const expectedStatuses = Array.isArray(expected) ? expected : [expected];
   if (!expectedStatuses.includes(response.status)) {
     const code = String(data.code || data.error?.code || data.error?.type || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 100);
-    throw new Error(`${new URL(url).pathname}: HTTP ${response.status}, ${code}`);
+    const parsedUrl = new URL(url);
+    const providerReason = parsedUrl.hostname === 'api.stripe.com'
+      ? String(data.error?.message || '')
+        .replace(/https?:\/\/\S+/gi, '[url]')
+        .replace(/\b(?:sk|rk|pk|whsec)_(?:test|live)?_?[a-zA-Z0-9]+\b/g, '[credential]')
+        .replace(/\b(?:acct|pi|ch|po|pm|card|cus|prod|price|req)_[a-zA-Z0-9]+\b/g, '[provider-id]')
+        .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
+        .replace(/[^\x20-\x7E]/g, ' ')
+        .trim()
+        .slice(0, 300)
+      : '';
+    throw new Error(`${parsedUrl.pathname}: HTTP ${response.status}, ${code}${providerReason ? `, ${providerReason}` : ''}`);
   }
   return data;
 }
@@ -253,9 +264,33 @@ async function main() {
   await json(`${api}/stripe/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 400);
   const before = await json(`${api}/commerce/payout-account`, { headers: onboardingUser.authorized });
   assert.equal(before.account.ready, false);
-  const setup = await json(`${api}/commerce/payout-account/onboarding-link`, {
-    method: 'POST', headers: onboardingUser.authorized, body: '{}',
-  });
+  let setup;
+  try {
+    setup = await json(`${api}/commerce/payout-account/onboarding-link`, {
+      method: 'POST', headers: onboardingUser.authorized, body: '{}',
+    });
+  } catch (error) {
+    const failedRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${onboardingUser.authUser.id}`, { headers: admin });
+    const failedAccountId = String(failedRows[0]?.provider_account_id || '');
+    if (failedAccountId.startsWith('acct_')) {
+      cleanupAccounts.add(failedAccountId);
+      try {
+        await stripe('/account_links', {
+          method: 'POST',
+          params: {
+            account: failedAccountId,
+            refresh_url: 'https://captro.app/earnings/payouts/refresh',
+            return_url: 'https://captro.app/earnings/payouts/complete',
+            type: 'account_onboarding',
+            'collection_options[fields]': 'eventually_due',
+          },
+        });
+      } catch (providerError) {
+        throw new Error(`${error.message}; Stripe diagnostic: ${providerError.message}`);
+      }
+    }
+    throw error;
+  }
   assert.equal(new URL(setup.url).protocol, 'https:');
   assert.equal(new URL(setup.url).hostname, 'connect.stripe.com');
   const onboardingRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${onboardingUser.authUser.id}`, { headers: admin });
