@@ -51,7 +51,7 @@ jobs:
         working-directory: backend-cf
         env:
           STRIPE_MODE: ${{ vars.STRIPE_MODE }}
-          STRIPE_EXPECTED_ACCOUNT_ID: acct_1T5nhiGSjUOo1Uml
+          STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
         run: node scripts/stripe-sandbox-bootstrap.mjs
@@ -61,7 +61,7 @@ jobs:
         working-directory: backend-cf
         env:
           STRIPE_MODE: ${{ vars.STRIPE_MODE }}
-          STRIPE_EXPECTED_ACCOUNT_ID: acct_1T5nhiGSjUOo1Uml
+          STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
         run: node scripts/stripe-sandbox-runtime.mjs

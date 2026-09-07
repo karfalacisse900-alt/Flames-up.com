@@ -67,7 +67,8 @@ test('sandbox CI scripts reject mismatched keys without printing them', () => {
 
 test('protected sandbox acceptance is pinned to its configured test account and exercises real money state', () => {
   assert.match(sandboxWorkflow, /environment: captro-payments-test/);
-  assert.match(sandboxWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_1T5nhiGSjUOo1Uml/);
+  assert.match(sandboxWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: \$\{\{ vars\.STRIPE_EXPECTED_ACCOUNT_ID \}\}/);
+  assert.doesNotMatch(sandboxWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_/);
   assert.match(sandboxRuntime, /stripe\('\/account'\)/);
   assert.match(sandboxRuntime, /pm_card_bypassPending/);
   assert.match(sandboxRuntime, /\}, \[200, 201\]\);/);
