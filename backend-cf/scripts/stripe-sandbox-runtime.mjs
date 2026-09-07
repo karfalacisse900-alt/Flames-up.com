@@ -365,7 +365,7 @@ async function main() {
   assert.equal(onboardingRows.length, 1);
   const onboardingAccount = await stripe(`/accounts/${onboardingRows[0].provider_account_id}`);
   cleanupAccounts.add(onboardingAccount.id);
-  assert.equal(onboardingAccount.type, 'express');
+  assert.equal(onboardingRows[0].account_type, 'express');
   assert.equal(onboardingRows[0].charges_enabled, onboardingAccount.charges_enabled);
   assert.equal(onboardingRows[0].payouts_enabled, onboardingAccount.payouts_enabled);
   assert.equal(onboardingRows[0].details_submitted, onboardingAccount.details_submitted);
