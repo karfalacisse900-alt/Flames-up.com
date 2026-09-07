@@ -14,7 +14,7 @@ import {
   STRIPE_ACCOUNTS_V2_VERSION,
   stripeRecipientAccountPayload,
   stripeRecipientOnboardingPayload,
-  stripeV1AccountTransfersEnabled,
+  stripeV2RecipientTransfersEnabled,
 } from './stripe-connect-v2';
 
 type MediaModerationJobMessage = {
@@ -8387,6 +8387,23 @@ async function stripeApiV2Request(
   return decodeStripeResponse(response, `/v2${path}`);
 }
 
+async function stripeApiV2Get(c: any, path: string) {
+  const stripe = getStripeConfig(c);
+  if (!stripe.configured) {
+    return { ok: false, status: 503, data: { detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' } };
+  }
+  await requireStripeDatabaseMode(c);
+  const response = await fetch(`https://api.stripe.com/v2${path}`, {
+    method: 'GET',
+    headers: {
+      ...stripeRequestHeaders(c),
+      'Stripe-Version': STRIPE_ACCOUNTS_V2_VERSION,
+    },
+    signal: AbortSignal.timeout(20_000),
+  });
+  return decodeStripeResponse(response, `/v2${path}`);
+}
+
 async function stripeApiGet(c: any, path: string, connectedAccountId?: string | null) {
   const stripe = getStripeConfig(c);
   if (!stripe.configured) {
@@ -8982,8 +8999,9 @@ function stripeProviderError(result: any, fallback: string): Error {
   return new Error(stripeFailureCode(result?.data, fallback));
 }
 
-function connectedAccountStatus(account: any): string {
-  if (stripeV1AccountTransfersEnabled(account) && account?.payouts_enabled === true) return 'ready';
+function connectedAccountStatus(account: any, accountV2?: any): string {
+  const transfersEnabled = stripeV2RecipientTransfersEnabled(accountV2);
+  if (transfersEnabled && account?.payouts_enabled === true) return 'ready';
   if (account?.requirements?.disabled_reason) return 'restricted';
   if (Array.isArray(account?.requirements?.currently_due) && account.requirements.currently_due.length > 0) {
     return account?.details_submitted === true ? 'restricted' : 'onboarding';
@@ -8991,7 +9009,7 @@ function connectedAccountStatus(account: any): string {
   return account?.details_submitted === true ? 'pending' : 'onboarding';
 }
 
-function connectedAccountSafePatch(account: any) {
+function connectedAccountSafePatch(account: any, accountV2?: any) {
   const external = Array.isArray(account?.external_accounts?.data)
     ? account.external_accounts.data.find((item: any) => eligibleDebitCard(item, account.default_currency || 'usd'))
     : null;
@@ -8999,10 +9017,10 @@ function connectedAccountSafePatch(account: any) {
     provider_account_id: cleanText(account?.id, 180),
     country: cleanText(account?.country, 2).toUpperCase() || null,
     default_currency: cleanText(account?.default_currency, 3).toUpperCase() || null,
-    status: connectedAccountStatus(account),
+    status: connectedAccountStatus(account, accountV2),
     details_submitted: account?.details_submitted === true,
     charges_enabled: account?.charges_enabled === true,
-    transfers_enabled: stripeV1AccountTransfersEnabled(account),
+    transfers_enabled: stripeV2RecipientTransfersEnabled(accountV2),
     payouts_enabled: account?.payouts_enabled === true,
     requirements_currently_due: Array.isArray(account?.requirements?.currently_due) ? account.requirements.currently_due.slice(0, 100) : [],
     requirements_eventually_due: Array.isArray(account?.requirements?.eventually_due) ? account.requirements.eventually_due.slice(0, 100) : [],
@@ -9018,9 +9036,21 @@ function connectedAccountSafePatch(account: any) {
   };
 }
 
-async function syncConnectedAccountFromStripe(c: any, account: any, knownRow?: any): Promise<any | null> {
+async function syncConnectedAccountFromStripe(
+  c: any,
+  account: any,
+  knownRow?: any,
+  accountV2?: any,
+): Promise<any | null> {
   const providerAccountId = cleanText(account?.id, 180);
   if (!providerAccountId.startsWith('acct_')) return null;
+  let recipientAccountV2 = accountV2;
+  if (!recipientAccountV2) {
+    const include = '?include[0]=configuration.recipient&include[1]=requirements&include[2]=defaults&include[3]=identity';
+    const response = await stripeApiV2Get(c, `/core/accounts/${encodeURIComponent(providerAccountId)}${include}`);
+    if (!response.ok) throw stripeProviderError(response, 'STRIPE_CONNECT_ACCOUNT_V2_SYNC_FAILED');
+    recipientAccountV2 = response.data;
+  }
   let row = knownRow;
   if (!row) {
     const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
@@ -9028,7 +9058,7 @@ async function syncConnectedAccountFromStripe(c: any, account: any, knownRow?: a
     }, '*', 1);
     row = rows[0];
   }
-  const patch = connectedAccountSafePatch(account);
+  const patch = connectedAccountSafePatch(account, recipientAccountV2);
   if (!row) {
     const authUserId = isUuidText(account?.metadata?.captro_auth_user_id || '');
     const appUserId = publicId(account?.metadata?.captro_app_user_id, 120);
@@ -9057,7 +9087,10 @@ async function refreshConnectedAccount(c: any, row: any): Promise<any> {
   const cards = await stripeApiGet(c, `/accounts/${encodeURIComponent(providerAccountId)}/external_accounts?object=card&limit=100`);
   if (!cards.ok) throw stripeProviderError(cards, 'STRIPE_PAYOUT_CARDS_READ_FAILED');
   response.data.external_accounts = cards.data;
-  return await syncConnectedAccountFromStripe(c, response.data, row) || row;
+  const include = '?include[0]=configuration.recipient&include[1]=requirements&include[2]=defaults&include[3]=identity';
+  const accountV2 = await stripeApiV2Get(c, `/core/accounts/${encodeURIComponent(providerAccountId)}${include}`);
+  if (!accountV2.ok) throw stripeProviderError(accountV2, 'STRIPE_CONNECT_ACCOUNT_V2_SYNC_FAILED');
+  return await syncConnectedAccountFromStripe(c, response.data, row, accountV2.data) || row;
 }
 
 async function connectedAccountForUser(c: any, authUserId: string, refresh = false): Promise<any | null> {
@@ -9119,7 +9152,7 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
     user_id: authUserId,
     app_user_id: appUserId,
     account_type: 'express',
-    ...connectedAccountSafePatch(v1Account.data),
+    ...connectedAccountSafePatch(v1Account.data, account.data),
   }]);
   if (!inserted[0]) throw new Error('STRIPE_CONNECT_ACCOUNT_SAVE_FAILED');
   return inserted[0];

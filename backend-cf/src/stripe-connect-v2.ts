@@ -61,6 +61,12 @@ export function stripeRecipientOnboardingPayload(
   };
 }
 
-export function stripeV1AccountTransfersEnabled(account: any): boolean {
-  return account?.capabilities?.transfers === 'active';
+export function stripeV2RecipientTransferStatus(account: any): string {
+  return String(account?.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status || '')
+    .trim()
+    .toLowerCase();
+}
+
+export function stripeV2RecipientTransfersEnabled(account: any): boolean {
+  return stripeV2RecipientTransferStatus(account) === 'active';
 }

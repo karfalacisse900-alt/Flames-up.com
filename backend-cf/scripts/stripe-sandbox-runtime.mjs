@@ -71,6 +71,17 @@ async function stripeV2(path, payload, idempotencyKey) {
   });
 }
 
+async function stripeV2Get(path, includes = []) {
+  const url = new URL(`https://api.stripe.com/v2${path}`);
+  includes.forEach((value, index) => url.searchParams.set(`include[${index}]`, value));
+  return json(url, {
+    headers: {
+      Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+      'Stripe-Version': STRIPE_ACCOUNTS_V2_VERSION,
+    },
+  });
+}
+
 function recipientAccountPayload({ email, displayName, dashboard, metadata }) {
   return {
     contact_email: email,
@@ -229,14 +240,22 @@ async function createReadyTestConnectedAccount(creator) {
   let lastReadiness = null;
   for (let attempt = 0; attempt < 90; attempt++) {
     const account = await stripe(`/accounts/${created.id}?expand[]=external_accounts`);
+    const accountV2 = await stripeV2Get(`/core/accounts/${created.id}`, [
+      'configuration.recipient', 'requirements', 'defaults', 'identity',
+    ]);
+    const transferCapability = accountV2.configuration?.recipient?.capabilities
+      ?.stripe_balance?.stripe_transfers;
     const cards = account.external_accounts?.data || [];
     const debit = cards.find(card => card.object === 'card' && card.funding === 'debit'
       && card.available_payout_methods?.includes('instant'));
-    if (account.details_submitted && account.capabilities?.transfers === 'active' && account.payouts_enabled
+    if (account.details_submitted && transferCapability?.status === 'active' && account.payouts_enabled
         && account.requirements?.currently_due?.length === 0 && debit) return { account, debit };
     lastReadiness = {
       detailsSubmitted: account.details_submitted === true,
       transfersEnabled: account.capabilities?.transfers === 'active',
+      recipientTransferStatus: String(transferCapability?.status || '').slice(0, 40),
+      recipientTransferStatusDetails: (transferCapability?.status_details || [])
+        .map(value => String(value?.code || '').slice(0, 80)),
       payoutsEnabled: account.payouts_enabled === true,
       currentlyDue: (account.requirements?.currently_due || []).map(value => String(value).slice(0, 80)),
       pendingVerification: (account.requirements?.pending_verification || []).map(value => String(value).slice(0, 80)),

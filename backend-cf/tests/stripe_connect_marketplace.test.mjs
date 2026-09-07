@@ -5,6 +5,8 @@ import {
   STRIPE_ACCOUNTS_V2_VERSION,
   stripeRecipientAccountPayload,
   stripeRecipientOnboardingPayload,
+  stripeV2RecipientTransferStatus,
+  stripeV2RecipientTransfersEnabled,
 } from '../src/stripe-connect-v2.ts';
 
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -56,6 +58,35 @@ test('recipient readiness depends on transfers and payouts rather than direct ch
   assert.match(nativeMigration, /transfers_enabled = true and payouts_enabled = true and details_submitted = true/);
   assert.match(worker, /row\?\.transfers_enabled === true && row\?\.payouts_enabled === true/);
   assert.doesNotMatch(worker, /row\?\.charges_enabled === true && row\?\.payouts_enabled === true/);
+  assert.match(worker, /stripeV2RecipientTransfersEnabled\(accountV2\)/);
+  assert.match(worker, /stripeApiV2Get\(c, `\/core\/accounts\/\$\{encodeURIComponent\(providerAccountId\)\}/);
+  assert.doesNotMatch(worker, /stripeV1AccountTransfersEnabled/);
+});
+
+test('recipient readiness uses the actual Accounts v2 transfer capability', () => {
+  const activeRecipient = {
+    configuration: {
+      recipient: {
+        capabilities: {
+          stripe_balance: { stripe_transfers: { status: 'active' } },
+        },
+      },
+    },
+  };
+  const restrictedRecipient = {
+    configuration: {
+      recipient: {
+        capabilities: {
+          stripe_balance: { stripe_transfers: { status: 'restricted' } },
+        },
+      },
+    },
+  };
+  assert.equal(stripeV2RecipientTransferStatus(activeRecipient), 'active');
+  assert.equal(stripeV2RecipientTransfersEnabled(activeRecipient), true);
+  assert.equal(stripeV2RecipientTransfersEnabled(restrictedRecipient), false);
+  assert.equal(stripeV2RecipientTransfersEnabled({ capabilities: { transfers: 'active' } }), false,
+    'legacy compatibility fields must not make a v2 recipient ready');
 });
 
 test('Accounts v2 payloads use the Captro marketplace recipient configuration', () => {
