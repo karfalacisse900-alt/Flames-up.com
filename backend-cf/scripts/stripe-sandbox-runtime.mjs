@@ -56,6 +56,40 @@ async function waitFor(label, callback, attempts = 60, delay = 1000) {
   throw new Error(`${label.replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 100)} timed out`);
 }
 
+async function probePlatformPaymentIntent() {
+  try {
+    const intent = await stripe('/payment_intents', {
+      method: 'POST',
+      params: {
+        amount: 2000,
+        currency: 'usd',
+        'automatic_payment_methods[enabled]': true,
+        'metadata[captro_test_run_id]': process.env.GITHUB_RUN_ID,
+        'metadata[captro_probe]': 'buyer_payment_intent',
+      },
+    });
+    assert.ok(String(intent.id || '').startsWith('pi_'));
+    await stripe(`/payment_intents/${intent.id}/cancel`, { method: 'POST' });
+    console.log(JSON.stringify({
+      event: 'stripe_platform_payment_probe',
+      paymentIntentId: intent.id,
+      amount: intent.amount,
+      currency: intent.currency,
+      created: true,
+      canceled: true,
+    }));
+    return true;
+  } catch (error) {
+    console.log(JSON.stringify({
+      event: 'stripe_platform_payment_probe',
+      created: false,
+      code: String(error?.message || 'STRIPE_PAYMENT_INTENT_CREATE_FAILED')
+        .replace(/[^a-zA-Z0-9_ -]/g, '').slice(0, 120),
+    }));
+    return false;
+  }
+}
+
 async function createLocalUser(local, admin, api, label) {
   const suffix = `${process.env.GITHUB_RUN_ID}-${label}-${randomBytes(4).toString('hex')}`;
   const email = `captro-sandbox-${suffix}@example.com`;
@@ -162,6 +196,7 @@ async function main() {
       || platformAccount.business_profile?.name || '').slice(0, 120) || null,
     mode: 'test',
   }));
+  await probePlatformPaymentIntent();
   assert.equal(process.platform, 'linux');
   const local = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'supabase-status.json'), 'utf8'));
   assert.ok(['127.0.0.1', 'localhost'].includes(new URL(local.API_URL).hostname));
