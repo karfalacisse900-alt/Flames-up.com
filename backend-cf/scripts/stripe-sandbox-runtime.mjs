@@ -155,6 +155,13 @@ async function main() {
   assert.ok(/^pk_test_/.test(process.env.STRIPE_PUBLISHABLE_KEY || ''), 'A sandbox publishable key is required');
   const platformAccount = await stripe('/account');
   assert.equal(platformAccount.id, process.env.STRIPE_EXPECTED_ACCOUNT_ID, 'Stripe credentials target the wrong platform account');
+  console.log(JSON.stringify({
+    event: 'stripe_platform_verified',
+    accountId: platformAccount.id,
+    displayName: String(platformAccount.settings?.dashboard?.display_name
+      || platformAccount.business_profile?.name || '').slice(0, 120) || null,
+    mode: 'test',
+  }));
   assert.equal(process.platform, 'linux');
   const local = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'supabase-status.json'), 'utf8'));
   assert.ok(['127.0.0.1', 'localhost'].includes(new URL(local.API_URL).hostname));
@@ -264,6 +271,9 @@ async function main() {
   assert.ok(priceRows[0]?.stripe_price_id?.startsWith('price_'));
   cleanupProducts.add(purchasableRows[0].stripe_product_id);
   cleanupPrices.add(priceRows[0].stripe_price_id);
+  console.log(JSON.stringify({ event: 'stripe_catalog_fixture_created',
+    productId: purchasableRows[0].stripe_product_id, priceId: priceRows[0].stripe_price_id,
+    productName: 'Captro Sandbox Event', cleanup: 'archive' }));
 
   const paymentRequestId = randomUUID();
   const paymentBody = { contentId: post.id, contentType: 'event', quantity: 1,
@@ -295,13 +305,30 @@ async function main() {
       return rows[0]?.status === 'confirmed' ? rows[0] : null;
     });
   } catch {
-    const purchaseRows = await json(`${local.API_URL}/rest/v1/app_purchases?id=eq.${checkout.purchase.id}&select=status,provider_payment_id`, { headers: admin });
+    const purchaseRows = await json(`${local.API_URL}/rest/v1/app_purchases?id=eq.${checkout.purchase.id}&select=status,provider_payment_id,stripe_destination_account_id,creator_amount,total_amount,currency`, { headers: admin });
     const webhookRows = await json(`${local.API_URL}/rest/v1/app_payment_webhook_events?select=event_type,status,error_code,provider_event_id&order=created_at.desc&limit=100`, { headers: admin });
     const providerEvents = await stripe('/events?type=payment_intent.succeeded&limit=20');
     const providerEvent = providerEvents.data?.find(event => event.data?.object?.id === paymentIntentId);
+    const currentIntent = await stripe(`/payment_intents/${paymentIntentId}?expand[]=latest_charge.balance_transaction`);
+    const chargeId = typeof currentIntent.latest_charge === 'string'
+      ? currentIntent.latest_charge : currentIntent.latest_charge?.id;
+    const currentCharge = chargeId ? await stripe(`/charges/${chargeId}?expand[]=balance_transaction`) : null;
+    const transferGroup = currentIntent.transfer_group;
+    const groupedTransfers = transferGroup ? await stripe(`/transfers?transfer_group=${encodeURIComponent(transferGroup)}&limit=10`) : null;
     throw new Error(`Payment confirmation evidence: ${JSON.stringify({
       purchase: purchaseRows[0] || null,
       providerEvent: providerEvent ? { id: providerEvent.id, type: providerEvent.type, pendingWebhooks: providerEvent.pending_webhooks } : null,
+      intent: { id: currentIntent.id, status: currentIntent.status, transferGroup: transferGroup || null,
+        latestChargeId: chargeId || null },
+      charge: currentCharge ? { id: currentCharge.id, status: currentCharge.status,
+        balanceTransactionId: typeof currentCharge.balance_transaction === 'string'
+          ? currentCharge.balance_transaction : currentCharge.balance_transaction?.id || null,
+        transferId: typeof currentCharge.transfer === 'string' ? currentCharge.transfer : currentCharge.transfer?.id || null } : null,
+      groupedTransfers: (groupedTransfers?.data || []).map(transfer => ({ id: transfer.id,
+        destination: typeof transfer.destination === 'string' ? transfer.destination : transfer.destination?.id || null,
+        sourceTransaction: typeof transfer.source_transaction === 'string'
+          ? transfer.source_transaction : transfer.source_transaction?.id || null,
+        amount: transfer.amount, currency: transfer.currency })),
       webhookAudit: webhookRows.filter(row => row.event_type?.startsWith('payment_intent.')).slice(0, 10),
     })}`);
   }

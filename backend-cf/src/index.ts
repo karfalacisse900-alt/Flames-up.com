@@ -9417,45 +9417,137 @@ async function parseCommercePassToken(c: any, value: unknown): Promise<{ kind: '
   return { kind, id, version };
 }
 
+function marketplaceTransferGroup(purchaseId: unknown): string {
+  const id = isUuidText(purchaseId);
+  if (!id) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
+  return `captro_purchase_${id.replace(/-/g, '')}`;
+}
+
+function stripeExpandableId(value: any, prefix: string): string {
+  const id = cleanText(typeof value === 'string' ? value : value?.id, 180);
+  return id.startsWith(prefix) ? id : '';
+}
+
+async function marketplaceSettlementForIntent(c: any, intent: any, purchase: any) {
+  const chargeId = stripeExpandableId(intent?.latest_charge, 'ch_');
+  if (!chargeId) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  const chargeResult = await stripeApiGet(c,
+    `/charges/${encodeURIComponent(chargeId)}?expand[]=balance_transaction`);
+  if (!chargeResult.ok) throw stripeProviderError(chargeResult, 'STRIPE_CHARGE_READ_FAILED');
+  const charge = chargeResult.data;
+  const paymentIntentId = stripeExpandableId(charge?.payment_intent, 'pi_');
+  if (paymentIntentId !== intent.id || charge.status !== 'succeeded' || charge.paid !== true
+      || charge.amount_captured !== purchase.total_amount
+      || charge.currency !== purchase.currency.toLowerCase()) {
+    throw new Error('STRIPE_PAYMENT_MISMATCH');
+  }
+
+  let balanceTransaction = charge.balance_transaction;
+  const balanceTransactionId = stripeExpandableId(balanceTransaction, 'txn_');
+  if (!balanceTransactionId) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  if (typeof balanceTransaction === 'string') {
+    const balanceResult = await stripeApiGet(c, `/balance_transactions/${encodeURIComponent(balanceTransactionId)}`);
+    if (!balanceResult.ok) throw stripeProviderError(balanceResult, 'STRIPE_BALANCE_TRANSACTION_READ_FAILED');
+    balanceTransaction = balanceResult.data;
+  }
+  if (stripeExpandableId(balanceTransaction?.source, 'ch_') !== chargeId
+      || balanceTransaction.amount !== purchase.total_amount
+      || balanceTransaction.currency !== purchase.currency.toLowerCase()) {
+    throw new Error('STRIPE_PAYMENT_MISMATCH');
+  }
+
+  const transferGroup = marketplaceTransferGroup(purchase.id);
+  let transferId = stripeExpandableId(charge.transfer, 'tr_');
+  if (!transferId && intent.transfer_group === transferGroup) {
+    const transfersResult = await stripeApiGet(c,
+      `/transfers?transfer_group=${encodeURIComponent(transferGroup)}&limit=10`);
+    if (!transfersResult.ok) throw stripeProviderError(transfersResult, 'STRIPE_TRANSFER_READ_FAILED');
+    const transfer = (Array.isArray(transfersResult.data?.data) ? transfersResult.data.data : []).find((item: any) =>
+      stripeExpandableId(item?.source_transaction, 'ch_') === chargeId
+      && stripeExpandableId(item?.destination, 'acct_') === purchase.stripe_destination_account_id
+      && item?.amount === purchase.creator_amount
+      && item?.currency === purchase.currency.toLowerCase()
+      && item?.livemode === getStripeConfig(c).liveMode
+    );
+    transferId = stripeExpandableId(transfer, 'tr_');
+  }
+  if (!transferId) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+
+  const transferResult = await stripeApiGet(c, `/transfers/${encodeURIComponent(transferId)}`);
+  if (!transferResult.ok) throw stripeProviderError(transferResult, 'STRIPE_TRANSFER_READ_FAILED');
+  const transfer = transferResult.data;
+  if (stripeExpandableId(transfer.destination, 'acct_') !== purchase.stripe_destination_account_id
+      || stripeExpandableId(transfer.source_transaction, 'ch_') !== chargeId
+      || transfer.amount !== purchase.creator_amount
+      || transfer.currency !== purchase.currency.toLowerCase()
+      || transfer.livemode !== getStripeConfig(c).liveMode
+      || (intent.transfer_group && transfer.transfer_group !== intent.transfer_group)) {
+    throw new Error('STRIPE_PAYMENT_MISMATCH');
+  }
+  return { charge, balanceTransaction, transferId };
+}
+
+async function waitForMarketplaceSettlement(c: any, intent: any, purchase: any) {
+  const delays = [0, 250, 750, 1_500];
+  for (let attempt = 0; attempt < delays.length; attempt += 1) {
+    if (delays[attempt] > 0) await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+    try {
+      return await marketplaceSettlementForIntent(c, intent, purchase);
+    } catch (error: any) {
+      if (getErrorCode(error) !== 'STRIPE_PAYMENT_SETTLEMENT_PENDING' || attempt === delays.length - 1) throw error;
+    }
+  }
+  throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+}
+
 async function completeCommercePurchaseFromSession(c: any, eventId: string, session: any) {
   const purchaseId = isUuidText(session?.metadata?.captro_purchase_id || '');
   if (!purchaseId || session?.metadata?.source !== 'captro_commerce') return { processed: false };
   if (session?.payment_status !== 'paid') return { processed: false, pending: true };
   const paymentIntentId = cleanText(session?.payment_intent?.id || session?.payment_intent, 180);
+  if (!paymentIntentId.startsWith('pi_')) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  const rows = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(purchaseId) }, '*', 1);
+  const purchase = rows[0];
+  if (!purchase) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
+  if (purchase.payment_interface === 'native'
+      || cleanText(purchase.provider_checkout_id, 180) !== cleanText(session?.id, 180)) {
+    throw new Error('STRIPE_PAYMENT_MISMATCH');
+  }
+  const intentResult = await stripeApiGet(c,
+    `/payment_intents/${encodeURIComponent(paymentIntentId)}?expand[]=latest_charge.balance_transaction`);
+  if (!intentResult.ok) throw stripeProviderError(intentResult, 'STRIPE_PAYMENT_CONFIRM_FAILED');
+  const intent = intentResult.data;
   const amount = Math.max(0, Number(session?.amount_total || 0));
   const tax = Math.max(0, Math.trunc(Number(
     session?.metadata?.captro_tax_amount ?? session?.total_details?.amount_tax ?? 0
   ) || 0));
-  let fee = 0;
-  let chargeId = '';
-  let transferId = '';
-  let availableAt = '';
-  if (paymentIntentId) {
-    const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(paymentIntentId)}?expand[]=latest_charge.balance_transaction`);
-    if (intent.ok) {
-      const charge = intent.data?.latest_charge;
-      fee = Math.max(0, Number(charge?.balance_transaction?.fee || 0));
-      chargeId = cleanText(charge?.id || charge, 180);
-      transferId = cleanText(charge?.transfer?.id || charge?.transfer, 180);
-      availableAt = stripeUnixToIso(charge?.balance_transaction?.available_on);
-    }
+  if (intent.status !== 'succeeded' || intent.livemode !== getStripeConfig(c).liveMode
+      || (purchase.provider_payment_id && intent.id !== purchase.provider_payment_id)
+      || intent.metadata?.source !== 'captro_commerce'
+      || intent.metadata?.captro_purchase_id !== purchaseId
+      || intent.amount_received !== purchase.total_amount
+      || intent.transfer_data?.destination !== purchase.stripe_destination_account_id
+      || intent.transfer_data?.amount !== purchase.creator_amount || amount !== purchase.total_amount) {
+    throw new Error('STRIPE_PAYMENT_MISMATCH');
   }
+  const settlement = await waitForMarketplaceSettlement(c, intent, purchase);
   const digest = await sha256Hex(JSON.stringify({ id: session?.id, payment_intent: paymentIntentId, amount, currency: session?.currency }));
-  const purchase = await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
+  const confirmedPurchase = await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
     p_purchase_id: purchaseId,
     p_provider_event_id: cleanText(eventId, 180),
     p_provider_checkout_id: cleanText(session?.id, 180),
     p_provider_payment_id: paymentIntentId,
-    p_provider_charge_id: chargeId,
-    p_provider_transfer_id: transferId,
+    p_provider_charge_id: settlement.charge.id,
+    p_provider_transfer_id: settlement.transferId,
     p_amount: amount,
-    p_processing_amount: fee,
+    p_processing_amount: cents(settlement.balanceTransaction.fee),
     p_tax_amount: tax,
     p_currency: cleanText(session?.currency || 'usd', 3).toUpperCase(),
-    p_available_at: availableAt || null,
+    p_available_at: null,
     p_payload_digest: digest,
   });
-  return { processed: true, purchase };
+  await reconcileCreatorEarnings(c, purchase.connected_account_id);
+  return { processed: true, purchase: confirmedPurchase };
 }
 
 async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = false) {
@@ -9466,11 +9558,13 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
     : await requireReadyConnectedAccount(c, purchase.creator_id);
   if (!connected) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
   if (connected.provider_account_id !== purchase.stripe_destination_account_id) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  const transferGroup = marketplaceTransferGroup(purchase.id);
   const params = {
     amount: cents(purchase.total_amount, 1), currency: purchase.currency.toLowerCase(),
     'automatic_payment_methods[enabled]': true,
     'transfer_data[destination]': connected.provider_account_id,
     'transfer_data[amount]': cents(purchase.creator_amount, 1),
+    transfer_group: transferGroup,
     'metadata[source]': 'captro_commerce',
     'metadata[captro_purchase_id]': purchase.id,
     'metadata[captro_tax_amount]': purchase.tax_amount,
@@ -9485,7 +9579,8 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
   if (intent.livemode !== stripe.liveMode || intent.amount !== purchase.total_amount
       || intent.currency !== purchase.currency.toLowerCase()
       || intent.transfer_data?.destination !== connected.provider_account_id
-      || intent.transfer_data?.amount !== purchase.creator_amount) throw new Error('STRIPE_PAYMENT_MISMATCH');
+      || intent.transfer_data?.amount !== purchase.creator_amount
+      || (intent.transfer_group && intent.transfer_group !== transferGroup)) throw new Error('STRIPE_PAYMENT_MISMATCH');
   await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
     provider_payment_id: intent.id, payment_provider: 'stripe', updated_at: now(),
   });
@@ -9514,13 +9609,12 @@ async function completeCommercePurchaseFromIntent(c: any, eventId: string, objec
       || intent.id !== purchase.provider_payment_id || intent.amount_received !== purchase.total_amount
       || intent.transfer_data?.destination !== purchase.stripe_destination_account_id
       || intent.transfer_data?.amount !== purchase.creator_amount) throw new Error('STRIPE_PAYMENT_MISMATCH');
-  const charge = intent.latest_charge;
-  if (!charge?.balance_transaction?.id || !charge?.transfer) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  const settlement = await waitForMarketplaceSettlement(c, intent, purchase);
   await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
     p_purchase_id: purchaseId, p_provider_event_id: eventId, p_provider_checkout_id: null,
-    p_provider_payment_id: intent.id, p_provider_charge_id: charge.id,
-    p_provider_transfer_id: typeof charge.transfer === 'string' ? charge.transfer : charge.transfer.id,
-    p_amount: intent.amount_received, p_processing_amount: cents(charge.balance_transaction.fee),
+    p_provider_payment_id: intent.id, p_provider_charge_id: settlement.charge.id,
+    p_provider_transfer_id: settlement.transferId,
+    p_amount: intent.amount_received, p_processing_amount: cents(settlement.balanceTransaction.fee),
     p_tax_amount: purchase.tax_amount, p_currency: intent.currency.toUpperCase(),
     // Platform settlement time is not the connected account's available balance.
     p_available_at: null,
@@ -9709,6 +9803,7 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
     'payment_intent_data[metadata][captro_tax_amount]': tax,
     'payment_intent_data[transfer_data][destination]': cleanText(connected.provider_account_id, 180),
     'payment_intent_data[transfer_data][amount]': Math.max(0, Number(purchase.creator_amount || purchase.item_amount || 0)),
+    'payment_intent_data[transfer_group]': marketplaceTransferGroup(purchaseId),
   };
   if (serviceFee > 0) {
     params['line_items[1][price_data][currency]'] = currency;
@@ -17894,13 +17989,31 @@ api.post('/commerce/purchases', authMiddleware, beginCommercePurchaseHandler);
 api.post('/payments/create', authMiddleware, beginCommercePurchaseHandler);
 
 api.get('/payments/purchases/:purchaseId', authMiddleware, async (c) => {
-  const authId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_purchase_status', appUserId, 30, 60);
+  if (limited) return limited;
+  const authId = await supabaseAuthUserIdForAppUserId(c, appUserId);
   const purchaseId = isUuidText(c.req.param('purchaseId'));
   if (!authId || !purchaseId) return c.json({ detail: 'Purchase not found.' }, 404);
-  const rows = await supabaseAdminSelectRows(c, 'app_purchases', {
+  let rows = await supabaseAdminSelectRows(c, 'app_purchases', {
     id: postgrestEqFilter(purchaseId), buyer_id: postgrestEqFilter(authId),
   }, '*', 1);
   if (!rows[0]) return c.json({ detail: 'Purchase not found.' }, 404);
+  if (rows[0].status === 'payment_pending' && rows[0].payment_interface === 'native'
+      && cleanText(rows[0].provider_payment_id, 180).startsWith('pi_')) {
+    try {
+      const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(rows[0].provider_payment_id)}`);
+      if (intent.ok && intent.data?.status === 'succeeded') {
+        await completeCommercePurchaseFromIntent(c, `status-reconcile-${intent.data.id}`, intent.data);
+        rows = await supabaseAdminSelectRows(c, 'app_purchases', {
+          id: postgrestEqFilter(purchaseId), buyer_id: postgrestEqFilter(authId),
+        }, '*', 1);
+      }
+    } catch (error: any) {
+      console.warn(JSON.stringify({ event: 'commerce_purchase_status_reconcile_pending',
+        purchase_id: purchaseId, code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
   c.header('Cache-Control', 'private, no-store');
   return c.json({ purchase: commercePurchasePayload(rows[0]) });
 });

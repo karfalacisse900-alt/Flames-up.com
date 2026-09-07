@@ -65,6 +65,12 @@ test('payment confirmation creates one immutable earning and entitlement server-
   assert.match(migration, /insert into public\.app_creator_earnings/);
   assert.match(migration, /perform public\.captro_create_entitlement_for_purchase\(purchase_row\.id\)/);
   assert.match(worker, /verifyStripeWebhookSignature\(rawBody, signature, secret\)/);
+  assert.match(worker, /async function marketplaceSettlementForIntent/);
+  assert.match(worker, /\/charges\/\$\{encodeURIComponent\(chargeId\)\}\?expand\[\]=balance_transaction/);
+  assert.match(worker, /\/transfers\?transfer_group=\$\{encodeURIComponent\(transferGroup\)\}/);
+  assert.match(worker, /stripeExpandableId\(transfer\.source_transaction, 'ch_'\)/);
+  assert.match(worker, /'payment_intent_data\[transfer_group\]'/);
+  assert.match(worker, /status-reconcile-\$\{intent\.data\.id\}/);
   assert.doesNotMatch(worker, /success_url[\s\S]{0,260}captro_create_entitlement_for_purchase/);
 });
 
