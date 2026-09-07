@@ -287,10 +287,23 @@ async function main() {
   });
   assert.equal(confirmedIntent.status, 'succeeded');
 
-  const purchase = await waitFor('signed payment webhook confirmation', async () => {
-    const rows = await json(`${local.API_URL}/rest/v1/app_purchases?id=eq.${checkout.purchase.id}&select=*`, { headers: admin });
-    return rows[0]?.status === 'confirmed' ? rows[0] : null;
-  });
+  let purchase;
+  try {
+    purchase = await waitFor('signed payment webhook confirmation', async () => {
+      const rows = await json(`${local.API_URL}/rest/v1/app_purchases?id=eq.${checkout.purchase.id}&select=*`, { headers: admin });
+      return rows[0]?.status === 'confirmed' ? rows[0] : null;
+    });
+  } catch {
+    const purchaseRows = await json(`${local.API_URL}/rest/v1/app_purchases?id=eq.${checkout.purchase.id}&select=status,provider_payment_id`, { headers: admin });
+    const webhookRows = await json(`${local.API_URL}/rest/v1/app_payment_webhook_events?select=event_type,status,error_code,provider_event_id&order=created_at.desc&limit=100`, { headers: admin });
+    const providerEvents = await stripe('/events?type=payment_intent.succeeded&limit=20');
+    const providerEvent = providerEvents.data?.find(event => event.data?.object?.id === paymentIntentId);
+    throw new Error(`Payment confirmation evidence: ${JSON.stringify({
+      purchase: purchaseRows[0] || null,
+      providerEvent: providerEvent ? { id: providerEvent.id, type: providerEvent.type, pendingWebhooks: providerEvent.pending_webhooks } : null,
+      webhookAudit: webhookRows.filter(row => row.event_type?.startsWith('payment_intent.')).slice(0, 10),
+    })}`);
+  }
   assert.equal(purchase.provider_payment_id, paymentIntentId);
   assert.equal(purchase.creator_amount, 2000);
   const payments = await json(`${local.API_URL}/rest/v1/app_payments?purchase_id=eq.${purchase.id}&select=*`, { headers: admin });
