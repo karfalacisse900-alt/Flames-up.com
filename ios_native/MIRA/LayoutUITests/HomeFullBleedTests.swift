@@ -11,7 +11,7 @@ final class HomeFullBleedTests: XCTestCase {
     XCTAssertEqual(media.frame.maxX, app.frame.width, accuracy: 0.5)
     XCTAssertTrue(app.buttons["Pause video"].firstMatch.waitForExistence(timeout: 10))
     app.buttons["Pause video"].firstMatch.tap()
-    XCTAssertTrue(app.buttons["Play video"].firstMatch.exists)
+    XCTAssertTrue(app.buttons["Play video"].firstMatch.waitForExistence(timeout: 3))
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = "full-bleed-video"
     attachment.lifetime = .keepAlways
