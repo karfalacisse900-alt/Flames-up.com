@@ -80,3 +80,12 @@ test('the production bootstrap binds one Stripe mode and provisions both signed 
   assert.match(deployWorkflow, /STRIPE_SECRET_KEY/);
   assert.match(deployWorkflow, /STRIPE_PUBLISHABLE_KEY/);
 });
+
+test('scheduled reconciliation recovers missed payment and payout webhooks from Stripe state', () => {
+  assert.match(worker, /intent\.data\.status === 'succeeded'/);
+  assert.match(worker, /completeCommercePurchaseFromIntent\(c, `reconcile-payment-\$\{intent\.data\.id\}`/);
+  assert.match(worker, /async function reconcileStripeFinancialState/);
+  assert.match(worker, /status: postgrestInFilter\(\['pending', 'in_transit'\]\)/);
+  assert.match(worker, /stripeApiGet\(c, `\/payouts\/\$\{encodeURIComponent\(payout\.provider_payout_id\)\}`/);
+  assert.match(worker, /controller\.cron === '23 \* \* \* \*'/);
+});

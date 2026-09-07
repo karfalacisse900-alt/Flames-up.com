@@ -21,6 +21,10 @@ TestFlight distribution. A successful compiler/unit-test run is not payment evid
   stored quote and `payout:{creatorId}:{requestId}` idempotency.
 - Refunds remain separate from sales. A refund revokes access even if transfer
   recovery fails. Unresolved recovery/disputes block new Captro withdrawals.
+- The five-minute hold job confirms a provider-succeeded PaymentIntent if its
+  webhook was missed instead of releasing inventory. An hourly bounded sweep
+  refreshes connected accounts, pending earnings, and in-flight payouts from
+  Stripe so webhook delivery is not the only reconciliation path.
 
 Home navigation, stamps and post paging are unchanged by this integration.
 

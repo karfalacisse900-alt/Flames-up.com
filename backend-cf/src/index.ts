@@ -23555,7 +23555,11 @@ async function expireNativePaymentHolds(env: Env) {
       if (!purchase.provider_payment_id) await createCommercePaymentIntent(c, purchase, true);
       const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`);
       if (!intent.ok) throw stripeProviderError(intent, 'STRIPE_PAYMENT_EXPIRY_READ_FAILED');
-      if (['succeeded', 'processing'].includes(intent.data.status)) continue;
+      if (intent.data.status === 'succeeded') {
+        await completeCommercePurchaseFromIntent(c, `reconcile-payment-${intent.data.id}`, intent.data);
+        continue;
+      }
+      if (intent.data.status === 'processing') continue;
       if (intent.data.status !== 'canceled') {
         const canceled = await stripeApiRequest(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}/cancel`,
           {}, `payment-expire:${purchase.id}`);
@@ -23568,6 +23572,46 @@ async function expireNativePaymentHolds(env: Env) {
   }
 }
 
+async function reconcileStripeFinancialState(env: Env) {
+  const c: any = { env };
+  if (!getStripeConfig(c).configured) return;
+  await requireStripeDatabaseMode(c);
+
+  const accounts = await supabaseAdminQueryRows(c, 'app_connected_accounts', {
+    order: 'updated_at.asc', limit: 20,
+  });
+  for (const account of accounts) {
+    try {
+      const refreshed = await refreshConnectedAccount(c, account);
+      await reconcileCreatorEarnings(c, refreshed.id);
+    } catch (error) {
+      console.warn(JSON.stringify({ event: 'stripe_account_reconciliation_failed',
+        connected_account_id: account.id, code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+
+  const payouts = await supabaseAdminQueryRows(c, 'app_payouts', {
+    filters: { status: postgrestInFilter(['pending', 'in_transit']) },
+    order: 'updated_at.asc', limit: 40,
+  });
+  for (const payout of payouts) {
+    try {
+      const account = accounts.find(row => row.id === payout.connected_account_id)
+        || (await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+          id: postgrestEqFilter(payout.connected_account_id),
+        }, '*', 1))[0];
+      if (!account?.provider_account_id || !cleanText(payout.provider_payout_id, 180).startsWith('po_')) continue;
+      const current = await stripeApiGet(c, `/payouts/${encodeURIComponent(payout.provider_payout_id)}`,
+        account.provider_account_id);
+      if (!current.ok) throw stripeProviderError(current, 'STRIPE_PAYOUT_SYNC_FAILED');
+      await syncStripePayout(c, account.provider_account_id, current.data);
+    } catch (error) {
+      console.warn(JSON.stringify({ event: 'stripe_payout_reconciliation_failed', payout_id: payout.id,
+        code: getErrorCode(error).slice(0, 180) }));
+    }
+  }
+}
+
 export default {
   fetch(request: Request, env: Env, ctx: ExecutionContext) {
     return app.fetch(request, env, ctx);
@@ -23576,5 +23620,6 @@ export default {
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron === '17 5 * * *') ctx.waitUntil(processAccountDeletionQueue(env));
     if (controller.cron === '*/5 * * * *') ctx.waitUntil(expireNativePaymentHolds(env));
+    if (controller.cron === '23 * * * *') ctx.waitUntil(reconcileStripeFinancialState(env));
   },
 };
