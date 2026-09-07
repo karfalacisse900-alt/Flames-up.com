@@ -6,6 +6,7 @@ import { join } from 'node:path';
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.equal(process.env.STRIPE_MODE, 'test');
+  assert.ok(/^acct_[A-Za-z0-9]+$/.test(process.env.STRIPE_EXPECTED_ACCOUNT_ID || ''), 'The expected sandbox account ID is required');
   assert.ok(/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY || ''), 'A sandbox secret key is required');
   assert.ok(/^pk_test_/.test(process.env.STRIPE_PUBLISHABLE_KEY || ''), 'A sandbox publishable key is required');
   const local = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'supabase-status.json'), 'utf8'));
@@ -38,10 +39,16 @@ async function main() {
     });
     assert.equal(result.status, 200, `Stripe sandbox ${path} must be accessible`);
     const data = await result.json();
-    assert.ok(path === '/account' ? data.id?.startsWith('acct_') : Array.isArray(data.data));
+    if (path === '/account') {
+      assert.equal(data.id, process.env.STRIPE_EXPECTED_ACCOUNT_ID, 'Stripe credentials target the wrong platform account');
+      assert.equal(data.charges_enabled, true, 'The named Stripe sandbox must be able to create charges');
+    } else {
+      assert.ok(Array.isArray(data.data));
+    }
   }
   const evidence = {
     isolatedDatabase: true, paymentSchema: true, stripeMode: 'test', stripeAuthenticated: true,
+    stripeAccountMatched: true,
     connectReadAPI: true, paymentCompleted: false, nativePaymentSheetValidated: false,
     note: 'Bootstrap evidence only. No charge, ticket, earning or payout has been created.',
   };

@@ -8,6 +8,8 @@ const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const worker = read('../src/index.ts');
 const native = read('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroPaymentSheetView.swift');
 const deployWorkflow = read('../../.github/workflows/deploy-worker.yml');
+const sandboxWorkflow = read('../../.github/workflows/stripe-sandbox-integration.yml');
+const sandboxRuntime = read('../scripts/stripe-sandbox-runtime.mjs');
 const paymentEnvironmentMigration = read('../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql');
 
 test('native checkout uses provider UI and only persisted confirmation grants completion', () => {
@@ -52,7 +54,8 @@ test('sandbox CI scripts reject mismatched keys without printing them', () => {
     ]) {
       const result = spawnSync(process.execPath, [script], {
         env: { ...process.env, GITHUB_ACTIONS: 'true', STRIPE_MODE: 'test',
-          STRIPE_SECRET_KEY: 'sk_test_fixture', STRIPE_PUBLISHABLE_KEY: 'pk_test_fixture', ...overrides },
+          STRIPE_EXPECTED_ACCOUNT_ID: 'acct_fixture', STRIPE_SECRET_KEY: 'sk_test_fixture',
+          STRIPE_PUBLISHABLE_KEY: 'pk_test_fixture', ...overrides },
         encoding: 'utf8',
       });
       assert.equal(result.status, 1);
@@ -60,6 +63,19 @@ test('sandbox CI scripts reject mismatched keys without printing them', () => {
       assert.ok(!`${result.stdout}${result.stderr}`.includes('do_not_log_this_fixture'));
     }
   }
+});
+
+test('protected sandbox acceptance is pinned to Captro sandbox and exercises real money state', () => {
+  assert.match(sandboxWorkflow, /environment: captro-payments-test/);
+  assert.match(sandboxWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_1UCpr82KVcRiAcs9/);
+  assert.match(sandboxRuntime, /stripe\('\/account'\)/);
+  assert.match(sandboxRuntime, /pm_card_bypassPending/);
+  assert.match(sandboxRuntime, /signed payment webhook confirmation/);
+  assert.match(sandboxRuntime, /app_commerce_tickets/);
+  assert.match(sandboxRuntime, /app_creator_earnings/);
+  assert.match(sandboxRuntime, /creator\/payouts\/quote/);
+  assert.match(sandboxRuntime, /signed payout webhook confirmation/);
+  assert.match(sandboxRuntime, /nativePaymentSheetValidated: false/);
 });
 
 test('the production bootstrap binds one Stripe mode and provisions both signed webhook destinations', () => {

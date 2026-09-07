@@ -51,15 +51,17 @@ jobs:
         working-directory: backend-cf
         env:
           STRIPE_MODE: ${{ vars.STRIPE_MODE }}
+          STRIPE_EXPECTED_ACCOUNT_ID: acct_1UCpr82KVcRiAcs9
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
         run: node scripts/stripe-sandbox-bootstrap.mjs
       - name: Install pinned Stripe webhook forwarding CLI
         run: npm install --global @stripe/cli@1.50.10
-      - name: Exercise Captro auth and Connect against the real sandbox
+      - name: Exercise payment, entitlement, earnings and payout against the real sandbox
         working-directory: backend-cf
         env:
           STRIPE_MODE: ${{ vars.STRIPE_MODE }}
+          STRIPE_EXPECTED_ACCOUNT_ID: acct_1UCpr82KVcRiAcs9
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
         run: node scripts/stripe-sandbox-runtime.mjs

@@ -1,13 +1,17 @@
 // Real Captro Worker, local Supabase Auth/Postgres and real Stripe sandbox APIs.
-// This is API integration coverage, NOT native PaymentSheet/onboarding UI acceptance.
+// The native PaymentSheet UI remains a separate device acceptance check.
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 const processes = [];
+const cleanupAccounts = new Set();
+const cleanupPrices = new Set();
+const cleanupProducts = new Set();
+
 function start(command, args, options = {}) {
   const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, ...options });
   child.output = '';
@@ -29,11 +33,113 @@ async function json(url, init = {}, expected = 200) {
   return data;
 }
 
+async function stripe(path, { method = 'GET', params, connectedAccount } = {}) {
+  const headers = { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` };
+  if (connectedAccount) headers['Stripe-Account'] = connectedAccount;
+  const init = { method, headers };
+  if (params) {
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    init.body = new URLSearchParams(Object.entries(params)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => [key, String(value)])).toString();
+  }
+  return json(`https://api.stripe.com/v1${path}`, init);
+}
+
+async function waitFor(label, callback, attempts = 60, delay = 1000) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const result = await callback();
+    if (result) return result;
+    await sleep(delay);
+  }
+  throw new Error(`${label.replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 100)} timed out`);
+}
+
+async function createLocalUser(local, admin, api, label) {
+  const suffix = `${process.env.GITHUB_RUN_ID}-${label}-${randomBytes(4).toString('hex')}`;
+  const email = `captro-sandbox-${suffix}@example.com`;
+  const password = randomBytes(32).toString('hex');
+  const authUser = await json(`${local.API_URL}/auth/v1/admin/users`, {
+    method: 'POST', headers: admin,
+    body: JSON.stringify({ email, password, email_confirm: true, user_metadata: { full_name: `Captro Sandbox ${label}` } }),
+  });
+  const session = await json(`${local.API_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST', headers: { apikey: local.ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const authorized = { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' };
+  await json(`${api}/auth/me`, { headers: authorized });
+  const rows = await json(`${local.API_URL}/rest/v1/app_users?supabase_user_id=eq.${authUser.id}&select=*`, { headers: admin });
+  assert.equal(rows.length, 1, 'Captro auth must create exactly one app user');
+  const username = `sandbox_${label}_${String(process.env.GITHUB_RUN_ID).slice(-8)}_${randomBytes(2).toString('hex')}`;
+  const updated = await json(`${local.API_URL}/rest/v1/app_users?id=eq.${encodeURIComponent(rows[0].id)}`, {
+    method: 'PATCH', headers: { ...admin, Prefer: 'return=representation' },
+    body: JSON.stringify({ username, full_name: `Captro Sandbox ${label}`, phone_verified: true }),
+  });
+  return { authUser, appUser: updated[0] || rows[0], authorized, email };
+}
+
+async function createReadyTestConnectedAccount(creator) {
+  const created = await stripe('/accounts', {
+    method: 'POST',
+    params: {
+      type: 'custom',
+      country: 'US',
+      email: creator.email,
+      business_type: 'individual',
+      'capabilities[card_payments][requested]': true,
+      'capabilities[transfers][requested]': true,
+      'business_profile[mcc]': '7299',
+      'business_profile[name]': 'Captro Sandbox Creator',
+      'business_profile[product_description]': 'Disposable Captro payment integration test',
+      'business_profile[support_email]': creator.email,
+      'business_profile[support_phone]': '8888675309',
+      'business_profile[support_url]': 'https://captro.app',
+      'business_profile[url]': 'https://captro.app',
+      'individual[first_name]': 'Jenny',
+      'individual[last_name]': 'Rosen',
+      'individual[email]': creator.email,
+      'individual[phone]': '8888675309',
+      'individual[dob][day]': 1,
+      'individual[dob][month]': 1,
+      'individual[dob][year]': 1990,
+      'individual[address][line1]': 'address_full_match',
+      'individual[address][city]': 'Schenectady',
+      'individual[address][state]': 'NY',
+      'individual[address][postal_code]': '12345',
+      'individual[ssn_last_4]': '0000',
+      'individual[id_number]': '000000000',
+      'individual[political_exposure]': 'none',
+      'tos_acceptance[date]': Math.floor(Date.now() / 1000),
+      'tos_acceptance[ip]': '127.0.0.1',
+      'tos_acceptance[user_agent]': 'Captro Stripe sandbox integration',
+      'settings[payouts][schedule][interval]': 'manual',
+      external_account: 'tok_visa_debit_us_transferSuccess',
+      'metadata[captro_auth_user_id]': creator.authUser.id,
+      'metadata[captro_app_user_id]': creator.appUser.id,
+      'metadata[captro_test_run_id]': process.env.GITHUB_RUN_ID,
+    },
+  });
+  assert.ok(created.id?.startsWith('acct_'), 'Stripe must create the disposable payment connected account');
+  cleanupAccounts.add(created.id);
+  return waitFor('Stripe test connected account readiness', async () => {
+    const account = await stripe(`/accounts/${created.id}?expand[]=external_accounts`);
+    const cards = account.external_accounts?.data || [];
+    const debit = cards.find(card => card.object === 'card' && card.funding === 'debit'
+      && card.available_payout_methods?.includes('instant'));
+    return account.details_submitted && account.charges_enabled && account.payouts_enabled
+      && account.requirements?.currently_due?.length === 0 && debit ? { account, debit } : null;
+  }, 30, 1000);
+}
+
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.equal(process.env.STRIPE_MODE, 'test');
+  assert.ok(/^acct_[A-Za-z0-9]+$/.test(process.env.STRIPE_EXPECTED_ACCOUNT_ID || ''), 'The expected sandbox account ID is required');
   assert.ok(/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY || ''), 'A sandbox secret key is required');
   assert.ok(/^pk_test_/.test(process.env.STRIPE_PUBLISHABLE_KEY || ''), 'A sandbox publishable key is required');
+  const platformAccount = await stripe('/account');
+  assert.equal(platformAccount.id, process.env.STRIPE_EXPECTED_ACCOUNT_ID, 'Stripe credentials target the wrong platform account');
   assert.equal(process.platform, 'linux');
   const local = JSON.parse(await readFile(join(process.env.RUNNER_TEMP, 'supabase-status.json'), 'utf8'));
   assert.ok(['127.0.0.1', 'localhost'].includes(new URL(local.API_URL).hostname));
@@ -80,46 +186,171 @@ async function main() {
   }
   assert.ok(healthy, 'Isolated Worker must start');
   const admin = { apikey: local.SERVICE_ROLE_KEY, Authorization: `Bearer ${local.SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' };
-  const email = `captro-sandbox-${process.env.GITHUB_RUN_ID}@example.com`;
-  const password = randomBytes(32).toString('hex');
-  const user = await json(`${local.API_URL}/auth/v1/admin/users`, {
-    method: 'POST', headers: admin, body: JSON.stringify({ email, password, email_confirm: true, user_metadata: { full_name: 'Captro Sandbox Creator' } }),
-  });
-  const session = await json(`${local.API_URL}/auth/v1/token?grant_type=password`, {
-    method: 'POST', headers: { apikey: local.ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }),
-  });
-  const authorized = { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' };
-  await json(`${api}/auth/me`, { headers: authorized });
+
+  // Verify Captro's real production onboarding path without automating or bypassing hosted identity collection.
+  const onboardingUser = await createLocalUser(local, admin, api, 'onboarding');
   await json(`${api}/commerce/payout-account`, {}, 401);
-  const capabilities = await json(`${api}/commerce/stripe-capabilities`, { headers: authorized });
+  const capabilities = await json(`${api}/commerce/stripe-capabilities`, { headers: onboardingUser.authorized });
   assert.equal(capabilities.liveMode, false);
   assert.equal(capabilities.connectAvailable, true);
   await json(`${api}/stripe/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 400);
-  const before = await json(`${api}/commerce/payout-account`, { headers: authorized });
+  const before = await json(`${api}/commerce/payout-account`, { headers: onboardingUser.authorized });
   assert.equal(before.account.ready, false);
   const setup = await json(`${api}/commerce/payout-account/onboarding-link`, {
-    method: 'POST', headers: authorized, body: '{}',
+    method: 'POST', headers: onboardingUser.authorized, body: '{}',
   });
   assert.equal(new URL(setup.url).protocol, 'https:');
   assert.equal(new URL(setup.url).hostname, 'connect.stripe.com');
-  const accounts = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${user.id}`, { headers: admin });
-  assert.equal(accounts.length, 1);
-  const account = await json(`https://api.stripe.com/v1/accounts/${accounts[0].provider_account_id}`, {
-    headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+  const onboardingRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${onboardingUser.authUser.id}`, { headers: admin });
+  assert.equal(onboardingRows.length, 1);
+  const onboardingAccount = await stripe(`/accounts/${onboardingRows[0].provider_account_id}`);
+  cleanupAccounts.add(onboardingAccount.id);
+  assert.equal(onboardingAccount.type, 'express');
+  assert.equal(onboardingRows[0].charges_enabled, onboardingAccount.charges_enabled);
+  assert.equal(onboardingRows[0].payouts_enabled, onboardingAccount.payouts_enabled);
+  assert.equal(onboardingRows[0].details_submitted, onboardingAccount.details_submitted);
+
+  // A disposable Custom test account lets CI complete money movement without fabricating hosted onboarding success.
+  const creator = await createLocalUser(local, admin, api, 'creator');
+  const buyer = await createLocalUser(local, admin, api, 'buyer');
+  const readyStripe = await createReadyTestConnectedAccount(creator);
+  const connectedRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts`, {
+    method: 'POST', headers: { ...admin, Prefer: 'return=representation' },
+    body: JSON.stringify({ user_id: creator.authUser.id, app_user_id: creator.appUser.id,
+      provider_account_id: readyStripe.account.id, account_type: 'custom' }),
   });
-  assert.equal(account.type, 'express');
-  assert.equal(accounts[0].charges_enabled, account.charges_enabled);
-  assert.equal(accounts[0].payouts_enabled, account.payouts_enabled);
-  assert.equal(accounts[0].details_submitted, account.details_submitted);
+  assert.equal(connectedRows.length, 1);
+  const payoutAccount = await json(`${api}/commerce/payout-account`, { headers: creator.authorized });
+  assert.equal(payoutAccount.account.ready, true);
+  assert.equal(payoutAccount.account.payoutCard?.instantPayoutEligible, true);
+
+  const startsAt = new Date(Date.now() + 7 * 86400_000).toISOString();
+  const endsAt = new Date(Date.now() + 7 * 86400_000 + 3 * 3600_000).toISOString();
+  const post = await json(`${api}/posts`, {
+    method: 'POST', headers: creator.authorized,
+    body: JSON.stringify({
+      client_request_id: randomUUID(), post_type: 'event', title: 'Captro Sandbox Event',
+      content: 'Disposable real Stripe test-mode purchase and payout.', visibility: 'public',
+      commerce: { enabled: true, contentType: 'event', paymentModel: 'paid', commerceClass: 'outside_app',
+        title: 'Captro Sandbox Event', description: 'Sandbox event', locationName: 'Captro Test Venue',
+        city: 'New York', startsAt, endsAt, capacity: 2, passRequired: true,
+        prices: [{ label: 'General Admission', unitAmount: 2000, capacity: 2 }] },
+    }),
+  });
+  assert.ok(post.id, 'Captro must create the paid event post');
+  const commerce = await json(`${api}/commerce/posts/${encodeURIComponent(post.id)}`, { headers: creator.authorized });
+  assert.equal(commerce.commerce.paymentModel, 'paid');
+  assert.equal(commerce.commerce.lowestPrice.unitAmount, 2000);
+  assert.equal(commerce.commerce.lowestPrice.serviceFeeAmount, 150);
+  assert.equal(commerce.commerce.lowestPrice.buyerTotal, 2150);
+  const purchasableRows = await json(`${local.API_URL}/rest/v1/app_purchasables?id=eq.${commerce.commerce.id}&select=*`, { headers: admin });
+  const priceRows = await json(`${local.API_URL}/rest/v1/app_prices?purchasable_id=eq.${commerce.commerce.id}&select=*`, { headers: admin });
+  assert.ok(purchasableRows[0]?.stripe_product_id?.startsWith('prod_'));
+  assert.ok(priceRows[0]?.stripe_price_id?.startsWith('price_'));
+  cleanupProducts.add(purchasableRows[0].stripe_product_id);
+  cleanupPrices.add(priceRows[0].stripe_price_id);
+
+  const paymentRequestId = randomUUID();
+  const paymentBody = { contentId: post.id, contentType: 'event', quantity: 1,
+    selectedPriceId: commerce.commerce.lowestPrice.id, idempotencyKey: paymentRequestId };
+  const checkout = await json(`${api}/payments/create`, {
+    method: 'POST', headers: buyer.authorized, body: JSON.stringify(paymentBody),
+  });
+  assert.equal(checkout.purchase.itemAmount, 2000);
+  assert.equal(checkout.purchase.creatorAmount, 2000);
+  assert.equal(checkout.purchase.serviceFeeAmount, 150);
+  assert.equal(checkout.purchase.totalAmount, 2150);
+  assert.equal(checkout.paymentSheet.mode, 'test');
+  assert.ok(checkout.paymentSheet.paymentIntentClientSecret?.startsWith('pi_'));
+  const replay = await json(`${api}/payments/create`, {
+    method: 'POST', headers: buyer.authorized, body: JSON.stringify(paymentBody),
+  });
+  assert.equal(replay.purchase.id, checkout.purchase.id, 'Payment request IDs must be idempotent');
+  assert.equal(replay.paymentSheet.paymentIntentClientSecret, checkout.paymentSheet.paymentIntentClientSecret);
+  const paymentIntentId = checkout.paymentSheet.paymentIntentClientSecret.split('_secret_')[0];
+  const confirmedIntent = await stripe(`/payment_intents/${paymentIntentId}/confirm`, {
+    method: 'POST', params: { payment_method: 'pm_card_bypassPending', return_url: 'https://captro.app/payments/return' },
+  });
+  assert.equal(confirmedIntent.status, 'succeeded');
+
+  const purchase = await waitFor('signed payment webhook confirmation', async () => {
+    const rows = await json(`${local.API_URL}/rest/v1/app_purchases?id=eq.${checkout.purchase.id}&select=*`, { headers: admin });
+    return rows[0]?.status === 'confirmed' ? rows[0] : null;
+  });
+  assert.equal(purchase.provider_payment_id, paymentIntentId);
+  assert.equal(purchase.creator_amount, 2000);
+  const payments = await json(`${local.API_URL}/rest/v1/app_payments?purchase_id=eq.${purchase.id}&select=*`, { headers: admin });
+  const entitlements = await json(`${local.API_URL}/rest/v1/app_entitlements?purchase_id=eq.${purchase.id}&select=*`, { headers: admin });
+  const earningsRows = await json(`${local.API_URL}/rest/v1/app_creator_earnings?purchase_id=eq.${purchase.id}&select=*`, { headers: admin });
+  assert.equal(payments.filter(row => row.status === 'confirmed').length, 1);
+  assert.equal(entitlements.length, 1);
+  assert.equal(entitlements[0].kind, 'ticket');
+  assert.equal(entitlements[0].status, 'active');
+  const tickets = await json(`${local.API_URL}/rest/v1/app_commerce_tickets?entitlement_id=eq.${entitlements[0].id}&select=*`, { headers: admin });
+  assert.equal(tickets.length, 1);
+  assert.equal(tickets[0].status, 'active');
+  assert.equal(earningsRows.length, 1);
+  assert.equal(earningsRows[0].creator_amount, 2000);
+  assert.ok(['pending', 'available'].includes(earningsRows[0].status));
+  const paymentEvents = await json(`${local.API_URL}/rest/v1/app_payment_webhook_events?event_type=eq.payment_intent.succeeded&status=eq.processed&select=*`, { headers: admin });
+  assert.ok(paymentEvents.length >= 1, 'The signed Stripe event must be recorded as processed');
+
+  const earnings = await waitFor('Stripe instant balance reconciliation', async () => {
+    const result = await json(`${api}/commerce/earnings`, { headers: creator.authorized });
+    return result.balance.status === 'available' && result.balance.instantAvailable >= 2000 ? result : null;
+  }, 30, 1000);
+  assert.ok(earnings.recent.some(row => row.purchaseId === purchase.id && row.creatorAmount === 2000));
+  const payoutQuote = await json(`${api}/creator/payouts/quote`, {
+    method: 'POST', headers: creator.authorized,
+    body: JSON.stringify({ requestId: randomUUID(), amount: 2000 }),
+  });
+  assert.equal(payoutQuote.amount, 2000);
+  assert.equal(payoutQuote.netAmount, 2000);
+  const payout = await json(`${api}/creator/payouts`, {
+    method: 'POST', headers: creator.authorized, body: JSON.stringify({ quoteId: payoutQuote.id }),
+  });
+  assert.equal(payout.payout.amount, 2000);
+  assert.ok(['pending', 'in_transit', 'paid'].includes(payout.payout.status));
+  const paidPayout = await waitFor('signed payout webhook confirmation', async () => {
+    const result = await json(`${api}/commerce/payouts`, { headers: creator.authorized });
+    return result.payouts.find(row => row.amount === 2000 && row.status === 'paid') || null;
+  }, 60, 1000);
+  assert.equal(paidPayout.card?.last4, readyStripe.debit.last4);
+  const payoutEvents = await waitFor('payout webhook audit record', async () => {
+    const rows = await json(`${local.API_URL}/rest/v1/app_payment_webhook_events?event_type=eq.payout.paid&provider_account_id=eq.${readyStripe.account.id}&status=eq.processed&select=*`, { headers: admin });
+    return rows.length ? rows : null;
+  }, 30, 1000);
+  assert.ok(payoutEvents.length >= 1);
+
   console.log(JSON.stringify({ realWorker: true, realSupabaseAuth: true, unsignedWebhookRejected: true,
-    stripeConnectAccountCreated: true, connectedAccountId: account.id, hostedOnboardingLinkCreated: true,
-    payoutsReady: setup.account.ready, requiredFields: account.requirements?.currently_due,
-    nativePaymentSheetValidated: false, paymentCompleted: false,
-    note: 'Actual Connect onboarding is required. No success flags or money records were fabricated.' }));
-  // This empty sandbox account belongs only to this disposable run, not a real creator.
-  await json(`https://api.stripe.com/v1/accounts/${account.id}`, {
-    method: 'DELETE', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
-  });
+    stripeConnectAccountCreated: true, hostedOnboardingLinkCreated: true,
+    nativePaymentIntentCreated: true, nativePaymentIntentConfirmed: true, signedPaymentWebhookProcessed: true,
+    purchaseConfirmed: true, ticketIssued: true, creatorEarningRecorded: true,
+    eligibleDebitCardValidated: true, instantPayoutCreated: true, signedPayoutWebhookProcessed: true,
+    nativePaymentSheetValidated: false,
+    note: 'Money movement used Stripe test mode. Hosted onboarding and native PaymentSheet UI remain manual acceptance gates.' }));
+}
+
+async function cleanupStripeFixtures() {
+  if (!/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY || '')) return;
+  for (const priceId of cleanupPrices) {
+    await fetch(`https://api.stripe.com/v1/prices/${priceId}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'active=false', signal: AbortSignal.timeout(15_000), redirect: 'error',
+    }).catch(() => undefined);
+  }
+  for (const productId of cleanupProducts) {
+    await fetch(`https://api.stripe.com/v1/products/${productId}`, {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'active=false', signal: AbortSignal.timeout(15_000), redirect: 'error',
+    }).catch(() => undefined);
+  }
+  for (const accountId of cleanupAccounts) {
+    await fetch(`https://api.stripe.com/v1/accounts/${accountId}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+      signal: AbortSignal.timeout(15_000), redirect: 'error',
+    }).catch(() => undefined);
+  }
 }
 
 try { await main(); }
@@ -127,6 +358,7 @@ catch (error) {
   console.error(`Stripe API integration incomplete: ${error.message}`);
   process.exitCode = 1;
 } finally {
+  await cleanupStripeFixtures();
   for (const child of processes.reverse()) {
     if (!child.pid || child.exitCode !== null) continue;
     try { process.kill(-child.pid, 'SIGTERM'); } catch {}
