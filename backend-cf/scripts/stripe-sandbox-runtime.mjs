@@ -228,8 +228,8 @@ async function main() {
   const creator = await createLocalUser(local, admin, api, 'creator');
   const buyer = await createLocalUser(local, admin, api, 'buyer');
   const readyStripe = await createReadyTestConnectedAccount(creator);
-  const connectedRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts`, {
-    method: 'POST', headers: { ...admin, Prefer: 'return=representation' },
+  const connectedRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?on_conflict=provider_account_id`, {
+    method: 'POST', headers: { ...admin, Prefer: 'resolution=merge-duplicates,return=representation' },
     body: JSON.stringify({ user_id: creator.authUser.id, app_user_id: creator.appUser.id,
       provider_account_id: readyStripe.account.id, account_type: 'custom' }),
   });
