@@ -21,9 +21,15 @@ export async function decodeStripeResponse(response: Response, path: string) {
   const header = response.headers.get('Request-Id') || '';
   const requestId = /^req_[a-zA-Z0-9]{1,100}$/.test(header) ? header : null;
   let code = stripeFailureCode(data, 'STRIPE_REQUEST_FAILED');
-  if (path === '/accounts' && response.status === 400
-      && typeof data.error?.message === 'string'
-      && data.error.message.includes("You can only create new accounts if you've signed up for Connect")) {
+  const activationCodes = new Set([
+    'account_create_activation_required', 'connect_identity_not_verified',
+    'connect_profile_not_submitted', 'platform_registration_required',
+  ]);
+  if (response.status === 400 && (
+    (path === '/accounts' && typeof data.error?.message === 'string'
+      && data.error.message.includes("You can only create new accounts if you've signed up for Connect"))
+    || (path === '/v2/core/accounts' && activationCodes.has(data.error?.code))
+  )) {
     code = 'STRIPE_CONNECT_ACTIVATION_REQUIRED';
     data = { ...data, error: { ...data.error, code } };
   }

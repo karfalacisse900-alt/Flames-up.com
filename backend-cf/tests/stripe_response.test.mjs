@@ -24,6 +24,16 @@ test('Malformed Stripe responses fail closed, including successful HTTP response
   }
 });
 
+test('Accounts v2 platform activation failures use a stable public error code', async t => {
+  t.mock.method(console, 'warn', () => {});
+  const result = await decodeStripeResponse(Response.json({ error: {
+    type: 'invalid_request_error', code: 'connect_profile_not_submitted',
+    message: 'Provider-controlled setup detail',
+  } }, { status: 400 }), '/v2/core/accounts');
+  assert.equal(result.ok, false);
+  assert.equal(result.data.error.code, 'STRIPE_CONNECT_ACTIVATION_REQUIRED');
+});
+
 test('Stripe successful objects are unchanged and do not emit failure logs', async t => {
   const log = t.mock.method(console, 'warn', () => {});
   const data = { object: 'payment_intent', id: 'pi_fixture' };

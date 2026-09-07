@@ -20,7 +20,8 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
     const buyer = (await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
     const post = (await one('insert into app_posts values(gen_random_uuid()) returning id')).id;
     await db.query(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,status,details_submitted,
-      charges_enabled,payouts_enabled,eligible_debit_card_exists) values($1,'seller','acct_fixture','ready',true,true,true,true)`, [seller]);
+      charges_enabled,transfers_enabled,payouts_enabled,eligible_debit_card_exists)
+      values($1,'seller','acct_fixture','ready',true,false,true,true,true)`, [seller]);
     const item = (await one(`insert into app_purchasables(post_id,creator_id,creator_app_user_id,content_type,
       fulfillment_type,payment_model,title,capacity) values($1,$2,'seller','event','ticket','paid','Test event',2) returning id`, [post,seller])).id;
     const price = (await one(`insert into app_prices(purchasable_id,unit_amount,currency) values($1,2000,'USD') returning id`, [item])).id;

@@ -10,6 +10,12 @@ import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } fr
 import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote, proportionalAmount } from './stripe-money';
 import { supabaseRuntimeURL } from './runtime-urls';
 import { decodeStripeResponse, stripeFailureCode } from './stripe-response';
+import {
+  STRIPE_ACCOUNTS_V2_VERSION,
+  stripeRecipientAccountPayload,
+  stripeRecipientOnboardingPayload,
+  stripeV1AccountTransfersEnabled,
+} from './stripe-connect-v2';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -8356,6 +8362,31 @@ async function stripeApiRequest(
   return decodeStripeResponse(response, path);
 }
 
+async function stripeApiV2Request(
+  c: any,
+  path: string,
+  payload: Record<string, unknown>,
+  idempotencyKey?: string | null,
+) {
+  const stripe = getStripeConfig(c);
+  if (!stripe.configured) {
+    return { ok: false, status: 503, data: { detail: 'Stripe is not configured yet.', code: 'STRIPE_NOT_CONFIGURED' } };
+  }
+
+  await requireStripeDatabaseMode(c);
+  const response = await fetch(`https://api.stripe.com/v2${path}`, {
+    method: 'POST',
+    headers: {
+      ...stripeRequestHeaders(c, { idempotencyKey }),
+      'Content-Type': 'application/json',
+      'Stripe-Version': STRIPE_ACCOUNTS_V2_VERSION,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(20_000),
+  });
+  return decodeStripeResponse(response, `/v2${path}`);
+}
+
 async function stripeApiGet(c: any, path: string, connectedAccountId?: string | null) {
   const stripe = getStripeConfig(c);
   if (!stripe.configured) {
@@ -8942,7 +8973,7 @@ function stripeProviderError(result: any, fallback: string): Error {
 }
 
 function connectedAccountStatus(account: any): string {
-  if (account?.charges_enabled === true && account?.payouts_enabled === true) return 'ready';
+  if (stripeV1AccountTransfersEnabled(account) && account?.payouts_enabled === true) return 'ready';
   if (account?.requirements?.disabled_reason) return 'restricted';
   if (Array.isArray(account?.requirements?.currently_due) && account.requirements.currently_due.length > 0) {
     return account?.details_submitted === true ? 'restricted' : 'onboarding';
@@ -8961,6 +8992,7 @@ function connectedAccountSafePatch(account: any) {
     status: connectedAccountStatus(account),
     details_submitted: account?.details_submitted === true,
     charges_enabled: account?.charges_enabled === true,
+    transfers_enabled: stripeV1AccountTransfersEnabled(account),
     payouts_enabled: account?.payouts_enabled === true,
     requirements_currently_due: Array.isArray(account?.requirements?.currently_due) ? account.requirements.currently_due.slice(0, 100) : [],
     requirements_eventually_due: Array.isArray(account?.requirements?.eventually_due) ? account.requirements.eventually_due.slice(0, 100) : [],
@@ -9027,7 +9059,7 @@ async function connectedAccountForUser(c: any, authUserId: string, refresh = fal
 }
 
 function connectedAccountIsReady(row: any): boolean {
-  return row?.status === 'ready' && row?.charges_enabled === true && row?.payouts_enabled === true
+  return row?.status === 'ready' && row?.transfers_enabled === true && row?.payouts_enabled === true
     && row?.details_submitted === true && row?.eligible_debit_card_exists === true
     && Array.isArray(row?.requirements_currently_due) && row.requirements_currently_due.length === 0;
 }
@@ -9039,6 +9071,7 @@ function connectedAccountPublicPayload(c: any, row: any) {
     ready: connectedAccountIsReady(row),
     detailsSubmitted: row?.details_submitted === true,
     chargesEnabled: row?.charges_enabled === true,
+    transfersEnabled: row?.transfers_enabled === true,
     payoutsEnabled: row?.payouts_enabled === true,
     payoutCard: row?.payout_card || null,
     identityRequirementsComplete: row?.details_submitted === true && row?.requirements_currently_due?.length === 0,
@@ -9053,25 +9086,30 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
   const countryCandidate = cleanText(userRow?.country || userRow?.country_code, 2).toUpperCase();
   const country = /^[A-Z]{2}$/.test(countryCandidate) ? countryCandidate : 'US';
   const email = normalizeOptionalEmail(userRow?.email);
-  const account = await stripeApiRequest(c, '/accounts', {
-    type: 'express',
+  const contactEmail = email && !isInternalOAuthEmail(email) ? email : '';
+  if (!contactEmail) throw new Error('COMMERCE_PAYOUT_EMAIL_REQUIRED');
+  const displayName = cleanText(userRow?.full_name || userRow?.username || safeDisplayNameFromEmail(contactEmail), 120)
+    || 'Captro creator';
+  const account = await stripeApiV2Request(c, '/core/accounts', stripeRecipientAccountPayload({
+    contactEmail,
+    displayName,
     country,
-    email: email && !isInternalOAuthEmail(email) ? email : undefined,
-    'capabilities[card_payments][requested]': true,
-    'capabilities[transfers][requested]': true,
-    'settings[payouts][schedule][interval]': 'manual',
-    'business_profile[product_description]': 'Sales and paid access through Captro',
-    'metadata[captro_auth_user_id]': authUserId,
-    'metadata[captro_app_user_id]': appUserId,
-  }, `captro-connect-account-${getStripeConfig(c).mode}-${authUserId}`);
+    authUserId,
+    appUserId,
+  }), `captro-connect-account-${getStripeConfig(c).mode}-${authUserId}`);
   if (!account.ok || !String(account.data?.id || '').startsWith('acct_')) {
     throw stripeProviderError(account, 'STRIPE_CONNECT_ACCOUNT_CREATE_FAILED');
+  }
+  const accountId = cleanText(account.data.id, 180);
+  const v1Account = await stripeApiGet(c, `/accounts/${encodeURIComponent(accountId)}?expand[]=external_accounts`);
+  if (!v1Account.ok || v1Account.data?.id !== accountId) {
+    throw stripeProviderError(v1Account, 'STRIPE_CONNECT_ACCOUNT_SYNC_FAILED');
   }
   const inserted = await supabaseAdminInsertRows(c, 'app_connected_accounts', [{
     user_id: authUserId,
     app_user_id: appUserId,
     account_type: 'express',
-    ...connectedAccountSafePatch(account.data),
+    ...connectedAccountSafePatch(v1Account.data),
   }]);
   if (!inserted[0]) throw new Error('STRIPE_CONNECT_ACCOUNT_SAVE_FAILED');
   return inserted[0];
@@ -9350,13 +9388,8 @@ async function createConnectedAccountOnboardingLink(c: any, account: any, body: 
   if (!accountId.startsWith('acct_')) throw new Error('STRIPE_CONNECT_ACCOUNT_REQUIRED');
   const refreshUrl = allowedStripeReturnUrl(c, body.refreshUrl || body.refresh_url, '/earnings/payouts/refresh');
   const returnUrl = allowedStripeReturnUrl(c, body.returnUrl || body.return_url, '/earnings/payouts/complete');
-  const result = await stripeApiRequest(c, '/account_links', {
-    account: accountId,
-    refresh_url: refreshUrl,
-    return_url: returnUrl,
-    type: 'account_onboarding',
-    'collection_options[fields]': 'eventually_due',
-  });
+  const result = await stripeApiV2Request(c, '/core/account_links',
+    stripeRecipientOnboardingPayload(accountId, refreshUrl, returnUrl));
   if (!result.ok || !safeExternalUrl(result.data?.url)) {
     throw stripeProviderError(result, 'STRIPE_CONNECT_ONBOARDING_FAILED');
   }

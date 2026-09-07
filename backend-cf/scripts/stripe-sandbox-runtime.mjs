@@ -11,6 +11,7 @@ const processes = [];
 const cleanupAccounts = new Set();
 const cleanupPrices = new Set();
 const cleanupProducts = new Set();
+const STRIPE_ACCOUNTS_V2_VERSION = '2026-08-26.dahlia';
 
 function start(command, args, options = {}) {
   const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, ...options });
@@ -56,6 +57,57 @@ async function stripe(path, { method = 'GET', params, connectedAccount } = {}) {
       .map(([key, value]) => [key, String(value)])).toString();
   }
   return json(`https://api.stripe.com/v1${path}`, init);
+}
+
+async function stripeV2(path, payload, idempotencyKey) {
+  const headers = {
+    Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+    'Content-Type': 'application/json',
+    'Stripe-Version': STRIPE_ACCOUNTS_V2_VERSION,
+  };
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+  return json(`https://api.stripe.com/v2${path}`, {
+    method: 'POST', headers, body: JSON.stringify(payload),
+  });
+}
+
+function recipientAccountPayload({ email, displayName, dashboard, metadata }) {
+  return {
+    contact_email: email,
+    display_name: displayName,
+    dashboard,
+    identity: { country: 'us' },
+    configuration: {
+      recipient: {
+        capabilities: {
+          stripe_balance: { stripe_transfers: { requested: true } },
+        },
+      },
+    },
+    defaults: {
+      currency: 'usd',
+      responsibilities: { fees_collector: 'application', losses_collector: 'application' },
+      locales: ['en-US'],
+      profile: { product_description: 'Sales and paid access through Captro' },
+    },
+    metadata,
+    include: ['configuration.recipient', 'identity', 'requirements', 'defaults'],
+  };
+}
+
+function recipientOnboardingPayload(account, refreshUrl, returnUrl) {
+  return {
+    account,
+    use_case: {
+      type: 'account_onboarding',
+      account_onboarding: {
+        collection_options: { fields: 'eventually_due' },
+        configurations: ['recipient'],
+        refresh_url: refreshUrl,
+        return_url: returnUrl,
+      },
+    },
+  };
 }
 
 async function waitFor(label, callback, attempts = 60, delay = 1000) {
@@ -126,15 +178,23 @@ async function createLocalUser(local, admin, api, label) {
 }
 
 async function createReadyTestConnectedAccount(creator) {
-  const created = await stripe('/accounts', {
+  const created = await stripeV2('/core/accounts', recipientAccountPayload({
+    email: creator.email,
+    displayName: 'Captro Sandbox Creator',
+    dashboard: 'none',
+    metadata: {
+      captro_auth_user_id: creator.authUser.id,
+      captro_app_user_id: creator.appUser.id,
+      captro_test_run_id: process.env.GITHUB_RUN_ID,
+    },
+  }), `captro-ready-account-${process.env.GITHUB_RUN_ID}-${creator.authUser.id}`);
+  assert.ok(created.id?.startsWith('acct_'), 'Stripe must create the disposable payment connected account');
+  cleanupAccounts.add(created.id);
+  await stripe(`/accounts/${created.id}`, {
     method: 'POST',
     params: {
-      type: 'custom',
-      country: 'US',
       email: creator.email,
       business_type: 'individual',
-      'capabilities[card_payments][requested]': true,
-      'capabilities[transfers][requested]': true,
       'business_profile[mcc]': '7299',
       'business_profile[name]': 'Captro Sandbox Creator',
       'business_profile[product_description]': 'Disposable Captro payment integration test',
@@ -166,19 +226,17 @@ async function createReadyTestConnectedAccount(creator) {
       'metadata[captro_test_run_id]': process.env.GITHUB_RUN_ID,
     },
   });
-  assert.ok(created.id?.startsWith('acct_'), 'Stripe must create the disposable payment connected account');
-  cleanupAccounts.add(created.id);
   let lastReadiness = null;
   for (let attempt = 0; attempt < 90; attempt++) {
     const account = await stripe(`/accounts/${created.id}?expand[]=external_accounts`);
     const cards = account.external_accounts?.data || [];
     const debit = cards.find(card => card.object === 'card' && card.funding === 'debit'
       && card.available_payout_methods?.includes('instant'));
-    if (account.details_submitted && account.charges_enabled && account.payouts_enabled
+    if (account.details_submitted && account.capabilities?.transfers === 'active' && account.payouts_enabled
         && account.requirements?.currently_due?.length === 0 && debit) return { account, debit };
     lastReadiness = {
       detailsSubmitted: account.details_submitted === true,
-      chargesEnabled: account.charges_enabled === true,
+      transfersEnabled: account.capabilities?.transfers === 'active',
       payoutsEnabled: account.payouts_enabled === true,
       currentlyDue: (account.requirements?.currently_due || []).map(value => String(value).slice(0, 80)),
       pendingVerification: (account.requirements?.pending_verification || []).map(value => String(value).slice(0, 80)),
@@ -275,34 +333,25 @@ async function main() {
     if (failedAccountId.startsWith('acct_')) {
       cleanupAccounts.add(failedAccountId);
       try {
-        await stripe('/account_links', {
-          method: 'POST',
-          params: {
-            account: failedAccountId,
-            refresh_url: 'https://captro.app/earnings/payouts/refresh',
-            return_url: 'https://captro.app/earnings/payouts/complete',
-            type: 'account_onboarding',
-            'collection_options[fields]': 'eventually_due',
-          },
-        });
+        await stripeV2('/core/account_links', recipientOnboardingPayload(
+          failedAccountId,
+          'https://captro.app/earnings/payouts/refresh',
+          'https://captro.app/earnings/payouts/complete',
+        ));
       } catch (providerError) {
         throw new Error(`${error.message}; Stripe diagnostic: ${providerError.message}`);
       }
     } else {
       try {
-        const diagnosticAccount = await stripe('/accounts', {
-          method: 'POST',
-          params: {
-            type: 'express',
-            country: 'US',
-            'capabilities[card_payments][requested]': true,
-            'capabilities[transfers][requested]': true,
-            'settings[payouts][schedule][interval]': 'manual',
-            'business_profile[product_description]': 'Sales and paid access through Captro',
-            'metadata[captro_test_run_id]': process.env.GITHUB_RUN_ID,
-            'metadata[captro_diagnostic]': 'connected_account_creation',
+        const diagnosticAccount = await stripeV2('/core/accounts', recipientAccountPayload({
+          email: onboardingUser.email,
+          displayName: 'Captro Sandbox Onboarding',
+          dashboard: 'express',
+          metadata: {
+            captro_test_run_id: process.env.GITHUB_RUN_ID,
+            captro_diagnostic: 'connected_account_creation',
           },
-        });
+        }));
         if (String(diagnosticAccount.id || '').startsWith('acct_')) cleanupAccounts.add(diagnosticAccount.id);
       } catch (providerError) {
         throw new Error(`${error.message}; Stripe diagnostic: ${providerError.message}`);
@@ -311,7 +360,7 @@ async function main() {
     throw error;
   }
   assert.equal(new URL(setup.url).protocol, 'https:');
-  assert.equal(new URL(setup.url).hostname, 'connect.stripe.com');
+  assert.ok(new Set(['accounts.stripe.com', 'connect.stripe.com']).has(new URL(setup.url).hostname));
   const onboardingRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${onboardingUser.authUser.id}`, { headers: admin });
   assert.equal(onboardingRows.length, 1);
   const onboardingAccount = await stripe(`/accounts/${onboardingRows[0].provider_account_id}`);
@@ -321,7 +370,7 @@ async function main() {
   assert.equal(onboardingRows[0].payouts_enabled, onboardingAccount.payouts_enabled);
   assert.equal(onboardingRows[0].details_submitted, onboardingAccount.details_submitted);
 
-  // A disposable Custom test account lets CI complete money movement without fabricating hosted onboarding success.
+  // A disposable platform-controlled v2 recipient lets CI exercise money movement without fabricating hosted onboarding success.
   const creator = await createLocalUser(local, admin, api, 'creator');
   const buyer = await createLocalUser(local, admin, api, 'buyer');
   const readyStripe = await createReadyTestConnectedAccount(creator);

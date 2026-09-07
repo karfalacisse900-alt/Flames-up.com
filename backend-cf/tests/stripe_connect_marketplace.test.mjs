@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
+import {
+  STRIPE_ACCOUNTS_V2_VERSION,
+  stripeRecipientAccountPayload,
+  stripeRecipientOnboardingPayload,
+} from '../src/stripe-connect-v2.ts';
 
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const worker = source('../src/index.ts');
+const connectV2 = source('../src/stripe-connect-v2.ts');
 const money = source('../src/stripe-money.ts');
 const migration = source('../../supabase/migrations/20260904221545_stripe_connect_creator_earnings.sql');
+const nativeMigration = source('../../supabase/migrations/20260904231905_stripe_native_payments.sql');
 const indexMigration = source('../../supabase/migrations/20260904221847_stripe_connect_fk_indexes.sql');
 const commerceModels = source('../../ios_native/MIRA/Sources/MIRANative/Models/CaptroCommerce.swift');
 const earnings = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDashboardViews.swift');
@@ -22,9 +29,15 @@ test('Stripe Connect stores one account per creator and no raw bank credentials'
   assert.match(migration, /provider_account_id text not null unique/);
   assert.match(migration, /external_account_last4 text/);
   assert.doesNotMatch(migration, /\b(?:routing_number|account_number|debit_card_number|bank_token)\b/i);
-  assert.match(worker, /type: 'express'/);
-  assert.match(worker, /\/account_links/);
-  assert.match(worker, /type: 'account_onboarding'/);
+  assert.match(worker, /stripeApiV2Request\(c, '\/core\/accounts'/);
+  assert.match(worker, /stripeApiV2Request\(c, '\/core\/account_links'/);
+  assert.match(connectV2, /dashboard: 'express'/);
+  assert.match(connectV2, /fees_collector: 'application'/);
+  assert.match(connectV2, /losses_collector: 'application'/);
+  assert.match(connectV2, /stripe_transfers: \{ requested: true \}/);
+  assert.match(connectV2, /configurations: \['recipient'\]/);
+  assert.match(connectV2, /type: 'account_onboarding'/);
+  assert.doesNotMatch(worker, /stripeApiRequest\(c, '\/accounts'/);
   assert.match(worker, /\/login_links/);
 });
 
@@ -36,6 +49,29 @@ test('paid posts create reusable Stripe products and prices only after payout re
   assert.match(worker, /stripeApiRequest\(c, '\/prices'/);
   assert.match(worker, /PAYOUT_SETUP_REQUIRED/);
   assert.match(worker, /requireReadyConnectedAccount/);
+});
+
+test('recipient readiness depends on transfers and payouts rather than direct charges', () => {
+  assert.match(nativeMigration, /transfers_enabled boolean not null default false/);
+  assert.match(nativeMigration, /transfers_enabled = true and payouts_enabled = true and details_submitted = true/);
+  assert.match(worker, /row\?\.transfers_enabled === true && row\?\.payouts_enabled === true/);
+  assert.doesNotMatch(worker, /row\?\.charges_enabled === true && row\?\.payouts_enabled === true/);
+});
+
+test('Accounts v2 payloads use the Captro marketplace recipient configuration', () => {
+  assert.equal(STRIPE_ACCOUNTS_V2_VERSION, '2026-08-26.dahlia');
+  const account = stripeRecipientAccountPayload({
+    contactEmail: 'creator@example.com', displayName: 'Creator', country: 'US',
+    authUserId: 'auth-fixture', appUserId: 'app-fixture',
+  });
+  assert.equal(account.dashboard, 'express');
+  assert.equal(account.configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested, true);
+  assert.equal(account.defaults.responsibilities.fees_collector, 'application');
+  assert.equal(account.defaults.responsibilities.losses_collector, 'application');
+  assert.equal('merchant' in account.configuration, false);
+  const link = stripeRecipientOnboardingPayload('acct_fixture', 'https://captro.app/refresh', 'https://captro.app/return');
+  assert.deepEqual(link.use_case.account_onboarding.configurations, ['recipient']);
+  assert.equal(link.use_case.account_onboarding.collection_options.fields, 'eventually_due');
 });
 
 test('buyer fees are configurable while the creator receives the full listed item amount', () => {

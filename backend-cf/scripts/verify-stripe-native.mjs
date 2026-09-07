@@ -90,7 +90,7 @@ async function verify() {
   assert.equal(earning.payment_id, payment.id);
   const account = await stripe(`/accounts/${purchase.stripe_destination_account_id}`);
   assert.equal(account.details_submitted, true);
-  assert.equal(account.charges_enabled, true);
+  assert.equal(account.capabilities?.transfers, 'active');
   assert.equal(account.payouts_enabled, true);
   assert.deepEqual(account.requirements.currently_due, []);
   const earnings = await captro('/commerce/earnings', creator);

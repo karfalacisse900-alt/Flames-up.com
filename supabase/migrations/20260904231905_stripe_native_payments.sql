@@ -10,6 +10,7 @@ grant all on public.app_payment_environment to service_role;
 
 alter table public.app_connected_accounts
   add column eligible_debit_card_exists boolean not null default false,
+  add column transfers_enabled boolean not null default false,
   add column payout_card jsonb;
 alter table public.app_purchases
   add column payment_interface text not null default 'checkout' check (payment_interface in ('checkout', 'native'));
@@ -138,7 +139,7 @@ begin
   if v_item_amount > 0 then
     select * into connected_row from public.app_connected_accounts
       where user_id = purchasable_row.creator_id and status = 'ready'
-        and charges_enabled = true and payouts_enabled = true and details_submitted = true
+        and transfers_enabled = true and payouts_enabled = true and details_submitted = true
         and eligible_debit_card_exists = true and jsonb_array_length(requirements_currently_due) = 0 for update;
     if not found then raise exception 'CAPTRO_PAYOUTS_NOT_READY'; end if;
   end if;
