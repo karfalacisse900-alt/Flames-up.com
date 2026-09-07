@@ -288,6 +288,25 @@ async function main() {
       } catch (providerError) {
         throw new Error(`${error.message}; Stripe diagnostic: ${providerError.message}`);
       }
+    } else {
+      try {
+        const diagnosticAccount = await stripe('/accounts', {
+          method: 'POST',
+          params: {
+            type: 'express',
+            country: 'US',
+            'capabilities[card_payments][requested]': true,
+            'capabilities[transfers][requested]': true,
+            'settings[payouts][schedule][interval]': 'manual',
+            'business_profile[product_description]': 'Sales and paid access through Captro',
+            'metadata[captro_test_run_id]': process.env.GITHUB_RUN_ID,
+            'metadata[captro_diagnostic]': 'connected_account_creation',
+          },
+        });
+        if (String(diagnosticAccount.id || '').startsWith('acct_')) cleanupAccounts.add(diagnosticAccount.id);
+      } catch (providerError) {
+        throw new Error(`${error.message}; Stripe diagnostic: ${providerError.message}`);
+      }
     }
     throw error;
   }
