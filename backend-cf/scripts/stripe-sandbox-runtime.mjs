@@ -416,9 +416,17 @@ async function main() {
   const paymentRequestId = randomUUID();
   const paymentBody = { contentId: post.id, contentType: 'event', quantity: 1,
     selectedPriceId: commerce.commerce.lowestPrice.id, idempotencyKey: paymentRequestId };
-  const checkout = await json(`${api}/payments/create`, {
-    method: 'POST', headers: buyer.authorized, body: JSON.stringify(paymentBody),
-  });
+  let checkout;
+  try {
+    checkout = await json(`${api}/payments/create`, {
+      method: 'POST', headers: buyer.authorized, body: JSON.stringify(paymentBody),
+    });
+  } catch (error) {
+    const diagnostic = worker.output.split(/\r?\n/)
+      .filter(line => line.includes('commerce_purchase_begin_failed'))
+      .slice(-1)[0];
+    throw new Error(`${error.message}${diagnostic ? `; Worker diagnostic: ${diagnostic}` : ''}`);
+  }
   assert.equal(checkout.purchase.itemAmount, 2000);
   assert.equal(checkout.purchase.creatorAmount, 2000);
   assert.equal(checkout.purchase.serviceFeeAmount, 150);

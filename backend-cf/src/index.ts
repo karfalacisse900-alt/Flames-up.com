@@ -8858,6 +8858,16 @@ function commerceErrorCode(error: any): string {
   return match?.[0] || 'COMMERCE_REQUEST_FAILED';
 }
 
+function commerceErrorDiagnostic(error: any): string {
+  return cleanText(getErrorCode(error), 500)
+    .replace(/https?:\/\/\S+/gi, '[url]')
+    .replace(/\b(?:sk|rk|pk|whsec)_(?:test|live)?_?[a-zA-Z0-9]+\b/g, '[credential]')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [credential]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
+    .replace(/\b(?:acct|pi|ch|po|pm|card|cus|prod|price|req)_[a-zA-Z0-9]+\b/g, '[provider-id]')
+    .slice(0, 300);
+}
+
 function commerceErrorStatus(code: string): number {
   if (['CAPTRO_ITEM_UNAVAILABLE', 'CAPTRO_ITEM_EXPIRED', 'CAPTRO_CAPACITY_REACHED', 'CAPTRO_TIER_SOLD_OUT',
     'CAPTRO_BOOKING_SLOT_UNAVAILABLE', 'CAPTRO_PASS_ALREADY_USED', 'CAPTRO_PURCHASE_NOT_PAYABLE',
@@ -18014,7 +18024,12 @@ const beginCommercePurchaseHandler = async (c: any) => {
     return c.json({ purchase: commercePurchasePayload(purchase, entitlements[0]), checkoutUrl, paymentSheet });
   } catch (error: any) {
     const code = commerceErrorCode(error);
-    console.warn(JSON.stringify({ event: 'commerce_purchase_begin_failed', code, request_id: c.get?.('requestId') || '' }));
+    console.warn(JSON.stringify({
+      event: 'commerce_purchase_begin_failed',
+      code,
+      diagnostic: commerceErrorDiagnostic(error),
+      request_id: c.get?.('requestId') || '',
+    }));
     return c.json({ detail: code === 'COMMERCE_REQUEST_FAILED' ? 'Could not begin this purchase.' : 'This item could not be reserved.', code }, commerceErrorStatus(code) as any);
   }
 };
