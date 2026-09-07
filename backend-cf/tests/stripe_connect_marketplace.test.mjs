@@ -94,6 +94,19 @@ test('refunds and disputes preserve the original sale and reverse access and ear
   assert.match(worker, /status: 'revoked'/);
 });
 
+test('creator and admin refunds share one Stripe path with financial authorization and audit', () => {
+  assert.match(worker, /async function refundMarketplacePurchase/);
+  assert.match(worker, /api\.post\('\/commerce\/purchases\/:purchaseId\/refund'/);
+  assert.match(worker, /creator_id: postgrestEqFilter\(creatorAuthId\)/);
+  assert.match(worker, /api\.post\('\/admin\/commerce\/purchases\/:purchaseId\/refund'/);
+  assert.match(worker, /requireAdminRole\(c, 'payments:refund'\)/);
+  assert.match(worker, /'payments:refund'/);
+  assert.match(worker, /actionType: 'commerce_purchase_refunded'/);
+  assert.match(worker, /writeAdminAuditLog\(c, admin/);
+  assert.equal((worker.match(/stripeApiRequest\(c, '\/refunds'/g) || []).length, 1,
+    'all commerce refund entry points must use the same Stripe operation');
+});
+
 test('Connect account, payout and purchase events are handled without the app remaining open', () => {
   assert.match(worker, /STRIPE_CONNECT_WEBHOOK_SECRET/);
   assert.match(worker, /STRIPE_CONNECT_BOOTSTRAP_TOKEN/);

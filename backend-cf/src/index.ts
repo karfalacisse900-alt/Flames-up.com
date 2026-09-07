@@ -18432,6 +18432,52 @@ api.get('/commerce/payouts', authMiddleware, async (c) => {
   }
 });
 
+async function refundMarketplacePurchase(c: any, purchase: any, body: any = {}) {
+  const purchaseId = isUuidText(purchase?.id);
+  const paymentIntentId = cleanText(purchase?.provider_payment_id, 180);
+  if (!purchaseId || !paymentIntentId.startsWith('pi_')) throw new Error('CAPTRO_PURCHASE_NOT_REFUNDABLE');
+
+  const prior = await supabaseAdminQueryRows(c, 'app_refunds', {
+    filters: { purchase_id: postgrestEqFilter(purchaseId), status: postgrestEqFilter('succeeded') }, limit: 100,
+  });
+  const alreadyRefunded = prior.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
+  const refundable = Math.max(0, Number(purchase.total_amount || 0) - alreadyRefunded);
+  const requested = body.amount == null ? refundable : cents(body.amount, 1);
+  if (!Number.isInteger(requested) || requested <= 0 || requested > refundable) {
+    throw new Error('CAPTRO_REFUND_AMOUNT_INVALID');
+  }
+  const reason = body.reason === 'fraudulent' || body.reason === 'duplicate'
+    ? body.reason : 'requested_by_customer';
+  const refund = await stripeApiRequest(c, '/refunds', {
+    payment_intent: paymentIntentId,
+    amount: requested,
+    reverse_transfer: true,
+    reason,
+    'metadata[source]': 'captro_commerce',
+    'metadata[captro_purchase_id]': purchaseId,
+  }, `captro-refund-${purchaseId}-${alreadyRefunded}-${requested}`);
+  if (!refund.ok) throw stripeProviderError(refund, 'STRIPE_REFUND_FAILED');
+  const refundId = cleanText(refund.data?.id, 180);
+  await recordCommerceRefund(c, `api-refund-${refundId}`, refund.data);
+  const updated = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(purchaseId) }, '*', 1);
+  return { purchase: updated[0] || purchase, refundId, amount: requested, reason };
+}
+
+function commerceRefundError(c: any, error: any, event: string) {
+  const code = getErrorCode(error).slice(0, 180) || 'STRIPE_REFUND_FAILED';
+  console.warn(JSON.stringify({ event, code }));
+  if (code === 'CAPTRO_PURCHASE_NOT_FOUND') {
+    return c.json({ detail: 'Purchase not found.', code }, 404);
+  }
+  if (code === 'CAPTRO_PURCHASE_NOT_REFUNDABLE') {
+    return c.json({ detail: 'This purchase cannot be refunded.', code }, 409);
+  }
+  if (code === 'CAPTRO_REFUND_AMOUNT_INVALID') {
+    return c.json({ detail: 'Enter an amount no greater than the remaining payment.', code }, 400);
+  }
+  return c.json({ detail: 'Could not refund this purchase.', code }, 502);
+}
+
 api.post('/commerce/purchases/:purchaseId/refund', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_refund', appUserId, 10, 60);
@@ -18439,41 +18485,17 @@ api.post('/commerce/purchases/:purchaseId/refund', authMiddleware, async (c) => 
   try {
     const creatorAuthId = await supabaseAuthUserIdForAppUserId(c, appUserId);
     const purchaseId = isUuidText(c.req.param('purchaseId'));
-    if (!creatorAuthId || !purchaseId) return c.json({ detail: 'Purchase not found.', code: 'CAPTRO_PURCHASE_NOT_FOUND' }, 404);
+    if (!creatorAuthId || !purchaseId) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
     const purchases = await supabaseAdminSelectRows(c, 'app_purchases', {
       id: postgrestEqFilter(purchaseId), creator_id: postgrestEqFilter(creatorAuthId),
     }, '*', 1);
-    const purchase = purchases[0];
-    if (!purchase || !cleanText(purchase.provider_payment_id, 180).startsWith('pi_')) {
-      return c.json({ detail: 'This purchase cannot be refunded.', code: 'CAPTRO_PURCHASE_NOT_REFUNDABLE' }, 409);
-    }
-    const prior = await supabaseAdminQueryRows(c, 'app_refunds', {
-      filters: { purchase_id: postgrestEqFilter(purchaseId), status: postgrestEqFilter('succeeded') }, limit: 100,
-    });
-    const alreadyRefunded = prior.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0);
-    const refundable = Math.max(0, Number(purchase.total_amount || 0) - alreadyRefunded);
+    if (!purchases[0]) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
     const body: any = await c.req.json().catch(() => ({}));
-    const requested = body.amount == null ? refundable : cents(body.amount, 1);
-    if (!Number.isInteger(requested) || requested <= 0 || requested > refundable) {
-      return c.json({ detail: 'Enter an amount no greater than the remaining payment.', code: 'CAPTRO_REFUND_AMOUNT_INVALID' }, 400);
-    }
-    const refund = await stripeApiRequest(c, '/refunds', {
-      payment_intent: purchase.provider_payment_id,
-      amount: requested,
-      reverse_transfer: true,
-      reason: body.reason === 'fraudulent' || body.reason === 'duplicate' ? body.reason : 'requested_by_customer',
-      'metadata[source]': 'captro_commerce',
-      'metadata[captro_purchase_id]': purchaseId,
-    }, `captro-refund-${purchaseId}-${alreadyRefunded}-${requested}`);
-    if (!refund.ok) throw stripeProviderError(refund, 'STRIPE_REFUND_FAILED');
-    await recordCommerceRefund(c, `api-refund-${cleanText(refund.data?.id, 180)}`, refund.data);
-    const updated = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(purchaseId) }, '*', 1);
+    const result = await refundMarketplacePurchase(c, purchases[0], body);
     c.header('Cache-Control', 'private, no-store');
-    return c.json({ purchase: commercePurchasePayload(updated[0] || purchase) });
+    return c.json({ purchase: commercePurchasePayload(result.purchase) });
   } catch (error: any) {
-    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_REFUND_FAILED';
-    console.warn(JSON.stringify({ event: 'commerce_refund_failed', code }));
-    return c.json({ detail: 'Could not refund this purchase.', code }, 502);
+    return commerceRefundError(c, error, 'commerce_refund_failed');
   }
 });
 
@@ -18844,6 +18866,7 @@ const ADMIN_PERMISSIONS: Record<AdminRole, Set<string>> = {
     'messages:reported:read',
     'messages:reported:write',
     'audit:read',
+    'payments:refund',
     'roles:write',
   ]),
   moderator: new Set([
@@ -19059,6 +19082,43 @@ async function writeAdminAuditLog(c: any, admin: AdminContext, input: {
 async function requireAdminWriteRateLimit(c: any, admin: AdminContext, bucket = 'admin_write') {
   return enforceRateLimit(c, bucket, admin.userId, 80, 60);
 }
+
+api.post('/admin/commerce/purchases/:purchaseId/refund', authMiddleware, async (c) => {
+  try {
+    const admin = await requireAdminRole(c, 'payments:refund');
+    const limited = await requireAdminWriteRateLimit(c, admin, 'admin_commerce_refund');
+    if (limited) return limited;
+    const bodyTooLarge = rejectLargeRequest(c, 10_000);
+    if (bodyTooLarge) return bodyTooLarge;
+    const body: any = await c.req.json().catch(() => ({}));
+    const unknown = rejectUnknownFields(c, body, ['amount', 'reason', 'note']);
+    if (unknown) return unknown;
+    const purchaseId = isUuidText(c.req.param('purchaseId'));
+    if (!purchaseId) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
+    const purchases = await supabaseAdminSelectRows(c, 'app_purchases', {
+      id: postgrestEqFilter(purchaseId),
+    }, '*', 1);
+    const purchase = purchases[0];
+    if (!purchase) throw new Error('CAPTRO_PURCHASE_NOT_FOUND');
+    const result = await refundMarketplacePurchase(c, purchase, body);
+    await writeAdminAuditLog(c, admin, {
+      actionType: 'commerce_purchase_refunded',
+      targetType: 'purchase',
+      targetId: purchaseId,
+      targetUserId: publicId(purchase.buyer_app_user_id || '', 120),
+      reason: result.reason,
+      note: body.note,
+      beforeState: { status: purchase.status, totalAmount: purchase.total_amount },
+      afterState: { status: result.purchase.status, refundId: result.refundId, refundedAmount: result.amount },
+    });
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ purchase: commercePurchasePayload(result.purchase) });
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_REFUND_FAILED';
+    if (code === 'FORBIDDEN') return c.json({ detail: 'Admin access required.', code }, 403);
+    return commerceRefundError(c, error, 'admin_commerce_refund_failed');
+  }
+});
 
 function normalizeRestrictionType(value: unknown): string {
   const type = cleanText(value || 'all', 60).toLowerCase().replace(/[\s-]+/g, '_');

@@ -53,6 +53,13 @@ Captro's persisted flags. The disposable empty test account was cleaned up. This
 clears the sandbox activation blocker, but not identity onboarding or payment and
 payout acceptance. The live account still shows Connect's "Continue setup" page.
 
+Run `34069525678` repeated the isolated test on September 6, 2026 and passed the
+real Stripe authentication, Connect account creation, hosted onboarding-link, and
+signed-webhook boundary checks. It still created no charge, entitlement, earning,
+or payout. The Worker also exposes a role-protected admin refund route that uses
+the same Stripe refund and transfer-reversal path as creator refunds and records
+the action in Captro's admin audit log.
+
 The ephemeral runtime is API integration coverage only. A persistently isolated
 test backend and sandbox-targeted iOS build are still required for native
 PaymentSheet, hosted onboarding, and device acceptance.
