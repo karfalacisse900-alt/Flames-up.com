@@ -199,8 +199,8 @@ jobs:
       - name: Check required live Stripe payment inputs
         shell: bash
         env:
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || secrets.SECRETKEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY || secrets.PUBLISHABLEKEY }}
           STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
         run: |
           set -euo pipefail
@@ -296,8 +296,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || secrets.SECRETKEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY || secrets.PUBLISHABLEKEY }}
 
       - name: Sync persisted Stripe webhook secrets
         working-directory: ./backend-cf
