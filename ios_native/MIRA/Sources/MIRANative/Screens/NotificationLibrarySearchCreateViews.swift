@@ -964,7 +964,7 @@ public struct CreatePostNativeView: View {
   @State private var isRestoringPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
   @State private var isCameraReviewingMedia = false
-  @State private var payoutSetupDestination: CaptroCheckoutDestination?
+  @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
@@ -988,10 +988,6 @@ public struct CreatePostNativeView: View {
         }
       }
       .ignoresSafeArea()
-    }
-    .sheet(item: $payoutSetupDestination) { destination in
-      CaptroCheckoutBrowser(url: destination.url)
-        .ignoresSafeArea()
     }
   }
 
@@ -2049,7 +2045,7 @@ public struct CreatePostNativeView: View {
       await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
       let link = try await api.createPayoutOnboardingLink()
       guard let url = URL(string: link.url) else { throw MIRAAPIError.badURL }
-      payoutSetupDestination = CaptroCheckoutDestination(url: url)
+      startPayoutOnboarding(url)
       errorMessage = nil
       return false
     } catch {
@@ -2057,6 +2053,42 @@ public struct CreatePostNativeView: View {
       errorMessage = message
       await persistComposerDraft(uploadStatus: "draft", errorMessage: message, includeMedia: true)
       return false
+    }
+  }
+
+  @MainActor
+  private func startPayoutOnboarding(_ url: URL) {
+    payoutOnboarding.start(url: url) { result in
+      switch result {
+      case .success(.complete):
+        Task {
+          do {
+            let account = try await api.loadPayoutAccount().account
+            errorMessage = account.ready
+              ? nil
+              : "Finish the remaining Earnings setup steps before publishing this paid post."
+          } catch {
+            errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not refresh earnings setup."
+          }
+        }
+      case .success(.refresh):
+        Task { await refreshPayoutOnboardingLink() }
+      case .success(.cancelled):
+        break
+      case .failure(let error):
+        errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  @MainActor
+  private func refreshPayoutOnboardingLink() async {
+    do {
+      let link = try await api.createPayoutOnboardingLink()
+      guard let url = URL(string: link.url) else { throw MIRAAPIError.badURL }
+      startPayoutOnboarding(url)
+    } catch {
+      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not reopen secure payout setup."
     }
   }
 

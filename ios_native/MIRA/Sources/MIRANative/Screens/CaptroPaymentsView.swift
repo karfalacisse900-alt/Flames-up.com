@@ -105,21 +105,19 @@ private final class CaptroPaymentsModel: ObservableObject {
     }
   }
 
-  func openPayoutSetup(manage: Bool) {
-    guard !isLoadingPayout else { return }
+  func payoutLink(manage: Bool) async -> CaptroHostedAccountLinkResponse? {
+    guard !isLoadingPayout else { return nil }
     isLoadingPayout = true
-    Task {
-      defer { isLoadingPayout = false }
-      do {
-        let link = manage
-          ? try await api.createPayoutManagementLink()
-          : try await api.createPayoutOnboardingLink()
-        guard let url = URL(string: link.url) else { throw URLError(.badURL) }
-        hostedDestination = CaptroCheckoutDestination(url: url)
-        payoutError = nil
-      } catch {
-        payoutError = apiMessage(error, fallback: "Could not open secure payout setup.")
-      }
+    defer { isLoadingPayout = false }
+    do {
+      let link = manage
+        ? try await api.createPayoutManagementLink()
+        : try await api.createPayoutOnboardingLink()
+      payoutError = nil
+      return link
+    } catch {
+      payoutError = apiMessage(error, fallback: "Could not open secure payout setup.")
+      return nil
     }
   }
 
@@ -138,6 +136,7 @@ private enum CaptroPaymentsError: LocalizedError {
 
 struct CaptroPaymentsView: View {
   @StateObject private var model: CaptroPaymentsModel
+  @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
   @State private var showingCustomerSheet = false
 
   init(api: MIRAAPIClient) {
@@ -203,6 +202,13 @@ struct CaptroPaymentsView: View {
         .font(.system(size: 13))
         .foregroundStyle(CaptroDetailStyle.secondary)
         .fixedSize(horizontal: false, vertical: true)
+
+      if !model.methods.isEmpty, model.payoutAccount?.ready != true {
+        Text("Your payment card is ready for purchases. Receiving money from sales still requires Earnings setup below.")
+          .font(.system(size: 12, weight: .semibold))
+          .foregroundStyle(CaptroDetailStyle.ink)
+          .fixedSize(horizontal: false, vertical: true)
+      }
 
       if let customerSheet = model.customerSheet {
         Button {
@@ -272,7 +278,7 @@ struct CaptroPaymentsView: View {
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
         Button(account.ready ? "Manage Payout Card" : (account.identityRequirementsComplete == true ? "Add Payout Card" : "Set Up Earnings")) {
-          model.openPayoutSetup(manage: account.ready)
+          openPayoutSetup(manage: account.ready)
         }
         .font(.system(size: 14, weight: .semibold))
         .frame(maxWidth: .infinity, minHeight: 46)
@@ -324,5 +330,32 @@ struct CaptroPaymentsView: View {
 
   private var divider: some View {
     Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
+  }
+
+  private func openPayoutSetup(manage: Bool) {
+    Task {
+      guard let link = await model.payoutLink(manage: manage),
+            let url = URL(string: link.url) else { return }
+      if link.flow == "management" {
+        model.hostedDestination = CaptroCheckoutDestination(url: url)
+      } else {
+        startPayoutOnboarding(url)
+      }
+    }
+  }
+
+  private func startPayoutOnboarding(_ url: URL) {
+    payoutOnboarding.start(url: url) { result in
+      switch result {
+      case .success(.complete):
+        Task { await model.refreshPayoutAccount() }
+      case .success(.refresh):
+        openPayoutSetup(manage: false)
+      case .success(.cancelled):
+        break
+      case .failure(let error):
+        model.payoutError = error.localizedDescription
+      }
+    }
   }
 }

@@ -382,6 +382,7 @@ async function main() {
   assert.ok(new Set(['accounts.stripe.com', 'connect.stripe.com']).has(new URL(setup.url).hostname));
   const onboardingRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${onboardingUser.authUser.id}`, { headers: admin });
   assert.equal(onboardingRows.length, 1);
+  assert.equal(onboardingRows[0].stripe_mode, 'test');
   const onboardingAccount = await stripe(`/accounts/${onboardingRows[0].provider_account_id}`);
   cleanupAccounts.add(onboardingAccount.id);
   assert.equal(onboardingRows[0].account_type, 'express');
@@ -396,7 +397,7 @@ async function main() {
   const connectedRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?on_conflict=provider_account_id`, {
     method: 'POST', headers: { ...admin, Prefer: 'resolution=merge-duplicates,return=representation' },
     body: JSON.stringify({ user_id: creator.authUser.id, app_user_id: creator.appUser.id,
-      provider_account_id: readyStripe.account.id, account_type: 'custom' }),
+      provider_account_id: readyStripe.account.id, stripe_mode: 'test', account_type: 'custom' }),
   }, [200, 201]);
   assert.equal(connectedRows.length, 1);
   const payoutAccount = await json(`${api}/commerce/payout-account`, { headers: creator.authorized });
@@ -426,6 +427,8 @@ async function main() {
   const priceRows = await json(`${local.API_URL}/rest/v1/app_prices?purchasable_id=eq.${commerce.commerce.id}&select=*`, { headers: admin });
   assert.ok(purchasableRows[0]?.stripe_product_id?.startsWith('prod_'));
   assert.ok(priceRows[0]?.stripe_price_id?.startsWith('price_'));
+  assert.equal(purchasableRows[0]?.stripe_product_mode, 'test');
+  assert.equal(priceRows[0]?.stripe_price_mode, 'test');
   cleanupProducts.add(purchasableRows[0].stripe_product_id);
   cleanupPrices.add(priceRows[0].stripe_price_id);
   console.log(JSON.stringify({ event: 'stripe_catalog_fixture_created',

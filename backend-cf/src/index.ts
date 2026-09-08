@@ -8266,6 +8266,12 @@ function getStripeConfig(c: any) {
   };
 }
 
+function configuredStripeMode(c: any): 'test' | 'live' {
+  const mode = getStripeConfig(c).mode;
+  if (!mode) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
+  return mode;
+}
+
 type StripeRequestOptions = {
   idempotencyKey?: string | null;
   connectedAccountId?: string | null;
@@ -9129,6 +9135,7 @@ async function syncConnectedAccountFromStripe(
   knownRow?: any,
   accountV2?: any,
 ): Promise<any | null> {
+  const stripeMode = configuredStripeMode(c);
   const providerAccountId = cleanText(account?.id, 180);
   if (!providerAccountId.startsWith('acct_')) return null;
   let recipientAccountV2 = accountV2;
@@ -9139,13 +9146,15 @@ async function syncConnectedAccountFromStripe(
     recipientAccountV2 = response.data;
   }
   let row = knownRow;
+  if (row && row.stripe_mode !== stripeMode) throw new Error('STRIPE_CONNECTED_ACCOUNT_MODE_MISMATCH');
   if (!row) {
     const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
       provider_account_id: postgrestEqFilter(providerAccountId),
+      stripe_mode: postgrestEqFilter(stripeMode),
     }, '*', 1);
     row = rows[0];
   }
-  const patch = connectedAccountSafePatch(account, recipientAccountV2);
+  const patch = { stripe_mode: stripeMode, ...connectedAccountSafePatch(account, recipientAccountV2) };
   if (!row) {
     const authUserId = isUuidText(account?.metadata?.captro_auth_user_id || '');
     const appUserId = publicId(account?.metadata?.captro_app_user_id, 120);
@@ -9163,6 +9172,7 @@ async function syncConnectedAccountFromStripe(
 }
 
 async function refreshConnectedAccount(c: any, row: any): Promise<any> {
+  if (row?.stripe_mode !== configuredStripeMode(c)) throw new Error('STRIPE_CONNECTED_ACCOUNT_MODE_MISMATCH');
   const providerAccountId = cleanText(row?.provider_account_id, 180);
   if (!providerAccountId.startsWith('acct_')) return row;
   const response = await stripeApiGet(c, `/accounts/${encodeURIComponent(providerAccountId)}?expand[]=external_accounts`);
@@ -9183,6 +9193,7 @@ async function refreshConnectedAccount(c: any, row: any): Promise<any> {
 async function connectedAccountForUser(c: any, authUserId: string, refresh = false): Promise<any | null> {
   const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
     user_id: postgrestEqFilter(authUserId),
+    stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
   }, '*', 1);
   if (!rows[0]) return null;
   return refresh ? refreshConnectedAccount(c, rows[0]) : rows[0];
@@ -9238,6 +9249,7 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
   const inserted = await supabaseAdminInsertRows(c, 'app_connected_accounts', [{
     user_id: authUserId,
     app_user_id: appUserId,
+    stripe_mode: configuredStripeMode(c),
     account_type: 'express',
     ...connectedAccountSafePatch(v1Account.data, account.data),
   }]);
@@ -9252,28 +9264,31 @@ async function requireReadyConnectedAccount(c: any, creatorAuthUserId: string): 
 }
 
 async function ensureStripeProductAndPrice(c: any, purchasable: any, price: any): Promise<string> {
+  const stripeMode = configuredStripeMode(c);
   let productId = cleanText(purchasable?.stripe_product_id, 180);
-  if (!productId.startsWith('prod_')) {
+  if (!productId.startsWith('prod_') || purchasable?.stripe_product_mode !== stripeMode) {
     const product = await stripeApiRequest(c, '/products', {
       name: cleanText(purchasable?.title, 180) || 'Captro item',
       description: cleanText(purchasable?.description, 500),
       'metadata[captro_purchasable_id]': publicId(purchasable?.id, 120),
       'metadata[captro_post_id]': publicId(purchasable?.post_id, 120),
       'metadata[captro_content_type]': cleanText(purchasable?.content_type, 40),
-    }, `captro-product-${publicId(purchasable?.id, 120)}`);
+    }, `captro-product-${stripeMode}-${publicId(purchasable?.id, 120)}`);
     if (!product.ok || !String(product.data?.id || '').startsWith('prod_')) {
       throw stripeProviderError(product, 'STRIPE_PRODUCT_CREATE_FAILED');
     }
     productId = product.data.id;
     await supabaseAdminPatchRows(c, 'app_purchasables', { id: postgrestEqFilter(purchasable.id) }, {
       stripe_product_id: productId,
+      stripe_product_mode: stripeMode,
       updated_at: now(),
     });
     purchasable.stripe_product_id = productId;
+    purchasable.stripe_product_mode = stripeMode;
   }
 
   let stripePriceId = cleanText(price?.stripe_price_id, 180);
-  if (!stripePriceId.startsWith('price_')) {
+  if (!stripePriceId.startsWith('price_') || price?.stripe_price_mode !== stripeMode) {
     const stripePrice = await stripeApiRequest(c, '/prices', {
       product: productId,
       currency: cleanText(price?.currency || 'USD', 3).toLowerCase(),
@@ -9281,16 +9296,18 @@ async function ensureStripeProductAndPrice(c: any, purchasable: any, price: any)
       'metadata[captro_price_id]': publicId(price?.id, 120),
       'metadata[captro_purchasable_id]': publicId(purchasable?.id, 120),
       'metadata[captro_price_label]': cleanText(price?.label, 80),
-    }, `captro-price-${publicId(price?.id, 120)}`);
+    }, `captro-price-${stripeMode}-${publicId(price?.id, 120)}`);
     if (!stripePrice.ok || !String(stripePrice.data?.id || '').startsWith('price_')) {
       throw stripeProviderError(stripePrice, 'STRIPE_PRICE_CREATE_FAILED');
     }
     stripePriceId = stripePrice.data.id;
     await supabaseAdminPatchRows(c, 'app_prices', { id: postgrestEqFilter(price.id) }, {
       stripe_price_id: stripePriceId,
+      stripe_price_mode: stripeMode,
       updated_at: now(),
     });
     price.stripe_price_id = stripePriceId;
+    price.stripe_price_mode = stripeMode;
   }
   return stripePriceId;
 }
@@ -9341,6 +9358,7 @@ async function syncStripePayout(c: any, providerAccountId: string, payout: any, 
   if (!providerAccountId.startsWith('acct_') || !payoutId.startsWith('po_')) return false;
   const accounts = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
     provider_account_id: postgrestEqFilter(providerAccountId),
+    stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
   }, '*', 1);
   const account = accounts[0];
   if (!account) return false;
@@ -9513,28 +9531,45 @@ async function recordStripeWebhookEvent(c: any, event: any, status: 'processed' 
   });
 }
 
-async function createConnectedAccountOnboardingLink(c: any, account: any, body: any = {}) {
+function connectedAccountOnboardingCallback(c: any, action: 'complete' | 'refresh'): string {
+  const requestUrl = new URL(c.req.url);
+  let origin = requestUrl.protocol === 'https:' ? requestUrl.origin : '';
+  if (!origin) {
+    try {
+      origin = new URL(getFrontendUrl(c).split(',')[0]).origin;
+    } catch {
+      origin = 'https://captro.app';
+    }
+  }
+  return `${origin}/api/commerce/payout-account/onboarding-${action}`;
+}
+
+async function createConnectedAccountOnboardingLink(c: any, account: any) {
   const accountId = cleanText(account?.provider_account_id, 180);
   if (!accountId.startsWith('acct_')) throw new Error('STRIPE_CONNECT_ACCOUNT_REQUIRED');
-  const refreshUrl = allowedStripeReturnUrl(c, body.refreshUrl || body.refresh_url, '/earnings/payouts/refresh');
-  const returnUrl = allowedStripeReturnUrl(c, body.returnUrl || body.return_url, '/earnings/payouts/complete');
+  const refreshUrl = connectedAccountOnboardingCallback(c, 'refresh');
+  const returnUrl = connectedAccountOnboardingCallback(c, 'complete');
   const result = await stripeApiV2Request(c, '/core/account_links',
     stripeRecipientOnboardingPayload(accountId, refreshUrl, returnUrl));
   if (!result.ok || !safeExternalUrl(result.data?.url)) {
     throw stripeProviderError(result, 'STRIPE_CONNECT_ONBOARDING_FAILED');
   }
-  return { url: safeExternalUrl(result.data.url), expiresAt: stripeUnixToIso(result.data?.expires_at) || null };
+  return {
+    flow: 'onboarding',
+    url: safeExternalUrl(result.data.url),
+    expiresAt: stripeUnixToIso(result.data?.expires_at) || null,
+  };
 }
 
-async function createConnectedAccountManagementLink(c: any, account: any, body: any = {}) {
+async function createConnectedAccountManagementLink(c: any, account: any) {
   const refreshed = await refreshConnectedAccount(c, account);
-  if (!connectedAccountIsReady(refreshed)) return createConnectedAccountOnboardingLink(c, refreshed, body);
+  if (!connectedAccountIsReady(refreshed)) return createConnectedAccountOnboardingLink(c, refreshed);
   const accountId = cleanText(refreshed?.provider_account_id, 180);
   const result = await stripeApiRequest(c, `/accounts/${encodeURIComponent(accountId)}/login_links`);
   if (!result.ok || !safeExternalUrl(result.data?.url)) {
     throw stripeProviderError(result, 'STRIPE_CONNECT_MANAGEMENT_FAILED');
   }
-  return { url: safeExternalUrl(result.data.url), expiresAt: null };
+  return { flow: 'management', url: safeExternalUrl(result.data.url), expiresAt: null };
 }
 
 function payoutPublicPayload(row: any) {
@@ -9822,7 +9857,10 @@ async function completeCommercePurchaseFromIntent(c: any, eventId: string, objec
 }
 
 async function reconcileCreatorEarnings(c: any, connectedAccountId: string) {
-  const accounts = await supabaseAdminSelectRows(c, 'app_connected_accounts', { id: postgrestEqFilter(connectedAccountId) }, '*', 1);
+  const accounts = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+    id: postgrestEqFilter(connectedAccountId),
+    stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
+  }, '*', 1);
   const account = accounts[0];
   if (!account) return;
   const earnings = await supabaseAdminQueryRows(c, 'app_creator_earnings', {
@@ -15715,7 +15753,16 @@ api.post('/posts', authMiddleware, async (c) => {
     }
     try {
       await requireReadyConnectedAccount(c, commerceCreatorId!);
-    } catch {
+    } catch (error: any) {
+      const code = commerceErrorCode(error);
+      if (code !== 'CAPTRO_PAYOUTS_NOT_READY') {
+        console.warn(JSON.stringify({ event: 'paid_post_payout_check_failed', code,
+          diagnostic: commerceErrorDiagnostic(error) }));
+        return c.json({
+          detail: 'Paid publishing is temporarily unavailable. Your draft is safe; try again shortly.',
+          code: 'COMMERCE_PAYMENTS_UNAVAILABLE',
+        }, 503);
+      }
       return c.json({
         detail: 'Finish setting up payouts to publish this paid post.',
         code: 'PAYOUT_SETUP_REQUIRED',
@@ -18122,9 +18169,18 @@ const beginCommercePurchaseHandler = async (c: any) => {
     if (Number(price.unit_amount || 0) > 0) {
       try {
         await requireReadyConnectedAccount(c, purchasable.creator_id);
-      } catch {
+      } catch (error: any) {
+        const code = commerceErrorCode(error);
+        if (code !== 'CAPTRO_PAYOUTS_NOT_READY') {
+          console.warn(JSON.stringify({ event: 'commerce_creator_payout_check_failed', code,
+            diagnostic: commerceErrorDiagnostic(error) }));
+          return c.json({
+            detail: 'Payments are temporarily unavailable. Your saved payment card was not charged.',
+            code: 'COMMERCE_PAYMENTS_UNAVAILABLE',
+          }, 503);
+        }
         return c.json({
-          detail: 'The creator is still finishing payout setup. No payment was started.',
+          detail: 'This paid item is not accepting payments yet. The creator must finish earnings setup. Your saved payment card was not charged.',
           code: 'CAPTRO_PAYOUTS_NOT_READY',
         }, 409);
       }
@@ -18555,6 +18611,14 @@ api.post('/internal/stripe/connect-webhook/bootstrap', async (c) => {
   });
 });
 
+function redirectPayoutOnboardingToApp(c: any, action: 'complete' | 'refresh') {
+  c.header('Cache-Control', 'no-store');
+  return c.redirect(`captro://payouts/${action}`, 302);
+}
+
+api.get('/commerce/payout-account/onboarding-complete', (c) => redirectPayoutOnboardingToApp(c, 'complete'));
+api.get('/commerce/payout-account/onboarding-refresh', (c) => redirectPayoutOnboardingToApp(c, 'refresh'));
+
 api.get('/commerce/payout-account', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_payout_account', appUserId, 60, 60);
@@ -18585,8 +18649,7 @@ api.post('/commerce/payout-account/onboarding-link', authMiddleware, async (c) =
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
     const userRows = await supabaseAdminSelectRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, '*', 1);
     const account = await createOrLoadConnectedAccount(c, authUserId, appUserId, userRows[0] || {});
-    const body: any = await c.req.json().catch(() => ({}));
-    const destination = await createConnectedAccountOnboardingLink(c, account, body);
+    const destination = await createConnectedAccountOnboardingLink(c, account);
     c.header('Cache-Control', 'private, no-store');
     return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
   } catch (error: any) {
@@ -18607,8 +18670,7 @@ api.post('/commerce/payout-account/manage-link', authMiddleware, async (c) => {
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
     const account = await connectedAccountForUser(c, authUserId, true);
     if (!account) return c.json({ detail: 'Set up payouts first.', code: 'PAYOUT_SETUP_REQUIRED' }, 409);
-    const body: any = await c.req.json().catch(() => ({}));
-    const destination = await createConnectedAccountManagementLink(c, account, body);
+    const destination = await createConnectedAccountManagementLink(c, account);
     c.header('Cache-Control', 'private, no-store');
     return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
   } catch (error: any) {
@@ -19157,13 +19219,17 @@ const stripeWebhookHandler = async (c: any) => {
       const row = await syncConnectedAccountFromStripe(c, current.data);
       if (row) await refreshConnectedAccount(c, row);
     } else if (event.type === 'balance.available' && event.account) {
-      const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', { provider_account_id: postgrestEqFilter(event.account) }, 'id', 1);
+      const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+        provider_account_id: postgrestEqFilter(event.account),
+        stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
+      }, 'id', 1);
       if (rows[0]) await reconcileCreatorEarnings(c, rows[0].id);
     } else if (event.type === 'account.application.deauthorized') {
       const accountId = cleanText(object?.id || event?.account, 180);
       if (accountId.startsWith('acct_')) {
         await supabaseAdminPatchRows(c, 'app_connected_accounts', {
           provider_account_id: postgrestEqFilter(accountId),
+          stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
         }, { status: 'disabled', charges_enabled: false, payouts_enabled: false, updated_at: now() });
       }
     } else if (event.type === 'capability.updated' || event.type.startsWith('account.external_account.')) {
@@ -19171,6 +19237,7 @@ const stripeWebhookHandler = async (c: any) => {
       if (accountId.startsWith('acct_')) {
         const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
           provider_account_id: postgrestEqFilter(accountId),
+          stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
         }, '*', 1);
         if (rows[0]) await refreshConnectedAccount(c, rows[0]);
       }
@@ -23983,6 +24050,7 @@ async function reconcileStripeFinancialState(env: Env) {
   await requireStripeDatabaseMode(c);
 
   const accounts = await supabaseAdminQueryRows(c, 'app_connected_accounts', {
+    filters: { stripe_mode: postgrestEqFilter(configuredStripeMode(c)) },
     order: 'updated_at.asc', limit: 20,
   });
   for (const account of accounts) {
@@ -24004,6 +24072,7 @@ async function reconcileStripeFinancialState(env: Env) {
       const account = accounts.find(row => row.id === payout.connected_account_id)
         || (await supabaseAdminSelectRows(c, 'app_connected_accounts', {
           id: postgrestEqFilter(payout.connected_account_id),
+          stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
         }, '*', 1))[0];
       if (!account?.provider_account_id || !cleanText(payout.provider_payout_id, 180).startsWith('po_')) continue;
       const current = await stripeApiGet(c, `/payouts/${encodeURIComponent(payout.provider_payout_id)}`,

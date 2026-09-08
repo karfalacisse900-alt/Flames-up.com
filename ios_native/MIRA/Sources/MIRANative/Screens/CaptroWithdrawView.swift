@@ -3,6 +3,7 @@ import SwiftUI
 struct CaptroWithdrawView: View {
   let api: MIRAAPIClient
   @Environment(\.dismiss) private var dismiss
+  @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
   @State private var earnings: CaptroEarningsResponse?
   @State private var quote: CaptroPayoutQuote?
   @State private var payout: CaptroPayout?
@@ -138,8 +139,28 @@ struct CaptroWithdrawView: View {
       defer { working = false }
       do {
         let link = try await api.createPayoutManagementLink()
-        if let url = URL(string: link.url) { hostedDestination = CaptroCheckoutDestination(url: url) }
+        guard let url = URL(string: link.url) else { throw URLError(.badURL) }
+        if link.flow == "management" {
+          hostedDestination = CaptroCheckoutDestination(url: url)
+        } else {
+          startPayoutOnboarding(url)
+        }
       } catch { self.error = "Could not open payout method management." }
+    }
+  }
+
+  private func startPayoutOnboarding(_ url: URL) {
+    payoutOnboarding.start(url: url) { result in
+      switch result {
+      case .success(.complete):
+        retry()
+      case .success(.refresh):
+        changeCard()
+      case .success(.cancelled):
+        break
+      case .failure(let error):
+        self.error = error.localizedDescription
+      }
     }
   }
 }

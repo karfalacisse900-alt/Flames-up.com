@@ -492,6 +492,7 @@ public struct CaptroPayoutAccountResponse: Decodable {
 public struct CaptroHostedAccountLinkResponse: Decodable, Identifiable {
   public var id: String { url }
   public let account: CaptroPayoutAccount
+  public let flow: String?
   public let url: String
   public let expiresAt: String?
 }

@@ -12,22 +12,28 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
       create table public.app_posts(id uuid primary key);
       create table public.app_group_chat_members(group_id text,user_id text,role text,joined_at timestamptz,primary key(group_id,user_id));`);
     for (const file of ['20260904193517_captro_commerce_entitlements.sql', '20260904221545_stripe_connect_creator_earnings.sql',
-      '20260904221847_stripe_connect_fk_indexes.sql', '20260904231905_stripe_native_payments.sql']) {
+      '20260904221847_stripe_connect_fk_indexes.sql', '20260904231905_stripe_native_payments.sql',
+      '20260908224758_isolate_stripe_connected_accounts_by_mode.sql']) {
       await db.exec(readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     }
     const one = async (sql, params = []) => (await db.query(sql, params)).rows[0];
     const seller = (await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
     const buyer = (await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
     const post = (await one('insert into app_posts values(gen_random_uuid()) returning id')).id;
-    await db.query(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,status,details_submitted,
+    await db.exec("insert into app_payment_environment(id,stripe_mode) values(true,'test')");
+    const testConnected = await one(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,
       charges_enabled,transfers_enabled,payouts_enabled,eligible_debit_card_exists)
-      values($1,'seller','acct_fixture','ready',true,false,true,true,true)`, [seller]);
+      values($1,'seller','acct_fixture','test','ready',true,false,true,true,true) returning id`, [seller]);
+    await db.query(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,
+      charges_enabled,transfers_enabled,payouts_enabled,eligible_debit_card_exists)
+      values($1,'seller','acct_live_fixture','live','ready',true,false,true,true,true)`, [seller]);
     const item = (await one(`insert into app_purchasables(post_id,creator_id,creator_app_user_id,content_type,
       fulfillment_type,payment_model,title,capacity) values($1,$2,'seller','event','ticket','paid','Test event',2) returning id`, [post,seller])).id;
     const price = (await one(`insert into app_prices(purchasable_id,unit_amount,currency) values($1,2000,'USD') returning id`, [item])).id;
     const begin = key => one(`select * from captro_begin_marketplace_purchase_v2($1,'buyer',$2,$3,1,$4,'{}',150,0,0,'native')`, [buyer,item,price,key]);
     const first = await begin('request-one');
     assert.equal(first.creator_amount,2000); assert.equal(first.total_amount,2150);
+    assert.equal(first.connected_account_id,testConnected.id, 'the purchase must use the account from the configured Stripe mode');
     assert.equal(first.payment_interface,'native');
     assert.equal((await begin('request-one')).id,first.id);
     await assert.rejects(one(`select * from captro_begin_marketplace_purchase_v2($1,'buyer',$2,$3,2,'request-one','{}',150,0,0,'native')`, [buyer,item,price]), /IDEMPOTENCY_CONFLICT/);

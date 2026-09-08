@@ -384,6 +384,7 @@ private final class CaptroQRScannerController: UIViewController, AVCaptureMetada
 
 struct CaptroEarningsView: View {
   let api: MIRAAPIClient
+  @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
   @State private var response: CaptroEarningsResponse?
   @State private var isLoading = false
   @State private var errorMessage: String?
@@ -585,9 +586,28 @@ struct CaptroEarningsView: View {
             link = try await api.createPayoutOnboardingLink()
         }
         guard let url = URL(string: link.url) else { throw URLError(.badURL) }
-        hostedDestination = CaptroCheckoutDestination(url: url)
+        if link.flow == "management" {
+          hostedDestination = CaptroCheckoutDestination(url: url)
+        } else {
+          startPayoutOnboarding(url)
+        }
       } catch {
         errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout setup."
+      }
+    }
+  }
+
+  private func startPayoutOnboarding(_ url: URL) {
+    payoutOnboarding.start(url: url) { result in
+      switch result {
+      case .success(.complete):
+        Task { await load() }
+      case .success(.refresh):
+        openHostedAccount(manage: false)
+      case .success(.cancelled):
+        break
+      case .failure(let error):
+        errorMessage = error.localizedDescription
       }
     }
   }
