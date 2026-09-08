@@ -434,17 +434,33 @@ jobs:
         run: |
           set -euo pipefail
           response_file="$RUNNER_TEMP/captro-stripe-payment-bootstrap.json"
-          http_status="$(curl --silent --show-error \
-            --output "$response_file" \
-            --write-out '%{http_code}' \
-            --request POST \
-            --header "Accept: application/json" \
-            --header "User-Agent: Captro-Release-Smoke/1.0" \
-            --header "X-Captro-Bootstrap-Token: $STRIPE_CONNECT_BOOTSTRAP_TOKEN" \
-            --header "Content-Type: application/json" \
-            --data '{}' \
-            https://flames-up-api.karfalacisse900.workers.dev/api/internal/stripe/connect-webhook/bootstrap)"
-          response="$(cat "$response_file")"
+          http_status="000"
+          response=""
+          for attempt in $(seq 1 12); do
+            if ! http_status="$(curl --silent --show-error \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header "Accept: application/json" \
+              --header "User-Agent: Captro-Release-Smoke/1.0" \
+              --header "X-Captro-Bootstrap-Token: $STRIPE_CONNECT_BOOTSTRAP_TOKEN" \
+              --header "Content-Type: application/json" \
+              --data '{}' \
+              https://flames-up-api.karfalacisse900.workers.dev/api/internal/stripe/connect-webhook/bootstrap)"; then
+              http_status="000"
+            fi
+            response="$(cat "$response_file" 2>/dev/null || true)"
+            if [[ "$http_status" =~ ^2 ]]; then
+              break
+            fi
+            code="$(jq -r '.code // "HTTP_ERROR"' <<<"$response" 2>/dev/null || printf 'HTTP_ERROR')"
+            if [ "$http_status" = "404" ] && [ "$code" = "NOT_FOUND" ] && [ "$attempt" -lt 12 ]; then
+              echo "Waiting for newly deployed Cloudflare secrets (attempt $attempt/12)."
+              sleep 5
+              continue
+            fi
+            break
+          done
           if [[ ! "$http_status" =~ ^2 ]]; then
             detail="$(jq -r '.detail // "No JSON error detail returned"' <<<"$response" 2>/dev/null || printf 'No readable JSON error detail returned')"
             code="$(jq -r '.code // "HTTP_ERROR"' <<<"$response" 2>/dev/null || printf 'HTTP_ERROR')"

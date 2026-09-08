@@ -109,6 +109,8 @@ test('the production bootstrap binds one Stripe mode and provisions both signed 
   assert.match(deployWorkflow, /environment: captro-payments-live/);
   assert.match(deployWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: \$\{\{ vars\.STRIPE_EXPECTED_ACCOUNT_ID \}\}/);
   assert.match(deployWorkflow, /actual_account_id.*STRIPE_EXPECTED_ACCOUNT_ID/s);
+  assert.match(deployWorkflow, /Waiting for newly deployed Cloudflare secrets/);
+  assert.match(deployWorkflow, /http_status" = "404".*code" = "NOT_FOUND".*sleep 5/s);
   assert.doesNotMatch(deployWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_/);
 });
 
