@@ -9,6 +9,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: captro-payments-live
     steps:
       - uses: actions/checkout@v6
 
@@ -200,6 +201,7 @@ jobs:
         env:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           if [[ "${STRIPE_SECRET_KEY:-}" != sk_live_* && "${STRIPE_SECRET_KEY:-}" != rk_live_* ]]; then
@@ -210,6 +212,19 @@ jobs:
             echo "A matching live STRIPE_PUBLISHABLE_KEY is required before native payments can be deployed."
             exit 1
           fi
+          if [[ "${STRIPE_EXPECTED_ACCOUNT_ID:-}" != acct_* ]]; then
+            echo "The protected Captro live Stripe account ID is required."
+            exit 1
+          fi
+          account_response="$(curl --silent --show-error --fail \
+            --user "$STRIPE_SECRET_KEY:" \
+            https://api.stripe.com/v1/account)"
+          actual_account_id="$(jq -r '.id // empty' <<<"$account_response")"
+          if [ "$actual_account_id" != "$STRIPE_EXPECTED_ACCOUNT_ID" ]; then
+            echo "The live Stripe key belongs to a different account than the protected Captro account."
+            exit 1
+          fi
+          echo "Live Stripe credentials belong to the protected Captro account."
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1

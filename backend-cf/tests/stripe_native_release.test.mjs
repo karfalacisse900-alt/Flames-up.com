@@ -97,6 +97,10 @@ test('the production bootstrap binds one Stripe mode and provisions both signed 
   assert.match(deployWorkflow, /Provision Stripe payment webhooks and bind live database/);
   assert.match(deployWorkflow, /STRIPE_SECRET_KEY/);
   assert.match(deployWorkflow, /STRIPE_PUBLISHABLE_KEY/);
+  assert.match(deployWorkflow, /environment: captro-payments-live/);
+  assert.match(deployWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: \$\{\{ vars\.STRIPE_EXPECTED_ACCOUNT_ID \}\}/);
+  assert.match(deployWorkflow, /actual_account_id.*STRIPE_EXPECTED_ACCOUNT_ID/s);
+  assert.doesNotMatch(deployWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_/);
 });
 
 test('scheduled reconciliation recovers missed payment and payout webhooks from Stripe state', () => {
