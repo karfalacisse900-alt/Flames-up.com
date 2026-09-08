@@ -11,6 +11,7 @@ const nativeApiClient = read('../../ios_native/MIRA/Sources/MIRANative/Services/
 const deployWorkflow = read('../../.github/workflows/deploy-worker.yml');
 const sandboxWorkflow = read('../../.github/workflows/stripe-sandbox-integration.yml');
 const sandboxRuntime = read('../scripts/stripe-sandbox-runtime.mjs');
+const sandboxSchema = read('../scripts/stripe-sandbox-schema.mjs');
 const connectSmoke = read('../scripts/verify-stripe-connect.mjs');
 const paymentEnvironmentMigration = read('../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql');
 
@@ -87,6 +88,10 @@ test('protected sandbox acceptance is pinned to its configured test account and 
   assert.match(sandboxRuntime, /creator\/payouts\/quote/);
   assert.match(sandboxRuntime, /signed payout webhook confirmation/);
   assert.match(sandboxRuntime, /nativePaymentSheetValidated: false/);
+  assert.match(sandboxSchema, /relationExists/);
+  assert.match(sandboxSchema, /app_stripe_customers/);
+  assert.match(sandboxSchema, /20260908205030_captro_buyer_payment_methods\.sql/);
+  assert.doesNotMatch(sandboxSchema, /Production baseline changed/);
 });
 
 test('the production bootstrap binds one Stripe mode and provisions both signed webhook destinations', () => {
