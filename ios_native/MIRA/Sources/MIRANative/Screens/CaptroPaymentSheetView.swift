@@ -1,5 +1,5 @@
 import SwiftUI
-import StripePaymentSheet
+@_spi(CustomerSessionBetaAccess) import StripePaymentSheet
 import StripePayments
 
 struct CaptroPaymentSheetView: View {
@@ -68,6 +68,14 @@ struct CaptroPaymentSheetView: View {
     settings.merchantDisplayName = configuration.merchantDisplayName
     settings.returnURL = configuration.returnURL
     settings.allowsDelayedPaymentMethods = false
+    if let customerId = configuration.customerId,
+       let customerSessionClientSecret = configuration.customerSessionClientSecret,
+       customerId.hasPrefix("cus_"), customerSessionClientSecret.hasPrefix("cuss_") {
+      settings.customer = .init(
+        id: customerId,
+        customerSessionClientSecret: customerSessionClientSecret
+      )
+    }
     // Enabled only in builds provisioned with this real Apple merchant identifier.
     if let merchant = configuration.applePayMerchantId,
        Bundle.main.object(forInfoDictionaryKey: "CaptroApplePayMerchantIdentifier") as? String == merchant {

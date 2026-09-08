@@ -16,8 +16,12 @@ const money = source('../src/stripe-money.ts');
 const migration = source('../../supabase/migrations/20260904221545_stripe_connect_creator_earnings.sql');
 const nativeMigration = source('../../supabase/migrations/20260904231905_stripe_native_payments.sql');
 const indexMigration = source('../../supabase/migrations/20260904221847_stripe_connect_fk_indexes.sql');
+const buyerCardsMigration = source('../../supabase/migrations/20260908205030_captro_buyer_payment_methods.sql');
 const commerceModels = source('../../ios_native/MIRA/Sources/MIRANative/Models/CaptroCommerce.swift');
 const earnings = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDashboardViews.swift');
+const payments = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroPaymentsView.swift');
+const paymentSheet = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroPaymentSheetView.swift');
+const profile = source('../../ios_native/MIRA/Sources/MIRANative/Screens/ProfileChatVerificationStudio.swift');
 const checkout = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDetailViews.swift');
 const composer = source('../../ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift');
 const cache = source('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAppCacheStore.swift');
@@ -208,6 +212,36 @@ test('Earnings UI is backed by private live endpoints and never invents balances
   assert.match(earnings, /Text\("Balance unavailable"\)/);
   assert.match(earnings, /"Set Up Earnings"/);
   assert.doesNotMatch(earnings, /Available\s*\$72|Pending\s*\$16|\+ \$8\.00/);
+});
+
+test('Profile payment cards use Stripe CustomerSheet and never store raw card data', () => {
+  assert.match(buyerCardsMigration, /create table public\.app_stripe_customers/);
+  assert.match(buyerCardsMigration, /unique \(user_id, stripe_mode\)/);
+  assert.match(buyerCardsMigration, /enable row level security/);
+  assert.match(buyerCardsMigration, /revoke all .* from anon, authenticated/);
+  assert.match(buyerCardsMigration, /grant all .* to service_role/);
+  assert.doesNotMatch(buyerCardsMigration, /card_number|\bcvc\b|card_token|expiry_month/i);
+  assert.match(worker, /api\.post\('\/commerce\/payment-methods\/session'/);
+  assert.match(worker, /api\.post\('\/commerce\/payment-methods\/setup-intent'/);
+  assert.match(worker, /'components\[customer_sheet\]\[enabled\]': true/);
+  assert.match(worker, /'components\[mobile_payment_element\]\[features\]\[payment_method_save\]': 'enabled'/);
+  assert.match(worker, /'payment_method_types\[0\]': 'card'/);
+  assert.match(worker, /usage: 'on_session'/);
+  assert.match(worker, /customer: customerId/);
+  assert.match(payments, /CustomerSheet\.IntentConfiguration\(paymentMethodTypes: \["card"\]\)/);
+  assert.match(payments, /billingDetailsCollectionConfiguration\.name = \.always/);
+  assert.match(payments, /CustomerSessionClientSecret/);
+  assert.doesNotMatch(payments, /TextField\([^\n]*(card number|cvc|expiration)/i);
+  assert.match(profile, /systemImage: "creditcard"[\s\S]{0,120}accessibilityLabel: "Payments"/);
+});
+
+test('native checkout displays saved buyer cards while payout remains debit-only', () => {
+  assert.match(commerceModels, /customerSessionClientSecret: String\?/);
+  assert.match(paymentSheet, /settings\.customer = \.init/);
+  assert.match(paymentSheet, /customerSessionClientSecret: customerSessionClientSecret/);
+  assert.match(payments, /Debit and credit cards saved here are available when you pay in Captro/);
+  assert.match(payments, /Credit cards cannot receive payouts/);
+  assert.match(worker, /eligibleDebitCard/);
 });
 
 test('paid-post onboarding preserves the creator draft and media selection', () => {

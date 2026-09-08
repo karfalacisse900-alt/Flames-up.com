@@ -358,11 +358,43 @@ public struct CaptroPaymentConfiguration: Decodable, Identifiable {
   public let purchaseId: String
   public let publishableKey: String
   public let paymentIntentClientSecret: String
+  public let customerId: String?
+  public let customerSessionClientSecret: String?
   public let mode: String
   public let merchantDisplayName: String
   public let returnURL: String
   public let applePayMerchantId: String?
   public let merchantCountryCode: String
+}
+
+public struct CaptroSavedPaymentMethod: Decodable, Hashable, Identifiable {
+  public let id: String
+  public let brand: String
+  public let last4: String
+  public let expirationMonth: Int
+  public let expirationYear: Int
+  public let funding: String
+  public let billingName: String?
+}
+
+public struct CaptroPaymentMethodsResponse: Decodable {
+  public let configured: Bool
+  public let mode: String
+  public let methods: [CaptroSavedPaymentMethod]
+}
+
+public struct CaptroPaymentMethodSession: Decodable {
+  public let publishableKey: String
+  public let mode: String
+  public let customerId: String
+  public let customerSessionClientSecret: String
+  public let merchantDisplayName: String
+  public let returnURL: String
+}
+
+public struct CaptroPaymentMethodSetup: Decodable {
+  public let setupIntentClientSecret: String
+  public let mode: String
 }
 
 public struct CaptroCommercePostResponse: Decodable {
@@ -587,6 +619,19 @@ extension MIRAAPIClient {
 
   public func loadPayoutAccount() async throws -> CaptroPayoutAccountResponse {
     try await get("/commerce/payout-account")
+  }
+
+  public func loadPaymentMethods() async throws -> CaptroPaymentMethodsResponse {
+    try await get("/commerce/payment-methods")
+  }
+
+  public func createPaymentMethodSession() async throws -> CaptroPaymentMethodSession {
+    try await post("/commerce/payment-methods/session", body: EmptyBody())
+  }
+
+  public func createPaymentMethodSetup(requestId: String) async throws -> CaptroPaymentMethodSetup {
+    struct Input: Encodable { let requestId: String }
+    return try await post("/commerce/payment-methods/setup-intent", body: Input(requestId: requestId))
   }
 
   public func createPayoutOnboardingLink() async throws -> CaptroHostedAccountLinkResponse {

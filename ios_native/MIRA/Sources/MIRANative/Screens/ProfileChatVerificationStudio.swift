@@ -257,7 +257,7 @@ public struct ProfileNativeView: View {
       ScrollView {
         VStack(spacing: MIRATheme.Space.lg) {
           profileHeader
-          creatorEarningsLink
+          paymentsLink
           if let earnings = model.receiptEarnings {
             receiptEarningsSection(earnings)
           }
@@ -297,6 +297,11 @@ public struct ProfileNativeView: View {
       .toolbar(profileTabBarVisibility, for: .tabBar)
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
+          ProfileToolbarDestinationButton(
+            systemImage: "creditcard",
+            accessibilityLabel: "Payments",
+            destination: CaptroPaymentsView(api: model.api)
+          )
           ProfileToolbarDestinationButton(
             systemImage: "bookmark",
             accessibilityLabel: "Bookmarks",
@@ -526,18 +531,18 @@ public struct ProfileNativeView: View {
     .padding(.horizontal, MIRATheme.Space.md)
   }
 
-  private var creatorEarningsLink: some View {
+  private var paymentsLink: some View {
     NavigationLink {
-      CaptroEarningsView(api: model.api)
+      CaptroPaymentsView(api: model.api)
     } label: {
       HStack(spacing: 12) {
-        Image(systemName: "dollarsign")
+        Image(systemName: "creditcard.fill")
           .font(.system(size: 16, weight: .semibold))
           .foregroundStyle(CaptroDetailStyle.accent)
           .frame(width: 34, height: 34)
         VStack(alignment: .leading, spacing: 2) {
-          Text("Earnings").font(.system(size: 15, weight: .semibold))
-          Text("Payout account, sales, and payouts")
+          Text("Payments").font(.system(size: 15, weight: .semibold))
+          Text("Payment cards, earnings, and payouts")
             .font(.system(size: 12)).foregroundStyle(MIRATheme.Color.textSecondary)
         }
         Spacer(minLength: 8)

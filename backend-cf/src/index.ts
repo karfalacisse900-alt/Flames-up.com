@@ -8999,6 +8999,93 @@ function stripeProviderError(result: any, fallback: string): Error {
   return new Error(stripeFailureCode(result?.data, fallback));
 }
 
+async function buyerStripeCustomerForUser(c: any, authUserId: string, appUserId: string): Promise<any> {
+  const stripe = getStripeConfig(c);
+  if (!stripe.configured || !stripe.mode) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
+  const existing = await supabaseAdminSelectRows(c, 'app_stripe_customers', {
+    user_id: postgrestEqFilter(authUserId),
+    stripe_mode: postgrestEqFilter(stripe.mode),
+  }, '*', 1);
+  if (cleanText(existing[0]?.provider_customer_id, 180).startsWith('cus_')) return existing[0];
+
+  const userRows = await supabaseAdminSelectRows(c, 'app_users', {
+    id: postgrestEqFilter(appUserId),
+  }, 'id,email,full_name,username', 1);
+  const user = userRows[0] || {};
+  const email = normalizeOptionalEmail(user.email);
+  const displayName = cleanText(user.full_name || user.username, 120);
+  const params: Record<string, string> = {
+    'metadata[source]': 'captro_buyer',
+    'metadata[captro_auth_user_id]': authUserId,
+    'metadata[captro_app_user_id]': appUserId,
+    'metadata[captro_mode]': stripe.mode,
+  };
+  if (email && !isInternalOAuthEmail(email)) params.email = email;
+  if (displayName) params.name = displayName;
+  const result = await stripeApiRequest(c, '/customers', params, `buyer-customer:${stripe.mode}:${authUserId}`);
+  if (!result.ok || !cleanText(result.data?.id, 180).startsWith('cus_')) {
+    throw stripeProviderError(result, 'STRIPE_CUSTOMER_CREATE_FAILED');
+  }
+  if (result.data.livemode !== stripe.liveMode) throw new Error('STRIPE_CUSTOMER_MODE_MISMATCH');
+  const timestamp = now();
+  await supabaseAdminUpsert(c, 'app_stripe_customers', [{
+    user_id: authUserId,
+    app_user_id: appUserId,
+    stripe_mode: stripe.mode,
+    provider_customer_id: result.data.id,
+    created_at: timestamp,
+    updated_at: timestamp,
+  }], 'user_id,stripe_mode');
+  return {
+    user_id: authUserId,
+    app_user_id: appUserId,
+    stripe_mode: stripe.mode,
+    provider_customer_id: result.data.id,
+  };
+}
+
+async function createBuyerCustomerSession(c: any, customerId: string) {
+  const stripe = getStripeConfig(c);
+  const result = await stripeApiRequest(c, '/customer_sessions', {
+    customer: customerId,
+    'components[customer_sheet][enabled]': true,
+    'components[customer_sheet][features][payment_method_remove]': 'enabled',
+    'components[mobile_payment_element][enabled]': true,
+    'components[mobile_payment_element][features][payment_method_save]': 'enabled',
+    'components[mobile_payment_element][features][payment_method_redisplay]': 'enabled',
+    'components[mobile_payment_element][features][payment_method_remove]': 'enabled',
+  });
+  if (!result.ok || !cleanText(result.data?.client_secret, 500).startsWith('cuss_')) {
+    throw stripeProviderError(result, 'STRIPE_CUSTOMER_SESSION_CREATE_FAILED');
+  }
+  if (result.data.livemode !== stripe.liveMode || stripeExpandableId(result.data.customer, 'cus_') !== customerId) {
+    throw new Error('STRIPE_CUSTOMER_SESSION_MISMATCH');
+  }
+  return result.data;
+}
+
+function buyerPaymentMethodPayload(method: any) {
+  const card = method?.card || {};
+  const funding = cleanText(card.funding, 20).toLowerCase();
+  return {
+    id: publicId(method?.id, 180),
+    brand: cleanText(card.display_brand || card.brand, 40) || 'Card',
+    last4: /^\d{4}$/.test(String(card.last4 || '')) ? String(card.last4) : '',
+    expirationMonth: Math.max(1, Math.min(12, Math.trunc(Number(card.exp_month || 1)))),
+    expirationYear: Math.max(0, Math.trunc(Number(card.exp_year || 0))),
+    funding: ['credit', 'debit', 'prepaid'].includes(funding) ? funding : 'unknown',
+    billingName: cleanText(method?.billing_details?.name, 120) || null,
+  };
+}
+
+async function authenticatedBuyerStripeCustomer(c: any) {
+  const appUserId = getUserId(c);
+  const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+  if (!authUserId) throw new Error('COMMERCE_ACCOUNT_REQUIRED');
+  const customer = await buyerStripeCustomerForUser(c, authUserId, appUserId);
+  return { appUserId, authUserId, customer };
+}
+
 function connectedAccountStatus(account: any, accountV2?: any): string {
   const transfersEnabled = stripeV2RecipientTransfersEnabled(accountV2);
   if (transfersEnabled && account?.payouts_enabled === true) return 'ready';
@@ -9651,6 +9738,8 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
   const stripe = getStripeConfig(c);
   if (!stripe.configured || !stripe.webhookConfigured) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
   if (purchase.status !== 'payment_pending' || purchase.payment_interface !== 'native') throw new Error('CAPTRO_PURCHASE_NOT_PAYABLE');
+  const buyerCustomer = await buyerStripeCustomerForUser(c, purchase.buyer_id, purchase.buyer_app_user_id);
+  const customerId = cleanText(buyerCustomer.provider_customer_id, 180);
   const connected = forExpiry ? await connectedAccountForUser(c, purchase.creator_id)
     : await requireReadyConnectedAccount(c, purchase.creator_id);
   if (!connected) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
@@ -9658,6 +9747,7 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
   const transferGroup = marketplaceTransferGroup(purchase.id);
   const params = {
     amount: cents(purchase.total_amount, 1), currency: purchase.currency.toLowerCase(),
+    customer: customerId,
     'automatic_payment_methods[enabled]': true,
     transfer_group: transferGroup,
     'metadata[source]': 'captro_commerce',
@@ -9666,13 +9756,20 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
     'metadata[captro_mode]': stripe.mode,
     description: cleanText(purchase.item_title, 180),
   };
-  const result = purchase.provider_payment_id
+  let result = purchase.provider_payment_id
     ? await stripeApiGet(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`)
     : await stripeApiRequest(c, '/payment_intents', params, `payment:${purchase.id}`);
+  if (result.ok && purchase.provider_payment_id && !stripeExpandableId(result.data?.customer, 'cus_')
+      && ['requires_payment_method', 'requires_confirmation'].includes(cleanText(result.data?.status, 60))) {
+    result = await stripeApiRequest(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`, {
+      customer: customerId,
+    });
+  }
   if (!result.ok || !result.data?.id) throw stripeProviderError(result, 'STRIPE_PAYMENT_CREATE_FAILED');
   const intent = result.data;
   if (intent.livemode !== stripe.liveMode || intent.amount !== purchase.total_amount
       || intent.currency !== purchase.currency.toLowerCase()
+      || stripeExpandableId(intent.customer, 'cus_') !== customerId
       || intent.transfer_group !== transferGroup
       || (intent.transfer_data?.destination
         && (intent.transfer_data.destination !== connected.provider_account_id
@@ -9681,9 +9778,12 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
     provider_payment_id: intent.id, payment_provider: 'stripe', updated_at: now(),
   });
   purchase.provider_payment_id = intent.id;
+  const customerSession = await createBuyerCustomerSession(c, customerId);
   return {
     purchaseId: purchase.id, publishableKey: stripe.publishableKey,
     paymentIntentClientSecret: intent.client_secret,
+    customerId,
+    customerSessionClientSecret: customerSession.client_secret,
     mode: stripe.mode, merchantDisplayName: 'Captro', returnURL: 'captro://stripe-redirect',
     applePayMerchantId: cleanText(c.env.CAPTRO_APPLE_PAY_MERCHANT_ID, 160) || null,
     merchantCountryCode: 'US',
@@ -18260,6 +18360,97 @@ api.get('/commerce/stripe-capabilities', authMiddleware, async (c) => {
     apiReachable: platform.ok,
     connectAvailable: accounts.ok,
   }, platform.ok && accounts.ok ? 200 : 503);
+});
+
+api.get('/commerce/payment-methods', authMiddleware, async (c) => {
+  const limited = await enforceRateLimit(c, 'commerce_payment_methods_read', getUserId(c), 30, 60);
+  if (limited) return limited;
+  try {
+    const stripe = getStripeConfig(c);
+    const { customer } = await authenticatedBuyerStripeCustomer(c);
+    const customerId = cleanText(customer.provider_customer_id, 180);
+    const result = await stripeApiGet(c,
+      `/payment_methods?customer=${encodeURIComponent(customerId)}&type=card&limit=20`);
+    if (!result.ok) throw stripeProviderError(result, 'STRIPE_PAYMENT_METHODS_READ_FAILED');
+    const methods = (Array.isArray(result.data?.data) ? result.data.data : [])
+      .filter((method: any) => method?.type === 'card' && method?.card)
+      .map(buyerPaymentMethodPayload);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({
+      configured: true,
+      mode: stripe.mode,
+      methods,
+    });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    return c.json({ detail: 'Could not load payment cards.', code }, commerceErrorStatus(code) as any);
+  }
+});
+
+api.post('/commerce/payment-methods/session', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 1_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const limited = await enforceRateLimit(c, 'commerce_payment_method_session', getUserId(c), 30, 60);
+  if (limited) return limited;
+  try {
+    const stripe = getStripeConfig(c);
+    const { customer } = await authenticatedBuyerStripeCustomer(c);
+    const customerId = cleanText(customer.provider_customer_id, 180);
+    const session = await createBuyerCustomerSession(c, customerId);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({
+      publishableKey: stripe.publishableKey,
+      mode: stripe.mode,
+      customerId,
+      customerSessionClientSecret: session.client_secret,
+      merchantDisplayName: 'Captro',
+      returnURL: 'captro://stripe-redirect',
+    });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    return c.json({ detail: 'Could not open secure card setup.', code }, commerceErrorStatus(code) as any);
+  }
+});
+
+api.post('/commerce/payment-methods/setup-intent', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 1_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_payment_method_setup', appUserId, 20, 60);
+  if (limited) return limited;
+  try {
+    const body: any = await c.req.json().catch(() => ({}));
+    const requestId = isUuidText(body.requestId || body.request_id || '');
+    if (!requestId) {
+      return c.json({ detail: 'A card setup request ID is required.', code: 'CAPTRO_IDEMPOTENCY_KEY_REQUIRED' }, 400);
+    }
+    const stripe = getStripeConfig(c);
+    const { authUserId, customer } = await authenticatedBuyerStripeCustomer(c);
+    const customerId = cleanText(customer.provider_customer_id, 180);
+    const result = await stripeApiRequest(c, '/setup_intents', {
+      customer: customerId,
+      usage: 'on_session',
+      'payment_method_types[0]': 'card',
+      'metadata[source]': 'captro_payment_card_setup',
+      'metadata[captro_auth_user_id]': authUserId,
+      'metadata[captro_mode]': stripe.mode,
+    }, `payment-card-setup:${authUserId}:${requestId}`);
+    if (!result.ok || !cleanText(result.data?.client_secret, 500).startsWith('seti_')) {
+      throw stripeProviderError(result, 'STRIPE_SETUP_INTENT_CREATE_FAILED');
+    }
+    if (result.data.livemode !== stripe.liveMode
+        || stripeExpandableId(result.data.customer, 'cus_') !== customerId) {
+      throw new Error('STRIPE_SETUP_INTENT_MISMATCH');
+    }
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({
+      setupIntentClientSecret: result.data.client_secret,
+      mode: stripe.mode,
+    });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    return c.json({ detail: 'Could not prepare secure card setup.', code }, commerceErrorStatus(code) as any);
+  }
 });
 
 api.post('/internal/stripe/connect-webhook/bootstrap', async (c) => {
