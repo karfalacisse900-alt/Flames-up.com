@@ -217,7 +217,7 @@ jobs:
             exit 1
           fi
           account_response="$(curl --silent --show-error --fail \
-            --user "$STRIPE_SECRET_KEY:" \
+            --header "Authorization: Bearer $STRIPE_SECRET_KEY" \
             https://api.stripe.com/v1/account)"
           actual_account_id="$(jq -r '.id // empty' <<<"$account_response")"
           actual_display_name="$(jq -r '.settings.dashboard.display_name // .business_profile.name // "unnamed"' <<<"$account_response")"

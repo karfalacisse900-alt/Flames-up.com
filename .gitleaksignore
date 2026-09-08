@@ -1,0 +1,4 @@
+# Supabase anonymous keys are intentionally public client credentials. These
+# entries suppress only the two configured public-key fingerprints.
+backend-cf/wrangler.toml:jwt:12
+backend-cf/wrangler.toml:jwt:76
