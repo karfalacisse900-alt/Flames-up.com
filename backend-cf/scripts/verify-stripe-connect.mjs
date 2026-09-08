@@ -25,7 +25,10 @@ async function request(url, init = {}, expected = 200) {
   });
   const payload = await response.json().catch(() => ({}));
   if (response.status !== expected) {
-    throw new Error(`Stripe Connect smoke returned HTTP ${response.status} at ${new URL(url).pathname}`);
+    const code = typeof payload?.code === 'string' ? payload.code.slice(0, 80) : '';
+    const detail = typeof payload?.detail === 'string' ? payload.detail.slice(0, 180) : '';
+    const diagnostic = [code, detail].filter(Boolean).join(': ');
+    throw new Error(`Stripe Connect smoke returned HTTP ${response.status} at ${new URL(url).pathname}${diagnostic ? ` (${diagnostic})` : ''}`);
   }
   return payload;
 }
