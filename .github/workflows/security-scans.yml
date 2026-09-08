@@ -13,6 +13,7 @@ on:
       - ".github/workflows/security-scans.yml"
       - ".semgrep.yml"
       - ".gitleaks.toml"
+      - ".gitleaksignore"
   schedule:
     - cron: "27 8 * * 1"
 
