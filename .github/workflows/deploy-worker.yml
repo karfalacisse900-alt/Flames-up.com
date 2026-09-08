@@ -220,11 +220,12 @@ jobs:
             --user "$STRIPE_SECRET_KEY:" \
             https://api.stripe.com/v1/account)"
           actual_account_id="$(jq -r '.id // empty' <<<"$account_response")"
+          actual_display_name="$(jq -r '.settings.dashboard.display_name // .business_profile.name // "unnamed"' <<<"$account_response")"
           if [ "$actual_account_id" != "$STRIPE_EXPECTED_ACCOUNT_ID" ]; then
-            echo "The live Stripe key belongs to account ${actual_account_id:-unknown}; expected the protected Captro account $STRIPE_EXPECTED_ACCOUNT_ID."
+            echo "The live Stripe key belongs to account ${actual_account_id:-unknown} (${actual_display_name}); expected the protected Captro account $STRIPE_EXPECTED_ACCOUNT_ID."
             exit 1
           fi
-          echo "Live Stripe credentials belong to the protected Captro account."
+          echo "Live Stripe credentials belong to the protected Captro account (${actual_display_name})."
 
       - name: Install Supabase CLI
         uses: supabase/setup-cli@v1
