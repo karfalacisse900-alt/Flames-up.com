@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url';
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const worker = read('../src/index.ts');
 const native = read('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroPaymentSheetView.swift');
+const nativeApiClient = read('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAPIClient.swift');
 const deployWorkflow = read('../../.github/workflows/deploy-worker.yml');
 const sandboxWorkflow = read('../../.github/workflows/stripe-sandbox-integration.yml');
 const sandboxRuntime = read('../scripts/stripe-sandbox-runtime.mjs');
+const connectSmoke = read('../scripts/verify-stripe-connect.mjs');
 const paymentEnvironmentMigration = read('../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql');
 
 test('native checkout uses provider UI and only persisted confirmation grants completion', () => {
@@ -22,6 +24,13 @@ test('native checkout uses provider UI and only persisted confirmation grants co
   assert.match(start, /CAPTRO_IDEMPOTENCY_KEY_REQUIRED/);
   assert.match(start, /Number\(price.unit_amount \|\| 0\) \* quantity/);
   assert.doesNotMatch(start, /body\.(amount|creatorAmount|serviceFee|taxAmount)/);
+});
+
+test('native release and Stripe smoke use the directly deployed production Worker', () => {
+  const directWorker = /https:\/\/flames-up-api\.karfalacisse900\.workers\.dev\/api/;
+  assert.match(nativeApiClient, directWorker);
+  assert.match(connectSmoke, directWorker);
+  assert.doesNotMatch(nativeApiClient, /apiBaseURL = URL\(string: "https:\/\/api\.flames-up\.com\/api"/);
 });
 
 test('read-only Stripe acceptance refuses live keys without logging credentials', () => {

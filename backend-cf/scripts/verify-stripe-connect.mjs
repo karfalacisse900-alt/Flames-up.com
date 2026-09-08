@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 const supabase = `https://${process.env.SUPABASE_PROJECT_REF}.supabase.co`;
-const api = 'https://api.flames-up.com/api';
+const api = process.env.CAPTRO_STRIPE_SMOKE_BASE_URL || 'https://flames-up-api.karfalacisse900.workers.dev/api';
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const anonKey = process.env.SUPABASE_ANON_KEY;
 const adminHeaders = {
