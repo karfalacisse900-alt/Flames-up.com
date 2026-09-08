@@ -13,11 +13,18 @@ assert.ok(!/^COPY /m.test(schema), 'Never copy production data into the payment 
 const relationExists = name => new RegExp(
   `CREATE TABLE(?: IF NOT EXISTS)?\\s+(?:"public"|public)\\.(?:"${name}"|${name})`, 'i'
 ).test(schema);
+const relationDefinition = name => schema.match(new RegExp(
+  `CREATE TABLE(?: IF NOT EXISTS)?\\s+(?:"public"|public)\\.(?:"${name}"|${name})\\s*\\(([\\s\\S]*?)\\n\\);`, 'i'
+))?.[1] || '';
+const columnExists = (relation, column) => new RegExp(
+  `(?:^|\\n)\\s*(?:"${column}"|${column})\\s+`, 'i'
+).test(relationDefinition(relation));
 const pending = [
-  ['app_payout_requests', '../../supabase/migrations/20260904231905_stripe_native_payments.sql'],
-  ['app_payment_environment', '../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql'],
-  ['app_stripe_customers', '../../supabase/migrations/20260908205030_captro_buyer_payment_methods.sql'],
-].filter(([marker]) => !relationExists(marker));
+  [relationExists('app_payout_requests'), '../../supabase/migrations/20260904231905_stripe_native_payments.sql'],
+  [relationExists('app_payment_environment'), '../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql'],
+  [relationExists('app_stripe_customers'), '../../supabase/migrations/20260908205030_captro_buyer_payment_methods.sql'],
+  [columnExists('app_connected_accounts', 'stripe_mode'), '../../supabase/migrations/20260908224758_isolate_stripe_connected_accounts_by_mode.sql'],
+].filter(([isApplied]) => !isApplied);
 const pendingMigrations = await Promise.all(
   pending.map(([, path]) => readFile(new URL(path, import.meta.url), 'utf8'))
 );

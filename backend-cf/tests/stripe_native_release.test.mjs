@@ -91,6 +91,8 @@ test('protected sandbox acceptance is pinned to its configured test account and 
   assert.match(sandboxSchema, /relationExists/);
   assert.match(sandboxSchema, /app_stripe_customers/);
   assert.match(sandboxSchema, /20260908205030_captro_buyer_payment_methods\.sql/);
+  assert.match(sandboxSchema, /columnExists\('app_connected_accounts', 'stripe_mode'\)/);
+  assert.match(sandboxSchema, /20260908224758_isolate_stripe_connected_accounts_by_mode\.sql/);
   assert.doesNotMatch(sandboxSchema, /Production baseline changed/);
 });
 
