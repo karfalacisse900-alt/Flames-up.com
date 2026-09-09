@@ -34,6 +34,8 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
   private var onboardingController: AccountOnboardingController?
   private weak var presentingViewController: UIViewController?
   private var nativeCompletion: ((Result<CaptroPayoutOnboardingAction, Error>) -> Void)?
+  private var onboardingAPI: MIRAAPIClient?
+  private var isStartingHostedFallback = false
 
   func start(
     api: MIRAAPIClient,
@@ -41,25 +43,13 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
   ) {
     clearNativeState()
     nativeCompletion = completion
+    onboardingAPI = api
     Task {
       do {
         let initialSession = try await api.createPayoutAccountSession()
         try presentNativeOnboarding(initialSession: initialSession, api: api)
       } catch {
-        clearNativeState(keepingCompletion: true)
-        do {
-          let link = try await api.createPayoutOnboardingLink()
-          guard let url = URL(string: link.url) else {
-            throw CaptroPayoutOnboardingError.invalidConfiguration
-          }
-          let fallbackCompletion = nativeCompletion
-          nativeCompletion = nil
-          start(url: url) { result in
-            fallbackCompletion?(result)
-          }
-        } catch {
-          finishNative(.failure(error))
-        }
+        await startHostedFallback(api: api)
       }
     }
   }
@@ -107,6 +97,9 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
   }
 
   func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+    if let window = presentingViewController?.viewIfLoaded?.window {
+      return window
+    }
     let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
     return scenes.flatMap { $0.windows }.first(where: \.isKeyWindow)
       ?? scenes.first?.windows.first
@@ -121,8 +114,20 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
     _ accountOnboarding: AccountOnboardingController,
     didFailLoadWithError error: Error
   ) {
-    presentingViewController?.presentedViewController?.dismiss(animated: true)
-    finishNative(.failure(error))
+    guard let api = onboardingAPI else {
+      finishNative(.failure(error))
+      return
+    }
+    let fallback = { [weak self] in
+      Task { @MainActor in
+        await self?.startHostedFallback(api: api)
+      }
+    }
+    if let presented = presentingViewController?.presentedViewController {
+      presented.dismiss(animated: true, completion: fallback)
+    } else {
+      fallback()
+    }
   }
 
   private func presentNativeOnboarding(
@@ -186,10 +191,35 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
     completion?(result)
   }
 
+  private func startHostedFallback(api: MIRAAPIClient) async {
+    guard !isStartingHostedFallback else { return }
+    isStartingHostedFallback = true
+    componentManager = nil
+    onboardingController = nil
+    do {
+      let link = try await api.createPayoutOnboardingLink()
+      guard let url = URL(string: link.url) else {
+        throw CaptroPayoutOnboardingError.invalidConfiguration
+      }
+      let completion = nativeCompletion
+      nativeCompletion = nil
+      onboardingAPI = nil
+      isStartingHostedFallback = false
+      start(url: url) { [weak self] result in
+        Task { @MainActor in self?.clearNativeState() }
+        completion?(result)
+      }
+    } catch {
+      finishNative(.failure(error))
+    }
+  }
+
   private func clearNativeState(keepingCompletion: Bool = false) {
     componentManager = nil
     onboardingController = nil
     presentingViewController = nil
+    onboardingAPI = nil
+    isStartingHostedFallback = false
     if !keepingCompletion { nativeCompletion = nil }
   }
 }

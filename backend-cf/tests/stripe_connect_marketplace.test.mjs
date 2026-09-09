@@ -284,6 +284,8 @@ test('payout onboarding is native in-app with a secure hosted fallback', () => {
   assert.match(payoutOnboarding, /createAccountOnboardingController\(\)/);
   assert.match(payoutOnboarding, /AccountOnboardingControllerDelegate/);
   assert.match(payoutOnboarding, /createPayoutAccountSession\(\)/);
+  assert.match(payoutOnboarding, /didFailLoadWithError[\s\S]*startHostedFallback/);
+  assert.match(payoutOnboarding, /presented\.dismiss\(animated: true, completion: fallback\)/);
   assert.match(worker, /onboarding-complete/);
   assert.match(worker, /onboarding-refresh/);
   assert.match(worker, /captro:\/\/payouts\/\$\{action\}/);
