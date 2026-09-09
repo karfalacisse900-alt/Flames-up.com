@@ -118,9 +118,10 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
       finishNative(.failure(error))
       return
     }
-    let fallback = { [weak self] in
+    let fallback: () -> Void = { [weak self] in
       Task { @MainActor in
-        await self?.startHostedFallback(api: api)
+        guard let self else { return }
+        await self.startHostedFallback(api: api)
       }
     }
     if let presented = presentingViewController?.presentedViewController {
