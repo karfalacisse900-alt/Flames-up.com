@@ -477,29 +477,35 @@ public struct CaptroPayoutAccount: Decodable, Hashable {
 }
 
 public extension CaptroPayoutAccount {
+  var needsIdentityVerification: Bool {
+    payoutCard != nil && identityRequirementsComplete != true && requirementsCount > 0
+  }
+
   var payoutCardActionTitle: String {
     if ready { return "Manage Payout Card" }
-    if status == "not_started" || (identityRequirementsComplete == true && payoutCard == nil) {
-      return "Add Payout Card"
-    }
+    if payoutCard == nil { return "Add Payout Card" }
+    if needsIdentityVerification { return "Verify Identity" }
     return "Continue Payout Card Setup"
   }
 
   var payoutCardStatusTitle: String {
     if ready { return "Payout card ready" }
-    if status == "not_started" { return "No payout debit card" }
-    if payoutCard != nil { return "Payout card setup needs attention" }
-    return "Payout card setup is incomplete"
+    if payoutCard == nil { return "No payout debit card" }
+    if needsIdentityVerification { return "Identity verification required" }
+    return "Payout card is being reviewed"
   }
 
   var payoutCardGuidance: String {
     if ready {
       return "Captro sends eligible earnings to this debit card."
     }
-    if status == "not_started" || identityRequirementsComplete == true {
-      return "Add an eligible debit card once to receive earnings from your sales."
+    if payoutCard == nil {
+      return "Add an eligible debit card once. Captro handles the payout account in the background."
     }
-    return "Continue the secure setup. Identity details are requested only when required for real-money payouts."
+    if needsIdentityVerification {
+      return "Stripe requires a one-time identity check before Captro can send real-money payouts."
+    }
+    return "Your card was added. Captro is checking whether it can receive payouts."
   }
 }
 
@@ -521,6 +527,14 @@ public struct CaptroHostedAccountLinkResponse: Decodable, Identifiable {
   public let account: CaptroPayoutAccount
   public let flow: String?
   public let url: String
+  public let expiresAt: String?
+}
+
+public struct CaptroPayoutAccountSession: Decodable {
+  public let account: CaptroPayoutAccount
+  public let publishableKey: String
+  public let mode: String
+  public let accountSessionClientSecret: String
   public let expiresAt: String?
 }
 
@@ -664,6 +678,10 @@ extension MIRAAPIClient {
 
   public func createPayoutOnboardingLink() async throws -> CaptroHostedAccountLinkResponse {
     try await post("/commerce/payout-account/onboarding-link", body: EmptyBody())
+  }
+
+  public func createPayoutAccountSession() async throws -> CaptroPayoutAccountSession {
+    try await post("/commerce/payout-account/session", body: EmptyBody())
   }
 
   public func createPayoutManagementLink() async throws -> CaptroHostedAccountLinkResponse {

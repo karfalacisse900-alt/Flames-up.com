@@ -337,28 +337,33 @@ struct CaptroPaymentsView: View {
   }
 
   private func openPayoutSetup(manage: Bool) {
+    if !manage {
+      guard !model.isLoadingPayout else { return }
+      model.isLoadingPayout = true
+      model.payoutError = nil
+      payoutOnboarding.start(api: model.api) { result in
+        model.isLoadingPayout = false
+        switch result {
+        case .success(.complete):
+          Task { await model.refreshPayoutAccount() }
+        case .success(.refresh):
+          openPayoutSetup(manage: false)
+        case .success(.cancelled):
+          break
+        case .failure(let error):
+          model.payoutError = error.localizedDescription
+        }
+      }
+      return
+    }
+
     Task {
-      guard let link = await model.payoutLink(manage: manage),
+      guard let link = await model.payoutLink(manage: true),
             let url = URL(string: link.url) else { return }
       if link.flow == "management" {
         model.hostedDestination = CaptroCheckoutDestination(url: url)
       } else {
-        startPayoutOnboarding(url)
-      }
-    }
-  }
-
-  private func startPayoutOnboarding(_ url: URL) {
-    payoutOnboarding.start(url: url) { result in
-      switch result {
-      case .success(.complete):
-        Task { await model.refreshPayoutAccount() }
-      case .success(.refresh):
         openPayoutSetup(manage: false)
-      case .success(.cancelled):
-        break
-      case .failure(let error):
-        model.payoutError = error.localizedDescription
       }
     }
   }

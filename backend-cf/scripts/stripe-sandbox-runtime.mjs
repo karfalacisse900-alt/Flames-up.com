@@ -112,7 +112,7 @@ function recipientOnboardingPayload(account, refreshUrl, returnUrl) {
     use_case: {
       type: 'account_onboarding',
       account_onboarding: {
-        collection_options: { fields: 'eventually_due' },
+        collection_options: { fields: 'currently_due' },
         configurations: ['recipient'],
         refresh_url: refreshUrl,
         return_url: returnUrl,
@@ -341,6 +341,13 @@ async function main() {
   await json(`${api}/stripe/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 400);
   const before = await json(`${api}/commerce/payout-account`, { headers: onboardingUser.authorized });
   assert.equal(before.account.ready, false);
+  const nativeSetup = await json(`${api}/commerce/payout-account/session`, {
+    method: 'POST', headers: onboardingUser.authorized, body: '{}',
+  });
+  assert.equal(nativeSetup.mode, 'test');
+  assert.ok(nativeSetup.publishableKey.startsWith('pk_test_'));
+  assert.ok(nativeSetup.accountSessionClientSecret.length > 20);
+  assert.equal(nativeSetup.account.ready, false);
   let setup;
   try {
     setup = await json(`${api}/commerce/payout-account/onboarding-link`, {
@@ -546,7 +553,8 @@ async function main() {
   assert.ok(payoutEvents.length >= 1);
 
   console.log(JSON.stringify({ realWorker: true, realSupabaseAuth: true, unsignedWebhookRejected: true,
-    stripeConnectAccountCreated: true, hostedOnboardingLinkCreated: true,
+    stripeConnectAccountCreated: true, nativeAccountOnboardingSessionCreated: true,
+    hostedOnboardingLinkCreated: true,
     nativePaymentIntentCreated: true, nativePaymentIntentConfirmed: true, signedPaymentWebhookProcessed: true,
     purchaseConfirmed: true, ticketIssued: true, creatorEarningRecorded: true,
     eligibleDebitCardValidated: true, instantPayoutCreated: true, signedPayoutWebhookProcessed: true,

@@ -26,6 +26,7 @@ const profile = source('../../ios_native/MIRA/Sources/MIRANative/Screens/Profile
 const checkout = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDetailViews.swift');
 const composer = source('../../ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift');
 const payoutOnboarding = source('../../ios_native/MIRA/Sources/MIRANative/Services/CaptroPayoutOnboardingCoordinator.swift');
+const packageManifest = source('../../ios_native/MIRA/Package.swift');
 const cache = source('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAppCacheStore.swift');
 const homeStamp = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostOverlays.swift');
 const homePost = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostView.swift');
@@ -121,7 +122,7 @@ test('Accounts v2 payloads use the Captro marketplace recipient configuration', 
   assert.equal('merchant' in account.configuration, false);
   const link = stripeRecipientOnboardingPayload('acct_fixture', 'https://captro.app/refresh', 'https://captro.app/return');
   assert.deepEqual(link.use_case.account_onboarding.configurations, ['recipient']);
-  assert.equal(link.use_case.account_onboarding.collection_options.fields, 'eventually_due');
+  assert.equal(link.use_case.account_onboarding.collection_options.fields, 'currently_due');
 });
 
 test('buyer fees are configurable while the creator receives the full listed item amount', () => {
@@ -222,6 +223,8 @@ test('Earnings UI is backed by private live endpoints and never invents balances
   assert.match(commerceModels, /get\("\/commerce\/earnings"\)/);
   assert.match(commerceModels, /get\("\/commerce\/payouts"\)/);
   assert.match(commerceModels, /post\("\/commerce\/payout-account\/onboarding-link"/);
+  assert.match(commerceModels, /post\("\/commerce\/payout-account\/session"/);
+  assert.match(worker, /api\.post\('\/commerce\/payout-account\/session'/);
   assert.match(worker, /stripeApiGet\(c, '\/balance\?expand\[\]=instant_available\.net_available', account\.provider_account_id\)/);
   assert.match(worker, /stripeApiGet\(c, '\/payouts\?limit=100', account\.provider_account_id\)/);
   assert.match(earnings, /Text\("Balance unavailable"\)/);
@@ -266,12 +269,21 @@ test('paid-post onboarding preserves the creator draft and media selection', () 
   assert.match(cache, /var commerceDraft: CaptroCommerceDraft\? = nil/);
   assert.match(composer, /preparePayoutAccountForPublishing/);
   assert.match(composer, /persistComposerDraft/);
-  assert.match(composer, /createPayoutOnboardingLink/);
   assert.match(composer, /CaptroPayoutOnboardingCoordinator/);
-  assert.match(composer, /refreshPayoutOnboardingLink/);
+  assert.match(composer, /payoutOnboarding\.start\(api: api\)/);
 });
 
-test('payout onboarding uses a browser callback and regenerates expired account links', () => {
+test('payout onboarding is native in-app with a secure hosted fallback', () => {
+  assert.match(packageManifest, /product\(name: "StripeConnect"/);
+  assert.match(worker, /stripeApiRequest\(c, '\/account_sessions'/);
+  assert.match(worker, /'components\[account_onboarding\]\[enabled\]': true/);
+  assert.match(worker, /'components\[account_onboarding\]\[features\]\[external_account_collection\]': true/);
+  assert.match(worker, /'components\[account_onboarding\]\[features\]\[disable_stripe_user_authentication\]': false/);
+  assert.match(payoutOnboarding, /import StripeConnect/);
+  assert.match(payoutOnboarding, /EmbeddedComponentManager\(apiClient: stripeClient\)/);
+  assert.match(payoutOnboarding, /createAccountOnboardingController\(\)/);
+  assert.match(payoutOnboarding, /AccountOnboardingControllerDelegate/);
+  assert.match(payoutOnboarding, /createPayoutAccountSession\(\)/);
   assert.match(worker, /onboarding-complete/);
   assert.match(worker, /onboarding-refresh/);
   assert.match(worker, /captro:\/\/payouts\/\$\{action\}/);

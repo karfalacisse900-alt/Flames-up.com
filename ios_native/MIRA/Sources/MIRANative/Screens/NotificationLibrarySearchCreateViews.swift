@@ -2043,9 +2043,7 @@ public struct CreatePostNativeView: View {
       let account = try await api.loadPayoutAccount().account
       if account.ready { return true }
       await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
-      let link = try await api.createPayoutOnboardingLink()
-      guard let url = URL(string: link.url) else { throw MIRAAPIError.badURL }
-      startPayoutOnboarding(url)
+      startPayoutOnboarding()
       errorMessage = nil
       return false
     } catch {
@@ -2057,8 +2055,8 @@ public struct CreatePostNativeView: View {
   }
 
   @MainActor
-  private func startPayoutOnboarding(_ url: URL) {
-    payoutOnboarding.start(url: url) { result in
+  private func startPayoutOnboarding() {
+    payoutOnboarding.start(api: api) { result in
       switch result {
       case .success(.complete):
         Task {
@@ -2072,23 +2070,12 @@ public struct CreatePostNativeView: View {
           }
         }
       case .success(.refresh):
-        Task { await refreshPayoutOnboardingLink() }
+        startPayoutOnboarding()
       case .success(.cancelled):
         break
       case .failure(let error):
         errorMessage = error.localizedDescription
       }
-    }
-  }
-
-  @MainActor
-  private func refreshPayoutOnboardingLink() async {
-    do {
-      let link = try await api.createPayoutOnboardingLink()
-      guard let url = URL(string: link.url) else { throw MIRAAPIError.badURL }
-      startPayoutOnboarding(url)
-    } catch {
-      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not reopen secure payout card setup."
     }
   }
 

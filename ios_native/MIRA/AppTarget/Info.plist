@@ -46,7 +46,7 @@
   <key>LSRequiresIPhoneOS</key>
   <true/>
   <key>NSCameraUsageDescription</key>
-  <string>Captro uses your camera to create posts and stories, update your profile, and privately scan receipts or invoices that you choose to verify.</string>
+  <string>Captro uses your camera to create posts and stories, update your profile, scan documents you choose to verify, and securely capture identity documents when required for payouts.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Captro uses your microphone so you can record audio when creating videos for posts or stories.</string>
   <key>NSPhotoLibraryUsageDescription</key>

@@ -576,21 +576,35 @@ struct CaptroEarningsView: View {
 
   private func openHostedAccount(manage: Bool) {
     guard !isLoading else { return }
+    if !manage {
+      isLoading = true
+      errorMessage = nil
+      payoutOnboarding.start(api: api) { result in
+        isLoading = false
+        switch result {
+        case .success(.complete):
+          Task { await load() }
+        case .success(.refresh):
+          openHostedAccount(manage: false)
+        case .success(.cancelled):
+          break
+        case .failure(let error):
+          errorMessage = error.localizedDescription
+        }
+      }
+      return
+    }
+
     isLoading = true
     Task {
       defer { isLoading = false }
       do {
-        let link: CaptroHostedAccountLinkResponse
-        if manage {
-            link = try await api.createPayoutManagementLink()
-        } else {
-            link = try await api.createPayoutOnboardingLink()
-        }
+        let link = try await api.createPayoutManagementLink()
         guard let url = URL(string: link.url) else { throw URLError(.badURL) }
         if link.flow == "management" {
           hostedDestination = CaptroCheckoutDestination(url: url)
         } else {
-          startPayoutOnboarding(url)
+          startPayoutOnboarding()
         }
       } catch {
         errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout card setup."
@@ -598,8 +612,8 @@ struct CaptroEarningsView: View {
     }
   }
 
-  private func startPayoutOnboarding(_ url: URL) {
-    payoutOnboarding.start(url: url) { result in
+  private func startPayoutOnboarding() {
+    payoutOnboarding.start(api: api) { result in
       switch result {
       case .success(.complete):
         Task { await load() }

@@ -143,14 +143,14 @@ struct CaptroWithdrawView: View {
         if link.flow == "management" {
           hostedDestination = CaptroCheckoutDestination(url: url)
         } else {
-          startPayoutOnboarding(url)
+          startPayoutOnboarding()
         }
       } catch { self.error = "Could not open payout method management." }
     }
   }
 
-  private func startPayoutOnboarding(_ url: URL) {
-    payoutOnboarding.start(url: url) { result in
+  private func startPayoutOnboarding() {
+    payoutOnboarding.start(api: api) { result in
       switch result {
       case .success(.complete):
         retry()

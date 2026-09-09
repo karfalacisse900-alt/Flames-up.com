@@ -1,4 +1,6 @@
 import AuthenticationServices
+import StripeConnect
+import StripePayments
 import UIKit
 
 enum CaptroPayoutOnboardingAction: Equatable {
@@ -8,11 +10,14 @@ enum CaptroPayoutOnboardingAction: Equatable {
 }
 
 private enum CaptroPayoutOnboardingError: LocalizedError {
+  case invalidConfiguration
   case invalidCallback
   case couldNotStart
 
   var errorDescription: String? {
     switch self {
+    case .invalidConfiguration:
+      return "The secure payout card configuration could not be verified."
     case .invalidCallback:
       return "The secure payout card setup did not return to Captro correctly."
     case .couldNotStart:
@@ -23,8 +28,41 @@ private enum CaptroPayoutOnboardingError: LocalizedError {
 
 @MainActor
 final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
-  ASWebAuthenticationPresentationContextProviding {
+  ASWebAuthenticationPresentationContextProviding, AccountOnboardingControllerDelegate {
   private var session: ASWebAuthenticationSession?
+  private var componentManager: EmbeddedComponentManager?
+  private var onboardingController: AccountOnboardingController?
+  private weak var presentingViewController: UIViewController?
+  private var nativeCompletion: ((Result<CaptroPayoutOnboardingAction, Error>) -> Void)?
+
+  func start(
+    api: MIRAAPIClient,
+    completion: @escaping (Result<CaptroPayoutOnboardingAction, Error>) -> Void
+  ) {
+    clearNativeState()
+    nativeCompletion = completion
+    Task {
+      do {
+        let initialSession = try await api.createPayoutAccountSession()
+        try presentNativeOnboarding(initialSession: initialSession, api: api)
+      } catch {
+        clearNativeState(keepingCompletion: true)
+        do {
+          let link = try await api.createPayoutOnboardingLink()
+          guard let url = URL(string: link.url) else {
+            throw CaptroPayoutOnboardingError.invalidConfiguration
+          }
+          let fallbackCompletion = nativeCompletion
+          nativeCompletion = nil
+          start(url: url) { result in
+            fallbackCompletion?(result)
+          }
+        } catch {
+          finishNative(.failure(error))
+        }
+      }
+    }
+  }
 
   func start(
     url: URL,
@@ -73,5 +111,113 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
     return scenes.flatMap { $0.windows }.first(where: \.isKeyWindow)
       ?? scenes.first?.windows.first
       ?? UIWindow()
+  }
+
+  func accountOnboardingDidExit(_ accountOnboarding: AccountOnboardingController) {
+    finishNative(.success(.complete))
+  }
+
+  func accountOnboarding(
+    _ accountOnboarding: AccountOnboardingController,
+    didFailLoadWithError error: Error
+  ) {
+    presentingViewController?.presentedViewController?.dismiss(animated: true)
+    finishNative(.failure(error))
+  }
+
+  private func presentNativeOnboarding(
+    initialSession: CaptroPayoutAccountSession,
+    api: MIRAAPIClient
+  ) throws {
+    guard ["test", "live"].contains(initialSession.mode),
+          initialSession.publishableKey.hasPrefix("pk_\(initialSession.mode)_"),
+          initialSession.accountSessionClientSecret.count > 20,
+          let presenter = topViewController() else {
+      throw CaptroPayoutOnboardingError.invalidConfiguration
+    }
+
+    let secretProvider = CaptroPayoutAccountSessionSecretProvider(
+      api: api,
+      initialSession: initialSession
+    )
+    let stripeClient = STPAPIClient(publishableKey: initialSession.publishableKey)
+    let manager = EmbeddedComponentManager(apiClient: stripeClient) {
+      await secretProvider.nextSecret()
+    }
+    let controller = manager.createAccountOnboardingController()
+    controller.delegate = self
+    controller.title = initialSession.account.needsIdentityVerification
+      ? "Verify Identity"
+      : "Add Payout Card"
+    componentManager = manager
+    onboardingController = controller
+    presentingViewController = presenter
+    controller.present(from: presenter)
+  }
+
+  private func topViewController() -> UIViewController? {
+    let scenes = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .filter { $0.activationState == .foregroundActive }
+    let root = scenes
+      .flatMap(\.windows)
+      .first(where: \.isKeyWindow)?
+      .rootViewController
+      ?? scenes.flatMap(\.windows).first?.rootViewController
+    return topViewController(from: root)
+  }
+
+  private func topViewController(from root: UIViewController?) -> UIViewController? {
+    if let presented = root?.presentedViewController {
+      return topViewController(from: presented)
+    }
+    if let navigation = root as? UINavigationController {
+      return topViewController(from: navigation.visibleViewController)
+    }
+    if let tabs = root as? UITabBarController {
+      return topViewController(from: tabs.selectedViewController)
+    }
+    return root
+  }
+
+  private func finishNative(_ result: Result<CaptroPayoutOnboardingAction, Error>) {
+    let completion = nativeCompletion
+    clearNativeState()
+    completion?(result)
+  }
+
+  private func clearNativeState(keepingCompletion: Bool = false) {
+    componentManager = nil
+    onboardingController = nil
+    presentingViewController = nil
+    if !keepingCompletion { nativeCompletion = nil }
+  }
+}
+
+private actor CaptroPayoutAccountSessionSecretProvider {
+  private let api: MIRAAPIClient
+  private let publishableKey: String
+  private let mode: String
+  private var initialSecret: String?
+
+  init(api: MIRAAPIClient, initialSession: CaptroPayoutAccountSession) {
+    self.api = api
+    publishableKey = initialSession.publishableKey
+    mode = initialSession.mode
+    initialSecret = initialSession.accountSessionClientSecret
+  }
+
+  func nextSecret() async -> String? {
+    if let initialSecret {
+      self.initialSecret = nil
+      return initialSecret
+    }
+    guard let session = try? await api.createPayoutAccountSession(),
+          session.mode == mode,
+          session.publishableKey == publishableKey,
+          session.accountSessionClientSecret.count > 20 else {
+      return nil
+    }
+    return session.accountSessionClientSecret
   }
 }

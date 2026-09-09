@@ -9561,6 +9561,33 @@ async function createConnectedAccountOnboardingLink(c: any, account: any) {
   };
 }
 
+async function createConnectedAccountOnboardingSession(c: any, account: any) {
+  const refreshed = await refreshConnectedAccount(c, account);
+  const accountId = cleanText(refreshed?.provider_account_id, 180);
+  if (!accountId.startsWith('acct_')) throw new Error('STRIPE_CONNECT_ACCOUNT_REQUIRED');
+  const stripe = getStripeConfig(c);
+  const result = await stripeApiRequest(c, '/account_sessions', {
+    account: accountId,
+    'components[account_onboarding][enabled]': true,
+    'components[account_onboarding][features][external_account_collection]': true,
+    'components[account_onboarding][features][disable_stripe_user_authentication]': false,
+  });
+  const clientSecret = cleanText(result.data?.client_secret, 1000);
+  if (!result.ok || result.data?.object !== 'account_session' || clientSecret.length < 20
+      || stripeExpandableId(result.data?.account, 'acct_') !== accountId
+      || result.data?.livemode !== stripe.liveMode
+      || result.data?.components?.account_onboarding?.enabled !== true) {
+    throw stripeProviderError(result, 'STRIPE_CONNECT_ACCOUNT_SESSION_CREATE_FAILED');
+  }
+  return {
+    account: refreshed,
+    publishableKey: stripe.publishableKey,
+    mode: stripe.mode,
+    accountSessionClientSecret: clientSecret,
+    expiresAt: stripeUnixToIso(result.data?.expires_at) || null,
+  };
+}
+
 async function createConnectedAccountManagementLink(c: any, account: any) {
   const refreshed = await refreshConnectedAccount(c, account);
   if (!connectedAccountIsReady(refreshed)) return createConnectedAccountOnboardingLink(c, refreshed);
@@ -18632,6 +18659,36 @@ api.get('/commerce/payout-account', authMiddleware, async (c) => {
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'commerce_payout_account_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load your payout card status.', code: 'PAYOUT_ACCOUNT_READ_FAILED' }, 500);
+  }
+});
+
+api.post('/commerce/payout-account/session', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 1_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'commerce_payout_account_session', appUserId, 20, 60);
+  if (limited) return limited;
+  try {
+    if (!getStripeConfig(c).configured) {
+      return c.json({ detail: 'Payout card setup is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
+    }
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const userRows = await supabaseAdminSelectRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, '*', 1);
+    const account = await createOrLoadConnectedAccount(c, authUserId, appUserId, userRows[0] || {});
+    const session = await createConnectedAccountOnboardingSession(c, account);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({
+      account: connectedAccountPublicPayload(c, session.account),
+      publishableKey: session.publishableKey,
+      mode: session.mode,
+      accountSessionClientSecret: session.accountSessionClientSecret,
+      expiresAt: session.expiresAt,
+    });
+  } catch (error: any) {
+    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_ACCOUNT_SESSION_CREATE_FAILED';
+    console.warn(JSON.stringify({ event: 'stripe_connect_account_session_failed', code }));
+    return c.json({ detail: 'Could not open secure in-app payout card setup.', code }, 502);
   }
 });
 
