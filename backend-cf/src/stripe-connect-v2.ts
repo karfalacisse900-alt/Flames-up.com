@@ -52,7 +52,10 @@ export function stripeRecipientOnboardingPayload(
     use_case: {
       type: 'account_onboarding',
       account_onboarding: {
-        collection_options: { fields: 'currently_due' },
+        collection_options: {
+          fields: 'eventually_due',
+          future_requirements: 'include',
+        },
         configurations: ['recipient'],
         refresh_url: refreshUrl,
         return_url: returnUrl,

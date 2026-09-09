@@ -122,7 +122,8 @@ test('Accounts v2 payloads use the Captro marketplace recipient configuration', 
   assert.equal('merchant' in account.configuration, false);
   const link = stripeRecipientOnboardingPayload('acct_fixture', 'https://captro.app/refresh', 'https://captro.app/return');
   assert.deepEqual(link.use_case.account_onboarding.configurations, ['recipient']);
-  assert.equal(link.use_case.account_onboarding.collection_options.fields, 'currently_due');
+  assert.equal(link.use_case.account_onboarding.collection_options.fields, 'eventually_due');
+  assert.equal(link.use_case.account_onboarding.collection_options.future_requirements, 'include');
 });
 
 test('buyer fees are configurable while the creator receives the full listed item amount', () => {
@@ -273,19 +274,16 @@ test('paid-post onboarding preserves the creator draft and media selection', () 
   assert.match(composer, /payoutOnboarding\.start\(api: api\)/);
 });
 
-test('payout onboarding is native in-app with a secure hosted fallback', () => {
+test('payout onboarding uses Stripe-hosted collection for reliable payout-card setup', () => {
   assert.match(packageManifest, /product\(name: "StripeConnect"/);
   assert.match(worker, /stripeApiRequest\(c, '\/account_sessions'/);
   assert.match(worker, /'components\[account_onboarding\]\[enabled\]': true/);
   assert.match(worker, /'components\[account_onboarding\]\[features\]\[external_account_collection\]': true/);
   assert.match(worker, /'components\[account_onboarding\]\[features\]\[disable_stripe_user_authentication\]': false/);
-  assert.match(payoutOnboarding, /import StripeConnect/);
-  assert.match(payoutOnboarding, /EmbeddedComponentManager\(apiClient: stripeClient\)/);
-  assert.match(payoutOnboarding, /createAccountOnboardingController\(\)/);
-  assert.match(payoutOnboarding, /AccountOnboardingControllerDelegate/);
-  assert.match(payoutOnboarding, /createPayoutAccountSession\(\)/);
-  assert.match(payoutOnboarding, /didFailLoadWithError[\s\S]*startHostedFallback/);
-  assert.match(payoutOnboarding, /presented\.dismiss\(animated: true, completion: fallback\)/);
+  assert.match(payoutOnboarding, /createPayoutOnboardingLink\(\)/);
+  assert.doesNotMatch(payoutOnboarding, /createPayoutAccountSession\(\)/);
+  assert.match(connectV2, /fields: 'eventually_due'/);
+  assert.match(connectV2, /future_requirements: 'include'/);
   assert.match(worker, /onboarding-complete/);
   assert.match(worker, /onboarding-refresh/);
   assert.match(worker, /captro:\/\/payouts\/\$\{action\}/);
