@@ -102,6 +102,22 @@ try {
     const account = connectedAccounts[0].provider_account_id;
     assert.match(account, /^acct_[A-Za-z0-9]+$/);
 
+    const v1Account = await stripeRequest(
+      `https://api.stripe.com/v1/accounts/${encodeURIComponent(account)}?expand[]=external_accounts`,
+    );
+    assert.equal(v1Account.id, account, 'Live connected-account read returned the wrong account');
+
+    const payoutCards = await stripeRequest(
+      `https://api.stripe.com/v1/accounts/${encodeURIComponent(account)}/external_accounts?object=card&limit=100`,
+    );
+    assert.equal(payoutCards.object, 'list', 'Live payout-card read did not return a Stripe list');
+
+    const accountV2 = await stripeRequest(
+      `https://api.stripe.com/v2/core/accounts/${encodeURIComponent(account)}?include[0]=configuration.recipient&include[1]=requirements&include[2]=defaults&include[3]=identity`,
+      { headers: { 'Stripe-Version': '2026-08-26.dahlia' } },
+    );
+    assert.equal(accountV2.id, account, 'Live recipient-account read returned the wrong account');
+
     const sessionBody = new URLSearchParams({
       account,
       'components[account_onboarding][enabled]': 'true',
