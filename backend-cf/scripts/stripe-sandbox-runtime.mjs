@@ -112,7 +112,10 @@ function recipientOnboardingPayload(account, refreshUrl, returnUrl) {
     use_case: {
       type: 'account_onboarding',
       account_onboarding: {
-        collection_options: { fields: 'currently_due' },
+        collection_options: {
+          fields: 'eventually_due',
+          future_requirements: 'include',
+        },
         configurations: ['recipient'],
         refresh_url: refreshUrl,
         return_url: returnUrl,
@@ -522,7 +525,10 @@ async function main() {
   assert.equal(earningsRows.length, 1);
   assert.equal(earningsRows[0].creator_amount, 2000);
   assert.ok(['pending', 'available'].includes(earningsRows[0].status));
-  const paymentEvents = await json(`${local.API_URL}/rest/v1/app_payment_webhook_events?event_type=eq.payment_intent.succeeded&status=eq.processed&select=*`, { headers: admin });
+  const paymentEvents = await waitFor('payment webhook audit record', async () => {
+    const rows = await json(`${local.API_URL}/rest/v1/app_payment_webhook_events?event_type=eq.payment_intent.succeeded&status=eq.processed&select=*`, { headers: admin });
+    return rows.length ? rows : null;
+  }, 30, 1000);
   assert.ok(paymentEvents.length >= 1, 'The signed Stripe event must be recorded as processed');
 
   const earnings = await waitFor('Stripe instant balance reconciliation', async () => {
