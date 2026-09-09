@@ -454,7 +454,7 @@ struct CaptroEarningsView: View {
         VStack(alignment: .leading, spacing: 5) {
           Text("Balance unavailable").font(.system(size: 20, weight: .bold))
           Text(value.account.status == "not_started"
-               ? "Set up earnings to receive money from paid posts."
+               ? "Add a payout card to receive money from paid posts."
                : "Could not retrieve your current balance. Try again shortly.")
             .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
         }
@@ -485,12 +485,13 @@ struct CaptroEarningsView: View {
         Button("Replace Card") { openHostedAccount(manage: true) }
           .buttonStyle(CaptroOutlineButtonStyle())
       } else {
-        Text(account.identityRequirementsComplete == true
-             ? "Add an eligible debit card to receive your Captro earnings."
-             : "Verify your identity and add a debit card to receive earnings from sales.")
+        Text(account.payoutCardGuidance)
           .font(.system(size: 14)).foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Button(account.identityRequirementsComplete == true ? "Add Debit Card" : "Set Up Earnings") {
+        Text("No separate Stripe account is needed. Captro creates and manages the secure payout profile; Stripe may request identity details only when required for real-money payouts.")
+          .font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        Button(account.payoutCardActionTitle) {
           openHostedAccount(manage: false)
         }
         .font(.system(size: 14, weight: .semibold))
@@ -592,7 +593,7 @@ struct CaptroEarningsView: View {
           startPayoutOnboarding(url)
         }
       } catch {
-        errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout setup."
+        errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout card setup."
       }
     }
   }

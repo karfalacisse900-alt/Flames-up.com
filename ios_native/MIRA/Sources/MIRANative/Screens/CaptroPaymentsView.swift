@@ -116,7 +116,7 @@ private final class CaptroPaymentsModel: ObservableObject {
       payoutError = nil
       return link
     } catch {
-      payoutError = apiMessage(error, fallback: "Could not open secure payout setup.")
+      payoutError = apiMessage(error, fallback: "Could not open secure payout card setup.")
       return nil
     }
   }
@@ -204,7 +204,7 @@ struct CaptroPaymentsView: View {
         .fixedSize(horizontal: false, vertical: true)
 
       if !model.methods.isEmpty, model.payoutAccount?.ready != true {
-        Text("Your payment card is ready for purchases. Receiving money from sales still requires Earnings setup below.")
+        Text("Your payment card is ready for purchases. To receive sales earnings, add a separate eligible debit card below.")
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(CaptroDetailStyle.ink)
           .fixedSize(horizontal: false, vertical: true)
@@ -270,14 +270,18 @@ struct CaptroPaymentsView: View {
           }
           .frame(minHeight: 50)
         } else {
-          Text(account.identityRequirementsComplete == true ? "No payout debit card" : "Earnings setup is incomplete")
+          Text(account.payoutCardStatusTitle)
             .font(.system(size: 15, weight: .semibold))
         }
-        Text("Earnings can be sent to an eligible debit card. Credit cards cannot receive payouts.")
+        Text(account.payoutCardGuidance)
           .font(.system(size: 13))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Button(account.ready ? "Manage Payout Card" : (account.identityRequirementsComplete == true ? "Add Payout Card" : "Set Up Earnings")) {
+        Text("You do not need to create or connect a separate Stripe account. Captro manages the secure payout profile behind the scenes. Credit cards cannot receive payouts.")
+          .font(.system(size: 12))
+          .foregroundStyle(CaptroDetailStyle.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        Button(account.payoutCardActionTitle) {
           openPayoutSetup(manage: account.ready)
         }
         .font(.system(size: 14, weight: .semibold))
@@ -289,7 +293,7 @@ struct CaptroPaymentsView: View {
       } else if model.isLoadingPayout {
         ProgressView("Loading payout method...").frame(minHeight: 48)
       } else {
-        Button("Try Payout Setup Again") {
+        Button("Try Payout Card Setup Again") {
           Task { await model.refreshPayoutAccount() }
         }
         .font(.system(size: 14, weight: .semibold))

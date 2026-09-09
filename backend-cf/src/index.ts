@@ -15764,7 +15764,7 @@ api.post('/posts', authMiddleware, async (c) => {
         }, 503);
       }
       return c.json({
-        detail: 'Finish setting up payouts to publish this paid post.',
+        detail: 'Add and finish setting up your payout card before publishing this paid post.',
         code: 'PAYOUT_SETUP_REQUIRED',
       }, 409);
     }
@@ -18180,7 +18180,7 @@ const beginCommercePurchaseHandler = async (c: any) => {
           }, 503);
         }
         return c.json({
-          detail: 'This paid item is not accepting payments yet. The creator must finish earnings setup. Your saved payment card was not charged.',
+          detail: "This paid item is not accepting payments yet because the creator's payout card is not ready. Your saved payment card was not charged.",
           code: 'CAPTRO_PAYOUTS_NOT_READY',
         }, 409);
       }
@@ -18631,7 +18631,7 @@ api.get('/commerce/payout-account', authMiddleware, async (c) => {
     return c.json({ account: connectedAccountPublicPayload(c, account) });
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'commerce_payout_account_failed', code: getErrorCode(error).slice(0, 180) }));
-    return c.json({ detail: 'Could not load your payout account.', code: 'PAYOUT_ACCOUNT_READ_FAILED' }, 500);
+    return c.json({ detail: 'Could not load your payout card status.', code: 'PAYOUT_ACCOUNT_READ_FAILED' }, 500);
   }
 });
 
@@ -18643,7 +18643,7 @@ api.post('/commerce/payout-account/onboarding-link', authMiddleware, async (c) =
   if (limited) return limited;
   try {
     if (!getStripeConfig(c).configured) {
-      return c.json({ detail: 'Payout setup is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
+      return c.json({ detail: 'Payout card setup is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
     }
     const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
@@ -18655,7 +18655,7 @@ api.post('/commerce/payout-account/onboarding-link', authMiddleware, async (c) =
   } catch (error: any) {
     const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_ONBOARDING_FAILED';
     console.warn(JSON.stringify({ event: 'stripe_connect_onboarding_failed', code }));
-    return c.json({ detail: 'Could not open secure payout setup.', code }, 502);
+    return c.json({ detail: 'Could not open secure payout card setup.', code }, 502);
   }
 });
 
@@ -18669,14 +18669,14 @@ api.post('/commerce/payout-account/manage-link', authMiddleware, async (c) => {
     const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
     const account = await connectedAccountForUser(c, authUserId, true);
-    if (!account) return c.json({ detail: 'Set up payouts first.', code: 'PAYOUT_SETUP_REQUIRED' }, 409);
+    if (!account) return c.json({ detail: 'Add a payout card first.', code: 'PAYOUT_SETUP_REQUIRED' }, 409);
     const destination = await createConnectedAccountManagementLink(c, account);
     c.header('Cache-Control', 'private, no-store');
     return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
   } catch (error: any) {
     const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_MANAGEMENT_FAILED';
     console.warn(JSON.stringify({ event: 'stripe_connect_management_failed', code }));
-    return c.json({ detail: 'Could not open payout account management.', code }, 502);
+    return c.json({ detail: 'Could not open payout card management.', code }, 502);
   }
 });
 

@@ -476,6 +476,33 @@ public struct CaptroPayoutAccount: Decodable, Hashable {
   public let requirementsCount: Int
 }
 
+public extension CaptroPayoutAccount {
+  var payoutCardActionTitle: String {
+    if ready { return "Manage Payout Card" }
+    if status == "not_started" || (identityRequirementsComplete == true && payoutCard == nil) {
+      return "Add Payout Card"
+    }
+    return "Continue Payout Card Setup"
+  }
+
+  var payoutCardStatusTitle: String {
+    if ready { return "Payout card ready" }
+    if status == "not_started" { return "No payout debit card" }
+    if payoutCard != nil { return "Payout card setup needs attention" }
+    return "Payout card setup is incomplete"
+  }
+
+  var payoutCardGuidance: String {
+    if ready {
+      return "Captro sends eligible earnings to this debit card."
+    }
+    if status == "not_started" || identityRequirementsComplete == true {
+      return "Add an eligible debit card once to receive earnings from your sales."
+    }
+    return "Continue the secure setup. Identity details are requested only when required for real-money payouts."
+  }
+}
+
 public struct CaptroPayoutCard: Decodable, Hashable {
   public let id: String
   public let brand: String

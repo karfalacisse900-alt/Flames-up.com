@@ -225,7 +225,10 @@ test('Earnings UI is backed by private live endpoints and never invents balances
   assert.match(worker, /stripeApiGet\(c, '\/balance\?expand\[\]=instant_available\.net_available', account\.provider_account_id\)/);
   assert.match(worker, /stripeApiGet\(c, '\/payouts\?limit=100', account\.provider_account_id\)/);
   assert.match(earnings, /Text\("Balance unavailable"\)/);
-  assert.match(earnings, /"Set Up Earnings"/);
+  assert.match(earnings, /"Add a payout card to receive money from paid posts\."/);
+  assert.match(earnings, /No separate Stripe account is needed/);
+  assert.match(commerceModels, /var payoutCardActionTitle: String/);
+  assert.doesNotMatch(`${earnings}\n${payments}\n${composer}`, /Set Up Earnings|Connect Stripe Account/i);
   assert.doesNotMatch(earnings, /Available\s*\$72|Pending\s*\$16|\+ \$8\.00/);
 });
 

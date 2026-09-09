@@ -14,9 +14,9 @@ private enum CaptroPayoutOnboardingError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .invalidCallback:
-      return "The secure earnings setup did not return to Captro correctly."
+      return "The secure payout card setup did not return to Captro correctly."
     case .couldNotStart:
-      return "Could not open secure earnings setup."
+      return "Could not open secure payout card setup."
     }
   }
 }

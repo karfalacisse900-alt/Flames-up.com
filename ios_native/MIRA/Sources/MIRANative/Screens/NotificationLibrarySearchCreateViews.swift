@@ -2049,7 +2049,7 @@ public struct CreatePostNativeView: View {
       errorMessage = nil
       return false
     } catch {
-      let message = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout setup."
+      let message = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout card setup."
       errorMessage = message
       await persistComposerDraft(uploadStatus: "draft", errorMessage: message, includeMedia: true)
       return false
@@ -2066,9 +2066,9 @@ public struct CreatePostNativeView: View {
             let account = try await api.loadPayoutAccount().account
             errorMessage = account.ready
               ? nil
-              : "Finish the remaining Earnings setup steps before publishing this paid post."
+              : "Finish adding your payout card before publishing this paid post."
           } catch {
-            errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not refresh earnings setup."
+            errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not refresh payout card setup."
           }
         }
       case .success(.refresh):
@@ -2088,7 +2088,7 @@ public struct CreatePostNativeView: View {
       guard let url = URL(string: link.url) else { throw MIRAAPIError.badURL }
       startPayoutOnboarding(url)
     } catch {
-      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not reopen secure payout setup."
+      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not reopen secure payout card setup."
     }
   }
 
