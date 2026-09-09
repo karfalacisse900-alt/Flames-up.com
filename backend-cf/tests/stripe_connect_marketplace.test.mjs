@@ -26,6 +26,7 @@ const profile = source('../../ios_native/MIRA/Sources/MIRANative/Screens/Profile
 const checkout = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDetailViews.swift');
 const composer = source('../../ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift');
 const payoutOnboarding = source('../../ios_native/MIRA/Sources/MIRANative/Services/CaptroPayoutOnboardingCoordinator.swift');
+const nativeRoot = source('../../ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift');
 const packageManifest = source('../../ios_native/MIRA/Package.swift');
 const cache = source('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAppCacheStore.swift');
 const homeStamp = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostOverlays.swift');
@@ -294,6 +295,13 @@ test('payout onboarding uses Stripe-hosted collection for reliable payout-card s
   assert.match(payoutOnboarding, /callbackURLScheme: "captro"/);
   assert.match(payoutOnboarding, /case "\/refresh"/);
   assert.doesNotMatch(payoutOnboarding, /SFSafariViewController|WKWebView/);
+});
+
+test('native payout onboarding falls back to system Safari and routes its callback', () => {
+  assert.match(payoutOnboarding, /UIApplication\.shared\.open\(url, options: \[:\]\)/);
+  assert.match(payoutOnboarding, /captroPayoutOnboardingCallback/);
+  assert.match(payoutOnboarding, /applicationDidBecomeActive/);
+  assert.match(nativeRoot, /CaptroPayoutOnboardingCoordinator\.handleIncomingURL\(url\)/);
 });
 
 test('checkout distinguishes seller readiness from temporary Stripe failures', () => {
