@@ -11579,7 +11579,11 @@ async function verifySupabaseAccessToken(c: any, accessToken: string) {
   } catch (localVerifyError: any) {
     const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
       headers: {
-        apikey: getSupabaseAuthClientKey(c),
+        // This is a server-side token verification call. Use the Worker-only
+        // service key so a rotated public key cannot invalidate an otherwise
+        // valid Captro session. The bearer token is still the user's token and
+        // Supabase validates it before returning a user.
+        apikey: getSupabaseAuthUserLookupKey(c),
         Authorization: `Bearer ${token}`,
       },
     });
@@ -11911,6 +11915,12 @@ function getSupabaseServiceRoleKey(c: any): string {
 
 function getSupabaseAuthClientKey(c: any): string {
   const key = String(c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_PUBLISHABLE_KEY || '').trim();
+  if (!key) throw new Error('SUPABASE_AUTH_KEY_MISSING');
+  return key;
+}
+
+function getSupabaseAuthUserLookupKey(c: any): string {
+  const key = String(c.env.SUPABASE_SERVICE_ROLE_KEY || c.env.SUPABASE_ANON_KEY || c.env.SUPABASE_PUBLISHABLE_KEY || '').trim();
   if (!key) throw new Error('SUPABASE_AUTH_KEY_MISSING');
   return key;
 }

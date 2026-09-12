@@ -35,17 +35,19 @@ test('native release and Stripe smoke use the directly deployed production Worke
   assert.doesNotMatch(nativeApiClient, /apiBaseURL = URL\(string: "https:\/\/api\.flames-up\.com\/api"/);
 });
 
-test('production Supabase session verification uses the current Worker secret', () => {
+test('production Supabase session verification stays valid when public keys rotate', () => {
   assert.doesNotMatch(wranglerConfig, /^SUPABASE_ANON_KEY\s*=/m);
-  assert.match(deployWorkflow, /Sync Supabase client-auth Worker secret/);
-  assert.match(
-    deployWorkflow,
-    /printf '%s' "\$SUPABASE_ANON_KEY" \| npx wrangler secret put SUPABASE_ANON_KEY --env production/
+  const tokenVerification = worker.slice(
+    worker.indexOf('async function verifySupabaseAccessToken'),
+    worker.indexOf('async function findOrCreateSupabaseUser')
   );
-  assert.ok(
-    deployWorkflow.indexOf('Sync Supabase client-auth Worker secret')
-      < deployWorkflow.indexOf('Deploy to Cloudflare Workers')
+  assert.match(tokenVerification, /apikey: getSupabaseAuthUserLookupKey\(c\)/);
+  const userLookupKey = worker.slice(
+    worker.indexOf('function getSupabaseAuthUserLookupKey'),
+    worker.indexOf('function supabasePublicAuthHeaders')
   );
+  assert.match(userLookupKey, /SUPABASE_SERVICE_ROLE_KEY \|\| c\.env\.SUPABASE_ANON_KEY/);
+  assert.doesNotMatch(deployWorkflow, /Sync Supabase client-auth Worker secret/);
 });
 
 test('read-only Stripe acceptance refuses live keys without logging credentials', () => {
