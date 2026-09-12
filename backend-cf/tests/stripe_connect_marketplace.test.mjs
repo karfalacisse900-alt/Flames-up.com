@@ -17,7 +17,7 @@ const nativeMigration = source('../../supabase/migrations/20260904231905_stripe_
 const indexMigration = source('../../supabase/migrations/20260904221847_stripe_connect_fk_indexes.sql');
 const buyerCardsMigration = source('../../supabase/migrations/20260908205030_captro_buyer_payment_methods.sql');
 const stripeModeMigration = source('../../supabase/migrations/20260908224758_isolate_stripe_connected_accounts_by_mode.sql');
-const customPayoutMigration = source('../../supabase/migrations/20260912214322_captro_custom_payout_accounts.sql');
+const customPayoutMigration = source('../../supabase/migrations/20260912225447_allow_unused_legacy_express_payout_migration.sql');
 const commerceModels = source('../../ios_native/MIRA/Sources/MIRANative/Models/CaptroCommerce.swift');
 const earnings = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDashboardViews.swift');
 const payments = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroPaymentsView.swift');
@@ -74,7 +74,7 @@ test('connected accounts and reusable catalog IDs are isolated by Stripe mode', 
   assert.match(worker, /price\?\.stripe_price_mode !== stripeMode/);
 });
 
-test('only an untouched current-mode Express payout profile can migrate to Captro-managed Custom', () => {
+test('an unused current-mode Express payout profile can migrate to Captro-managed Custom', () => {
   const migration = worker.match(/async function legacyExpressPayoutProfileCanMigrate[\s\S]*?\n}\n\nasync function createRecipientStripeAccount/)?.[0] || '';
   const upgrade = worker.match(/async function migrateUntouchedLegacyExpressPayoutAccount[\s\S]*?\n}\n\nasync function createOrLoadConnectedAccount/)?.[0] || '';
   const connectWebhook = worker.match(/event\.type === 'account\.updated'[\s\S]*?\n    } else if \(event\.type === 'balance\.available'/)?.[0] || '';
@@ -83,7 +83,7 @@ test('only an untouched current-mode Express payout profile can migrate to Captr
   assert.match(migration, /cleanText\(account\?\.type, 20\)\.toLowerCase\(\) === 'express'/);
   assert.match(migration, /connectedAccountDashboard\(account, accountV2\) === 'express'/);
   assert.match(migration, /connectedAccountOwnerIsComplete\(remoteOwner\)/);
-  assert.match(migration, /payoutProfileHasLocalSetup\(row\)/);
+  assert.match(migration, /payoutProfileHasPayoutDestination\(row\)/);
   assert.match(migration, /legacyConnectedAccountHasFinancialActivity/);
   assert.match(migration, /stripeBalanceIsEmpty\(balanceResult\.data\)/);
   assert.match(migration, /\/transfers\?destination=\$\{encodeURIComponent\(accountId\)\}/);
@@ -95,7 +95,7 @@ test('only an untouched current-mode Express payout profile can migrate to Captr
   assert.match(customPayoutMigration, /set search_path = ''/);
   assert.match(customPayoutMigration, /pg_catalog\.left/);
   assert.match(customPayoutMigration, /pg_catalog\.now\(\)/);
-  assert.match(customPayoutMigration, /details_submitted is distinct from false/);
+  assert.doesNotMatch(customPayoutMigration, /details_submitted is distinct from false/);
   assert.match(customPayoutMigration, /eligible_debit_card_exists is distinct from false/);
   assert.match(customPayoutMigration, /from public\.app_connected_accounts[\s\S]*?for update/);
   assert.match(customPayoutMigration, /app_creator_earnings/);

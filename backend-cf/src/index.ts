@@ -9450,13 +9450,12 @@ function expectedConnectedAccountOwner(authUserId: string, appUserId: string): C
   };
 }
 
-function payoutProfileHasLocalSetup(row: any): boolean {
-  return row?.status !== 'onboarding'
-    || row?.details_submitted !== false
-    || row?.charges_enabled !== false
-    || row?.transfers_enabled !== false
-    || row?.payouts_enabled !== false
-    || row?.eligible_debit_card_exists !== false
+function payoutProfileHasPayoutDestination(row: any): boolean {
+  // An abandoned Express profile can retain onboarding/KYC state even when it
+  // has never held funds or received a payout. Those profile fields must not
+  // send someone back to an Express login. An attached payout destination is
+  // different: it can receive funds, so it keeps the old account protected.
+  return row?.eligible_debit_card_exists !== false
     || row?.payout_card != null
     || row?.external_account_type != null
     || row?.external_account_name != null
@@ -9529,21 +9528,6 @@ async function stripeListIsEmpty(
   throw new Error(failureCode);
 }
 
-function accountCapabilitiesShowPriorUse(account: any, accountV2: any): boolean {
-  const statuses = [
-    ...Object.values(account?.capabilities || {}),
-    accountV2?.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status,
-  ].map((value) => cleanText(value, 40).toLowerCase()).filter(Boolean);
-  return statuses.some((status) => !['inactive', 'unrequested'].includes(status));
-}
-
-function accountRequirementsShowSubmittedDetails(account: any): boolean {
-  const requirements = account?.requirements || {};
-  return ['pending_verification', 'past_due', 'errors']
-    .some((key) => Array.isArray(requirements[key]) && requirements[key].length > 0)
-    || Boolean(cleanText(requirements.disabled_reason, 180));
-}
-
 async function legacyExpressPayoutProfileCanMigrate(
   c: any,
   row: any,
@@ -9555,7 +9539,7 @@ async function legacyExpressPayoutProfileCanMigrate(
       || cleanText(row?.account_type, 20).toLowerCase() !== 'express'
       || !accountId.startsWith('acct_')
       || !connectedAccountOwnerIsComplete(expectedOwner)
-      || payoutProfileHasLocalSetup(row)
+      || payoutProfileHasPayoutDestination(row)
       || await legacyConnectedAccountHasFinancialActivity(c, row)) {
     return false;
   }
@@ -9579,7 +9563,6 @@ async function legacyExpressPayoutProfileCanMigrate(
   const remoteOwner = connectedAccountOwnerFromMetadata(account);
   const embeddedExternalAccounts = account?.external_accounts?.data;
   const externalAccounts = externalAccountsResult.data?.data;
-  const recipientTransferStatus = stripeV2RecipientTransferStatus(accountV2);
   return account?.id === accountId
     && account?.livemode === stripe.liveMode
     && cleanText(account?.type, 20).toLowerCase() === 'express'
@@ -9595,13 +9578,10 @@ async function legacyExpressPayoutProfileCanMigrate(
     && Array.isArray(externalAccounts)
     && externalAccounts.length === 0
     && externalAccountsResult.data?.has_more !== true
-    && account?.details_submitted === false
-    && account?.charges_enabled === false
-    && account?.payouts_enabled === false
-    && account?.requirements && typeof account.requirements === 'object'
-    && ['inactive', 'unrequested'].includes(recipientTransferStatus)
-    && !accountCapabilitiesShowPriorUse(account, accountV2)
-    && !accountRequirementsShowSubmittedDetails(account)
+    // Profile/KYC state by itself is not financial activity. It can be left
+    // behind by an abandoned Express sign-in, which is exactly the flow that
+    // Captro now replaces. The balance, payout, transfer, and external-card
+    // checks above are the financial safety boundary.
     && stripeBalanceIsEmpty(balanceResult.data)
     && payoutsEmpty
     && transfersEmpty
