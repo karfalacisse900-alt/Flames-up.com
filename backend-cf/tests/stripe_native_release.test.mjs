@@ -13,6 +13,7 @@ const sandboxWorkflow = read('../../.github/workflows/stripe-sandbox-integration
 const sandboxRuntime = read('../scripts/stripe-sandbox-runtime.mjs');
 const sandboxSchema = read('../scripts/stripe-sandbox-schema.mjs');
 const connectSmoke = read('../scripts/verify-stripe-connect.mjs');
+const wranglerConfig = read('../wrangler.toml');
 const paymentEnvironmentMigration = read('../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql');
 
 test('native checkout uses provider UI and only persisted confirmation grants completion', () => {
@@ -32,6 +33,19 @@ test('native release and Stripe smoke use the directly deployed production Worke
   assert.match(nativeApiClient, directWorker);
   assert.match(connectSmoke, directWorker);
   assert.doesNotMatch(nativeApiClient, /apiBaseURL = URL\(string: "https:\/\/api\.flames-up\.com\/api"/);
+});
+
+test('production Supabase session verification uses the current Worker secret', () => {
+  assert.doesNotMatch(wranglerConfig, /^SUPABASE_ANON_KEY\s*=/m);
+  assert.match(deployWorkflow, /Sync Supabase client-auth Worker secret/);
+  assert.match(
+    deployWorkflow,
+    /printf '%s' "\$SUPABASE_ANON_KEY" \| npx wrangler secret put SUPABASE_ANON_KEY --env production/
+  );
+  assert.ok(
+    deployWorkflow.indexOf('Sync Supabase client-auth Worker secret')
+      < deployWorkflow.indexOf('Deploy to Cloudflare Workers')
+  );
 });
 
 test('read-only Stripe acceptance refuses live keys without logging credentials', () => {
