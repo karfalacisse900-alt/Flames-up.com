@@ -264,7 +264,15 @@ test('native checkout displays saved buyer cards while payout remains debit-only
   assert.match(paymentSheet, /customerSessionClientSecret: customerSessionClientSecret/);
   assert.match(payments, /Debit and credit cards saved here are available when you pay in Captro/);
   assert.match(payments, /Credit cards cannot receive payouts/);
+  assert.match(payments, /Use .* for Payouts/);
+  assert.match(payments, /Stripe will securely verify/);
+  assert.match(payments, /payoutDebitCardPendingConfirmation/);
   assert.match(worker, /eligibleDebitCard/);
+});
+
+test('native payout requests accept Codable snake_case identifiers', () => {
+  assert.match(worker, /body\.requestId \|\| body\.request_id/);
+  assert.match(worker, /body\.quoteId \|\| body\.quote_id/);
 });
 
 test('paid-post onboarding preserves the creator draft and media selection', () => {
@@ -302,6 +310,7 @@ test('native payout onboarding falls back to system Safari and routes its callba
   assert.match(payoutOnboarding, /captroPayoutOnboardingCallback/);
   assert.match(payoutOnboarding, /applicationDidBecomeActive/);
   assert.match(nativeRoot, /CaptroPayoutOnboardingCoordinator\.handleIncomingURL\(url\)/);
+  assert.match(payoutOnboarding, /COMMERCE_PAYOUT_EMAIL_REQUIRED/);
 });
 
 test('checkout distinguishes seller readiness from temporary Stripe failures', () => {

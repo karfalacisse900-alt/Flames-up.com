@@ -11,6 +11,7 @@ private enum CaptroPayoutOnboardingError: LocalizedError {
   case invalidConfiguration
   case invalidCallback
   case couldNotStart
+  case profileEmailRequired
   case linkRequestFailed(String)
 
   var errorDescription: String? {
@@ -21,6 +22,8 @@ private enum CaptroPayoutOnboardingError: LocalizedError {
       return "The secure payout card setup did not return to Captro correctly."
     case .couldNotStart:
       return "Could not open secure payout card setup."
+    case .profileEmailRequired:
+      return "Add a valid email address to your Captro profile before setting up payouts."
     case .linkRequestFailed(let code):
       return "Captro could not create the secure payout setup link. Reference: \(code)."
     }
@@ -201,6 +204,9 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
   private static func payoutLinkError(_ error: Error) -> Error {
     guard case let MIRAAPIError.server(_, code, _) = error,
           let code, !code.isEmpty else { return error }
+    if code == "COMMERCE_PAYOUT_EMAIL_REQUIRED" {
+      return CaptroPayoutOnboardingError.profileEmailRequired
+    }
     return CaptroPayoutOnboardingError.linkRequestFailed(code)
   }
 

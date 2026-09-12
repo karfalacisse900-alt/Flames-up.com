@@ -18758,7 +18758,9 @@ api.post('/creator/payouts/quote', authMiddleware, async (c) => {
     const authId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
     if (!authId) return c.json({ detail: 'Sign in to continue.' }, 401);
     const body: any = await c.req.json();
-    const requestKey = isUuidText(body.requestId);
+    // MIRAAPIClient encodes Codable keys as snake_case. Keep camelCase for
+    // non-native clients, but accept the native request shape as well.
+    const requestKey = isUuidText(body.requestId || body.request_id || '');
     if (!requestKey) return c.json({ detail: 'A payout request ID is required.' }, 400);
     const state = await creatorInstantPayoutState(c, authId);
     const quote = payoutQuote(body.amount, state.balance, state.card.id, state.currency, c.env);
@@ -18792,7 +18794,8 @@ api.post('/creator/payouts', authMiddleware, async (c) => {
   try {
     const authId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
     const body: any = await c.req.json();
-    const quoteId = isUuidText(body.quoteId);
+    // See the quote endpoint above: native Codable requests use quote_id.
+    const quoteId = isUuidText(body.quoteId || body.quote_id || '');
     if (!authId || !quoteId) return c.json({ detail: 'Payout request not found.' }, 404);
     const rows = await supabaseAdminSelectRows(c, 'app_payout_requests', {
       id: postgrestEqFilter(quoteId), creator_id: postgrestEqFilter(authId),
