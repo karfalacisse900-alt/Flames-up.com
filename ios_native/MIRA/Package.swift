@@ -24,7 +24,6 @@ let package = Package(
       dependencies: [
         "MIRACoreCpp",
         .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS"),
-        .product(name: "StripeConnect", package: "stripe-ios"),
         .product(name: "StripePaymentSheet", package: "stripe-ios"),
         .product(name: "StripePayments", package: "stripe-ios")
       ]

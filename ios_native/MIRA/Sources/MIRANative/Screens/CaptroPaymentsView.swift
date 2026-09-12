@@ -63,7 +63,7 @@ private final class CaptroPaymentsModel: ObservableObject {
       configuration.headerTextForSelectionScreen = "Payment cards"
       configuration.returnURL = initialSession.returnURL
       configuration.billingDetailsCollectionConfiguration.name = .always
-      configuration.billingDetailsCollectionConfiguration.address = .automatic
+      configuration.billingDetailsCollectionConfiguration.address = .full
       configuration.removeSavedPaymentMethodMessage = "Remove this card from your Captro payment methods?"
 
       let intentConfiguration = CustomerSheet.IntentConfiguration(paymentMethodTypes: ["card"]) { [api] in
@@ -121,10 +121,6 @@ private final class CaptroPaymentsModel: ObservableObject {
     }
   }
 
-  var savedDebitCards: [CaptroSavedPaymentMethod] {
-    methods.filter { $0.funding.lowercased() == "debit" }
-  }
-
   private func apiMessage(_ error: Error, fallback: String) -> String {
     (error as? MIRAAPIError)?.errorDescription ?? fallback
   }
@@ -154,7 +150,6 @@ struct CaptroPaymentsView: View {
   @StateObject private var model: CaptroPaymentsModel
   @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
   @State private var showingCustomerSheet = false
-  @State private var payoutDebitCardPendingConfirmation: CaptroSavedPaymentMethod?
 
   init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: CaptroPaymentsModel(api: api))
@@ -181,25 +176,6 @@ struct CaptroPaymentsView: View {
       Task { await model.refreshPayoutAccount() }
     }) { destination in
       CaptroCheckoutBrowser(url: destination.url).ignoresSafeArea()
-    }
-    .confirmationDialog(
-      "Use this debit card for payouts?",
-      isPresented: Binding(
-        get: { payoutDebitCardPendingConfirmation != nil },
-        set: { if !$0 { payoutDebitCardPendingConfirmation = nil } }
-      ),
-      titleVisibility: .visible,
-      presenting: payoutDebitCardPendingConfirmation
-    ) { card in
-      Button("Continue with Stripe") {
-        payoutDebitCardPendingConfirmation = nil
-        openPayoutSetup(manage: false)
-      }
-      Button("Cancel", role: .cancel) {
-        payoutDebitCardPendingConfirmation = nil
-      }
-    } message: { card in
-      Text("Stripe will securely verify \(card.brand) ending in \(card.last4) for payouts. Captro never copies or stores card details.")
     }
   }
 
@@ -239,8 +215,13 @@ struct CaptroPaymentsView: View {
         .foregroundStyle(CaptroDetailStyle.secondary)
         .fixedSize(horizontal: false, vertical: true)
 
+      Text("You are a Captro customer when you pay—no Stripe account connection is needed for purchases.")
+        .font(.system(size: 12))
+        .foregroundStyle(CaptroDetailStyle.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
       if !model.methods.isEmpty, model.payoutAccount?.ready != true {
-        Text("Your payment card is ready for purchases. To receive sales earnings, choose an eligible debit card in Payout Card below.")
+        Text("Your payment card is ready for purchases. To receive sales earnings, add an eligible debit card in Seller Payout Card below.")
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(CaptroDetailStyle.ink)
           .fixedSize(horizontal: false, vertical: true)
@@ -284,7 +265,7 @@ struct CaptroPaymentsView: View {
 
   private var payoutSection: some View {
     VStack(alignment: .leading, spacing: 14) {
-      sectionHeading("PAYOUT CARD")
+      sectionHeading("SELLER PAYOUT CARD")
       if let account = model.payoutAccount {
         if let card = account.payoutCard {
           HStack(spacing: 12) {
@@ -313,47 +294,10 @@ struct CaptroPaymentsView: View {
           .font(.system(size: 13))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Text("You do not need to create or connect a separate Stripe account. Captro manages the secure payout profile behind the scenes. Credit cards cannot receive payouts.")
+        Text("Only needed when you receive earnings from paid posts. You never need this—or a Stripe account connection—to pay in Captro. Captro securely collects and verifies an eligible debit card during payout setup. Credit cards cannot receive payouts.")
           .font(.system(size: 12))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        if account.payoutCard == nil, !model.savedDebitCards.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("USE A SAVED DEBIT CARD")
-              .font(.system(size: 11, weight: .bold))
-              .foregroundStyle(CaptroDetailStyle.secondary)
-            Text("Select a debit card you already use for purchases. Stripe will securely confirm it again before Captro can send payouts.")
-              .font(.system(size: 12))
-              .foregroundStyle(CaptroDetailStyle.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-            ForEach(model.savedDebitCards) { card in
-              Button {
-                payoutDebitCardPendingConfirmation = card
-              } label: {
-                HStack(spacing: 10) {
-                  Image(systemName: "creditcard.fill")
-                    .foregroundStyle(CaptroDetailStyle.accent)
-                  VStack(alignment: .leading, spacing: 2) {
-                    Text("Use \(card.brand) ending in \(card.last4) for Payouts")
-                      .font(.system(size: 14, weight: .semibold))
-                    Text("Securely confirm this debit card with Stripe")
-                      .font(.system(size: 12))
-                      .foregroundStyle(CaptroDetailStyle.secondary)
-                  }
-                  Spacer(minLength: 8)
-                  Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(CaptroDetailStyle.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 46)
-                .padding(.horizontal, 12)
-                .overlay(Rectangle().stroke(CaptroDetailStyle.divider, lineWidth: 1))
-              }
-              .buttonStyle(.plain)
-              .disabled(model.isLoadingPayout)
-            }
-          }
-        }
         Button(account.payoutCardActionTitle) {
           openPayoutSetup(manage: account.ready)
         }

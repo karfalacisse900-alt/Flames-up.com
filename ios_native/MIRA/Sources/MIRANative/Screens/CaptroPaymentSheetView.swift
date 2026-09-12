@@ -68,6 +68,10 @@ struct CaptroPaymentSheetView: View {
     settings.merchantDisplayName = configuration.merchantDisplayName
     settings.returnURL = configuration.returnURL
     settings.allowsDelayedPaymentMethods = false
+    // Buyers pay Captro as Stripe Customers. Keep the billing details on their
+    // PaymentMethod so card checks include the cardholder name and postal address.
+    settings.billingDetailsCollectionConfiguration.name = .always
+    settings.billingDetailsCollectionConfiguration.address = .full
     if let customerId = configuration.customerId,
        let customerSessionClientSecret = configuration.customerSessionClientSecret,
        customerId.hasPrefix("cus_"), customerSessionClientSecret.hasPrefix("cuss_") {

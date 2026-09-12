@@ -500,7 +500,7 @@ public extension CaptroPayoutAccount {
       return "Captro sends eligible earnings to this debit card."
     }
     if payoutCard == nil {
-      return "Choose an eligible debit card for payouts. If it is already saved for purchases, select it below and securely confirm it with Stripe."
+      return "Add an eligible debit card securely to receive payouts."
     }
     if needsIdentityVerification {
       return "Stripe requires a one-time identity check before Captro can send real-money payouts."

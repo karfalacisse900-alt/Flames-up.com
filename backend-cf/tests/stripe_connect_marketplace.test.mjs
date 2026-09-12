@@ -265,6 +265,7 @@ test('Profile payment cards use Stripe CustomerSheet and never store raw card da
   assert.match(worker, /customer: customerId/);
   assert.match(payments, /CustomerSheet\.IntentConfiguration\(paymentMethodTypes: \["card"\]\)/);
   assert.match(payments, /billingDetailsCollectionConfiguration\.name = \.always/);
+  assert.match(payments, /billingDetailsCollectionConfiguration\.address = \.full/);
   assert.match(payments, /CustomerSessionClientSecret/);
   assert.doesNotMatch(payments, /TextField\([^\n]*(card number|cvc|expiration)/i);
   assert.match(profile, /systemImage: "creditcard"[\s\S]{0,120}accessibilityLabel: "Payments"/);
@@ -274,12 +275,20 @@ test('native checkout displays saved buyer cards while payout remains debit-only
   assert.match(commerceModels, /customerSessionClientSecret: String\?/);
   assert.match(paymentSheet, /settings\.customer = \.init/);
   assert.match(paymentSheet, /customerSessionClientSecret: customerSessionClientSecret/);
+  assert.match(paymentSheet, /billingDetailsCollectionConfiguration\.name = \.always/);
+  assert.match(paymentSheet, /billingDetailsCollectionConfiguration\.address = \.full/);
   assert.match(payments, /Debit and credit cards saved here are available when you pay in Captro/);
+  assert.match(payments, /no Stripe account connection is needed for purchases/);
   assert.match(payments, /Credit cards cannot receive payouts/);
-  assert.match(payments, /Use .* for Payouts/);
-  assert.match(payments, /Stripe will securely verify/);
-  assert.match(payments, /payoutDebitCardPendingConfirmation/);
+  assert.match(payments, /SELLER PAYOUT CARD/);
+  assert.doesNotMatch(payments, /Use .* for Payouts/);
+  assert.doesNotMatch(payments, /payoutDebitCardPendingConfirmation/);
+  assert.doesNotMatch(packageManifest, /\.product\(name: "StripeConnect"/);
   assert.match(worker, /eligibleDebitCard/);
+  const paymentIntent = worker.slice(worker.indexOf('async function createCommercePaymentIntent'), worker.indexOf('async function completeCommercePurchaseFromIntent'));
+  assert.match(paymentIntent, /buyerStripeCustomerForUser/);
+  assert.match(paymentIntent, /stripeApiRequest\(c, '\/payment_intents'/);
+  assert.doesNotMatch(paymentIntent, /stripeAccount|Stripe-Account|on_behalf_of/);
 });
 
 test('native payout requests accept Codable snake_case identifiers', () => {
@@ -295,8 +304,8 @@ test('paid-post onboarding preserves the creator draft and media selection', () 
   assert.match(composer, /payoutOnboarding\.start\(api: api\)/);
 });
 
-test('payout onboarding uses Stripe-hosted collection for reliable payout-card setup', () => {
-  assert.match(packageManifest, /product\(name: "StripeConnect"/);
+test('seller payout onboarding uses Stripe-hosted collection without a client Connect SDK', () => {
+  assert.doesNotMatch(packageManifest, /\.product\(name: "StripeConnect"/);
   assert.match(worker, /stripeApiRequest\(c, '\/account_sessions'/);
   assert.match(worker, /'components\[account_onboarding\]\[enabled\]': true/);
   assert.match(worker, /'components\[account_onboarding\]\[features\]\[external_account_collection\]': true/);
