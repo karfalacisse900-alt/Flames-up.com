@@ -6,13 +6,16 @@ type RecipientAccountInput = {
   country: string;
   authUserId: string;
   appUserId: string;
+  migratedFromAccountId?: string;
 };
 
 export function stripeRecipientAccountPayload(input: RecipientAccountInput) {
   return {
     contact_email: input.contactEmail,
     display_name: input.displayName,
-    dashboard: 'express',
+    // Captro owns the seller experience. A no-dashboard recipient account gives
+    // the native app an Account Session without sending the seller to Express.
+    dashboard: 'none',
     identity: { country: input.country.toLowerCase() },
     configuration: {
       recipient: {
@@ -37,30 +40,14 @@ export function stripeRecipientAccountPayload(input: RecipientAccountInput) {
     metadata: {
       captro_auth_user_id: input.authUserId,
       captro_app_user_id: input.appUserId,
+      ...(input.migratedFromAccountId ? {
+        migrated_from_account_id: input.migratedFromAccountId,
+        // A webhook can arrive before the replacement mapping is swapped.
+        // The worker ignores this exact marker until that mapping exists.
+        captro_payout_migration_pending: input.migratedFromAccountId,
+      } : {}),
     },
     include: ['configuration.recipient', 'identity', 'requirements', 'defaults'],
-  };
-}
-
-export function stripeRecipientOnboardingPayload(
-  accountId: string,
-  refreshUrl: string,
-  returnUrl: string,
-) {
-  return {
-    account: accountId,
-    use_case: {
-      type: 'account_onboarding',
-      account_onboarding: {
-        collection_options: {
-          fields: 'eventually_due',
-          future_requirements: 'include',
-        },
-        configurations: ['recipient'],
-        refresh_url: refreshUrl,
-        return_url: returnUrl,
-      },
-    },
   };
 }
 

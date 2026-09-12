@@ -1,10 +1,11 @@
 # Captro Native Payments: Release Gate
 
 Status: the automated backend purchase-to-payout path has passed against a real
-Stripe test account. Native PaymentSheet, hosted onboarding, Apple Pay provisioning,
-and live-mode acceptance remain release gates, so this update is not yet cleared
-for production or TestFlight distribution. Compiler/unit-test success alone is not
-payment evidence.
+Stripe test account. Captro now uses a no-dashboard, Captro-managed recipient
+account and Stripe's embedded in-app onboarding for payout debit cards; it must
+never open an Express login or a hosted Account Link. Native PaymentSheet, Apple
+Pay provisioning, and live-mode acceptance remain release gates. Compiler/unit-test
+success alone is not payment evidence.
 
 ## Architecture
 
@@ -15,9 +16,10 @@ payment evidence.
   idempotency. PaymentSheet receives only the publishable key and client secret.
 - Verified Stripe webhooks confirm the purchase and issue its entitlement and
   creator earning transactionally. PaymentSheet completion never grants access.
-- One Express connected account serves every paid content type for a creator.
-  Stripe-hosted onboarding collects identity and payout information. Captro
-  stores only IDs, requirement statuses and safe debit-card metadata.
+- One Captro-managed, no-dashboard connected account serves every paid content
+  type for a creator. Stripe's embedded onboarding collects the payout debit
+  card and any legally required verification inside Captro; Captro stores only
+  IDs, requirement statuses and safe debit-card metadata.
 - Withdrawal quotes use Stripe's expanded, destination-specific instant balance.
   Creation uses `method=instant`, a validated debit-card destination, an immutable
   stored quote and `payout:{creatorId}:{requestId}` idempotency.
@@ -53,18 +55,17 @@ in this run. No new TestFlight build or production deployment was released.
 Native validation run `33933452281` passed; compiler success is separate evidence.
 
 Retry `33934777282` passed actual account creation and hosted onboarding-link
-creation through Captro. Stripe returned an Express account with real outstanding
-identity/business/external-account requirements and `payoutsReady=false`, matching
-Captro's persisted flags. The disposable empty test account was cleaned up. This
-clears the sandbox activation blocker, but not identity onboarding or payment and
-payout acceptance. The live account still shows Connect's "Continue setup" page.
+creation through Captro. This is historical evidence for the retired Express flow,
+not the current release path. The current path creates a no-dashboard account and
+uses embedded onboarding only; no Captro client should request a hosted link.
 
 Run `34069525678` repeated the isolated test on September 6, 2026 and passed the
-real Stripe authentication, Connect account creation, hosted onboarding-link, and
-signed-webhook boundary checks. It still created no charge, entitlement, earning,
-or payout. The Worker also exposes a role-protected admin refund route that uses
-the same Stripe refund and transfer-reversal path as creator refunds and records
-the action in Captro's admin audit log.
+then-current Stripe authentication, Connect account creation, hosted-link, and
+signed-webhook boundary checks. Its hosted-link evidence is historical and does
+not apply to the embedded release path. It still created no charge, entitlement,
+earning, or payout. The Worker also exposes a role-protected admin refund route
+that uses the same Stripe refund and transfer-reversal path as creator refunds and
+records the action in Captro's admin audit log.
 
 Run [`34075309981`](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/34075309981)
 passed the complete automated backend flow on September 6, 2026 against Stripe
@@ -88,8 +89,8 @@ Stripe sandbox `Captro sandbox` (`acct_1UCpr82KVcRiAcs9`) and touched no live ac
 
 This clears the automated backend Stripe test-flow gate. The runtime confirmed the
 PaymentIntent through Stripe's test API, not through the native iOS PaymentSheet UI.
-Hosted onboarding completion and native device interaction therefore remain manual
-acceptance gates.
+Embedded payout-card onboarding completion and native device interaction therefore
+remain manual acceptance gates.
 
 Native validation run [`34075309982`](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/34075309982)
 also passed the backend compiler/tests, unsigned simulator build, and full-bleed
@@ -98,7 +99,7 @@ a PaymentSheet payment and therefore is not native checkout acceptance evidence.
 
 The ephemeral runtime is API integration coverage only. A persistently isolated
 test backend and sandbox-targeted iOS build are still required for native
-PaymentSheet, hosted onboarding, and device acceptance.
+PaymentSheet, embedded payout onboarding, and device acceptance.
 
 ## Provision An Isolated Sandbox
 
@@ -135,10 +136,18 @@ created/updated/paid/failed/canceled. Retain required legacy Checkout events.
 The old live-only bootstrap helper is not a sandbox provisioner.
 
 Use Stripe's Connect dashboard settings to allow debit cards and remove mandatory
-bank collection where supported. Captro only accepts cards for withdrawal, but
-Express-hosted screens are controlled by Stripe. Confirm those hosted screens
-meet the product's debit-only expectations before release; the app cannot force
-an ineligible card or account to become eligible.
+bank collection where supported. Captro only accepts eligible debit cards for
+withdrawal. Confirm the embedded Stripe component presents an appropriate debit
+card option before release; Captro must not open Express or an Account Link, and
+it cannot make an ineligible card eligible.
+
+Before creating a live embedded Account Session, configure the Connect embedded
+component Site Links in Stripe to Captro's published Terms and Privacy URLs.
+Those pages must link to the Stripe Recipient Agreement and Stripe Privacy Policy
+and include Stripe's required recipient and data-processing disclosures. The
+embedded component itself collects acceptance; do not set
+`skipTermsOfServiceCollection` unless Captro also records Stripe's required
+acceptance data.
 
 ## Fee Policy
 
@@ -186,7 +195,8 @@ button is shown. Apple Pay provisioning has not been completed by this change.
 Use actual Stripe sandbox records, not inserted success rows or fabricated events.
 
 1. Creator drafts a $20 event; publish prompts for earnings setup without losing the draft.
-2. Complete Stripe's required test identity onboarding and add an eligible test debit card.
+2. Add an eligible test debit card through Captro's embedded onboarding and complete
+   only the Stripe verification that is currently required.
 3. Publish the event, then open it as a different buyer in the sandbox iOS build.
 4. Inspect the complete $20 item, configured service fee and total; open real PaymentSheet.
 5. Pay using Stripe's documented test card flow. Test 3DS, cancellation and a decline separately.
@@ -238,10 +248,10 @@ The PostgreSQL test fixtures are isolated SQL tests, not real Stripe integration
 
 ## Production And TestFlight
 
-Do not dispatch the production deploy or TestFlight workflow until the remaining
-native/device sandbox acceptance is recorded and the release target has matching
-API/database/Stripe configuration. Automated backend sandbox acceptance is recorded
-above, but the current TestFlight app targets production, not this isolated sandbox.
+The production deploy and TestFlight workflow are only meaningful when the release
+target has matching API, database, and Stripe configuration. Automated backend
+sandbox acceptance is recorded above, but the current TestFlight app targets
+production, not the isolated sandbox.
 
 The production Worker fixes `STRIPE_MODE=live` and the platform-absorbs payout
 policy in its production configuration. The deployment workflow requires matching

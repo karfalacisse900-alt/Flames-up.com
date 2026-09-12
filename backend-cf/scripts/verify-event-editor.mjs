@@ -55,7 +55,11 @@ try {
   assert.equal(updated.detail.event.attendeesCount, 1);
   assert.equal(updated.detail.event.viewerGoing, true);
   assert.equal(updated.visibility, 'private');
-  assert.doesNotMatch(JSON.stringify(updated.detail), /MUST-NOT-BECOME|999|verified/);
+  // Assert against the actual untrusted event fields, not the whole response:
+  // attendee IDs are random UUIDs and can legitimately contain the digit 999.
+  assert.equal(Object.hasOwn(updated.detail.event, 'code'), false);
+  assert.equal(Object.hasOwn(updated.detail.event, 'attendees_count'), false);
+  assert.equal(Object.hasOwn(updated.detail.event, 'verified'), false);
   assert.equal((await request(`${api}/posts/${post.id}/object`, { headers: owner })).ticket, null);
   await request(`${api}/posts/${post.id}/ticket`, { headers: owner }, 404);
   await request(`${api}/posts/${post.id}`, { headers: stranger }, 404);

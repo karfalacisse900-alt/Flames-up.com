@@ -483,7 +483,7 @@ public extension CaptroPayoutAccount {
 
   var payoutCardActionTitle: String {
     if ready { return "Manage Payout Card" }
-    if payoutCard == nil { return "Add Payout Card" }
+    if payoutCard == nil { return "Add Debit Card" }
     if needsIdentityVerification { return "Verify Identity" }
     return "Continue Payout Card Setup"
   }
@@ -520,14 +520,6 @@ public struct CaptroPayoutCard: Decodable, Hashable {
 
 public struct CaptroPayoutAccountResponse: Decodable {
   public let account: CaptroPayoutAccount
-}
-
-public struct CaptroHostedAccountLinkResponse: Decodable, Identifiable {
-  public var id: String { url }
-  public let account: CaptroPayoutAccount
-  public let flow: String?
-  public let url: String
-  public let expiresAt: String?
 }
 
 public struct CaptroPayoutAccountSession: Decodable {
@@ -676,16 +668,8 @@ extension MIRAAPIClient {
     return try await post("/commerce/payment-methods/setup-intent", body: Input(requestId: requestId))
   }
 
-  public func createPayoutOnboardingLink() async throws -> CaptroHostedAccountLinkResponse {
-    try await post("/commerce/payout-account/onboarding-link", body: EmptyBody())
-  }
-
   public func createPayoutAccountSession() async throws -> CaptroPayoutAccountSession {
     try await post("/commerce/payout-account/session", body: EmptyBody())
-  }
-
-  public func createPayoutManagementLink() async throws -> CaptroHostedAccountLinkResponse {
-    try await post("/commerce/payout-account/manage-link", body: EmptyBody())
   }
 
   public func loadCreatorEarnings() async throws -> CaptroEarningsResponse {

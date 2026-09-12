@@ -87,6 +87,8 @@ test('protected sandbox acceptance is pinned to its configured test account and 
   assert.match(sandboxRuntime, /app_creator_earnings/);
   assert.match(sandboxRuntime, /creator\/payouts\/quote/);
   assert.match(sandboxRuntime, /signed payout webhook confirmation/);
+  assert.match(sandboxRuntime, /stripeVersion: '2024-10-28\.acacia'/);
+  assert.match(sandboxRuntime, /disable_stripe_user_authentication\]': true/);
   assert.match(sandboxRuntime, /nativePaymentSheetValidated: false/);
   assert.match(sandboxSchema, /relationExists/);
   assert.match(sandboxSchema, /app_stripe_customers/);
@@ -118,7 +120,12 @@ test('the production bootstrap binds one Stripe mode and provisions both signed 
   assert.match(deployWorkflow, /actual_account_id.*STRIPE_EXPECTED_ACCOUNT_ID/s);
   assert.match(deployWorkflow, /Verify production Stripe Connect runtime[\s\S]*STRIPE_SECRET_KEY/);
   assert.match(connectSmoke, /https:\/\/api\.stripe\.com\/v1\/account_sessions/);
-  assert.match(connectSmoke, /https:\/\/api\.stripe\.com\/v2\/core\/account_links/);
+  assert.match(connectSmoke, /accountV2\.dashboard, 'none'/);
+  assert.match(connectSmoke, /requirement_collection, 'application'/);
+  assert.match(connectSmoke, /external_account_collection\]': 'true'/);
+  assert.match(connectSmoke, /disable_stripe_user_authentication\]': 'true'/);
+  assert.match(connectSmoke, /Stripe-Version': '2024-10-28\.acacia'/);
+  assert.doesNotMatch(connectSmoke, /\/core\/account_links|\/login_links/);
   assert.match(deployWorkflow, /Waiting for newly deployed Cloudflare secrets/);
   assert.match(deployWorkflow, /http_status" = "404".*code" = "NOT_FOUND".*sleep 5/s);
   assert.doesNotMatch(deployWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_/);

@@ -2062,17 +2062,17 @@ public struct CreatePostNativeView: View {
         Task {
           do {
             let account = try await api.loadPayoutAccount().account
-            errorMessage = account.ready
-              ? nil
-              : "Finish adding your payout card before publishing this paid post."
+            if account.ready {
+              errorMessage = nil
+            } else if account.needsIdentityVerification {
+              errorMessage = "Complete the required identity verification before publishing this paid post."
+            } else {
+              errorMessage = "Finish adding your payout debit card before publishing this paid post."
+            }
           } catch {
             errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not refresh payout card setup."
           }
         }
-      case .success(.refresh):
-        startPayoutOnboarding()
-      case .success(.cancelled):
-        break
       case .failure(let error):
         errorMessage = error.localizedDescription
       }

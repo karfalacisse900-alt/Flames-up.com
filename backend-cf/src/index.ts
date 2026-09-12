@@ -13,7 +13,7 @@ import { decodeStripeResponse, stripeFailureCode } from './stripe-response';
 import {
   STRIPE_ACCOUNTS_V2_VERSION,
   stripeRecipientAccountPayload,
-  stripeRecipientOnboardingPayload,
+  stripeV2RecipientTransferStatus,
   stripeV2RecipientTransfersEnabled,
 } from './stripe-connect-v2';
 
@@ -8277,6 +8277,11 @@ type StripeRequestOptions = {
   connectedAccountId?: string | null;
 };
 
+// Stripe added disable_stripe_user_authentication for Account Sessions in this
+// API version. Pin just the embedded payout request so an older account default
+// cannot silently bring back a Stripe user-authentication step.
+const STRIPE_PAYOUT_ACCOUNT_SESSION_VERSION = '2024-10-28.acacia';
+
 function stripeRequestHeaders(c: any, options: StripeRequestOptions = {}): Record<string, string> {
   const stripe = getStripeConfig(c);
   const headers: Record<string, string> = { Authorization: `Bearer ${stripe.secretKey}` };
@@ -8340,7 +8345,8 @@ async function stripeApiRequest(
   path: string,
   params?: Record<string, string | number | boolean | null | undefined>,
   idempotencyKey?: string | null,
-  connectedAccountId?: string | null
+  connectedAccountId?: string | null,
+  stripeVersion?: string,
 ) {
   const stripe = getStripeConfig(c);
   if (!stripe.configured) {
@@ -8358,6 +8364,7 @@ async function stripeApiRequest(
     ...stripeRequestHeaders(c, { idempotencyKey, connectedAccountId }),
     'Content-Type': 'application/x-www-form-urlencoded',
   };
+  if (stripeVersion) headers['Stripe-Version'] = stripeVersion;
 
   const response = await fetch(`https://api.stripe.com/v1${path}`, {
     method: 'POST',
@@ -8887,14 +8894,14 @@ function commerceErrorDiagnostic(error: any): string {
     .replace(/\b(?:sk|rk|pk|whsec)_(?:test|live)?_?[a-zA-Z0-9]+\b/g, '[credential]')
     .replace(/\bBearer\s+\S+/gi, 'Bearer [credential]')
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
-    .replace(/\b(?:acct|pi|ch|po|pm|card|cus|prod|price|req)_[a-zA-Z0-9]+\b/g, '[provider-id]')
+    .replace(/\b(?:acct|pi|ch|po|pm|card|cus|prod|price|req|tok)_[a-zA-Z0-9]+\b/g, '[provider-id]')
     .slice(0, 300);
 }
 
 type PayoutSetupFailure = {
   code: string;
   detail: string;
-  status: 409 | 502;
+  status: 409 | 410 | 502;
 };
 
 function payoutSetupFailure(error: any): PayoutSetupFailure {
@@ -8911,6 +8918,20 @@ function payoutSetupFailure(error: any): PayoutSetupFailure {
       code,
       detail: 'We could not verify your existing payout setup securely. Please contact Captro support.',
       status: 409,
+    };
+  }
+  if (code === 'CAPTRO_PAYOUT_PROFILE_UPGRADE_REQUIRED') {
+    return {
+      code,
+      detail: 'This payout profile needs a secure Captro review before it can be upgraded.',
+      status: 409,
+    };
+  }
+  if (code === 'CAPTRO_PAYOUT_APP_UPDATE_REQUIRED') {
+    return {
+      code,
+      detail: 'Update Captro to manage your payout card.',
+      status: 410,
     };
   }
   return {
@@ -9131,6 +9152,44 @@ function connectedAccountStatus(account: any, accountV2?: any): string {
   return account?.details_submitted === true ? 'pending' : 'onboarding';
 }
 
+function connectedAccountDashboard(account: any, accountV2?: any): string {
+  const candidates = [
+    accountV2?.dashboard,
+    accountV2?.dashboard?.type,
+    account?.controller?.stripe_dashboard?.type,
+  ];
+  for (const candidate of candidates) {
+    const value = cleanText(candidate, 40).toLowerCase();
+    if (['express', 'full', 'none'].includes(value)) return value;
+  }
+  return '';
+}
+
+function connectedAccountRequirementCollection(account: any, accountV2?: any): string {
+  const candidates = [
+    account?.controller?.requirement_collection,
+    accountV2?.controller?.requirement_collection,
+    accountV2?.configuration?.controller?.requirement_collection,
+  ];
+  for (const candidate of candidates) {
+    const value = cleanText(candidate, 40).toLowerCase();
+    if (value) return value;
+  }
+  return '';
+}
+
+function connectedAccountType(account: any, accountV2?: any): 'express' | 'standard' | 'custom' {
+  // Accounts v2 represents Captro's no-dashboard recipient configuration as
+  // dashboard:none; the v1 Account.type field is not the source of truth here.
+  const dashboard = connectedAccountDashboard(account, accountV2);
+  if (dashboard === 'none') return 'custom';
+  if (dashboard === 'express') return 'express';
+  if (dashboard === 'full') return 'standard';
+  if (connectedAccountRequirementCollection(account, accountV2) === 'application') return 'custom';
+  const type = cleanText(account?.type, 20).toLowerCase();
+  return type === 'standard' || type === 'custom' || type === 'express' ? type : 'custom';
+}
+
 function connectedAccountSafePatch(account: any, accountV2?: any) {
   const external = Array.isArray(account?.external_accounts?.data)
     ? account.external_accounts.data.find((item: any) => eligibleDebitCard(item, account.default_currency || 'usd'))
@@ -9206,6 +9265,20 @@ function isConnectedAccountConstraintConflict(error: any): boolean {
     && /(23505|duplicate key|unique)/i.test(code);
 }
 
+function connectedAccountHasPendingMigration(account: any): boolean {
+  const migratedFrom = cleanText(account?.metadata?.migrated_from_account_id, 180);
+  const pending = cleanText(account?.metadata?.captro_payout_migration_pending, 180);
+  return migratedFrom.startsWith('acct_') && pending === migratedFrom;
+}
+
+async function connectedAccountProviderIsRetired(c: any, providerAccountId: string, stripeMode: 'test' | 'live'): Promise<boolean> {
+  const rows = await supabaseAdminSelectRowsIfShapeExists(c, 'app_retired_connected_accounts', {
+    provider_account_id: postgrestEqFilter(providerAccountId),
+    stripe_mode: postgrestEqFilter(stripeMode),
+  }, 'provider_account_id', 1);
+  return rows.length > 0;
+}
+
 async function syncConnectedAccountFromStripe(
   c: any,
   account: any,
@@ -9236,8 +9309,19 @@ async function syncConnectedAccountFromStripe(
     }, '*', 1);
     row = rows[0];
   }
-  const patch = { stripe_mode: stripeMode, ...connectedAccountSafePatch(account, recipientAccountV2) };
+  const patch = {
+    stripe_mode: stripeMode,
+    account_type: connectedAccountType(account, recipientAccountV2),
+    ...connectedAccountSafePatch(account, recipientAccountV2),
+  };
   const metadataOwner = connectedAccountOwnerFromMetadata(account);
+  // The replacement is created before an atomic database swap. Ignore a
+  // provider webhook during that tiny window; once mapped, this same account
+  // is reconciled normally. Retired account events are audit-only as well.
+  if (!row && (connectedAccountHasPendingMigration(account)
+      || await connectedAccountProviderIsRetired(c, providerAccountId, stripeMode))) {
+    return null;
+  }
   if (row) {
     if ((connectedAccountOwnerIsComplete(metadataOwner) && !connectedAccountRowMatchesOwner(row, metadataOwner))
       || (expectedOwner && !connectedAccountRowMatchesOwner(row, expectedOwner))) {
@@ -9272,7 +9356,6 @@ async function syncConnectedAccountFromStripe(
     const inserted = await supabaseAdminInsertRows(c, 'app_connected_accounts', [{
       user_id: metadataOwner.authUserId,
       app_user_id: metadataOwner.appUserId,
-      account_type: cleanText(account?.type || 'express', 20) || 'express',
       ...patch,
     }]);
     return inserted[0] || null;
@@ -9337,9 +9420,7 @@ function connectedAccountPublicPayload(c: any, row: any) {
   };
 }
 
-async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserId: string, userRow: any): Promise<any> {
-  const existing = await connectedAccountForUser(c, authUserId, true);
-  if (existing) return existing;
+function payoutRecipientAccountInput(authUserId: string, appUserId: string, userRow: any) {
   const countryCandidate = cleanText(userRow?.country || userRow?.country_code, 2).toUpperCase();
   const country = /^[A-Z]{2}$/.test(countryCandidate) ? countryCandidate : 'US';
   const email = normalizeOptionalEmail(userRow?.email);
@@ -9347,31 +9428,267 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
   if (!contactEmail) throw new Error('COMMERCE_PAYOUT_EMAIL_REQUIRED');
   const displayName = cleanText(userRow?.full_name || userRow?.username || safeDisplayNameFromEmail(contactEmail), 120)
     || 'Captro creator';
-  const account = await stripeApiV2Request(c, '/core/accounts', stripeRecipientAccountPayload({
+  return {
     contactEmail,
     displayName,
     country,
     authUserId,
     appUserId,
-  }), `captro-connect-account-${getStripeConfig(c).mode}-${authUserId}`);
-  if (!account.ok || !String(account.data?.id || '').startsWith('acct_')) {
-    throw stripeProviderError(account, 'STRIPE_CONNECT_ACCOUNT_CREATE_FAILED');
+  };
+}
+
+function expectedConnectedAccountOwner(authUserId: string, appUserId: string): ConnectedAccountOwner {
+  return {
+    authUserId: isUuidText(authUserId),
+    appUserId: publicId(appUserId, 120),
+  };
+}
+
+function payoutProfileHasLocalSetup(row: any): boolean {
+  return row?.status !== 'onboarding'
+    || row?.details_submitted !== false
+    || row?.charges_enabled !== false
+    || row?.transfers_enabled !== false
+    || row?.payouts_enabled !== false
+    || row?.eligible_debit_card_exists !== false
+    || row?.payout_card != null
+    || row?.external_account_type != null
+    || row?.external_account_name != null
+    || row?.external_account_last4 != null;
+}
+
+async function legacyConnectedAccountHasFinancialActivity(c: any, row: any): Promise<boolean> {
+  const accountId = isUuidText(row?.id);
+  const providerAccountId = cleanText(row?.provider_account_id, 180);
+  if (!accountId || !providerAccountId.startsWith('acct_')) return true;
+  const [purchases, destinationPurchases, earnings, payouts, payoutRequests, providerPayoutRequests] = await Promise.all([
+    supabaseAdminSelectRows(c, 'app_purchases', { connected_account_id: postgrestEqFilter(accountId) }, 'id', 1),
+    supabaseAdminSelectRows(c, 'app_purchases', { stripe_destination_account_id: postgrestEqFilter(providerAccountId) }, 'id', 1),
+    supabaseAdminSelectRows(c, 'app_creator_earnings', { connected_account_id: postgrestEqFilter(accountId) }, 'id', 1),
+    supabaseAdminSelectRows(c, 'app_payouts', { connected_account_id: postgrestEqFilter(accountId) }, 'id', 1),
+    supabaseAdminSelectRows(c, 'app_payout_requests', { connected_account_id: postgrestEqFilter(accountId) }, 'id', 1),
+    supabaseAdminSelectRows(c, 'app_payout_requests', { provider_account_id: postgrestEqFilter(providerAccountId) }, 'id', 1),
+  ]);
+  return [purchases, destinationPurchases, earnings, payouts, payoutRequests, providerPayoutRequests]
+    .some((rows) => rows.length > 0);
+}
+
+function stripeBalanceHasNonZeroAmount(value: any): boolean {
+  if (Array.isArray(value)) return value.some((item) => stripeBalanceHasNonZeroAmount(item));
+  if (!value || typeof value !== 'object') return false;
+  if (Object.prototype.hasOwnProperty.call(value, 'amount')
+      && Number.isFinite(Number(value.amount)) && Math.trunc(Number(value.amount)) !== 0) {
+    return true;
   }
-  const accountId = cleanText(account.data.id, 180);
+  return Object.values(value).some((item) => stripeBalanceHasNonZeroAmount(item));
+}
+
+function stripeBalanceIsEmpty(balance: any): boolean {
+  if (!balance || typeof balance !== 'object' || !Array.isArray(balance.available) || !Array.isArray(balance.pending)) {
+    return false;
+  }
+  return !stripeBalanceHasNonZeroAmount(balance.available)
+    && !stripeBalanceHasNonZeroAmount(balance.pending)
+    && !stripeBalanceHasNonZeroAmount(balance.instant_available)
+    && !stripeBalanceHasNonZeroAmount(balance.connect_reserved)
+    && !stripeBalanceHasNonZeroAmount(balance.issuing);
+}
+
+function stripeListPagePath(path: string, startingAfter: string): string {
+  if (!startingAfter) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}starting_after=${encodeURIComponent(startingAfter)}`;
+}
+
+async function stripeListIsEmpty(
+  c: any,
+  path: string,
+  failureCode: string,
+  connectedAccountId?: string,
+): Promise<boolean> {
+  let startingAfter = '';
+  for (let page = 0; page < 20; page += 1) {
+    const result = await stripeApiGet(c, stripeListPagePath(path, startingAfter), connectedAccountId);
+    if (!result.ok || result.data?.object !== 'list' || !Array.isArray(result.data?.data)) {
+      throw stripeProviderError(result, failureCode);
+    }
+    const rows = result.data.data;
+    if (rows.length > 0) return false;
+    if (result.data?.has_more !== true) return true;
+    // Stripe cannot provide a next-page cursor without a last list item. Treat
+    // an inconsistent list response as unsafe rather than assuming no activity.
+    const cursor = cleanText(rows.at(-1)?.id, 180);
+    if (!cursor) throw new Error(failureCode);
+    startingAfter = cursor;
+  }
+  throw new Error(failureCode);
+}
+
+function accountCapabilitiesShowPriorUse(account: any, accountV2: any): boolean {
+  const statuses = [
+    ...Object.values(account?.capabilities || {}),
+    accountV2?.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers?.status,
+  ].map((value) => cleanText(value, 40).toLowerCase()).filter(Boolean);
+  return statuses.some((status) => !['inactive', 'unrequested'].includes(status));
+}
+
+function accountRequirementsShowSubmittedDetails(account: any): boolean {
+  const requirements = account?.requirements || {};
+  return ['pending_verification', 'past_due', 'errors']
+    .some((key) => Array.isArray(requirements[key]) && requirements[key].length > 0)
+    || Boolean(cleanText(requirements.disabled_reason, 180));
+}
+
+async function legacyExpressPayoutProfileCanMigrate(
+  c: any,
+  row: any,
+  expectedOwner: ConnectedAccountOwner,
+): Promise<boolean> {
+  const stripe = getStripeConfig(c);
+  const accountId = cleanText(row?.provider_account_id, 180);
+  if (row?.stripe_mode !== configuredStripeMode(c)
+      || cleanText(row?.account_type, 20).toLowerCase() !== 'express'
+      || !accountId.startsWith('acct_')
+      || !connectedAccountOwnerIsComplete(expectedOwner)
+      || payoutProfileHasLocalSetup(row)
+      || await legacyConnectedAccountHasFinancialActivity(c, row)) {
+    return false;
+  }
+
+  const [accountResult, accountV2Result, externalAccountsResult, balanceResult, payoutsEmpty, transfersEmpty, ledgerEmpty] = await Promise.all([
+    stripeApiGet(c, `/accounts/${encodeURIComponent(accountId)}?expand[]=external_accounts`),
+    stripeApiV2Get(c, `/core/accounts/${encodeURIComponent(accountId)}?include[0]=configuration.recipient&include[1]=requirements&include[2]=defaults&include[3]=identity`),
+    stripeApiGet(c, `/accounts/${encodeURIComponent(accountId)}/external_accounts?limit=100`),
+    stripeApiGet(c, '/balance?expand[]=instant_available.net_available', accountId),
+    stripeListIsEmpty(c, '/payouts?limit=100', 'STRIPE_PAYOUT_HISTORY_READ_FAILED', accountId),
+    stripeListIsEmpty(c, `/transfers?destination=${encodeURIComponent(accountId)}&limit=100`, 'STRIPE_TRANSFER_HISTORY_READ_FAILED'),
+    stripeListIsEmpty(c, '/balance_transactions?limit=100', 'STRIPE_BALANCE_TRANSACTION_HISTORY_READ_FAILED', accountId),
+  ]);
+  if (!accountResult.ok) throw stripeProviderError(accountResult, 'STRIPE_CONNECT_ACCOUNT_SYNC_FAILED');
+  if (!accountV2Result.ok) throw stripeProviderError(accountV2Result, 'STRIPE_CONNECT_ACCOUNT_V2_SYNC_FAILED');
+  if (!externalAccountsResult.ok) throw stripeProviderError(externalAccountsResult, 'STRIPE_EXTERNAL_ACCOUNT_HISTORY_READ_FAILED');
+  if (!balanceResult.ok) throw stripeProviderError(balanceResult, 'STRIPE_BALANCE_UNAVAILABLE');
+
+  const account = accountResult.data;
+  const accountV2 = accountV2Result.data;
+  const remoteOwner = connectedAccountOwnerFromMetadata(account);
+  const embeddedExternalAccounts = account?.external_accounts?.data;
+  const externalAccounts = externalAccountsResult.data?.data;
+  const recipientTransferStatus = stripeV2RecipientTransferStatus(accountV2);
+  return account?.id === accountId
+    && account?.livemode === stripe.liveMode
+    && cleanText(account?.type, 20).toLowerCase() === 'express'
+    && connectedAccountDashboard(account, accountV2) === 'express'
+    && connectedAccountOwnerIsComplete(remoteOwner)
+    && remoteOwner.authUserId === expectedOwner.authUserId
+    && remoteOwner.appUserId === expectedOwner.appUserId
+    && account?.external_accounts?.object === 'list'
+    && Array.isArray(embeddedExternalAccounts)
+    && embeddedExternalAccounts.length === 0
+    && account?.external_accounts?.has_more !== true
+    && externalAccountsResult.data?.object === 'list'
+    && Array.isArray(externalAccounts)
+    && externalAccounts.length === 0
+    && externalAccountsResult.data?.has_more !== true
+    && account?.details_submitted === false
+    && account?.charges_enabled === false
+    && account?.payouts_enabled === false
+    && account?.requirements && typeof account.requirements === 'object'
+    && ['inactive', 'unrequested'].includes(recipientTransferStatus)
+    && !accountCapabilitiesShowPriorUse(account, accountV2)
+    && !accountRequirementsShowSubmittedDetails(account)
+    && stripeBalanceIsEmpty(balanceResult.data)
+    && payoutsEmpty
+    && transfersEmpty
+    && ledgerEmpty;
+}
+
+async function createRecipientStripeAccount(c: any, input: any, idempotencyKey: string): Promise<{ account: any; accountId: string }> {
+  const result = await stripeApiV2Request(c, '/core/accounts', stripeRecipientAccountPayload(input), idempotencyKey);
+  if (!result.ok || !String(result.data?.id || '').startsWith('acct_')) {
+    throw stripeProviderError(result, 'STRIPE_CONNECT_ACCOUNT_CREATE_FAILED');
+  }
+  return { account: result.data, accountId: cleanText(result.data.id, 180) };
+}
+
+async function readCreatedRecipientV1Account(c: any, accountId: string): Promise<any> {
   const v1Account = await stripeApiGet(c, `/accounts/${encodeURIComponent(accountId)}?expand[]=external_accounts`);
   if (!v1Account.ok || v1Account.data?.id !== accountId) {
     throw stripeProviderError(v1Account, 'STRIPE_CONNECT_ACCOUNT_SYNC_FAILED');
   }
-  const expectedOwner: ConnectedAccountOwner = {
-    authUserId: isUuidText(authUserId),
-    appUserId: publicId(appUserId, 120),
-  };
-  const connected = await syncConnectedAccountFromStripe(c, v1Account.data, undefined, account.data, expectedOwner);
+  return v1Account.data;
+}
+
+async function createCaptroManagedConnectedAccount(c: any, authUserId: string, appUserId: string, userRow: any): Promise<any> {
+  const input = payoutRecipientAccountInput(authUserId, appUserId, userRow);
+  const created = await createRecipientStripeAccount(c, input,
+    `captro-managed-payout-account-${getStripeConfig(c).mode}-${authUserId}`);
+  const v1Account = await readCreatedRecipientV1Account(c, created.accountId);
+  const expectedOwner = expectedConnectedAccountOwner(authUserId, appUserId);
+  const connected = await syncConnectedAccountFromStripe(c, v1Account, undefined, created.account, expectedOwner);
   if (!connected || !connectedAccountRowMatchesOwner(connected, expectedOwner)
-    || connected.stripe_mode !== configuredStripeMode(c)) {
+    || connected.stripe_mode !== configuredStripeMode(c) || connected.account_type !== 'custom') {
     throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
   }
   return connected;
+}
+
+async function migrateUntouchedLegacyExpressPayoutAccount(
+  c: any,
+  legacy: any,
+  authUserId: string,
+  appUserId: string,
+  userRow: any,
+): Promise<any> {
+  const expectedOwner = expectedConnectedAccountOwner(authUserId, appUserId);
+  if (!await legacyExpressPayoutProfileCanMigrate(c, legacy, expectedOwner)) {
+    throw new Error('CAPTRO_PAYOUT_PROFILE_UPGRADE_REQUIRED');
+  }
+  const legacyAccountId = cleanText(legacy.provider_account_id, 180);
+  const input = {
+    ...payoutRecipientAccountInput(authUserId, appUserId, userRow),
+    migratedFromAccountId: legacyAccountId,
+  };
+  const created = await createRecipientStripeAccount(c, input,
+    `captro-managed-payout-upgrade-${getStripeConfig(c).mode}-${authUserId}-${legacyAccountId}`);
+  const v1Account = await readCreatedRecipientV1Account(c, created.accountId);
+  // Creating the replacement may take long enough for a legacy account event
+  // to arrive. Re-check the provider and local financial state immediately
+  // before the atomic database swap; the RPC repeats the local checks under
+  // its row lock.
+  if (!await legacyExpressPayoutProfileCanMigrate(c, legacy, expectedOwner)) {
+    throw new Error('CAPTRO_PAYOUT_PROFILE_UPGRADE_REQUIRED');
+  }
+  const migrated = await supabaseAdminRpc(c, 'captro_upgrade_untouched_payout_account', {
+    p_account_id: legacy.id,
+    p_user_id: authUserId,
+    p_app_user_id: appUserId,
+    p_stripe_mode: configuredStripeMode(c),
+    p_old_provider_account_id: legacyAccountId,
+    p_new_provider_account_id: created.accountId,
+  });
+  if (migrated !== true) {
+    const current = await connectedAccountForUser(c, authUserId, false);
+    if (current?.provider_account_id === created.accountId && current?.account_type === 'custom') return current;
+    throw new Error('CAPTRO_PAYOUT_PROFILE_UPGRADE_REQUIRED');
+  }
+  const mapped = await connectedAccountForUser(c, authUserId, false);
+  if (!mapped || mapped.provider_account_id !== created.accountId || mapped.account_type !== 'custom') {
+    throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+  }
+  const connected = await syncConnectedAccountFromStripe(c, v1Account, mapped, created.account, expectedOwner);
+  if (!connected || !connectedAccountRowMatchesOwner(connected, expectedOwner)
+    || connected.stripe_mode !== configuredStripeMode(c) || connected.account_type !== 'custom') {
+    throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+  }
+  return connected;
+}
+
+async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserId: string, userRow: any): Promise<any> {
+  const existing = await connectedAccountForUser(c, authUserId, true);
+  if (!existing) return createCaptroManagedConnectedAccount(c, authUserId, appUserId, userRow);
+  if (existing.account_type === 'custom') return existing;
+  if (existing.account_type !== 'express') throw new Error('CAPTRO_PAYOUT_PROFILE_UPGRADE_REQUIRED');
+  return migrateUntouchedLegacyExpressPayoutAccount(c, existing, authUserId, appUserId, userRow);
 }
 
 async function requireReadyConnectedAccount(c: any, creatorAuthUserId: string): Promise<any> {
@@ -9648,52 +9965,29 @@ async function recordStripeWebhookEvent(c: any, event: any, status: 'processed' 
   });
 }
 
-function connectedAccountOnboardingCallback(c: any, action: 'complete' | 'refresh'): string {
-  const requestUrl = new URL(c.req.url);
-  let origin = requestUrl.protocol === 'https:' ? requestUrl.origin : '';
-  if (!origin) {
-    try {
-      origin = new URL(getFrontendUrl(c).split(',')[0]).origin;
-    } catch {
-      origin = 'https://captro.app';
-    }
-  }
-  return `${origin}/api/commerce/payout-account/onboarding-${action}`;
-}
-
-async function createConnectedAccountOnboardingLink(c: any, account: any) {
-  const accountId = cleanText(account?.provider_account_id, 180);
-  if (!accountId.startsWith('acct_')) throw new Error('STRIPE_CONNECT_ACCOUNT_REQUIRED');
-  const refreshUrl = connectedAccountOnboardingCallback(c, 'refresh');
-  const returnUrl = connectedAccountOnboardingCallback(c, 'complete');
-  const result = await stripeApiV2Request(c, '/core/account_links',
-    stripeRecipientOnboardingPayload(accountId, refreshUrl, returnUrl));
-  if (!result.ok || !safeExternalUrl(result.data?.url)) {
-    throw stripeProviderError(result, 'STRIPE_CONNECT_ONBOARDING_FAILED');
-  }
-  return {
-    flow: 'onboarding',
-    url: safeExternalUrl(result.data.url),
-    expiresAt: stripeUnixToIso(result.data?.expires_at) || null,
-  };
-}
-
 async function createConnectedAccountOnboardingSession(c: any, account: any) {
   const refreshed = await refreshConnectedAccount(c, account);
   const accountId = cleanText(refreshed?.provider_account_id, 180);
-  if (!accountId.startsWith('acct_')) throw new Error('STRIPE_CONNECT_ACCOUNT_REQUIRED');
+  if (!accountId.startsWith('acct_') || refreshed?.account_type !== 'custom') {
+    throw new Error('CAPTRO_PAYOUT_PROFILE_UPGRADE_REQUIRED');
+  }
   const stripe = getStripeConfig(c);
+  // Captro presents this Account Session in the native embedded component.
+  // It collects the eligible payout card and any currently due KYC without
+  // handing the seller to an Express dashboard or Stripe login.
   const result = await stripeApiRequest(c, '/account_sessions', {
     account: accountId,
     'components[account_onboarding][enabled]': true,
     'components[account_onboarding][features][external_account_collection]': true,
-    'components[account_onboarding][features][disable_stripe_user_authentication]': false,
-  });
+    'components[account_onboarding][features][disable_stripe_user_authentication]': true,
+  }, undefined, undefined, STRIPE_PAYOUT_ACCOUNT_SESSION_VERSION);
   const clientSecret = cleanText(result.data?.client_secret, 1000);
   if (!result.ok || result.data?.object !== 'account_session' || clientSecret.length < 20
       || stripeExpandableId(result.data?.account, 'acct_') !== accountId
       || result.data?.livemode !== stripe.liveMode
-      || result.data?.components?.account_onboarding?.enabled !== true) {
+      || result.data?.components?.account_onboarding?.enabled !== true
+      || result.data?.components?.account_onboarding?.features?.external_account_collection !== true
+      || result.data?.components?.account_onboarding?.features?.disable_stripe_user_authentication !== true) {
     throw stripeProviderError(result, 'STRIPE_CONNECT_ACCOUNT_SESSION_CREATE_FAILED');
   }
   return {
@@ -9703,17 +9997,6 @@ async function createConnectedAccountOnboardingSession(c: any, account: any) {
     accountSessionClientSecret: clientSecret,
     expiresAt: stripeUnixToIso(result.data?.expires_at) || null,
   };
-}
-
-async function createConnectedAccountManagementLink(c: any, account: any) {
-  const refreshed = await refreshConnectedAccount(c, account);
-  if (!connectedAccountIsReady(refreshed)) return createConnectedAccountOnboardingLink(c, refreshed);
-  const accountId = cleanText(refreshed?.provider_account_id, 180);
-  const result = await stripeApiRequest(c, `/accounts/${encodeURIComponent(accountId)}/login_links`);
-  if (!result.ok || !safeExternalUrl(result.data?.url)) {
-    throw stripeProviderError(result, 'STRIPE_CONNECT_MANAGEMENT_FAILED');
-  }
-  return { flow: 'management', url: safeExternalUrl(result.data.url), expiresAt: null };
 }
 
 function payoutPublicPayload(row: any) {
@@ -18755,14 +19038,6 @@ api.post('/internal/stripe/connect-webhook/bootstrap', async (c) => {
   });
 });
 
-function redirectPayoutOnboardingToApp(c: any, action: 'complete' | 'refresh') {
-  c.header('Cache-Control', 'no-store');
-  return c.redirect(`captro://payouts/${action}`, 302);
-}
-
-api.get('/commerce/payout-account/onboarding-complete', (c) => redirectPayoutOnboardingToApp(c, 'complete'));
-api.get('/commerce/payout-account/onboarding-refresh', (c) => redirectPayoutOnboardingToApp(c, 'refresh'));
-
 api.get('/commerce/payout-account', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_payout_account', appUserId, 60, 60);
@@ -18810,51 +19085,22 @@ api.post('/commerce/payout-account/session', authMiddleware, async (c) => {
   }
 });
 
-api.post('/commerce/payout-account/onboarding-link', authMiddleware, async (c) => {
-  const bodyTooLarge = rejectLargeRequest(c, 10_000);
-  if (bodyTooLarge) return bodyTooLarge;
-  const appUserId = getUserId(c);
-  const limited = await enforceRateLimit(c, 'commerce_payout_onboarding', appUserId, 10, 60);
-  if (limited) return limited;
-  try {
-    if (!getStripeConfig(c).configured) {
-      return c.json({ detail: 'Payout card setup is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
-    }
-    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
-    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
-    const userRows = await supabaseAdminSelectRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, '*', 1);
-    const account = await createOrLoadConnectedAccount(c, authUserId, appUserId, userRows[0] || {});
-    const destination = await createConnectedAccountOnboardingLink(c, account);
-    c.header('Cache-Control', 'private, no-store');
-    return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
-  } catch (error: any) {
-    const failure = payoutSetupFailure(error);
-    console.warn(JSON.stringify({ event: 'stripe_connect_onboarding_failed', code: failure.code,
-      cause: commerceErrorDiagnostic(error) }));
-    return c.json({ detail: failure.detail, code: failure.code }, failure.status);
-  }
+api.post('/commerce/payout-account/onboarding-link', authMiddleware, (c) => {
+  // Intentionally retain the endpoint for old builds, but never issue a Stripe
+  // Account Link. The supported native flow is the Account Session above.
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({
+    detail: 'Update Captro to manage your payout card.',
+    code: 'CAPTRO_PAYOUT_APP_UPDATE_REQUIRED',
+  }, 410);
 });
 
-api.post('/commerce/payout-account/manage-link', authMiddleware, async (c) => {
-  const bodyTooLarge = rejectLargeRequest(c, 10_000);
-  if (bodyTooLarge) return bodyTooLarge;
-  const appUserId = getUserId(c);
-  const limited = await enforceRateLimit(c, 'commerce_payout_manage', appUserId, 10, 60);
-  if (limited) return limited;
-  try {
-    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
-    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
-    const account = await connectedAccountForUser(c, authUserId, true);
-    if (!account) return c.json({ detail: 'Add a payout card first.', code: 'PAYOUT_SETUP_REQUIRED' }, 409);
-    const destination = await createConnectedAccountManagementLink(c, account);
-    c.header('Cache-Control', 'private, no-store');
-    return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
-  } catch (error: any) {
-    const failure = payoutSetupFailure(error);
-    console.warn(JSON.stringify({ event: 'stripe_connect_management_failed', code: failure.code,
-      cause: commerceErrorDiagnostic(error) }));
-    return c.json({ detail: failure.detail, code: failure.code }, failure.status);
-  }
+api.post('/commerce/payout-account/manage-link', authMiddleware, (c) => {
+  c.header('Cache-Control', 'private, no-store');
+  return c.json({
+    detail: 'Update Captro to manage your payout card.',
+    code: 'CAPTRO_PAYOUT_APP_UPDATE_REQUIRED',
+  }, 410);
 });
 
 async function creatorInstantPayoutState(c: any, authUserId: string) {
@@ -19394,10 +19640,23 @@ const stripeWebhookHandler = async (c: any) => {
     } else if (event.type === 'payment_intent.payment_failed') {
       await recordMarketplacePaymentFailure(c, cleanText(event?.id, 180), object);
     } else if (event.type === 'account.updated') {
-      const current = await stripeApiGet(c, `/accounts/${encodeURIComponent(object.id)}`);
-      if (!current.ok) throw stripeProviderError(current, 'STRIPE_ACCOUNT_SYNC_FAILED');
-      const row = await syncConnectedAccountFromStripe(c, current.data);
-      if (row) await refreshConnectedAccount(c, row);
+      const accountId = cleanText(object?.id, 180);
+      const stripeMode = configuredStripeMode(c);
+      const retired = accountId.startsWith('acct_')
+        && await connectedAccountProviderIsRetired(c, accountId, stripeMode);
+      const activeRows = !retired && accountId.startsWith('acct_') ? await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+        provider_account_id: postgrestEqFilter(accountId), stripe_mode: postgrestEqFilter(stripeMode),
+      }, 'id', 1) : [];
+      // Webhooks never create an account mapping. In particular, a replacement
+      // can emit account.updated before the migration transaction swaps the
+      // mapping (and some event shapes omit metadata). The mapped account is
+      // refreshed after the transaction, while retired accounts stay audit-only.
+      if (accountId.startsWith('acct_') && !retired && activeRows.length > 0) {
+        const current = await stripeApiGet(c, `/accounts/${encodeURIComponent(accountId)}`);
+        if (!current.ok) throw stripeProviderError(current, 'STRIPE_ACCOUNT_SYNC_FAILED');
+        const row = await syncConnectedAccountFromStripe(c, current.data);
+        if (row) await refreshConnectedAccount(c, row);
+      }
     } else if (event.type === 'balance.available' && event.account) {
       const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
         provider_account_id: postgrestEqFilter(event.account),

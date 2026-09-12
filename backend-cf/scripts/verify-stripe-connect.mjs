@@ -48,13 +48,13 @@ async function stripeRequest(url, init = {}) {
     const type = typeof payload?.error?.type === 'string' ? payload.error.type.slice(0, 80) : 'stripe_error';
     const code = typeof payload?.error?.code === 'string' ? payload.error.code.slice(0, 80) : '';
     const param = typeof payload?.error?.param === 'string' ? payload.error.param.slice(0, 120) : '';
-    throw new Error(`Live payout onboarding probe failed with HTTP ${response.status}: ${[type, code, param].filter(Boolean).join(':')}`);
+    throw new Error(`Live Captro payout-account probe failed with HTTP ${response.status}: ${[type, code, param].filter(Boolean).join(':')}`);
   }
   return payload;
 }
 
 try {
-  assert.match(stripeKey || '', /^sk_live_|^rk_live_/, 'Live Stripe key is required for the payout onboarding probe');
+  assert.match(stripeKey || '', /^sk_live_|^rk_live_/, 'Live Stripe key is required for the Captro payout-account probe');
   const email = `captro-stripe-smoke-${crypto.randomUUID()}@captro.invalid`;
   const password = crypto.randomUUID() + crypto.randomUUID();
   const created = await request(`${supabase}/auth/v1/admin/users`, {
@@ -93,7 +93,7 @@ try {
   assert.equal(payout.account?.payoutCard, null);
 
   const connectedResponse = await fetch(
-    `${supabase}/rest/v1/app_connected_accounts?stripe_mode=eq.live&select=provider_account_id&order=updated_at.desc&limit=1`,
+    `${supabase}/rest/v1/app_connected_accounts?stripe_mode=eq.live&account_type=eq.custom&select=provider_account_id&order=updated_at.desc&limit=1`,
     { headers: adminHeaders, signal: AbortSignal.timeout(30_000) },
   );
   assert.equal(connectedResponse.ok, true, `Could not load the live payout-account probe target (${connectedResponse.status})`);
@@ -117,51 +117,35 @@ try {
       { headers: { 'Stripe-Version': '2026-08-26.dahlia' } },
     );
     assert.equal(accountV2.id, account, 'Live recipient-account read returned the wrong account');
+    assert.equal(accountV2.dashboard, 'none', 'Live recipient must use Captro-managed dashboard:none');
+    assert.equal(v1Account.controller?.requirement_collection, 'application',
+      'Live recipient must let Captro collect payout requirements');
 
     const sessionBody = new URLSearchParams({
       account,
       'components[account_onboarding][enabled]': 'true',
       'components[account_onboarding][features][external_account_collection]': 'true',
-      'components[account_onboarding][features][disable_stripe_user_authentication]': 'false',
+      'components[account_onboarding][features][disable_stripe_user_authentication]': 'true',
     });
     const accountSession = await stripeRequest('https://api.stripe.com/v1/account_sessions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Stripe-Version': '2024-10-28.acacia',
+      },
       body: sessionBody,
     });
     assert.equal(accountSession.object, 'account_session');
     assert.equal(accountSession.livemode, true);
     assert.ok(typeof accountSession.client_secret === 'string' && accountSession.client_secret.length > 20);
-
-    const accountLink = await stripeRequest('https://api.stripe.com/v2/core/account_links', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Stripe-Version': '2026-08-26.dahlia',
-      },
-      body: JSON.stringify({
-        account,
-        use_case: {
-          type: 'account_onboarding',
-          account_onboarding: {
-            collection_options: {
-              fields: 'eventually_due',
-              future_requirements: 'include',
-            },
-            configurations: ['recipient'],
-            refresh_url: `${api}/commerce/payout-account/onboarding-refresh`,
-            return_url: `${api}/commerce/payout-account/onboarding-complete`,
-          },
-        },
-      }),
-    });
-    assert.ok(typeof accountLink.url === 'string' && accountLink.url.startsWith('https://'));
-    console.log('Live native and hosted payout onboarding sessions were created for an existing Captro recipient account.');
+    assert.equal(accountSession.components?.account_onboarding?.features?.external_account_collection, true);
+    assert.equal(accountSession.components?.account_onboarding?.features?.disable_stripe_user_authentication, true);
+    console.log('Live native Captro-managed payout Account Session was created for an existing recipient account.');
   } else {
-    console.log('No live recipient exists yet; payout onboarding creation probe was skipped.');
+    console.log('No live Captro-managed recipient exists yet; payout Account Session probe was skipped.');
   }
 
-  console.log('Production live Stripe and Connect APIs are reachable; account and connected-account webhook secrets are configured; signatures are enforced.');
+  console.log('Production live Stripe APIs are reachable; Captro-managed payout account and webhook configuration are ready; signatures are enforced.');
 } finally {
   if (userId) {
     await fetch(`${supabase}/rest/v1/app_users?id=eq.${userId}`, {

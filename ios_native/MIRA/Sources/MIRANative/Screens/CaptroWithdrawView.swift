@@ -11,7 +11,6 @@ struct CaptroWithdrawView: View {
   @State private var requestId = UUID().uuidString
   @State private var working = false
   @State private var error: String?
-  @State private var hostedDestination: CaptroCheckoutDestination?
 
   var body: some View {
     NavigationStack {
@@ -69,9 +68,6 @@ struct CaptroWithdrawView: View {
       .task {
         do { earnings = try await api.loadCreatorEarnings() }
         catch { self.error = "Could not retrieve your payout balance." }
-      }
-      .sheet(item: $hostedDestination) { destination in
-        CaptroCheckoutBrowser(url: destination.url).ignoresSafeArea()
       }
       .task(id: payout?.id) {
         guard let id = payout?.id else { return }
@@ -135,29 +131,11 @@ struct CaptroWithdrawView: View {
   private func changeCard() {
     guard !working else { return }
     working = true; error = nil
-    Task {
-      defer { working = false }
-      do {
-        let link = try await api.createPayoutManagementLink()
-        guard let url = URL(string: link.url) else { throw URLError(.badURL) }
-        if link.flow == "management" {
-          hostedDestination = CaptroCheckoutDestination(url: url)
-        } else {
-          startPayoutOnboarding()
-        }
-      } catch { self.error = "Could not open payout method management." }
-    }
-  }
-
-  private func startPayoutOnboarding() {
     payoutOnboarding.start(api: api) { result in
+      working = false
       switch result {
       case .success(.complete):
         retry()
-      case .success(.refresh):
-        changeCard()
-      case .success(.cancelled):
-        break
       case .failure(let error):
         self.error = error.localizedDescription
       }

@@ -388,7 +388,6 @@ struct CaptroEarningsView: View {
   @State private var response: CaptroEarningsResponse?
   @State private var isLoading = false
   @State private var errorMessage: String?
-  @State private var hostedDestination: CaptroCheckoutDestination?
   @State private var showingWithdrawal = false
 
   var body: some View {
@@ -420,9 +419,6 @@ struct CaptroEarningsView: View {
     .miraHideTabBarOnAppear()
     .refreshable { await load() }
     .task { await load() }
-    .sheet(item: $hostedDestination, onDismiss: { Task { await load() } }) { destination in
-      CaptroCheckoutBrowser(url: destination.url).ignoresSafeArea()
-    }
     .sheet(isPresented: $showingWithdrawal, onDismiss: { Task { await load() } }) {
       CaptroWithdrawView(api: api)
     }
@@ -454,7 +450,7 @@ struct CaptroEarningsView: View {
         VStack(alignment: .leading, spacing: 5) {
           Text("Balance unavailable").font(.system(size: 20, weight: .bold))
           Text(value.account.status == "not_started"
-               ? "Add a payout card to receive money from paid posts."
+               ? "Add a payout debit card to receive money from paid posts."
                : "Could not retrieve your current balance. Try again shortly.")
             .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
         }
@@ -482,17 +478,17 @@ struct CaptroEarningsView: View {
               .font(.caption).foregroundStyle(CaptroDetailStyle.accent)
           }
         }
-        Button("Replace Card") { openHostedAccount(manage: true) }
+        Button("Replace Card") { openPayoutSetup() }
           .buttonStyle(CaptroOutlineButtonStyle())
       } else {
         Text(account.payoutCardGuidance)
           .font(.system(size: 14)).foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Text("No separate Stripe account is needed. Captro creates and manages the secure payout profile; Stripe may request identity details only when required for real-money payouts.")
+        Text("This is a separate payout debit card. You can use the same physical debit card you use for purchases by securely entering it again in Payout Card Setup; Captro never copies your saved payment-card details. Stripe may request identity details when required for real-money payouts.")
           .font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
         Button(account.payoutCardActionTitle) {
-          openHostedAccount(manage: false)
+          openPayoutSetup()
         }
         .font(.system(size: 14, weight: .semibold))
         .foregroundStyle(.white)
@@ -574,53 +570,15 @@ struct CaptroEarningsView: View {
 
   private var divider: some View { Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5) }
 
-  private func openHostedAccount(manage: Bool) {
+  private func openPayoutSetup() {
     guard !isLoading else { return }
-    if !manage {
-      isLoading = true
-      errorMessage = nil
-      payoutOnboarding.start(api: api) { result in
-        isLoading = false
-        switch result {
-        case .success(.complete):
-          Task { await load() }
-        case .success(.refresh):
-          openHostedAccount(manage: false)
-        case .success(.cancelled):
-          break
-        case .failure(let error):
-          errorMessage = error.localizedDescription
-        }
-      }
-      return
-    }
-
     isLoading = true
-    Task {
-      defer { isLoading = false }
-      do {
-        let link = try await api.createPayoutManagementLink()
-        guard let url = URL(string: link.url) else { throw URLError(.badURL) }
-        if link.flow == "management" {
-          hostedDestination = CaptroCheckoutDestination(url: url)
-        } else {
-          startPayoutOnboarding()
-        }
-      } catch {
-        errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout card setup."
-      }
-    }
-  }
-
-  private func startPayoutOnboarding() {
+    errorMessage = nil
     payoutOnboarding.start(api: api) { result in
+      isLoading = false
       switch result {
       case .success(.complete):
         Task { await load() }
-      case .success(.refresh):
-        openHostedAccount(manage: false)
-      case .success(.cancelled):
-        break
       case .failure(let error):
         errorMessage = error.localizedDescription
       }

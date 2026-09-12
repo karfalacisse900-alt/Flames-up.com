@@ -1,6 +1,6 @@
 import SwiftUI
 
-private let captroLegalLastUpdated = "June 8, 2026"
+private let captroLegalLastUpdated = "September 12, 2026"
 private let captroSupportEmail = "karfalacisse900@gmail.com"
 private let captroWebsiteDomain = "https://captro.app"
 private let captroLegalDisclaimer = "Captro may update these pages as the app, safety tools, or legal requirements change."
@@ -321,6 +321,19 @@ private let termsSections: [LegalSection] = [
     ]
   ),
   LegalSection(
+    title: "Payments and Payouts",
+    paragraphs: [
+      "Captro may let people pay for eligible content and let sellers receive eligible earnings. A card you save to make purchases is separate from a debit card you add to receive payouts; Captro does not automatically reuse a buyer card as a payout destination.",
+      "Captro uses Stripe to make payouts to sellers. The Stripe Recipient Agreement applies to your receipt of payouts: https://stripe.com/connect-account/legal/recipient. By accepting these Terms or continuing to receive payouts, you agree to that agreement as it may be modified by Stripe.",
+      "To receive payouts, you authorize Captro and its payment partners, including Stripe, to create and manage a seller payout profile and to collect, use, and verify the information required to send funds, prevent fraud, and comply with law. You agree to provide accurate and complete information about you and your business, and authorize Captro to share it and payout-related transaction information with Stripe. Captro keeps payout setup inside Captro where available, but Stripe may still require identity verification before payouts can be enabled."
+    ],
+    bullets: [
+      "Provide accurate, current information and an eligible debit card that you are authorized to use. Credit cards cannot receive payouts.",
+      "Captro may delay, restrict, reverse, or hold payouts when needed for fraud prevention, disputes, refunds, chargebacks, legal compliance, risk review, or an unavailable payout method.",
+      "When Captro upgrades a seller payout profile, you may need to re-enter payout information and complete the then-current verification steps before receiving new payouts."
+    ]
+  ),
+  LegalSection(
     title: "User Content and License",
     paragraphs: [
       "You own the content you create or upload, subject to any rights held by other people. This can include photos, story videos, captions, comments, profile details, messages, places, reports, and other content.",
@@ -403,6 +416,16 @@ private let privacySections: [LegalSection] = [
     ]
   ),
   LegalSection(
+    title: "Payments and Payout Information",
+    paragraphs: [
+      "If you choose to receive payouts, Stripe securely collects payout debit-card, identity, and verification information. Captro receives only the information needed to operate the payout feature, such as payout eligibility, verification status, card brand, and last four digits; Captro does not receive or store a full card number or security code. When you provide personal data in connection with Captro payouts, Stripe receives that personal data and processes it in accordance with Stripe’s Privacy Policy: https://stripe.com/privacy."
+    ],
+    bullets: [
+      "Captro uses payout information to set up, verify, secure, and operate seller payout profiles; send eligible earnings; prevent fraud; resolve refunds, disputes, and chargebacks; and meet applicable legal and financial compliance obligations.",
+      "A debit card you add for payouts is separate from a card you save to make purchases in Captro."
+    ]
+  ),
+  LegalSection(
     title: "Content You Create",
     paragraphs: [
       "Captro collects and processes content you create or choose to share so the app can work."
@@ -469,7 +492,7 @@ private let privacySections: [LegalSection] = [
     ],
     bullets: [
       "With other users when you post, comment, share a profile, appear in Discover, send messages, like, save, follow, or use public app features.",
-      "With service providers such as Supabase for authentication and structured Postgres data, Cloudflare for Worker API, media storage, media processing, CDN delivery, and safety jobs, Apple, Google, Mapbox, notification providers, analytics/diagnostics providers, moderation tools, and support tools where configured.",
+      "With service providers such as Supabase for authentication and structured Postgres data, Cloudflare for Worker API, media storage, media processing, CDN delivery, and safety jobs, Stripe for secure payment and payout collection, verification, and payout processing, Apple, Google, Mapbox, notification providers, analytics/diagnostics providers, moderation tools, and support tools where configured.",
       "With law enforcement, courts, regulators, or safety partners when required by law, legal process, emergency, abuse prevention, or protection of users and the public.",
       "If Captro is involved in a merger, sale, financing, acquisition, restructuring, or transfer of assets, information may transfer as part of that transaction."
     ]

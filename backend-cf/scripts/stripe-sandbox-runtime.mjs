@@ -46,9 +46,10 @@ async function json(url, init = {}, expected = 200) {
   return data;
 }
 
-async function stripe(path, { method = 'GET', params, connectedAccount } = {}) {
+async function stripe(path, { method = 'GET', params, connectedAccount, stripeVersion } = {}) {
   const headers = { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` };
   if (connectedAccount) headers['Stripe-Account'] = connectedAccount;
+  if (stripeVersion) headers['Stripe-Version'] = stripeVersion;
   const init = { method, headers };
   if (params) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
@@ -103,24 +104,6 @@ function recipientAccountPayload({ email, displayName, dashboard, metadata }) {
     },
     metadata,
     include: ['configuration.recipient', 'identity', 'requirements', 'defaults'],
-  };
-}
-
-function recipientOnboardingPayload(account, refreshUrl, returnUrl) {
-  return {
-    account,
-    use_case: {
-      type: 'account_onboarding',
-      account_onboarding: {
-        collection_options: {
-          fields: 'eventually_due',
-          future_requirements: 'include',
-        },
-        configurations: ['recipient'],
-        refresh_url: refreshUrl,
-        return_url: returnUrl,
-      },
-    },
   };
 }
 
@@ -335,7 +318,8 @@ async function main() {
   assert.ok(healthy, 'Isolated Worker must start');
   const admin = { apikey: local.SERVICE_ROLE_KEY, Authorization: `Bearer ${local.SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' };
 
-  // Verify Captro's real production onboarding path without automating or bypassing hosted identity collection.
+  // Verify Captro's native, Captro-managed payout setup without opening a hosted
+  // Stripe Express or Account Link flow.
   const onboardingUser = await createLocalUser(local, admin, api, 'onboarding');
   await json(`${api}/commerce/payout-account`, {}, 401);
   const capabilities = await json(`${api}/commerce/stripe-capabilities`, { headers: onboardingUser.authorized });
@@ -344,6 +328,9 @@ async function main() {
   await json(`${api}/stripe/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 400);
   const before = await json(`${api}/commerce/payout-account`, { headers: onboardingUser.authorized });
   assert.equal(before.account.ready, false);
+  // Captro owns the embedded Account Onboarding presentation. Stripe collects
+  // the payout card and any required identity details without an Express login
+  // or a hosted Account Link. Device UI covers the actual card entry.
   const nativeSetup = await json(`${api}/commerce/payout-account/session`, {
     method: 'POST', headers: onboardingUser.authorized, body: '{}',
   });
@@ -351,56 +338,43 @@ async function main() {
   assert.ok(nativeSetup.publishableKey.startsWith('pk_test_'));
   assert.ok(nativeSetup.accountSessionClientSecret.length > 20);
   assert.equal(nativeSetup.account.ready, false);
-  let setup;
-  try {
-    setup = await json(`${api}/commerce/payout-account/onboarding-link`, {
-      method: 'POST', headers: onboardingUser.authorized, body: '{}',
-    });
-  } catch (error) {
-    const failedRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${onboardingUser.authUser.id}`, { headers: admin });
-    const failedAccountId = String(failedRows[0]?.provider_account_id || '');
-    if (failedAccountId.startsWith('acct_')) {
-      cleanupAccounts.add(failedAccountId);
-      try {
-        await stripeV2('/core/account_links', recipientOnboardingPayload(
-          failedAccountId,
-          'https://captro.app/earnings/payouts/refresh',
-          'https://captro.app/earnings/payouts/complete',
-        ));
-      } catch (providerError) {
-        throw new Error(`${error.message}; Stripe diagnostic: ${providerError.message}`);
-      }
-    } else {
-      try {
-        const diagnosticAccount = await stripeV2('/core/accounts', recipientAccountPayload({
-          email: onboardingUser.email,
-          displayName: 'Captro Sandbox Onboarding',
-          dashboard: 'express',
-          metadata: {
-            captro_test_run_id: process.env.GITHUB_RUN_ID,
-            captro_diagnostic: 'connected_account_creation',
-          },
-        }));
-        if (String(diagnosticAccount.id || '').startsWith('acct_')) cleanupAccounts.add(diagnosticAccount.id);
-      } catch (providerError) {
-        throw new Error(`${error.message}; Stripe diagnostic: ${providerError.message}`);
-      }
-    }
-    throw error;
-  }
-  assert.equal(new URL(setup.url).protocol, 'https:');
-  assert.ok(new Set(['accounts.stripe.com', 'connect.stripe.com']).has(new URL(setup.url).hostname));
+  const deprecatedLink = await json(`${api}/commerce/payout-account/onboarding-link`, {
+    method: 'POST', headers: onboardingUser.authorized, body: '{}',
+  }, 410);
+  assert.equal(deprecatedLink.code, 'CAPTRO_PAYOUT_APP_UPDATE_REQUIRED');
+  const deprecatedManage = await json(`${api}/commerce/payout-account/manage-link`, {
+    method: 'POST', headers: onboardingUser.authorized, body: '{}',
+  }, 410);
+  assert.equal(deprecatedManage.code, 'CAPTRO_PAYOUT_APP_UPDATE_REQUIRED');
   const onboardingRows = await json(`${local.API_URL}/rest/v1/app_connected_accounts?user_id=eq.${onboardingUser.authUser.id}`, { headers: admin });
   assert.equal(onboardingRows.length, 1);
   assert.equal(onboardingRows[0].stripe_mode, 'test');
   const onboardingAccount = await stripe(`/accounts/${onboardingRows[0].provider_account_id}`);
   cleanupAccounts.add(onboardingAccount.id);
-  assert.equal(onboardingRows[0].account_type, 'express');
+  const onboardingAccountV2 = await stripeV2Get(`/core/accounts/${onboardingAccount.id}`, [
+    'configuration.recipient', 'requirements', 'defaults', 'identity',
+  ]);
+  assert.equal(onboardingRows[0].account_type, 'custom');
+  assert.equal(onboardingAccountV2.dashboard, 'none');
+  assert.equal(onboardingAccount.controller?.requirement_collection, 'application');
   assert.equal(onboardingRows[0].charges_enabled, onboardingAccount.charges_enabled);
   assert.equal(onboardingRows[0].payouts_enabled, onboardingAccount.payouts_enabled);
   assert.equal(onboardingRows[0].details_submitted, onboardingAccount.details_submitted);
+  const providerOnboardingSession = await stripe('/account_sessions', {
+    method: 'POST',
+    stripeVersion: '2024-10-28.acacia',
+    params: {
+      account: onboardingAccount.id,
+      'components[account_onboarding][enabled]': true,
+      'components[account_onboarding][features][external_account_collection]': true,
+      'components[account_onboarding][features][disable_stripe_user_authentication]': true,
+    },
+  });
+  assert.equal(providerOnboardingSession.object, 'account_session');
+  assert.equal(providerOnboardingSession.components?.account_onboarding?.features?.external_account_collection, true);
+  assert.equal(providerOnboardingSession.components?.account_onboarding?.features?.disable_stripe_user_authentication, true);
 
-  // A disposable platform-controlled v2 recipient lets CI exercise money movement without fabricating hosted onboarding success.
+  // A disposable Captro-managed recipient lets CI exercise money movement.
   const creator = await createLocalUser(local, admin, api, 'creator');
   const buyer = await createLocalUser(local, admin, api, 'buyer');
   const readyStripe = await createReadyTestConnectedAccount(creator);
@@ -560,12 +534,12 @@ async function main() {
 
   console.log(JSON.stringify({ realWorker: true, realSupabaseAuth: true, unsignedWebhookRejected: true,
     stripeConnectAccountCreated: true, nativeAccountOnboardingSessionCreated: true,
-    hostedOnboardingLinkCreated: true,
+    hostedOnboardingLinkDisabled: true,
     nativePaymentIntentCreated: true, nativePaymentIntentConfirmed: true, signedPaymentWebhookProcessed: true,
     purchaseConfirmed: true, ticketIssued: true, creatorEarningRecorded: true,
     eligibleDebitCardValidated: true, instantPayoutCreated: true, signedPayoutWebhookProcessed: true,
     nativePaymentSheetValidated: false,
-    note: 'Money movement used Stripe test mode. Hosted onboarding and native PaymentSheet UI remain manual acceptance gates.' }));
+    note: 'Money movement used Stripe test mode. Native payment-card and payout-card UI remain device acceptance gates.' }));
 }
 
 async function cleanupStripeFixtures() {

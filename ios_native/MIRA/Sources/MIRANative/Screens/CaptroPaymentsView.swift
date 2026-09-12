@@ -8,7 +8,6 @@ private final class CaptroPaymentsModel: ObservableObject {
   @Published var methods: [CaptroSavedPaymentMethod] = []
   @Published var payoutAccount: CaptroPayoutAccount?
   @Published var customerSheet: CustomerSheet?
-  @Published var hostedDestination: CaptroCheckoutDestination?
   @Published var isLoadingCards = false
   @Published var isLoadingPayout = false
   @Published var cardError: String?
@@ -105,36 +104,8 @@ private final class CaptroPaymentsModel: ObservableObject {
     }
   }
 
-  func payoutLink(manage: Bool) async -> CaptroHostedAccountLinkResponse? {
-    guard !isLoadingPayout else { return nil }
-    isLoadingPayout = true
-    defer { isLoadingPayout = false }
-    do {
-      let link = manage
-        ? try await api.createPayoutManagementLink()
-        : try await api.createPayoutOnboardingLink()
-      payoutError = nil
-      return link
-    } catch {
-      payoutError = payoutAPIMessage(error, fallback: "Could not open secure payout card setup. Please try again.")
-      return nil
-    }
-  }
-
   private func apiMessage(_ error: Error, fallback: String) -> String {
     (error as? MIRAAPIError)?.errorDescription ?? fallback
-  }
-
-  private func payoutAPIMessage(_ error: Error, fallback: String) -> String {
-    guard case let MIRAAPIError.server(_, code, _) = error else { return fallback }
-    switch code {
-    case "COMMERCE_PAYOUT_EMAIL_REQUIRED":
-      return "Add a valid email address to your Captro profile before setting up payouts."
-    case "CAPTRO_PAYOUT_ACCOUNT_CONFLICT":
-      return "We could not verify your existing payout setup securely. Please contact Captro support."
-    default:
-      return fallback
-    }
   }
 }
 
@@ -172,11 +143,6 @@ struct CaptroPaymentsView: View {
     .miraHideTabBarOnAppear()
     .task { await model.load() }
     .refreshable { await model.load() }
-    .sheet(item: $model.hostedDestination, onDismiss: {
-      Task { await model.refreshPayoutAccount() }
-    }) { destination in
-      CaptroCheckoutBrowser(url: destination.url).ignoresSafeArea()
-    }
   }
 
   private var paymentCardsSection: some View {
@@ -294,12 +260,12 @@ struct CaptroPaymentsView: View {
           .font(.system(size: 13))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Text("Only needed when you receive earnings from paid posts. You never need this—or a Stripe account connection—to pay in Captro. Captro securely collects and verifies an eligible debit card during payout setup. Credit cards cannot receive payouts.")
+        Text("Only needed when you receive earnings from paid posts. This is a separate payout debit card. If you use the same debit card for purchases, securely enter it again in Payout Card Setup—your saved payment card is never copied. Stripe may request details needed to verify payouts. Credit cards cannot receive payouts.")
           .font(.system(size: 12))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
         Button(account.payoutCardActionTitle) {
-          openPayoutSetup(manage: account.ready)
+          openPayoutSetup()
         }
         .font(.system(size: 14, weight: .semibold))
         .frame(maxWidth: .infinity, minHeight: 46)
@@ -353,34 +319,17 @@ struct CaptroPaymentsView: View {
     Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
   }
 
-  private func openPayoutSetup(manage: Bool) {
-    if !manage {
-      guard !model.isLoadingPayout else { return }
-      model.isLoadingPayout = true
-      model.payoutError = nil
-      payoutOnboarding.start(api: model.api) { result in
-        model.isLoadingPayout = false
-        switch result {
-        case .success(.complete):
-          Task { await model.refreshPayoutAccount() }
-        case .success(.refresh):
-          openPayoutSetup(manage: false)
-        case .success(.cancelled):
-          break
-        case .failure(let error):
-          model.payoutError = error.localizedDescription
-        }
-      }
-      return
-    }
-
-    Task {
-      guard let link = await model.payoutLink(manage: true),
-            let url = URL(string: link.url) else { return }
-      if link.flow == "management" {
-        model.hostedDestination = CaptroCheckoutDestination(url: url)
-      } else {
-        openPayoutSetup(manage: false)
+  private func openPayoutSetup() {
+    guard !model.isLoadingPayout else { return }
+    model.isLoadingPayout = true
+    model.payoutError = nil
+    payoutOnboarding.start(api: model.api) { result in
+      model.isLoadingPayout = false
+      switch result {
+      case .success(.complete):
+        Task { await model.refreshPayoutAccount() }
+      case .failure(let error):
+        model.payoutError = error.localizedDescription
       }
     }
   }

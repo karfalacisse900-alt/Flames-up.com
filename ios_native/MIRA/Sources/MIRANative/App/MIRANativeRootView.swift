@@ -276,7 +276,6 @@ public struct MIRANativeRootView: View {
     }
     .onOpenURL { url in
       if StripeAPI.handleURLCallback(with: url) { return }
-      if CaptroPayoutOnboardingCoordinator.handleIncomingURL(url) { return }
       let googleHandled = GIDSignIn.sharedInstance.handle(url)
       MIRAAuthDiagnostics.callbackReceived(url, googleHandled: googleHandled)
       authSession.handleIncomingURL(url)

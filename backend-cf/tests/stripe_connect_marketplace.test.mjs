@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs';
 import {
   STRIPE_ACCOUNTS_V2_VERSION,
   stripeRecipientAccountPayload,
-  stripeRecipientOnboardingPayload,
   stripeV2RecipientTransferStatus,
   stripeV2RecipientTransfersEnabled,
 } from '../src/stripe-connect-v2.ts';
@@ -18,6 +17,7 @@ const nativeMigration = source('../../supabase/migrations/20260904231905_stripe_
 const indexMigration = source('../../supabase/migrations/20260904221847_stripe_connect_fk_indexes.sql');
 const buyerCardsMigration = source('../../supabase/migrations/20260908205030_captro_buyer_payment_methods.sql');
 const stripeModeMigration = source('../../supabase/migrations/20260908224758_isolate_stripe_connected_accounts_by_mode.sql');
+const customPayoutMigration = source('../../supabase/migrations/20260912214322_captro_custom_payout_accounts.sql');
 const commerceModels = source('../../ios_native/MIRA/Sources/MIRANative/Models/CaptroCommerce.swift');
 const earnings = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDashboardViews.swift');
 const payments = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroPaymentsView.swift');
@@ -26,29 +26,29 @@ const profile = source('../../ios_native/MIRA/Sources/MIRANative/Screens/Profile
 const checkout = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCommerceDetailViews.swift');
 const composer = source('../../ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift');
 const payoutOnboarding = source('../../ios_native/MIRA/Sources/MIRANative/Services/CaptroPayoutOnboardingCoordinator.swift');
-const nativeRoot = source('../../ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift');
 const packageManifest = source('../../ios_native/MIRA/Package.swift');
 const cache = source('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAppCacheStore.swift');
 const homeStamp = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostOverlays.swift');
 const homePost = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostView.swift');
 const details = source('../../ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift');
 
-test('Stripe Connect stores one account per creator per mode and no raw bank credentials', () => {
+test('Stripe Connect stores Captro-managed payout accounts without raw card data or hosted account links', () => {
   assert.match(migration, /create table public\.app_connected_accounts \(/);
   assert.match(migration, /provider_account_id text not null unique/);
   assert.match(stripeModeMigration, /app_connected_accounts \(user_id, stripe_mode\)/);
   assert.match(migration, /external_account_last4 text/);
   assert.doesNotMatch(migration, /\b(?:routing_number|account_number|debit_card_number|bank_token)\b/i);
   assert.match(worker, /stripeApiV2Request\(c, '\/core\/accounts'/);
-  assert.match(worker, /stripeApiV2Request\(c, '\/core\/account_links'/);
-  assert.match(connectV2, /dashboard: 'express'/);
+  assert.doesNotMatch(worker, /\/core\/account_links/);
+  assert.match(connectV2, /dashboard: 'none'/);
   assert.match(connectV2, /fees_collector: 'application'/);
   assert.match(connectV2, /losses_collector: 'application'/);
   assert.match(connectV2, /stripe_transfers: \{ requested: true \}/);
-  assert.match(connectV2, /configurations: \['recipient'\]/);
-  assert.match(connectV2, /type: 'account_onboarding'/);
+  assert.match(connectV2, /include: \['configuration\.recipient'/);
+  assert.doesNotMatch(connectV2, /account_onboarding/);
   assert.doesNotMatch(worker, /stripeApiRequest\(c, '\/accounts'/);
-  assert.match(worker, /\/login_links/);
+  assert.doesNotMatch(worker, /\/login_links/);
+  assert.doesNotMatch(worker, /payout-account\/debit-card/);
 });
 
 test('paid posts create reusable Stripe products and prices only after payout readiness', () => {
@@ -69,21 +69,43 @@ test('connected accounts and reusable catalog IDs are isolated by Stripe mode', 
   assert.match(stripeModeMigration, /stripe_price_mode text/);
   assert.match(stripeModeMigration, /stripe_mode = current_stripe_mode/);
   assert.match(worker, /user_id: postgrestEqFilter\(authUserId\),[\s\S]{0,120}stripe_mode: postgrestEqFilter\(configuredStripeMode\(c\)\)/);
-  assert.match(worker, /const patch = \{ stripe_mode: stripeMode,/);
+  assert.match(worker, /stripe_mode: stripeMode,/);
   assert.match(worker, /purchasable\?\.stripe_product_mode !== stripeMode/);
   assert.match(worker, /price\?\.stripe_price_mode !== stripeMode/);
 });
 
-test('payout onboarding securely reconciles a legacy account record instead of reinserting it', () => {
-  const createAccount = worker.match(/async function createOrLoadConnectedAccount[\s\S]*?\n}\n\nasync function requireReadyConnectedAccount/)?.[0] || '';
-  const connectSync = worker.match(/async function syncConnectedAccountFromStripe[\s\S]*?\n}\n\nasync function refreshConnectedAccount/)?.[0] || '';
-  assert.match(connectSync, /provider_account_id: postgrestEqFilter\(providerAccountId\)/);
-  assert.match(connectSync, /provider_account_id: postgrestEqFilter\(providerAccountId\),\n    }, [\s\S]*?row = rows\[0\];/);
+test('only an untouched current-mode Express payout profile can migrate to Captro-managed Custom', () => {
+  const migration = worker.match(/async function legacyExpressPayoutProfileCanMigrate[\s\S]*?\n}\n\nasync function createRecipientStripeAccount/)?.[0] || '';
+  const upgrade = worker.match(/async function migrateUntouchedLegacyExpressPayoutAccount[\s\S]*?\n}\n\nasync function createOrLoadConnectedAccount/)?.[0] || '';
+  const connectWebhook = worker.match(/event\.type === 'account\.updated'[\s\S]*?\n    } else if \(event\.type === 'balance\.available'/)?.[0] || '';
+  assert.match(migration, /row\?\.stripe_mode !== configuredStripeMode\(c\)/);
+  assert.match(migration, /account_type, 20\)\.toLowerCase\(\) !== 'express'/);
+  assert.match(migration, /cleanText\(account\?\.type, 20\)\.toLowerCase\(\) === 'express'/);
+  assert.match(migration, /connectedAccountDashboard\(account, accountV2\) === 'express'/);
+  assert.match(migration, /connectedAccountOwnerIsComplete\(remoteOwner\)/);
+  assert.match(migration, /payoutProfileHasLocalSetup\(row\)/);
+  assert.match(migration, /legacyConnectedAccountHasFinancialActivity/);
+  assert.match(migration, /stripeBalanceIsEmpty\(balanceResult\.data\)/);
+  assert.match(migration, /\/transfers\?destination=\$\{encodeURIComponent\(accountId\)\}/);
+  assert.match(migration, /\/balance_transactions\?limit=100/);
+  assert.match(migration, /\/payouts\?limit=100/);
+  assert.match(upgrade, /migratedFromAccountId: legacyAccountId/);
+  assert.match(upgrade, /captro-managed-payout-upgrade-/);
+  assert.match(upgrade, /captro_upgrade_untouched_payout_account/);
+  assert.match(customPayoutMigration, /set search_path = ''/);
+  assert.match(customPayoutMigration, /pg_catalog\.left/);
+  assert.match(customPayoutMigration, /pg_catalog\.now\(\)/);
+  assert.match(customPayoutMigration, /details_submitted is distinct from false/);
+  assert.match(customPayoutMigration, /eligible_debit_card_exists is distinct from false/);
+  assert.match(customPayoutMigration, /from public\.app_connected_accounts[\s\S]*?for update/);
+  assert.match(customPayoutMigration, /app_creator_earnings/);
+  assert.match(customPayoutMigration, /app_payouts/);
+  assert.match(customPayoutMigration, /app_payout_requests/);
+  assert.match(customPayoutMigration, /app_retired_connected_accounts/);
+  assert.match(connectWebhook, /activeRows\.length > 0/);
+  assert.doesNotMatch(connectWebhook, /\|\| !connectedAccountHasPendingMigration/);
+  assert.match(worker, /CAPTRO_PAYOUT_PROFILE_UPGRADE_REQUIRED/);
   assert.match(worker, /CAPTRO_PAYOUT_ACCOUNT_CONFLICT/);
-  assert.match(worker, /isConnectedAccountConstraintConflict/);
-  assert.match(createAccount, /syncConnectedAccountFromStripe/);
-  assert.doesNotMatch(createAccount, /supabaseAdminInsertRows/);
-  assert.match(worker, /SUPABASE_INSERT_FAILED:app_connected_accounts:409:/);
 });
 
 test('recipient readiness depends on transfers and payouts rather than direct charges', () => {
@@ -128,15 +150,17 @@ test('Accounts v2 payloads use the Captro marketplace recipient configuration', 
     contactEmail: 'creator@example.com', displayName: 'Creator', country: 'US',
     authUserId: 'auth-fixture', appUserId: 'app-fixture',
   });
-  assert.equal(account.dashboard, 'express');
+  assert.equal(account.dashboard, 'none');
   assert.equal(account.configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested, true);
   assert.equal(account.defaults.responsibilities.fees_collector, 'application');
   assert.equal(account.defaults.responsibilities.losses_collector, 'application');
   assert.equal('merchant' in account.configuration, false);
-  const link = stripeRecipientOnboardingPayload('acct_fixture', 'https://captro.app/refresh', 'https://captro.app/return');
-  assert.deepEqual(link.use_case.account_onboarding.configurations, ['recipient']);
-  assert.equal(link.use_case.account_onboarding.collection_options.fields, 'eventually_due');
-  assert.equal(link.use_case.account_onboarding.collection_options.future_requirements, 'include');
+  const migrationAccount = stripeRecipientAccountPayload({
+    contactEmail: 'creator@example.com', displayName: 'Creator', country: 'US',
+    authUserId: 'auth-fixture', appUserId: 'app-fixture', migratedFromAccountId: 'acct_legacy',
+  });
+  assert.equal(migrationAccount.metadata.migrated_from_account_id, 'acct_legacy');
+  assert.equal(migrationAccount.metadata.captro_payout_migration_pending, 'acct_legacy');
 });
 
 test('buyer fees are configurable while the creator receives the full listed item amount', () => {
@@ -236,14 +260,14 @@ test('Connect account, payout and purchase events are handled without the app re
 test('Earnings UI is backed by private live endpoints and never invents balances', () => {
   assert.match(commerceModels, /get\("\/commerce\/earnings"\)/);
   assert.match(commerceModels, /get\("\/commerce\/payouts"\)/);
-  assert.match(commerceModels, /post\("\/commerce\/payout-account\/onboarding-link"/);
   assert.match(commerceModels, /post\("\/commerce\/payout-account\/session"/);
+  assert.doesNotMatch(commerceModels, /payout-account\/onboarding-link/);
   assert.match(worker, /api\.post\('\/commerce\/payout-account\/session'/);
   assert.match(worker, /stripeApiGet\(c, '\/balance\?expand\[\]=instant_available\.net_available', account\.provider_account_id\)/);
   assert.match(worker, /stripeApiGet\(c, '\/payouts\?limit=100', account\.provider_account_id\)/);
   assert.match(earnings, /Text\("Balance unavailable"\)/);
-  assert.match(earnings, /"Add a payout card to receive money from paid posts\."/);
-  assert.match(earnings, /No separate Stripe account is needed/);
+  assert.match(earnings, /Add a payout debit card to receive money from paid posts\./);
+  assert.match(earnings, /separate payout debit card/);
   assert.match(commerceModels, /var payoutCardActionTitle: String/);
   assert.doesNotMatch(`${earnings}\n${payments}\n${composer}`, /Set Up Earnings|Connect Stripe Account/i);
   assert.doesNotMatch(earnings, /Available\s*\$72|Pending\s*\$16|\+ \$8\.00/);
@@ -283,7 +307,7 @@ test('native checkout displays saved buyer cards while payout remains debit-only
   assert.match(payments, /SELLER PAYOUT CARD/);
   assert.doesNotMatch(payments, /Use .* for Payouts/);
   assert.doesNotMatch(payments, /payoutDebitCardPendingConfirmation/);
-  assert.doesNotMatch(packageManifest, /\.product\(name: "StripeConnect"/);
+  assert.match(packageManifest, /\.product\(name: "StripeConnect"/);
   assert.match(worker, /eligibleDebitCard/);
   const paymentIntent = worker.slice(worker.indexOf('async function createCommercePaymentIntent'), worker.indexOf('async function completeCommercePurchaseFromIntent'));
   assert.match(paymentIntent, /buyerStripeCustomerForUser/);
@@ -304,33 +328,28 @@ test('paid-post onboarding preserves the creator draft and media selection', () 
   assert.match(composer, /payoutOnboarding\.start\(api: api\)/);
 });
 
-test('seller payout onboarding uses Stripe-hosted collection without a client Connect SDK', () => {
-  assert.doesNotMatch(packageManifest, /\.product\(name: "StripeConnect"/);
+test('seller payout onboarding stays inside Captro with embedded Stripe collection and no Express link', () => {
+  assert.match(packageManifest, /\.product\(name: "StripeConnect"/);
   assert.match(worker, /stripeApiRequest\(c, '\/account_sessions'/);
   assert.match(worker, /'components\[account_onboarding\]\[enabled\]': true/);
   assert.match(worker, /'components\[account_onboarding\]\[features\]\[external_account_collection\]': true/);
-  assert.match(worker, /'components\[account_onboarding\]\[features\]\[disable_stripe_user_authentication\]': false/);
-  assert.match(payoutOnboarding, /createPayoutOnboardingLink\(\)/);
-  assert.doesNotMatch(payoutOnboarding, /createPayoutAccountSession\(\)/);
-  assert.match(connectV2, /fields: 'eventually_due'/);
-  assert.match(connectV2, /future_requirements: 'include'/);
-  assert.match(worker, /onboarding-complete/);
-  assert.match(worker, /onboarding-refresh/);
-  assert.match(worker, /captro:\/\/payouts\/\$\{action\}/);
-  assert.match(worker, /flow: 'onboarding'/);
-  assert.match(worker, /flow: 'management'/);
-  assert.match(commerceModels, /public let flow: String\?/);
-  assert.match(payoutOnboarding, /ASWebAuthenticationSession/);
-  assert.match(payoutOnboarding, /callbackURLScheme: "captro"/);
-  assert.match(payoutOnboarding, /case "\/refresh"/);
-  assert.doesNotMatch(payoutOnboarding, /SFSafariViewController|WKWebView/);
+  assert.match(worker, /'components\[account_onboarding\]\[features\]\[disable_stripe_user_authentication\]': true/);
+  assert.match(worker, /STRIPE_PAYOUT_ACCOUNT_SESSION_VERSION = '2024-10-28\.acacia'/);
+  assert.match(worker, /undefined, undefined, STRIPE_PAYOUT_ACCOUNT_SESSION_VERSION/);
+  assert.match(worker, /features\?\.external_account_collection !== true/);
+  assert.match(worker, /features\?\.disable_stripe_user_authentication !== true/);
+  assert.match(payoutOnboarding, /EmbeddedComponentManager/);
+  assert.match(payoutOnboarding, /createPayoutAccountSession\(\)/);
+  assert.match(payoutOnboarding, /createAccountOnboardingController/);
+  assert.match(payoutOnboarding, /AccountOnboardingControllerDelegate/);
+  assert.doesNotMatch(worker, /\/core\/account_links|\/login_links/);
+  assert.doesNotMatch(worker, /payout-account\/debit-card/);
+  assert.doesNotMatch(payoutOnboarding, /ASWebAuthenticationSession|SFSafariViewController|WKWebView/);
 });
 
-test('native payout onboarding falls back to system Safari and routes its callback', () => {
-  assert.match(payoutOnboarding, /UIApplication\.shared\.open\(url, options: \[:\]\)/);
-  assert.match(payoutOnboarding, /captroPayoutOnboardingCallback/);
-  assert.match(payoutOnboarding, /applicationDidBecomeActive/);
-  assert.match(nativeRoot, /CaptroPayoutOnboardingCoordinator\.handleIncomingURL\(url\)/);
+test('embedded payout onboarding never opens a Stripe-hosted browser or accepts raw card data', () => {
+  assert.doesNotMatch(payoutOnboarding, /UIApplication\.shared\.open|captroPayoutOnboardingCallback|applicationDidBecomeActive/);
+  assert.doesNotMatch(payoutOnboarding, /STPCardParams|createToken\(withCard|tok_/);
   assert.match(payoutOnboarding, /COMMERCE_PAYOUT_EMAIL_REQUIRED/);
   assert.match(payoutOnboarding, /CAPTRO_PAYOUT_ACCOUNT_CONFLICT/);
   assert.match(payoutOnboarding, /payoutSetupUnavailable/);
@@ -343,9 +362,11 @@ test('payout setup errors are safe for users and never expose database responses
   assert.match(worker, /function payoutSetupFailure/);
   assert.match(worker, /CAPTRO_PAYOUT_SETUP_UNAVAILABLE/);
   assert.match(payoutSession, /payoutSetupFailure\(error\)/);
-  assert.match(payoutOnboardingRoute, /payoutSetupFailure\(error\)/);
+  assert.match(payoutOnboardingRoute, /CAPTRO_PAYOUT_APP_UPDATE_REQUIRED/);
+  assert.match(payoutOnboardingRoute, /Update Captro to manage your payout card\./);
+  assert.match(payoutOnboardingRoute, /}, 410\);/);
   assert.doesNotMatch(payoutSession, /const code = getErrorCode\(error\)/);
-  assert.doesNotMatch(payoutOnboardingRoute, /const code = getErrorCode\(error\)/);
+  assert.doesNotMatch(payoutOnboardingRoute, /SUPABASE_|23505|duplicate key/);
 });
 
 test('checkout distinguishes seller readiness from temporary Stripe failures', () => {
