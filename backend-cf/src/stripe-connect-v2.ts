@@ -2,6 +2,7 @@ export const STRIPE_ACCOUNTS_V2_VERSION = '2026-08-26.dahlia';
 
 type RecipientAccountInput = {
   contactEmail: string;
+  contactPhone?: string;
   displayName: string;
   country: string;
   authUserId: string;
@@ -12,6 +13,7 @@ type RecipientAccountInput = {
 export function stripeRecipientAccountPayload(input: RecipientAccountInput) {
   return {
     contact_email: input.contactEmail,
+    ...(input.contactPhone ? { contact_phone: input.contactPhone } : {}),
     display_name: input.displayName,
     // Captro owns the seller experience. A no-dashboard recipient account gives
     // the native app an Account Session without sending the seller to Express.

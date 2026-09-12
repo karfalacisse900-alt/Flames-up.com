@@ -147,10 +147,11 @@ test('recipient readiness uses the actual Accounts v2 transfer capability', () =
 test('Accounts v2 payloads use the Captro marketplace recipient configuration', () => {
   assert.equal(STRIPE_ACCOUNTS_V2_VERSION, '2026-08-26.dahlia');
   const account = stripeRecipientAccountPayload({
-    contactEmail: 'creator@example.com', displayName: 'Creator', country: 'US',
+    contactEmail: 'creator@example.com', contactPhone: '+12125551212', displayName: 'Creator', country: 'US',
     authUserId: 'auth-fixture', appUserId: 'app-fixture',
   });
   assert.equal(account.dashboard, 'none');
+  assert.equal(account.contact_phone, '+12125551212');
   assert.equal(account.configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested, true);
   assert.equal(account.defaults.responsibilities.fees_collector, 'application');
   assert.equal(account.defaults.responsibilities.losses_collector, 'application');
@@ -161,6 +162,7 @@ test('Accounts v2 payloads use the Captro marketplace recipient configuration', 
   });
   assert.equal(migrationAccount.metadata.migrated_from_account_id, 'acct_legacy');
   assert.equal(migrationAccount.metadata.captro_payout_migration_pending, 'acct_legacy');
+  assert.equal('contact_phone' in migrationAccount, false);
 });
 
 test('buyer fees are configurable while the creator receives the full listed item amount', () => {
@@ -305,7 +307,12 @@ test('native checkout displays saved buyer cards while payout remains debit-only
   assert.match(payments, /no Stripe account connection is needed for purchases/);
   assert.match(payments, /Credit cards cannot receive payouts/);
   assert.match(payments, /SELLER PAYOUT CARD/);
-  assert.doesNotMatch(payments, /Use .* for Payouts/);
+  assert.match(payments, /private var savedDebitCards/);
+  assert.match(payments, /funding\.lowercased\(\) == "debit"/);
+  assert.match(payments, /Label\("Use /);
+  assert.match(payments, /for payouts", systemImage: "creditcard"/);
+  assert.match(payments, /For security, enter this same debit card in the next screen/);
+  assert.doesNotMatch(payments, /method\.id/);
   assert.doesNotMatch(payments, /payoutDebitCardPendingConfirmation/);
   assert.match(packageManifest, /\.product\(name: "StripeConnect"/);
   assert.match(worker, /eligibleDebitCard/);

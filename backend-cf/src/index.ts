@@ -9428,8 +9428,14 @@ function payoutRecipientAccountInput(authUserId: string, appUserId: string, user
   if (!contactEmail) throw new Error('COMMERCE_PAYOUT_EMAIL_REQUIRED');
   const displayName = cleanText(userRow?.full_name || userRow?.username || safeDisplayNameFromEmail(contactEmail), 120)
     || 'Captro creator';
+  // Only pass a phone number that Captro has already verified. Profile text,
+  // city, billing data, and an unverified phone are not payout identity data.
+  const contactPhone = userRow?.phone_verified === true || Number(userRow?.phone_verified || 0) === 1
+    ? normalizeOptionalPhone(userRow?.phone)
+    : '';
   return {
     contactEmail,
+    ...(contactPhone ? { contactPhone } : {}),
     displayName,
     country,
     authUserId,

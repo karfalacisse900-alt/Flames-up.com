@@ -126,6 +126,10 @@ struct CaptroPaymentsView: View {
     _model = StateObject(wrappedValue: CaptroPaymentsModel(api: api))
   }
 
+  private var savedDebitCards: [CaptroSavedPaymentMethod] {
+    model.methods.filter { $0.funding.lowercased() == "debit" }
+  }
+
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
@@ -264,7 +268,33 @@ struct CaptroPaymentsView: View {
           .font(.system(size: 12))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Button(account.payoutCardActionTitle) {
+        if account.payoutCard == nil && !savedDebitCards.isEmpty {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("USE A SAVED DEBIT CARD")
+              .font(.system(size: 11, weight: .bold))
+              .foregroundStyle(CaptroDetailStyle.secondary)
+            ForEach(savedDebitCards) { method in
+              Button {
+                openPayoutSetup()
+              } label: {
+                Label("Use \(method.brand) ···· \(method.last4) for payouts", systemImage: "creditcard")
+                  .frame(maxWidth: .infinity, minHeight: 44)
+              }
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(CaptroDetailStyle.ink)
+              .overlay(Rectangle().stroke(CaptroDetailStyle.divider, lineWidth: 1))
+              .buttonStyle(.plain)
+              .disabled(model.isLoadingPayout)
+            }
+            Text("For security, enter this same debit card in the next screen. Captro never copies your saved card details.")
+              .font(.system(size: 12))
+              .foregroundStyle(CaptroDetailStyle.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        Button(account.payoutCard == nil && !savedDebitCards.isEmpty
+          ? "Use a Different Debit Card"
+          : account.payoutCardActionTitle) {
           openPayoutSetup()
         }
         .font(.system(size: 14, weight: .semibold))
