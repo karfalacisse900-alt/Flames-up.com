@@ -69,9 +69,21 @@ test('connected accounts and reusable catalog IDs are isolated by Stripe mode', 
   assert.match(stripeModeMigration, /stripe_price_mode text/);
   assert.match(stripeModeMigration, /stripe_mode = current_stripe_mode/);
   assert.match(worker, /user_id: postgrestEqFilter\(authUserId\),[\s\S]{0,120}stripe_mode: postgrestEqFilter\(configuredStripeMode\(c\)\)/);
-  assert.match(worker, /stripe_mode: configuredStripeMode\(c\)/);
+  assert.match(worker, /const patch = \{ stripe_mode: stripeMode,/);
   assert.match(worker, /purchasable\?\.stripe_product_mode !== stripeMode/);
   assert.match(worker, /price\?\.stripe_price_mode !== stripeMode/);
+});
+
+test('payout onboarding securely reconciles a legacy account record instead of reinserting it', () => {
+  const createAccount = worker.match(/async function createOrLoadConnectedAccount[\s\S]*?\n}\n\nasync function requireReadyConnectedAccount/)?.[0] || '';
+  const connectSync = worker.match(/async function syncConnectedAccountFromStripe[\s\S]*?\n}\n\nasync function refreshConnectedAccount/)?.[0] || '';
+  assert.match(connectSync, /provider_account_id: postgrestEqFilter\(providerAccountId\)/);
+  assert.match(connectSync, /provider_account_id: postgrestEqFilter\(providerAccountId\),\n    }, [\s\S]*?row = rows\[0\];/);
+  assert.match(worker, /CAPTRO_PAYOUT_ACCOUNT_CONFLICT/);
+  assert.match(worker, /isConnectedAccountConstraintConflict/);
+  assert.match(createAccount, /syncConnectedAccountFromStripe/);
+  assert.doesNotMatch(createAccount, /supabaseAdminInsertRows/);
+  assert.match(worker, /SUPABASE_INSERT_FAILED:app_connected_accounts:409:/);
 });
 
 test('recipient readiness depends on transfers and payouts rather than direct charges', () => {
@@ -311,6 +323,20 @@ test('native payout onboarding falls back to system Safari and routes its callba
   assert.match(payoutOnboarding, /applicationDidBecomeActive/);
   assert.match(nativeRoot, /CaptroPayoutOnboardingCoordinator\.handleIncomingURL\(url\)/);
   assert.match(payoutOnboarding, /COMMERCE_PAYOUT_EMAIL_REQUIRED/);
+  assert.match(payoutOnboarding, /CAPTRO_PAYOUT_ACCOUNT_CONFLICT/);
+  assert.match(payoutOnboarding, /payoutSetupUnavailable/);
+  assert.doesNotMatch(payoutOnboarding, /Reference:/);
+});
+
+test('payout setup errors are safe for users and never expose database responses', () => {
+  const payoutSession = worker.match(/api\.post\('\/commerce\/payout-account\/session'[\s\S]*?\n}\);\n\napi\.post\('\/commerce\/payout-account\/onboarding-link'/)?.[0] || '';
+  const payoutOnboardingRoute = worker.match(/api\.post\('\/commerce\/payout-account\/onboarding-link'[\s\S]*?\n}\);\n\napi\.post\('\/commerce\/payout-account\/manage-link'/)?.[0] || '';
+  assert.match(worker, /function payoutSetupFailure/);
+  assert.match(worker, /CAPTRO_PAYOUT_SETUP_UNAVAILABLE/);
+  assert.match(payoutSession, /payoutSetupFailure\(error\)/);
+  assert.match(payoutOnboardingRoute, /payoutSetupFailure\(error\)/);
+  assert.doesNotMatch(payoutSession, /const code = getErrorCode\(error\)/);
+  assert.doesNotMatch(payoutOnboardingRoute, /const code = getErrorCode\(error\)/);
 });
 
 test('checkout distinguishes seller readiness from temporary Stripe failures', () => {

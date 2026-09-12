@@ -12,7 +12,8 @@ private enum CaptroPayoutOnboardingError: LocalizedError {
   case invalidCallback
   case couldNotStart
   case profileEmailRequired
-  case linkRequestFailed(String)
+  case payoutSetupUnavailable
+  case payoutAccountConflict
 
   var errorDescription: String? {
     switch self {
@@ -24,8 +25,10 @@ private enum CaptroPayoutOnboardingError: LocalizedError {
       return "Could not open secure payout card setup."
     case .profileEmailRequired:
       return "Add a valid email address to your Captro profile before setting up payouts."
-    case .linkRequestFailed(let code):
-      return "Captro could not create the secure payout setup link. Reference: \(code)."
+    case .payoutSetupUnavailable:
+      return "Could not open secure payout card setup. Please try again."
+    case .payoutAccountConflict:
+      return "We could not verify your existing payout setup securely. Please contact Captro support."
     }
   }
 }
@@ -207,7 +210,10 @@ final class CaptroPayoutOnboardingCoordinator: NSObject, ObservableObject,
     if code == "COMMERCE_PAYOUT_EMAIL_REQUIRED" {
       return CaptroPayoutOnboardingError.profileEmailRequired
     }
-    return CaptroPayoutOnboardingError.linkRequestFailed(code)
+    if code == "CAPTRO_PAYOUT_ACCOUNT_CONFLICT" {
+      return CaptroPayoutOnboardingError.payoutAccountConflict
+    }
+    return CaptroPayoutOnboardingError.payoutSetupUnavailable
   }
 
   private func activeWindow() -> UIWindow? {

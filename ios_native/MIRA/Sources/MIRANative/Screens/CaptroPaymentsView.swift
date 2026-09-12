@@ -116,7 +116,7 @@ private final class CaptroPaymentsModel: ObservableObject {
       payoutError = nil
       return link
     } catch {
-      payoutError = apiMessage(error, fallback: "Could not open secure payout card setup.")
+      payoutError = payoutAPIMessage(error, fallback: "Could not open secure payout card setup. Please try again.")
       return nil
     }
   }
@@ -127,6 +127,18 @@ private final class CaptroPaymentsModel: ObservableObject {
 
   private func apiMessage(_ error: Error, fallback: String) -> String {
     (error as? MIRAAPIError)?.errorDescription ?? fallback
+  }
+
+  private func payoutAPIMessage(_ error: Error, fallback: String) -> String {
+    guard case let MIRAAPIError.server(_, code, _) = error else { return fallback }
+    switch code {
+    case "COMMERCE_PAYOUT_EMAIL_REQUIRED":
+      return "Add a valid email address to your Captro profile before setting up payouts."
+    case "CAPTRO_PAYOUT_ACCOUNT_CONFLICT":
+      return "We could not verify your existing payout setup securely. Please contact Captro support."
+    default:
+      return fallback
+    }
   }
 }
 

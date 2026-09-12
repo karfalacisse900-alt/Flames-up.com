@@ -8891,6 +8891,35 @@ function commerceErrorDiagnostic(error: any): string {
     .slice(0, 300);
 }
 
+type PayoutSetupFailure = {
+  code: string;
+  detail: string;
+  status: 409 | 502;
+};
+
+function payoutSetupFailure(error: any): PayoutSetupFailure {
+  const code = commerceErrorCode(error);
+  if (code === 'COMMERCE_PAYOUT_EMAIL_REQUIRED') {
+    return {
+      code,
+      detail: 'Add a valid email address to your Captro profile before setting up payouts.',
+      status: 409,
+    };
+  }
+  if (code === 'CAPTRO_PAYOUT_ACCOUNT_CONFLICT') {
+    return {
+      code,
+      detail: 'We could not verify your existing payout setup securely. Please contact Captro support.',
+      status: 409,
+    };
+  }
+  return {
+    code: 'CAPTRO_PAYOUT_SETUP_UNAVAILABLE',
+    detail: 'Could not open secure payout card setup. Please try again.',
+    status: 502,
+  };
+}
+
 function commerceErrorStatus(code: string): number {
   if (['CAPTRO_ITEM_UNAVAILABLE', 'CAPTRO_ITEM_EXPIRED', 'CAPTRO_CAPACITY_REACHED', 'CAPTRO_TIER_SOLD_OUT',
     'CAPTRO_BOOKING_SLOT_UNAVAILABLE', 'CAPTRO_PASS_ALREADY_USED', 'CAPTRO_PURCHASE_NOT_PAYABLE',
@@ -9129,15 +9158,67 @@ function connectedAccountSafePatch(account: any, accountV2?: any) {
   };
 }
 
+type ConnectedAccountOwner = {
+  authUserId: string | null;
+  appUserId: string;
+};
+
+function connectedAccountOwnerFromMetadata(account: any): ConnectedAccountOwner {
+  return {
+    authUserId: isUuidText(account?.metadata?.captro_auth_user_id || ''),
+    appUserId: publicId(account?.metadata?.captro_app_user_id, 120),
+  };
+}
+
+function connectedAccountOwnerIsComplete(owner: ConnectedAccountOwner | undefined): owner is { authUserId: string; appUserId: string } {
+  return Boolean(owner?.authUserId && owner.appUserId);
+}
+
+function connectedAccountRowMatchesOwner(row: any, owner: ConnectedAccountOwner | undefined): boolean {
+  return !!row && connectedAccountOwnerIsComplete(owner)
+    && row.user_id === owner.authUserId
+    && row.app_user_id === owner.appUserId;
+}
+
+async function connectedAccountModeHasConflict(
+  c: any,
+  authUserId: string,
+  appUserId: string,
+  stripeMode: 'test' | 'live',
+  currentRowId = '',
+): Promise<boolean> {
+  const [userRows, appUserRows] = await Promise.all([
+    supabaseAdminSelectRows(c, 'app_connected_accounts', {
+      user_id: postgrestEqFilter(authUserId),
+      stripe_mode: postgrestEqFilter(stripeMode),
+    }, '*', 2),
+    supabaseAdminSelectRows(c, 'app_connected_accounts', {
+      app_user_id: postgrestEqFilter(appUserId),
+      stripe_mode: postgrestEqFilter(stripeMode),
+    }, '*', 2),
+  ]);
+  return [...userRows, ...appUserRows].some((candidate: any) => candidate?.id && candidate.id !== currentRowId);
+}
+
+function isConnectedAccountConstraintConflict(error: any): boolean {
+  const code = getErrorCode(error);
+  return /^SUPABASE_(?:INSERT|PATCH)_FAILED:app_connected_accounts:409:/i.test(code)
+    && /(23505|duplicate key|unique)/i.test(code);
+}
+
 async function syncConnectedAccountFromStripe(
   c: any,
   account: any,
   knownRow?: any,
   accountV2?: any,
+  expectedOwner?: ConnectedAccountOwner,
 ): Promise<any | null> {
   const stripeMode = configuredStripeMode(c);
   const providerAccountId = cleanText(account?.id, 180);
   if (!providerAccountId.startsWith('acct_')) return null;
+  if (typeof account?.livemode === 'boolean' && account.livemode !== getStripeConfig(c).liveMode) {
+    throw new Error('STRIPE_CONNECTED_ACCOUNT_MODE_MISMATCH');
+  }
   let recipientAccountV2 = accountV2;
   if (!recipientAccountV2) {
     const include = '?include[0]=configuration.recipient&include[1]=requirements&include[2]=defaults&include[3]=identity';
@@ -9146,29 +9227,64 @@ async function syncConnectedAccountFromStripe(
     recipientAccountV2 = response.data;
   }
   let row = knownRow;
-  if (row && row.stripe_mode !== stripeMode) throw new Error('STRIPE_CONNECTED_ACCOUNT_MODE_MISMATCH');
+  if (row && cleanText(row.provider_account_id, 180) !== providerAccountId) {
+    throw new Error('STRIPE_CONNECTED_ACCOUNT_MISMATCH');
+  }
   if (!row) {
     const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
       provider_account_id: postgrestEqFilter(providerAccountId),
-      stripe_mode: postgrestEqFilter(stripeMode),
     }, '*', 1);
     row = rows[0];
   }
   const patch = { stripe_mode: stripeMode, ...connectedAccountSafePatch(account, recipientAccountV2) };
-  if (!row) {
-    const authUserId = isUuidText(account?.metadata?.captro_auth_user_id || '');
-    const appUserId = publicId(account?.metadata?.captro_app_user_id, 120);
-    if (!authUserId || !appUserId) return null;
+  const metadataOwner = connectedAccountOwnerFromMetadata(account);
+  if (row) {
+    if ((connectedAccountOwnerIsComplete(metadataOwner) && !connectedAccountRowMatchesOwner(row, metadataOwner))
+      || (expectedOwner && !connectedAccountRowMatchesOwner(row, expectedOwner))) {
+      throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+    }
+    if (row.stripe_mode !== stripeMode) {
+      const verifiedOwner = connectedAccountOwnerIsComplete(metadataOwner) ? metadataOwner : expectedOwner;
+      if (!connectedAccountOwnerIsComplete(verifiedOwner)
+        || !connectedAccountRowMatchesOwner(row, verifiedOwner)
+        || await connectedAccountModeHasConflict(c, verifiedOwner.authUserId, verifiedOwner.appUserId, stripeMode, row.id)) {
+        throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+      }
+    }
+    try {
+      await supabaseAdminPatchRows(c, 'app_connected_accounts', { id: postgrestEqFilter(row.id) }, patch);
+    } catch (error: any) {
+      if (isConnectedAccountConstraintConflict(error)) throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+      throw error;
+    }
+    return { ...row, ...patch };
+  }
+
+  if (!connectedAccountOwnerIsComplete(metadataOwner)
+    || (expectedOwner && (!connectedAccountOwnerIsComplete(expectedOwner)
+      || metadataOwner.authUserId !== expectedOwner.authUserId || metadataOwner.appUserId !== expectedOwner.appUserId))) {
+    throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+  }
+  if (await connectedAccountModeHasConflict(c, metadataOwner.authUserId, metadataOwner.appUserId, stripeMode)) {
+    throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+  }
+  try {
     const inserted = await supabaseAdminInsertRows(c, 'app_connected_accounts', [{
-      user_id: authUserId,
-      app_user_id: appUserId,
-      account_type: cleanText(account?.type || 'express', 20),
+      user_id: metadataOwner.authUserId,
+      app_user_id: metadataOwner.appUserId,
+      account_type: cleanText(account?.type || 'express', 20) || 'express',
       ...patch,
     }]);
     return inserted[0] || null;
+  } catch (error: any) {
+    if (!isConnectedAccountConstraintConflict(error)
+      || !getErrorCode(error).startsWith('SUPABASE_INSERT_FAILED:app_connected_accounts:409:')) throw error;
+    const rows = await supabaseAdminSelectRows(c, 'app_connected_accounts', {
+      provider_account_id: postgrestEqFilter(providerAccountId),
+    }, '*', 1);
+    if (!rows[0]) throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+    return await syncConnectedAccountFromStripe(c, account, rows[0], recipientAccountV2, expectedOwner);
   }
-  await supabaseAdminPatchRows(c, 'app_connected_accounts', { id: postgrestEqFilter(row.id) }, patch);
-  return { ...row, ...patch };
 }
 
 async function refreshConnectedAccount(c: any, row: any): Promise<any> {
@@ -9246,15 +9362,16 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
   if (!v1Account.ok || v1Account.data?.id !== accountId) {
     throw stripeProviderError(v1Account, 'STRIPE_CONNECT_ACCOUNT_SYNC_FAILED');
   }
-  const inserted = await supabaseAdminInsertRows(c, 'app_connected_accounts', [{
-    user_id: authUserId,
-    app_user_id: appUserId,
-    stripe_mode: configuredStripeMode(c),
-    account_type: 'express',
-    ...connectedAccountSafePatch(v1Account.data, account.data),
-  }]);
-  if (!inserted[0]) throw new Error('STRIPE_CONNECT_ACCOUNT_SAVE_FAILED');
-  return inserted[0];
+  const expectedOwner: ConnectedAccountOwner = {
+    authUserId: isUuidText(authUserId),
+    appUserId: publicId(appUserId, 120),
+  };
+  const connected = await syncConnectedAccountFromStripe(c, v1Account.data, undefined, account.data, expectedOwner);
+  if (!connected || !connectedAccountRowMatchesOwner(connected, expectedOwner)
+    || connected.stripe_mode !== configuredStripeMode(c)) {
+    throw new Error('CAPTRO_PAYOUT_ACCOUNT_CONFLICT');
+  }
+  return connected;
 }
 
 async function requireReadyConnectedAccount(c: any, creatorAuthUserId: string): Promise<any> {
@@ -18686,9 +18803,10 @@ api.post('/commerce/payout-account/session', authMiddleware, async (c) => {
       expiresAt: session.expiresAt,
     });
   } catch (error: any) {
-    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_ACCOUNT_SESSION_CREATE_FAILED';
-    console.warn(JSON.stringify({ event: 'stripe_connect_account_session_failed', code }));
-    return c.json({ detail: 'Could not open secure in-app payout card setup.', code }, 502);
+    const failure = payoutSetupFailure(error);
+    console.warn(JSON.stringify({ event: 'stripe_connect_account_session_failed', code: failure.code,
+      cause: commerceErrorDiagnostic(error) }));
+    return c.json({ detail: failure.detail, code: failure.code }, failure.status);
   }
 });
 
@@ -18710,9 +18828,10 @@ api.post('/commerce/payout-account/onboarding-link', authMiddleware, async (c) =
     c.header('Cache-Control', 'private, no-store');
     return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
   } catch (error: any) {
-    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_ONBOARDING_FAILED';
-    console.warn(JSON.stringify({ event: 'stripe_connect_onboarding_failed', code }));
-    return c.json({ detail: 'Could not open secure payout card setup.', code }, 502);
+    const failure = payoutSetupFailure(error);
+    console.warn(JSON.stringify({ event: 'stripe_connect_onboarding_failed', code: failure.code,
+      cause: commerceErrorDiagnostic(error) }));
+    return c.json({ detail: failure.detail, code: failure.code }, failure.status);
   }
 });
 
@@ -18731,9 +18850,10 @@ api.post('/commerce/payout-account/manage-link', authMiddleware, async (c) => {
     c.header('Cache-Control', 'private, no-store');
     return c.json({ account: connectedAccountPublicPayload(c, account), ...destination });
   } catch (error: any) {
-    const code = getErrorCode(error).slice(0, 180) || 'STRIPE_CONNECT_MANAGEMENT_FAILED';
-    console.warn(JSON.stringify({ event: 'stripe_connect_management_failed', code }));
-    return c.json({ detail: 'Could not open payout card management.', code }, 502);
+    const failure = payoutSetupFailure(error);
+    console.warn(JSON.stringify({ event: 'stripe_connect_management_failed', code: failure.code,
+      cause: commerceErrorDiagnostic(error) }));
+    return c.json({ detail: failure.detail, code: failure.code }, failure.status);
   }
 });
 
