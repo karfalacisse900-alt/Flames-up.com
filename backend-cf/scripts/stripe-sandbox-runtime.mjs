@@ -9,6 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 const processes = [];
 const cleanupAccounts = new Set();
+const cleanupExternalAccounts = new Map();
 const cleanupPrices = new Set();
 const cleanupProducts = new Set();
 const STRIPE_ACCOUNTS_V2_VERSION = '2026-08-26.dahlia';
@@ -53,6 +54,23 @@ async function stripe(path, { method = 'GET', params, connectedAccount, stripeVe
   const init = { method, headers };
   if (params) {
     headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    init.body = new URLSearchParams(Object.entries(params)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => [key, String(value)])).toString();
+  }
+  return json(`https://api.stripe.com/v1${path}`, init);
+}
+
+// This intentionally mirrors the native iOS SDK's publishable-key token call.
+// It only ever runs in the protected Stripe test environment with Stripe's
+// public test debit-card number; PAN/CVC never reach Captro's Worker.
+async function stripePublishable(path, { method = 'POST', params } = {}) {
+  const headers = {
+    Authorization: `Bearer ${process.env.STRIPE_PUBLISHABLE_KEY}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  const init = { method, headers };
+  if (params) {
     init.body = new URLSearchParams(Object.entries(params)
       .filter(([, value]) => value !== undefined && value !== null)
       .map(([key, value]) => [key, String(value)])).toString();
@@ -360,6 +378,52 @@ async function main() {
   assert.equal(onboardingRows[0].charges_enabled, onboardingAccount.charges_enabled);
   assert.equal(onboardingRows[0].payouts_enabled, onboardingAccount.payouts_enabled);
   assert.equal(onboardingRows[0].details_submitted, onboardingAccount.details_submitted);
+
+  // Prove the exact one-entry-card primitive used by the native app: the
+  // device sends the debit details straight to Stripe with Captro's
+  // publishable key, then Captro receives only the opaque tok_ identifier.
+  // This is deliberately not a Stripe fixture token, so the test catches a
+  // missing Raw Card Data API approval instead of masking it.
+  const debitToken = await stripePublishable('/tokens', {
+    params: {
+      'card[number]': '4000056655665556',
+      'card[exp_month]': 12,
+      'card[exp_year]': 2034,
+      'card[cvc]': '123',
+      'card[name]': 'Captro Sandbox Debit',
+      'card[address_line1]': 'address_full_match',
+      'card[address_city]': 'Schenectady',
+      'card[address_state]': 'NY',
+      'card[address_zip]': '12345',
+      'card[address_country]': 'US',
+      'card[currency]': 'usd',
+    },
+  });
+  assert.ok(debitToken.id?.startsWith('tok_'));
+  assert.equal(debitToken.livemode, false);
+  assert.equal(debitToken.type, 'card');
+  assert.equal(debitToken.used, false);
+  assert.equal(debitToken.card?.funding, 'debit');
+  assert.equal(debitToken.card?.last4, '5556');
+  assert.equal(debitToken.card?.currency, 'usd');
+  const attachedDebit = await stripe(`/accounts/${onboardingAccount.id}/external_accounts`, {
+    method: 'POST',
+    params: {
+      external_account: debitToken.id,
+      default_for_currency: true,
+      'metadata[captro_probe]': 'publishable_raw_debit_token',
+      'metadata[captro_test_run_id]': process.env.GITHUB_RUN_ID,
+    },
+  });
+  assert.ok(attachedDebit.id?.startsWith('card_'));
+  assert.equal(attachedDebit.livemode, false);
+  assert.equal(attachedDebit.funding, 'debit');
+  assert.equal(attachedDebit.currency, 'usd');
+  assert.equal(attachedDebit.last4, '5556');
+  assert.equal(attachedDebit.default_for_currency, true);
+  assert.ok(attachedDebit.available_payout_methods?.includes('instant'));
+  cleanupExternalAccounts.set(onboardingAccount.id, attachedDebit.id);
+
   const providerOnboardingSession = await stripe('/account_sessions', {
     method: 'POST',
     stripeVersion: '2024-10-28.acacia',
@@ -544,6 +608,12 @@ async function main() {
 
 async function cleanupStripeFixtures() {
   if (!/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY || '')) return;
+  for (const [accountId, externalAccountId] of cleanupExternalAccounts) {
+    await fetch(`https://api.stripe.com/v1/accounts/${accountId}/external_accounts/${externalAccountId}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+      signal: AbortSignal.timeout(15_000), redirect: 'error',
+    }).catch(() => undefined);
+  }
   for (const priceId of cleanupPrices) {
     await fetch(`https://api.stripe.com/v1/prices/${priceId}`, {
       method: 'POST', headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}`, 'Content-Type': 'application/x-www-form-urlencoded' },
