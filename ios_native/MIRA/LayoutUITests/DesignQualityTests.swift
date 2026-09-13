@@ -63,6 +63,10 @@ final class DesignQualityTests: XCTestCase {
     let editor = app.textViews["What do you want to share?"]
     XCTAssertTrue(editor.waitForExistence(timeout: 15))
     editor.tap()
+    // A fresh simulator can present the system's one-time keyboard tutorial.
+    if app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Speed up your typing")).firstMatch.exists {
+      app.buttons["Continue"].tap()
+    }
     editor.typeText("A draft worth keeping")
     app.buttons["Cancel"].tap()
     XCTAssertTrue(app.buttons["Keep editing"].waitForExistence(timeout: 5))

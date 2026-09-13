@@ -1008,9 +1008,9 @@ public struct CreatePostNativeView: View {
   public var body: some View {
     composerSheetPage
     .interactiveDismissDisabled(isPosting || hasUnsavedPost)
-    .confirmationDialog("Discard this post?", isPresented: $showDiscardConfirmation, titleVisibility: .visible) {
+    .alert("Discard this post?", isPresented: $showDiscardConfirmation) {
       Button("Discard post", role: .destructive) { close() }
-      Button("Keep editing", role: .cancel) {}
+      Button("Keep editing", role: .cancel) { focusedPostDetailsField = .caption }
     } message: {
       Text("Your text and selected media will be removed from this draft.")
     }
@@ -1202,6 +1202,7 @@ public struct CreatePostNativeView: View {
   private var composerTopBar: some View {
     HStack {
       Button("Cancel") {
+        focusedPostDetailsField = nil
         if hasUnsavedPost { showDiscardConfirmation = true } else { close() }
       }
       .font(.system(size: 17, weight: .regular))
