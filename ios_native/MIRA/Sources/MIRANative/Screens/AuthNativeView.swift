@@ -161,7 +161,7 @@ public struct AuthNativeView: View {
   private var formBlock: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
       Text(isCreatingAccount ? "Create with email" : "Continue with email")
-        .font(.system(size: 15, weight: .black, design: .rounded))
+        .font(.subheadline.weight(.semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
 
       if isCreatingAccount {
@@ -187,16 +187,17 @@ public struct AuthNativeView: View {
             ProgressView().tint(.white)
           } else {
             Text(isCreatingAccount ? "Create account" : "Log in")
-              .font(.system(size: 16, weight: .semibold))
+              .font(.body.weight(.semibold))
           }
           Spacer()
         }
-        .foregroundStyle(.white)
-        .frame(height: 50)
+        .foregroundStyle(MIRATheme.Color.onPrimary)
+        .padding(.vertical, 12)
+        .frame(minHeight: 50)
         .background(MIRATheme.Color.forest)
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
       }
-      .buttonStyle(.plain)
+      .buttonStyle(.miraPress)
       .disabled(session.isWorking || !canSubmit)
 
       Button {
@@ -254,7 +255,7 @@ public struct AuthNativeView: View {
       HStack {
         VStack(alignment: .leading, spacing: 4) {
           Text("Reset password")
-            .font(.system(size: 26, weight: .black, design: .rounded))
+            .font(.title2.weight(.semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
           Text("We’ll send a reset link to your email.")
             .font(.system(size: 14.5, weight: .medium))
@@ -308,16 +309,17 @@ public struct AuthNativeView: View {
               ProgressView().tint(.white)
             } else {
               Text("Send reset link")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.body.weight(.semibold))
             }
             Spacer()
           }
-          .foregroundStyle(.white)
-          .frame(height: 50)
+          .foregroundStyle(MIRATheme.Color.onPrimary)
+          .padding(.vertical, 12)
+          .frame(minHeight: 50)
           .background(MIRATheme.Color.forest)
-          .clipShape(Capsule())
+          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.miraPress)
         .disabled(session.isWorking || !forgotPasswordEmail.contains("@"))
       }
       .padding(.horizontal, MIRATheme.Space.xl)
@@ -325,8 +327,8 @@ public struct AuthNativeView: View {
       .padding(.bottom, MIRATheme.Space.xxl)
     }
     .frame(maxWidth: .infinity)
-    .background(MIRATheme.Color.launchBackground)
-    .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
     .modifier(MIRATheme.floatingShadow())
     .frame(maxHeight: .infinity, alignment: .bottom)
     .ignoresSafeArea(edges: .bottom)
@@ -343,7 +345,7 @@ public struct AuthNativeView: View {
       HStack {
         VStack(alignment: .leading, spacing: 4) {
           Text("Create a new password")
-            .font(.system(size: 26, weight: .black, design: .rounded))
+            .font(.title2.weight(.semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
           Text("Use the reset link email to finish signing back in.")
             .font(.system(size: 14.5, weight: .medium))
@@ -400,16 +402,17 @@ public struct AuthNativeView: View {
               ProgressView().tint(.white)
             } else {
               Text("Save new password")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.body.weight(.semibold))
             }
             Spacer()
           }
-          .foregroundStyle(.white)
-          .frame(height: 50)
+          .foregroundStyle(MIRATheme.Color.onPrimary)
+          .padding(.vertical, 12)
+          .frame(minHeight: 50)
           .background(MIRATheme.Color.forest)
-          .clipShape(Capsule())
+          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.miraPress)
         .disabled(session.isWorking || resetPassword.count < 6 || confirmResetPassword.count < 6)
       }
       .padding(.horizontal, MIRATheme.Space.xl)
@@ -417,8 +420,8 @@ public struct AuthNativeView: View {
       .padding(.bottom, MIRATheme.Space.xxl)
     }
     .frame(maxWidth: .infinity)
-    .background(MIRATheme.Color.launchBackground)
-    .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
     .modifier(MIRATheme.floatingShadow())
     .frame(maxHeight: .infinity, alignment: .bottom)
     .ignoresSafeArea(edges: .bottom)
@@ -427,7 +430,7 @@ public struct AuthNativeView: View {
   private var socialAuthBlock: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
       Text(isCreatingAccount ? "Create your account" : "Sign in faster")
-        .font(.system(size: 15, weight: .black, design: .rounded))
+        .font(.subheadline.weight(.semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
 
       VStack(spacing: MIRATheme.Space.sm) {
@@ -438,32 +441,9 @@ public struct AuthNativeView: View {
   }
 
   private var googleButton: some View {
-    Button {
-      startGoogleSignIn()
-    } label: {
-      HStack(spacing: MIRATheme.Space.sm) {
-        Text("G")
-          .font(.system(size: 18, weight: .black, design: .rounded))
-          .foregroundStyle(MIRATheme.Color.forest)
-          .frame(width: 28, height: 28)
-          .background(.white)
-          .clipShape(Circle())
-          .overlay(Circle().stroke(Color.black.opacity(0.08), lineWidth: 1))
-
-        Text("Continue with Google")
-          .font(.system(size: 16, weight: .black, design: .rounded))
-      }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(maxWidth: .infinity)
-      .frame(height: 52)
-      .background(.white)
-      .clipShape(Capsule())
-      .overlay(Capsule().stroke(Color.black.opacity(0.12), lineWidth: 1))
-    }
-    .buttonStyle(.miraPress)
-    .disabled(session.isWorking || isSocialSignInWorking)
-    .opacity(session.isWorking || isSocialSignInWorking ? 0.56 : 1)
-    .accessibilityLabel("Continue with Google")
+    MIRAGoogleSignInControl(isEnabled: !session.isWorking && !isSocialSignInWorking, action: startGoogleSignIn)
+      .frame(height: 50)
+      .opacity(session.isWorking || isSocialSignInWorking ? 0.45 : 1)
   }
 
   private var authDivider: some View {
@@ -511,7 +491,7 @@ public struct AuthNativeView: View {
       }
     }
     .frame(height: 50)
-    .clipShape(Capsule())
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
     .opacity(session.isWorking || isSocialSignInWorking ? 0.56 : 1)
   }
 
@@ -598,12 +578,13 @@ public struct AuthNativeView: View {
 
   private func legalFooterPill(_ title: String) -> some View {
     Text(title)
-      .font(.system(size: 12.5, weight: .semibold))
+      .font(.subheadline.weight(.medium))
       .foregroundStyle(MIRATheme.Color.textPrimary)
       .frame(maxWidth: .infinity)
-      .frame(height: 36)
+      .padding(.vertical, 8)
+      .frame(minHeight: 44)
       .background(MIRATheme.Color.surfaceSoft)
-      .clipShape(Capsule())
+      .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
   }
 
   private func authField(
@@ -1269,7 +1250,7 @@ public struct ChooseUsernameNativeView: View {
                 ProgressView().tint(.white)
               } else {
                 Text(localization.string("auth.continue"))
-                  .font(.system(size: 16, weight: .semibold))
+                  .font(.body.weight(.semibold))
               }
               Spacer()
             }

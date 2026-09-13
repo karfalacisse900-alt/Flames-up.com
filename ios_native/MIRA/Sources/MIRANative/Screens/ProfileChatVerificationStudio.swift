@@ -1860,6 +1860,7 @@ private struct EditProfileNativeView: View {
 final class ChatNativeModel: ObservableObject {
   @Published var conversations: [MIRAConversation] = []
   @Published var isLoading = false
+  @Published var loadError: String?
   let api: MIRAAPIClient
   private let localStore = MIRAChatLocalStore.shared
   private var currentUserId = ""
@@ -1874,6 +1875,7 @@ final class ChatNativeModel: ObservableObject {
     let clean = currentUserId.trimmingCharacters(in: .whitespacesAndNewlines)
     guard clean != self.currentUserId else { return }
     self.currentUserId = clean
+    loadError = nil
     hasLoadedFreshConversations = false
     if !conversations.isEmpty {
       conversations = []
@@ -1903,9 +1905,11 @@ final class ChatNativeModel: ObservableObject {
     guard let fresh: [MIRAConversation] = try? await api.get("/conversations") else {
       if conversations.isEmpty {
         hasLoadedFreshConversations = false
+        loadError = "Check your connection and try again."
       }
       return
     }
+    loadError = nil
     hasLoadedFreshConversations = true
     if conversations != fresh {
       conversations = fresh
@@ -1961,6 +1965,10 @@ public struct ChatNativeView: View {
 
           if model.conversations.isEmpty && model.isLoading {
             chatListSkeleton
+          } else if let error = model.loadError, model.conversations.isEmpty {
+            MIRAEmptyState(title: "Couldn't load chats", message: error, systemImage: "wifi.exclamationmark")
+            MIRAPrimaryButton("Try again") { Task { await model.load(forceRefresh: true) } }
+              .frame(maxWidth: .infinity)
           } else if model.conversations.isEmpty {
             MIRAEmptyState(title: "No chats yet", message: "Friends and replies will appear here.", systemImage: "bubble.left.and.bubble.right")
           } else {

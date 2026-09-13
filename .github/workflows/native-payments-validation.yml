@@ -1,6 +1,11 @@
 name: Validate Native Payments
 on:
   workflow_dispatch:
+    inputs:
+      skip_generic_build:
+        description: Avoid the redundant generic build; simulator tests still build the complete app
+        type: boolean
+        default: true
   push:
     branches: [fix/oauth-guest-access]
     paths:
@@ -29,6 +34,7 @@ jobs:
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
       - name: Build simulator without signing or publishing
+        if: ${{ !inputs.skip_generic_build }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
@@ -36,7 +42,7 @@ jobs:
             -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/CaptroBuild" \
             CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/native-payments-build.log"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: ${{ always() && !inputs.skip_generic_build }}
         with:
           name: native-payments-build-log
           path: ${{ runner.temp }}/native-payments-build.log

@@ -48,6 +48,7 @@ private struct SettingsBlockedAccount: Decodable, Identifiable, Hashable {
 
 @MainActor
 final class SettingsNativeModel: ObservableObject {
+  @Published var loadError: String?
   @Published var user: MIRAUser?
   @Published var isPrivate = false
   @Published var language = MIRALanguageResolver.storedPreference()
@@ -81,12 +82,13 @@ final class SettingsNativeModel: ObservableObject {
     defer { isLoading = false }
     do {
       let fresh: MIRAUser = try await api.get("/auth/me")
+      loadError = nil
       apply(user: fresh)
       await MIRAAppCacheStore.shared.saveSettings(user: fresh, language: language, isPrivate: isPrivate)
       authSession?.replaceUser(fresh)
     } catch {
       if user == nil {
-        show(MIRALocalization.shared.string("common.error"), isError: true)
+        loadError = "Couldn't load account settings. Pull down to try again."
       }
     }
   }
@@ -226,6 +228,9 @@ public struct SettingsNativeView: View {
       VStack(alignment: .leading, spacing: 14) {
         settingsHero
 
+        if let loadError = model.loadError {
+          SettingsBanner(message: loadError, isError: true)
+        }
         if let message = model.bannerMessage {
           SettingsBanner(message: message, isError: model.bannerIsError)
         }
@@ -233,10 +238,11 @@ public struct SettingsNativeView: View {
         SettingsCard(title: localization.string("settings.account")) {
           SettingsNavigationRow(
             title: localization.string("settings.privacy"),
-            subtitle: model.isPrivate ? "Private account is on" : "Public account",
+            subtitle: model.user == nil ? "Account settings unavailable" : (model.isPrivate ? "Private account is on" : "Public account"),
             systemImage: "lock",
             destination: PrivacySettingsNativeView(model: model)
           )
+          .disabled(model.user == nil)
           SettingsNavigationRow(
             title: localization.string("settings.notifications"),
             subtitle: "Push, likes, comments, messages",
@@ -297,6 +303,7 @@ public struct SettingsNativeView: View {
     .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
     .task { await model.load() }
+    .refreshable { await model.load() }
   }
 
   private var settingsHero: some View {
