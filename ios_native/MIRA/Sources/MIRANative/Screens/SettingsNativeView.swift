@@ -836,6 +836,8 @@ private struct PreferenceSettingsNativeView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @State private var isClearingMediaCache = false
+  @State private var cacheNotice: String?
+  @State private var cacheClearFailed = false
 
   var body: some View {
     SettingsDetailScaffold(title: "Appearance & cache") {
@@ -882,11 +884,16 @@ private struct PreferenceSettingsNativeView: View {
         ) {
           guard !isClearingMediaCache else { return }
           isClearingMediaCache = true
-          MIRAMediaCacheMaintenance.clearMediaCaches()
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+          cacheNotice = nil
+          Task {
+            let cleared = await MIRAMediaCacheMaintenance.clearMediaCaches()
+            cacheClearFailed = !cleared
+            cacheNotice = cleared ? "Cached media cleared. Images reload as needed." : "Some cached files couldn't be cleared. Try again."
             isClearingMediaCache = false
           }
         }
+        .disabled(isClearingMediaCache)
+        if let cacheNotice { SettingsBanner(message: cacheNotice, isError: cacheClearFailed) }
       }
     }
   }

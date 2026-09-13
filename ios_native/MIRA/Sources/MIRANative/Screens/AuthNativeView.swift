@@ -47,6 +47,7 @@ public struct AuthNativeView: View {
             session.continueAsGuest()
           }
         )
+        .accessibilityHidden(isAuthPanelVisible || isForgotPasswordVisible || session.passwordResetContext != nil)
 
         if isAuthPanelVisible {
           Color.black.opacity(0.24)
@@ -58,6 +59,9 @@ public struct AuthNativeView: View {
             .zIndex(1)
 
           authPanel
+            .accessibilityAddTraits(.isModal)
+            .accessibilityAction(.escape) { closeAuthPanel() }
+            .accessibilityHidden(isForgotPasswordVisible || session.passwordResetContext != nil)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .zIndex(2)
         }
@@ -69,6 +73,7 @@ public struct AuthNativeView: View {
             .zIndex(3)
 
           passwordResetOverlay
+            .accessibilityAddTraits(.isModal)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .zIndex(4)
         }

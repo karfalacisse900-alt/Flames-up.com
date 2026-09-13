@@ -1004,7 +1004,7 @@ public struct MainFeedView: View {
             Image(systemName: "paperplane")
               .font(.system(size: 21, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textPrimary)
-              .frame(width: 40, height: 44)
+              .frame(width: 44, height: 44)
               .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
@@ -1013,7 +1013,7 @@ public struct MainFeedView: View {
           Image(systemName: "paperplane")
             .font(.system(size: 21, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textMuted)
-            .frame(width: 40, height: 44)
+            .frame(width: 44, height: 44)
             .accessibilityHidden(true)
         }
 
@@ -1024,7 +1024,7 @@ public struct MainFeedView: View {
           Image(systemName: "square.and.pencil")
             .font(.system(size: 21, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 40, height: 44)
+            .frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

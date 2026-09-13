@@ -486,13 +486,12 @@ private final class MIRAImageMemoryCache {
 }
 
 public enum MIRAMediaCacheMaintenance {
-  public static func clearMediaCaches() {
+  public static func clearMediaCaches() async -> Bool {
     MIRAImageMemoryCache.shared.removeAll()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
-    Task {
-      await MIRAImageDiskCache.clear()
-      MIRAApplePerformanceLogger.event("media_cache_cleared", detail: "manual")
-    }
+    let didClear = await MIRAImageDiskCache.clear()
+    MIRAApplePerformanceLogger.event(didClear ? "media_cache_cleared" : "media_cache_clear_failed", detail: "manual")
+    return didClear
   }
 }
 

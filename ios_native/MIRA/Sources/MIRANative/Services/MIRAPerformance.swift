@@ -340,7 +340,8 @@ public enum MIRAImageDiskCache {
     }.value
   }
 
-  public static func clear() async {
+  @discardableResult
+  public static func clear() async -> Bool {
     await Task.detached(priority: .utility) {
       guard let directory = cacheDirectory(),
             let files = try? FileManager.default.contentsOfDirectory(
@@ -348,10 +349,13 @@ public enum MIRAImageDiskCache {
               includingPropertiesForKeys: nil,
               options: [.skipsHiddenFiles]
             )
-      else { return }
+      else { return false }
+      var didClearAll = true
       for file in files {
-        try? FileManager.default.removeItem(at: file)
+        do { try FileManager.default.removeItem(at: file) }
+        catch { didClearAll = false }
       }
+      return didClearAll
     }.value
   }
 
