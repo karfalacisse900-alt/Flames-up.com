@@ -57,4 +57,34 @@ final class DesignQualityTests: XCTestCase {
     app.swipeUp()
     capture(app, "settings-dark-scrolled")
   }
+
+  func testDraftCannotBeDiscardedAccidentally() {
+    let app = launch(["--captro-quality-composer"])
+    let editor = app.textViews["What do you want to share?"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 15))
+    editor.tap()
+    editor.typeText("A draft worth keeping")
+    app.buttons["Cancel"].tap()
+    XCTAssertTrue(app.buttons["Keep editing"].waitForExistence(timeout: 5))
+    capture(app, "discard-confirmation")
+    app.buttons["Keep editing"].tap()
+    XCTAssertEqual(editor.value as? String, "A draft worth keeping")
+  }
+
+  func testSearchClearAndLegalReading() {
+    let app = launch(["--captro-quality-search"])
+    let field = app.textFields["Search people"]
+    XCTAssertTrue(field.waitForExistence(timeout: 10))
+    field.tap()
+    field.typeText("z")
+    XCTAssertTrue(app.staticTexts["Search people by name or username."].exists)
+    capture(app, "search-keyboard")
+    app.buttons["Clear search"].tap()
+    XCTAssertEqual(field.value as? String, "Search people")
+    app.terminate()
+    let legal = launch(["--captro-quality-legal", "--captro-quality-large-text"])
+    XCTAssertTrue(legal.navigationBars["Privacy"].waitForExistence(timeout: 10))
+    legal.swipeUp()
+    capture(legal, "legal-large-text")
+  }
 }

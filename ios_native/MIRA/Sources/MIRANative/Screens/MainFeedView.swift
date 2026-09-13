@@ -103,7 +103,7 @@ final class MainFeedModel: ObservableObject {
       canLoadMore = false
       if posts.isEmpty {
         hasLoadedFreshFeed = false
-        errorMessage = "Could not load the feed. Pull back in a moment."
+        errorMessage = "Check your connection and try again."
       }
       return
     }
@@ -1078,6 +1078,15 @@ public struct MainFeedView: View {
       MainPostSkeleton()
         .frame(width: size.width, height: size.height, alignment: .top)
         .clipped()
+    } else if let error = model.errorMessage, model.posts.isEmpty {
+      ScrollView {
+        VStack(spacing: 20) {
+          MIRAEmptyState(title: "Couldn't load your feed", message: error, systemImage: "wifi.exclamationmark")
+          MIRAPrimaryButton("Try again") { Task { await model.load() } }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, minHeight: size.height)
+      }
     } else if displayedPosts.isEmpty {
       MIRAEmptyState(
         title: selectedFeedSection == .friends ? "No friends posts yet" : localization.string("feed.empty.title"),

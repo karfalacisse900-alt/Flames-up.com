@@ -438,6 +438,7 @@ private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier 
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
+      guard isMounted, !isVisible else { return }
       isPresented = false
       isMounted = false
       onDismissed?()
@@ -451,7 +452,7 @@ private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier 
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard !isPresented else { return }
+      guard isMounted, !isPresented, !isVisible else { return }
       isMounted = false
       onDismissed?()
     }
@@ -655,6 +656,7 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
+      guard isMounted, !isVisible else { return }
       isPresented = false
       isMounted = false
       onDismissed?()
@@ -669,7 +671,7 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard !isPresented else { return }
+      guard isMounted, !isPresented, !isVisible else { return }
       isMounted = false
       onDismissed?()
     }
@@ -761,6 +763,7 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
+      guard isMounted, !isVisible else { return }
       isPresented = false
       isMounted = false
       onDismissed?()
@@ -774,7 +777,7 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard !isPresented else { return }
+      guard isMounted, !isPresented, !isVisible else { return }
       isMounted = false
       onDismissed?()
     }
@@ -854,6 +857,7 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
+      guard isMounted, !isVisible else { return }
       isPresented = false
       isMounted = false
       onDismissed?()
@@ -867,7 +871,7 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard !isPresented else { return }
+      guard isMounted, !isPresented, !isVisible else { return }
       isMounted = false
       onDismissed?()
     }

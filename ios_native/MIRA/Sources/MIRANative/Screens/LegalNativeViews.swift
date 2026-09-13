@@ -147,14 +147,11 @@ private struct LegalDocumentView: View {
 
         VStack(alignment: .leading, spacing: 6) {
           Text(page.title)
-            .font(.system(size: 27, weight: .semibold))
+            .font(.title.weight(.semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .fixedSize(horizontal: false, vertical: true)
           Text("Last updated: \(captroLegalLastUpdated)")
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-          Text(page.route)
-            .font(.system(size: 12, weight: .semibold, design: .monospaced))
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
       }
@@ -203,12 +200,12 @@ private struct LegalSectionCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       Text(section.title)
-        .font(.system(size: 18, weight: .semibold))
+        .font(.headline)
         .foregroundStyle(MIRATheme.Color.textPrimary)
 
       ForEach(Array(section.paragraphs.enumerated()), id: \.offset) { _, paragraph in
         Text(paragraph)
-          .font(.system(size: 14.5, weight: .regular))
+          .font(.body)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineSpacing(3)
           .fixedSize(horizontal: false, vertical: true)
@@ -223,7 +220,7 @@ private struct LegalSectionCard: View {
                 .frame(width: 5, height: 5)
                 .padding(.top, 8)
               Text(bullet)
-                .font(.system(size: 14.5, weight: .regular))
+                .font(.body)
                 .foregroundStyle(MIRATheme.Color.textSecondary)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)

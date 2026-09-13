@@ -91,7 +91,7 @@ public struct AuthNativeView: View {
       HStack(spacing: MIRATheme.Space.sm) {
         VStack(alignment: .leading, spacing: 3) {
           Text(isCreatingAccount ? "Sign up" : "Log in")
-            .font(.system(size: 28, weight: .black, design: .rounded))
+            .font(.title2.weight(.semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
           Text(isCreatingAccount ? "Create your Captro account." : "Welcome back to Captro.")
             .font(.system(size: 14.5, weight: .medium))
@@ -130,8 +130,8 @@ public struct AuthNativeView: View {
     }
     .frame(maxWidth: .infinity)
     .frame(maxHeight: isCreatingAccount ? 740 : 680, alignment: .bottom)
-    .background(MIRATheme.Color.launchBackground)
-    .clipShape(RoundedRectangle(cornerRadius: 34, style: .continuous))
+    .background(MIRATheme.Color.surface)
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
     .modifier(MIRATheme.floatingShadow())
     .frame(maxHeight: .infinity, alignment: .bottom)
     .ignoresSafeArea(edges: .bottom)

@@ -832,35 +832,43 @@ private struct DeleteAccountNativeView: View {
 }
 
 private struct PreferenceSettingsNativeView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @State private var isClearingMediaCache = false
 
   var body: some View {
     SettingsDetailScaffold(title: "Appearance & cache") {
       SettingsCard(title: "Appearance") {
-        HStack(spacing: 8) {
+        VStack(spacing: 8) {
           ForEach(MIRAAppearance.allCases) { option in
             Button {
               CaptroHaptics.light()
-              withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: false)) {
+              withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
                 appearancePreference = option.rawValue
               }
             } label: {
-              VStack(spacing: 7) {
+              HStack(spacing: 12) {
                 Image(systemName: option.systemImage)
-                  .font(.system(size: 15, weight: .semibold))
+                  .font(.body)
+                  .frame(width: 24)
+                  .accessibilityHidden(true)
                 Text(option.title)
-                  .font(.system(size: 12, weight: .bold))
-                  .lineLimit(1)
-                  .minimumScaleFactor(0.82)
+                  .font(.body.weight(.medium))
+                  .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if appearancePreference == option.rawValue {
+                  Image(systemName: "checkmark").foregroundStyle(MIRATheme.Color.forest)
+                }
               }
-              .foregroundStyle(appearancePreference == option.rawValue ? .white : MIRATheme.Color.textPrimary)
+              .foregroundStyle(MIRATheme.Color.textPrimary)
               .frame(maxWidth: .infinity)
-              .frame(height: 52)
-              .background(appearancePreference == option.rawValue ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft)
-              .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+              .padding(14)
+              .frame(minHeight: 48)
+              .background(MIRATheme.Color.surfaceSoft)
+              .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
             }
             .buttonStyle(.miraPress)
+            .accessibilityAddTraits(appearancePreference == option.rawValue ? .isSelected : [])
           }
         }
       }
@@ -906,6 +914,7 @@ private struct SettingsDetailScaffold<Content: View>: View {
             .frame(width: 44, height: 44)
         }
         .buttonStyle(.miraPress)
+        .accessibilityLabel("Back")
 
         Text(title)
           .font(.system(size: 20, weight: .bold))

@@ -306,18 +306,20 @@ struct CaptroCommerceDetailSection: View {
 
   private func commerceActionLabel(title: String, disabled: Bool) -> some View {
     HStack(spacing: 8) {
-      if model.isUpdatingCommerce { ProgressView().tint(.white) }
+      if model.isUpdatingCommerce { ProgressView().tint(MIRATheme.Color.onPrimary) }
       if commerce?.isActiveForViewer == true,
          let fulfillmentType = commerce?.fulfillmentType,
          ["ticket", "redemption"].contains(fulfillmentType) {
         Image(systemName: "qrcode")
       }
-      Text(title).font(.system(size: 14, weight: .semibold))
+      Text(title).font(.body.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
     }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
     .frame(maxWidth: .infinity, minHeight: 48)
-    .foregroundStyle(disabled ? CaptroDetailStyle.secondary : Color.white)
-    .background(disabled ? Color.black.opacity(0.06) : CaptroDetailStyle.accent)
-    .clipShape(RoundedRectangle(cornerRadius: 6))
+    .foregroundStyle(disabled ? MIRATheme.Color.textSecondary : MIRATheme.Color.onPrimary)
+    .background(disabled ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
   }
 
   private func actionDisabled(_ commerce: CaptroCommerceDetails) -> Bool {

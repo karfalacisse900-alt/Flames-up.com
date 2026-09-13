@@ -8,19 +8,19 @@ enum ConversationNativeKind: Hashable {
 }
 
 private enum ChatRoomPalette {
-  static let background = Color(red: 0.944, green: 0.944, blue: 0.944)
-  static let backgroundWash = Color(red: 0.944, green: 0.944, blue: 0.944)
-  static let composer = Color.white
-  static let input = Color(red: 0.910, green: 0.910, blue: 0.910)
-  static let incomingBubble = Color.white
-  static let outgoingBubble = Color.black
-  static let outgoingSoft = Color.black.opacity(0.82)
-  static let accent = Color.black
-  static let hairline = Color.black.opacity(0.075)
+  static let background = MIRATheme.Color.surfaceSoft
+  static let backgroundWash = MIRATheme.Color.surfaceSoft
+  static let composer = MIRATheme.Color.surface
+  static let input = MIRATheme.Color.surfaceRaised
+  static let incomingBubble = MIRATheme.Color.surface
+  static let outgoingBubble = MIRATheme.Color.forest
+  static let outgoingSoft = MIRATheme.Color.forest.opacity(0.82)
+  static let accent = MIRATheme.Color.forest
+  static let hairline = MIRATheme.Color.hairline
   static let incomingStroke = Color.clear
   static let outgoingStroke = Color.clear
-  static let incomingTimestamp = Color(red: 0.520, green: 0.520, blue: 0.520)
-  static let outgoingTimestamp = Color.white.opacity(0.72)
+  static let incomingTimestamp = MIRATheme.Color.textSecondary
+  static let outgoingTimestamp = MIRATheme.Color.onPrimary.opacity(0.8)
   static let messageShadow = Color.black.opacity(0.030)
 }
 
@@ -454,7 +454,7 @@ public struct ConversationNativeView: View {
           }
           .padding(.horizontal, 14)
           .padding(.top, 14)
-          .padding(.bottom, 120)
+          .padding(.bottom, 16)
         }
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
@@ -543,22 +543,23 @@ public struct ConversationNativeView: View {
       } label: {
         Image(systemName: "chevron.left")
           .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(.black)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
             .frame(width: 44, height: 44)
       }
       .buttonStyle(.miraPress)
+      .accessibilityLabel("Back")
 
       RemoteAvatar(url: peerAvatarURL, size: 40)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
           .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(.black)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
           .truncationMode(.tail)
         Text(statusText)
           .font(.system(size: 11, weight: .regular))
-          .foregroundStyle(Color.black.opacity(0.58))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
           .truncationMode(.tail)
       }
@@ -758,10 +759,10 @@ public struct ConversationNativeView: View {
         Text(model.isLoadingOlder ? "Loading earlier messages..." : "Load earlier messages")
           .font(.system(size: 12, weight: .semibold))
       }
-      .foregroundStyle(Color.black.opacity(0.58))
+      .foregroundStyle(MIRATheme.Color.textSecondary)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
-      .background(Color.black.opacity(0.045))
+      .background(MIRATheme.Color.surfaceSoft)
       .clipShape(Capsule())
     }
     .buttonStyle(.plain)
@@ -828,17 +829,18 @@ public struct ConversationNativeView: View {
         } label: {
           Image(systemName: showAttachmentTray ? "xmark" : "plus")
             .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.black)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
             .frame(width: 44, height: 44)
             .background(ChatRoomPalette.input)
             .clipShape(Circle())
         }
         .buttonStyle(.miraPress)
+        .accessibilityLabel(showAttachmentTray ? "Close attachments" : "Add attachment")
 
         TextField("Message", text: $model.draft, axis: .vertical)
           .lineLimit(1...5)
           .font(.body)
-          .foregroundStyle(.black)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
           .padding(.vertical, 8)
           .onChange(of: model.draft) { value in
             model.updateTyping(!value.isEmpty)
@@ -882,9 +884,9 @@ public struct ConversationNativeView: View {
     } label: {
       Image(systemName: "arrow.up")
         .font(.system(size: 15, weight: .bold))
-        .foregroundStyle(.white)
+        .foregroundStyle(MIRATheme.Color.onPrimary)
         .frame(width: 44, height: 44)
-        .background(hasDraft ? ChatRoomPalette.accent : Color.black.opacity(0.18))
+        .background(hasDraft ? ChatRoomPalette.accent : MIRATheme.Color.textMuted.opacity(0.3))
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
@@ -901,7 +903,7 @@ public struct ConversationNativeView: View {
     }
     .foregroundStyle(tint)
     .frame(width: 58, height: 50)
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -962,10 +964,10 @@ private struct ChatProfileOptionRow: View {
       VStack(alignment: .leading, spacing: 3) {
         Text(title)
           .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(.black)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
         Text(subtitle)
           .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(Color.black.opacity(0.56))
+          .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
           .truncationMode(.tail)
       }
@@ -973,7 +975,7 @@ private struct ChatProfileOptionRow: View {
 
       Image(systemName: "chevron.right")
         .font(.system(size: 12, weight: .bold))
-        .foregroundStyle(Color.black.opacity(0.32))
+        .foregroundStyle(MIRATheme.Color.textMuted)
     }
     .padding(.horizontal, MIRATheme.Space.lg)
     .frame(minHeight: 58)
@@ -1042,7 +1044,7 @@ private struct MessageBubbleContent: View {
   }
 
   private var bubbleTextColor: Color {
-    outgoing ? .white : .black
+    outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary
   }
 
   private var bubbleRadius: CGFloat {
@@ -1090,14 +1092,14 @@ private struct MessageBubbleContent: View {
   private func bubbleText(_ content: String) -> some View {
     if shouldUseCompactTextLayout(content) {
       Text(content)
-        .font(.system(size: 15, weight: .regular))
+        .font(.body)
         .foregroundStyle(bubbleTextColor)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
         .multilineTextAlignment(outgoing ? .trailing : .leading)
     } else {
       Text(content)
-        .font(.system(size: 15, weight: .regular))
+        .font(.body)
         .foregroundStyle(bubbleTextColor)
         .fixedSize(horizontal: false, vertical: true)
         .multilineTextAlignment(outgoing ? .trailing : .leading)
@@ -1170,7 +1172,7 @@ private struct MessageBubbleContent: View {
         .font(.system(size: 18, weight: .semibold))
         .foregroundStyle(outgoing ? .white : .black)
         .frame(width: 34, height: 34)
-        .background((outgoing ? Color.white : Color.black).opacity(0.12))
+        .background((outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary).opacity(0.12))
         .clipShape(Circle())
       VStack(alignment: .leading, spacing: 3) {
         Text(message.fileName?.isEmpty == false ? message.fileName! : "File")
@@ -1180,7 +1182,7 @@ private struct MessageBubbleContent: View {
         if let fileSize = message.fileSize, fileSize > 0 {
           Text(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(outgoing ? Color.white.opacity(0.72) : Color.black.opacity(0.55))
+            .foregroundStyle(outgoing ? ChatRoomPalette.outgoingTimestamp : MIRATheme.Color.textSecondary)
         }
       }
     }

@@ -526,9 +526,16 @@ public struct LibraryNativeView: View {
 
 @MainActor
 final class SearchUsersNativeModel: ObservableObject {
-  @Published var query = ""
+  @Published var query = "" {
+    didSet {
+      users = []
+      errorMessage = nil
+      isLoading = query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
+    }
+  }
   @Published var users: [MIRAUser] = []
   @Published var isLoading = false
+  @Published var errorMessage: String?
   let api: MIRAAPIClient
 
   init(api: MIRAAPIClient) {
@@ -537,13 +544,25 @@ final class SearchUsersNativeModel: ObservableObject {
 
   func search() async {
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !Task.isCancelled else { return }
     guard trimmed.count >= 2 else {
       users = []
+      isLoading = false
       return
     }
     isLoading = true
-    defer { isLoading = false }
-    users = (try? await api.get("/users/search/\(trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed)")) ?? []
+    errorMessage = nil
+    let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?#"))) ?? trimmed
+    do {
+      let result: [MIRAUser] = try await api.get("/users/search/\(encoded)")
+      guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+      users = result
+      isLoading = false
+    } catch {
+      guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+      isLoading = false
+      errorMessage = "Couldn't search right now. Check your connection and try again."
+    }
   }
 }
 
@@ -571,6 +590,13 @@ public struct SearchUsersNativeView: View {
             Text("Searching...")
               .font(.system(size: 14, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+          .listRowBackground(MIRATheme.Color.appBackground)
+        } else if let error = model.errorMessage {
+          VStack(alignment: .leading, spacing: 12) {
+            Text(error).font(.subheadline)
+            Button("Try again") { Task { await model.search() } }
+              .frame(minHeight: 44)
           }
           .listRowBackground(MIRATheme.Color.appBackground)
         } else if model.users.isEmpty {
@@ -604,7 +630,7 @@ public struct SearchUsersNativeView: View {
     .toolbar(.hidden, for: .navigationBar)
     .miraHideTabBarOnAppear()
     .task(id: model.query) {
-      try? await Task.sleep(nanoseconds: 250_000_000)
+      do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
       await model.search()
     }
   }
@@ -626,7 +652,7 @@ public struct SearchUsersNativeView: View {
         TextField("Search people", text: $model.query)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
-          .font(.system(size: 16, weight: .medium))
+          .font(.body)
         if !model.query.isEmpty {
           Button {
             model.query = ""
@@ -635,12 +661,14 @@ public struct SearchUsersNativeView: View {
             Image(systemName: "xmark.circle.fill")
               .font(.system(size: 16, weight: .semibold))
               .foregroundStyle(MIRATheme.Color.textMuted)
+              .frame(width: 44, height: 44)
           }
           .buttonStyle(.plain)
+          .accessibilityLabel("Clear search")
         }
       }
       .padding(.horizontal, 14)
-      .frame(height: 44)
+      .frame(minHeight: 48)
       .background(MIRATheme.Color.surfaceRaised)
       .clipShape(Capsule())
       .overlay(Capsule().stroke(MIRATheme.Color.hairline, lineWidth: 1))
@@ -942,6 +970,7 @@ public struct CreatePostNativeView: View {
   @State private var showPreview = false
   @State private var isEditingPostDetails = false
   @State private var isPosting = false
+  @State private var showDiscardConfirmation = false
   @State private var postUploader: MIRAMediaUploadService?
   @State private var postRequestID = UUID().uuidString
   @State private var isLoadingMedia = false
@@ -978,6 +1007,13 @@ public struct CreatePostNativeView: View {
 
   public var body: some View {
     composerSheetPage
+    .interactiveDismissDisabled(isPosting || hasUnsavedPost)
+    .confirmationDialog("Discard this post?", isPresented: $showDiscardConfirmation, titleVisibility: .visible) {
+      Button("Discard post", role: .destructive) { close() }
+      Button("Keep editing", role: .cancel) {}
+    } message: {
+      Text("Your text and selected media will be removed from this draft.")
+    }
     .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
       MIRANativeMediaEditorView(media: item.media, mode: .post, onClose: closeEditor) { edited in
         if item.returnsToCamera {
@@ -1166,11 +1202,12 @@ public struct CreatePostNativeView: View {
   private var composerTopBar: some View {
     HStack {
       Button("Cancel") {
-        close()
+        if hasUnsavedPost { showDiscardConfirmation = true } else { close() }
       }
       .font(.system(size: 17, weight: .regular))
       .foregroundStyle(MIRATheme.Color.textSecondary)
       .frame(minWidth: 54, minHeight: 44, alignment: .leading)
+      .disabled(isPosting)
 
       Spacer()
 
@@ -1184,20 +1221,28 @@ public struct CreatePostNativeView: View {
               .scaleEffect(0.72)
           }
           Text(isPosting ? "Posting" : "Post")
-            .font(.system(size: 16, weight: .semibold))
+            .font(.body.weight(.semibold))
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(MIRATheme.Color.onPrimary)
         .padding(.horizontal, 20)
-        .frame(height: 44)
+        .padding(.vertical, 10)
+        .frame(minHeight: 44)
         .background(canPost && !isPosting && !isLoadingMedia ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.42))
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
       }
       .buttonStyle(.plain)
       .disabled(isPosting || isLoadingMedia || !canPost)
     }
     .padding(.horizontal, 16)
     .padding(.top, 8)
-    .frame(height: 68)
+    .padding(.bottom, 8)
+    .frame(minHeight: 68)
+  }
+
+  private var hasUnsavedPost: Bool {
+    !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+    !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+    !mediaItems.isEmpty || selectedPlace != nil || !taggedUsers.isEmpty || !hashtags.isEmpty || selectedStampKind != .social
   }
 
   private func composerPrompt(minimumHeight: CGFloat) -> some View {
