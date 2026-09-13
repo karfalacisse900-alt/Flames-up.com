@@ -44,8 +44,16 @@
 
 Run the **Native payments validation** GitHub Actions workflow on the target branch. Its simulator step builds the complete native app and runs `DesignQualityTests` and `HomeFullBleedTests` on an iPhone SE (3rd generation) and iPhone 17 Pro Max. The `home-full-bleed-simulator-evidence` artifact contains the build/test log, result bundles and exported screenshots. `skip_generic_build=true` skips only the redundant generic build, not the simulator app build or tests.
 
+## TestFlight release
+
+Captro **1.0.1 (458.1)** was signed, archived and uploaded successfully in [release run 34732486043](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/34732486043), from commit `6707a11c4693c8cecf02c3e8dfe0307081c08249`. This commit adds only verification documentation after the tested code revision. The Release bundle, Google callback configuration and Sign in with Apple entitlement checks passed. Apple's upload tool reported `UPLOAD SUCCEEDED with no errors` at 2026-09-13 02:23:53 UTC (September 12, 10:23 PM EDT).
+
+Upload acceptance is verified; Apple's subsequent processing and tester availability were not independently checked.
+
 ## Coverage boundaries
 
 Authenticated posting/chat, physical camera capture, VoiceOver on a physical device, and live purchase/withdrawal transactions require dedicated account/device checks. Simulator layout tests are not evidence that real-money transfers succeeded. No payment-provider, payout-account, ledger, or backend money-handling implementation is changed by this pass.
 
 Existing SDK deprecation warnings remain in camera/location code. They were not converted into broad API migrations during this visual pass.
+
+GitHub also reported existing repository dependency alerts during the release push (8 high, 12 moderate and 1 low). Their applicability to the shipped native app was not assessed in this UI pass; this report is not a security certification.
