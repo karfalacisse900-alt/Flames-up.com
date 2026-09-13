@@ -41,7 +41,7 @@ struct CaptroCommerceDetailSection: View {
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 20)
-      .background(Color.white)
+      .background(MIRATheme.Color.surface)
       .sheet(isPresented: $isShowingPass) {
         if let pass = model.commercePass {
           CaptroCommercePassView(post: model.post, commerce: commerce, pass: pass)
@@ -463,7 +463,7 @@ struct CaptroCommercePassView: View {
         .frame(maxWidth: .infinity)
         .padding(24)
       }
-      .background(Color.white)
+      .background(MIRATheme.Color.surface)
       .foregroundStyle(CaptroDetailStyle.ink)
       .privacySensitive()
       .navigationTitle("Pass")

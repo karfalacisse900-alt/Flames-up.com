@@ -15,6 +15,7 @@ struct CaptroPaymentSheetView: View {
 
   var body: some View {
     NavigationStack {
+      ScrollView {
       VStack(alignment: .leading, spacing: 20) {
         Text(purchase.itemTitle).font(.title2.bold())
         Text(purchase.priceLabel).font(.subheadline).foregroundStyle(.secondary)
@@ -44,8 +45,9 @@ struct CaptroPaymentSheetView: View {
         Spacer(minLength: 0)
       }
       .padding(20)
-      .background(Color.white)
-      .foregroundStyle(.black)
+      }
+      .background(MIRATheme.Color.surface)
+      .foregroundStyle(MIRATheme.Color.textPrimary)
       .tint(CaptroDetailStyle.accent)
       .navigationTitle("Payment")
       .navigationBarTitleDisplayMode(.inline)

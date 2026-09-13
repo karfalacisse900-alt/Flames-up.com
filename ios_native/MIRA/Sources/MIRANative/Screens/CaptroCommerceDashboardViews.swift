@@ -266,7 +266,7 @@ private struct CaptroDashboardPassView: View {
           .font(.system(size: 12, weight: .bold))
           .foregroundStyle(presentation.pass.status == "active" ? MIRATheme.Color.forest : CaptroDetailStyle.secondary)
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24).background(Color.white).privacySensitive()
+      .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24).background(MIRATheme.Color.surface).privacySensitive()
       .navigationTitle("Pass").navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
@@ -412,7 +412,7 @@ struct CaptroEarningsView: View {
         }
       }
     }
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .foregroundStyle(CaptroDetailStyle.ink)
     .navigationTitle("Earnings")
     .navigationBarTitleDisplayMode(.inline)
@@ -626,7 +626,7 @@ private struct CaptroPayoutsView: View {
               Text(message).font(.system(size: 12)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
             }
           }
-          .listRowBackground(Color.white)
+          .listRowBackground(MIRATheme.Color.surface)
         }
         .listStyle(.plain)
         .overlay {
@@ -640,7 +640,7 @@ private struct CaptroPayoutsView: View {
         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .navigationTitle("Payouts")
     .navigationBarTitleDisplayMode(.inline)
     .task {
@@ -683,7 +683,7 @@ private struct CaptroEarningDetailView: View {
         ProgressView().frame(maxWidth: .infinity, minHeight: 320)
       }
     }
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .navigationTitle("Earning")
     .navigationBarTitleDisplayMode(.inline)
     .task {

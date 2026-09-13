@@ -140,7 +140,7 @@ struct CaptroPaymentsView: View {
         earningsLink
       }
     }
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .foregroundStyle(CaptroDetailStyle.ink)
     .navigationTitle("Payments")
     .navigationBarTitleDisplayMode(.inline)
@@ -160,7 +160,7 @@ struct CaptroPaymentsView: View {
       } else {
         ForEach(model.methods) { method in
           HStack(spacing: 12) {
-            Image(systemName: "creditcard.fill")
+            Image(systemName: "creditcard")
               .font(.system(size: 18, weight: .semibold))
               .foregroundStyle(CaptroDetailStyle.accent)
               .frame(width: 34, height: 34)
@@ -204,10 +204,11 @@ struct CaptroPaymentsView: View {
           Label(model.methods.isEmpty ? "Add Payment Card" : "Manage Payment Cards", systemImage: "creditcard")
             .frame(maxWidth: .infinity, minHeight: 46)
         }
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
-        .background(CaptroDetailStyle.accent)
-        .buttonStyle(.plain)
+        .font(.body.weight(.semibold))
+        .foregroundStyle(MIRATheme.Color.onPrimary)
+        .padding(.vertical, 6)
+        .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+        .buttonStyle(.miraPress)
         .customerSheet(
           isPresented: $showingCustomerSheet,
           customerSheet: customerSheet,
@@ -220,10 +221,11 @@ struct CaptroPaymentsView: View {
           Label("Try Card Setup Again", systemImage: "arrow.clockwise")
             .frame(maxWidth: .infinity, minHeight: 46)
         }
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(.white)
-        .background(CaptroDetailStyle.accent)
-        .buttonStyle(.plain)
+        .font(.body.weight(.semibold))
+        .foregroundStyle(MIRATheme.Color.onPrimary)
+        .padding(.vertical, 6)
+        .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+        .buttonStyle(.miraPress)
         .disabled(model.isLoadingCards)
       }
       if let cardError = model.cardError {

@@ -612,7 +612,7 @@ public struct PostDetailNativeView: View {
       }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) { commentBar }
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .foregroundStyle(CaptroDetailStyle.ink)
     .tint(CaptroDetailStyle.accent)
     .environment(\.colorScheme, .light)
@@ -711,7 +711,7 @@ public struct PostDetailNativeView: View {
       .padding(.horizontal, 8)
     }
     .frame(height: 52)
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .overlay(alignment: .bottom) {
       Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
     }
@@ -809,7 +809,7 @@ public struct PostDetailNativeView: View {
             .lineLimit(1)
           Spacer(minLength: 0)
           Button { self.replyingTo = nil } label: {
-            Image(systemName: "xmark").font(.system(size: 12)).frame(width: 32, height: 32)
+            Image(systemName: "xmark").font(.system(size: 14)).frame(width: 44, height: 44)
           }
           .accessibilityLabel("Cancel reply")
         }
@@ -817,7 +817,7 @@ public struct PostDetailNativeView: View {
       }
       HStack(alignment: .bottom, spacing: 8) {
         TextField("Add a comment...", text: $draft, axis: .vertical)
-          .font(.system(size: 14))
+          .font(.body)
           .textInputAutocapitalization(.sentences)
           .submitLabel(.send)
           .focused($isCommentFocused)
@@ -825,9 +825,9 @@ public struct PostDetailNativeView: View {
           .padding(.horizontal, 12)
           .padding(.vertical, 12)
           .frame(minHeight: 44)
-          .background(Color.black.opacity(0.025))
-          .clipShape(RoundedRectangle(cornerRadius: 6))
-          .overlay(RoundedRectangle(cornerRadius: 6).stroke(CaptroDetailStyle.divider, lineWidth: 0.75))
+          .background(MIRATheme.Color.surfaceSoft)
+          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+          .overlay(RoundedRectangle(cornerRadius: MIRATheme.Radius.small).stroke(isCommentFocused ? MIRATheme.Color.forest : CaptroDetailStyle.divider, lineWidth: isCommentFocused ? 2 : 1))
           .onSubmit(sendDraftComment)
           .accessibilityLabel("Add a comment")
         Button(action: sendDraftComment) {
@@ -848,7 +848,7 @@ public struct PostDetailNativeView: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 10)
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .overlay(alignment: .top) {
       Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
     }

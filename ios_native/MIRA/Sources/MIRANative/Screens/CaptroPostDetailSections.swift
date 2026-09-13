@@ -1,10 +1,10 @@
 import SwiftUI
 
 enum CaptroDetailStyle {
-  static let ink = Color.black
-  static let secondary = Color.black.opacity(0.56)
+  static let ink = MIRATheme.Color.textPrimary
+  static let secondary = MIRATheme.Color.textSecondary
   static let accent = MIRATheme.Color.like
-  static let divider = Color.black.opacity(0.10)
+  static let divider = MIRATheme.Color.hairline
 }
 
 struct CaptroPostDetailSections: View {
@@ -78,7 +78,7 @@ struct CaptroPostDetailSections: View {
       )
     }
     .padding(20)
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .overlay(Rectangle().stroke(CaptroDetailStyle.divider, lineWidth: 1))
     .padding(.horizontal, 16)
     .padding(.top, post.feedMediaURLs.isEmpty ? 16 : -12)

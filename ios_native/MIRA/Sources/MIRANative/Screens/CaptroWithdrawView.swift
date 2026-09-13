@@ -62,7 +62,7 @@ struct CaptroWithdrawView: View {
         }
         .padding(20)
       }
-      .background(Color.white).foregroundStyle(.black).tint(CaptroDetailStyle.accent)
+      .background(MIRATheme.Color.surface).foregroundStyle(MIRATheme.Color.textPrimary).tint(CaptroDetailStyle.accent)
       .navigationTitle("Withdraw").navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
       .task {

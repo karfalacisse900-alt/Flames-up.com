@@ -705,7 +705,8 @@ private struct DeleteAccountNativeView: View {
       SettingsActionButton(
         title: model.isDeletingAccount ? "Scheduling deletion..." : "Delete account",
         disabled: !canSubmit,
-        tint: .red
+        tint: .red,
+        foreground: .white
       ) {
         Task {
           localError = nil
@@ -1128,6 +1129,7 @@ private struct SettingsActionButton: View {
   let title: String
   let disabled: Bool
   var tint: Color = MIRATheme.Color.forest
+  var foreground: Color = MIRATheme.Color.onPrimary
   let action: () -> Void
 
   var body: some View {
@@ -1137,7 +1139,7 @@ private struct SettingsActionButton: View {
     } label: {
       Text(title)
         .font(.body.weight(.semibold))
-        .foregroundStyle(.white)
+        .foregroundStyle(foreground)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .frame(minHeight: 48)
@@ -1158,14 +1160,15 @@ private struct SettingsBanner: View {
     HStack(spacing: MIRATheme.Space.sm) {
       Image(systemName: isError ? "exclamationmark.circle" : "checkmark.circle")
       Text(message)
-        .font(.system(size: 13, weight: .semibold))
+        .font(.subheadline)
+        .fixedSize(horizontal: false, vertical: true)
       Spacer()
     }
     .foregroundStyle(isError ? Color.red : MIRATheme.Color.forest)
     .padding(.horizontal, 14)
     .padding(.vertical, 12)
     .background((isError ? Color.red : MIRATheme.Color.forest).opacity(0.08))
-    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
   }
 }
 

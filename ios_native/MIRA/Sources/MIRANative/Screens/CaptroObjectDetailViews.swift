@@ -36,7 +36,7 @@ struct CaptroEventTicketSection: View {
       if !ticketLabel.isEmpty {
         Label(ticketLabel, systemImage: "ticket.fill")
           .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(Color.white)
+          .foregroundStyle(MIRATheme.Color.surface)
           .padding(.horizontal, 12).padding(.vertical, 7)
           .background(CaptroDetailStyle.ink)
           .clipShape(Capsule())
@@ -61,7 +61,7 @@ struct CaptroEventTicketSection: View {
         if let map = post.detailMapURL {
           Link(destination: map) {
             Label("View on map", systemImage: "arrow.up.right")
-              .font(.system(size: 13, weight: .medium)).frame(minHeight: 36)
+              .font(.subheadline.weight(.medium)).frame(minHeight: 44)
           }.foregroundStyle(CaptroDetailStyle.accent)
         }
       }
@@ -70,7 +70,7 @@ struct CaptroEventTicketSection: View {
     }
     .frame(maxWidth: .infinity)
     .padding(.top, 24)
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
   }
 
   @ViewBuilder private func ticketFact(_ value: String?, icon: String) -> some View {
@@ -164,7 +164,7 @@ struct CaptroTravelDetailSection: View {
         }
       }
     }
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .clipShape(CaptroBoardingPassShape(notchY: headerHeight))
     .overlay(CaptroBoardingPassShape(notchY: headerHeight).stroke(CaptroDetailStyle.divider, lineWidth: 1))
     .onPreferenceChange(CaptroTicketHeaderHeight.self) { headerHeight = $0 }
