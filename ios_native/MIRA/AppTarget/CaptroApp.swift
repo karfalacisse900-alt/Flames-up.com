@@ -32,7 +32,9 @@ struct MIRAApp: App {
   @ViewBuilder
   private var appRoot: some View {
 #if DEBUG
-    if ProcessInfo.processInfo.arguments.contains("--captro-home-feed-visual-test") {
+    if ProcessInfo.processInfo.arguments.contains("--captro-design-quality-test") {
+      CaptroDesignQualityTestView()
+    } else if ProcessInfo.processInfo.arguments.contains("--captro-home-feed-visual-test") {
       CaptroHomeFeedVisualTestView()
     } else {
       MIRANativeRootView()

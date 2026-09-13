@@ -503,9 +503,10 @@ public struct ProfileNativeView: View {
       RemoteAvatar(url: model.user?.profileImage, size: 92)
       VStack(spacing: 4) {
         Text(profileTitle)
-          .font(.system(size: 24, weight: .semibold))
+          .font(.title2.weight(.semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
         if let username = model.user?.username, !username.isEmpty {
           Text("@\(username)")
             .font(.system(size: 14, weight: .medium))
@@ -541,9 +542,10 @@ public struct ProfileNativeView: View {
           .foregroundStyle(CaptroDetailStyle.accent)
           .frame(width: 34, height: 34)
         VStack(alignment: .leading, spacing: 2) {
-          Text("Payments").font(.system(size: 15, weight: .semibold))
-          Text("Payment cards, earnings, and payouts")
-            .font(.system(size: 12)).foregroundStyle(MIRATheme.Color.textSecondary)
+          Text("Payments").font(.body.weight(.medium))
+          Text("Your debit card, earnings, and withdrawals")
+            .font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
         Spacer(minLength: 8)
         Image(systemName: "chevron.right")
@@ -552,6 +554,7 @@ public struct ProfileNativeView: View {
       }
       .foregroundStyle(MIRATheme.Color.textPrimary)
       .frame(minHeight: 54)
+      .padding(.vertical, 12)
       .padding(.horizontal, 16)
       .overlay(alignment: .bottom) {
         Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)

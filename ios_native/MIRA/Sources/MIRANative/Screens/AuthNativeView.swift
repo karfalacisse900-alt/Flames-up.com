@@ -607,36 +607,13 @@ public struct AuthNativeView: View {
     systemImage: String,
     keyboard: UIKeyboardType = .default
   ) -> some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: systemImage)
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .frame(width: 22)
-      TextField(placeholder, text: text)
-        .keyboardType(keyboard)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-        .font(.system(size: 16, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .frame(height: 50)
-    .background(MIRATheme.Color.surfaceSoft)
-    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    MIRAFormInput(title: placeholder, text: text, keyboardType: keyboard,
+                  contentType: keyboard == .emailAddress ? .emailAddress : nil)
   }
 
   private var secureField: some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: "lock")
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .frame(width: 22)
-      SecureField("Password", text: $password)
-        .font(.system(size: 16, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .frame(height: 50)
-    .background(MIRATheme.Color.surfaceSoft)
-    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    MIRAFormInput(title: "Password", text: $password, secure: true,
+                  contentType: isCreatingAccount ? .newPassword : .password)
   }
 
   private var canSubmit: Bool {
@@ -659,18 +636,7 @@ public struct AuthNativeView: View {
   }
 
   private func secureResetField(_ placeholder: String, text: Binding<String>) -> some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: "lock")
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .frame(width: 22)
-      SecureField(placeholder, text: text)
-        .font(.system(size: 16, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
-    .frame(height: 50)
-    .background(MIRATheme.Color.surfaceSoft)
-    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    MIRAFormInput(title: placeholder, text: text, secure: true, contentType: .newPassword)
   }
 
   private var googleServerClientID: String? {
@@ -944,68 +910,40 @@ private struct CaptroWelcomePager: View {
   let onLogin: () -> Void
   let onSignup: () -> Void
   let onGuest: () -> Void
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @EnvironmentObject private var localization: MIRALocalization
 
-  private var currentPage: CaptroWelcomePage {
-    let pages = CaptroWelcomePage.all
-    let index = min(max(selectedPage, 0), pages.count - 1)
-    return pages[index]
-  }
-
   var body: some View {
-    ZStack {
+    VStack(spacing: 0) {
+      HStack {
+        CaptroWelcomeWordmark(color: MIRATheme.Color.textPrimary)
+        Spacer()
+        CaptroWelcomePageIndicator(selectedPage: selectedPage, tint: MIRATheme.Color.textSecondary)
+      }
+      .padding(.horizontal, 24)
+      .padding(.vertical, 20)
+
       TabView(selection: $selectedPage) {
         ForEach(CaptroWelcomePage.all) { page in
-          CaptroWelcomeSlide(page: page)
-            .tag(page.id)
+          CaptroWelcomeSlide(page: page).tag(page.id)
         }
       }
       .tabViewStyle(.page(indexDisplayMode: .never))
-      .ignoresSafeArea()
 
-      VStack(spacing: 0) {
-        HStack(alignment: .center, spacing: MIRATheme.Space.md) {
-          CaptroWelcomeWordmark(color: currentPage.textColor)
-          Spacer()
-          CaptroWelcomePageIndicator(selectedPage: selectedPage, tint: currentPage.textColor)
+      VStack(spacing: 12) {
+        CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: onLogin)
+        CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: onSignup)
+        Button(action: onGuest) {
+          Text("Continue as Guest")
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 58)
-        .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: selectedPage)
-
-        Spacer()
-
-        VStack(spacing: 8) {
-          HStack(spacing: MIRATheme.Space.md) {
-            CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: openLogin)
-            CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: openSignup)
-          }
-
-          Button(action: onGuest) {
-            Text("Continue as Guest")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(currentPage.textColor)
-              .frame(maxWidth: .infinity)
-              .frame(height: 44)
-          }
-          .buttonStyle(.miraPress)
-          .accessibilityLabel("Continue as Guest")
-        }
-        .padding(.horizontal, 28)
-        .padding(.bottom, 22)
+        .buttonStyle(.miraPress)
       }
-      .ignoresSafeArea()
+      .padding(.horizontal, 24)
+      .padding(.bottom, 12)
     }
-    .background(currentPage.background.ignoresSafeArea())
-  }
-
-  private func openLogin() {
-    onLogin()
-  }
-
-  private func openSignup() {
-    onSignup()
+    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
   }
 }
 
@@ -1015,50 +953,24 @@ private struct CaptroWelcomeSlide: View {
 
   var body: some View {
     GeometryReader { geometry in
-      ZStack {
-        page.background.ignoresSafeArea()
-
-        CaptroWelcomeTypographyScene(page: page)
-          .allowsHitTesting(false)
-
-        VStack(spacing: 0) {
-          Spacer(minLength: max(geometry.safeAreaInsets.top + 118, 148))
-
-          VStack(spacing: 24) {
-            Text(localization.string(page.titleKey))
-              .font(.system(size: titleSize(for: geometry.size), weight: .heavy, design: .serif))
-              .foregroundStyle(page.textColor)
-              .multilineTextAlignment(.center)
-              .lineLimit(4)
-              .minimumScaleFactor(0.68)
-              .fixedSize(horizontal: false, vertical: true)
-              .accessibilityAddTraits(.isHeader)
-
-            Text(localization.string(page.subtitleKey))
-              .font(.system(size: 24, weight: .semibold, design: .serif))
-              .foregroundStyle(page.mutedTextColor)
-              .multilineTextAlignment(.center)
-              .lineLimit(5)
-              .minimumScaleFactor(0.76)
-              .fixedSize(horizontal: false, vertical: true)
-              .frame(maxWidth: min(geometry.size.width - 52, 520))
-          }
-          .padding(.horizontal, 24)
-
-          Spacer(minLength: 0)
-
-          CaptroWelcomeEditorialRule(color: page.secondaryAccent)
-            .frame(width: min(geometry.size.width - 96, 330))
-            .padding(.bottom, max(124, geometry.safeAreaInsets.bottom + 105))
+      ScrollView {
+        VStack(alignment: .leading, spacing: 20) {
+          Text(localization.string(page.titleKey))
+            .font(.largeTitle.weight(.semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
+          Text(localization.string(page.subtitleKey))
+            .font(.title3)
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: 480, minHeight: max(0, geometry.size.height - 48), alignment: .center)
+        .padding(24)
+        .frame(maxWidth: .infinity)
       }
-      .frame(width: geometry.size.width, height: geometry.size.height)
-      .clipped()
+      .scrollIndicators(.hidden)
     }
-  }
-
-  private func titleSize(for size: CGSize) -> CGFloat {
-    min(max(size.width * 0.145, 52), 78)
   }
 }
 
@@ -1160,15 +1072,16 @@ private struct CaptroWelcomeActionButton: View {
   var body: some View {
     Button(action: action) {
       Text(title)
-        .font(.system(size: 20, weight: .black, design: .rounded))
-        .foregroundStyle(style == .filled ? .white : MIRATheme.Color.textPrimary)
+        .font(.body.weight(.semibold))
+        .foregroundStyle(style == .filled ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary)
         .frame(maxWidth: .infinity)
-        .frame(height: 58)
-        .background(style == .filled ? Color.black : Color.white)
-        .clipShape(Capsule())
+        .padding(.vertical, 14)
+        .frame(minHeight: 50)
+        .background(style == .filled ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft)
+        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
         .overlay(
-          Capsule()
-            .stroke(style == .filled ? Color.black.opacity(0.18) : Color.black.opacity(0.16), lineWidth: 1)
+          RoundedRectangle(cornerRadius: MIRATheme.Radius.small)
+            .stroke(MIRATheme.Color.hairline, lineWidth: 1)
         )
     }
     .buttonStyle(.miraPress)

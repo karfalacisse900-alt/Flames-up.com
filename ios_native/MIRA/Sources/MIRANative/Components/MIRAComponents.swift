@@ -22,13 +22,14 @@ public struct MIRAPrimaryButton: View {
         if let systemImage {
           Image(systemName: systemImage)
         }
-        Text(title).font(.system(size: 16, weight: .semibold))
+        Text(title).font(.body.weight(.semibold))
       }
-      .foregroundStyle(.white)
-      .frame(minHeight: 42)
+      .foregroundStyle(MIRATheme.Color.onPrimary)
+      .padding(.vertical, 12)
+      .frame(minHeight: 48)
       .padding(.horizontal, MIRATheme.Space.lg)
       .background(MIRATheme.Color.forest)
-      .clipShape(Capsule())
+      .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
     }
     .buttonStyle(.miraPress)
   }
@@ -200,7 +201,7 @@ public struct MIRAHeaderCircleButton: View {
     Image(systemName: systemImage)
       .font(.system(size: 17, weight: .semibold))
       .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(width: size, height: size)
+      .frame(width: max(44, size), height: max(44, size))
       .background(MIRATheme.Color.surfaceSoft)
       .clipShape(Circle())
   }
@@ -416,13 +417,14 @@ private struct MIRAScrollTuningView: UIViewRepresentable {
 
 public struct MIRAPressButtonStyle: ButtonStyle {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.isEnabled) private var isEnabled
 
   public init() {}
 
   public func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .scaleEffect(configuration.isPressed && !reduceMotion ? CaptroMotion.Scale.buttonPressed : 1)
-      .opacity(configuration.isPressed ? 0.88 : 1)
+      .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.99 : 1)
+      .opacity(!isEnabled ? 0.45 : (configuration.isPressed ? 0.72 : 1))
       .animation(CaptroMotion.buttonPressAnimation(reduceMotion: reduceMotion), value: configuration.isPressed)
   }
 }
@@ -439,15 +441,18 @@ public struct MIRAEmptyState: View {
   public var body: some View {
     VStack(spacing: MIRATheme.Space.md) {
       Image(systemName: systemImage)
-        .font(.system(size: 42, weight: .light))
+        .font(.system(size: 28, weight: .regular))
         .foregroundStyle(MIRATheme.Color.textMuted)
+        .accessibilityHidden(true)
       Text(title)
-        .font(.system(size: 18, weight: .semibold))
+        .font(.headline)
         .foregroundStyle(MIRATheme.Color.textPrimary)
+        .multilineTextAlignment(.center)
       Text(message)
-        .font(.system(size: 15, weight: .regular))
+        .font(.subheadline)
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
     }
     .padding(MIRATheme.Space.xxl)
     .frame(maxWidth: .infinity)

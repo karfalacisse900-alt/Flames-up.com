@@ -51,6 +51,9 @@ public struct NotificationNativeView: View {
       LazyVStack(spacing: MIRATheme.Space.sm) {
         if model.isLoading && model.notifications.isEmpty {
           ForEach(0..<6, id: \.self) { _ in notificationSkeleton }
+        } else if let error = model.errorMessage, model.notifications.isEmpty {
+          MIRAEmptyState(title: "Couldn't load notifications", message: error, systemImage: "wifi.exclamationmark")
+          MIRAPrimaryButton("Try again") { Task { await model.load() } }
         } else if model.notifications.isEmpty {
           MIRAEmptyState(title: "No notifications yet", message: "Likes, replies, follows, gifts, and posts will appear here.", systemImage: "bell")
         } else {
@@ -66,6 +69,7 @@ public struct NotificationNativeView: View {
     .navigationTitle("Notifications")
     .miraHideTabBarOnAppear()
     .task { await model.load() }
+    .refreshable { await model.load() }
   }
 
   private func notificationRow(_ item: MIRANotification) -> some View {
@@ -78,12 +82,12 @@ public struct NotificationNativeView: View {
         .clipShape(Circle())
       VStack(alignment: .leading, spacing: 4) {
         Text(item.title ?? "New activity")
-          .font(.system(size: 16, weight: .semibold))
+          .font(.body.weight(.semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
         Text(item.body ?? "Something new happened on Captro.")
-          .font(.system(size: 14, weight: .regular))
+          .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
       }
       Spacer()
       if item.isRead?.value == false {

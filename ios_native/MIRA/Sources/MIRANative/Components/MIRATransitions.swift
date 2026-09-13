@@ -97,7 +97,7 @@ public enum MIRATransitionTiming {
 
 private enum MIRAPresentationGeometry {
   static func sheetHeight(for proxy: GeometryProxy, preferredFraction: CGFloat, maxHeight: CGFloat) -> CGFloat {
-    let available = max(320, proxy.size.height - 10)
+    let available = max(0, proxy.size.height - 10)
     let preferred = proxy.size.height * preferredFraction
     return min(max(340, preferred), min(maxHeight, available))
   }
@@ -207,14 +207,12 @@ public struct MIRAActionModalCard<Content: View>: View {
       content
     }
     .padding(10)
-    .frame(maxWidth: 320)
+    .frame(maxWidth: 400)
     .background {
       RoundedRectangle(cornerRadius: 24, style: .continuous)
-        .fill(Color(red: 0.945, green: 0.933, blue: 0.929).opacity(0.94))
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .fill(MIRATheme.Color.surface)
     }
     .shadow(color: .black.opacity(0.09), radius: 14, x: 0, y: 7)
-    .shadow(color: .white.opacity(0.28), radius: 1, x: 0, y: 1)
     .accessibilityElement(children: .contain)
   }
 }
@@ -252,8 +250,6 @@ public struct MIRAActionModalButton: View {
         systemImage: systemImage,
         isDestructive: isDestructive
       )
-      .opacity(isVisible || reduceMotion ? 1 : 0)
-      .offset(y: isVisible || reduceMotion ? 0 : 8)
     }
     .buttonStyle(.miraPress)
     .accessibilityLabel(title)
@@ -284,7 +280,7 @@ public struct MIRAActionModalPillLabel: View {
   }
 
   public var body: some View {
-    let tint = isDestructive ? Color(red: 1.0, green: 0.176, blue: 0.176) : Color(red: 0.02, green: 0.02, blue: 0.02)
+    let tint = isDestructive ? Color.red : MIRATheme.Color.textPrimary
     HStack(spacing: 10) {
       Image(systemName: systemImage)
         .font(.system(size: 18, weight: .semibold))
@@ -292,17 +288,17 @@ public struct MIRAActionModalPillLabel: View {
         .frame(width: 21, height: 21)
 
       Text(title)
-        .font(.system(size: 16, weight: .bold))
-        .lineLimit(1)
-        .minimumScaleFactor(0.78)
+        .font(.body.weight(.medium))
+        .fixedSize(horizontal: false, vertical: true)
 
       Spacer(minLength: 0)
     }
     .foregroundStyle(tint)
     .padding(.horizontal, 14)
-    .frame(maxWidth: .infinity, minHeight: 44)
-    .background(Color.white, in: Capsule())
-    .contentShape(Capsule())
+    .padding(.vertical, 12)
+    .frame(maxWidth: .infinity, minHeight: 48)
+    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+    .contentShape(Rectangle())
   }
 }
 
@@ -344,6 +340,7 @@ private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier 
 
   func body(content: Content) -> some View {
     content
+      .accessibilityHidden(isMounted)
       .overlay {
         if isMounted {
           GeometryReader { proxy in
@@ -361,7 +358,8 @@ private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier 
                 .onTapGesture(perform: dismiss)
 
               modalContent(dismiss)
-                .padding(.horizontal, proxy.size.width > 700 ? 180 : 62)
+                .frame(maxWidth: 400)
+                .padding(.horizontal, 20)
                 .padding(.bottom, max(18, proxy.safeAreaInsets.bottom + 12))
                 .opacity(isVisible ? 1 : 0)
                 .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.actionModalInitial)
@@ -374,6 +372,8 @@ private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier 
           .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
           .zIndex(920)
           .allowsHitTesting(isMounted)
+          .accessibilityAddTraits(.isModal)
+          .accessibilityAction(.escape) { dismiss() }
         }
       }
       .onAppear {
@@ -524,6 +524,7 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
 
   func body(content: Content) -> some View {
     content
+      .accessibilityHidden(isMounted)
       .overlay {
         if isMounted {
           GeometryReader { proxy in
@@ -557,14 +558,27 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
                 }
                 .shadow(color: .black.opacity(isVisible ? 0.18 : 0), radius: 26, x: 0, y: -8)
                 .padding(.horizontal, proxy.size.width > 700 ? 76 : 0)
+                // Scrolling the sheet must not dismiss it. Only its handle owns the drag.
+                .overlay(alignment: .top) {
+                  Capsule()
+                    .fill(MIRATheme.Color.textMuted.opacity(0.5))
+                    .frame(width: 36, height: 4)
+                    .frame(width: 80, height: 24)
+                    .contentShape(Rectangle())
+                    .gesture(sheetDragGesture(threshold: min(180, height * 0.24)))
+                    .accessibilityLabel("Dismiss sheet")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { dismiss() }
+                }
                 .offset(y: sheetOffset(height: height, safeAreaBottom: proxy.safeAreaInsets.bottom))
-                .simultaneousGesture(sheetDragGesture(threshold: min(180, height * 0.24)))
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
           }
           .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
           .zIndex(900)
           .allowsHitTesting(isMounted)
+          .accessibilityAddTraits(.isModal)
+          .accessibilityAction(.escape) { dismiss() }
         }
       }
       .onAppear {
@@ -683,6 +697,7 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
 
   func body(content: Content) -> some View {
     content
+      .accessibilityHidden(isMounted)
       .overlay {
         if isMounted {
           ZStack {
@@ -700,6 +715,8 @@ private struct MIRAFadeScaleOverlayModifier<Overlay: View>: ViewModifier {
           }
           .zIndex(850)
           .allowsHitTesting(isMounted)
+          .accessibilityAddTraits(.isModal)
+          .accessibilityAction(.escape) { dismiss() }
         }
       }
       .onAppear {
@@ -775,6 +792,7 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
 
   func body(content: Content) -> some View {
     content
+      .accessibilityHidden(isMounted)
       .overlay {
         if isMounted {
           ZStack {
@@ -790,6 +808,8 @@ private struct MIRAFullScreenBoolOverlayModifier<Overlay: View>: ViewModifier {
           .ignoresSafeArea()
           .zIndex(950)
           .allowsHitTesting(isMounted)
+          .accessibilityAddTraits(.isModal)
+          .accessibilityAction(.escape) { dismiss() }
         }
       }
       .onAppear {
@@ -865,6 +885,7 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
 
   func body(content: Content) -> some View {
     content
+      .accessibilityHidden(mountedItem != nil)
       .overlay {
         if let presentedItem = mountedItem {
           ZStack {
@@ -880,6 +901,8 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
           .ignoresSafeArea()
           .zIndex(950)
           .allowsHitTesting(true)
+          .accessibilityAddTraits(.isModal)
+          .accessibilityAction(.escape) { dismiss() }
         }
       }
       .onAppear(perform: syncWithBinding)
@@ -916,11 +939,13 @@ private struct MIRAFullScreenItemOverlayModifier<Item: Identifiable, Overlay: Vi
 
   private func dismiss() {
     guard mountedItem != nil, isVisible else { return }
+    let dismissedID = mountedItem?.id
     MIRAApplePerformanceLogger.event("modal_close", detail: "fullscreen_item")
     withAnimation(animation) {
       isVisible = false
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
+      guard mountedItem?.id == dismissedID, item?.id == dismissedID, !isVisible else { return }
       item = nil
       mountedItem = nil
       onDismissed?()

@@ -606,13 +606,13 @@ private struct CaptroStartupView: View {
             .opacity(appeared ? 1 : 0)
 
           Rectangle()
-            .fill(Color.black.opacity(0.72))
+            .fill(MIRATheme.Color.textSecondary)
             .frame(width: 128, height: 1)
             .opacity(appeared ? 1 : 0)
 
           Text("capture moments")
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(Color.black.opacity(0.52))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
             .opacity(appeared ? 1 : 0)
         }
 
@@ -623,7 +623,7 @@ private struct CaptroStartupView: View {
           if showSlowMessage {
             Text(phase.statusText)
               .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(Color.black.opacity(0.46))
+              .foregroundStyle(MIRATheme.Color.textSecondary)
               .transition(.opacity)
           }
         }
@@ -656,12 +656,12 @@ private struct CaptroStartupPulse: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    TimelineView(.animation) { timeline in
+    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
       let now = timeline.date.timeIntervalSinceReferenceDate
       HStack(spacing: 7) {
         ForEach(0..<3, id: \.self) { index in
           Circle()
-            .fill(Color.black.opacity(dotOpacity(at: now, index: index)))
+            .fill(MIRATheme.Color.textPrimary.opacity(dotOpacity(at: now, index: index)))
             .frame(width: 5, height: 5)
         }
       }

@@ -16,7 +16,7 @@ public enum MIRATheme {
       dark: UIColor(red: 0.043, green: 0.043, blue: 0.050, alpha: 1)
     )
     public static let surfaceSoft = adaptive(
-      light: UIColor(red: 0.982, green: 0.985, blue: 0.978, alpha: 1),
+      light: UIColor(white: 0.965, alpha: 1),
       dark: UIColor(red: 0.078, green: 0.078, blue: 0.086, alpha: 1)
     )
     public static let surfaceRaised = adaptive(
@@ -32,16 +32,16 @@ public enum MIRATheme {
       dark: UIColor(red: 0.150, green: 0.150, blue: 0.158, alpha: 1)
     )
     public static let textPrimary = adaptive(
-      light: UIColor(red: 0.070, green: 0.084, blue: 0.068, alpha: 1),
+      light: UIColor(white: 0.09, alpha: 1),
       dark: UIColor(red: 0.955, green: 0.955, blue: 0.960, alpha: 1)
     )
     public static let textSecondary = adaptive(
-      light: UIColor(red: 0.405, green: 0.440, blue: 0.390, alpha: 1),
+      light: UIColor(white: 0.38, alpha: 1),
       dark: UIColor(red: 0.705, green: 0.705, blue: 0.730, alpha: 1)
     )
     public static let textMuted = adaptive(
-      light: UIColor(red: 0.595, green: 0.625, blue: 0.570, alpha: 1),
-      dark: UIColor(red: 0.500, green: 0.500, blue: 0.525, alpha: 1)
+      light: UIColor(white: 0.44, alpha: 1),
+      dark: UIColor(white: 0.66, alpha: 1)
     )
     public static let forest = adaptive(
       light: UIColor(red: 0.090, green: 0.175, blue: 0.105, alpha: 1),
@@ -51,6 +51,8 @@ public enum MIRATheme {
       light: UIColor(red: 0.925, green: 0.965, blue: 0.905, alpha: 1),
       dark: UIColor(red: 0.055, green: 0.095, blue: 0.065, alpha: 1)
     )
+    /// Foreground for controls filled with the adaptive primary accent.
+    public static let onPrimary = adaptive(light: .white, dark: UIColor(white: 0.06, alpha: 1))
     public static let accent = SwiftUI.Color(red: 0.365, green: 0.785, blue: 0.500)
     public static let like = SwiftUI.Color(red: 0.875, green: 0.305, blue: 0.440)
     public static let divider = adaptive(
@@ -72,8 +74,8 @@ public enum MIRATheme {
   public enum Radius {
     public static let small: CGFloat = 10
     public static let medium: CGFloat = 16
-    public static let large: CGFloat = 24
-    public static let sheet: CGFloat = 28
+    public static let large: CGFloat = 18
+    public static let sheet: CGFloat = 22
   }
 
   public enum Space {
@@ -87,11 +89,11 @@ public enum MIRATheme {
   }
 
   public static func softShadow() -> some ViewModifier {
-    SurfaceShadow(radius: 24, y: 8, opacity: 0.075)
+    SurfaceShadow(radius: 6, y: 2, opacity: 0.035)
   }
 
   public static func floatingShadow() -> some ViewModifier {
-    SurfaceShadow(radius: 34, y: 14, opacity: 0.110)
+    SurfaceShadow(radius: 16, y: 6, opacity: 0.08)
   }
 }
 

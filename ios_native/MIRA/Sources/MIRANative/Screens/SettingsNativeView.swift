@@ -92,6 +92,7 @@ final class SettingsNativeModel: ObservableObject {
   }
 
   func updatePrivacy(_ value: Bool) async {
+    guard !isSavingPrivacy else { return }
     let previous = isPrivate
     isPrivate = value
     isSavingPrivacy = true
@@ -112,6 +113,7 @@ final class SettingsNativeModel: ObservableObject {
   }
 
   func updateEmail(newEmail: String) async -> Bool {
+    guard !isSavingEmail else { return false }
     let cleanEmail = newEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard cleanEmail.contains("@"), cleanEmail.contains(".") else {
       show("Enter a valid email address.", isError: true)
@@ -136,6 +138,7 @@ final class SettingsNativeModel: ObservableObject {
   }
 
   func updatePassword(newPassword: String) async -> Bool {
+    guard !isSavingPassword else { return false }
     guard !newPassword.isEmpty else {
       show("Enter a new password.", isError: true)
       return false
@@ -160,6 +163,7 @@ final class SettingsNativeModel: ObservableObject {
   }
 
   func deleteAccount(confirmation: String, password: String?, provider: String?, idToken: String?, accessToken: String?, authorizationCode: String?) async -> Bool {
+    guard !isDeletingAccount else { return false }
     isDeletingAccount = true
     defer { isDeletingAccount = false }
     do {
@@ -603,6 +607,7 @@ private struct SecuritySettingsNativeView: View {
           }
         }
         .buttonStyle(.miraPress)
+
       }
     }
     .onAppear {
@@ -905,7 +910,7 @@ private struct SettingsDetailScaffold<Content: View>: View {
         Text(title)
           .font(.system(size: 20, weight: .bold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
+          .fixedSize(horizontal: false, vertical: true)
         Spacer()
       }
       .padding(.horizontal, 18)
@@ -942,8 +947,8 @@ private struct SettingsCard<Content: View>: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(title.uppercased())
-        .font(.system(size: 11, weight: .bold))
+      Text(title)
+        .font(.subheadline.weight(.semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
         .padding(.horizontal, 8)
 
@@ -1030,9 +1035,10 @@ private struct SettingsToggleRow: View {
         ProgressView()
           .tint(MIRATheme.Color.forest)
       } else {
-        Toggle("", isOn: $isOn)
+        Toggle(title, isOn: $isOn)
           .labelsHidden()
           .tint(MIRATheme.Color.forest)
+          .accessibilityHint(subtitle)
       }
     }
   }
@@ -1065,29 +1071,27 @@ private struct SettingsRowContent<Trailing: View>: View {
         .font(.system(size: 15, weight: .semibold))
         .foregroundStyle(tint)
         .frame(width: 34, height: 34)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Circle())
+        .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.system(size: 15, weight: .bold))
+          .font(.body.weight(.medium))
           .foregroundStyle(tint)
-          .lineLimit(1)
-          .minimumScaleFactor(0.86)
+          .fixedSize(horizontal: false, vertical: true)
         Text(subtitle)
-          .font(.system(size: 12, weight: .semibold))
+          .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(2)
+          .fixedSize(horizontal: false, vertical: true)
       }
 
       Spacer(minLength: MIRATheme.Space.sm)
       trailing
     }
     .padding(.horizontal, 12)
-    .padding(.vertical, 8)
+    .padding(.vertical, 12)
     .frame(minHeight: 58)
     .settingsPillSurface(cornerRadius: 26)
-    .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+    .contentShape(Rectangle())
   }
 }
 
@@ -1097,17 +1101,8 @@ private struct SettingsTextField: View {
   var keyboardType: UIKeyboardType = .default
 
   var body: some View {
-    TextField(title, text: $text)
-      .keyboardType(keyboardType)
-      .textInputAutocapitalization(.never)
-      .autocorrectionDisabled()
-      .font(.system(size: 15, weight: .medium))
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, 14)
-      .frame(maxWidth: .infinity)
-      .frame(height: 44)
-      .settingsPillSurface(cornerRadius: 22)
-      .padding(.bottom, 4)
+    MIRAFormInput(title: title, text: $text, keyboardType: keyboardType,
+                  contentType: keyboardType == .emailAddress ? .emailAddress : nil)
   }
 }
 
@@ -1116,16 +1111,7 @@ private struct SettingsSecureField: View {
   @Binding var text: String
 
   var body: some View {
-    SecureField(title, text: $text)
-      .textInputAutocapitalization(.never)
-      .autocorrectionDisabled()
-      .font(.system(size: 15, weight: .medium))
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, 14)
-      .frame(maxWidth: .infinity)
-      .frame(height: 44)
-      .settingsPillSurface(cornerRadius: 22)
-      .padding(.bottom, 4)
+    MIRAFormInput(title: title, text: $text, secure: true)
   }
 }
 
@@ -1141,12 +1127,13 @@ private struct SettingsActionButton: View {
       action()
     } label: {
       Text(title)
-        .font(.system(size: 15, weight: .semibold))
+        .font(.body.weight(.semibold))
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
-        .frame(height: 44)
+        .padding(.vertical, 12)
+        .frame(minHeight: 48)
         .background(disabled ? MIRATheme.Color.textMuted.opacity(0.45) : tint)
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
     }
     .buttonStyle(.miraPress)
     .disabled(disabled)
@@ -1179,14 +1166,13 @@ private struct SettingsPillSurface: ViewModifier {
   func body(content: Content) -> some View {
     content
       .background {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous)
           .fill(MIRATheme.Color.surfaceRaised)
           .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous)
               .stroke(MIRATheme.Color.hairline.opacity(0.65), lineWidth: 1)
           )
       }
-      .shadow(color: .black.opacity(0.045), radius: 12, x: 0, y: 5)
   }
 }
 

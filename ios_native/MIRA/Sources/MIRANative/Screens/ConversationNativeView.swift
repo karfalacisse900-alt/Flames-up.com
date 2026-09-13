@@ -544,7 +544,7 @@ public struct ConversationNativeView: View {
         Image(systemName: "chevron.left")
           .font(.system(size: 19, weight: .semibold))
           .foregroundStyle(.black)
-          .frame(width: 30, height: 40)
+            .frame(width: 44, height: 44)
       }
       .buttonStyle(.miraPress)
 
@@ -829,7 +829,7 @@ public struct ConversationNativeView: View {
           Image(systemName: showAttachmentTray ? "xmark" : "plus")
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.black)
-            .frame(width: 32, height: 32)
+            .frame(width: 44, height: 44)
             .background(ChatRoomPalette.input)
             .clipShape(Circle())
         }
@@ -837,7 +837,7 @@ public struct ConversationNativeView: View {
 
         TextField("Message", text: $model.draft, axis: .vertical)
           .lineLimit(1...5)
-          .font(.system(size: 15))
+          .font(.body)
           .foregroundStyle(.black)
           .padding(.vertical, 8)
           .onChange(of: model.draft) { value in
@@ -883,12 +883,13 @@ public struct ConversationNativeView: View {
       Image(systemName: "arrow.up")
         .font(.system(size: 15, weight: .bold))
         .foregroundStyle(.white)
-        .frame(width: 34, height: 34)
+        .frame(width: 44, height: 44)
         .background(hasDraft ? ChatRoomPalette.accent : Color.black.opacity(0.18))
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
     .disabled(!hasDraft || model.isSending)
+    .accessibilityLabel(model.isSending ? "Sending message" : "Send message")
   }
 
   private func trayButton(_ systemImage: String, _ title: String, tint: Color = MIRATheme.Color.textMuted) -> some View {
