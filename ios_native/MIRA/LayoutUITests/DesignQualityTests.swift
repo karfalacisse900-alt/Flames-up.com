@@ -60,7 +60,7 @@ final class DesignQualityTests: XCTestCase {
 
   func testDraftCannotBeDiscardedAccidentally() {
     let app = launch(["--captro-quality-composer"])
-    let editor = app.textViews["What do you want to share?"]
+    let editor = app.textViews["Write a caption"]
     XCTAssertTrue(editor.waitForExistence(timeout: 15))
     editor.tap()
     // A fresh simulator can present the system's one-time keyboard tutorial.
@@ -73,6 +73,21 @@ final class DesignQualityTests: XCTestCase {
     capture(app, "discard-confirmation")
     app.buttons["Keep editing"].tap()
     XCTAssertEqual(editor.value as? String, "A draft worth keeping")
+  }
+
+  func testComposerStampPickerKeepsSelectionExplicit() {
+    let app = launch(["--captro-quality-composer"])
+    let addStamp = app.buttons["post.option.Add stamp"]
+    XCTAssertTrue(addStamp.waitForExistence(timeout: 15))
+    for _ in 0..<4 where !addStamp.isHittable { app.swipeUp() }
+    addStamp.tap()
+    XCTAssertTrue(app.navigationBars["Add Stamp"].waitForExistence(timeout: 5))
+    let event = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Event. An event or meetup")).firstMatch
+    XCTAssertTrue(event.waitForExistence(timeout: 5))
+    event.tap()
+    capture(app, "stamp-picker-selected")
+    app.buttons["Done"].tap()
+    XCTAssertTrue(app.staticTexts["Stamp"].waitForExistence(timeout: 5), "Event selection should open the real details editor")
   }
 
   func testCacheClearReportsActualCompletion() {
