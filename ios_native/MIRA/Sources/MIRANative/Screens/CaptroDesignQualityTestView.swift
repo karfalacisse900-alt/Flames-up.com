@@ -17,6 +17,8 @@ public struct CaptroDesignQualityTestView: View {
         AuthNativeView(session: session, api: api)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-settings") {
         NavigationStack { SettingsNativeView(api: api) }
+      } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-appearance") {
+        NavigationStack { PreferenceSettingsNativeView() }
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-search") {
         NavigationStack { SearchUsersNativeView(api: api) }
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-composer") {
