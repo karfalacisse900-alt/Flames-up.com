@@ -229,10 +229,11 @@ test('post creation is Photos-first and keeps selected media proportions', () =>
   const firstPage = composer.slice(firstPageStart, firstPageEnd);
 
   assert.ok(firstPageStart >= 0 && firstPageEnd > firstPageStart);
-  assert.match(firstPage, /Text\("What do you want to share\?"\)/);
+  assert.match(firstPage, /Text\("Write a caption\.\.\."\)/);
   assert.match(firstPage, /PhotosPicker\([\s\S]*?matching: \.any\(of: \[\.images, \.videos\]\)/);
   assert.match(firstPage, /title: "Photos and videos"/);
-  assert.match(firstPage, /title: "Add Stamp"/);
+  assert.match(firstPage, /title: selectedStampKind == \.social \? "Add stamp" : selectedStampKind\.displayName/);
+  assert.match(firstPage, /composerMediaPreview\(first\)[\s\S]*?composerPrompt/);
   assert.match(firstPage, /width \* coverMediaRatio/);
   assert.doesNotMatch(firstPage, /MIRAStoryLiveCameraView/);
   assert.doesNotMatch(firstPage, /Color\.black\.ignoresSafeArea/);
@@ -247,15 +248,18 @@ test('post creation is Photos-first and keeps selected media proportions', () =>
   assert.match(mediaEditorView, /postAspectRatio: \.nearest\(width: Double\(image\.size\.width\), height: Double\(image\.size\.height\)\)/);
 });
 
-test('composer stays on a single writing page with compact tools and optional stamp sheet', () => {
+test('composer stays on a single writing page with compact tools and an explicit stamp picker', () => {
   const root = composer.slice(composer.indexOf('private var composerPage:'), composer.indexOf('private var postDetailSheetPresentedBinding:'));
   assert.match(root, /mediaFirstPage/);
   assert.doesNotMatch(root, /if isEditingPostDetails|finalPostPage|AnyView/);
-  const tool = composer.slice(composer.indexOf('private func composerToolLabel'), composer.indexOf('private func stampOptionsSheet'));
+  const tool = composer.slice(composer.indexOf('private func composerToolLabel'), composer.indexOf('private var composerPostOptions'));
   assert.match(tool, /Image\(systemName: icon\)/);
   assert.match(tool, /accessibilityLabel\(title\)/);
   assert.doesNotMatch(tool, /Text\(title\)|background\(|clipShape\(/);
   assert.match(composer, /miraBottomSheet\(isPresented: \$isEditingPostDetails/);
+  assert.match(composer, /fullScreenCover\(isPresented: \$showStampPicker\)/);
+  assert.match(composer, /navigationTitle\("Add Stamp"\)/);
+  assert.match(composer, /accessibilityIdentifier\("post\.option\.\\\(title\)"\)/);
   assert.match(composer, /matching: \.videos/);
   assert.match(composer, /scrollDismissesKeyboard\(\.interactively\)/);
   assert.doesNotMatch(composer, /private var finalPostPage/);
