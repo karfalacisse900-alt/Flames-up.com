@@ -92,7 +92,7 @@ final class DesignQualityTests: XCTestCase {
 
   func testCacheClearReportsActualCompletion() {
     let app = launch(["--captro-quality-appearance"])
-    XCTAssertTrue(app.navigationBars["Appearance & cache"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["Appearance & cache"].waitForExistence(timeout: 10))
     let clear = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear media cache")).firstMatch
     XCTAssertTrue(clear.waitForExistence(timeout: 5))
     for _ in 0..<4 where !clear.isHittable { app.swipeUp() }
