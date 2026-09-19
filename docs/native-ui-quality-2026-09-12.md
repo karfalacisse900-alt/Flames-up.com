@@ -50,6 +50,10 @@ Captro **1.0.1 (458.1)** was signed, archived and uploaded successfully in [rele
 
 Upload acceptance is verified; Apple's subsequent processing and tester availability were not independently checked.
 
+Captro **1.0.1 (460.1)** was signed, archived, exported, and uploaded successfully in [release run 35457584224](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/35457584224), from app-code commit `4ab11956be501c7706e42ba853bb8806d8b4da72`. The release includes the simplified Create Post screen and the full-screen Moment, Club, Event, Meetup, and Deal detail flows. Release authentication configuration, IPA export, artifact upload, and the App Store Connect upload all passed.
+
+The follow-up automated UI-test alignment is commit `6d9cfa9814f31d6346a308da60d29962f711a0cb`. [Validation run 35458338471](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/35458338471) passed the 143-test backend suite, TypeScript check, and small/large iPhone simulator interaction and screenshot suite. This follow-up changes test coverage only; it does not change the uploaded app binary. Apple's subsequent TestFlight processing and tester availability remain outside this workflow's verification.
+
 ## Coverage boundaries
 
 Authenticated posting/chat, physical camera capture, VoiceOver on a physical device, and live purchase/withdrawal transactions require dedicated account/device checks. Simulator layout tests are not evidence that real-money transfers succeeded. No payment-provider, payout-account, ledger, or backend money-handling implementation is changed by this pass.
