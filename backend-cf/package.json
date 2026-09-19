@@ -12,7 +12,8 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "hono": "^4.12.22",
-    "jose": "^6.2.3"
+    "jose": "^6.2.3",
+    "openai": "7.19.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260524.1",

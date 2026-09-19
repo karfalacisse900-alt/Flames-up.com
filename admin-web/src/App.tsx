@@ -12,9 +12,10 @@ import type {
   ReportDetail,
   ReportSummary,
   ReportedMessageDetail,
+  VoiceReview,
 } from './types';
 
-type ViewKey = 'dashboard' | 'reports' | 'posts' | 'comments' | 'users' | 'messages' | 'discover' | 'audit' | 'settings';
+type ViewKey = 'dashboard' | 'reports' | 'voice' | 'posts' | 'comments' | 'users' | 'messages' | 'discover' | 'audit' | 'settings';
 type PostAction = 'remove' | 'restore' | 'discover' | 'safe' | 'clearLocation';
 
 type ActionDialogState = {
@@ -39,6 +40,7 @@ type MediaPreviewModel = {
 const navItems: Array<{ key: ViewKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'reports', label: 'Reports' },
+  { key: 'voice', label: 'Voice Review' },
   { key: 'posts', label: 'Posts' },
   { key: 'comments', label: 'Comments' },
   { key: 'users', label: 'Users' },
@@ -1433,6 +1435,68 @@ function AuditPage({ token }: { token: string }) {
   );
 }
 
+function VoiceReviewPage({ token, openAction }: { token: string; openAction: (state: ActionDialogState) => void }) {
+  const list = useAdminLoad<VoiceReview[]>(() => AdminApi.voiceReviews(token), [token]);
+  const [playingId, setPlayingId] = useState('');
+  const [playbackError, setPlaybackError] = useState('');
+
+  async function play(recording: VoiceReview) {
+    setPlaybackError('');
+    try {
+      const blob = await AdminApi.voiceAudio(token, recording.id);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      setPlayingId(recording.id);
+      audio.onended = () => { setPlayingId(''); URL.revokeObjectURL(url); };
+      audio.onerror = () => { setPlayingId(''); setPlaybackError('Recording could not be played.'); URL.revokeObjectURL(url); };
+      await audio.play();
+    } catch (error) {
+      setPlayingId('');
+      setPlaybackError(error instanceof Error ? error.message : 'Recording could not be played.');
+    }
+  }
+
+  function decide(recording: VoiceReview, decision: 'approved' | 'rejected') {
+    openAction({
+      title: decision === 'approved' ? 'Approve recording' : 'Reject recording',
+      message: `This decision applies only to version ${recording.content_version} of the submitted recording and text.`,
+      confirmLabel: decision === 'approved' ? 'Approve' : 'Reject',
+      danger: decision === 'rejected',
+      targetPreview: <p>{recording.machine_transcript || 'No reliable transcript was produced.'}</p>,
+      onConfirm: async (reason, note) => {
+        await AdminApi.decideVoice(token, recording.id, { decision, reason_code: reason, note });
+        await list.reload();
+      },
+    });
+  }
+
+  return (
+    <section className="page">
+      <PageHeader title="Voice Review" subtitle="Private recordings held by transcription or safety checks. Review the recording and exact machine transcript together." onRefresh={list.reload} />
+      <ErrorBanner message={list.error || playbackError} />
+      {list.loading ? <LoadingRows /> : list.data?.length ? (
+        <div className="admin-table">
+          {list.data.map((recording) => (
+            <div className="table-row" key={recording.id}>
+              <div className="text-cell">
+                <strong>{recording.machine_transcript || 'Unclear or silent recording'}</strong>
+                <span>{titleCase(recording.target_type)} · v{recording.content_version} · {Math.round(recording.verified_duration_ms / 1000)}s</span>
+                {recording.caption_snapshot ? <span>Caption: {recording.caption_snapshot}</span> : null}
+              </div>
+              <span>{formatDate(recording.submitted_at)}</span>
+              <div className="row-actions">
+                <button disabled={playingId === recording.id} onClick={() => void play(recording)}>{playingId === recording.id ? 'Playing…' : 'Play'}</button>
+                <button onClick={() => decide(recording, 'approved')}>Approve</button>
+                <button className="danger-text" onClick={() => decide(recording, 'rejected')}>Reject</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : <EmptyState title="No voice recordings need review" body="Flagged, ambiguous, silent, and appealed submissions will remain private and appear here." />}
+    </section>
+  );
+}
+
 function SettingsPage({ session }: { session: AdminSession }) {
   return (
     <section className="page">
@@ -1537,6 +1601,7 @@ function App() {
   const content = (() => {
     if (active === 'dashboard') return <DashboardPage token={token} openReport={(id) => { setSelectedReportId(id); setActive('reports'); }} />;
     if (active === 'reports') return <ReportsPage token={token} selectedId={selectedReportId} setSelectedId={setSelectedReportId} openAction={openAction} />;
+    if (active === 'voice') return <VoiceReviewPage token={token} openAction={openAction} />;
     if (active === 'posts') return <PostModerationPage token={token} session={session} openAction={openAction} onViewAuthor={viewAuthor} />;
     if (active === 'comments') return <CommentModerationPage token={token} openAction={openAction} />;
     if (active === 'users') return <UsersPage token={token} session={session} selectedUserId={selectedUserId} setSelectedUserId={setSelectedUserId} openAction={openAction} />;

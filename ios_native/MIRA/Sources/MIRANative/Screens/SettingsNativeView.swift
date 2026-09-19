@@ -839,7 +839,7 @@ private struct DeleteAccountNativeView: View {
   }
 }
 
-private struct PreferenceSettingsNativeView: View {
+struct PreferenceSettingsNativeView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @State private var isClearingMediaCache = false

@@ -872,6 +872,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
   public let pinnedAt: String?
   public let isPinned: Bool?
   public let user: MIRAUser?
+  public let voice: CaptroVoiceAttachment?
 
   public var text: String { body ?? content ?? "" }
 
@@ -898,7 +899,8 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
     likedByMe: Bool?,
     pinnedAt: String?,
     isPinned: Bool?,
-    user: MIRAUser?
+    user: MIRAUser?,
+    voice: CaptroVoiceAttachment? = nil
   ) {
     self.id = id
     self.userId = userId
@@ -913,6 +915,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
     self.pinnedAt = pinnedAt
     self.isPinned = isPinned
     self.user = user
+    self.voice = voice
   }
 
   enum CodingKeys: String, CodingKey {
@@ -932,6 +935,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
     case userUsername
     case userFullName
     case userProfileImage
+    case voice
   }
 
   public init(from decoder: Decoder) throws {
@@ -948,6 +952,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
     likedByMe = try container.decodeIfPresent(Bool.self, forKey: .likedByMe)
     pinnedAt = try container.decodeIfPresent(String.self, forKey: .pinnedAt)
     isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned)
+    voice = try container.decodeIfPresent(CaptroVoiceAttachment.self, forKey: .voice)
 
     if let nestedUser = try container.decodeIfPresent(MIRAUser.self, forKey: .user) {
       user = nestedUser
@@ -1005,6 +1010,7 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
     try container.encodeIfPresent(pinnedAt, forKey: .pinnedAt)
     try container.encodeIfPresent(isPinned, forKey: .isPinned)
     try container.encodeIfPresent(user, forKey: .user)
+    try container.encodeIfPresent(voice, forKey: .voice)
   }
 
   public func updating(liked: Bool? = nil, likesCount: Int? = nil, pinnedAt: String? = nil, clearPin: Bool = false) -> MIRAComment {
@@ -1021,7 +1027,8 @@ public struct MIRAComment: Codable, Identifiable, Hashable {
       likedByMe: liked ?? likedByMe,
       pinnedAt: clearPin ? nil : (pinnedAt ?? self.pinnedAt),
       isPinned: clearPin ? false : ((pinnedAt != nil) ? true : isPinned),
-      user: user
+      user: user,
+      voice: voice
     )
   }
 }
@@ -1487,6 +1494,7 @@ public struct CreatePostBody: Encodable {
   public let audioStreamUrl: String?
   public let audioStartTime: Int?
   public let audioDuration: Int?
+  public let voiceAudioId: String?
   public let visibility: String
   public let clientRequestId: String
 
@@ -1536,6 +1544,7 @@ public struct CreatePostBody: Encodable {
     audioStreamUrl: String? = nil,
     audioStartTime: Int? = nil,
     audioDuration: Int? = nil,
+    voiceAudioId: String? = nil,
     visibility: String,
     clientRequestId: String
   ) {
@@ -1584,6 +1593,7 @@ public struct CreatePostBody: Encodable {
     self.audioStreamUrl = audioStreamUrl
     self.audioStartTime = audioStartTime
     self.audioDuration = audioDuration
+    self.voiceAudioId = voiceAudioId
     self.visibility = visibility
     self.clientRequestId = clientRequestId
   }
@@ -1793,10 +1803,12 @@ public struct CommentMutationResponse: Decodable {
 public struct PostCommentBody: Encodable {
   public let content: String
   public let parentId: String?
+  public let voiceAudioId: String?
 
-  public init(content: String, parentId: String? = nil) {
+  public init(content: String, parentId: String? = nil, voiceAudioId: String? = nil) {
     self.content = content
     self.parentId = parentId
+    self.voiceAudioId = voiceAudioId
   }
 }
 

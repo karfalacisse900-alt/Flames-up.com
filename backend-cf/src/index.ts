@@ -16,6 +16,7 @@ import {
   stripeV2RecipientTransferStatus,
   stripeV2RecipientTransfersEnabled,
 } from './stripe-connect-v2';
+import { bindVoiceAttachment, createVoiceRoutes, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -34,7 +35,17 @@ interface Env {
   KV?: KVNamespace;
   HYPERDRIVE?: any;
   AI?: any;
-  MEDIA_MODERATION_QUEUE?: Queue<MediaModerationJobMessage>;
+  MEDIA_MODERATION_QUEUE?: Queue<MediaModerationJobMessage | VoiceJobMessage>;
+  OPENAI_API_KEY?: string;
+  OPENAI_TRANSCRIPTION_MODEL?: string;
+  OPENAI_MODERATION_MODEL?: string;
+  OPENAI_CONTEXT_REVIEW_MODEL?: string;
+  CAPTRO_VOICE_POLICY_VERSION?: string;
+  CAPTRO_VOICE_AUTO_REJECT?: string;
+  CAPTRO_VOICE_DISCLOSURE_VERSION?: string;
+  VOICE_MAX_POST_SECONDS?: string;
+  VOICE_MAX_REPLY_SECONDS?: string;
+  VOICE_MAX_BYTES?: string;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID: string;
@@ -5842,6 +5853,7 @@ function supabaseCommentPayload(row: any, author: any, fallbackPostId: string, l
   const parentId = publicId((metadata as any).parent_legacy_id || row?.parent_id, 120);
   const likesCount = Math.max(0, Number((metadata as any).likes_count || 0));
   const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
+  const voice = parseJsonObject((metadata as any).voice);
   return {
     id: commentId,
     supabase_comment_id: isUuidText(row?.id),
@@ -5855,6 +5867,11 @@ function supabaseCommentPayload(row: any, author: any, fallbackPostId: string, l
     liked_by_me: likedByMe,
     pinned_at: pinnedAt,
     is_pinned: !!pinnedAt,
+    voice: cleanText((voice as any).id, 160) ? {
+      id: cleanText((voice as any).id, 160),
+      version: Number((voice as any).version || 1),
+      duration_ms: Number((voice as any).duration_ms || 0),
+    } : null,
     user_username: publicUsernameFor(author),
     user_full_name: author?.full_name,
     user_profile_image: safeMediaReference(author?.avatar_url),
@@ -6119,6 +6136,7 @@ async function supabaseCreatePostComment(c: any, input: {
   content: string;
   parentId?: string | null;
   clientRequestId?: string;
+  voiceAudioId?: string;
 }) {
   const visiblePost = await supabaseVisiblePostForComments(c, input.userId, input.postId);
   if (!visiblePost) return { status: 404 as const, body: { detail: 'Post not found' } };
@@ -6176,13 +6194,14 @@ async function supabaseCreatePostComment(c: any, input: {
     user_id: authUserId || null,
     parent_id: parentUuid || null,
     body: input.content,
-    status: 'active',
+    status: input.voiceAudioId ? 'pending_voice' : 'active',
     metadata: {
       source: 'cloudflare_worker_primary',
       parent_legacy_id: publicId(input.parentId, 120),
       client_request_id: cleanText(input.clientRequestId, 160),
       post_user_id: publicId(visiblePost?.user_id, 120),
       likes_count: 0,
+      voice: input.voiceAudioId ? { id: input.voiceAudioId, state: 'checking' } : null,
     },
     legacy_created_at: nowIso,
     created_at: nowIso,
@@ -6854,6 +6873,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   const raw = parseJsonObject((metadata as any).raw);
   const place = parseJsonObject((metadata as any).place);
   const audio = parseJsonObject((metadata as any).audio);
+  const voice = parseJsonObject((metadata as any).voice);
   const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
   const { mediaUrls, mediaTypes, mediaDimensions } = supabaseAppPostMedia(row);
   const primaryCategory = (normalizeDiscoverCategory(row?.category || (discover as any).primary_category || row?.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
@@ -6861,7 +6881,14 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   return {
     id: publicId(row?.legacy_post_id || row?.id, 120),
     supabase_post_id: isUuidText(row?.id),
-    detail: creatorEventDetails(metadata, row?.post_type),
+    detail: {
+      ...(creatorEventDetails(metadata, row?.post_type) || {}),
+      voice: cleanText((voice as any).id, 160) ? {
+        id: cleanText((voice as any).id, 160),
+        version: Number((voice as any).version || 1),
+        duration_ms: Number((voice as any).duration_ms || 0),
+      } : null,
+    },
     user_id: appUserId,
     user_username: author?.username,
     user_full_name: author?.full_name,
@@ -12714,7 +12741,7 @@ function supabasePrimaryPostCreatePayload(input: any) {
     title: cleanText(input.postTitle, 180) || null,
     content: cleanMultilineText(input.postContent, 4000),
     visibility: normalizeVisibility(input.visibility),
-    status: 'active',
+    status: input.voiceAudioId ? 'pending_voice' : 'active',
     post_type: cleanText(input.postType || 'general', 80),
     category: primaryCategory,
     location: cleanText(input.location || input.placeName, 180) || null,
@@ -12765,6 +12792,7 @@ function supabasePrimaryPostCreatePayload(input: any) {
       display_location_source: raw.display_location_source,
       display_location_visibility: raw.display_location_visibility,
       moderation_status: 'approved',
+      voice: input.voiceAudioId ? { id: input.voiceAudioId, state: 'checking' } : null,
       place,
       audio,
       raw,
@@ -16141,6 +16169,12 @@ api.post('/posts', authMiddleware, async (c) => {
   const audioStreamUrl = audioProvider ? cleanText(b.audio_stream_url, 2200) : '';
   const audioStartTime = audioProvider ? clampNumber(b.audio_start_time, 0, 60 * 60 * 6, 0) : 0;
   const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
+  const voiceAudioId = cleanText(b.voice_audio_id || b.voiceAudioId, 160);
+
+  if (voiceAudioId) {
+    try { await validateVoiceAttachment(c.env, voiceAudioId, userId, 'post'); }
+    catch (error: any) { return c.json({ detail: 'This voice recording cannot be attached.', code: getErrorCode(error) }, 409); }
+  }
 
   if (audioProvider && !audioTrackId) {
     return c.json({ detail: 'Audio track id is required.' }, 400);
@@ -16238,6 +16272,7 @@ api.post('/posts', authMiddleware, async (c) => {
     audioStreamUrl,
     audioStartTime,
     audioDuration,
+    voiceAudioId,
     clientRequestId,
     createdAt,
   };
@@ -16257,6 +16292,12 @@ api.post('/posts', authMiddleware, async (c) => {
       });
     }
     await writeSupabasePrimaryPostPlace(c, supabaseInput);
+    if (voiceAudioId) {
+      await bindVoiceAttachment(c.env, {
+        voiceId: voiceAudioId, ownerId: userId, targetType: 'post', targetId: id,
+        caption: [postTitle, postContent].filter(Boolean).join('\n\n'),
+      });
+    }
     if (commerceConfig && commerceCreatorId) {
       const purchasableRows = await supabaseAdminInsertRows(c, 'app_purchasables', [{
         ...commerceConfig.purchasable,
@@ -16319,7 +16360,7 @@ api.post('/posts', authMiddleware, async (c) => {
     }, 503);
   }
 
-  runBackgroundTask(c, 'supabase_post_follower_notifications_failed', async () => {
+  if (!voiceAudioId) runBackgroundTask(c, 'supabase_post_follower_notifications_failed', async () => {
     await notifySupabaseFollowersOfNewPost(c, {
       userId,
       postId: id,
@@ -16332,7 +16373,8 @@ api.post('/posts', authMiddleware, async (c) => {
   const createdPost = {
     ...supabaseAppPostToLegacy(insertedPostRow, supabaseAuthorRow, false, 0),
     client_request_id: clientRequestId,
-    moderation_status: 'approved',
+    moderation_status: voiceAudioId ? 'pending' : 'approved',
+    voice_processing_state: voiceAudioId ? 'queued' : undefined,
     moderation_media_ids: JSON.stringify(approvedMediaAssetIds),
   };
   if (createdCommerce) createdPost.detail = { ...(createdPost.detail || {}), commerce: createdCommerce };
@@ -16694,11 +16736,23 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const postId = c.req.param('postId');
     const body: any = await c.req.json().catch(() => ({}));
     const content = cleanMultilineText(body.content, 1200);
+    const voiceAudioId = cleanText(body.voice_audio_id || body.voiceAudioId, 160);
     const parentId = body.parent_id ? publicId(body.parent_id, 120) : null;
     const clientRequestId = getClientRequestId(c, body);
-    if (!content) return c.json({ detail: 'Comment cannot be empty.' }, 400);
+    if (!content && !voiceAudioId) return c.json({ detail: 'Comment cannot be empty.' }, 400);
     if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
-    const result = await supabaseCreatePostComment(c, { postId, userId, content, parentId, clientRequestId: clientRequestId || undefined });
+    if (voiceAudioId) {
+      try { await validateVoiceAttachment(c.env, voiceAudioId, userId, 'reply'); }
+      catch (error: any) { return c.json({ detail: 'This voice recording cannot be attached.', code: getErrorCode(error) }, 409); }
+    }
+    const result = await supabaseCreatePostComment(c, { postId, userId, content, parentId, clientRequestId: clientRequestId || undefined, voiceAudioId: voiceAudioId || undefined });
+    if (result.status === 200 && voiceAudioId) {
+      await bindVoiceAttachment(c.env, {
+        voiceId: voiceAudioId, ownerId: userId, targetType: 'reply', targetId: cleanText(result.body?.id, 160),
+        parentPostId: postId, parentCommentId: parentId, caption: content,
+      });
+      return c.json({ ...result.body, status: 'pending_voice', voice_processing_state: 'queued' }, 202);
+    }
     return c.json(result.body, result.status);
   } catch (error: any) {
     console.error('Comment create failed:', getErrorCode(error), error?.message || error);
@@ -24428,20 +24482,43 @@ async function processAccountDeletionQueue(env: Env, limit = 20) {
 }
 
 api.route('/scan', createCaptroScanRoutes(authMiddleware, getUserId, enforceRateLimit));
+api.route('/voice', createVoiceRoutes({
+  authMiddleware,
+  getUserId,
+  requireAdmin: requireAdminRole,
+  canViewTarget: async (c, row, viewerId) => {
+    const postId = cleanText(row?.target_type === 'post' ? row?.target_id : row?.parent_post_id, 160);
+    if (!postId) return false;
+    const post = await supabaseVisiblePostForComments(c, viewerId, postId);
+    if (!post) return false;
+    if (row?.target_type !== 'reply') return true;
+    const replyId = cleanText(row?.target_id, 160);
+    const comments = await supabaseAdminQueryRows(c, 'post_comments', {
+      select: 'id,legacy_comment_id,status',
+      filters: { or: isUuidText(replyId) ? `(legacy_comment_id.eq.${replyId},id.eq.${replyId})` : `(legacy_comment_id.eq.${replyId})`, status: postgrestEqFilter('active') },
+      limit: 1,
+    });
+    return comments.length === 1;
+  },
+}));
 
 // Mount API routes on app
 app.route('/api', api);
 
-async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJobMessage>, env: Env, _ctx: ExecutionContext) {
+async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJobMessage | VoiceJobMessage>, env: Env, _ctx: ExecutionContext) {
   for (const message of batch.messages) {
     try {
-      await processMediaModerationJob(env, message.body, 'queue');
+      if ((message.body as VoiceJobMessage)?.kind === 'voice') {
+        await processVoiceJob(env, message.body as VoiceJobMessage);
+      } else {
+        await processMediaModerationJob(env, message.body as MediaModerationJobMessage, 'queue');
+      }
       message.ack();
     } catch (error: any) {
       console.warn(JSON.stringify({
         event: 'media_moderation_queue_failed',
         code: getErrorCode(error).slice(0, 180),
-        media_id: publicId(message.body?.mediaId || '', 160),
+        media_id: publicId((message.body as MediaModerationJobMessage)?.mediaId || (message.body as VoiceJobMessage)?.voiceId || '', 160),
       }));
       message.retry();
     }
@@ -24528,7 +24605,10 @@ export default {
   queue: handleMediaModerationQueue,
   scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     if (controller.cron === '17 5 * * *') ctx.waitUntil(processAccountDeletionQueue(env));
-    if (controller.cron === '*/5 * * * *') ctx.waitUntil(expireNativePaymentHolds(env));
+    if (controller.cron === '*/5 * * * *') {
+      ctx.waitUntil(expireNativePaymentHolds(env));
+      ctx.waitUntil(recoverVoiceJobs(env));
+    }
     if (controller.cron === '23 * * * *') ctx.waitUntil(reconcileStripeFinancialState(env));
   },
 };

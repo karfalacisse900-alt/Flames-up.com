@@ -9,6 +9,7 @@ import type {
   ReportDetail,
   ReportedMessageDetail,
   ReportSummary,
+  VoiceReview,
 } from './types';
 
 const DEFAULT_API_BASE = 'https://api.flames-up.com/api';
@@ -187,4 +188,14 @@ export const AdminApi = {
       body: JSON.stringify(body),
     }),
   auditLogs: (token: string, query = '') => request<Paginated<AuditLog>>(`/admin/audit-logs${query}`, token),
+  voiceReviews: (token: string) => request<VoiceReview[]>('/voice/admin/review', token),
+  decideVoice: (token: string, id: string, body: Record<string, unknown>) =>
+    request(`/voice/admin/${encodeURIComponent(id)}/decision`, token, { method: 'POST', body: JSON.stringify(body) }),
+  voiceAudio: async (token: string, id: string) => {
+    const response = await fetchWithTimeout(`${API_BASE}/voice/${encodeURIComponent(id)}/playback`, {
+      headers: { Authorization: `Bearer ${token}`, 'X-Request-ID': requestId() },
+    });
+    if (!response.ok) throw new ApiError('Recording is unavailable.', response.status);
+    return response.blob();
+  },
 };

@@ -181,6 +181,23 @@ export type AdminComment = {
   created_at?: string;
 };
 
+export type VoiceReview = {
+  id: string;
+  owner_app_user_id: string;
+  target_type: 'post' | 'reply';
+  target_id?: string | null;
+  content_version: number;
+  verified_duration_ms: number;
+  machine_transcript?: string | null;
+  display_transcript?: string | null;
+  caption_snapshot?: string | null;
+  detected_languages?: string[];
+  moderation_evidence?: Record<string, unknown> | null;
+  decision_reason?: string | null;
+  submitted_at: string;
+  review_requested_at?: string | null;
+};
+
 export type AuditLog = {
   id: string;
   actor_admin_user_id?: string;

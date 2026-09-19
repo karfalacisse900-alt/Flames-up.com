@@ -17,6 +17,7 @@ struct CaptroFeedPostView: View {
   let showsCoverMediaOnly: Bool
 
   @Environment(\.displayScale) private var displayScale
+  @State private var transcriptVoiceId: String?
 
   var body: some View {
     Group {
@@ -43,6 +44,14 @@ struct CaptroFeedPostView: View {
           .padding(.horizontal, 16)
       }
 
+      if let voice = post.detail?.voice {
+        CaptroCompactVoicePlayer(voiceId: voice.id, durationMs: voice.durationMs, waveform: voice.waveform) {
+          transcriptVoiceId = voice.id
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, post.feedMediaURLs.isEmpty ? 14 : 12)
+      }
+
       if showsMoreButton {
         HStack {
           Spacer(minLength: 0)
@@ -64,6 +73,9 @@ struct CaptroFeedPostView: View {
         .padding(.top, 24)
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
+    .sheet(isPresented: Binding(get: { transcriptVoiceId != nil }, set: { if !$0 { transcriptVoiceId = nil } })) {
+      if let transcriptVoiceId { CaptroVoiceTranscriptSheet(voiceId: transcriptVoiceId) }
+    }
   }
 
   @ViewBuilder

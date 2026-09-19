@@ -9,6 +9,21 @@ public struct CaptroPostDetails: Codable, Hashable {
   public var travel: CaptroTravelDetails? = nil
   public var document: CaptroDocumentPreview? = nil
   public var commerce: CaptroCommerceDetails? = nil
+  public var voice: CaptroVoiceAttachment? = nil
+}
+
+public struct CaptroVoiceAttachment: Codable, Hashable {
+  public let id: String
+  public let version: Int?
+  public let durationMs: Int
+  public let waveform: [Float]?
+
+  public init(id: String, version: Int? = nil, durationMs: Int, waveform: [Float]? = nil) {
+    self.id = id
+    self.version = version
+    self.durationMs = durationMs
+    self.waveform = waveform
+  }
 }
 
 public struct CaptroEventDetails: Codable, Hashable {
