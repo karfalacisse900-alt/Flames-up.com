@@ -217,22 +217,25 @@ test('Home carousel locks each touch to horizontal or vertical intent', () => {
 
 test('composer persists the selected stamp and previews the production component', () => {
   assert.match(composer, /@State private var selectedStampKind: CaptroStampKind = \.social/);
-  assert.match(composer, /ForEach\(CaptroStampKind\.creationCases\)/);
+  assert.match(composer, /private var stampPickerKinds:[\s\S]*?\[\.social, \.club, \.event, \.meetup, \.deal\]/);
+  assert.match(composer, /stampType: hasSelectedStamp \? selectedStampKind\.rawValue : nil/);
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
   assert.match(composer, /ComposerPreviewSheet\([\s\S]*?stampKind: selectedStampKind/);
   assert.match(composer, /CaptroPostStamp\(content: previewStampContent, onOpen: onEditStamp/);
 });
 
-test('post creation is Photos-first and keeps selected media proportions', () => {
+test('post creation matches the simple Photo, Video, Voice composer and keeps media proportions', () => {
   const firstPageStart = composer.indexOf('private var mediaFirstPage');
   const firstPageEnd = composer.indexOf('private func removeMedia(');
   const firstPage = composer.slice(firstPageStart, firstPageEnd);
 
   assert.ok(firstPageStart >= 0 && firstPageEnd > firstPageStart);
-  assert.match(firstPage, /Text\("Write a caption\.\.\."\)/);
+  assert.match(firstPage, /Text\("What's on your mind\?"\)/);
   assert.match(firstPage, /PhotosPicker\([\s\S]*?matching: \.any\(of: \[\.images, \.videos\]\)/);
-  assert.match(firstPage, /title: "Photos and videos"/);
-  assert.match(firstPage, /title: selectedStampKind == \.social \? "Add stamp" : selectedStampKind\.displayName/);
+  assert.match(firstPage, /composerToolLabel\(icon: "photo", title: "Photo"\)/);
+  assert.match(firstPage, /composerToolLabel\(icon: "video", title: "Video"\)/);
+  assert.match(firstPage, /composerToolLabel\(icon: voiceDraft == nil \? "mic" : "mic\.fill", title: "Voice"\)/);
+  assert.match(firstPage, /title: hasSelectedStamp \? stampPickerDetails\(for: selectedStampKind\)\.title : "Add stamp"/);
   assert.match(firstPage, /composerMediaPreview\(first\)[\s\S]*?composerPrompt/);
   assert.match(firstPage, /width \* coverMediaRatio/);
   assert.doesNotMatch(firstPage, /MIRAStoryLiveCameraView/);
@@ -254,11 +257,16 @@ test('composer stays on a single writing page with compact tools and an explicit
   assert.doesNotMatch(root, /if isEditingPostDetails|finalPostPage|AnyView/);
   const tool = composer.slice(composer.indexOf('private func composerToolLabel'), composer.indexOf('private func composerVoiceAttachment'));
   assert.match(tool, /Image\(systemName: icon\)/);
+  assert.match(tool, /Text\(title\)/);
   assert.match(tool, /accessibilityLabel\(title\)/);
-  assert.doesNotMatch(tool, /Text\(title\)|background\(|clipShape\(/);
-  assert.match(composer, /miraBottomSheet\(isPresented: \$isEditingPostDetails/);
+  assert.doesNotMatch(tool, /background\(|clipShape\(/);
+  assert.match(composer, /fullScreenCover\(isPresented: \$isEditingPostDetails/);
   assert.match(composer, /fullScreenCover\(isPresented: \$showStampPicker\)/);
   assert.match(composer, /navigationTitle\("Add Stamp"\)/);
+  for (const title of ['Moment', 'Club', 'Event', 'Meetup', 'Deal']) {
+    assert.match(composer, new RegExp(`case \\.${title === 'Moment' ? 'social' : title.toLowerCase()}: return \\("${title}"`));
+  }
+  assert.match(composer, /private var stampDetailsPage:[\s\S]*?case \.social:[\s\S]*?case \.club:[\s\S]*?case \.event:[\s\S]*?case \.meetup:[\s\S]*?case \.deal:/);
   assert.match(composer, /accessibilityIdentifier\("post\.option\.\\\(title\)"\)/);
   assert.match(composer, /matching: \.videos/);
   assert.match(composer, /scrollDismissesKeyboard\(\.interactively\)/);

@@ -42,6 +42,7 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let title: String
   let bodyText: String
   let stampType: String?
+  var momentType: String? = nil
   var eventDraft: CaptroEventDraft? = nil
   var commerceDraft: CaptroCommerceDraft? = nil
   let hashtags: [String]

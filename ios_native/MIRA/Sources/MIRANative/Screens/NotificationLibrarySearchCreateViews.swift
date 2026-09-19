@@ -970,7 +970,8 @@ public struct CreatePostNativeView: View {
   @State private var showPreview = false
   @State private var isEditingPostDetails = false
   @State private var showStampPicker = false
-  @State private var stampPickerSelection: CaptroStampKind = .social
+  @State private var hasSelectedStamp = false
+  @State private var momentType = "Thought"
   @State private var isPosting = false
   @State private var showDiscardConfirmation = false
   @State private var postUploader: MIRAMediaUploadService?
@@ -1033,9 +1034,7 @@ public struct CreatePostNativeView: View {
           mediaItems[index] = edited
         } else {
           mediaItems.append(edited)
-          withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-            isEditingPostDetails = true
-          }
+          focusedPostDetailsField = .caption
         }
       }
       .ignoresSafeArea()
@@ -1092,6 +1091,8 @@ public struct CreatePostNativeView: View {
       }
       cacheComposerDraft()
     }
+    .onChange(of: hasSelectedStamp) { _, _ in cacheComposerDraft() }
+    .onChange(of: momentType) { _, _ in cacheComposerDraft() }
     .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: commerceDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
@@ -1111,8 +1112,8 @@ public struct CreatePostNativeView: View {
 
   private var composerSheetPage: some View {
     composerDraftObservedPage
-    .miraBottomSheet(isPresented: $isEditingPostDetails, preferredHeightFraction: selectedStampKind.commerceContentType != nil || isEventStamp ? 0.90 : 0.56) { closeSheet in
-      stampOptionsSheet(onClose: closeSheet)
+    .fullScreenCover(isPresented: $isEditingPostDetails) {
+      stampDetailsPage
     }
     .miraBottomSheet(isPresented: $showPreview, preferredHeightFraction: 0.72) { _ in
       ComposerPreviewSheet(
@@ -1121,7 +1122,10 @@ public struct CreatePostNativeView: View {
         mediaItems: mediaItems,
         stampKind: selectedStampKind,
         location: selectedPlace?.displayName ?? (shouldPublishBroadLocation ? broadLocation.label : nil),
-        onEditStamp: { showPreview = false; isEditingPostDetails = true },
+        onEditStamp: {
+          showPreview = false
+          if hasSelectedStamp { isEditingPostDetails = true } else { showStampPicker = true }
+        },
         onClose: { showPreview = false }
       )
     }
@@ -1191,15 +1195,17 @@ public struct CreatePostNativeView: View {
       composerTopBar
       GeometryReader { proxy in
         ScrollView(showsIndicators: false) {
-          VStack(alignment: .leading, spacing: 20) {
+          VStack(alignment: .leading, spacing: 0) {
             if let first = mediaItems.first {
               composerMediaPreview(first)
               composerMediaRail
+                .padding(.top, 10)
             }
 
-            composerPrompt(minimumHeight: mediaItems.isEmpty ? max(180, proxy.size.height - 32) : 116)
+            composerPrompt(minimumHeight: mediaItems.isEmpty ? min(210, max(150, proxy.size.height * 0.34)) : 116)
+              .padding(.top, mediaItems.isEmpty ? 8 : 12)
 
-            if let voiceDraft { composerVoiceAttachment(voiceDraft) }
+            if let voiceDraft { composerVoiceAttachment(voiceDraft).padding(.vertical, 12) }
 
             composerPostOptions
           }
@@ -1244,42 +1250,37 @@ public struct CreatePostNativeView: View {
       Button {
         Task { await submit() }
       } label: {
-        HStack(spacing: 7) {
-          if isPosting {
-            ProgressView()
-              .tint(.white)
-              .scaleEffect(0.72)
-          }
-          Text(isPosting ? "Posting" : "Post")
-            .font(.body.weight(.semibold))
+        if isPosting {
+          ProgressView().controlSize(.small)
+        } else {
+          Text("Post").font(.body.weight(.semibold))
         }
-        .foregroundStyle(MIRATheme.Color.onPrimary)
-      .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(minHeight: 44)
-        .background(canPost && !isPosting && !isLoadingMedia ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.42))
-        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
       }
+      .foregroundStyle(canPost && !isPosting && !isLoadingMedia ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+      .frame(minWidth: 54, minHeight: 44, alignment: .trailing)
       .buttonStyle(.plain)
       .disabled(isPosting || isLoadingMedia || !canPost)
     }
     .padding(.horizontal, 16)
     .padding(.top, 8)
     .padding(.bottom, 8)
-    .frame(minHeight: 68)
+    .frame(minHeight: 56)
+    .overlay(alignment: .bottom) {
+      Rectangle().fill(MIRATheme.Color.hairline.opacity(0.75)).frame(height: 0.7)
+    }
   }
 
   private var hasUnsavedPost: Bool {
     !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
     !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-    !mediaItems.isEmpty || voiceDraft != nil || selectedPlace != nil || !taggedUsers.isEmpty || !hashtags.isEmpty || selectedStampKind != .social
+    !mediaItems.isEmpty || voiceDraft != nil || selectedPlace != nil || !taggedUsers.isEmpty || !hashtags.isEmpty || hasSelectedStamp
   }
 
   private func composerPrompt(minimumHeight: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       ZStack(alignment: .topLeading) {
         if bodyText.isEmpty {
-          Text("Write a caption...")
+          Text("What's on your mind?")
             .font(.body)
             .foregroundStyle(MIRATheme.Color.textMuted)
             .padding(.horizontal, 14)
@@ -1307,16 +1308,17 @@ public struct CreatePostNativeView: View {
         .padding(.horizontal, 14)
         .padding(.bottom, 10)
     }
-    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
+    .background(MIRATheme.Color.surface)
+    .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5) }
   }
 
   private func composerMediaPreview(_ media: MIRAPickedMedia) -> some View {
     let width = max(1, UIScreen.main.bounds.width - 32)
     let height = width * coverMediaRatio
-    return LocalMediaThumb(media: media, width: width, height: height, cornerRadius: 16)
+    return LocalMediaThumb(media: media, width: width, height: height, cornerRadius: 8)
       .background(MIRATheme.Color.mediaPlaceholder)
       .overlay(alignment: .bottomLeading) {
-        if selectedStampKind != .social {
+        if hasSelectedStamp {
           CaptroPostStamp(content: composerStampContent,
             onOpen: { focusedPostDetailsField = nil; isEditingPostDetails = true },
             onAction: { focusedPostDetailsField = nil; isEditingPostDetails = true }, compact: true)
@@ -1324,7 +1326,7 @@ public struct CreatePostNativeView: View {
             .padding(16)
         }
       }
-      .overlay(alignment: .topLeading) {
+      .overlay(alignment: .topTrailing) {
         Button {
           removeMedia(at: 0)
         } label: {
@@ -1339,7 +1341,7 @@ public struct CreatePostNativeView: View {
         .padding(10)
         .accessibilityLabel("Remove selected media")
       }
-      .overlay(alignment: .topTrailing) {
+      .overlay(alignment: .topLeading) {
         if mediaItems.count > 1 {
           Text("1 of \(mediaItems.count)")
             .font(.system(size: 12, weight: .semibold))
@@ -1351,7 +1353,7 @@ public struct CreatePostNativeView: View {
             .padding(10)
         }
       }
-      .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       .onTapGesture {
         if media.kind == .image {
           editingMedia = MIRAEditorPresentation(media: media, replacementIndex: 0)
@@ -1401,24 +1403,16 @@ public struct CreatePostNativeView: View {
   }
 
   private var composerToolBar: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: 0) {
       PhotosPicker(
         selection: $pickerItems,
         maxSelectionCount: max(1, 10 - mediaItems.count),
         matching: .any(of: [.images, .videos]),
         preferredItemEncoding: .current
       ) {
-        composerToolLabel(icon: "photo", title: "Photos and videos")
+        composerToolLabel(icon: "photo", title: "Photo")
       }
       .disabled(isPosting || isLoadingMedia || mediaItems.count >= 10)
-
-      Button {
-        focusedPostDetailsField = nil
-        showVoiceRecorder = true
-      } label: {
-        composerToolLabel(icon: voiceDraft == nil ? "mic" : "mic.fill", title: voiceDraft == nil ? "Record voice" : "Replace voice recording")
-      }
-      .disabled(isPosting)
 
       PhotosPicker(
         selection: $pickerItems,
@@ -1426,11 +1420,17 @@ public struct CreatePostNativeView: View {
         matching: .videos,
         preferredItemEncoding: .current
       ) {
-        composerToolLabel(icon: "play.circle", title: "Videos")
+        composerToolLabel(icon: "video", title: "Video")
       }
       .disabled(isPosting || isLoadingMedia || mediaItems.count >= 10)
 
-      Spacer(minLength: 8)
+      Button {
+        focusedPostDetailsField = nil
+        showVoiceRecorder = true
+      } label: {
+        composerToolLabel(icon: voiceDraft == nil ? "mic" : "mic.fill", title: "Voice")
+      }
+      .disabled(isPosting)
 
       if isLoadingMedia {
         ProgressView()
@@ -1438,13 +1438,6 @@ public struct CreatePostNativeView: View {
           .frame(width: 44, height: 44)
       }
 
-      if focusedPostDetailsField != nil {
-        Button {
-          focusedPostDetailsField = nil
-        } label: {
-          composerToolLabel(icon: "keyboard.chevron.compact.down", title: "Dismiss keyboard")
-        }
-      }
     }
     .buttonStyle(.plain)
     .padding(.horizontal, 16)
@@ -1457,13 +1450,15 @@ public struct CreatePostNativeView: View {
   }
 
   private func composerToolLabel(icon: String, title: String) -> some View {
-    Image(systemName: icon)
-      .font(.system(size: 23, weight: .regular))
-      .foregroundStyle(MIRATheme.Color.forest)
-      .frame(width: 44, height: 44)
-      .contentShape(Rectangle())
-      .accessibilityLabel(title)
-      .help(title)
+    VStack(spacing: 4) {
+      Image(systemName: icon).font(.system(size: 21, weight: .medium))
+      Text(title).font(.caption2)
+    }
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .frame(maxWidth: .infinity, minHeight: 52)
+    .contentShape(Rectangle())
+    .accessibilityLabel(title)
+    .help(title)
   }
 
   private func composerVoiceAttachment(_ draft: CaptroVoiceDraft) -> some View {
@@ -1504,13 +1499,13 @@ public struct CreatePostNativeView: View {
       postComposerActionRow(
         icon: "person.2",
         title: taggedUsers.isEmpty ? "Add people" : "People: \(taggedUsers.count)",
-        subtitle: taggedUsers.isEmpty ? "Optional" : taggedUsers.prefix(2).map(\.displayName).joined(separator: ", "),
+        subtitle: taggedUsers.isEmpty ? nil : taggedUsers.prefix(2).map(\.displayName).joined(separator: ", "),
         action: { focusedPostDetailsField = nil; activePostDetailSheet = .people }
       )
       postComposerActionRow(
         icon: "tag",
-        title: selectedStampKind == .social ? "Add stamp" : selectedStampKind.displayName,
-        subtitle: selectedStampKind == .social ? "Choose up to one" : "Change stamp",
+        title: hasSelectedStamp ? stampPickerDetails(for: selectedStampKind).title : "Add stamp",
+        subtitle: hasSelectedStamp ? stampSummary : "Optional",
         action: { openStampPicker() }
       )
     }
@@ -1524,8 +1519,13 @@ public struct CreatePostNativeView: View {
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .frame(width: 28)
         VStack(alignment: .leading, spacing: 2) {
-          Text(title).font(.body).foregroundStyle(MIRATheme.Color.textPrimary)
-          if let subtitle {
+          HStack(spacing: 8) {
+            Text(title).font(.body).foregroundStyle(MIRATheme.Color.textPrimary)
+            if subtitle == "Optional" {
+              Text("Optional").font(.subheadline).foregroundStyle(MIRATheme.Color.textMuted)
+            }
+          }
+          if let subtitle, subtitle != "Optional" {
             Text(subtitle).font(.subheadline).foregroundStyle(MIRATheme.Color.textMuted).lineLimit(1)
           }
         }
@@ -1544,35 +1544,28 @@ public struct CreatePostNativeView: View {
 
   private func openStampPicker() {
     focusedPostDetailsField = nil
-    stampPickerSelection = selectedStampKind
     showStampPicker = true
   }
 
   private var stampPickerPage: some View {
     NavigationStack {
-      VStack(spacing: 0) {
-        List {
-          ForEach(stampPickerKinds) { kind in
-            Button {
-              stampPickerSelection = kind
-            } label: {
-              stampPickerRow(kind)
-            }
-            .buttonStyle(.plain)
-            .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
-            .listRowBackground(MIRATheme.Color.surface)
+      List {
+        ForEach(stampPickerKinds) { kind in
+          Button {
+            selectedStampKind = kind
+            hasSelectedStamp = true
+            if [.event, .meetup].contains(kind) { eventDraft.hasSchedule = true }
+            showStampPicker = false
+            DispatchQueue.main.async { isEditingPostDetails = true }
+          } label: {
+            stampPickerRow(kind)
           }
+          .buttonStyle(.plain)
+          .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 16))
+          .listRowBackground(MIRATheme.Color.surface)
         }
-        .listStyle(.plain)
-
-        Text("You can always edit or change this later.")
-          .font(.footnote)
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 18)
-          .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
-          .padding(16)
       }
+      .listStyle(.plain)
       .background(MIRATheme.Color.surface)
       .navigationTitle("Add Stamp")
       .navigationBarTitleDisplayMode(.inline)
@@ -1581,56 +1574,217 @@ public struct CreatePostNativeView: View {
           Button { showStampPicker = false } label: { Image(systemName: "chevron.left") }
             .accessibilityLabel("Back")
         }
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") {
-            selectedStampKind = stampPickerSelection
-            showStampPicker = false
-            if stampPickerSelection.commerceContentType != nil || isEventStamp {
-              isEditingPostDetails = true
-            }
-          }
-          .fontWeight(.semibold)
-        }
       }
     }
   }
 
   private var stampPickerKinds: [CaptroStampKind] {
-    [.club, .ticket, .social, .deal, .event, .group]
+    [.social, .club, .event, .meetup, .deal]
   }
 
   private func stampPickerRow(_ kind: CaptroStampKind) -> some View {
     let details = stampPickerDetails(for: kind)
     return HStack(spacing: 15) {
       Image(systemName: details.icon)
-        .font(.system(size: 22, weight: .semibold))
-        .foregroundStyle(details.tint)
-        .frame(width: 56, height: 56)
-        .background(details.tint.opacity(0.10), in: Circle())
+        .font(.system(size: 24, weight: .regular))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .frame(width: 42, height: 52)
       VStack(alignment: .leading, spacing: 4) {
         Text(details.title).font(.body.weight(.semibold)).foregroundStyle(MIRATheme.Color.textPrimary)
         Text(details.subtitle).font(.subheadline).foregroundStyle(MIRATheme.Color.textMuted)
       }
       Spacer()
-      Image(systemName: stampPickerSelection == kind ? "checkmark.circle.fill" : "circle")
-        .font(.system(size: 28, weight: .regular))
-        .foregroundStyle(stampPickerSelection == kind ? MIRATheme.Color.forest : MIRATheme.Color.textMuted.opacity(0.55))
+      Image(systemName: "chevron.right")
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted)
     }
     .frame(minHeight: 64)
     .contentShape(Rectangle())
     .accessibilityLabel("\(details.title). \(details.subtitle)")
-    .accessibilityValue(stampPickerSelection == kind ? "Selected" : "Not selected")
+    .accessibilityHint("Opens \(details.title) details")
   }
 
   private func stampPickerDetails(for kind: CaptroStampKind) -> (title: String, subtitle: String, icon: String, tint: Color) {
     switch kind {
-    case .club: return ("Club", "Related to a club or community", "person.3.fill", .indigo)
-    case .ticket: return ("Paid", "Requires payment or ticket", "creditcard.fill", .red)
-    case .social: return ("Free", "Free to join or attend", "gift.fill", .green)
-    case .deal: return ("Deal", "Special offer or discount", "tag.fill", .orange)
-    case .event: return ("Event", "An event or meetup", "calendar", .red)
-    case .group: return ("Question", "Ask the community", "bubble.left.and.bubble.right.fill", .blue)
+    case .social: return ("Moment", "Photo, meme, thought, concern, etc.", "theatermasks", MIRATheme.Color.textPrimary)
+    case .club: return ("Club", "Create or share a club", "person.3", MIRATheme.Color.textPrimary)
+    case .event: return ("Event", "Create an event", "calendar", MIRATheme.Color.textPrimary)
+    case .meetup: return ("Meetup", "Plan something together", "person.2", MIRATheme.Color.textPrimary)
+    case .deal: return ("Deal", "Share an offer or discount", "tag", MIRATheme.Color.textPrimary)
     default: return (kind.displayName, "Add details to this post", "tag", MIRATheme.Color.forest)
+    }
+  }
+
+  private var stampSummary: String {
+    let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch selectedStampKind {
+    case .social: return cleanTitle.isEmpty ? momentType : cleanTitle
+    case .event, .meetup:
+      if !cleanTitle.isEmpty { return cleanTitle }
+      return eventDraft.hasSchedule ? eventDraft.startsAt.formatted(date: .abbreviated, time: .shortened) : "Add details"
+    case .club, .deal: return cleanTitle.isEmpty ? "Add details" : cleanTitle
+    default: return "Add details"
+    }
+  }
+
+  private var stampDetailsPage: some View {
+    NavigationStack {
+      Form {
+        switch selectedStampKind {
+        case .social:
+          Section {
+            TextField("Title (optional)", text: $title)
+              .textInputAutocapitalization(.sentences)
+          }
+          Section("Type (optional)") {
+            Picker("Moment type", selection: $momentType) {
+              Text("Thought").tag("Thought")
+              Text("Meme").tag("Meme")
+              Text("Concern").tag("Concern")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+          }
+
+        case .club:
+          Section {
+            TextField("Club name", text: $title)
+            TextField("About (optional)", text: $bodyText, axis: .vertical).lineLimit(3...6)
+          }
+          accessSection
+          optionalScheduleSection(label: "Add date (optional)")
+          capacitySection
+
+        case .event:
+          Section {
+            TextField("Event name", text: $title)
+          }
+          scheduleSection(label: "Date & time")
+          accessSection
+          capacitySection
+
+        case .meetup:
+          Section {
+            TextField("Meetup name", text: $title)
+          }
+          scheduleSection(label: "When")
+          accessSection
+          capacitySection
+
+        case .deal:
+          Section {
+            TextField("Title", text: $title)
+            TextField("Details (optional)", text: $bodyText, axis: .vertical).lineLimit(3...6)
+          }
+          Section {
+            if commerceDraft.hasExpiration {
+              DatePicker("Expires", selection: $commerceDraft.expiresAt, displayedComponents: [.date, .hourAndMinute])
+              Button("Remove expiration", role: .destructive) { commerceDraft.hasExpiration = false }
+            } else {
+              Button {
+                commerceDraft.hasExpiration = true
+              } label: {
+                Label("Add expiration (optional)", systemImage: "plus")
+              }
+            }
+          }
+
+        default:
+          Section {
+            TextField("Title", text: $title)
+            TextField("Details (optional)", text: $bodyText, axis: .vertical).lineLimit(3...6)
+          }
+        }
+      }
+      .scrollContentBackground(.hidden)
+      .background(MIRATheme.Color.surface)
+      .navigationTitle(stampPickerDetails(for: selectedStampKind).title)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button { isEditingPostDetails = false } label: { Image(systemName: "chevron.left") }
+            .accessibilityLabel("Back to create post")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Done") { isEditingPostDetails = false }
+            .fontWeight(.semibold)
+            .disabled(stampDetailsRequireTitle && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+      }
+    }
+  }
+
+  private var stampDetailsRequireTitle: Bool {
+    [.club, .event, .meetup, .deal].contains(selectedStampKind)
+  }
+
+  private var accessSection: some View {
+    Section("Access") {
+      Picker("Access", selection: $commerceDraft.isPaid) {
+        Text("Free").tag(false)
+        Text("Paid").tag(true)
+      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+
+      if commerceDraft.isPaid {
+        TextField("Price", text: primaryCommercePrice)
+          .keyboardType(.decimalPad)
+        Picker("Currency", selection: $commerceDraft.currency) {
+          ForEach(Locale.commonISOCurrencyCodes, id: \.self) { Text($0).tag($0) }
+        }
+        Picker("Used for", selection: $commerceDraft.isUsedOutsideApp) {
+          Text("In person / service").tag(true)
+          Text("Digital access").tag(false)
+        }
+        TextField("Refund / cancellation policy (optional)", text: $commerceDraft.refundPolicy, axis: .vertical)
+          .lineLimit(2...4)
+      }
+    }
+  }
+
+  private var primaryCommercePrice: Binding<String> {
+    Binding(
+      get: { commerceDraft.prices.first?.price ?? "" },
+      set: { value in
+        if commerceDraft.prices.isEmpty {
+          commerceDraft.prices = [CaptroCommercePriceDraft()]
+        }
+        commerceDraft.prices[0].price = value
+      }
+    )
+  }
+
+  private func scheduleSection(label: String) -> some View {
+    Section(label) {
+      DatePicker("Starts", selection: $eventDraft.startsAt, displayedComponents: [.date, .hourAndMinute])
+        .labelsHidden()
+    }
+  }
+
+  @ViewBuilder
+  private func optionalScheduleSection(label: String) -> some View {
+    Section {
+      if eventDraft.hasSchedule {
+        DatePicker("Date", selection: $eventDraft.startsAt, displayedComponents: [.date, .hourAndMinute])
+        Button("Remove date", role: .destructive) { eventDraft.hasSchedule = false }
+      } else {
+        Button {
+          eventDraft.hasSchedule = true
+        } label: {
+          Label(label, systemImage: "plus")
+        }
+      }
+    }
+  }
+
+  private var capacitySection: some View {
+    Section {
+      HStack {
+        Image(systemName: "plus")
+        TextField("Add capacity (optional)", text: $commerceDraft.capacity)
+          .keyboardType(.numberPad)
+      }
     }
   }
 
@@ -1751,10 +1905,6 @@ public struct CreatePostNativeView: View {
   }
 
   private func handleSelectedPlaceChange(_ place: MIRAExactPostPlace?) {
-    let shouldUsePlaceStamp = !isRestoringPostDraft && place != nil
-    if shouldUsePlaceStamp && selectedStampKind == .social {
-      selectedStampKind = .place
-    }
     cacheComposerDraft()
   }
 
@@ -2155,9 +2305,7 @@ public struct CreatePostNativeView: View {
     editedCameraMedia = nil
     isCameraReviewingMedia = false
     mediaItems.append(media)
-    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-      isEditingPostDetails = true
-    }
+    focusedPostDetailsField = .caption
   }
 
   private func addGalleryMedia(_ media: [MIRAPickedMedia]) {
@@ -2172,9 +2320,7 @@ public struct CreatePostNativeView: View {
   private func continueToPostDetails() {
     editedCameraMedia = nil
     isCameraReviewingMedia = false
-    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-      isEditingPostDetails = true
-    }
+    focusedPostDetailsField = .caption
   }
 
   private func editorUploadMetadata() -> [MIRAEditorUploadMetadata]? {
@@ -2195,7 +2341,9 @@ public struct CreatePostNativeView: View {
     defer { isRestoringPostDraft = false }
     title = draft.title
     bodyText = draft.bodyText
+    hasSelectedStamp = draft.stampType != nil
     selectedStampKind = CaptroStampKind(rawValue: draft.stampType ?? "") ?? .social
+    momentType = draft.momentType ?? "Thought"
     eventDraft = draft.eventDraft ?? CaptroEventDraft()
     commerceDraft = draft.commerceDraft ?? CaptroCommerceDraft()
     hashtags = draft.hashtags
@@ -2246,7 +2394,8 @@ public struct CreatePostNativeView: View {
     let snapshot = MIRAPostDraftSnapshot(
       title: title,
       bodyText: bodyText,
-      stampType: selectedStampKind.rawValue,
+      stampType: hasSelectedStamp ? selectedStampKind.rawValue : nil,
+      momentType: momentType,
       eventDraft: eventDraft,
       commerceDraft: commerceDraft,
       hashtags: hashtags,
@@ -2269,7 +2418,9 @@ public struct CreatePostNativeView: View {
     focusedPostDetailsField = nil
     title = ""
     bodyText = ""
+    hasSelectedStamp = false
     selectedStampKind = .social
+    momentType = "Thought"
     eventDraft = CaptroEventDraft()
     commerceDraft = CaptroCommerceDraft()
     mediaItems = []
@@ -2302,6 +2453,7 @@ public struct CreatePostNativeView: View {
       !mediaItems.isEmpty ||
       !hashtags.isEmpty ||
       selectedPlace != nil ||
+      hasSelectedStamp ||
       commerceDraft.enabled
   }
 
