@@ -75,19 +75,28 @@ final class DesignQualityTests: XCTestCase {
     XCTAssertEqual(editor.value as? String, "A draft worth keeping")
   }
 
-  func testComposerStampPickerKeepsSelectionExplicit() {
+  func testComposerStampPickerOpensTheSelectedDetailsFlow() {
     let app = launch(["--captro-quality-composer"])
     let addStamp = app.buttons["post.option.Add stamp"]
     XCTAssertTrue(addStamp.waitForExistence(timeout: 15))
     for _ in 0..<4 where !addStamp.isHittable { app.swipeUp() }
     addStamp.tap()
     XCTAssertTrue(app.navigationBars["Add Stamp"].waitForExistence(timeout: 5))
-    let event = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Event. An event or meetup")).firstMatch
+    let event = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Event. Create an event")).firstMatch
     XCTAssertTrue(event.waitForExistence(timeout: 5))
     event.tap()
-    capture(app, "stamp-picker-selected")
+    XCTAssertTrue(app.navigationBars["Event"].waitForExistence(timeout: 5))
+    let name = app.textFields["Event name"]
+    XCTAssertTrue(name.waitForExistence(timeout: 5))
+    name.tap()
+    if app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Speed up your typing")).firstMatch.exists {
+      app.buttons["Continue"].tap()
+    }
+    name.typeText("Rooftop Party")
+    capture(app, "event-details")
     app.buttons["Done"].tap()
-    XCTAssertTrue(app.staticTexts["Stamp"].waitForExistence(timeout: 5), "Event selection should open the real details editor")
+    XCTAssertTrue(app.buttons["post.option.Event"].waitForExistence(timeout: 5), "The selected event should return to the composer")
+    XCTAssertTrue(app.staticTexts["Rooftop Party"].exists)
   }
 
   func testCacheClearReportsActualCompletion() {
