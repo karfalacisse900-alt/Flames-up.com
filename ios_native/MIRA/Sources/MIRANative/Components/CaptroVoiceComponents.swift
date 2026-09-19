@@ -285,7 +285,7 @@ public final class CaptroVoiceUploadService {
 }
 
 @MainActor
-public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, AVAudioPlayerDelegate {
+public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preconcurrency AVAudioPlayerDelegate {
   public static let shared = CaptroVoicePlaybackCenter()
   @Published public private(set) var activeId: String?
   @Published public private(set) var isPlaying = false
@@ -298,7 +298,11 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, AVAudi
 
   public func toggle(id: String) async {
     if activeId == id, let player {
-      player.isPlaying ? player.pause() : player.play()
+      if player.isPlaying {
+        player.pause()
+      } else {
+        player.play()
+      }
       isPlaying = player.isPlaying
       return
     }
