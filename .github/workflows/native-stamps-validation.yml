@@ -1,6 +1,11 @@
 name: Validate Captro Stamps
 on:
   workflow_dispatch:
+  push:
+    branches: [feature/recorded-voice-moderation]
+    paths:
+      - 'ios_native/MIRA/**'
+      - '.github/workflows/native-stamps-validation.yml'
 permissions:
   contents: read
 jobs:
