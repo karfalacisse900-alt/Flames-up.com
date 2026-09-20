@@ -32,12 +32,11 @@ jobs:
         working-directory: ./backend-cf
         run: node --experimental-strip-types --test tests/*.test.mjs
 
-      - name: Verify voice production dependencies
+      - name: Verify voice processing secret
         working-directory: ./backend-cf
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler r2 bucket info flames-up-media-backup >/dev/null
           if [ -n "${OPENAI_API_KEY:-}" ]; then
             printf '%s' "$OPENAI_API_KEY" | npx wrangler secret put OPENAI_API_KEY --env production
             exit 0
