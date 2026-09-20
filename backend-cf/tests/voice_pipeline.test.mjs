@@ -45,12 +45,17 @@ test('review evidence must occur in the submitting author content', () => {
   assert.deepEqual(validatedContextEvidence(['exact words', 'invented evidence'], 'caption\nexact words'), ['exact words']);
 });
 
-test('source keeps storage private and publishing version-bound', () => {
+test('source keeps Cloudflare R2 storage private and publishing version-bound', () => {
   const migration = fs.readFileSync('../supabase/migrations/20260919150750_voice_recordings_moderation.sql', 'utf8');
   const source = fs.readFileSync('../backend-cf/src/voice.ts', 'utf8');
-  assert.match(migration, /'captro-voice-private'[\s\S]*false/);
   assert.match(migration, /approved_content_version <> p_content_version/);
   assert.match(migration, /status = 'pending_voice'/);
+  assert.match(source, /VOICE_RECORDINGS\?\s*:\s*R2Bucket/);
+  assert.match(source, /VOICE_RECORDINGS\.put/);
+  assert.match(source, /VOICE_RECORDINGS\.get/);
+  assert.match(source, /VOICE_RECORDINGS\.delete/);
+  assert.match(source, /cloudflare-r2-private/);
+  assert.doesNotMatch(source, /\/storage\/v1\/object/);
   assert.match(source, /publication_state === 'published'/);
   assert.doesNotMatch(source, /moderation_state\s*:\s*clean\(form/);
 });
@@ -60,6 +65,8 @@ test('native recording is explicit, interruption-safe, and disclosed before use'
   assert.match(recorder, /requestRecordPermission/);
   assert.match(recorder, /AVAudioSession\.interruptionNotification/);
   assert.match(recorder, /AVAudioSession\.routeChangeNotification/);
+  assert.match(recorder, /case \.oldDeviceUnavailable, \.noSuitableRouteForCategory/);
+  assert.match(recorder, /let finalDuration = activeRecorder\?\.currentTime/);
   assert.match(recorder, /UIApplication\.didEnterBackgroundNotification/);
   assert.match(recorder, /interactiveDismissDisabled\(recorder\.isRecording\)/);
   assert.match(recorder, /disclosureAccepted/);

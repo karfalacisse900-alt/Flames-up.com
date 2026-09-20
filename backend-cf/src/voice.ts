@@ -17,6 +17,7 @@ type VoiceEnv = {
   VOICE_MAX_REPLY_SECONDS?: string;
   VOICE_MAX_BYTES?: string;
   MEDIA_MODERATION_QUEUE?: Queue<any>;
+  VOICE_RECORDINGS?: R2Bucket;
 };
 
 type Deps = {
@@ -26,7 +27,7 @@ type Deps = {
   canViewTarget: (c: any, row: any, viewerId: string) => Promise<boolean>;
 };
 
-const BUCKET = 'captro-voice-private';
+const STORAGE_PROVIDER = 'cloudflare-r2-private';
 const DEFAULT_POLICY = 'captro-voice-2026-09-19';
 const DEFAULT_DISCLOSURE = 'voice-ai-processing-v1';
 
@@ -35,7 +36,7 @@ function clean(value: unknown, max = 500): string {
 }
 
 function envRequired(env: VoiceEnv) {
-  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('VOICE_STORAGE_NOT_CONFIGURED');
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('VOICE_DATABASE_NOT_CONFIGURED');
   return { url: env.SUPABASE_URL.replace(/\/$/, ''), key: env.SUPABASE_SERVICE_ROLE_KEY };
 }
 
@@ -197,28 +198,24 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 }
 
 async function storePrivate(env: VoiceEnv, object: string, bytes: Uint8Array, mime: string) {
-  const { url } = envRequired(env);
-  const response = await fetch(`${url}/storage/v1/object/${BUCKET}/${object}`, {
-    method: 'POST',
-    headers: headers(env, { 'Content-Type': mime, 'x-upsert': 'false' }),
-    body: bytes,
+  if (!env.VOICE_RECORDINGS) throw new Error('VOICE_CLOUDFLARE_STORAGE_NOT_CONFIGURED');
+  await env.VOICE_RECORDINGS.put(object, bytes, {
+    httpMetadata: { contentType: mime },
+    customMetadata: { visibility: 'private', media: 'voice' },
   });
-  if (!response.ok) throw new Error(`VOICE_STORAGE_WRITE_FAILED:${response.status}`);
 }
 
 async function readPrivate(env: VoiceEnv, object: string): Promise<ArrayBuffer> {
-  const { url } = envRequired(env);
-  const response = await fetch(`${url}/storage/v1/object/authenticated/${BUCKET}/${object}`, { headers: headers(env) });
-  if (!response.ok) throw new Error(`VOICE_STORAGE_READ_FAILED:${response.status}`);
-  return response.arrayBuffer();
+  if (!env.VOICE_RECORDINGS) throw new Error('VOICE_CLOUDFLARE_STORAGE_NOT_CONFIGURED');
+  const stored = await env.VOICE_RECORDINGS.get(object);
+  if (!stored) throw new Error('VOICE_STORAGE_OBJECT_NOT_FOUND');
+  return stored.arrayBuffer();
 }
 
 async function deletePrivate(env: VoiceEnv, objects: string[]) {
   if (!objects.length) return;
-  const { url } = envRequired(env);
-  await fetch(`${url}/storage/v1/object/${BUCKET}`, {
-    method: 'DELETE', headers: headers(env, { 'Content-Type': 'application/json' }), body: JSON.stringify({ prefixes: objects }),
-  });
+  if (!env.VOICE_RECORDINGS) throw new Error('VOICE_CLOUDFLARE_STORAGE_NOT_CONFIGURED');
+  await env.VOICE_RECORDINGS.delete(objects);
 }
 
 function publicStatus(row: any) {
@@ -355,13 +352,21 @@ export function createVoiceRoutes(deps: Deps) {
     const id = crypto.randomUUID();
     const version = 1;
     const object = `${userId}/${id}/v${version}-${hash}.${inspected.format}`;
-    await storePrivate(c.env, object, bytes, inspected.mime);
+    try {
+      await storePrivate(c.env, object, bytes, inspected.mime);
+    } catch (error: any) {
+      const code = clean(error?.message, 160);
+      if (code === 'VOICE_CLOUDFLARE_STORAGE_NOT_CONFIGURED') {
+        return c.json({ detail: 'Voice storage is temporarily unavailable.', code }, 503);
+      }
+      throw error;
+    }
     let recording: any;
     try {
       recording = await insert(c.env, 'app_voice_recordings', {
         id, owner_app_user_id: userId, target_type: targetType, target_id: clean(form.get('target_id'), 160) || null,
         parent_post_id: clean(form.get('parent_post_id'), 160) || null, parent_comment_id: clean(form.get('parent_comment_id'), 160) || null,
-        storage_bucket: BUCKET, storage_object: object, storage_version: `v${version}-${hash}`, audio_sha256: hash,
+        storage_bucket: STORAGE_PROVIDER, storage_object: object, storage_version: `v${version}-${hash}`, audio_sha256: hash,
         verified_duration_ms: inspected.durationMs, byte_size: bytes.byteLength, verified_format: inspected.format,
         caption_snapshot: clean(form.get('caption'), 5000), content_version: version,
         policy_version: c.env.CAPTRO_VOICE_POLICY_VERSION || DEFAULT_POLICY,

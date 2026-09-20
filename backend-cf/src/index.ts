@@ -46,6 +46,7 @@ interface Env {
   VOICE_MAX_POST_SECONDS?: string;
   VOICE_MAX_REPLY_SECONDS?: string;
   VOICE_MAX_BYTES?: string;
+  VOICE_RECORDINGS?: R2Bucket;
   MEDIA_BACKUP?: R2Bucket;
   JWT_SECRET: string;
   CLOUDFLARE_ACCOUNT_ID: string;

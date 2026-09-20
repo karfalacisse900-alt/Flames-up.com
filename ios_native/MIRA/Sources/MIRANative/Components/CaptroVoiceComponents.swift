@@ -42,8 +42,8 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
     observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
       Task { @MainActor in self?.handleInterruption(note) }
     })
-    observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
-      Task { @MainActor in self?.stop(reason: "Audio route changed. Review your recording before using it.") }
+    observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+      Task { @MainActor in self?.handleRouteChange(note) }
     })
     observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
       Task { @MainActor in self?.stop(reason: "Recording stopped when Captro moved to the background.") }
@@ -72,6 +72,9 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetoothHFP])
       try session.setActive(true, options: .notifyOthersOnDeactivation)
+      guard !session.currentRoute.inputs.isEmpty else {
+        throw MIRAAPIError.emptyResponse
+      }
       let url = FileManager.default.temporaryDirectory.appendingPathComponent("captro-voice-\(UUID().uuidString).m4a")
       let settings: [String: Any] = [
         AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -83,34 +86,53 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
       let next = try AVAudioRecorder(url: url, settings: settings)
       next.delegate = self
       next.isMeteringEnabled = true
-      guard next.prepareToRecord(), next.record(forDuration: limit) else { throw MIRAAPIError.emptyResponse }
+      guard next.prepareToRecord() else { throw MIRAAPIError.emptyResponse }
       recorder = next
       fileURL = url
       duration = 0
       level = 0
       levels = []
       isPausedBySystem = false
+      guard next.record() else { throw MIRAAPIError.emptyResponse }
       isRecording = true
       timer?.invalidate()
       timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
         Task { @MainActor in self?.tick() }
       }
     } catch {
+      let failedURL = fileURL
+      recorder?.stop()
+      recorder = nil
+      timer?.invalidate()
+      timer = nil
+      isRecording = false
+      fileURL = nil
+      duration = 0
+      if let failedURL { try? FileManager.default.removeItem(at: failedURL) }
+      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
       errorMessage = "Captro could not start recording. Check the microphone and try again."
-      stop()
     }
   }
 
   public func stop(reason: String? = nil) {
     guard recorder != nil || isRecording else { return }
-    recorder?.stop()
-    duration = min(limit, recorder?.currentTime ?? duration)
+    let activeRecorder = recorder
+    let finalDuration = activeRecorder?.currentTime ?? duration
     recorder = nil
     timer?.invalidate()
     timer = nil
     isRecording = false
+    activeRecorder?.stop()
+    duration = min(limit, max(duration, finalDuration))
     if let reason { errorMessage = reason }
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
+
+  public var hasUsableRecording: Bool {
+    guard !isRecording, duration >= 0.25, let fileURL,
+          let values = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
+          (values.fileSize ?? 0) > 0 else { return false }
+    return true
   }
 
   public func reset() {
@@ -142,6 +164,20 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
     guard isRecording else { return }
     isPausedBySystem = true
     stop(reason: "Recording stopped because the audio session was interrupted.")
+  }
+
+  private func handleRouteChange(_ note: Notification) {
+    guard isRecording,
+          let rawReason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+          let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) else { return }
+    switch reason {
+    case .oldDeviceUnavailable, .noSuitableRouteForCategory:
+      stop(reason: "Recording stopped because the microphone route became unavailable.")
+    default:
+      // Session activation itself emits category/override route changes. Those must
+      // not immediately stop a recording that has just started.
+      break
+    }
   }
 }
 
@@ -219,7 +255,7 @@ public struct CaptroVoiceRecorderSheet: View {
           }
           .buttonStyle(.borderedProminent)
           .tint(MIRATheme.Color.forest)
-          .disabled(!disclosureAccepted)
+          .disabled(!disclosureAccepted || !recorder.hasUsableRecording)
           .frame(maxWidth: .infinity)
         }
 

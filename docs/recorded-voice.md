@@ -4,17 +4,18 @@ Captro now supports voice-only posts, photo posts with one voice attachment, and
 
 ## Required configuration
 
-1. Apply `supabase/migrations/20260919150750_voice_recordings_moderation.sql`. It creates the private `captro-voice-private` bucket, private voice/job/review tables, RLS, indexes, and the version-checked publication function.
-2. Configure the server-only variables shown in `backend-cf/.env.example`. `OPENAI_API_KEY` is required. The defaults are `gpt-transcribe` for transcription and `omni-moderation-latest` for transcript/text moderation.
-3. Bind `MEDIA_MODERATION_QUEUE` as both the Worker queue producer and consumer. Voice jobs use the existing durable queue and the scheduled recovery pass; they are not detached request promises.
-4. Give approved moderators `content:read` and `content:write`. Flagged, ambiguous, silent, appealed, and conflicting submissions remain private in Admin → Voice Review. Do not launch review-required submissions without staffed reviewer access.
+1. Apply `supabase/migrations/20260919150750_voice_recordings_moderation.sql`. It creates the private voice/job/review metadata tables, RLS, indexes, and the version-checked publication function. Audio bytes are not written to Supabase Storage.
+2. Bind the private Cloudflare R2 bucket as `VOICE_RECORDINGS`. Production currently uses the existing `flames-up-media-backup` bucket with immutable per-user voice object keys; the bucket must not have public access enabled.
+3. Configure the server-only variables shown in `backend-cf/.env.example`. `OPENAI_API_KEY` is required. The defaults are `gpt-transcribe` for transcription and `omni-moderation-latest` for transcript/text moderation.
+4. Bind `MEDIA_MODERATION_QUEUE` as both the Worker queue producer and consumer. Voice jobs use the existing durable queue and the scheduled recovery pass; they are not detached request promises.
+5. Give approved moderators `content:read` and `content:write`. Flagged, ambiguous, silent, appealed, and conflicting submissions remain private in Admin → Voice Review. Do not launch review-required submissions without staffed reviewer access.
 
 `CAPTRO_VOICE_AUTO_REJECT` defaults to `false`. Leave it off during the initial evaluation. Clean, complete recordings can publish automatically; first-stage flags remain private for human review. Provider errors and unclear audio do not create policy strikes and never fail open.
 
 ## Security and privacy behavior
 
 - The app requests microphone access only after the user taps Record.
-- Audio is uploaded directly to private Supabase Storage through the authenticated backend. Filenames, client MIME type, duration, and approval claims are not trusted.
+- Audio is uploaded through the authenticated Worker and stored as a private Cloudflare R2 object. Filenames, client MIME type, duration, and approval claims are not trusted.
 - Playback and transcript endpoints re-check the signed-in viewer, current publication state, and post/reply audience. There are no public storage URLs.
 - The immutable storage key and SHA-256 bind moderation to the exact recording version. Caption changes require another screening pass. Delayed work cannot publish a deleted item or an old version.
 - Ordinary logs exclude raw recordings, transcripts, signed links, and credentials.

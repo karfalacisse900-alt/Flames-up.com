@@ -32,6 +32,26 @@ jobs:
         working-directory: ./backend-cf
         run: node --experimental-strip-types --test tests/*.test.mjs
 
+      - name: Verify voice production dependencies
+        working-directory: ./backend-cf
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler r2 bucket info flames-up-media-backup >/dev/null
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            printf '%s' "$OPENAI_API_KEY" | npx wrangler secret put OPENAI_API_KEY --env production
+            exit 0
+          fi
+          configured="$(npx wrangler secret list --env production)"
+          if ! printf '%s' "$configured" | grep -q '"name": "OPENAI_API_KEY"'; then
+            echo "OPENAI_API_KEY is required for real voice transcription and moderation."
+            exit 1
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
       - name: Verify Cloudflare photo and video uploads
         working-directory: ./backend-cf
         shell: bash
@@ -427,6 +447,18 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify production voice route is deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --output "$RUNNER_TEMP/captro-voice-route.json" --write-out '%{http_code}' \
+            'https://api.flames-up.com/api/voice/not-a-real-recording/status')"
+          if [ "$status" != "401" ]; then
+            echo "Production voice route returned HTTP $status instead of the expected authenticated response."
+            exit 1
+          fi
+          echo "Production voice route is deployed and authentication-gated."
 
       - name: Provision Stripe payment webhooks and bind live database
         working-directory: ./backend-cf
