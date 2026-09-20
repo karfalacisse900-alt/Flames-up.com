@@ -47,3 +47,9 @@ Official integration references:
 - https://developers.openai.com/api/docs/guides/speech-to-text
 - https://developers.openai.com/api/docs/guides/moderation
 - https://developers.openai.com/api/docs/guides/structured-outputs
+
+## Release status — 2026-09-20
+
+- Captro **1.0.1 (461.1)** was signed, archived, exported, and uploaded to TestFlight in [release run 35540928436](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/35540928436) from commit `9deeb570a56862412bb5af768aaa5cd568dfc32c`. The simulator capture job was skipped.
+- The iOS release fixes the recorder route-change race, preserves the measured duration before stopping, removes failed temporary captures, and prevents empty recordings from being submitted.
+- Production Worker release [35540928409](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/35540928409) stopped at the dependency gate because the configured Cloudflare API token cannot access R2 (`Authentication error 10000`). `OPENAI_API_KEY` is also not configured as a GitHub Actions secret. The Worker and database migration were therefore not deployed; voice uploads remain unavailable in production until both credentials are corrected and the deploy is rerun.
