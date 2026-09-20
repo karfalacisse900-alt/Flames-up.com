@@ -33,9 +33,6 @@ struct CaptroMediaPager: View {
   private var mediaHeightToWidthRatio: CGFloat {
     naturalMediaHeightToWidthRatio
   }
-  private var stampWidthFraction: CGFloat {
-    naturalMediaHeightToWidthRatio < 0.8 ? 0.66 : (naturalMediaHeightToWidthRatio > 1.3 ? 0.68 : 0.70)
-  }
   private var showsStampOnCurrentSlide: Bool {
     showsCoverMediaOnly || selectedMediaIndex == 0
   }
@@ -185,16 +182,16 @@ struct CaptroMediaPager: View {
         onSave: onSave,
         compact: true
       )
-      .frame(width: mediaWidth * stampWidthFraction, alignment: .leading)
+      .frame(width: min(232, mediaWidth - 24), alignment: .leading)
       .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
       .allowsHitTesting(showsStampOnCurrentSlide)
       .accessibilityHidden(!showsStampOnCurrentSlide)
       .animation(stampPeekAnimation, value: isHoldingStamp)
       .simultaneousGesture(stampPeekGesture)
-      .padding(.bottom, mediaURLs.count > 1 && !showsCoverMediaOnly ? 24 : 0)
+      .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 44 : 0)
     }
-    .padding(16)
+    .padding(12)
   }
 
   private var stampPeekGesture: some Gesture {

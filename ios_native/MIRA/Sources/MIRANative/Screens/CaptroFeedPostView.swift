@@ -42,6 +42,9 @@ struct CaptroFeedPostView: View {
       } else {
         CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost, isSaved: post.viewerSaved, onSave: onSave)
           .padding(.horizontal, 16)
+        if let caption = post.captroFeedCaptionText {
+          Text(caption).font(.body).lineLimit(5).padding(.horizontal, 16).padding(.top, 8)
+        }
       }
 
       if let voice = post.detail?.voice {

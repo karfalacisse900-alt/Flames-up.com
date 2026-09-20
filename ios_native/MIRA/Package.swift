@@ -27,7 +27,8 @@ let package = Package(
         .product(name: "StripeConnect", package: "stripe-ios"),
         .product(name: "StripePaymentSheet", package: "stripe-ios"),
         .product(name: "StripePayments", package: "stripe-ios")
-      ]
+      ],
+      resources: [.process("Resources")]
     ),
     .testTarget(
       name: "MIRANativeTests",

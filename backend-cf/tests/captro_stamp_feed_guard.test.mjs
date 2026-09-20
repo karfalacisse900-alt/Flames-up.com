@@ -35,7 +35,7 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroPostStamp\(/);
-  assert.match(mediaPager, /mediaWidth \* stampWidthFraction/);
+  assert.match(mediaPager, /min\(232, mediaWidth - 24\)/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
 
@@ -167,11 +167,14 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(stamps, /case \.event: return "ATTEND"/);
   assert.match(stamps, /case \.deal, \.localOffer: return "CLAIM"/);
   assert.match(stamps, /case \.group: return "ACCESS"/);
-  assert.match(stamps, /background\(Color\.white\.opacity\(0\.96\)\)/);
+  const nativeStamp = readIOS('Components/CaptroPostStamp.swift');
+  assert.match(nativeStamp, /CaptroStampArtwork\(content: content, compact: compact\)/);
+  assert.match(nativeStamp, /Button\(action: onOpen\)/);
+  assert.doesNotMatch(nativeStamp, /Button\(action: onAction\)|Button\(action: onSave\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /naturalMediaHeightToWidthRatio < 0\.8 \? 0\.66 : \(naturalMediaHeightToWidthRatio > 1\.3 \? 0\.68 : 0\.70\)/);
+  assert.match(mediaPager, /min\(232, mediaWidth - 24\)/);
   assert.match(mediaPager, /CaptroPostStamp\([\s\S]*?compact: true/);
-  assert.match(stamps, /\.lineLimit\(compact \? 3 : 4\)/);
+  assert.match(nativeStamp, /640 \/ \(compact \? 224\.0 : 288\.0\)/);
 });
 
 test('holding the Home stamp temporarily reveals the unobstructed photo', () => {

@@ -132,6 +132,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let displayLocationSource: String?
   public let displayLocationVisibility: String?
   public let postType: String?
+  public var stampVariant: String? = nil
   public let primaryCategory: String?
   public let category: String?
   public let categoryConfidence: Double?
@@ -1449,6 +1450,7 @@ public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
 }
 
 public struct CreatePostBody: Encodable {
+  public var stampVariant: String? = nil
   public let event: CaptroEventInput?
   public let commerce: CaptroCommerceInput?
   public let title: String

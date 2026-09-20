@@ -982,6 +982,7 @@ public struct CreatePostNativeView: View {
   @State private var editedCameraMedia: MIRAPickedMedia?
   @State private var activePostDetailSheet: PostDetailSheet?
   @State private var selectedStampKind: CaptroStampKind = .social
+  @State private var stampVariant = "moment-paper"
   @State private var eventDraft = CaptroEventDraft()
   @State private var commerceDraft = CaptroCommerceDraft()
   @State private var selectedPlace: MIRAExactPostPlace?
@@ -1083,6 +1084,7 @@ public struct CreatePostNativeView: View {
       handleSelectedPlaceChange(place)
     }
     .onChange(of: selectedStampKind) { _, kind in
+      if !kind.stampVariants.contains(stampVariant) { stampVariant = kind.stampVariants[0] }
       if kind.commerceContentType != nil {
         commerceDraft.enabled = true
         commerceDraft.configureDefaults(for: kind)
@@ -1092,6 +1094,7 @@ public struct CreatePostNativeView: View {
       cacheComposerDraft()
     }
     .onChange(of: hasSelectedStamp) { _, _ in cacheComposerDraft() }
+    .onChange(of: stampVariant) { _, _ in cacheComposerDraft() }
     .onChange(of: momentType) { _, _ in cacheComposerDraft() }
     .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: commerceDraft) { _, _ in cacheComposerDraft() }
@@ -1121,6 +1124,7 @@ public struct CreatePostNativeView: View {
         bodyText: bodyText,
         mediaItems: mediaItems,
         stampKind: selectedStampKind,
+        stampContent: composerStampContent,
         location: selectedPlace?.displayName ?? (shouldPublishBroadLocation ? broadLocation.label : nil),
         onEditStamp: {
           showPreview = false
@@ -1322,8 +1326,8 @@ public struct CreatePostNativeView: View {
           CaptroPostStamp(content: composerStampContent,
             onOpen: { focusedPostDetailsField = nil; isEditingPostDetails = true },
             onAction: { focusedPostDetailsField = nil; isEditingPostDetails = true }, compact: true)
-            .frame(width: min(280, width * 0.68), alignment: .leading)
-            .padding(16)
+            .frame(width: min(232, width - 24), alignment: .leading)
+            .padding(12)
         }
       }
       .overlay(alignment: .topTrailing) {
@@ -1630,6 +1634,15 @@ public struct CreatePostNativeView: View {
   private var stampDetailsPage: some View {
     NavigationStack {
       Form {
+        Section {
+          CaptroPostStamp(content: composerStampContent)
+            .listRowBackground(Color.clear)
+          Picker("Paper style", selection: $stampVariant) {
+            ForEach(selectedStampKind.stampVariants, id: \.self) { variant in
+              Text(variant.split(separator: "-").dropFirst().joined(separator: " ").capitalized).tag(variant)
+            }
+          }
+        }
         switch selectedStampKind {
         case .social:
           Section {
@@ -1706,7 +1719,7 @@ public struct CreatePostNativeView: View {
             .accessibilityLabel("Back to create post")
         }
         ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { isEditingPostDetails = false }
+          Button("Done") { cacheComposerDraft(); isEditingPostDetails = false }
             .fontWeight(.semibold)
             .disabled(stampDetailsRequireTitle && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
@@ -1849,7 +1862,24 @@ public struct CreatePostNativeView: View {
       title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedStampKind.displayName : title,
       metadata: isEventStamp && !eventDraft.venueName.isEmpty ? eventDraft.venueName : selectedPlace?.displayName,
       description: bodyText.isEmpty ? nil : bodyText,
-      footer: nil, actionTitle: selectedStampKind.actionTitle, contributors: [])
+      footer: nil, actionTitle: selectedStampKind.actionTitle, contributors: [],
+      variant: stampVariant, terms: composerStampTerms,
+      dateMonth: CaptroStampAdapter.datePart(eventDraft.input.startsAt, timeZone: eventDraft.timeZone, format: "MMM"),
+      dateDay: CaptroStampAdapter.datePart(eventDraft.input.startsAt, timeZone: eventDraft.timeZone, format: "dd"))
+  }
+
+  private var composerStampTerms: String? {
+    guard let input = commerceDraft.input(kind: selectedStampKind, title: title, description: bodyText,
+      event: isEventStamp ? eventDraft.input : nil, locationName: selectedPlace?.displayName, address: nil, city: nil) else { return nil }
+    if selectedStampKind.stampFamily == "deal" {
+      let rules = input.publicData.redemptionRules?.trimmingCharacters(in: .whitespacesAndNewlines)
+      return rules?.isEmpty == false ? rules : nil
+    }
+    guard commerceDraft.validationError == nil, let price = input.prices.first else { return "View pricing and terms" }
+    let amount = price.unitAmount == 0 ? "Free" : CaptroMoney.format(minorUnits: price.unitAmount, currency: input.currency) + " one time"
+    if selectedStampKind.stampFamily == "club" { return amount }
+    return [CaptroStampAdapter.datePart(input.startsAt, timeZone: input.timezone, format: "MMM d jmm"), amount]
+      .compactMap { $0 }.joined(separator: " · ")
   }
 
   private func removeMedia(at index: Int) {
@@ -2187,7 +2217,7 @@ public struct CreatePostNativeView: View {
         address: selectedPlace?.addressText,
         city: selectedPlace?.city ?? (shouldPublishBroadLocation ? broadLocation.city : nil)
       )
-      let body = CreatePostBody(
+      var body = CreatePostBody(
         title: title,
         content: postContent,
         image: uploaded.first,
@@ -2237,6 +2267,7 @@ public struct CreatePostNativeView: View {
         visibility: "public",
         clientRequestId: postRequestID
       )
+      body.stampVariant = stampVariant
       let _: MIRAPost = try await api.post("/posts", body: body)
       await MIRAAppCacheStore.shared.clearPostDraft()
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
@@ -2343,6 +2374,7 @@ public struct CreatePostNativeView: View {
     bodyText = draft.bodyText
     hasSelectedStamp = draft.stampType != nil
     selectedStampKind = CaptroStampKind(rawValue: draft.stampType ?? "") ?? .social
+    stampVariant = draft.stampVariant.flatMap { selectedStampKind.stampVariants.contains($0) ? $0 : nil } ?? selectedStampKind.stampVariants[0]
     momentType = draft.momentType ?? "Thought"
     eventDraft = draft.eventDraft ?? CaptroEventDraft()
     commerceDraft = draft.commerceDraft ?? CaptroCommerceDraft()
@@ -2395,6 +2427,7 @@ public struct CreatePostNativeView: View {
       title: title,
       bodyText: bodyText,
       stampType: hasSelectedStamp ? selectedStampKind.rawValue : nil,
+      stampVariant: stampVariant,
       momentType: momentType,
       eventDraft: eventDraft,
       commerceDraft: commerceDraft,
@@ -2420,6 +2453,7 @@ public struct CreatePostNativeView: View {
     bodyText = ""
     hasSelectedStamp = false
     selectedStampKind = .social
+    stampVariant = "moment-paper"
     momentType = "Thought"
     eventDraft = CaptroEventDraft()
     commerceDraft = CaptroCommerceDraft()
@@ -4607,6 +4641,7 @@ private struct ComposerPreviewSheet: View {
   let bodyText: String
   let mediaItems: [MIRAPickedMedia]
   let stampKind: CaptroStampKind
+  let stampContent: CaptroStampContent
   let location: String?
   let onEditStamp: () -> Void
   let onClose: () -> Void
@@ -4619,13 +4654,12 @@ private struct ComposerPreviewSheet: View {
           if let first = mediaItems.first {
             let width = UIScreen.main.bounds.width - 32
             let height = width * coverRatio
-            let stampWidthFraction = coverRatio < 0.8 ? 0.56 : (coverRatio > 1.3 ? 0.52 : 0.54)
             ZStack(alignment: .bottomLeading) {
-              LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 18)
+              LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 0)
 
               CaptroPostStamp(content: previewStampContent, onOpen: onEditStamp, onAction: onEditStamp, compact: true)
-                .frame(width: width * stampWidthFraction, alignment: .leading)
-                .padding(16)
+                .frame(width: min(232, width - 24), alignment: .leading)
+                .padding(12)
             }
             .frame(width: width, height: height)
           } else {
@@ -4648,30 +4682,7 @@ private struct ComposerPreviewSheet: View {
     }
   }
 
-  private var previewStampContent: CaptroStampContent {
-    let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    let cleanBody = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
-    let cleanLocation = location?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let placeTitle = cleanLocation.flatMap { $0.isEmpty ? nil : $0 }
-    let titleText = stampKind == .place && cleanTitle.isEmpty
-      ? (placeTitle ?? stampKind.displayName)
-      : (cleanTitle.isEmpty ? stampKind.displayName : cleanTitle)
-    let footerValues = [cleanLocation, Self.previewDateFormatter.string(from: Date())]
-      .compactMap { value -> String? in
-        guard let value, !value.isEmpty else { return nil }
-        return value
-      }
-
-    return CaptroStampContent(
-      kind: stampKind,
-      title: titleText,
-      metadata: stampKind == .social ? nil : cleanLocation,
-      description: cleanBody.isEmpty ? nil : cleanBody,
-      footer: footerValues.isEmpty ? nil : footerValues.joined(separator: " · "),
-      actionTitle: stampKind.actionTitle,
-      contributors: []
-    )
-  }
+  private var previewStampContent: CaptroStampContent { stampContent }
 
   private static let previewDateFormatter: DateFormatter = {
     let formatter = DateFormatter()

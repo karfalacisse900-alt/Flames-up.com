@@ -21,6 +21,7 @@ struct CaptroPostDetailSections: View {
         if model.commerce != nil || post.detail?.commerce != nil {
           CaptroCommerceDetailSection(model: model)
         } else {
+          CaptroPostStamp(content: post.captroStampContent).padding(.horizontal, 16)
           switch post.detailKind {
           case .placeReview: placeReview
           case .regular: regularPost

@@ -20,16 +20,10 @@ enum CaptroStampKind: String, Identifiable {
 
   static let creationCases: [CaptroStampKind] = [
     .social,
-    .place,
     .club,
-    .group,
     .meetup,
     .event,
-    .party,
-    .ticket,
-    .booking,
     .deal,
-    .localOffer,
   ]
 
   var id: String { rawValue }
@@ -37,7 +31,7 @@ enum CaptroStampKind: String, Identifiable {
 
   var displayName: String {
     switch self {
-    case .social: return "Just Post"
+    case .social: return "Moment"
     case .place: return "Place"
     case .club: return "Club"
     case .group: return "Group"
@@ -93,153 +87,18 @@ struct CaptroStampContent {
   let actionTitle: String?
   let contributors: [MIRATaggedUserPayload]
   var highlight: String? = nil
+  var variant: String? = nil
+  var terms: String? = nil
+  var availability: String? = nil
+  var relationship: String? = nil
+  var postID: String? = nil
+  var attachmentID: String? = nil
+  var dateMonth: String? = nil
+  var dateDay: String? = nil
+  var waveform: [Float]? = nil
+  var duration: String? = nil
 }
 
-struct CaptroPostStamp: View {
-  let content: CaptroStampContent
-  var onOpen: (() -> Void)? = nil
-  var onAction: (() -> Void)? = nil
-  var isSaved: Bool? = nil
-  var onSave: (() -> Void)? = nil
-  var compact = false
-
-  var body: some View {
-    stampLayout
-      .padding(.horizontal, compact ? 12 : 14)
-      .padding(.vertical, compact ? 10 : 12)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Color.white.opacity(0.96))
-      .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-      .overlay(
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-          .stroke(Color.black.opacity(0.12), lineWidth: 0.75)
-      )
-      .contentShape(Rectangle())
-      .onTapGesture { onOpen?() }
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel(accessibilityLabel)
-      .accessibilityHint(onOpen == nil ? "" : "Opens details")
-  }
-
-  @ViewBuilder
-  private var stampLayout: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      stampTitle
-      stampMetadata
-      if let highlight = content.highlight {
-        Text(highlight)
-          .font(.system(size: 10, weight: .semibold))
-          .foregroundStyle(.black)
-          .padding(.horizontal, 7)
-          .padding(.vertical, 4)
-          .background(MIRATheme.Color.like.opacity(0.20))
-      }
-      if content.metadata != nil || content.highlight != nil {
-        Rectangle().fill(Color.black.opacity(0.16)).frame(height: 0.75)
-      }
-      stampDescription
-      if content.actionTitle != nil { stampActionFooter } else { stampFooter }
-    }
-  }
-
-  private var stampTitle: some View {
-    HStack(alignment: .top, spacing: 8) {
-      Text(content.title.uppercased())
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(Color.black.opacity(0.88))
-        .lineLimit(2)
-        .minimumScaleFactor(0.84)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(.isHeader)
-
-      Spacer(minLength: 0)
-
-      if let isSaved, let onSave {
-        Button(action: onSave) {
-          Image(systemName: isSaved ? "bookmark.fill" : "bookmark")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.like)
-            .frame(width: 30, height: 30)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isSaved ? "Remove saved post" : "Save post")
-      }
-    }
-  }
-
-  @ViewBuilder
-  private var stampMetadata: some View {
-    if let metadata = content.metadata {
-      Text(metadata.uppercased())
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(Color.black.opacity(0.58))
-        .lineLimit(2)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  @ViewBuilder
-  private var stampDescription: some View {
-    if let description = content.description {
-      Text(description)
-        .font(.system(size: 12, weight: .regular))
-        .foregroundStyle(Color.black.opacity(0.78))
-        .lineSpacing(2)
-        .lineLimit(compact ? 3 : 4)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-
-  @ViewBuilder
-  private var stampFooter: some View {
-    if let footer = content.footer {
-      Text(footer.uppercased())
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(Color.black.opacity(0.56))
-        .lineLimit(1)
-        .minimumScaleFactor(0.82)
-    }
-  }
-
-  private var stampActionFooter: some View {
-    HStack(alignment: .center, spacing: 8) {
-      if let footer = content.footer {
-        Text(footer.uppercased())
-          .font(.system(size: 10, weight: .medium))
-          .foregroundStyle(Color.black.opacity(0.56))
-          .lineLimit(1)
-          .minimumScaleFactor(0.78)
-      }
-
-      Spacer(minLength: 6)
-
-      if let actionTitle = content.actionTitle {
-        if let onAction {
-          Button(action: onAction) {
-            Text(actionTitle)
-              .font(.system(size: 12, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.forest)
-              .frame(minWidth: 44, minHeight: 32, alignment: .trailing)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(actionTitle.capitalized)
-        } else {
-          Text(actionTitle)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.forest)
-        }
-      }
-    }
-  }
-
-  private var accessibilityLabel: String {
-    [content.kind.displayName, content.title, content.metadata, content.description, content.footer, content.actionTitle]
-      .compactMap { $0 }
-      .joined(separator: ", ")
-  }
-}
 
 private struct CaptroContributorAvatars: View {
   let contributors: [MIRATaggedUserPayload]
@@ -334,7 +193,7 @@ extension MIRAPost {
     case .receipt, .invoice:
       title = detail?.document?.merchantName ?? captroCleanTitle ?? kind.displayName
     default:
-      title = commerce?.title ?? captroCleanTitle ?? kind.displayName
+      title = commerce?.title ?? captroCleanTitle ?? captroFeedCaptionText ?? kind.displayName
     }
 
     let metadata: String?
@@ -377,7 +236,17 @@ extension MIRAPost {
       footer: captroAuthorStampFooter,
       actionTitle: kind.actionTitle,
       contributors: captroGuideContributors,
-      highlight: kind == .place ? savesCount.map { "\(max(0, $0)) SAVES" } : nil
+      highlight: kind == .place ? savesCount.map { "\(max(0, $0)) SAVES" } : nil,
+      variant: stampVariant,
+      terms: CaptroStampAdapter.terms(commerce, family: kind.stampFamily),
+      availability: CaptroStampAdapter.availability(commerce),
+      relationship: CaptroStampAdapter.relationship(commerce, saved: viewerSaved),
+      postID: id,
+      attachmentID: commerce?.id,
+      dateMonth: CaptroStampAdapter.datePart(commerce?.startsAt, timeZone: commerce?.timeZone, format: "MMM"),
+      dateDay: CaptroStampAdapter.datePart(commerce?.startsAt, timeZone: commerce?.timeZone, format: "dd"),
+      waveform: detail?.voice?.waveform,
+      duration: detail?.voice.map { String(format: "%d:%02d", $0.durationMs / 60000, ($0.durationMs / 1000) % 60) }
     )
   }
 

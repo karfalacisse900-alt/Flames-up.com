@@ -75,6 +75,19 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.captro.layout-tests
         GENERATE_INFOPLIST_FILE: YES
 
+  CaptroStampTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/MIRANativeTests/CaptroStampTests.swift
+    dependencies:
+      - package: MIRANative
+        product: MIRANative
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.captro.stamp-tests
+        GENERATE_INFOPLIST_FILE: YES
+
 schemes:
   Captro:
     build:
@@ -86,5 +99,6 @@ schemes:
       config: Debug
       targets:
         - CaptroLayoutUITests
+        - CaptroStampTests
     archive:
       config: Release

@@ -42,6 +42,7 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let title: String
   let bodyText: String
   let stampType: String?
+  var stampVariant: String? = nil
   var momentType: String? = nil
   var eventDraft: CaptroEventDraft? = nil
   var commerceDraft: CaptroCommerceDraft? = nil
@@ -283,7 +284,8 @@ actor MIRAAppCacheStore {
   func clearPostDraftFromPreviousProcessIfNeeded() async {
     guard !didClearPostDraftFromPreviousProcess else { return }
     didClearPostDraftFromPreviousProcess = true
-    await clearPostDraft()
+    // Keep the existing entry point, but do not silently discard a saved composer
+    // attachment on relaunch. Explicit discard, publish and sign-out still clear it.
   }
 
   func storePostDraftMedia(_ mediaItems: [MIRAPickedMedia]) async -> [MIRAPostDraftMediaSnapshot] {

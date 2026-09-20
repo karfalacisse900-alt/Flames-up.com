@@ -28,6 +28,7 @@ struct CaptroCommerceDetailSection: View {
   var body: some View {
     if let commerce {
       VStack(alignment: .leading, spacing: 18) {
+        CaptroPostStamp(content: model.post.captroStampContent)
         heading(commerce)
         typeSpecificFacts(commerce)
         purchaseControls(commerce)
@@ -188,7 +189,7 @@ struct CaptroCommerceDetailSection: View {
       if commerce.prices.count > 1 {
         Picker("Ticket type", selection: $selectedPriceID) {
           ForEach(commerce.prices) { price in
-            Text("\(price.label) · \(price.unitAmount == 0 ? "Free" : price.money)").tag(price.id)
+            Text("\(price.label) · \(price.stampPrice ?? "See pricing terms")").tag(price.id)
           }
         }
         .pickerStyle(.menu)
@@ -196,7 +197,7 @@ struct CaptroCommerceDetailSection: View {
         HStack {
           Text(price.label).font(.system(size: 14, weight: .semibold))
           Spacer()
-          Text(price.unitAmount == 0 ? "Free" : price.money).font(.system(size: 18, weight: .bold))
+          Text(price.stampPrice ?? "See pricing terms").font(.system(size: 18, weight: .bold))
         }
       }
 

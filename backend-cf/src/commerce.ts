@@ -233,7 +233,8 @@ export function publicCommercePayload(row: any, prices: any[], viewer?: any) {
 export async function attachPublicCommerce(posts: any[], select: Select): Promise<void> {
   const postIds = posts.map(post => post.supabase_post_id).filter((id: unknown) => typeof id === 'string' && id);
   if (!postIds.length) return;
-  const rows = await select('app_purchasables', { post_id: `in.(${postIds.join(',')})`, status: 'in.(active,sold_out)' });
+  // Visible posts must retain truthful attached-object status after expiry/cancellation.
+  const rows = await select('app_purchasables', { post_id: `in.(${postIds.join(',')})`, status: 'in.(active,sold_out,expired,cancelled,canceled)' });
   if (!rows.length) return;
   const ids = rows.map(row => row.id).filter(Boolean);
   const prices = await select('app_prices', { purchasable_id: `in.(${ids.join(',')})`, active: 'eq.true' });
