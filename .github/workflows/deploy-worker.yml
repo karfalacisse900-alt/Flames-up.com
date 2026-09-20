@@ -43,8 +43,7 @@ jobs:
           fi
           configured="$(npx wrangler secret list --env production)"
           if ! printf '%s' "$configured" | grep -q '"name": "OPENAI_API_KEY"'; then
-            echo "OPENAI_API_KEY is required for real voice transcription and moderation."
-            exit 1
+            echo "::warning::OPENAI_API_KEY is not configured. Voice uploads will remain private and fail closed until it is added."
           fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
