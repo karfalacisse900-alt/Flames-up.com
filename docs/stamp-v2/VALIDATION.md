@@ -26,6 +26,10 @@ physical Club pass construction, multiline fallback for genuinely long Event/Clu
 Meetup titles, and a printed paper state slip instead of a rounded UI capsule. Data,
 navigation, five-family mapping, media ratios and consequential actions are unchanged.
 
+The final signed app archive uploaded successfully to TestFlight as **1.0.1 (464.1)**
+in run `35552279096` at 2026-09-21 02:04:05 UTC. Apple-side processing and tester
+availability occur after upload and were not verified in this run.
+
 - [Before](home-before.png): Home's production component in the offline media fixture,
   September 19, commit `6d9cfa98`, iPhone 17 Pro Max, Actions run `35458338471`.
 - [After](home-after.png): same square-media fixture in Home, September 20 local time,
