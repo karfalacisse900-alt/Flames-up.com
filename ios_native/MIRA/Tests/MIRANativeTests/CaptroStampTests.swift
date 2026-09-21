@@ -62,4 +62,40 @@ final class CaptroStampTests: XCTestCase {
     let club = try XCTUnwrap(CaptroStampTemplate.catalog["club-oval"]?.compact.fields.first(where: { $0.key == "title" }))
     XCTAssertTrue(club.fits("Yoga NYC", size: club.size))
   }
+
+  func testEditorialCardUsesOneDesignForFiveLiveKinds() {
+    let mappings: [(CaptroStampKind, CaptroEditorialCardType)] = [
+      (.place, .place), (.club, .club), (.event, .event), (.meetup, .meetup), (.deal, .deal)
+    ]
+    for (kind, expected) in mappings {
+      XCTAssertEqual(CaptroEditorialCardType(stampKind: kind), expected)
+    }
+    XCTAssertNil(CaptroEditorialCardType(stampKind: .social))
+    XCTAssertEqual(CaptroEditorialCardLayout.width(for: 320), 249.6, accuracy: 0.01)
+    XCTAssertEqual(CaptroEditorialCardLayout.width(for: 390), 304.2, accuracy: 0.01)
+    XCTAssertTrue(CaptroEditorialCardLayout.isCondensed(mediaWidth: 390, mediaHeight: 219))
+    XCTAssertFalse(CaptroEditorialCardLayout.isCondensed(mediaWidth: 390, mediaHeight: 488))
+  }
+
+  func testEditorialPlaceUsesPostDataAndDoesNotInventMissingCounts() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let withCount = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"post","post_type":"place","place_name":"Ruffian","display_location_label":"East Village","saves_count":469,"caption":"An intimate wine bar.","user_username":"atlanta_gao"}"#.utf8))
+    let card = try XCTUnwrap(withCount.captroEditorialCardContent)
+    XCTAssertEqual(card.type, .place)
+    XCTAssertEqual(card.title, "Ruffian")
+    XCTAssertEqual(card.chipText, "469 SAVES")
+    XCTAssertEqual(card.username, "@atlanta_gao")
+    let noCount = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"post","post_type":"place","place_name":"Ruffian"}"#.utf8))
+    XCTAssertNil(noCount.captroEditorialCardContent?.chipText)
+  }
+
+  func testEditorialDealDoesNotInventBenefitOrLoseConditions() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let json = #"{"id":"post","post_type":"deal","detail":{"commerce":{"id":"offer","content_type":"deal","fulfillment_type":"redemption","payment_model":"free","commerce_class":"commerce","title":"Joe's Pizza","description":"Offer details","joined_count":0,"refund_policy":"none","approval_required":false,"pass_required":false,"status":"expired","audience":"public","public_data":{"benefits":["20% Off"],"redemption_rules":"Spend $20+"},"prices":[]}}}"#
+    let post = try decoder.decode(MIRAPost.self, from: Data(json.utf8))
+    let card = try XCTUnwrap(post.captroEditorialCardContent)
+    XCTAssertEqual(card.title, "Joe's Pizza")
+    XCTAssertEqual(card.chipText, "Expired")
+    XCTAssertEqual(card.supportingText, "Spend $20+")
+  }
 }

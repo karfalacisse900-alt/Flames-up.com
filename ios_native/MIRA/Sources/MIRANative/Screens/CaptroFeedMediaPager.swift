@@ -92,7 +92,7 @@ struct CaptroMediaPager: View {
           .contentShape(Rectangle())
           .onTapGesture(perform: handleMediaTap)
 
-        overlayContent(mediaWidth: proxy.size.width)
+        overlayContent(mediaWidth: proxy.size.width, mediaHeight: proxy.size.height)
 
         if currentMediaIsVideo {
           videoControls
@@ -162,7 +162,7 @@ struct CaptroMediaPager: View {
     MIRAMediaSizing.supportedPostHeightToWidthRatio(ratio)
   }
 
-  private func overlayContent(mediaWidth: CGFloat) -> some View {
+  private func overlayContent(mediaWidth: CGFloat, mediaHeight: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
         Spacer(minLength: 0)
@@ -174,15 +174,24 @@ struct CaptroMediaPager: View {
 
       Spacer(minLength: 12)
 
-      CaptroPostStamp(
-        content: post.captroStampContent,
-        onOpen: openPostUnlessPeeking,
-        onAction: openPostUnlessPeeking,
-        isSaved: post.viewerSaved,
-        onSave: onSave,
-        compact: true
-      )
-      .frame(width: CaptroStampLayout.feedWidth(for: mediaWidth), alignment: .leading)
+      Group {
+        if let editorial = post.captroEditorialCardContent {
+          CaptroEditorialOverlayCard(content: editorial,
+            condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: mediaWidth, mediaHeight: mediaHeight),
+            onOpen: openPostUnlessPeeking)
+            .frame(width: CaptroEditorialCardLayout.width(for: mediaWidth), alignment: .leading)
+        } else {
+          CaptroPostStamp(
+            content: post.captroStampContent,
+            onOpen: openPostUnlessPeeking,
+            onAction: openPostUnlessPeeking,
+            isSaved: post.viewerSaved,
+            onSave: onSave,
+            compact: true
+          )
+          .frame(width: CaptroStampLayout.feedWidth(for: mediaWidth), alignment: .leading)
+        }
+      }
       .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
       .allowsHitTesting(showsStampOnCurrentSlide)

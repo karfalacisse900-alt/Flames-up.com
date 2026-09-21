@@ -5,13 +5,13 @@ final class StampVisualTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-stamp-visual-test"]
     app.launch()
-    let stamp = app.buttons.matching(identifier: "captro.stamp").firstMatch
+    let stamp = app.buttons.matching(identifier: "captro.editorialCard").firstMatch
     XCTAssertTrue(stamp.waitForExistence(timeout: 5))
     stamp.tap()
     XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 3))
     app.buttons["Close"].tap()
     _ = app.otherElements["stamp.photo.loaded"].waitForExistence(timeout: 12)
-    let families = ["moment", "club", "event", "meetup", "deal"]
+    let families = ["place", "club", "event", "meetup", "deal"]
     for (index, family) in families.enumerated() {
       let next = app.buttons["stamp.next"]
       XCTAssertTrue(next.waitForExistence(timeout: 5))

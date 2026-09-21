@@ -1,29 +1,36 @@
 #if DEBUG
 import SwiftUI
 
-/// Non-writing visual QA. The photo is a read-only public Captro feed image;
-/// the stamp is the production component at its real responsive feed size.
+/// Non-writing visual QA. Example data is intentionally confined to DEBUG;
+/// the same production card is shown on a real Captro feed photograph.
 public struct CaptroStampVisualTestView: View {
   @State private var index = 0
   @State private var opened = false
   @State private var photoLoaded = false
   public init() {}
 
-  private let kinds: [CaptroStampKind] = [.social, .club, .event, .meetup, .deal]
+  private let kinds: [CaptroEditorialCardType] = CaptroEditorialCardType.allCases
   private let photoURL = "https://imagedelivery.net/DY-IgVdOm-0zb0K5ZFnpKA/81cd6cb6-ec4c-4a22-e356-3ecd1613cd00/public"
-  private var kind: CaptroStampKind { kinds[index] }
-  private var content: CaptroStampContent {
+  private var kind: CaptroEditorialCardType { kinds[index] }
+  private var content: CaptroEditorialCardContent {
     switch kind {
-    case .social:
-      return fixture(title: "NYC Ferry", metadata: nil, terms: nil)
+    case .place:
+      return CaptroEditorialCardContent(type: .place, title: "Ruffian", subtitle: "East Village",
+        chipText: "469 Saves", description: "Cute wine bar with awesome food options. Perfect for girls night and first date.",
+        username: "@atlanta_gao")
     case .club:
-      return fixture(title: "Yoga NYC", metadata: nil, terms: "Free to join")
+      return CaptroEditorialCardContent(type: .club, title: "NYC Photo Club", subtitle: "Manhattan",
+        chipText: "127 Members", description: "Weekly photo walks and casual meetups for city photographers.",
+        username: "@karfala")
     case .event:
-      return fixture(title: "Bronx Run Club", metadata: nil, terms: "4:49 PM · $5", month: "SEP", day: "04")
+      return CaptroEditorialCardContent(type: .event, title: "Bronx Run Club", subtitle: "Bronx",
+        chipText: "Sep 28", supportingText: "8:00 PM · $5 entry", username: "@bronxrunclub")
     case .meetup:
-      return fixture(title: "Photo Walk", metadata: "DUMBO", terms: "SAT · 2 PM · 8 GOING")
-    default:
-      return fixture(title: "$4 Back", metadata: "Joe’s Pizza", terms: "Spend $20+")
+      return CaptroEditorialCardContent(type: .meetup, title: "Coffee Walk", subtitle: "Soho",
+        chipText: "12 Going", supportingText: "Sunday · 11 AM", username: "@maya")
+    case .deal:
+      return CaptroEditorialCardContent(type: .deal, title: "Joe’s Pizza", subtitle: "Greenwich Village",
+        chipText: "20% Off", supportingText: "Today until 8 PM", username: "@joespizza")
     }
   }
 
@@ -42,9 +49,9 @@ public struct CaptroStampVisualTestView: View {
           .frame(width: proxy.size.width, height: proxy.size.height)
           .clipped()
 
-          CaptroPostStamp(content: content, onOpen: { opened = true }, compact: true)
-            .frame(width: CaptroStampLayout.feedWidth(for: proxy.size.width), alignment: .leading)
-            .padding(CaptroStampLayout.feedInset)
+          CaptroEditorialOverlayCard(content: content, onOpen: { opened = true })
+            .frame(width: CaptroEditorialCardLayout.width(for: proxy.size.width), alignment: .leading)
+            .padding(CaptroEditorialCardLayout.inset)
         }
       }
       .aspectRatio(4.0 / 5.0, contentMode: .fit)
@@ -54,7 +61,7 @@ public struct CaptroStampVisualTestView: View {
           Image(systemName: "heart"); Image(systemName: "bubble.right"); Image(systemName: "paperplane")
           Spacer(); Image(systemName: "bookmark")
         }.font(.system(size: 21, weight: .regular))
-        Text("A real-feed-size material check for \(kind.displayName.lowercased()).")
+        Text("A real-feed-size editorial check for \(kind.rawValue).")
           .font(.system(size: 14.5)).lineLimit(2)
         Button("Next family") { index = (index + 1) % kinds.count }
           .font(.system(size: 15, weight: .semibold))
@@ -72,7 +79,7 @@ public struct CaptroStampVisualTestView: View {
       }
     }
     .sheet(isPresented: $opened) {
-      VStack { Text(content.accessibleStampLabel); Button("Close") { opened = false } }.padding()
+      VStack { Text(content.accessibilityLabel); Button("Close") { opened = false } }.padding()
     }
   }
 
@@ -90,11 +97,5 @@ public struct CaptroStampVisualTestView: View {
     .padding(.horizontal, 14).frame(height: 58)
   }
 
-  private func fixture(title: String, metadata: String?, terms: String?, month: String? = nil, day: String? = nil) -> CaptroStampContent {
-    CaptroStampContent(kind: kind, title: title, metadata: metadata,
-      description: "Visual QA fixture", footer: "@captro · Sep 20", actionTitle: nil, contributors: [],
-      variant: kind.stampVariants[0], terms: terms, postID: "test-post",
-      attachmentID: kind == .social ? nil : "test-attachment", dateMonth: month, dateDay: day)
-  }
 }
 #endif
