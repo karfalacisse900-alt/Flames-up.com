@@ -212,7 +212,9 @@ def design(id,compact=False):
         else:fields.append(field('meta',129,193,435,28))
     elif id=='deal-coupon':
         f+=line(497,26,497,h-26,dash='3 6',color='ink',sw=1.1)+line(36,bottom-33,478,bottom-33)
-        f+=circle(557,head-5,21,sw=1.2)+path(f'M547 {head+5}l20-20m-15 1h0m10 19h0',stroke='{{ink}}',sw=2,extra='stroke-linecap="round"')+circle(549,head-13,3,sw=1.5)+circle(565,head+3,3,sw=1.5)+arrow(542,bottom-8,30)
+        # The benefit text supplies the offer meaning; a percent icon would be
+        # false for cash/free-item deals. Keep only the physical redemption stub.
+        f+=arrow(542,bottom-8,30)
         fields=[field('label',37,head,440,30,weight=700,tracking=2),field('title',31,title+6,446,70 if compact else 80,weight=700,minSize=64 if compact else 70,overflow='offer',tracking=-2),field('sideMain',557,title+10,111,27,weight=700,anchor='middle',overflow='details'),field('compactText' if compact else 'footer',37,bottom,439,30 if compact else 28,overflow='details')]
         if compact:fields.append(field('meta',37,162,435,23,weight=600,tracking=.5))
         else:fields.extend([field('meta',37,203,435,31,weight=600),field('sideBottom',557,199,112,21,anchor='middle',overflow='details')])
