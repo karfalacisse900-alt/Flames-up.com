@@ -182,16 +182,16 @@ struct CaptroMediaPager: View {
         onSave: onSave,
         compact: true
       )
-      .frame(width: min(232, mediaWidth - 24), alignment: .leading)
+      .frame(width: CaptroStampLayout.feedWidth(for: mediaWidth), alignment: .leading)
       .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
       .allowsHitTesting(showsStampOnCurrentSlide)
       .accessibilityHidden(!showsStampOnCurrentSlide)
       .animation(stampPeekAnimation, value: isHoldingStamp)
       .simultaneousGesture(stampPeekGesture)
-      .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 44 : 0)
+      .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 48 : 4)
     }
-    .padding(12)
+    .padding(CaptroStampLayout.feedInset)
   }
 
   private var stampPeekGesture: some Gesture {

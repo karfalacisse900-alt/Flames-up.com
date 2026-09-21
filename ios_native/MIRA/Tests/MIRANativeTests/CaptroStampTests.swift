@@ -43,4 +43,21 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertEqual(restored.stampVariant,"club-tag")
     XCTAssertEqual(post.updating(liked: true).stampVariant,"club-tag")
   }
+  func testMomentDoesNotRepeatAuthorOrDateAndFeedSizingStaysResponsive() {
+    let moment = CaptroStampContent(kind: .social, title: "NYC Ferry", metadata: nil,
+      description: nil, footer: "@captro · Sep 20", actionTitle: nil, contributors: [])
+    XCTAssertEqual(moment.displayFields["compactText"], "")
+    XCTAssertFalse(moment.displayFields.values.contains(where: { $0.contains("@captro") }))
+    XCTAssertEqual(CaptroStampLayout.feedWidth(for: 320), 184)
+    XCTAssertEqual(CaptroStampLayout.feedWidth(for: 390), 210.6, accuracy: 0.01)
+    XCTAssertEqual(CaptroStampLayout.feedWidth(for: 430), 214)
+  }
+  func testImportantEventTitleCanUseTwoLinesWithoutEllipsis() throws {
+    let template = try XCTUnwrap(CaptroStampTemplate.catalog["event-ticket"])
+    let title = try XCTUnwrap(template.compact.fields.first(where: { $0.key == "title" }))
+    let lines = try XCTUnwrap(title.fittedLines("Bronx Run Club", maximumLines: 2))
+    XCTAssertEqual(lines.map(\.0).joined(separator: " "), "Bronx Run Club")
+    XCTAssertEqual(lines.count, 2)
+    XCTAssertFalse(lines.contains(where: { $0.0.contains("…") }))
+  }
 }

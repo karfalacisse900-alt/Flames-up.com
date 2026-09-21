@@ -1,5 +1,13 @@
 import SwiftUI
 
+enum CaptroStampLayout {
+  static let feedInset: CGFloat = 14
+  static func feedWidth(for mediaWidth: CGFloat) -> CGFloat {
+    let responsiveTarget = min(214, max(184, mediaWidth * 0.54))
+    return min(responsiveTarget, max(0, mediaWidth - feedInset * 2))
+  }
+}
+
 extension CaptroStampKind {
   var stampFamily: String {
     switch self {
@@ -28,9 +36,11 @@ extension CaptroStampContent {
     return kind.stampVariants[0]
   }
   var displayFields: [String: String] {
-    let supporting = terms ?? (family == "moment" ? metadata ?? footer : nil) ?? "View details"
+    // Moment is already surrounded by the post author/date UI. Keep the default
+    // stamp quiet and never repeat that row inside the paper label.
+    let supporting = family == "moment" ? (metadata ?? "") : (terms ?? metadata ?? "View details")
     return ["title": family == "deal" && terms == nil ? "View offer" : title,
-            "meta": metadata ?? "", "footer": supporting, "compactText": supporting,
+            "meta": metadata?.uppercased() ?? "", "footer": supporting, "compactText": supporting,
             "sideTop": dateMonth ?? "", "sideMain": family == "deal" ? "VIEW" : resolvedVariant == "moment-voice" ? duration ?? "" : dateDay ?? "",
             "sideBottom": family == "deal" ? "TERMS" : ""]
       .mapValues { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }

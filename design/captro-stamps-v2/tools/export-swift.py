@@ -43,10 +43,12 @@ def layers(node, inherited=None, transform=Transform(), opacity=1, texture=False
         if op=='endPath': continue
         code={'moveTo':0,'lineTo':1,'qCurveTo':2,'curveTo':3,'closePath':4}[op]
         commands.append([code]+[round(v,5) for p in points for v in p])
-    yield dict(commands=commands,fill=a.get('fill','black'),stroke=a.get('stroke','none'),
+    fill=a.get('fill','black')
+    yield dict(commands=commands,fill=fill,stroke=a.get('stroke','none'),
         width=float(a.get('stroke-width','1'))*abs(transform.xx),opacity=opacity,
         evenOdd=a.get('fill-rule')=='evenodd',round=a.get('stroke-linecap')=='round',
-        dash=[float(v) for v in re.split(r'[ ,]+',a['stroke-dasharray'])] if 'stroke-dasharray' in a else [],texture=texture)
+        dash=[float(v) for v in re.split(r'[ ,]+',a['stroke-dasharray'])] if 'stroke-dasharray' in a else [],
+        texture=texture,paper=fill=='{{paper}}')
 
 def build():
     source=json.loads((ROOT/'tools/template-data.json').read_text(encoding='utf-8'))

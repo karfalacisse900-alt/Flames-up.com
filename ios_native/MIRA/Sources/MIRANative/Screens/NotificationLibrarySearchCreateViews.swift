@@ -1326,8 +1326,8 @@ public struct CreatePostNativeView: View {
           CaptroPostStamp(content: composerStampContent,
             onOpen: { focusedPostDetailsField = nil; isEditingPostDetails = true },
             onAction: { focusedPostDetailsField = nil; isEditingPostDetails = true }, compact: true)
-            .frame(width: min(232, width - 24), alignment: .leading)
-            .padding(12)
+            .frame(width: CaptroStampLayout.feedWidth(for: width), alignment: .leading)
+            .padding(CaptroStampLayout.feedInset)
         }
       }
       .overlay(alignment: .topTrailing) {
@@ -4661,8 +4661,8 @@ private struct ComposerPreviewSheet: View {
               LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 0)
 
               CaptroPostStamp(content: previewStampContent, onOpen: onEditStamp, onAction: onEditStamp, compact: true)
-                .frame(width: min(232, width - 24), alignment: .leading)
-                .padding(12)
+                .frame(width: CaptroStampLayout.feedWidth(for: width), alignment: .leading)
+                .padding(CaptroStampLayout.feedInset)
             }
             .frame(width: width, height: height)
           } else {

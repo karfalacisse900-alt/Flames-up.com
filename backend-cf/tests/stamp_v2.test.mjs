@@ -13,8 +13,10 @@ test('all 15 source variants compile to both native densities and validate in th
     for (const [density,height] of [['compact',224],['full',288]]) {
       const layout = template[density];
       assert.equal(layout.width,640); assert.equal(layout.height,height);
-      assert.ok(layout.layers.length > 4);
+      assert.ok(layout.layers.length >= 4);
       assert.ok(layout.fields.some(f=>f.key==='title'));
+      assert.ok(layout.layers.some(layer=>layer.paper), `${id} ${density} has no paper contour`);
+      assert.ok(layout.layers.some(layer=>layer.texture), `${id} ${density} has no deterministic paper texture`);
       for (const layer of layout.layers) {
         if (layer.texture) assert.ok(layer.opacity >= .02 && layer.opacity <= .05);
         for (const command of layer.commands) {

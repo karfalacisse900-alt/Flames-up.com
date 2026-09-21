@@ -50,12 +50,12 @@ def people(x,y,scale=1):
 
 def fiber(id,h,inside):
     rng=random.Random(id+str(h)); s=[]
-    for _ in range(135):
+    for _ in range(82):
         x=rng.uniform(14,626);y=rng.uniform(14,h-14)
         if inside(x,y):
             dx=rng.uniform(.6,2.5);dy=rng.uniform(-.4,.4)
             s.append(f'M{x:.1f} {y:.1f}l{dx:.1f} {dy:.1f}')
-    return '<g data-texture="paper" opacity="0.035">'+path(' '.join(s),stroke='{{ink}}',sw=.6,extra='stroke-linecap="round"')+'</g>'
+    return '<g data-texture="paper" opacity="0.024">'+path(' '.join(s),stroke='{{ink}}',sw=.55,extra='stroke-linecap="round"')+'</g>'
 
 def shape(id,h):
     """Only genuine contours/holes: no masking paint that assumes a background."""
@@ -84,6 +84,11 @@ def shape(id,h):
         d=f'M22 10H618Q630 10 630 22V{cy-14}a14 14 0 0 0 0 28V{y-12}Q630 {y} 618 {y}H22Q10 {y} 10 {y-12}V{cy+14}a14 14 0 0 0 0-28V22Q10 10 22 10Z'
         base=path(d,fill='{{paper}}',sw=1.5)
         inner=lambda x,z:28<x<612 and 22<z<h-22
+    elif id=='club-member':
+        # A clipped, weighty membership pass rather than a nested digital card.
+        d=f'M30 10H610L630 30V{y-20}L610 {y}H30L10 {y-20}V30Z'
+        base=path(d,fill='{{paper}}',sw=1.35)
+        inner=lambda x,z:34<x<606 and 27<z<h-27
     elif id=='club-tag':
         # Even-odd subpath cuts a transparent hole through the tag.
         cy=h/2
@@ -113,11 +118,12 @@ def shape(id,h):
     else:
         base=rect(12,12,616,h-24,'{{paper}}',r=8)
         inner=lambda x,z:28<x<611 and 28<z<h-28
-    # Two faint offset contour layers lend the paper a thin, tangible edge.
+    # One close offset contour remains useful in the source preview. Native adds
+    # a small blurred contact shadow from this exact paper contour.
     import re
     first = re.match(r'<(?:path|rect|ellipse)[^>]*?/>', base).group(0)
     shadow = first.replace('{{paper}}','#191B17').replace('{{ink}}','#191B17').replace('{{line}}','#191B17')
-    shadows = '<g opacity=".045" transform="translate(0 3)">'+shadow+'</g><g opacity=".04" transform="translate(0 1.5)">'+shadow+'</g>'
+    shadows = '<g opacity=".07" transform="translate(0 2.2)">'+shadow+'</g>'
     return shadows+base+fiber(id,h,inner)
 
 def field(key,x,y,w,size=30,font='sans',weight=500,tracking=0,minSize=None,overflow=None,anchor='start',color='ink',italic=False):
@@ -134,10 +140,11 @@ def design(id,compact=False):
     fs=54 if compact else 65
     if id in ('deal-coupon','deal-cashback'):head=44 if compact else 56
     elif id=='deal-drop' and compact:head=48
+    if compact and (id.startswith('deal-') or id.startswith('meetup-')): bottom=h-26
     if id=='moment-paper':
-        f+=rect(25,25,590,h-50,sw=.9)+line(40,head+14,600,head+14)+sun(581,head-12,9)
-        f+=line(40,bottom-33,600,bottom-33,sw=.95)
-        fields=[field('label',42,head,475,30,weight=700,tracking=2.5),field('title',40,title,553,fs,'serif',400,minSize=50),field('compactText' if compact else 'footer',42,bottom,553,32 if compact else 28,tracking=.3)]
+        # Quiet journal/photo label: one register mark, no nested card frame.
+        f+=star(582,head-10,6,color='accent')
+        fields=[field('label',42,head,495,28,weight=700,tracking=2.5),field('title',40,title+3,553,fs,'serif',400,minSize=50),field('compactText' if compact else 'footer',42,bottom,553,29 if compact else 27,tracking=.3)]
         if not compact:fields.append(field('meta',42,193,553,30))
     elif id=='moment-postal':
         # Large line-drawn sun impression, not a tiny generic icon.
@@ -158,12 +165,11 @@ def design(id,compact=False):
         fields=[field('label',320,head,270,30,weight=600,tracking=3,anchor='middle'),field('title',320,title+2,510,fs,'serif',400,minSize=49,anchor='middle'),field('compactText' if compact else 'footer',320,bottom,444,30,anchor='middle',overflow='details')]
         if not compact:fields.append(field('meta',320,191,440,26,anchor='middle'))
     elif id=='club-member':
-        f+=rect(23,23,86,h-46,'{{ink}}',stroke='none',sw=0,r=3)
-        f+=circle(66,head+4,18,stroke='{{paper}}',sw=1.6)+circle(66,head+4,12,stroke='{{paper}}',sw=.8)
-        f+=path(f'M57 {head+19}l-4 19 13-7 13 7-4-19',stroke='{{paper}}',sw=1.3)
-        f+=rect(120,23,497,h-46,sw=.9)+line(137,head+14,599,head+14)
-        fields=[field('label',139,head,446,30,weight=700,tracking=2.1),field('title',135,title,462,fs,'serif',400,minSize=47),field('compactText' if compact else 'footer',139,bottom,455,31,overflow='details')]
-        if not compact:fields.append(field('meta',139,193,452,28))
+        # Small printed membership seal; no solid sidebar or inner card rectangle.
+        f+=circle(72,h/2,31,stroke='{{ink}}',sw=1.6)+circle(72,h/2,23,stroke='{{line}}',sw=.9)
+        f+=star(72,h/2,8,color='accent')+line(120,35,120,h-35,color='line',sw=1,dash='2 5')
+        fields=[field('label',145,head,426,29,weight=700,tracking=2.1),field('title',141,title,449,fs,'serif',400,minSize=47),field('compactText' if compact else 'footer',145,bottom,443,30,overflow='details')]
+        if not compact:fields.append(field('meta',145,193,440,27))
     elif id=='club-tag':
         f+=circle(45,h/2,13,sw=.75,stroke='{{line}}')+line(78,32,78,h-32)
         f+=circle(585,head-10,14,sw=1.3)+circle(585,head-10,9,sw=.8)+line(98,bottom-33,601,bottom-33)
@@ -172,8 +178,7 @@ def design(id,compact=False):
     elif id=='event-ticket':
         split=142
         f+=line(split,25,split,h-25,dash='3 6',color='ink',sw=1.2)
-        f+=line(164,head+14,604,head+14)+rect(571,head-22,31,19,stroke='{{ink}}',sw=1.4,r=2)
-        fields=[field('sideTop',76,head+8,104,31,weight=600,anchor='middle',overflow='details'),field('sideMain',76,title+24,110,72 if compact else 83,weight=600,anchor='middle',overflow='details'),field('label',164,head,368,29,weight=700,tracking=2.2),field('title',162,title,440,fs,'serif',400,minSize=52),field('compactText' if compact else 'footer',165,bottom,436,30,overflow='details')]
+        fields=[field('sideTop',76,head+8,104,31,weight=600,anchor='middle',overflow='details'),field('sideMain',76,title+24,110,72 if compact else 83,weight=600,anchor='middle',overflow='details'),field('label',164,head,420,28,weight=700,tracking=2.2),field('title',162,title,440,54 if compact else 63,'serif',400,minSize=43),field('compactText' if compact else 'footer',165,bottom,436,29,overflow='details')]
         if not compact:fields.append(field('meta',165,196,438,27))
     elif id=='event-screening':
         # Rounded ticket with a print block / date stub. Still one tap target.
@@ -192,32 +197,38 @@ def design(id,compact=False):
         f+=line(36,head+15,605,head+15)+people(566,head-28,.8)+line(36,bottom-31,605,bottom-31)
         f+=arrow(567,bottom-9,30)
         fields=[field('label',39,head,500,30,weight=700,tracking=2.2),field('title',36,title,561,fs+3,'serif',400,minSize=51,italic=True),field('compactText' if compact else 'footer',40,bottom,513,30,overflow='details')]
-        if not compact:fields.append(field('meta',40,193,548,28))
+        if compact:fields.append(field('meta',40,162,500,23,weight=600,tracking=.6))
+        else:fields.append(field('meta',40,193,548,28))
     elif id=='meetup-fold':
         f+=line(34,head+14,568,head+14)+line(35,bottom-32,603,bottom-32)+arrow(568,bottom-9,28)
         fields=[field('label',38,head,503,30,weight=700,tracking=2),field('title',35,title,566,fs,'serif',400,minSize=50),field('compactText' if compact else 'footer',39,bottom,514,30,overflow='details')]
-        if not compact:fields.append(field('meta',39,193,520,28))
+        if compact:fields.append(field('meta',39,162,500,23,weight=600,tracking=.6))
+        else:fields.append(field('meta',39,193,520,28))
     elif id=='meetup-route':
         f+=line(104,31,104,h-31)
         f+=circle(59,head-9,5,fill='{{ink}}',stroke='none',sw=0)+line(59,head+2,59,title-6,dash='2 5',color='ink',sw=1.5)
         f+=path(f'M59 {title+35}C32 {title+6} 44 {title-11} 59 {title-11}S85 {title+6} 59 {title+35}Z',stroke='{{ink}}',sw=1.7)+circle(59,title+3,5,sw=1.5)
         fields=[field('label',128,head,425,30,weight=700,tracking=2),field('title',124,title,446,fs,'serif',400,minSize=47),field('compactText' if compact else 'footer',129,bottom,432,30,overflow='details')]
-        if not compact:fields.append(field('meta',129,193,435,28))
+        if compact:fields.append(field('meta',129,162,420,23,weight=600,tracking=.6))
+        else:fields.append(field('meta',129,193,435,28))
     elif id=='deal-coupon':
         f+=line(497,26,497,h-26,dash='3 6',color='ink',sw=1.1)+line(36,bottom-33,478,bottom-33)
         f+=circle(557,head-5,21,sw=1.2)+path(f'M547 {head+5}l20-20m-15 1h0m10 19h0',stroke='{{ink}}',sw=2,extra='stroke-linecap="round"')+circle(549,head-13,3,sw=1.5)+circle(565,head+3,3,sw=1.5)+arrow(542,bottom-8,30)
         fields=[field('label',37,head,440,30,weight=700,tracking=2),field('title',31,title+6,446,70 if compact else 80,weight=700,minSize=64 if compact else 70,overflow='offer',tracking=-2),field('sideMain',557,title+10,111,27,weight=700,anchor='middle',overflow='details'),field('compactText' if compact else 'footer',37,bottom,439,30 if compact else 28,overflow='details')]
-        if not compact:fields.extend([field('meta',37,203,435,31,weight=600),field('sideBottom',557,199,112,21,anchor='middle',overflow='details')])
+        if compact:fields.append(field('meta',37,162,435,23,weight=600,tracking=.5))
+        else:fields.extend([field('meta',37,203,435,31,weight=600),field('sideBottom',557,199,112,21,anchor='middle',overflow='details')])
     elif id=='deal-cashback':
         f+=line(40,bottom-33,600,bottom-33,dash='4 5',sw=1)
         f+=circle(577,title-15,28,stroke='{{line}}',sw=1.1)+path(f'M591 {title-12}a15 15 0 1 1-11-17m0-6v11h11',stroke='{{ink}}',sw=2,extra='stroke-linecap="round" stroke-linejoin="round"')
         fields=[field('label',42,head,550,29,weight=700,tracking=1.2),field('title',37,title+(10 if compact else 5),493,72 if compact else 80,weight=700,minSize=70,tracking=-1.6,overflow='offer'),field('compactText' if compact else 'footer',43,bottom,551,30 if compact else 28,overflow='details')]
-        if not compact:fields.append(field('meta',43,204,515,31,weight=600))
+        if compact:fields.append(field('meta',43,162,500,23,weight=600,tracking=.5))
+        else:fields.append(field('meta',43,204,515,31,weight=600))
     elif id=='deal-drop':
         f+=line(502,26,502,h-26,dash='3 6',color='ink',sw=1.1)+line(36,bottom-33,481,bottom-33)
         f+=circle(563,head+9,27,sw=1.2)+path(f'M563 {head-5}v27m-9-9 9 9 9-9',stroke='{{ink}}',sw=2,extra='stroke-linecap="round" stroke-linejoin="round"')+arrow(548,bottom-9,30)
         fields=[field('label',38,head,443,29,weight=700,tracking=1.1),field('title',32,title+3,450,65 if compact else 72,weight=700,minSize=58,tracking=-1.9,overflow='offer'),field('sideMain',563,title+20,106,26,weight=700,anchor='middle',overflow='details'),field('compactText' if compact else 'footer',38,bottom,443,29 if compact else 27,overflow='details')]
-        if not compact:fields.append(field('meta',38,201,443,31,weight=600))
+        if compact:fields.append(field('meta',38,162,443,23,weight=600,tracking=.5))
+        else:fields.append(field('meta',38,201,443,31,weight=600))
     return dict(width=640,height=h,frame=f,fields=fields)
 
 labels={'moment-voice':'MOMENT / VOICE','deal-cashback':'DEAL / CASH BACK','deal-drop':'DEAL / DROP'}

@@ -35,7 +35,7 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroPostStamp\(/);
-  assert.match(mediaPager, /min\(232, mediaWidth - 24\)/);
+  assert.match(mediaPager, /CaptroStampLayout\.feedWidth\(for: mediaWidth\)/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
 
@@ -172,7 +172,7 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(nativeStamp, /Button\(action: onOpen\)/);
   assert.doesNotMatch(nativeStamp, /Button\(action: onAction\)|Button\(action: onSave\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /min\(232, mediaWidth - 24\)/);
+  assert.match(mediaPager, /CaptroStampLayout\.feedWidth\(for: mediaWidth\)/);
   assert.match(mediaPager, /CaptroPostStamp\([\s\S]*?compact: true/);
   assert.match(nativeStamp, /640 \/ \(compact \? 224\.0 : 288\.0\)/);
 });

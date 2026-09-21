@@ -50,12 +50,30 @@ struct CaptroStampTemplate: Decodable {
       }
       return (String(characters.prefix(lower)) + "…", size)
     }
+    func fittedLines(_ value: String, maximumLines: Int) -> [(String, CGFloat)]? {
+      let words = value.split(whereSeparator: \.isWhitespace).map(String.init)
+      guard maximumLines == 2, words.count > 1 else { return nil }
+      var candidateSize = size
+      while candidateSize >= minSize {
+        var best: ([String], CGFloat)?
+        for split in 1..<words.count {
+          let lines = [words[..<split].joined(separator: " "), words[split...].joined(separator: " ")]
+          guard lines.allSatisfy({ fits($0, size: candidateSize) }) else { continue }
+          let widths = lines.map { ($0 as NSString).size(withAttributes: attributes(size: candidateSize)).width }
+          let imbalance = abs(widths[0] - widths[1])
+          if best == nil || imbalance < best!.1 { best = (lines, imbalance) }
+        }
+        if let best { return best.0.map { ($0, candidateSize) } }
+        candidateSize -= 1
+      }
+      return nil
+    }
   }
   struct Layer: Decodable {
     let commands: [[CGFloat]]
     let fill, stroke: String
     let width, opacity: CGFloat
-    let evenOdd, round, texture: Bool
+    let evenOdd, round, texture, paper: Bool
     let dash: [CGFloat]
     // Cached at catalogue load, not parsed every time a cell scrolls.
     var path: CGPath {
@@ -125,7 +143,18 @@ final class CaptroStampDrawingView: UIView {
       return UIColor(red: CGFloat((hex >> 16) & 255)/255, green: CGFloat((hex >> 8) & 255)/255, blue: CGFloat(hex & 255)/255, alpha: 1)
     }
     let paths = CaptroStampTemplate.paths[template.id]?[compact ? 0 : 1] ?? []
-    for (index, layer) in layout.layers.enumerated() where !compact || !layer.texture {
+    // A very close contact shadow makes the label read as paper without turning
+    // it into a floating UI card. It follows real cutouts and irregular edges.
+    if let paperIndex = layout.layers.firstIndex(where: \.paper), paths.indices.contains(paperIndex) {
+      context.saveGState()
+      context.setShadow(offset: CGSize(width: 0, height: 2.2), blur: 4.2,
+                        color: UIColor.black.withAlphaComponent(0.22).cgColor)
+      context.addPath(paths[paperIndex])
+      context.setFillColor(color("paper").cgColor)
+      context.fillPath(using: layout.layers[paperIndex].evenOdd ? .evenOdd : .winding)
+      context.restoreGState()
+    }
+    for (index, layer) in layout.layers.enumerated() {
       guard paths.indices.contains(index) else { continue }
       context.saveGState()
       context.setAlpha(layer.opacity)
@@ -153,6 +182,19 @@ final class CaptroStampDrawingView: UIView {
     }
     for field in layout.fields {
       guard let raw = fields[field.key], !raw.isEmpty else { continue }
+      if field.key == "title", ["event", "club", "meetup"].contains(content.family),
+         let lines = field.fittedLines(raw, maximumLines: 2), lines.count > 1 {
+        let lineHeight = lines[0].1 * 0.92
+        let firstBaseline = field.y - lineHeight * CGFloat(lines.count - 1) / 2
+        for (index, line) in lines.enumerated() {
+          let attributes = field.attributes(size: line.1, color: color(field.color))
+          let width = (line.0 as NSString).size(withAttributes: attributes).width
+          let x = field.x - (field.anchor == "middle" ? width/2 : field.anchor == "end" ? width : 0)
+          let baseline = firstBaseline + CGFloat(index) * lineHeight
+          (line.0 as NSString).draw(at: CGPoint(x: x, y: baseline - field.nativeFont(line.1).ascender), withAttributes: attributes)
+        }
+        continue
+      }
       let (text, size) = field.fitted(raw)
       let attributes = field.attributes(size: size, color: color(field.color))
       let width = (text as NSString).size(withAttributes: attributes).width

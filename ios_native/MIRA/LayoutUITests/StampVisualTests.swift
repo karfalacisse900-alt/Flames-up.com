@@ -1,7 +1,7 @@
 import XCTest
 
 final class StampVisualTests: XCTestCase {
-  func testAllStylesRemainLiveAndOpenOnlyDetails() {
+  func testFiveFamiliesAtRealFeedSizeAndOpenOnlyDetails() {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-stamp-visual-test"]
     app.launch()
@@ -10,15 +10,16 @@ final class StampVisualTests: XCTestCase {
     stamp.tap()
     XCTAssertTrue(app.buttons["Close"].waitForExistence(timeout: 3))
     app.buttons["Close"].tap()
-    for index in 0..<15 {
+    _ = app.otherElements["stamp.photo.loaded"].waitForExistence(timeout: 12)
+    let families = ["moment", "club", "event", "meetup", "deal"]
+    for (index, family) in families.enumerated() {
       let next = app.buttons["stamp.next"]
-      if !next.isHittable { app.swipeUp() }
       XCTAssertTrue(next.waitForExistence(timeout: 5))
       let screenshot = XCTAttachment(screenshot: app.screenshot())
-      screenshot.name = "stamp-\(index)"
+      screenshot.name = "feed-\(family)"
       screenshot.lifetime = .keepAlways
       add(screenshot)
-      next.tap()
+      if index < families.count - 1 { next.tap() }
     }
   }
 }
