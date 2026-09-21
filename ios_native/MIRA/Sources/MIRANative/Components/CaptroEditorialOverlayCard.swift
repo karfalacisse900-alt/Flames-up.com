@@ -2,7 +2,7 @@ import SwiftUI
 
 /// One quiet, on-media treatment for the five editorial attachment types.
 /// The entire card opens details; consequential actions remain on that screen.
-enum CaptroEditorialCardType: String, CaseIterable {
+enum CaptroEditorialCardType: String, CaseIterable, Equatable {
   case place, club, event, meetup, deal
 
   init?(stampKind: CaptroStampKind) {
@@ -37,7 +37,7 @@ enum CaptroEditorialCardLayout {
   static let inset: CGFloat = 14
 
   static func width(for mediaWidth: CGFloat) -> CGFloat {
-    min(340, max(0, mediaWidth - inset * 2), mediaWidth * 0.78)
+    min(min(340, max(0, mediaWidth - inset * 2)), mediaWidth * 0.78)
   }
 
   static func isCondensed(mediaWidth: CGFloat, mediaHeight: CGFloat) -> Bool {

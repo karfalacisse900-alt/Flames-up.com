@@ -34,12 +34,10 @@ extension MIRAPost {
     case .event:
       content.chipText = unavailable ?? date
       content.supportingText = joinedEditorialText([time, price])
-      content.description = cleanEditorialText(commerce?.description) ?? cleanEditorialText(captroFeedCaptionText)
     case .meetup:
       content.chipText = unavailable ?? commerce.map { "\(max(0, $0.joinedCount)) GOING" }
         ?? event?.attendeesCount.map { "\(max(0, $0)) GOING" }
       content.supportingText = joinedEditorialText([date, time, price])
-      content.description = cleanEditorialText(commerce?.description) ?? cleanEditorialText(captroFeedCaptionText)
     case .deal:
       // Never parse a discount or minimum spend from decorative post text.
       // A long/unavailable condition gets a neutral summary, not a misleading offer.
@@ -47,7 +45,9 @@ extension MIRAPost {
       let rules = cleanEditorialText(commerce?.publicData?.redemptionRules)
       let conciseRules = rules.flatMap { $0.count <= 70 ? $0 : nil }
       content.chipText = unavailable ?? (rules != nil && conciseRules == nil ? "VIEW OFFER" : benefit ?? "VIEW OFFER")
-      content.supportingText = conciseRules ?? (rules == nil ? nil : "Full conditions in details")
+      let expiry = CaptroStampAdapter.datePart(commerce?.expiresAt,
+        timeZone: commerce?.timeZone, format: "MMM d jmm").map { "Until \($0)" }
+      content.supportingText = conciseRules ?? (rules == nil ? expiry : "Full conditions in details")
       if content.chipText == "VIEW OFFER", content.supportingText == nil {
         content.supportingText = "See offer details"
       }
