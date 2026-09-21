@@ -66,6 +66,6 @@ test('composer respects the keyboard and exposes editable stamps, not just hidde
   assert.match(composer, /safeAreaInset\(edge: \.bottom, spacing: 0\) \{ composerToolBar/);
   assert.match(composer, /CaptroEventEditorFields\(draft: \$eventDraft\)/);
   assert.match(composer, /event: isEventStamp \? eventDraft.input : nil/);
-  assert.match(composer, /CaptroPostStamp\(content: composerStampContent/);
+  assert.match(composer, /CaptroEditorialOverlayCard\(content: CaptroEditorialCardContent\(draftStamp: composerStampContent\)/);
   assert.match(source('Screens/PostDetailNativeView.swift'), /isMuted = false/);
 });

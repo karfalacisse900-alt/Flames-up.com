@@ -28,7 +28,7 @@ const composer = source('../../ios_native/MIRA/Sources/MIRANative/Screens/Notifi
 const payoutOnboarding = source('../../ios_native/MIRA/Sources/MIRANative/Services/CaptroPayoutOnboardingCoordinator.swift');
 const packageManifest = source('../../ios_native/MIRA/Package.swift');
 const cache = source('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAppCacheStore.swift');
-const homeStamp = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostOverlays.swift');
+const overlayCard = source('../../ios_native/MIRA/Sources/MIRANative/Components/CaptroEditorialOverlayCard.swift');
 const homePost = source('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostView.swift');
 const details = source('../../ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift');
 
@@ -386,6 +386,6 @@ test('stamp has one detail target while saving remains available in the detail h
   assert.equal((details.match(/reactionRow\(/g) || []).length, 1, 'reactionRow must remain unused except for its private declaration');
   assert.match(details, /detailHeader/);
   assert.match(details, /Image\(systemName: model\.post\.viewerSaved \? "bookmark\.fill" : "bookmark"\)/);
-  assert.doesNotMatch(homeStamp, /Button\(action: onSave\)/);
-  assert.match(homePost, /isSaved: post\.viewerSaved, onSave: onSave/);
+  assert.doesNotMatch(overlayCard, /Button\(action: onSave\)/);
+  assert.match(homePost, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent, onOpen: onOpenPost\)/);
 });
