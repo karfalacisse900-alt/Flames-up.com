@@ -13,8 +13,9 @@ python design/captro-stamps-v2/tools/export-swift.py
 ```
 
 Native entry points: `CaptroPostStamp`, `CaptroStampArtwork`, `CaptroStampAdapter`.
-Feed/editor use compact 640×224 at 232 points. Details use 640×288 with 3.5%
-deterministic vector fibers. Feed texture remains off pending device profiling.
+Feed/editor use compact 640×224 at a responsive 184–214 points. Details use 640×288.
+Both densities use deterministic 2.4% vector fibers below live text; the feed path is
+one cached path per texture layer and passed focused iPhone rendering validation.
 System sans and installed Georgia are measured with NSString, not estimated.
 Unknown variants fall back within their own family. Important term overflow uses
 neutral details copy; an overflowing deal condition also suppresses its benefit.

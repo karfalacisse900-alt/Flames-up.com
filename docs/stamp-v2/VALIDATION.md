@@ -2,6 +2,30 @@
 
 ## Real app screenshots
 
+### Physical-material refinement pass
+
+Final iPhone 17 feed-scale captures from commit `de962c61`, Actions run
+`35551395291`:
+
+- [Moment on a photograph](refinement-feed-moment.png)
+- [Club on a photograph](refinement-feed-club.png)
+- [Event on a photograph](refinement-feed-event.png)
+- [Meetup on a photograph](refinement-feed-meetup.png)
+- [Deal on a photograph](refinement-feed-deal.png)
+
+These use the production native stamp component at its responsive feed width over a
+read-only photograph from Captro's public feed. The surrounding header/action layout
+is a non-writing DEBUG QA fixture at the real iPhone viewport; it is not a redesigned
+production feed. The run passed six native renderer/data tests and one five-family
+tap/screenshot flow. The photos verify the compact stamp scale, contrast, complete
+Event title, Club/Meetup spacing, and Deal merchant plus qualifying condition.
+
+This pass changed only stamp presentation: responsive 184–214 point sizing, close
+contour-following contact shadow, deterministic 2.4% paper fibers, quieter Moment,
+physical Club pass construction, multiline fallback for genuinely long Event/Club/
+Meetup titles, and a printed paper state slip instead of a rounded UI capsule. Data,
+navigation, five-family mapping, media ratios and consequential actions are unchanged.
+
 - [Before](home-before.png): Home's production component in the offline media fixture,
   September 19, commit `6d9cfa98`, iPhone 17 Pro Max, Actions run `35458338471`.
 - [After](home-after.png): same square-media fixture in Home, September 20 local time,
@@ -23,7 +47,8 @@ conditions retained alongside Expired / Saved. Run `35547481917`, commit `c35b28
 - `Components/CaptroStampArtwork.swift`: native paths, live measured text, protected
   financial/condition overflow, real waveform input, texture off in the feed.
 - `Components/CaptroPostStamp.swift`: five-family adapter, 15 style IDs, single detail
-  button, separate availability/relationship labels, screen-reader description.
+  button, separate printed availability/relationship slip, responsive feed sizing,
+  screen-reader description.
 - `Models/CaptroStampAdapter.swift`: real commerce dates/timezones, billing intervals,
   offer conditions and status; no amounts parsed from decorative strings.
 - `CaptroFeedPostOverlays`, `CaptroFeedMediaPager`, `CaptroFeedPostView`: record mapping,
