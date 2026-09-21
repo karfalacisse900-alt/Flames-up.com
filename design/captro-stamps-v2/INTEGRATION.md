@@ -27,7 +27,8 @@ or authorization changes were made.
 
 `stamp_variant` is an allowlisted value in existing post metadata. Worker changes
 must be deployed before selected styles round-trip on the live service. There is
-no migration. No production deployment/data mutation is part of this change.
+no migration. The user-approved stamp-only Worker release is deployed; see
+`docs/stamp-v2/VALIDATION.md` for release evidence and live verification limits.
 Older records use the family default. Drafts include the style and no longer get
 silently cleared on process startup. Explicit discard and publish still clear them.
 
