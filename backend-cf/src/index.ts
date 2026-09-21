@@ -6896,6 +6896,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     display_location_source: cleanText((raw as any).display_location_source || (metadata as any).display_location_source, 40),
     display_location_visibility: cleanText((raw as any).display_location_visibility || (metadata as any).display_location_visibility || 'public', 40),
     post_type: cleanText(row?.post_type || 'general', 80),
+    stamp_variant: validatedStampVariant((metadata as any).stamp_variant, row?.post_type),
     place_id: cleanText((place as any).id, 160),
     place_name: cleanText((place as any).name, 180),
     place_provider: cleanText((place as any).provider || 'apple_mapkit', 40),
@@ -12746,6 +12747,7 @@ function supabasePrimaryPostCreatePayload(input: any) {
     metadata: {
       source: 'cloudflare_worker_supabase_primary',
       creator_event: input.creatorEvent,
+      stamp_variant: validatedStampVariant(input.stampVariant, input.postType),
       image: mediaUrls[0] || '',
       client_request_id: cleanText(input.clientRequestId, 120),
       media_backup_ids: parseJsonArray(input.backupIds),
@@ -16198,6 +16200,7 @@ api.post('/posts', authMiddleware, async (c) => {
     id,
     userId,
     creatorEvent,
+    stampVariant: validatedStampVariant(b.stamp_variant ?? b.stampVariant, postType),
     authUserId: supabaseAuthorRow?.supabase_user_id || userId,
     postTitle,
     postContent,
@@ -24532,3 +24535,4 @@ export default {
     if (controller.cron === '23 * * * *') ctx.waitUntil(reconcileStripeFinancialState(env));
   },
 };
+import { validatedStampVariant } from './stamp-style';
