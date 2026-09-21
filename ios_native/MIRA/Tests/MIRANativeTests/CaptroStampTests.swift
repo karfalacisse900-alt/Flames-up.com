@@ -59,5 +59,7 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertEqual(lines.map(\.0).joined(separator: " "), "Bronx Run Club")
     XCTAssertEqual(lines.count, 2)
     XCTAssertFalse(lines.contains(where: { $0.0.contains("…") }))
+    let club = try XCTUnwrap(CaptroStampTemplate.catalog["club-oval"]?.compact.fields.first(where: { $0.key == "title" }))
+    XCTAssertTrue(club.fits("Yoga NYC", size: club.size))
   }
 }

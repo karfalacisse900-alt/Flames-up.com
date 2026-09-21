@@ -64,7 +64,6 @@ def shape(id,h):
         cx,cy,rx,ry=320,h/2,307,(h-24)/2
         base=f'<ellipse cx="{cx}" cy="{cy}" rx="{rx}" ry="{ry}" fill="{{{{paper}}}}" stroke="{{{{ink}}}}" stroke-width="1.6"/>'
         base+=f'<ellipse cx="320" cy="{cy}" rx="295" ry="{ry-10}" fill="none" stroke="{{{{line}}}}" stroke-width="2"/>'
-        base+=f'<ellipse cx="320" cy="{cy}" rx="285" ry="{ry-18}" fill="none" stroke="{{{{ink}}}}" stroke-width=".8" opacity=".45"/>'
         inner=lambda x,z:((x-320)/278)**2+((z-h/2)/(ry-20))**2<1
     elif id in ('moment-postal','event-postal'):
         # 20px scallops are purpose-drawn in the outline, not filled circles.

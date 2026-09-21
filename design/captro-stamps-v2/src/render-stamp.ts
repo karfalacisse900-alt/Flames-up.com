@@ -138,7 +138,8 @@ export function renderStamp(data: StampData, options: RenderOptions = {}): strin
     for (const field of layout.fields) {
       const raw = fieldValue(field, template, data);
       if (!raw) continue;
-      const wrapped = field.key === 'title' && ['event', 'club', 'meetup'].includes(template.type)
+      const wrapped = field.key === 'title' && estimatedWidth(raw, field, field.size) > field.maxWidth
+        && ['event', 'club', 'meetup'].includes(template.type)
         ? fitLines(raw, field) : null;
       if (wrapped && wrapped.lines.length > 1) {
         const lineHeight = wrapped.size * .92;

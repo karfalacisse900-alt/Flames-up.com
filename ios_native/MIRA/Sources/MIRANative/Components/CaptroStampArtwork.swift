@@ -182,7 +182,8 @@ final class CaptroStampDrawingView: UIView {
     }
     for field in layout.fields {
       guard let raw = fields[field.key], !raw.isEmpty else { continue }
-      if field.key == "title", ["event", "club", "meetup"].contains(content.family),
+      if field.key == "title", !field.fits(raw, size: field.size),
+         ["event", "club", "meetup"].contains(content.family),
          let lines = field.fittedLines(raw, maximumLines: 2), lines.count > 1 {
         let lineHeight = lines[0].1 * 0.92
         let firstBaseline = field.y - lineHeight * CGFloat(lines.count - 1) / 2
