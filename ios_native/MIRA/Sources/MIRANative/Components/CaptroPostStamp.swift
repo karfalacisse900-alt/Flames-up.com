@@ -83,13 +83,32 @@ struct CaptroPostStamp: View {
       // Separate from the printed terms: SAVED can never conceal EXPIRED.
       let statuses = [content.availability, content.relationship].compactMap { $0 }
       if !statuses.isEmpty {
-        Text(statuses.joined(separator: " · "))
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.primary)
+        Text(statuses.joined(separator: " · ").uppercased())
+          .font(.system(size: 9.5, weight: .bold, design: .rounded))
+          .tracking(0.5)
+          .foregroundStyle(Color(red: 0.17, green: 0.16, blue: 0.14))
           .padding(.horizontal, 7).padding(.vertical, 3)
-          .background(.background, in: Capsule())
+          .background {
+            CaptroStampStatusSlip()
+              .fill(Color(red: 0.965, green: 0.945, blue: 0.895))
+              .overlay { CaptroStampStatusSlip().stroke(.black.opacity(0.16), lineWidth: 0.55) }
+              .shadow(color: .black.opacity(0.18), radius: 1.2, x: 0, y: 0.8)
+          }
+          .rotationEffect(.degrees(-0.6))
       }
     }
     .contentShape(Rectangle())
+  }
+}
+
+private struct CaptroStampStatusSlip: Shape {
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    path.move(to: CGPoint(x: 1, y: 2))
+    path.addLine(to: CGPoint(x: rect.maxX - 1.5, y: 0.6))
+    path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - 1.2))
+    path.addLine(to: CGPoint(x: 1.8, y: rect.maxY))
+    path.closeSubpath()
+    return path
   }
 }
