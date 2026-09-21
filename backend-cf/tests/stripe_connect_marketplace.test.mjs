@@ -382,10 +382,10 @@ test('checkout distinguishes seller readiness from temporary Stripe failures', (
   assert.match(worker, /code !== 'CAPTRO_PAYOUTS_NOT_READY'/);
 });
 
-test('Details removes the lower reaction strip while Home stamps expose a red save control', () => {
+test('stamp has one detail target while saving remains available in the detail header', () => {
   assert.equal((details.match(/reactionRow\(/g) || []).length, 1, 'reactionRow must remain unused except for its private declaration');
   assert.match(details, /detailHeader/);
-  assert.match(homeStamp, /Image\(systemName: isSaved \? "bookmark\.fill" : "bookmark"\)/);
-  assert.match(homeStamp, /foregroundStyle\(MIRATheme\.Color\.like\)/);
+  assert.match(details, /Image\(systemName: model\.post\.viewerSaved \? "bookmark\.fill" : "bookmark"\)/);
+  assert.doesNotMatch(homeStamp, /Button\(action: onSave\)/);
   assert.match(homePost, /isSaved: post\.viewerSaved, onSave: onSave/);
 });

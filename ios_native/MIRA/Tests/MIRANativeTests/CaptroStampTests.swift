@@ -41,5 +41,6 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertEqual(post.captroStampContent.resolvedVariant,"club-tag")
     let restored = try JSONDecoder().decode(MIRAPost.self, from: JSONEncoder().encode(post))
     XCTAssertEqual(restored.stampVariant,"club-tag")
+    XCTAssertEqual(post.updating(liked: true).stampVariant,"club-tag")
   }
 }

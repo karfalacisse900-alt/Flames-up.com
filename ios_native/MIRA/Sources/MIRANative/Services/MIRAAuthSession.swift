@@ -330,6 +330,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
     keychain.clearSession()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
     Task {
+      await MIRAAppCacheStore.shared.clearPostDraft()
       await MIRALocalJSONCache.remove(key: cachedUserKey)
       await MIRAPostEngagementSync.clearCachedState()
     }
@@ -351,6 +352,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
     keychain.clearSession()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
     Task {
+      await MIRAAppCacheStore.shared.clearPostDraft()
       await MIRALocalJSONCache.remove(key: cachedUserKey)
       await MIRAPostEngagementSync.clearCachedState()
     }

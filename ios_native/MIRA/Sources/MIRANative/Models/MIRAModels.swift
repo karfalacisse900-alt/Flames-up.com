@@ -358,6 +358,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       displayLocationSource: displayLocationSource,
       displayLocationVisibility: displayLocationVisibility,
       postType: postType,
+      stampVariant: stampVariant,
       primaryCategory: primaryCategory,
       category: category,
       categoryConfidence: categoryConfidence,

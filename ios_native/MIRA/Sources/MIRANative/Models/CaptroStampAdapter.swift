@@ -37,7 +37,8 @@ enum CaptroStampAdapter {
       let rules = commerce.publicData?.redemptionRules?.trimmingCharacters(in: .whitespacesAndNewlines)
       return rules?.isEmpty == false ? rules : nil
     }
-    guard let price = commerce.lowestPrice?.stampPrice else { return "View pricing and terms" }
+    guard let lowest = commerce.lowestPrice?.stampPrice else { return "View pricing and terms" }
+    let price = commerce.prices.count > 1 ? "From \(lowest)" : lowest
     if family == "club" { return price }
     return [datePart(commerce.startsAt, timeZone: commerce.timeZone, format: "MMM d jmm"), price]
       .compactMap { $0 }.joined(separator: " · ")
@@ -54,7 +55,15 @@ enum CaptroStampAdapter {
     switch commerce?.viewerStatus {
     case "used": return "Used"
     case "claimed": return "Claimed"
-    case "active", "confirmed": return commerce?.fulfillmentType == "membership" ? "Member" : "Joined"
+    case "active", "confirmed":
+      switch commerce?.fulfillmentType {
+      case "membership", "group_access": return "Member"
+      case "redemption": return "Claimed"
+      case "ticket": return "Ticket ready"
+      case "reservation": return "Reserved"
+      case "attendance": return "Joined"
+      default: return "Confirmed"
+      }
     case "payment_pending": return "Payment pending"
     case "approval_pending": return "Request pending"
     default: return saved ? "Saved" : nil

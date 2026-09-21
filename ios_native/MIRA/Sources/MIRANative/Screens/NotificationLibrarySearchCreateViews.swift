@@ -1688,6 +1688,7 @@ public struct CreatePostNativeView: View {
           Section {
             TextField("Title", text: $title)
             TextField("Details (optional)", text: $bodyText, axis: .vertical).lineLimit(3...6)
+            TextField("Conditions and redemption instructions", text: $commerceDraft.redemptionRules, axis: .vertical).lineLimit(2...5)
           }
           Section {
             if commerceDraft.hasExpiration {
@@ -1859,7 +1860,8 @@ public struct CreatePostNativeView: View {
 
   private var composerStampContent: CaptroStampContent {
     CaptroStampContent(kind: selectedStampKind,
-      title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedStampKind.displayName : title,
+      title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? (bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedStampKind.displayName : bodyText) : title,
       metadata: isEventStamp && !eventDraft.venueName.isEmpty ? eventDraft.venueName : selectedPlace?.displayName,
       description: bodyText.isEmpty ? nil : bodyText,
       footer: nil, actionTitle: selectedStampKind.actionTitle, contributors: [],
@@ -1875,8 +1877,9 @@ public struct CreatePostNativeView: View {
       let rules = input.publicData.redemptionRules?.trimmingCharacters(in: .whitespacesAndNewlines)
       return rules?.isEmpty == false ? rules : nil
     }
-    guard commerceDraft.validationError == nil, let price = input.prices.first else { return "View pricing and terms" }
-    let amount = price.unitAmount == 0 ? "Free" : CaptroMoney.format(minorUnits: price.unitAmount, currency: input.currency) + " one time"
+    guard commerceDraft.validationError == nil, let price = input.prices.min(by: { $0.unitAmount < $1.unitAmount }) else { return "View pricing and terms" }
+    let lowest = price.unitAmount == 0 ? "Free" : CaptroMoney.format(minorUnits: price.unitAmount, currency: input.currency) + " one time"
+    let amount = input.prices.count > 1 ? "From \(lowest)" : lowest
     if selectedStampKind.stampFamily == "club" { return amount }
     return [CaptroStampAdapter.datePart(input.startsAt, timeZone: input.timezone, format: "MMM d jmm"), amount]
       .compactMap { $0 }.joined(separator: " · ")

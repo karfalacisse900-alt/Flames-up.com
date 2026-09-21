@@ -33,6 +33,7 @@ extension CaptroStampContent {
             "meta": metadata ?? "", "footer": supporting, "compactText": supporting,
             "sideTop": dateMonth ?? "", "sideMain": family == "deal" ? "VIEW" : resolvedVariant == "moment-voice" ? duration ?? "" : dateDay ?? "",
             "sideBottom": family == "deal" ? "TERMS" : ""]
+      .mapValues { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
   }
   var accessibleStampLabel: String {
     [family.capitalized, title, metadata, description, terms, availability, relationship]
@@ -60,6 +61,7 @@ struct CaptroPostStamp: View {
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(content.accessibleStampLabel)
+    .accessibilityIdentifier("captro.stamp")
   }
   private var artwork: some View {
     VStack(alignment: .leading, spacing: 3) {

@@ -41,9 +41,14 @@ struct CaptroStampTemplate: Decodable {
       if overflow != "ellipsis" {
         return (maxWidth < 160 ? "INFO" : (overflow == "offer" ? "VIEW OFFER" : "SEE DETAILS"), min(size, 30))
       }
-      var shortened = value
-      while !shortened.isEmpty && !fits(shortened + "…", size: size) { shortened.removeLast() }
-      return (shortened + "…", size)
+      let characters = Array(value)
+      var lower = 0, upper = characters.count
+      while lower < upper {
+        let middle = (lower + upper + 1) / 2
+        if fits(String(characters.prefix(middle)) + "…", size: size) { lower = middle }
+        else { upper = middle - 1 }
+      }
+      return (String(characters.prefix(lower)) + "…", size)
     }
   }
   struct Layer: Decodable {

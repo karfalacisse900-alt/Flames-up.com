@@ -216,7 +216,7 @@ extension MIRAPost {
     switch kind {
     case .event, .meetup, .party, .ticket, .booking, .club, .group, .deal, .localOffer:
       let event = detail?.event
-      let price = commerce?.lowestPrice.map { $0.unitAmount == 0 ? "FREE" : $0.money }
+      let price = commerce?.lowestPrice?.stampPrice
       let facts = [commerce?.scheduleLabel, event?.calendarDate, event?.timeRange, commerce?.locationName,
         event?.venueName, price, event?.priceLabel, commerce?.compactAvailabilityLabel].compactMap { $0 }
       summary = facts.isEmpty ? captroFeedCaptionText : facts.joined(separator: " · ")
@@ -231,7 +231,9 @@ extension MIRAPost {
     return CaptroStampContent(
       kind: kind,
       title: title,
-      metadata: metadata,
+      metadata: kind.stampFamily == "club" && commerce != nil
+        ? [metadata, commerce.map { "\($0.joinedCount) members" }].compactMap { $0 }.joined(separator: " · ")
+        : metadata,
       description: summary,
       footer: captroAuthorStampFooter,
       actionTitle: kind.actionTitle,
