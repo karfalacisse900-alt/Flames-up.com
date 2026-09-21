@@ -51,17 +51,19 @@ struct CaptroPostStamp: View {
   var onSave: (() -> Void)? = nil
   var compact = false
 
-  var body: some View {
-    Group {
-      if let onOpen {
-        Button(action: onOpen) { artwork }
-          .buttonStyle(.plain)
-          .accessibilityHint("Opens details; does not join or make a payment")
-      } else { artwork }
+  @ViewBuilder var body: some View {
+    if let onOpen {
+      Button(action: onOpen) { artwork.accessibilityHidden(true) }
+        .buttonStyle(.plain)
+        .accessibilityLabel(content.accessibleStampLabel)
+        .accessibilityHint("Opens details; does not join or make a payment")
+        .accessibilityIdentifier("captro.stamp")
+    } else {
+      artwork
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(content.accessibleStampLabel)
+        .accessibilityIdentifier("captro.stamp.preview")
     }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(content.accessibleStampLabel)
-    .accessibilityIdentifier("captro.stamp")
   }
   private var artwork: some View {
     VStack(alignment: .leading, spacing: 3) {

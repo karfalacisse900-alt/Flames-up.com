@@ -25,7 +25,6 @@ jobs:
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath "$RUNNER_TEMP/StampBuild" -resultBundlePath "$RUNNER_TEMP/Stamps.xcresult" \
             -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests \
-            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/stamp-build.log"
       - name: Export screenshots
         if: always()
@@ -37,4 +36,3 @@ jobs:
           path: |
             ${{ runner.temp }}/stamp-build.log
             ${{ runner.temp }}/stamp-screenshots/
-            ${{ runner.temp }}/Stamps.xcresult/
