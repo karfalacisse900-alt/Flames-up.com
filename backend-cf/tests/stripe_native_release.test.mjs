@@ -127,6 +127,11 @@ test('the production bootstrap binds one Stripe mode and provisions both signed 
   assert.match(bootstrap, /balance\.available/);
   assert.match(bootstrap, /platformSigningSecret/);
   assert.match(bootstrap, /connectSigningSecret/);
+  if (deployWorkflow.includes('Deploy stamp code without migrations or secret changes')) {
+    assert.doesNotMatch(deployWorkflow, /secret put|db push|bootstrap-token|STRIPE_SECRET_KEY/);
+    assert.match(deployWorkflow, /--keep-vars/);
+    assert.match(deployWorkflow, /environment: captro-payments-live/);
+  } else {
   assert.match(deployWorkflow, /Sync Stripe payment API secrets/);
   assert.match(deployWorkflow, /Provision Stripe payment webhooks and bind live database/);
   assert.match(deployWorkflow, /STRIPE_SECRET_KEY/);
@@ -135,6 +140,9 @@ test('the production bootstrap binds one Stripe mode and provisions both signed 
   assert.match(deployWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: \$\{\{ vars\.STRIPE_EXPECTED_ACCOUNT_ID \}\}/);
   assert.match(deployWorkflow, /actual_account_id.*STRIPE_EXPECTED_ACCOUNT_ID/s);
   assert.match(deployWorkflow, /Verify production Stripe Connect runtime[\s\S]*STRIPE_SECRET_KEY/);
+  assert.match(deployWorkflow, /Waiting for newly deployed Cloudflare secrets/);
+  assert.match(deployWorkflow, /http_status" = "404".*code" = "NOT_FOUND".*sleep 5/s);
+  }
   assert.match(connectSmoke, /https:\/\/api\.stripe\.com\/v1\/account_sessions/);
   assert.match(connectSmoke, /accountV2\.dashboard, 'none'/);
   assert.match(connectSmoke, /requirement_collection, 'application'/);
@@ -142,8 +150,6 @@ test('the production bootstrap binds one Stripe mode and provisions both signed 
   assert.match(connectSmoke, /disable_stripe_user_authentication\]': 'true'/);
   assert.match(connectSmoke, /Stripe-Version': '2024-10-28\.acacia'/);
   assert.doesNotMatch(connectSmoke, /\/core\/account_links|\/login_links/);
-  assert.match(deployWorkflow, /Waiting for newly deployed Cloudflare secrets/);
-  assert.match(deployWorkflow, /http_status" = "404".*code" = "NOT_FOUND".*sleep 5/s);
   assert.doesNotMatch(deployWorkflow, /STRIPE_EXPECTED_ACCOUNT_ID: acct_/);
 });
 

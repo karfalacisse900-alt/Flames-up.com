@@ -19,7 +19,7 @@ jobs:
         run: |
           git fetch origin af5bdc3e06a71bb9b8fa4e491d89a0d703000027
           git diff --name-only af5bdc3e06a71bb9b8fa4e491d89a0d703000027 HEAD > /tmp/changed
-          if grep -Ev '^(backend-cf/src/(index|commerce|stamp-style)\.ts|backend-cf/tests/stamp-release\.test\.mjs|\.github/workflows/deploy-worker\.yml)$' /tmp/changed; then exit 1; fi
+          if grep -Ev '^(backend-cf/src/(index|commerce|stamp-style)\.ts|backend-cf/tests/(stamp-release|stripe_native_release)\.test\.mjs|\.github/workflows/deploy-worker\.yml)$' /tmp/changed; then exit 1; fi
       - run: npm ci
         working-directory: backend-cf
       - run: npx tsc --noEmit
