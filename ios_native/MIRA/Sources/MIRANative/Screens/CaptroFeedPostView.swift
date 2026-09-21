@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 struct CaptroFeedPostView: View {
   let post: MIRAPost
@@ -40,9 +41,11 @@ struct CaptroFeedPostView: View {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
       } else {
-        CaptroPostStamp(content: post.captroStampContent, onOpen: onOpenPost, isSaved: post.viewerSaved, onSave: onSave)
-          .padding(.horizontal, 16)
-        if let caption = post.captroFeedCaptionText {
+        CaptroEditorialOverlayCard(content: post.captroEditorialCardContent, onOpen: onOpenPost)
+          .frame(width: CaptroEditorialCardLayout.width(for: pageSize?.width ?? UIScreen.main.bounds.width), alignment: .leading)
+          .padding(.horizontal, CaptroEditorialCardLayout.inset)
+        if post.captroEditorialCardContent.type != .moment,
+           let caption = post.captroFeedCaptionText {
           Text(caption).font(.body).lineLimit(5).padding(.horizontal, 16).padding(.top, 8)
         }
       }

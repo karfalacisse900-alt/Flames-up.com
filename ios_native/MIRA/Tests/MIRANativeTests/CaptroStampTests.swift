@@ -63,16 +63,17 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertTrue(club.fits("Yoga NYC", size: club.size))
   }
 
-  func testEditorialCardUsesOneDesignForFiveLiveKinds() {
+  func testEditorialCardUsesOneDesignForMomentAndAttachedKinds() {
     let mappings: [(CaptroStampKind, CaptroEditorialCardType)] = [
-      (.place, .place), (.club, .club), (.event, .event), (.meetup, .meetup), (.deal, .deal)
+      (.social, .moment), (.place, .place), (.club, .club), (.event, .event),
+      (.meetup, .meetup), (.deal, .deal)
     ]
     for (kind, expected) in mappings {
       XCTAssertEqual(CaptroEditorialCardType(stampKind: kind), expected)
     }
-    XCTAssertNil(CaptroEditorialCardType(stampKind: .social))
-    XCTAssertEqual(CaptroEditorialCardLayout.width(for: 320), 249.6, accuracy: 0.01)
-    XCTAssertEqual(CaptroEditorialCardLayout.width(for: 390), 304.2, accuracy: 0.01)
+    XCTAssertEqual(CaptroEditorialCardType(stampKind: .travel), .moment)
+    XCTAssertEqual(CaptroEditorialCardLayout.width(for: 320), 233.6, accuracy: 0.01)
+    XCTAssertEqual(CaptroEditorialCardLayout.width(for: 390), 284.7, accuracy: 0.01)
     XCTAssertTrue(CaptroEditorialCardLayout.isCondensed(mediaWidth: 390, mediaHeight: 219))
     XCTAssertFalse(CaptroEditorialCardLayout.isCondensed(mediaWidth: 390, mediaHeight: 488))
   }
@@ -80,22 +81,38 @@ final class CaptroStampTests: XCTestCase {
   func testEditorialPlaceUsesPostDataAndDoesNotInventMissingCounts() throws {
     let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
     let withCount = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"post","post_type":"place","place_name":"Ruffian","display_location_label":"East Village","saves_count":469,"caption":"An intimate wine bar.","user_username":"atlanta_gao"}"#.utf8))
-    let card = try XCTUnwrap(withCount.captroEditorialCardContent)
+    let card = withCount.captroEditorialCardContent
     XCTAssertEqual(card.type, .place)
     XCTAssertEqual(card.title, "Ruffian")
     XCTAssertEqual(card.chipText, "469 SAVES")
     XCTAssertEqual(card.username, "@atlanta_gao")
     let noCount = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"post","post_type":"place","place_name":"Ruffian"}"#.utf8))
-    XCTAssertNil(noCount.captroEditorialCardContent?.chipText)
+    XCTAssertNil(noCount.captroEditorialCardContent.chipText)
   }
 
   func testEditorialDealDoesNotInventBenefitOrLoseConditions() throws {
     let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
     let json = #"{"id":"post","post_type":"deal","detail":{"commerce":{"id":"offer","content_type":"deal","fulfillment_type":"redemption","payment_model":"free","commerce_class":"commerce","title":"Joe's Pizza","description":"Offer details","joined_count":0,"refund_policy":"none","approval_required":false,"pass_required":false,"status":"expired","audience":"public","public_data":{"benefits":["20% Off"],"redemption_rules":"Spend $20+"},"prices":[]}}}"#
     let post = try decoder.decode(MIRAPost.self, from: Data(json.utf8))
-    let card = try XCTUnwrap(post.captroEditorialCardContent)
+    let card = post.captroEditorialCardContent
     XCTAssertEqual(card.title, "Joe's Pizza")
     XCTAssertEqual(card.chipText, "Expired")
     XCTAssertEqual(card.supportingText, "Spend $20+")
+  }
+
+  func testVoiceMomentAndStampedVoicePostsUseTheSameCard() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let moment = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"voice","post_type":"general","caption":"Walking home","detail":{"voice":{"id":"audio-1","duration_ms":42000}}}"#.utf8))
+    XCTAssertEqual(moment.captroEditorialCardContent.type, .moment)
+    XCTAssertEqual(moment.captroEditorialCardContent.title, "Voice post")
+    XCTAssertEqual(moment.captroEditorialCardContent.description, "Walking home")
+
+    for kind in CaptroStampKind.creationCases {
+      let body = CreatePostBody(title: "Test", content: "A recorded post", image: nil,
+        images: [], mediaTypes: [], mediaDimensions: [], postType: kind.backendPostType,
+        voiceAudioId: "audio-1", visibility: "public", clientRequestId: "request-1")
+      XCTAssertEqual(body.postType, kind.backendPostType)
+      XCTAssertEqual(body.voiceAudioId, "audio-1")
+    }
   }
 }

@@ -982,7 +982,6 @@ public struct CreatePostNativeView: View {
   @State private var editedCameraMedia: MIRAPickedMedia?
   @State private var activePostDetailSheet: PostDetailSheet?
   @State private var selectedStampKind: CaptroStampKind = .social
-  @State private var stampVariant = "moment-paper"
   @State private var eventDraft = CaptroEventDraft()
   @State private var commerceDraft = CaptroCommerceDraft()
   @State private var selectedPlace: MIRAExactPostPlace?
@@ -1045,6 +1044,9 @@ public struct CreatePostNativeView: View {
     }
     .fullScreenCover(isPresented: $showVoiceRecorder) {
       CaptroVoiceRecorderSheet(limit: 60) { draft in
+        if let previous = voiceDraft, previous.fileURL != draft.fileURL {
+          try? FileManager.default.removeItem(at: previous.fileURL)
+        }
         voiceDraft = draft
         voiceSubmissionId = nil
       }
@@ -1084,7 +1086,6 @@ public struct CreatePostNativeView: View {
       handleSelectedPlaceChange(place)
     }
     .onChange(of: selectedStampKind) { _, kind in
-      if !kind.stampVariants.contains(stampVariant) { stampVariant = kind.stampVariants[0] }
       if kind.commerceContentType != nil {
         commerceDraft.enabled = true
         commerceDraft.configureDefaults(for: kind)
@@ -1094,7 +1095,6 @@ public struct CreatePostNativeView: View {
       cacheComposerDraft()
     }
     .onChange(of: hasSelectedStamp) { _, _ in cacheComposerDraft() }
-    .onChange(of: stampVariant) { _, _ in cacheComposerDraft() }
     .onChange(of: momentType) { _, _ in cacheComposerDraft() }
     .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: commerceDraft) { _, _ in cacheComposerDraft() }
@@ -1123,6 +1123,7 @@ public struct CreatePostNativeView: View {
         title: title,
         bodyText: bodyText,
         mediaItems: mediaItems,
+        voiceDraft: voiceDraft,
         stampKind: selectedStampKind,
         stampContent: composerStampContent,
         location: selectedPlace?.displayName ?? (shouldPublishBroadLocation ? broadLocation.label : nil),
@@ -1204,6 +1205,10 @@ public struct CreatePostNativeView: View {
               composerMediaPreview(first)
               composerMediaRail
                 .padding(.top, 10)
+            } else if hasSelectedStamp || voiceDraft != nil {
+              CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: composerStampContent),
+                onOpen: openStampEditor)
+                .frame(width: CaptroEditorialCardLayout.width(for: proxy.size.width - 32), alignment: .leading)
             }
 
             composerPrompt(minimumHeight: mediaItems.isEmpty ? min(210, max(150, proxy.size.height * 0.34)) : 116)
@@ -1322,21 +1327,11 @@ public struct CreatePostNativeView: View {
     return LocalMediaThumb(media: media, width: width, height: height, cornerRadius: 8)
       .background(MIRATheme.Color.mediaPlaceholder)
       .overlay(alignment: .bottomLeading) {
-        if hasSelectedStamp {
-          if let editorial = CaptroEditorialCardContent(draftStamp: composerStampContent) {
-            CaptroEditorialOverlayCard(content: editorial,
-              condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: width, mediaHeight: height),
-              onOpen: { focusedPostDetailsField = nil; isEditingPostDetails = true })
-              .frame(width: CaptroEditorialCardLayout.width(for: width), alignment: .leading)
-              .padding(CaptroEditorialCardLayout.inset)
-          } else {
-            CaptroPostStamp(content: composerStampContent,
-              onOpen: { focusedPostDetailsField = nil; isEditingPostDetails = true },
-              onAction: { focusedPostDetailsField = nil; isEditingPostDetails = true }, compact: true)
-              .frame(width: CaptroStampLayout.feedWidth(for: width), alignment: .leading)
-              .padding(CaptroStampLayout.feedInset)
-          }
-        }
+        CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: composerStampContent),
+          condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: width, mediaHeight: height),
+          onOpen: openStampEditor)
+          .frame(width: CaptroEditorialCardLayout.width(for: width), alignment: .leading)
+          .padding(CaptroEditorialCardLayout.inset)
       }
       .overlay(alignment: .topTrailing) {
         Button {
@@ -1643,13 +1638,8 @@ public struct CreatePostNativeView: View {
     NavigationStack {
       Form {
         Section {
-          CaptroPostStamp(content: composerStampContent)
+          CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: composerStampContent))
             .listRowBackground(Color.clear)
-          Picker("Paper style", selection: $stampVariant) {
-            ForEach(selectedStampKind.stampVariants, id: \.self) { variant in
-              Text(variant.split(separator: "-").dropFirst().joined(separator: " ").capitalized).tag(variant)
-            }
-          }
         }
         switch selectedStampKind {
         case .social:
@@ -1866,14 +1856,20 @@ public struct CreatePostNativeView: View {
     [.event, .meetup, .party, .ticket, .booking].contains(selectedStampKind)
   }
 
+  private func openStampEditor() {
+    focusedPostDetailsField = nil
+    if hasSelectedStamp { isEditingPostDetails = true }
+    else { showStampPicker = true }
+  }
+
   private var composerStampContent: CaptroStampContent {
     CaptroStampContent(kind: selectedStampKind,
       title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? (bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedStampKind.displayName : bodyText) : title,
+        ? (selectedStampKind == .social && voiceDraft != nil ? "Voice post" : selectedStampKind.displayName) : title,
       metadata: isEventStamp && !eventDraft.venueName.isEmpty ? eventDraft.venueName : selectedPlace?.displayName,
       description: bodyText.isEmpty ? nil : bodyText,
       footer: nil, actionTitle: selectedStampKind.actionTitle, contributors: [],
-      variant: stampVariant, terms: composerStampTerms,
+      variant: nil, terms: composerStampTerms,
       dateMonth: CaptroStampAdapter.datePart(eventDraft.input.startsAt, timeZone: eventDraft.timeZone, format: "MMM"),
       dateDay: CaptroStampAdapter.datePart(eventDraft.input.startsAt, timeZone: eventDraft.timeZone, format: "dd"))
   }
@@ -2228,7 +2224,7 @@ public struct CreatePostNativeView: View {
         address: selectedPlace?.addressText,
         city: selectedPlace?.city ?? (shouldPublishBroadLocation ? broadLocation.city : nil)
       )
-      var body = CreatePostBody(
+      let body = CreatePostBody(
         title: title,
         content: postContent,
         image: uploaded.first,
@@ -2278,7 +2274,8 @@ public struct CreatePostNativeView: View {
         visibility: "public",
         clientRequestId: postRequestID
       )
-      body.stampVariant = stampVariant
+      // New posts use one editorial presentation; legacy variant metadata is
+      // still decoded for older posts but is not selectable or rendered.
       let _: MIRAPost = try await api.post("/posts", body: body)
       await MIRAAppCacheStore.shared.clearPostDraft()
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
@@ -2297,6 +2294,9 @@ public struct CreatePostNativeView: View {
 
   private func close() {
     Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+    if let voiceDraft { try? FileManager.default.removeItem(at: voiceDraft.fileURL) }
+    voiceDraft = nil
+    voiceSubmissionId = nil
     if let onClose {
       onClose()
     } else {
@@ -2385,7 +2385,6 @@ public struct CreatePostNativeView: View {
     bodyText = draft.bodyText
     hasSelectedStamp = draft.stampType != nil
     selectedStampKind = CaptroStampKind(rawValue: draft.stampType ?? "") ?? .social
-    stampVariant = draft.stampVariant.flatMap { selectedStampKind.stampVariants.contains($0) ? $0 : nil } ?? selectedStampKind.stampVariants[0]
     momentType = draft.momentType ?? "Thought"
     eventDraft = draft.eventDraft ?? CaptroEventDraft()
     commerceDraft = draft.commerceDraft ?? CaptroCommerceDraft()
@@ -2438,7 +2437,7 @@ public struct CreatePostNativeView: View {
       title: title,
       bodyText: bodyText,
       stampType: hasSelectedStamp ? selectedStampKind.rawValue : nil,
-      stampVariant: stampVariant,
+      stampVariant: nil,
       momentType: momentType,
       eventDraft: eventDraft,
       commerceDraft: commerceDraft,
@@ -2464,7 +2463,6 @@ public struct CreatePostNativeView: View {
     bodyText = ""
     hasSelectedStamp = false
     selectedStampKind = .social
-    stampVariant = "moment-paper"
     momentType = "Thought"
     eventDraft = CaptroEventDraft()
     commerceDraft = CaptroCommerceDraft()
@@ -4651,6 +4649,7 @@ private struct ComposerPreviewSheet: View {
   let title: String
   let bodyText: String
   let mediaItems: [MIRAPickedMedia]
+  let voiceDraft: CaptroVoiceDraft?
   let stampKind: CaptroStampKind
   let stampContent: CaptroStampContent
   let location: String?
@@ -4668,24 +4667,25 @@ private struct ComposerPreviewSheet: View {
             ZStack(alignment: .bottomLeading) {
               LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 0)
 
-              if let editorial = CaptroEditorialCardContent(draftStamp: previewStampContent) {
-                CaptroEditorialOverlayCard(content: editorial,
-                  condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: width, mediaHeight: height),
-                  onOpen: onEditStamp)
-                  .frame(width: CaptroEditorialCardLayout.width(for: width), alignment: .leading)
-                  .padding(CaptroEditorialCardLayout.inset)
-              } else {
-                CaptroPostStamp(content: previewStampContent, onOpen: onEditStamp, onAction: onEditStamp, compact: true)
-                  .frame(width: CaptroStampLayout.feedWidth(for: width), alignment: .leading)
-                  .padding(CaptroStampLayout.feedInset)
-              }
+              CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: previewStampContent),
+                condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: width, mediaHeight: height),
+                onOpen: onEditStamp)
+                .frame(width: CaptroEditorialCardLayout.width(for: width), alignment: .leading)
+                .padding(CaptroEditorialCardLayout.inset)
             }
             .frame(width: width, height: height)
           } else {
-            CaptroPostStamp(content: previewStampContent, onOpen: onEditStamp, onAction: onEditStamp)
-              .padding(16)
+            CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: previewStampContent),
+              onOpen: onEditStamp)
+              .frame(width: CaptroEditorialCardLayout.width(for: UIScreen.main.bounds.width - 32), alignment: .leading)
+          }
+          if let voiceDraft {
+            Label("Voice recording · \(String(format: "%d:%02d", Int(voiceDraft.duration) / 60, Int(voiceDraft.duration) % 60))", systemImage: "waveform")
+              .font(.subheadline)
+              .foregroundStyle(MIRATheme.Color.textPrimary)
+              .padding(12)
+              .frame(maxWidth: .infinity, alignment: .leading)
               .background(MIRATheme.Color.surfaceSoft)
-              .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
           }
         }
         .padding(MIRATheme.Space.md)

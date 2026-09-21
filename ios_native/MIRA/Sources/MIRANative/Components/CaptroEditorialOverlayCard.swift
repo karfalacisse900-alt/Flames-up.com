@@ -1,18 +1,18 @@
 import SwiftUI
 
-/// One quiet, on-media treatment for the five editorial attachment types.
+/// The single stamp treatment for Moment and attached content, including voice posts.
 /// The entire card opens details; consequential actions remain on that screen.
 enum CaptroEditorialCardType: String, CaseIterable, Equatable {
-  case place, club, event, meetup, deal
+  case moment, place, club, event, meetup, deal
 
-  init?(stampKind: CaptroStampKind) {
+  init(stampKind: CaptroStampKind) {
     switch stampKind {
     case .place: self = .place
     case .club, .group: self = .club
     case .event, .party, .ticket: self = .event
     case .meetup, .booking: self = .meetup
     case .deal, .localOffer: self = .deal
-    default: return nil
+    default: self = .moment
     }
   }
 }
@@ -37,7 +37,7 @@ enum CaptroEditorialCardLayout {
   static let inset: CGFloat = 14
 
   static func width(for mediaWidth: CGFloat) -> CGFloat {
-    min(min(340, max(0, mediaWidth - inset * 2)), mediaWidth * 0.78)
+    min(min(320, max(0, mediaWidth - inset * 2)), mediaWidth * 0.73)
   }
 
   static func isCondensed(mediaWidth: CGFloat, mediaHeight: CGFloat) -> Bool {
@@ -69,9 +69,9 @@ struct CaptroEditorialOverlayCard: View {
   }
 
   private var card: some View {
-    VStack(alignment: .leading, spacing: condensed ? 5 : 8) {
+    VStack(alignment: .leading, spacing: condensed ? 4 : 7) {
       Text(content.title)
-        .font(.system(size: condensed ? 23 : 28, weight: .bold))
+        .font(.system(size: condensed ? 21 : 26, weight: .bold))
         .tracking(-0.65)
         .lineSpacing(-2)
         .lineLimit(2)
@@ -115,7 +115,7 @@ struct CaptroEditorialOverlayCard: View {
 
       if let username = nonempty(content.username) {
         HStack(spacing: 9) {
-          RemoteAvatar(url: content.avatarURL, size: condensed ? 28 : 32)
+          RemoteAvatar(url: content.avatarURL, size: condensed ? 26 : 30)
           Text(username)
             .font(.system(size: condensed ? 13 : 15, weight: .medium))
             .lineLimit(1)
@@ -127,7 +127,7 @@ struct CaptroEditorialOverlayCard: View {
     }
     .foregroundStyle(ink)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(condensed ? 12 : 16)
+    .padding(condensed ? 11 : 14)
     .background(Color.white)
     .overlay(Rectangle().strokeBorder(ink, lineWidth: 1))
     .contentShape(Rectangle())

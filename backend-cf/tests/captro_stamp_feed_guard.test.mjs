@@ -12,6 +12,7 @@ const mainFeed = readIOS('Screens/MainFeedView.swift');
 const postView = readIOS('Screens/CaptroFeedPostView.swift');
 const mediaPager = readIOS('Screens/CaptroFeedMediaPager.swift');
 const stamps = readIOS('Screens/CaptroFeedPostOverlays.swift');
+const editorialCard = readIOS('Components/CaptroEditorialOverlayCard.swift');
 const composer = readIOS('Screens/NotificationLibrarySearchCreateViews.swift');
 const mediaSizing = readIOS('Components/MIRAComponents.swift');
 const mediaModels = readIOS('Models/MIRAModels.swift');
@@ -31,11 +32,12 @@ test('guest Home reads only the public feed and keeps an isolated cache', () => 
 
 test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.match(postView, /CaptroMediaPager\(/);
-  assert.match(postView, /CaptroPostStamp\(content: post\.captroStampContent/);
+  assert.match(postView, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
-  assert.match(mediaPager, /CaptroPostStamp\(/);
-  assert.match(mediaPager, /CaptroStampLayout\.feedWidth\(for: mediaWidth\)/);
+  assert.match(mediaPager, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
+  assert.match(mediaPager, /CaptroEditorialCardLayout\.width\(for: mediaWidth\)/);
+  assert.doesNotMatch(mediaPager, /CaptroPostStamp\(/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
 
@@ -50,7 +52,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(visiblePostIndices, id: \\.self\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?CaptroPostStamp\(content: post\.captroStampContent/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -167,14 +169,12 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(stamps, /case \.event: return "ATTEND"/);
   assert.match(stamps, /case \.deal, \.localOffer: return "CLAIM"/);
   assert.match(stamps, /case \.group: return "ACCESS"/);
-  const nativeStamp = readIOS('Components/CaptroPostStamp.swift');
-  assert.match(nativeStamp, /CaptroStampArtwork\(content: content, compact: compact\)/);
-  assert.match(nativeStamp, /Button\(action: onOpen\)/);
-  assert.doesNotMatch(nativeStamp, /Button\(action: onAction\)|Button\(action: onSave\)/);
+  assert.match(editorialCard, /Button\(action: onOpen\)/);
+  assert.doesNotMatch(editorialCard, /Button\(action: onAction\)|Button\(action: onSave\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /CaptroStampLayout\.feedWidth\(for: mediaWidth\)/);
-  assert.match(mediaPager, /CaptroPostStamp\([\s\S]*?compact: true/);
-  assert.match(nativeStamp, /640 \/ \(compact \? 224\.0 : 288\.0\)/);
+  assert.match(mediaPager, /CaptroEditorialCardLayout\.width\(for: mediaWidth\)/);
+  assert.match(editorialCard, /mediaWidth \* 0\.73/);
+  assert.doesNotMatch(composer, /Picker\("Paper style"/);
 });
 
 test('holding the Home stamp temporarily reveals the unobstructed photo', () => {
@@ -185,7 +185,7 @@ test('holding the Home stamp temporarily reveals the unobstructed photo', () => 
   assert.match(mediaPager, /hypot\(drag\.translation\.width, drag\.translation\.height\) <= 22/);
   assert.match(
     mediaPager,
-    /CaptroPostStamp\([\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
+    /CaptroEditorialOverlayCard\([\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
   );
   assert.doesNotMatch(
     mediaPager,
@@ -224,7 +224,7 @@ test('composer persists the selected stamp and previews the production component
   assert.match(composer, /stampType: hasSelectedStamp \? selectedStampKind\.rawValue : nil/);
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
   assert.match(composer, /ComposerPreviewSheet\([\s\S]*?stampKind: selectedStampKind/);
-  assert.match(composer, /CaptroPostStamp\(content: previewStampContent, onOpen: onEditStamp/);
+  assert.match(composer, /CaptroEditorialOverlayCard\(content: CaptroEditorialCardContent\(draftStamp: previewStampContent\)/);
 });
 
 test('post creation matches the simple Photo, Video, Voice composer and keeps media proportions', () => {

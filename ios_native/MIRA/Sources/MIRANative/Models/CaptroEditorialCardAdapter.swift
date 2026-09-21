@@ -2,13 +2,13 @@ import Foundation
 
 extension MIRAPost {
   /// Live feed data only. Example content belongs in the DEBUG visual fixture, not here.
-  var captroEditorialCardContent: CaptroEditorialCardContent? {
-    guard let type = CaptroEditorialCardType(stampKind: captroStampKind) else { return nil }
+  var captroEditorialCardContent: CaptroEditorialCardContent {
+    let type = CaptroEditorialCardType(stampKind: captroStampKind)
     let commerce = detail?.commerce
     let event = detail?.event
     let unavailable = CaptroStampAdapter.availability(commerce)
     let title = cleanEditorialText(type == .place ? placeDisplayName : commerce?.title)
-      ?? captroCleanTitle ?? type.rawValue.capitalized
+      ?? captroCleanTitle ?? (type == .moment && detail?.voice != nil ? "Voice post" : type.rawValue.capitalized)
     let area = cleanEditorialText(type == .place
       ? (displayLocationText ?? placeCity)
       : (commerce?.city ?? event?.city ?? commerce?.locationName ?? captroFeedLocationText))
@@ -24,6 +24,9 @@ extension MIRAPost {
     var content = CaptroEditorialCardContent(type: type, title: title,
       subtitle: area, username: handle, avatarURL: userProfileImage)
     switch type {
+    case .moment:
+      let caption = cleanEditorialText(captroFeedCaptionText)
+      content.description = caption == title ? nil : caption
     case .place:
       content.chipText = savesCount.map { "\(max(0, $0)) SAVES" }
       content.description = cleanEditorialText(captroFeedCaptionText)
@@ -69,12 +72,12 @@ extension MIRAPost {
 extension CaptroEditorialCardContent {
   /// Draft preview uses only entered fields. Counts, benefits, and payment
   /// states are never invented before the attached object exists on the server.
-  init?(draftStamp stamp: CaptroStampContent) {
-    guard let type = CaptroEditorialCardType(stampKind: stamp.kind) else { return nil }
+  init(draftStamp stamp: CaptroStampContent) {
+    let type = CaptroEditorialCardType(stampKind: stamp.kind)
     let date = [stamp.dateMonth, stamp.dateDay].compactMap { $0 }.joined(separator: " ")
     self.init(type: type, title: stamp.title, subtitle: stamp.metadata,
       chipText: type == .event && !date.isEmpty ? date : (type == .deal ? "VIEW OFFER" : nil),
-      description: type == .club || type == .place ? stamp.description : nil,
+      description: type == .moment || type == .club || type == .place ? stamp.description : nil,
       supportingText: stamp.terms,
       username: nil, avatarURL: nil)
   }

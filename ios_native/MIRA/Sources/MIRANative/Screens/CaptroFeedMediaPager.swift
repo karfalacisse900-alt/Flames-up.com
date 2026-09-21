@@ -174,24 +174,10 @@ struct CaptroMediaPager: View {
 
       Spacer(minLength: 12)
 
-      Group {
-        if let editorial = post.captroEditorialCardContent {
-          CaptroEditorialOverlayCard(content: editorial,
-            condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: mediaWidth, mediaHeight: mediaHeight),
-            onOpen: openPostUnlessPeeking)
-            .frame(width: CaptroEditorialCardLayout.width(for: mediaWidth), alignment: .leading)
-        } else {
-          CaptroPostStamp(
-            content: post.captroStampContent,
-            onOpen: openPostUnlessPeeking,
-            onAction: openPostUnlessPeeking,
-            isSaved: post.viewerSaved,
-            onSave: onSave,
-            compact: true
-          )
-          .frame(width: CaptroStampLayout.feedWidth(for: mediaWidth), alignment: .leading)
-        }
-      }
+      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
+        condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: mediaWidth, mediaHeight: mediaHeight),
+        onOpen: openPostUnlessPeeking)
+        .frame(width: CaptroEditorialCardLayout.width(for: mediaWidth), alignment: .leading)
       .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
       .allowsHitTesting(showsStampOnCurrentSlide)
@@ -200,7 +186,7 @@ struct CaptroMediaPager: View {
       .simultaneousGesture(stampPeekGesture)
       .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 48 : 4)
     }
-    .padding(CaptroStampLayout.feedInset)
+    .padding(CaptroEditorialCardLayout.inset)
   }
 
   private var stampPeekGesture: some Gesture {

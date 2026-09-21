@@ -9,11 +9,14 @@ public struct CaptroStampVisualTestView: View {
   @State private var photoLoaded = false
   public init() {}
 
-  private let kinds: [CaptroEditorialCardType] = CaptroEditorialCardType.allCases
+  private let kinds: [CaptroEditorialCardType] = [.place, .club, .event, .meetup, .deal, .moment]
   private let photoURL = "https://imagedelivery.net/DY-IgVdOm-0zb0K5ZFnpKA/81cd6cb6-ec4c-4a22-e356-3ecd1613cd00/public"
   private var kind: CaptroEditorialCardType { kinds[index] }
   private var content: CaptroEditorialCardContent {
     switch kind {
+    case .moment:
+      return CaptroEditorialCardContent(type: .moment, title: "Voice post", subtitle: "New York",
+        description: "A short story from the city.", username: "@captro")
     case .place:
       return CaptroEditorialCardContent(type: .place, title: "Ruffian", subtitle: "East Village",
         chipText: "469 Saves", description: "Cute wine bar with awesome food options. Perfect for girls night and first date.",

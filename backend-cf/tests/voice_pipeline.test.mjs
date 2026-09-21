@@ -84,3 +84,13 @@ test('composer and comments submit private voice IDs instead of fake audio', () 
   assert.match(comments, /voiceAudioId: voiceId/);
   assert.match(comments, /pendingVoiceReplies/);
 });
+
+test('a stamped voice post keeps its selected type and stays pending until moderation', () => {
+  const composer = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift', 'utf8');
+  const backend = fs.readFileSync('../backend-cf/src/index.ts', 'utf8');
+  assert.match(composer, /postType: selectedStampKind\.backendPostType/);
+  assert.match(composer, /voiceAudioId: voiceSubmissionId/);
+  assert.match(backend, /await validateVoiceAttachment\(c\.env, voiceAudioId, userId, 'post'\)/);
+  assert.match(backend, /await bindVoiceAttachment\(c\.env, \{[\s\S]*?targetType: 'post', targetId: id/);
+  assert.match(backend, /status: input\.voiceAudioId \? 'pending_voice' : 'active'/);
+});
