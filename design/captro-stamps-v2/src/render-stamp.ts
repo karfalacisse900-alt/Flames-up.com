@@ -73,6 +73,22 @@ function fit(value: string, field: StampField): { value: string; size: number } 
   while (chars.length > 0 && estimatedWidth(chars.join('') + '…', field, size) > field.maxWidth) chars.pop();
   return { value: chars.join('').trimEnd() + '…', size };
 }
+function fitLines(value: string, field: StampField): { lines: string[]; size: number } | null {
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return null;
+  for (let size = field.size; size >= field.minSize; size--) {
+    let best: { lines: string[]; imbalance: number } | null = null;
+    for (let split = 1; split < words.length; split++) {
+      const lines = [words.slice(0, split).join(' '), words.slice(split).join(' ')];
+      const widths = lines.map(line => estimatedWidth(line, field, size));
+      if (widths.some(width => width > field.maxWidth)) continue;
+      const imbalance = Math.abs(widths[0] - widths[1]);
+      if (!best || imbalance < best.imbalance) best = { lines, imbalance };
+    }
+    if (best) return { lines: best.lines, size };
+  }
+  return null;
+}
 function fieldValue(field: StampField, template: StampTemplate, data: StampData): string {
   if (field.key === 'label') return template.label;
   if (data.type === 'deal' && data.state && data.state !== 'active') {
@@ -122,6 +138,16 @@ export function renderStamp(data: StampData, options: RenderOptions = {}): strin
     for (const field of layout.fields) {
       const raw = fieldValue(field, template, data);
       if (!raw) continue;
+      const wrapped = field.key === 'title' && ['event', 'club', 'meetup'].includes(template.type)
+        ? fitLines(raw, field) : null;
+      if (wrapped && wrapped.lines.length > 1) {
+        const lineHeight = wrapped.size * .92;
+        const firstY = field.y - lineHeight * (wrapped.lines.length - 1) / 2;
+        content += `<text x="${field.x}" y="${firstY}" font-family="${escapeXml(fonts[field.font])}" font-size="${wrapped.size}" font-weight="${field.weight}" font-style="${field.italic ? 'italic' : 'normal'}" letter-spacing="${field.tracking}" text-anchor="${field.anchor}" fill="${colors[field.color]}">`;
+        content += wrapped.lines.map((line, index) => `<tspan x="${field.x}" dy="${index === 0 ? 0 : lineHeight}">${escapeXml(line)}</tspan>`).join('');
+        content += '</text>';
+        continue;
+      }
       const fitted = fit(raw, field);
       content += `<text x="${field.x}" y="${field.y}" font-family="${escapeXml(fonts[field.font])}" font-size="${fitted.size}" font-weight="${field.weight}" font-style="${field.italic ? 'italic' : 'normal'}"${options.native ? '' : ' font-kerning="none"'} letter-spacing="${field.tracking}" text-anchor="${field.anchor}" fill="${colors[field.color]}"`;
       if (!options.native) content += ` data-field="${field.key}" data-max-width="${field.maxWidth}"`;
