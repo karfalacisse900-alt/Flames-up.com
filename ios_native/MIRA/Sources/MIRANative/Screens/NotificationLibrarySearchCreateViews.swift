@@ -4172,6 +4172,16 @@ public struct CreateStoryNativeView: View {
   @State private var pendingStoryMedia: MIRAPickedMedia?
   @State private var selectedAudioTrack: MIRAAudiusTrack?
   @State private var showMusicPicker = false
+  @State private var isTextStory = false
+  @State private var storyCaption = ""
+  @State private var storyLocation = ""
+  @State private var locationDraft = ""
+  @State private var showLocationEntry = false
+  @State private var showLinkPicker = false
+  @State private var linkedItem: MIRAStoryLinkedItem?
+  @State private var managedClubs: [StoryClubChoice] = []
+  @State private var selectedClub: StoryClubChoice?
+  @State private var showClubPicker = false
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
     self.api = api
@@ -4182,7 +4192,7 @@ public struct CreateStoryNativeView: View {
     ZStack {
       Color.black.ignoresSafeArea()
 
-      if let pendingStoryMedia {
+      if pendingStoryMedia != nil || isTextStory {
         storyPublishPage(media: pendingStoryMedia)
       } else {
         VStack {
@@ -4242,10 +4252,14 @@ public struct CreateStoryNativeView: View {
     .onAppear {
       MIRAPlaybackCoordinator.pauseAll(reason: "story_creation_open")
     }
+    .task {
+      managedClubs = (try? await api.get("/statuses/clubs/managed")) ?? []
+    }
     .miraFullScreenOverlay(isPresented: $showCamera, background: .black) { closeCamera in
       MIRAStoryLiveCameraView(
         editedMedia: editedStoryCameraMedia,
-        captureMode: .videoOnly,
+        captureMode: .photoAndVideo,
+        showsMusicButton: false,
         showsGridOverlay: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
@@ -4268,6 +4282,20 @@ public struct CreateStoryNativeView: View {
         }
       )
       .ignoresSafeArea()
+      .overlay(alignment: .bottomTrailing) {
+        Button("TEXT") {
+          closeCamera()
+          isTextStory = true
+          pendingStoryMedia = nil
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .frame(height: 44)
+        .background(.black.opacity(0.48), in: Capsule())
+        .padding(.trailing, 24)
+        .padding(.bottom, 56)
+      }
     }
     .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
       MIRANativeMediaEditorView(media: item.media, mode: .story, onClose: closeEditor) { edited in
@@ -4287,144 +4315,209 @@ public struct CreateStoryNativeView: View {
     }
   }
 
-  private func storyPublishPage(media: MIRAPickedMedia) -> some View {
+  private func storyPublishPage(media: MIRAPickedMedia?) -> some View {
     GeometryReader { proxy in
       VStack(spacing: 0) {
         HStack {
           Button {
+            isTextStory = false
             pendingStoryMedia = nil
-            editedStoryCameraMedia = nil
-            selectedAudioTrack = nil
             errorMessage = nil
             showCamera = true
           } label: {
-            Image(systemName: "chevron.left")
-              .font(.system(size: 28, weight: .medium))
-              .foregroundStyle(.white)
-              .frame(width: 50, height: 50)
+            Image(systemName: "arrow.left")
+              .font(.system(size: 20, weight: .medium))
+              .foregroundStyle(.black)
+              .frame(width: 48, height: 48)
           }
-          .buttonStyle(.plain)
-
+          .accessibilityLabel("Back to story camera")
           Spacer()
-
-          Button { close() } label: {
-            Image(systemName: "xmark")
-              .font(.system(size: 22, weight: .semibold))
-              .foregroundStyle(.white)
-              .frame(width: 50, height: 50)
-          }
-          .buttonStyle(.plain)
+          Text("New status")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.black)
+          Spacer()
+          Color.clear.frame(width: 48, height: 48)
         }
-        .padding(.horizontal, MIRATheme.Space.sm)
-        .padding(.top, proxy.safeAreaInsets.top + 4)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
 
-        LocalMediaThumb(
-          media: media,
-          width: min(proxy.size.width - 28, 430),
-          height: min(proxy.size.height * 0.70, (proxy.size.width - 28) * 16 / 9),
-          cornerRadius: 24
-        )
-        .padding(.top, MIRATheme.Space.sm)
-        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 10)
-
-        if let errorMessage {
-          Text(errorMessage)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.86))
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, MIRATheme.Space.md)
-            .padding(.top, MIRATheme.Space.md)
-        }
-
-        Spacer(minLength: MIRATheme.Space.md)
-
-        VStack(spacing: MIRATheme.Space.sm) {
-          Button {
-            showMusicPicker = true
-          } label: {
-            HStack(spacing: MIRATheme.Space.sm) {
-              Image(systemName: "music.note")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(MIRATheme.Color.forest)
-                .clipShape(Circle())
-
-              VStack(alignment: .leading, spacing: 2) {
-                Text(selectedAudioTrack?.displayTitle ?? "Add music")
-                  .font(.system(size: 15, weight: .semibold))
-                  .foregroundStyle(.white)
-                  .lineLimit(1)
-                Text(selectedAudioTrack?.displayArtist ?? "Search Audius tracks")
-                  .font(.system(size: 12, weight: .medium))
-                  .foregroundStyle(.white.opacity(0.68))
-                  .lineLimit(1)
+        ScrollView {
+          VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+              Group {
+                if let media {
+                  LocalMediaThumb(media: media, width: 104, height: 156, cornerRadius: 8)
+                } else {
+                  ZStack {
+                    Color(red: 0.96, green: 0.94, blue: 0.90)
+                    Text(storyCaption.isEmpty ? "Your words" : storyCaption)
+                      .font(.system(size: 15, weight: .medium))
+                      .foregroundStyle(.black)
+                      .multilineTextAlignment(.center)
+                      .lineLimit(5)
+                      .padding(9)
+                  }
+                  .frame(width: 104, height: 156)
+                  .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
               }
-
-              Spacer()
-
-              Image(systemName: "chevron.right")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.white.opacity(0.68))
-            }
-            .padding(.horizontal, MIRATheme.Space.md)
-            .frame(height: 58)
-            .background(.white.opacity(0.14))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-          }
-          .buttonStyle(.miraPress)
-
-          Button {
-            Task { await submit(media: media) }
-          } label: {
-            HStack(spacing: 8) {
-              if isPosting {
-                ProgressView()
-                  .tint(.white)
-                  .scaleEffect(0.74)
+              .accessibilityLabel(media == nil ? "Text status preview" : "Selected status media")
+              ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 10)
+                  .stroke(Color.black.opacity(0.13), lineWidth: 1)
+                if storyCaption.isEmpty {
+                  Text(media == nil ? "Write your status..." : "Add a caption...")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.gray)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 13)
+                    .allowsHitTesting(false)
+                }
+                TextEditor(text: $storyCaption)
+                  .font(.system(size: 16))
+                  .foregroundStyle(.black)
+                  .scrollContentBackground(.hidden)
+                  .padding(7)
+                  .onChange(of: storyCaption) { _, value in
+                    if value.count > 500 { storyCaption = String(value.prefix(500)) }
+                  }
               }
-              Text(isPosting ? "Posting" : "Share story")
-                .font(.system(size: 16, weight: .bold))
+              .frame(height: 156)
+              .accessibilityLabel("Status text")
             }
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 54)
-            .background(MIRATheme.Color.forest)
-            .clipShape(Capsule())
+            .padding(.top, 28)
+            .padding(.bottom, 28)
+
+            Divider()
+            if !managedClubs.isEmpty {
+              Button { showClubPicker = true } label: {
+                storyDetailRow("Post as", value: selectedClub?.name ?? "You", icon: "person.2")
+              }
+              .buttonStyle(.plain)
+              Divider()
+            }
+            Button {
+              locationDraft = storyLocation
+              showLocationEntry = true
+            } label: {
+              storyDetailRow("Add location", value: storyLocation, icon: "mappin")
+            }
+            .buttonStyle(.plain)
+            Divider()
+            Button { showLinkPicker = true } label: {
+              storyDetailRow("Link to a Captro item", value: linkedItem?.title ?? "", icon: "link")
+            }
+            .buttonStyle(.plain)
+            Divider()
+            if media != nil {
+              Button { showMusicPicker = true } label: {
+                storyDetailRow("Music", value: selectedAudioTrack?.displayTitle ?? "", icon: "music.note")
+              }
+              .buttonStyle(.plain)
+              Divider()
+            }
+            if let errorMessage {
+              Text(errorMessage)
+                .font(.system(size: 14))
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 18)
+            }
           }
-          .buttonStyle(.miraPress)
-          .disabled(isPosting)
+          .padding(.horizontal, 24)
         }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.bottom, max(proxy.safeAreaInsets.bottom + 12, 26))
+
+        Button {
+          Task { await submit(media: media) }
+        } label: {
+          HStack(spacing: 8) {
+            if isPosting { ProgressView().tint(.white) }
+            Text(isPosting ? "Posting status" : "Post Status")
+              .font(.system(size: 16, weight: .semibold))
+          }
+          .foregroundStyle(.white)
+          .frame(maxWidth: .infinity)
+          .frame(height: 54)
+          .background(.black, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .disabled(isPosting || (media == nil && storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+        .opacity(isPosting || media != nil || !storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1 : 0.45)
+        .padding(.horizontal, 24)
+        .padding(.bottom, max(proxy.safeAreaInsets.bottom + 12, 24))
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .background(.white)
     }
-    .statusBarHidden(true)
-    .miraStatusBarHidden(true)
+    .alert("Location", isPresented: $showLocationEntry) {
+      TextField("City or place", text: $locationDraft)
+      Button("Save") { storyLocation = String(locationDraft.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120)) }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Add an optional location label.")
+    }
+    .sheet(isPresented: $showLinkPicker) {
+      StoryPostLinkPicker(api: api, selected: $linkedItem)
+    }
+    .confirmationDialog("Post status as", isPresented: $showClubPicker) {
+      Button("You") { selectedClub = nil }
+      ForEach(managedClubs) { club in
+        Button("\(club.name) · Public") { selectedClub = club }
+      }
+    }
+    .statusBarHidden(false)
+    .miraStatusBarHidden(false)
   }
 
-  private func submit(media: MIRAPickedMedia) async {
-    guard media.kind == .video else {
-      errorMessage = "Stories are video-only."
+  private func storyDetailRow(_ title: String, value: String, icon: String) -> some View {
+    HStack(spacing: 16) {
+      Image(systemName: icon)
+        .font(.system(size: 18, weight: .regular))
+        .frame(width: 22)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title).font(.system(size: 16))
+        if !value.isEmpty {
+          Text(value).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+        }
+      }
+      Spacer()
+      Image(systemName: "chevron.right")
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(.gray)
+    }
+    .foregroundStyle(.black)
+    .frame(minHeight: 62)
+    .contentShape(Rectangle())
+  }
+
+  private func submit(media: MIRAPickedMedia?) async {
+    let content = storyCaption.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard media != nil || !content.isEmpty else {
+      errorMessage = "Add a photo, video, or text before posting."
       return
     }
     isPosting = true
+    errorMessage = nil
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "story")
     defer { isPosting = false }
     do {
-      let uploaded = try await MIRAMediaUploadService(api: api).upload(media)
+      var uploaded: String?
+      if let media {
+        uploaded = try await MIRAMediaUploadService(api: api).upload(media)
+      }
       let _: MIRAStatusPreview = try await api.post(
         "/statuses",
         body: CreateStatusBody(
-          content: "",
+          content: content,
           image: uploaded,
-          backgroundColor: "#1B4332",
-          textColor: "#FFFFFF",
+          backgroundColor: media == nil ? "#F5F1E8" : "#202020",
+          textColor: media == nil ? "#111111" : "#FFFFFF",
+          locationName: storyLocation.isEmpty ? nil : storyLocation,
+          linkedItem: linkedItem,
+          clubId: selectedClub?.id,
           visibility: "public",
-          mediaType: media.kind == .video ? "video" : "image",
-          duration: media.kind == .video ? 15 : nil,
-          editorMetadata: media.editorMetadata,
+          mediaType: media?.kind == .video ? "video" : media == nil ? "text" : "image",
+          duration: media?.kind == .video ? 15 : nil,
+          editorMetadata: media?.editorMetadata,
           audioProvider: selectedAudioTrack == nil ? nil : "audius",
           audioTrackId: selectedAudioTrack?.resolvedTrackId,
           audioTitle: selectedAudioTrack?.displayTitle,
@@ -4436,10 +4529,11 @@ public struct CreateStoryNativeView: View {
         )
       )
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "story")
+      NotificationCenter.default.post(name: Notification.Name("captroStoryDidChange"), object: nil)
       close()
     } catch {
       MIRAPerformanceTimeline.mark("post_upload_failed", detail: "story")
-      errorMessage = "Story could not be posted."
+      errorMessage = "Status could not be posted. Please try again."
     }
   }
   private func close() {
@@ -4447,6 +4541,77 @@ public struct CreateStoryNativeView: View {
       onClose()
     } else {
       dismiss()
+    }
+  }
+}
+
+private struct StoryClubChoice: Decodable, Identifiable {
+  let id: String
+  let name: String
+}
+
+private struct StoryPostLinkPicker: View {
+  let api: MIRAAPIClient
+  @Binding var selected: MIRAStoryLinkedItem?
+  @Environment(\.dismiss) private var dismiss
+  @State private var posts: [MIRAPost] = []
+  @State private var isLoading = true
+  @State private var loadFailed = false
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if isLoading {
+          ProgressView("Loading Captro posts")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if loadFailed {
+          ContentUnavailableView("Posts unavailable", systemImage: "wifi.exclamationmark", description: Text("Try again later."))
+        } else {
+          List {
+            if selected != nil {
+              Button("Remove link") {
+                selected = nil
+                dismiss()
+              }
+              .foregroundStyle(.red)
+            }
+            ForEach(posts) { post in
+              Button {
+                let rawType = (post.postType ?? "").lowercased()
+                let type = ["club", "event", "meetup", "deal"].contains(rawType)
+                  ? rawType : (post.placeId == nil ? "post" : "place")
+                let title = (post.title?.isEmpty == false ? post.title : post.content) ?? "Captro post"
+                selected = MIRAStoryLinkedItem(type: type, id: post.id, postId: post.id, title: String(title.prefix(120)))
+                dismiss()
+              } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text((post.title?.isEmpty == false ? post.title : post.content) ?? "Captro post")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                  Text((post.postType ?? "Post").capitalized)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                }
+                .frame(minHeight: 48, alignment: .leading)
+              }
+            }
+          }
+          .listStyle(.plain)
+        }
+      }
+      .navigationTitle("Link a Captro item")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+    }
+    .task {
+      do {
+        posts = try await api.get("/posts/feed?limit=40")
+        isLoading = false
+      } catch {
+        loadFailed = true
+        isLoading = false
+      }
     }
   }
 }

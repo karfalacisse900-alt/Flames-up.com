@@ -913,6 +913,14 @@ public struct MainFeedView: View {
             dismissStory()
             reportTarget = target
             isReportSheetPresented = true
+          },
+          onOpenLinkedPost: { postId in
+            dismissStory()
+            Task {
+              if let post: MIRAPost = try? await model.api.get("/posts/\(postId)") {
+                detailPost = post
+              }
+            }
           }
         )
       }
@@ -920,6 +928,9 @@ public struct MainFeedView: View {
         model.configureGuestMode(isGuest)
         await model.load()
         await loadHomeStories()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: Notification.Name("captroStoryDidChange"))) { _ in
+        Task { await loadHomeStories() }
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
@@ -992,7 +1003,7 @@ public struct MainFeedView: View {
             Button {
               selectedStoryGroup = group
             } label: {
-              homeStoryAvatar(url: group.userProfileImage, unseen: group.hasUnviewed == true, add: false)
+              homeStoryAvatar(url: group.userProfileImage, unseen: group.hasUnviewed == true, add: false, clubName: group.ownerType == "club" ? group.displayName : nil)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("View \(group.displayName)'s story")
@@ -1065,11 +1076,24 @@ public struct MainFeedView: View {
     .zIndex(10)
   }
 
-  private func homeStoryAvatar(url: String?, unseen: Bool, add: Bool) -> some View {
+  private func homeStoryAvatar(url: String?, unseen: Bool, add: Bool, clubName: String? = nil) -> some View {
     ZStack(alignment: .bottomTrailing) {
-      RemoteAvatar(url: url, size: 60)
-        .padding(3)
-        .overlay(Circle().stroke(unseen ? MIRATheme.Color.textPrimary : MIRATheme.Color.hairline, lineWidth: unseen ? 1.5 : 1))
+      Group {
+        if let clubName {
+          Circle()
+            .fill(MIRATheme.Color.surfaceSoft)
+            .frame(width: 60, height: 60)
+            .overlay {
+              Text(String(clubName.prefix(2)).uppercased())
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(MIRATheme.Color.textPrimary)
+            }
+        } else {
+          RemoteAvatar(url: url, size: 60)
+        }
+      }
+      .padding(3)
+      .overlay(Circle().stroke(unseen ? MIRATheme.Color.textPrimary : MIRATheme.Color.hairline, lineWidth: unseen ? 1.5 : 1))
       if add {
         Image(systemName: "plus")
           .font(.system(size: 10, weight: .bold))

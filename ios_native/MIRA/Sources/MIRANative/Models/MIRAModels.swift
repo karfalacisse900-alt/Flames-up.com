@@ -769,12 +769,25 @@ public struct MIRAAudiusTrackResponse: Decodable, Hashable {
   public let tracks: [MIRAAudiusTrack]
 }
 
+public struct MIRAStoryLinkedItem: Codable, Hashable, Identifiable {
+  public let type: String
+  public let id: String
+  public let postId: String?
+  public let title: String
+}
+
 public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
   public let id: String
   public let userId: String?
   public let content: String?
   public let image: String?
   public let backgroundColor: String?
+  public var mediaType: String? = nil
+  public var durationSeconds: Int? = nil
+  public var locationName: String? = nil
+  public var linkedItem: MIRAStoryLinkedItem? = nil
+  public var clubId: String? = nil
+  public var clubName: String? = nil
   public let textColor: String?
   public let audioProvider: String?
   public let audioTrackId: String?
@@ -822,6 +835,12 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
       content: content,
       image: image,
       backgroundColor: backgroundColor,
+      mediaType: mediaType,
+      durationSeconds: durationSeconds,
+      locationName: locationName,
+      linkedItem: linkedItem,
+      clubId: clubId,
+      clubName: clubName,
       textColor: textColor,
       audioProvider: audioProvider,
       audioTrackId: audioTrackId,
@@ -847,6 +866,8 @@ public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
   public let userFullName: String?
   public let userProfileImage: String?
   public let hasUnviewed: Bool?
+  public var ownerType: String? = nil
+  public var clubId: String? = nil
   public let statuses: [MIRAStatusPreview]?
 
   public var displayName: String {
@@ -1625,6 +1646,9 @@ public struct CreateStatusBody: Encodable {
   public let image: String?
   public let backgroundColor: String
   public let textColor: String
+  public let locationName: String?
+  public let linkedItem: MIRAStoryLinkedItem?
+  public let clubId: String?
   public let visibility: String
   public let mediaType: String?
   public let duration: Int?
@@ -1643,6 +1667,9 @@ public struct CreateStatusBody: Encodable {
     image: String?,
     backgroundColor: String,
     textColor: String,
+    locationName: String? = nil,
+    linkedItem: MIRAStoryLinkedItem? = nil,
+    clubId: String? = nil,
     visibility: String,
     mediaType: String? = nil,
     duration: Int? = nil,
@@ -1660,6 +1687,9 @@ public struct CreateStatusBody: Encodable {
     self.image = image
     self.backgroundColor = backgroundColor
     self.textColor = textColor
+    self.locationName = locationName
+    self.linkedItem = linkedItem
+    self.clubId = clubId
     self.visibility = visibility
     self.mediaType = mediaType
     self.duration = duration

@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
+import OpenAI from 'openai';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
@@ -3892,7 +3893,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
     if (type === 'story') {
       const storySql = [
         'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-        `WHERE s.id = ? AND s.created_at >= datetime('now', '-14 days') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
+        `WHERE s.id = ? AND s.created_at >= datetime('now', '-1 day') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
       ].join(' ');
       const row: any = await c.env.DB.prepare(storySql).bind(reportedId, reporterId, reporterId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported story was not found.' };
@@ -16848,12 +16849,14 @@ api.post('/comments/:commentId/hide', authMiddleware, async (c) => {
 function groupStatusRows(rows: any[], viewerId: string) {
   const grouped = new Map<string, any>();
   for (const s of rows) {
-    const uid = s.user_id;
+    const uid = s.club_id ? `club:${s.club_id}` : s.user_id;
     if (!grouped.has(uid)) {
       grouped.set(uid, {
         user_id: uid,
-        user_username: publicUsernameFor({ username: s.user_username }),
-        user_full_name: s.user_full_name,
+        user_username: s.club_id ? '' : publicUsernameFor({ username: s.user_username }),
+        user_full_name: s.club_id ? s.club_name : s.user_full_name,
+        owner_type: s.club_id ? 'club' : 'user',
+        club_id: s.club_id || null,
         user_profile_image: s.user_profile_image,
         statuses: [],
         has_unviewed: false,
@@ -16912,6 +16915,10 @@ function supabaseStoryToStatusRow(row: any, user: any, likesCount = 0, likedByMe
     status: cleanText(row?.status || 'active', 40),
     duration_seconds: clampNumber(row?.duration_seconds, 0, 60, 0),
     expires_at: row?.expires_at || '',
+    location_name: cleanText((metadata as any).location_name, 120),
+    club_id: publicId((metadata as any).club_id, 120),
+    club_name: cleanText((metadata as any).club_name, 120),
+    linked_item: (metadata as any).linked_item || null,
     created_at: createdAt,
     updated_at: row?.updated_at || createdAt,
     viewed_by: JSON.stringify(viewedByMe ? [publicId(row?.viewer_id || '', 120)].filter(Boolean) : []),
@@ -16940,8 +16947,10 @@ function supabaseStoryIsVisibleToViewer(row: any, user: any, viewerId: string, b
   if (cleanText(row?.status || 'active', 40) !== 'active') return false;
   const expiresAt = Date.parse(String(row?.expires_at || ''));
   if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return false;
-  if (viewerOwnStory) return !friendsOnly;
+  const clubId = publicId((parseJsonObject(row?.metadata) as any).club_id, 120);
   const visibility = normalizeVisibility(row?.visibility);
+  if (clubId) return visibility !== 'private';
+  if (viewerOwnStory) return !friendsOnly;
   if (visibility === 'private') return false;
   const followsAuthor = followingIds.has(storyUserId);
   if (friendsOnly) return followsAuthor;
@@ -16955,6 +16964,7 @@ async function supabaseReadVisibleStories(c: any, viewerId: string, friendsOnly 
     filters: {
       status: postgrestEqFilter('active'),
       expires_at: `gt.${now()}`,
+      created_at: `gt.${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`,
     },
     order: 'created_at.desc',
     limit: 120,
@@ -17015,6 +17025,7 @@ async function supabaseGetVisibleStory(c: any, storyId: string, viewerId: string
       id: postgrestEqFilter(storyId),
       status: postgrestEqFilter('active'),
       expires_at: `gt.${now()}`,
+      created_at: `gt.${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`,
     },
     limit: 1,
   });
@@ -17030,15 +17041,81 @@ async function supabaseGetVisibleStory(c: any, storyId: string, viewerId: string
   return supabaseStoryIsVisibleToViewer(row, user, viewerId, blockedIds, followingIds) ? row : null;
 }
 
+api.get('/statuses/clubs/managed', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'managed_story_clubs');
+  if (supabaseRequired) return supabaseRequired;
+  const groups = await supabaseAdminQueryRows(c, 'app_group_chats', {
+    select: 'id,name,metadata', filters: { created_by: postgrestEqFilter(userId) }, limit: 100,
+  });
+  const purchasableIds = groups.map((group) => publicId((parseJsonObject(group.metadata) as any).purchasable_id, 120)).filter(Boolean);
+  const purchasables = purchasableIds.length ? await supabaseAdminQueryRows(c, 'app_purchasables', {
+    select: 'id,payment_model,content_type', filters: { id: postgrestInFilter(purchasableIds) }, limit: 100,
+  }) : [];
+  const publicClubIds = new Set(purchasables.filter((item) => item.payment_model === 'free' && item.content_type === 'club').map((item) => publicId(item.id, 120)));
+  const eligible = groups.filter((group) => {
+    const metadata = parseJsonObject(group.metadata);
+    return (metadata as any).source === 'captro_commerce' && publicClubIds.has(publicId((metadata as any).purchasable_id, 120));
+  });
+  return c.json(eligible.map((group) => ({
+    id: publicId(group.id, 120),
+    name: cleanText(group.name, 120) || 'Club',
+  })));
+});
+
 api.post('/statuses', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'share stories');
   if (phoneGate) return phoneGate;
   const userId = getUserId(c); const b = await c.req.json();
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_create');
   if (supabaseRequired) return supabaseRequired;
-  const storyLifetimeMs = 14 * 24 * 60 * 60 * 1000;
-  const id = uuid(); const expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
-  const visibility = normalizeVisibility(b.visibility);
+  const storyLifetimeMs = 24 * 60 * 60 * 1000;
+  const limited = await enforceRateLimit(c, 'story_create', userId, 24, 86400);
+  if (limited) return limited;
+  const storyContent = cleanMultilineText(b.content || '', 2000);
+  if (storyContent) {
+    if (!c.env.OPENAI_API_KEY) {
+      return c.json({ detail: 'Story text screening is unavailable. Please try again later.' }, 503);
+    }
+    try {
+      const moderation = await new OpenAI({ apiKey: c.env.OPENAI_API_KEY, timeout: 12_000, maxRetries: 0 })
+        .moderations.create({ model: c.env.OPENAI_MODERATION_MODEL || 'omni-moderation-latest', input: storyContent });
+      const result = moderation.results?.[0];
+      if (!result || typeof result.flagged !== 'boolean') {
+        return c.json({ detail: 'Story text screening is unavailable. Please try again later.' }, 503);
+      }
+      if (result.flagged) {
+        return c.json({ detail: 'This status needs a safety review before it can be posted.' }, 409);
+      }
+    } catch {
+      return c.json({ detail: 'Story text screening is unavailable. Please try again later.' }, 503);
+    }
+  }
+  const id = uuid(); let expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();
+  const clubId = publicId(b.club_id || '', 120);
+  let clubName = '';
+  let clubPostId = '';
+  if (clubId) {
+    const groups = await supabaseAdminQueryRows(c, 'app_group_chats', {
+      select: 'id,name,created_by,metadata', filters: { id: postgrestEqFilter(clubId) }, limit: 1,
+    });
+    const group = groups[0];
+    const groupMetadata = parseJsonObject(group?.metadata);
+    if (!group || publicId(group.created_by, 120) !== userId || (groupMetadata as any).source !== 'captro_commerce') {
+      return c.json({ detail: 'You cannot post a status for this Club.' }, 403);
+    }
+    const parentPostId = publicId((groupMetadata as any).post_id, 120);
+    const parent = parentPostId ? await supabaseAdminQueryRows(c, 'app_posts', { select: 'id,legacy_post_id,status', filters: { id: postgrestEqFilter(parentPostId), status: postgrestEqFilter('active') }, limit: 1 }) : [];
+    if (!parent[0]) return c.json({ detail: 'This Club is unavailable.' }, 400);
+    const purchasableId = publicId((groupMetadata as any).purchasable_id, 120);
+    const purchasables = purchasableId ? await supabaseAdminQueryRows(c, 'app_purchasables', { select: 'id,payment_model,content_type', filters: { id: postgrestEqFilter(purchasableId) }, limit: 1 }) : [];
+    if (purchasables[0]?.payment_model !== 'free' || purchasables[0]?.content_type !== 'club') {
+      return c.json({ detail: 'Club statuses are currently available only for public free Clubs.' }, 403);
+    }
+    clubName = cleanText(group.name, 120) || 'Club';
+    clubPostId = publicId(parent[0].legacy_post_id, 120);
+  }
+  const visibility = clubId ? 'public' : normalizeVisibility(b.visibility);
   const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';
   const audioTrackId = audioProvider ? cleanText(b.audio_track_id, 80) : '';
   const audioTitle = audioProvider ? cleanText(b.audio_title, 180) : '';
@@ -17049,6 +17126,8 @@ api.post('/statuses', authMiddleware, async (c) => {
   const audioDuration = audioProvider ? clampNumber(b.audio_duration, 5, 30, 15) : 0;
   const storyDurationSeconds = normalizeStoryDurationSeconds(b.duration || b.video_duration || b.video_duration_seconds || b.duration_seconds);
   const storyMediaType = String(b.media_type || b.mediaType || '').toLowerCase();
+  if (!storyContent && !cleanText(b.image || '', 2200)) return c.json({ detail: 'Add a photo, video, or text before posting.' }, 400);
+  if (!['image', 'video', 'text'].includes(storyMediaType || 'image')) return c.json({ detail: 'Unsupported story type.' }, 400);
   const storyIsVideo = storyMediaType.includes('video') || isVideoMediaUrl(String(b.image || ''));
   if (storyIsVideo && !storyDurationSeconds) {
     return c.json({ detail: 'Story videos must be 15, 30, or 60 seconds.', code: 'STORY_VIDEO_DURATION_REQUIRED' }, 400);
@@ -17060,9 +17139,60 @@ api.post('/statuses', authMiddleware, async (c) => {
     return c.json({ detail: 'This sound is unavailable.' }, 400);
   }
 
+  const linked = b.linked_item && typeof b.linked_item === 'object' && !Array.isArray(b.linked_item) ? b.linked_item : null;
+  let verifiedLinkedItem: Record<string, string> | null = null;
+  if (linked) {
+    const linkedPostId = publicId(linked.post_id || linked.id, 120);
+    const requestedType = cleanText(linked.type, 20).toLowerCase();
+    if (!linkedPostId || !['post', 'club', 'event', 'meetup', 'deal', 'place'].includes(requestedType)) {
+      return c.json({ detail: 'Choose a valid Captro item.' }, 400);
+    }
+    const linkedRows = await supabaseAdminQueryRows(c, 'app_posts', {
+      select: 'id,legacy_post_id,title,content,post_type,visibility,status,metadata',
+      filters: { legacy_post_id: postgrestEqFilter(linkedPostId), status: postgrestEqFilter('active') },
+      limit: 1,
+    });
+    const linkedPost = linkedRows[0];
+    if (!linkedPost || normalizeVisibility(linkedPost.visibility) !== 'public') {
+      return c.json({ detail: 'The linked Captro item is unavailable.' }, 400);
+    }
+    const actualType = cleanText(linkedPost.post_type, 20).toLowerCase();
+    if (requestedType !== 'post' && requestedType !== actualType && !(requestedType === 'place' && actualType === 'moment')) {
+      return c.json({ detail: 'The selected item type does not match its post.' }, 400);
+    }
+    verifiedLinkedItem = { type: requestedType, id: linkedPostId, post_id: linkedPostId, title: cleanText(linkedPost.title || linkedPost.content, 120) || 'View on Captro' };
+    if (requestedType === 'event' || requestedType === 'meetup') {
+      const objectRows = await supabaseAdminQueryRows(c, 'app_post_objects', { select: 'public_data', filters: { post_id: postgrestEqFilter(linkedPost.id) }, limit: 1 });
+      const objectData = parseJsonObject(objectRows[0]?.public_data);
+      const creatorEvent = parseJsonObject((parseJsonObject(linkedPost.metadata) as any).creator_event);
+      const end = Date.parse(String((objectData as any).endsAt || (creatorEvent as any).endsAt || ''));
+      if (Number.isFinite(end)) {
+        if (end <= Date.now()) return c.json({ detail: 'This activity has ended.' }, 400);
+        if (end < Date.parse(expiresAt)) expiresAt = new Date(end).toISOString();
+      }
+    }
+  }
+  if (clubId && !verifiedLinkedItem && clubPostId) {
+    verifiedLinkedItem = { type: 'club', id: clubPostId, post_id: clubPostId, title: clubName };
+  }
   const users = await supabaseUsersByAnyIds(c, [userId]);
   const user = users.get(userId) || {};
   const createdAt = now();
+  const submittedMediaUrl = cleanText(b.image || '', 2200);
+  if (submittedMediaUrl) {
+    const ownedAssets = await supabaseAdminQueryRows(c, 'app_media_assets', {
+      select: 'id,media_type,moderation_status,public_url,storage_provider,storage_key',
+      filters: { user_id: postgrestEqFilter(userId), moderation_status: postgrestEqFilter('approved') },
+      order: 'created_at.desc', limit: 300,
+    });
+    const approvedAsset = ownedAssets.find((asset) =>
+      submittedMediaUrl === safeMediaReference(asset.public_url)
+      || submittedMediaUrl === mediaAssetPublicUrl(c.env, asset)
+    );
+    if (!approvedAsset || (storyIsVideo ? approvedAsset.media_type !== 'video' : approvedAsset.media_type !== 'image')) {
+      return c.json({ detail: 'Upload and approve your own photo or video before posting this status.' }, 400);
+    }
+  }
   const mediaUrl = String(b.image || '').startsWith('cfstream:')
     ? String(b.image || '')
     : isVideoMediaUrl(String(b.image || '')) ? streamPlaybackUrl(String(b.image || '')) : safeMediaReference(String(b.image || ''));
@@ -17079,9 +17209,9 @@ api.post('/statuses', authMiddleware, async (c) => {
   await supabaseAdminUpsert(c, 'app_stories', [{
     id,
     user_id: userId,
-    content: cleanMultilineText(b.content || '', 2000),
+    content: storyContent,
     media_url: mediaUrl || null,
-    media_type: storyIsVideo ? 'video' : cleanText(storyMediaType || 'image', 40),
+    media_type: storyIsVideo ? 'video' : (mediaUrl ? 'image' : 'text'),
     background_color: cleanText(b.background_color || '#1B4332', 40),
     text_color: cleanText(b.text_color || '#FFFFFF', 40),
     visibility,
@@ -17091,6 +17221,10 @@ api.post('/statuses', authMiddleware, async (c) => {
     metadata: {
       source: 'worker_status_create',
       original_media_url: cleanText(b.image || '', 2200),
+      location_name: cleanText(b.location_name, 120),
+      linked_item: verifiedLinkedItem,
+      club_id: clubId || null,
+      club_name: clubName || null,
     },
     legacy_created_at: createdAt,
     created_at: createdAt,
@@ -17099,8 +17233,9 @@ api.post('/statuses', authMiddleware, async (c) => {
   }], 'id');
 
   return c.json({
-    id, user_id: userId, content: cleanMultilineText(b.content || '', 2000),
-    image: mediaUrl,
+    id, user_id: userId, content: storyContent,
+    image: mediaUrl, location_name: cleanText(b.location_name, 120), linked_item: verifiedLinkedItem,
+    club_id: clubId || null, club_name: clubName || null,
     background_color: b.background_color, text_color: b.text_color,
     visibility, user_username: publicUsernameFor(user), user_full_name: user?.full_name, user_profile_image: user?.avatar_url || user?.profile_image,
     audio_provider: audioProvider, audio_track_id: audioTrackId, audio_title: audioTitle, audio_artist: audioArtist,
@@ -17191,6 +17326,61 @@ api.post('/statuses/:statusId/view', authMiddleware, async (c) => {
     created_at: now(),
   }], 'story_id,user_id');
   return c.json({ viewed: true });
+});
+
+api.get('/statuses/:statusId/viewers', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_viewers');
+  if (supabaseRequired) return supabaseRequired;
+  const storyId = publicId(c.req.param('statusId'), 120);
+  const stories = await supabaseAdminQueryRows(c, 'app_stories', { select: 'id,user_id,status', filters: { id: postgrestEqFilter(storyId) }, limit: 1 });
+  if (!stories[0] || publicId(stories[0].user_id, 120) !== userId) return c.json({ detail: 'Story not found' }, 404);
+  const views = await supabaseAdminQueryRows(c, 'app_story_views', {
+    select: 'user_id,created_at', filters: { story_id: postgrestEqFilter(storyId) }, order: 'created_at.desc', limit: 500,
+  });
+  const viewerIds = views.map((row) => publicId(row.user_id, 120)).filter((id) => id && id !== userId);
+  const [users, blockedIds] = await Promise.all([supabaseUsersByAnyIds(c, viewerIds), supabaseBlockedUserIds(c, userId)]);
+  return c.json({
+    count: viewerIds.length,
+    viewers: views.filter((row) => row.user_id !== userId && !blockedIds.has(publicId(row.user_id, 120))).map((row) => {
+      const viewer = users.get(publicId(row.user_id, 120)) || {};
+      return { id: publicId(row.user_id, 120), username: publicUsernameFor(viewer), full_name: cleanText(viewer.full_name, 120), avatar_url: safeMediaReference(viewer.avatar_url || viewer.profile_image), viewed_at: row.created_at };
+    }),
+  });
+});
+
+api.post('/statuses/:statusId/reply', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_reply');
+  if (supabaseRequired) return supabaseRequired;
+  const limited = await enforceRateLimit(c, 'story_reply', userId, 30, 3600);
+  if (limited) return limited;
+  const restricted = await enforceUserRestriction(c, userId, 'messaging');
+  if (restricted) return restricted;
+  const storyId = publicId(c.req.param('statusId'), 120);
+  const story = await supabaseGetVisibleStory(c, storyId, userId);
+  if (!story) return c.json({ detail: 'Story not found' }, 404);
+  const receiverId = publicId(story.user_id, 120);
+  if (receiverId === userId) return c.json({ detail: 'You cannot reply to your own status.' }, 400);
+  const invalidPeer = await validateDirectMessagePeer(c, userId, receiverId);
+  if (invalidPeer) return invalidPeer;
+  const body: any = await c.req.json().catch(() => ({}));
+  const reply = cleanMultilineText(body.body || '', 500);
+  if (!reply) return c.json({ detail: 'Write a reply.' }, 400);
+  const id = uuid(); const ts = now();
+  const content = `Replied to your status\n${reply}`;
+  const media = { story_reply_id: storyId };
+  await supabaseAdminUpsert(c, 'app_messages', [{
+    id, sender_id: userId, receiver_id: receiverId, body: content, media_url: null, media_type: null,
+    media, is_read: false, status: 'sent', legacy_created_at: ts, created_at: ts, updated_at: ts,
+  }], 'id');
+  await logSecurityEvent(c, 'story_reply_sent', userId, { story_id: storyId, receiver_id: receiverId });
+  runBackgroundTask(c, 'story_reply_notification_failed', async () => {
+    const sender = await supabaseUserByAnyId(c, userId);
+    const senderName = cleanText(sender?.full_name || sender?.username || 'Someone', 80);
+    await insertNotificationOnce(c, { userId: receiverId, type: 'message', title: `${senderName} replied to your status`, body: 'Sent you a private reply', data: { sender_id: userId, conversation_id: userId, message_id: id, actor_name: senderName }, dedupeKey: `message:${id}`, dedupeSeconds: 86400 });
+  });
+  return c.json({ sent: true, message_id: id });
 });
 
 api.get('/statuses/:statusId/thoughts', authMiddleware, async (c) => {

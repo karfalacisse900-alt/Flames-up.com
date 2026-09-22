@@ -15,8 +15,9 @@ enum MIRAStoryCameraCaptureMode: Equatable {
   case photoOnly
   case videoOnly
 
+  case photoAndVideo
   var usesVideoCapture: Bool {
-    self == .videoOnly
+    self != .photoOnly
   }
 }
 
@@ -714,7 +715,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func requestMicrophoneIfNeededThenConfigure() {
-    guard captureMode.usesVideoCapture else {
+    guard captureMode == .videoOnly else {
       configureSession()
       return
     }
@@ -886,7 +887,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private var availableCameraModes: [CameraMode] {
-    captureMode == .videoOnly ? [.video] : [.photo]
+    captureMode == .videoOnly ? [.video] : captureMode == .photoOnly ? [.photo] : [.photo, .video]
   }
 
   private func updateTimerButton() {
@@ -1038,11 +1039,45 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   @objc private func modeTapped(_ sender: UIButton) {
     guard let mode = modeButtons.first(where: { $0.value === sender })?.key else { return }
     selectedMode = mode
+    if mode == .video && captureMode == .photoAndVideo { requestVideoMicrophoneIfNeeded() }
     CaptroHaptics.light()
     UIView.animate(withDuration: 0.18) {
       self.updateModeSelection()
       self.updateRawButton()
       self.modeStack.layoutIfNeeded()
+    }
+  }
+
+  private func requestVideoMicrophoneIfNeeded() {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
+      installMicrophoneInputIfNeeded()
+    case .notDetermined:
+      AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+        DispatchQueue.main.async {
+          if granted {
+            self?.installMicrophoneInputIfNeeded()
+          } else {
+            self?.showTransientMessage("Microphone access is off. Video will be silent.")
+          }
+        }
+      }
+    default:
+      showTransientMessage("Microphone access is off. Video will be silent.")
+    }
+  }
+
+  private func installMicrophoneInputIfNeeded() {
+    sessionQueue.async { [weak self] in
+      guard let self, self.audioInput == nil,
+            let device = AVCaptureDevice.default(for: .audio),
+            let input = try? AVCaptureDeviceInput(device: device) else { return }
+      self.session.beginConfiguration()
+      if self.session.canAddInput(input) {
+        self.session.addInput(input)
+        self.audioInput = input
+      }
+      self.session.commitConfiguration()
     }
   }
 
@@ -1237,8 +1272,8 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
 
   @objc private func openGallery() {
     var configuration = PHPickerConfiguration(photoLibrary: .shared())
-    configuration.filter = captureMode == .videoOnly ? .videos : .images
-    configuration.selectionLimit = captureMode == .videoOnly ? 1 : 10
+    configuration.filter = captureMode == .videoOnly ? .videos : captureMode == .photoOnly ? .images : .any(of: [.images, .videos])
+    configuration.selectionLimit = captureMode == .photoOnly ? 10 : 1
     configuration.preferredAssetRepresentationMode = .current
     let picker = PHPickerViewController(configuration: configuration)
     picker.delegate = self
@@ -1777,7 +1812,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     picker.dismiss(animated: true)
     guard let provider = results.first?.itemProvider else { return }
     let videoTypes = [UTType.movie.identifier, UTType.mpeg4Movie.identifier, UTType.quickTimeMovie.identifier]
-    if captureMode == .videoOnly, let type = videoTypes.first(where: { provider.hasItemConformingToTypeIdentifier($0) }) {
+    if captureMode != .photoOnly, let type = videoTypes.first(where: { provider.hasItemConformingToTypeIdentifier($0) }) {
       provider.loadFileRepresentation(forTypeIdentifier: type) { [weak self] url, _ in
         guard let self, let url, let data = try? Data(contentsOf: url) else { return }
         DispatchQueue.main.async {
@@ -1788,7 +1823,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
       return
     }
 
-    guard captureMode == .photoOnly else {
+    guard captureMode != .videoOnly else {
       DispatchQueue.main.async { self.showTransientMessage("Choose a video for Stories.") }
       return
     }

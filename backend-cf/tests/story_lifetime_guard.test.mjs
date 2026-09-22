@@ -9,22 +9,41 @@ async function readRepoFile(relativePath) {
   return readFile(path.join(repoRoot, relativePath), 'utf8');
 }
 
-test('stories remain eligible for two weeks, not one week', async () => {
+test('new statuses expire after 24 hours and legacy reports use the same window', async () => {
   const worker = await readRepoFile('backend-cf/src/index.ts');
+  assert.match(worker, /const storyLifetimeMs = 24 \* 60 \* 60 \* 1000;/);
+  assert.match(worker, /s\.created_at >= datetime\('now', '-1 day'\)/);
+  assert.match(worker, /expires_at: `gt\.\${now\(\)\}`/);
+});
 
-  assert.match(
-    worker,
-    /const storyLifetimeMs = 14 \* 24 \* 60 \* 60 \* 1000;/,
-    'new stories must expire after 14 days'
-  );
-  assert.match(
-    worker,
-    /s\.created_at >= datetime\('now', '-14 days'\)/,
-    'legacy story report validation must allow the full 14-day story window'
-  );
-  assert.doesNotMatch(
-    worker,
-    /const storyLifetimeMs = 7 \* 24 \* 60 \* 60 \* 1000;|datetime\('now', '-7 days'\)/,
-    'story logic must not keep the old 7-day expiration window'
-  );
+test('story viewers are owner-only and replies are private direct messages', async () => {
+  const worker = await readRepoFile('backend-cf/src/index.ts');
+  assert.match(worker, /api\.get\('\/statuses\/:statusId\/viewers'/);
+  assert.match(worker, /publicId\(stories\[0\]\.user_id, 120\) !== userId/);
+  assert.match(worker, /api\.post\('\/statuses\/:statusId\/reply'/);
+  assert.match(worker, /validateDirectMessagePeer\(c, userId, receiverId\)/);
+  assert.match(worker, /story_reply_id: storyId/);
+});
+
+test('story links are validated against an active public Captro post', async () => {
+  const worker = await readRepoFile('backend-cf/src/index.ts');
+  assert.match(worker, /linkedPostId = publicId/);
+  assert.match(worker, /status: postgrestEqFilter\('active'\)/);
+  assert.match(worker, /normalizeVisibility\(linkedPost.visibility\) !== 'public'/);
+});
+
+test('story text and media must pass server-side publication checks', async () => {
+  const worker = await readRepoFile('backend-cf/src/index.ts');
+  assert.match(worker, /moderations\.create\(\{ model: c\.env\.OPENAI_MODERATION_MODEL/);
+  assert.match(worker, /Story text screening is unavailable/);
+  assert.match(worker, /if \(result\.flagged\)/);
+  assert.match(worker, /moderation_status: postgrestEqFilter\('approved'\)/);
+  assert.match(worker, /submittedMediaUrl === safeMediaReference\(asset\.public_url\)/);
+});
+
+test('database enforces the 24-hour story expiry cap', async () => {
+  const migration = await readRepoFile('supabase/migrations/20260922205520_story_24_hour_expiry_guard.sql');
+  assert.match(migration, /app_stories_max_24h/);
+  assert.match(migration, /as restrictive/);
+  assert.match(migration, /created_at > now\(\) - interval '24 hours'/);
 });
