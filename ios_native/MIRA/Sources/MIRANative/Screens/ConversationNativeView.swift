@@ -27,6 +27,7 @@ private enum ChatRoomPalette {
 @MainActor
 final class ConversationNativeModel: ObservableObject {
   @Published var messages: [MIRAMessage] = []
+  @Published var groupInfo: MIRAGroupInfo?
   @Published var presence: MIRAPresence?
   @Published var draft = ""
   @Published var isLoading = false
@@ -107,6 +108,7 @@ final class ConversationNativeModel: ObservableObject {
         rows = try await api.get(messagesPath("/messages/\(peerId)", after: cursor, limit: 50))
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", after: cursor, limit: 50))
+        groupInfo = response.group
         rows = response.messages
       }
       if !rows.isEmpty || messages.isEmpty {
@@ -136,6 +138,7 @@ final class ConversationNativeModel: ObservableObject {
         rows = try await api.get(messagesPath("/messages/\(peerId)", limit: 50))
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", limit: 50))
+        groupInfo = response.group
         rows = response.messages
       }
       guard !rows.isEmpty else { return }
@@ -160,6 +163,7 @@ final class ConversationNativeModel: ObservableObject {
         rows = try await api.get(messagesPath("/messages/\(peerId)", before: before, limit: 50))
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", before: before, limit: 50))
+        groupInfo = response.group
         rows = response.messages
       }
       guard !rows.isEmpty else {
@@ -182,6 +186,10 @@ final class ConversationNativeModel: ObservableObject {
       presence = try? await api.get("/messages/presence/\(peerId)")
       try? await Task.sleep(nanoseconds: 8_000_000_000)
     }
+  }
+
+  func sendSharedPost(_ post: MIRAPost) async {
+    _ = await send(content: MIRAProductionBackend.siteURL("post/\(post.id)").absoluteString, mediaUrl: nil, mediaType: nil)
   }
 
   func sendText() async {
@@ -230,6 +238,17 @@ final class ConversationNativeModel: ObservableObject {
   func removeMessages(byUserId userId: String) {
     messages.removeAll { $0.senderId == userId || $0.receiverId == userId }
     Task { await persistThread() }
+  }
+
+  func blockUser(_ userId: String) async {
+    guard !userId.isEmpty, userId != currentUserId else { return }
+    do {
+      let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      removeMessages(byUserId: userId)
+      errorMessage = nil
+    } catch {
+      errorMessage = "Could not block this user. Try again in a moment."
+    }
   }
 
   func blockPeer() async -> Bool {
@@ -405,6 +424,10 @@ public struct ConversationNativeView: View {
   @StateObject private var model: ConversationNativeModel
   @State private var pickerItem: PhotosPickerItem?
   @State private var showAttachmentTray = false
+  @State private var showGroupMembers = false
+  @State private var showSharePostPicker = false
+  @State private var showPinnedMessage = false
+  @State private var showActivityDetails = false
   @State private var showProfileOptions = false
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportMessage: MIRAMessage?
@@ -434,7 +457,11 @@ public struct ConversationNativeView: View {
 
   public var body: some View {
     VStack(spacing: 0) {
-      chatHeader
+      if model.isGroup {
+        clubContextHeader
+      } else {
+        chatHeader
+      }
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(spacing: 12) {
@@ -484,7 +511,7 @@ public struct ConversationNativeView: View {
     .safeAreaInset(edge: .bottom, spacing: 0) {
       composerContainer
     }
-    .background(ChatRoomPalette.background)
+    .background(model.isGroup ? MIRATheme.Color.surface : ChatRoomPalette.background)
     .miraScreenEnter(.push)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
@@ -525,6 +552,37 @@ public struct ConversationNativeView: View {
         Color.clear
       }
     }
+    .sheet(isPresented: $showSharePostPicker) {
+      ClubPostShareSheet(api: model.api, userId: model.currentUserId) { post in
+        showSharePostPicker = false
+        Task { await model.sendSharedPost(post) }
+      }
+    }
+    .sheet(isPresented: $showGroupMembers) {
+      ClubMembersSheet(members: model.groupInfo?.members ?? [], api: model.api)
+    }
+    .alert("Pinned message", isPresented: $showPinnedMessage) {
+      Button("Done", role: .cancel) {}
+    } message: {
+      Text(model.groupInfo?.pinnedMessage ?? "")
+    }
+    .sheet(isPresented: $showActivityDetails) {
+      if let activity = model.groupInfo?.activity {
+        NavigationStack {
+          VStack(alignment: .leading, spacing: 12) {
+            Text(activity.title).font(.title2.bold())
+            if let subtitle = activity.subtitle { Text(subtitle) }
+            if let detail = activity.detail { Text(detail).foregroundStyle(.secondary) }
+            Spacer()
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(24)
+          .navigationTitle("Club activity")
+          .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium])
+      }
+    }
     .onChange(of: pickerItem) { item in
       guard let item else { return }
       Task {
@@ -533,6 +591,32 @@ public struct ConversationNativeView: View {
         await model.sendPickedMedia(data: data, contentTypes: item.supportedContentTypes)
       }
     }
+  }
+
+  private var clubContextHeader: some View {
+    VStack(spacing: 0) {
+      ClubChatHeader(title: title, info: model.groupInfo, onBack: {
+        CaptroHaptics.light()
+        dismiss()
+      }, onMore: {
+        CaptroHaptics.light()
+        showProfileOptions = true
+      })
+      if let info = model.groupInfo, !(info.members ?? []).isEmpty {
+        ClubMemberAvatarRow(info: info) { showGroupMembers = true }
+      }
+      if let activity = model.groupInfo?.activity {
+        ActiveClubActivityCard(activity: activity) { showActivityDetails = true }
+          .padding(.vertical, 8)
+      }
+      if let pinned = model.groupInfo?.pinnedMessage, !pinned.isEmpty {
+        ClubPinnedMessageRow(message: pinned) { showPinnedMessage = true }
+      }
+      Rectangle()
+        .fill(MIRATheme.Color.hairline)
+        .frame(height: 0.5)
+    }
+    .background(MIRATheme.Color.surface)
   }
 
   private var chatHeader: some View {
@@ -672,22 +756,108 @@ public struct ConversationNativeView: View {
     .padding(.top, MIRATheme.Space.xl)
   }
 
+  @ViewBuilder
   private func messageBubble(_ message: MIRAMessage) -> some View {
+    if model.isGroup {
+      clubMessageBubble(message)
+    } else {
+      directMessageBubble(message)
+    }
+  }
+
+  private func clubMessageBubble(_ message: MIRAMessage) -> some View {
+    let outgoing = isOutgoing(message)
+    let sender = model.groupInfo?.members?.first { $0.id == message.senderId }
+    return HStack(alignment: .bottom, spacing: 10) {
+      if outgoing { Spacer(minLength: 46) }
+      if !outgoing {
+        NavigationLink(destination: UserProfileNativeView(userId: message.senderId ?? "", api: model.api)) {
+          RemoteAvatar(url: message.profileImage ?? sender?.profileImage, size: 32)
+        }
+        .buttonStyle(.plain)
+        .disabled(message.senderId == nil)
+      }
+      VStack(alignment: outgoing ? .trailing : .leading, spacing: 5) {
+        HStack(spacing: 6) {
+          Text(outgoing ? "You" : (message.fullName ?? message.username ?? sender?.displayName ?? "Member"))
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+          if let role = sender?.role, role == "owner" || role == "admin" {
+            Text(role == "owner" ? "HOST" : "MOD")
+              .font(.system(size: 9, weight: .semibold))
+              .foregroundStyle(MIRATheme.Color.textMuted)
+          }
+          Text(clubMessageTime(message.createdAt))
+            .font(.system(size: 11))
+            .foregroundStyle(MIRATheme.Color.textMuted)
+        }
+        if let link = clubMessageLinkURL(message.content) {
+          ClubChatLinkMessage(url: link, api: model.api)
+        } else {
+          MessageBubbleContent(
+            message: message,
+            outgoing: outgoing,
+            maxWidth: bubbleMaxWidth,
+            timestamp: nil,
+            editorial: true
+          )
+        }
+        if message.status == "failed" {
+          Text("Failed to send · long press to retry")
+            .font(.system(size: 11))
+            .foregroundStyle(.red)
+        }
+      }
+      .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
+      if !outgoing { Spacer(minLength: 46) }
+    }
+    .contextMenu {
+      if let content = message.content, !content.isEmpty {
+        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = content }
+      }
+      if outgoing && message.status?.lowercased() == "failed" {
+        Button("Retry", systemImage: "arrow.clockwise") { Task { await model.retry(message) } }
+      }
+      if !outgoing {
+        Button("Report", systemImage: "flag") { presentReport(for: message) }
+        if let senderId = message.senderId {
+          Button(role: .destructive) {
+            Task { await model.blockUser(senderId) }
+          } label: {
+            Label("Block user", systemImage: "hand.raised")
+          }
+        }
+      }
+      Button("Hide for me", systemImage: "eye.slash") { model.deleteForMe(message) }
+    }
+  }
+
+  private func clubMessageLinkURL(_ content: String?) -> URL? {
+    guard let content = content?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !content.contains(where: \.isWhitespace),
+          let url = URL(string: content),
+          let scheme = url.scheme?.lowercased(),
+          scheme == "https" || scheme == "http",
+          url.host != nil else { return nil }
+    return url
+  }
+
+  private func clubMessageTime(_ value: String?) -> String {
+    guard let value, let date = ISO8601DateFormatter().date(from: value) else { return "" }
+    return DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)
+  }
+
+  private func directMessageBubble(_ message: MIRAMessage) -> some View {
     let outgoing = isOutgoing(message)
     return HStack(alignment: .bottom, spacing: 0) {
       if outgoing { Spacer(minLength: 68) }
       VStack(alignment: outgoing ? .trailing : .leading, spacing: 6) {
-        if model.isGroup && !outgoing {
-          Text(message.fullName ?? message.username ?? "Captro")
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
         MessageBubbleContent(
           message: message,
           outgoing: outgoing,
           maxWidth: bubbleMaxWidth,
-          timestamp: statusText(for: message, outgoing: outgoing)
+          timestamp: statusText(for: message, outgoing: outgoing),
+          editorial: false
         )
       }
       .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
@@ -696,32 +866,23 @@ public struct ConversationNativeView: View {
     .transition(.move(edge: .bottom).combined(with: .opacity))
     .contextMenu {
       if outgoing, message.status?.lowercased() == "failed" {
-        Button {
-          Task { await model.retry(message) }
-        } label: {
+        Button { Task { await model.retry(message) } } label: {
           Label("Retry", systemImage: "arrow.clockwise")
         }
       }
       if !outgoing {
-        Button(role: .destructive) {
-          presentReport(for: message)
-        } label: {
+        Button(role: .destructive) { presentReport(for: message) } label: {
           Label("Report message", systemImage: "flag")
         }
-        Button(role: .destructive) {
-          Task { _ = await model.blockPeer() }
-        } label: {
+        Button(role: .destructive) { Task { _ = await model.blockPeer() } } label: {
           Label("Block user", systemImage: "hand.raised")
         }
       }
-      Button(role: .destructive) {
-        model.deleteForMe(message)
-      } label: {
+      Button(role: .destructive) { model.deleteForMe(message) } label: {
         Label("Delete for me", systemImage: "trash")
       }
     }
   }
-
   private var bubbleMaxWidth: CGFloat {
     min(UIScreen.main.bounds.width * 0.72, 296)
   }
@@ -837,7 +998,7 @@ public struct ConversationNativeView: View {
         .buttonStyle(.miraPress)
         .accessibilityLabel(showAttachmentTray ? "Close attachments" : "Add attachment")
 
-        TextField("Message", text: $model.draft, axis: .vertical)
+        TextField(model.isGroup ? "Message the club..." : "Message", text: $model.draft, axis: .vertical)
           .lineLimit(1...5)
           .font(.body)
           .foregroundStyle(MIRATheme.Color.textPrimary)
@@ -852,7 +1013,7 @@ public struct ConversationNativeView: View {
       .padding(.vertical, 9)
     }
     .background(ChatRoomPalette.composer)
-    .shadow(color: .black.opacity(0.035), radius: 12, x: 0, y: -3)
+    .shadow(color: model.isGroup ? .clear : .black.opacity(0.035), radius: model.isGroup ? 0 : 12, x: 0, y: model.isGroup ? 0 : -3)
     .overlay(alignment: .top) {
       Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
     }
@@ -866,7 +1027,15 @@ public struct ConversationNativeView: View {
           trayButton("photo.on.rectangle", "Media")
         }
         .disabled(model.isUploading)
-
+        if model.isGroup {
+          Button {
+            showAttachmentTray = false
+            showSharePostPicker = true
+          } label: {
+            trayButton("square.on.square", "Captro post")
+          }
+          .buttonStyle(.plain)
+        }
       }
       .padding(.horizontal, MIRATheme.Space.md)
     }
@@ -886,7 +1055,7 @@ public struct ConversationNativeView: View {
         .font(.system(size: 15, weight: .bold))
         .foregroundStyle(MIRATheme.Color.onPrimary)
         .frame(width: 44, height: 44)
-        .background(hasDraft ? ChatRoomPalette.accent : MIRATheme.Color.textMuted.opacity(0.3))
+        .background(hasDraft ? (model.isGroup ? MIRATheme.Color.textPrimary : ChatRoomPalette.accent) : MIRATheme.Color.textMuted.opacity(0.3))
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
@@ -988,6 +1157,7 @@ private struct MessageBubbleContent: View {
   let outgoing: Bool
   let maxWidth: CGFloat
   let timestamp: String?
+  let editorial: Bool
   @State private var isVideoPlaying = false
 
   var body: some View {
@@ -1019,7 +1189,7 @@ private struct MessageBubbleContent: View {
       RoundedRectangle(cornerRadius: bubbleRadius, style: .continuous)
         .stroke(outgoing ? ChatRoomPalette.outgoingStroke : ChatRoomPalette.incomingStroke, lineWidth: 1)
     }
-    .shadow(color: ChatRoomPalette.messageShadow, radius: 8, x: 0, y: 4)
+    .shadow(color: editorial ? .clear : ChatRoomPalette.messageShadow, radius: editorial ? 0 : 8, x: 0, y: editorial ? 0 : 4)
   }
 
   private var hasLargeMedia: Bool {
@@ -1040,15 +1210,15 @@ private struct MessageBubbleContent: View {
   }
 
   private var bubbleFill: Color {
-    outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble
+    editorial ? (outgoing ? Color(red: 0.94, green: 0.95, blue: 0.94) : MIRATheme.Color.surfaceSoft) : (outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble)
   }
 
   private var bubbleTextColor: Color {
-    outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary
+    editorial ? MIRATheme.Color.textPrimary : (outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary)
   }
 
   private var bubbleRadius: CGFloat {
-    hasLargeMedia ? 18 : 22
+    editorial ? 12 : (hasLargeMedia ? 18 : 22)
   }
 
   private var bubbleVerticalPadding: CGFloat {

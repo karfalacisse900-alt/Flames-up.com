@@ -17756,18 +17756,48 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
       limit: 1,
     }),
     supabaseAdminQueryRows(c, 'app_group_chat_members', {
-      select: 'user_id',
+      select: 'user_id,role',
       filters: { group_id: postgrestEqFilter(groupId) },
       limit: 200,
     }),
   ]);
   const group = groups[0];
   if (!group) return c.json({ detail: 'Group not found' }, 404);
+  const users = await supabaseUsersByAnyIds(c, members.map((member: any) => publicId(member.user_id, 120)).filter(Boolean));
+  const memberProfiles = members.map((member: any) => {
+    const memberId = publicId(member.user_id, 120);
+    const profile = users.get(memberId) || {};
+    return {
+      id: memberId,
+      username: publicUsernameFor(profile),
+      full_name: cleanText(profile.full_name, 80) || null,
+      profile_image: safeMediaReference(profile.avatar_url) || null,
+      role: cleanText(member.role, 24) || 'member',
+    };
+  });
+  const presence = c.env.KV
+    ? await Promise.all(memberProfiles.map((member: any) => readSupabasePrimaryPresence(c, member.id)))
+    : null;
   const messages = await supabaseGroupMessageRows(c, groupId, { limit, before, after });
+  const metadata = parseJsonObject(group.metadata);
+  const rawActivity = parseJsonObject(metadata.activity);
+  const activityTitle = cleanText(rawActivity.title, 100);
+  const activity = activityTitle ? {
+    title: activityTitle,
+    subtitle: cleanText(rawActivity.subtitle, 160) || null,
+    detail: cleanText(rawActivity.detail, 100) || null,
+    image_url: safeMediaReference(rawActivity.image_url) || null,
+    destination_type: ['event', 'meetup'].includes(cleanText(rawActivity.destination_type, 20)) ? rawActivity.destination_type : null,
+    destination_id: publicId(rawActivity.destination_id, 120) || null,
+  } : null;
   return c.json({
     group: {
       ...group,
+      activity,
+      pinned_message: cleanText(metadata.pinned_message, 240) || null,
       member_count: members.length,
+      active_count: presence ? presence.filter(isPresenceOnline).length : null,
+      members: memberProfiles,
       created_at: group.legacy_created_at || group.created_at,
     },
     messages,

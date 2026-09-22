@@ -1116,7 +1116,7 @@ private struct StoryThoughtBubbleState: Identifiable, Hashable {
   let thought: StoryThought
 }
 
-private struct StoryViewerNativeView: View {
+struct StoryViewerNativeView: View {
   let group: MIRAStoryGroup
   let allGroups: [MIRAStoryGroup]
   let api: MIRAAPIClient

@@ -1714,11 +1714,37 @@ public struct MIRAGroupChatCreatedResponse: Decodable, Hashable {
   public let createdAt: String?
 }
 
+public struct MIRAGroupMember: Decodable, Hashable, Identifiable {
+  public let id: String
+  public let username: String?
+  public let fullName: String?
+  public let profileImage: String?
+  public let role: String?
+
+  public var displayName: String {
+    let full = fullName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return full.isEmpty ? (username ?? "Member") : full
+  }
+}
+
+public struct MIRAClubActivity: Decodable, Hashable {
+  public let title: String
+  public let subtitle: String?
+  public let detail: String?
+  public let imageUrl: String?
+  public let destinationType: String?
+  public let destinationId: String?
+}
+
 public struct MIRAGroupInfo: Decodable, Hashable {
   public let id: String
   public let name: String?
   public let createdBy: String?
   public let memberCount: Int?
+  public let activeCount: Int?
+  public let members: [MIRAGroupMember]?
+  public let activity: MIRAClubActivity?
+  public let pinnedMessage: String?
 }
 
 public struct MIRAGroupMessagesResponse: Decodable, Hashable {

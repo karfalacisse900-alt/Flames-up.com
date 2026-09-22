@@ -801,6 +801,9 @@ private enum MainFeedPagerDragTarget {
 }
 
 public struct MainFeedView: View {
+  @State private var homeStories: [MIRAStoryGroup] = []
+  @State private var homeAvatarURL: String?
+  @State private var selectedStoryGroup: MIRAStoryGroup?
   @StateObject private var model: MainFeedModel
   private let isTabActive: Bool
   private let isGuest: Bool
@@ -900,9 +903,23 @@ public struct MainFeedView: View {
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api, onClose: { isShowingCreatePost = false })
       }
+      .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
+        StoryViewerNativeView(
+          group: group,
+          allGroups: homeStories,
+          api: model.api,
+          onClose: dismissStory,
+          onReportStory: { target in
+            dismissStory()
+            reportTarget = target
+            isReportSheetPresented = true
+          }
+        )
+      }
       .task(id: isGuest) {
         model.configureGuestMode(isGuest)
         await model.load()
+        await loadHomeStories()
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
@@ -961,88 +978,126 @@ public struct MainFeedView: View {
   }
 
   private var homeTopBar: some View {
-    HStack(spacing: 0) {
-      Menu {
-        ForEach(homeCities, id: \.self) { city in
-          Button {
-            selectedCity = city
-          } label: {
-            if selectedCity == city {
-              Label(city, systemImage: "checkmark")
-            } else {
-              Text(city)
+    ZStack(alignment: .leading) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 12) {
+          if !isGuest {
+            NavigationLink(destination: CreateStoryNativeView(api: model.api).miraHideTabBarOnAppear()) {
+              homeStoryAvatar(url: homeAvatarURL, unseen: false, add: true)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add story")
+          }
+          ForEach(homeStories) { group in
+            Button {
+              selectedStoryGroup = group
+            } label: {
+              homeStoryAvatar(url: group.userProfileImage, unseen: group.hasUnviewed == true, add: false)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View \(group.displayName)'s story")
           }
         }
-      } label: {
-        HStack(spacing: 4) {
-          Text(selectedCity)
-            .font(.system(size: 17, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .lineLimit(1)
-
-          Image(systemName: "chevron.down")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-        }
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .contentShape(Rectangle())
-      }
-      .menuIndicator(.hidden)
-      .frame(width: 92, alignment: .leading)
-      .accessibilityLabel("Selected city, \(selectedCity)")
-
-      HStack(spacing: 24) {
-        homeSectionButton(title: "for you", section: .forYou)
-        homeSectionButton(title: "friends", section: .friends)
+        .padding(.leading, 176)
+        .padding(.trailing, 14)
       }
       .frame(maxWidth: .infinity)
 
-      HStack(spacing: 4) {
-        if let currentPost {
-          ShareLink(item: mainFeedShareURL(for: currentPost)) {
-            Image(systemName: "paperplane")
-              .font(.system(size: 21, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .frame(width: 44, height: 44)
-              .contentShape(Rectangle())
+      HStack(spacing: 8) {
+        Menu {
+          ForEach(homeCities, id: \.self) { city in
+            Button {
+              selectedCity = city
+            } label: {
+              if selectedCity == city {
+                Label(city, systemImage: "checkmark")
+              } else {
+                Text(city)
+              }
+            }
           }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Share post")
-        } else {
-          Image(systemName: "paperplane")
-            .font(.system(size: 21, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .frame(width: 44, height: 44)
-            .accessibilityHidden(true)
+          Divider()
+          Button("For you") { selectedFeedSection = .forYou }
+          Button("Friends") { selectedFeedSection = .friends }
+          if let currentPost {
+            ShareLink(item: mainFeedShareURL(for: currentPost)) {
+              Label("Share current post", systemImage: "square.and.arrow.up")
+            }
+          }
+        } label: {
+          HStack(spacing: 4) {
+            Text(selectedCity)
+              .font(.system(size: 18, weight: .bold))
+              .lineLimit(1)
+            Image(systemName: "chevron.down")
+              .font(.system(size: 10, weight: .bold))
+          }
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .frame(width: 92, height: 52, alignment: .leading)
+          .contentShape(Rectangle())
         }
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Selected city, \(selectedCity)")
 
         Button {
           CaptroHaptics.light()
           isShowingCreatePost = true
         } label: {
           Image(systemName: "square.and.pencil")
-            .font(.system(size: 21, weight: .medium))
+            .font(.system(size: 22, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 44, height: 44)
+            .frame(width: 48, height: 52)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Create post")
       }
-      .frame(width: 92, alignment: .trailing)
+      .frame(width: 162, alignment: .leading)
+      .padding(.leading, 14)
+      .background(MIRATheme.Color.surface)
+      .zIndex(1)
     }
-    .padding(.horizontal, 14)
-    .frame(height: 64)
+    .frame(height: 78)
     .background(MIRATheme.Color.surface)
     .overlay(alignment: .bottom) {
-      Rectangle()
-        .fill(MIRATheme.Color.hairline)
-        .frame(height: 0.5)
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
     }
     .zIndex(10)
   }
 
+  private func homeStoryAvatar(url: String?, unseen: Bool, add: Bool) -> some View {
+    ZStack(alignment: .bottomTrailing) {
+      RemoteAvatar(url: url, size: 60)
+        .padding(3)
+        .overlay(Circle().stroke(unseen ? MIRATheme.Color.textPrimary : MIRATheme.Color.hairline, lineWidth: unseen ? 1.5 : 1))
+      if add {
+        Image(systemName: "plus")
+          .font(.system(size: 10, weight: .bold))
+          .foregroundStyle(.white)
+          .frame(width: 20, height: 20)
+          .background(MIRATheme.Color.textPrimary, in: Circle())
+          .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
+      }
+    }
+    .frame(width: 68, height: 68)
+    .contentShape(Circle())
+  }
+
+  private func loadHomeStories() async {
+    if !isGuest, let profile = await MIRAAppCacheStore.shared.loadCurrentProfile() {
+      homeAvatarURL = profile.profileImage
+    }
+    if let cached = await MIRAAppCacheStore.shared.loadDiscoverStories(), homeStories.isEmpty {
+      homeStories = cached.filter { $0.statuses?.isEmpty == false }
+    }
+    do {
+      let fresh: [MIRAStoryGroup] = try await model.api.get("/statuses")
+      homeStories = fresh.filter { $0.statuses?.isEmpty == false }
+      await MIRAAppCacheStore.shared.saveDiscoverStories(homeStories)
+    } catch {
+      // Keep cached stories visible when offline.
+    }
+  }
   private func homeSectionButton(title: String, section: MainFeedSection) -> some View {
     Button {
       guard selectedFeedSection != section else { return }
@@ -1449,7 +1504,8 @@ public struct MainFeedView: View {
       postOptionsTarget != nil ||
       isReportSheetPresented ||
       reportTarget != nil ||
-      isShowingCreatePost
+      isShowingCreatePost ||
+      selectedStoryGroup != nil
   }
 }
 

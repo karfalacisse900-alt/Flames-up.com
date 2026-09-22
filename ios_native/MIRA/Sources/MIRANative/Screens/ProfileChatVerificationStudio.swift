@@ -298,6 +298,11 @@ public struct ProfileNativeView: View {
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
           ProfileToolbarDestinationButton(
+            systemImage: "bubble.left.and.bubble.right",
+            accessibilityLabel: "Chats",
+            destination: ChatNativeView(api: model.api, currentUserId: model.user?.id ?? authSession?.user?.id ?? "").miraHideTabBarOnAppear()
+          )
+          ProfileToolbarDestinationButton(
             systemImage: "creditcard",
             accessibilityLabel: "Payments",
             destination: CaptroPaymentsView(api: model.api)
@@ -1958,8 +1963,7 @@ public struct ChatNativeView: View {
   }
 
   public var body: some View {
-    NavigationStack {
-      ScrollView {
+    ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
           chatHeader
 
@@ -1985,7 +1989,7 @@ public struct ChatNativeView: View {
       }
       .miraScrollFeel(.chat)
       .background(MIRATheme.Color.appBackground)
-      .miraScreenEnter(.tab)
+      .miraScreenEnter(.push)
       .task {
         model.configure(currentUserId: currentUserId)
         await model.load()
@@ -2016,7 +2020,8 @@ public struct ChatNativeView: View {
           Task { await model.load() }
         }
       }
-    }
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar(.hidden, for: .tabBar)
   }
 
   private var chatHeader: some View {
