@@ -42,7 +42,7 @@ test('story text and media must pass server-side publication checks', async () =
 });
 
 test('database enforces the 24-hour story expiry cap', async () => {
-  const migration = await readRepoFile('supabase/migrations/20260922205520_story_24_hour_expiry_guard.sql');
+  const migration = await readRepoFile('supabase/migrations/20260922213005_story_24_hour_expiry_guard.sql');
   assert.match(migration, /app_stories_max_24h/);
   assert.match(migration, /as restrictive/);
   assert.match(migration, /created_at > now\(\) - interval '24 hours'/);
