@@ -71,6 +71,8 @@ test('native recording is explicit, interruption-safe, and disclosed before use'
   assert.match(recorder, /interactiveDismissDisabled\(recorder\.isRecording\)/);
   assert.match(recorder, /disclosureAccepted/);
   assert.match(recorder, /CaptroVoicePlaybackCenter\.shared\.stop\(\)/);
+  assert.doesNotMatch(recorder, /guard !session\.currentRoute\.inputs\.isEmpty/);
+  assert.match(recorder, /CaptroVoiceUploadError\.serviceUnavailable/);
 });
 
 test('composer and comments submit private voice IDs instead of fake audio', () => {
@@ -83,6 +85,7 @@ test('composer and comments submit private voice IDs instead of fake audio', () 
   assert.match(comments, /CaptroVoiceRecorderSheet\(limit: 30\)/);
   assert.match(comments, /voiceAudioId: voiceId/);
   assert.match(comments, /pendingVoiceReplies/);
+  assert.ok(comments.indexOf('pendingVoiceReplies.append(voiceSubmission)') > comments.indexOf('let comment: MIRAComment = try await api.post'));
 });
 
 test('a stamped voice post keeps its selected type and stays pending until moderation', () => {

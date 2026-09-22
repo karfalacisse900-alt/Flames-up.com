@@ -21,9 +21,6 @@ struct CaptroPostDetailSections: View {
         if model.commerce != nil || post.detail?.commerce != nil {
           CaptroCommerceDetailSection(model: model)
         } else {
-          CaptroEditorialOverlayCard(content: post.captroEditorialCardContent)
-            .frame(maxWidth: 320, alignment: .leading)
-            .padding(.horizontal, 16)
           switch post.detailKind {
           case .placeReview: placeReview
           case .regular: regularPost

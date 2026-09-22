@@ -72,9 +72,8 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetoothHFP])
       try session.setActive(true, options: .notifyOthersOnDeactivation)
-      guard !session.currentRoute.inputs.isEmpty else {
-        throw MIRAAPIError.emptyResponse
-      }
+      // The route can be empty briefly after activation, even though the
+      // recorder can open the built-in microphone. Let AVAudioRecorder decide.
       let url = FileManager.default.temporaryDirectory.appendingPathComponent("captro-voice-\(UUID().uuidString).m4a")
       let settings: [String: Any] = [
         AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -316,7 +315,24 @@ public final class CaptroVoiceUploadService {
     if let targetId { fields["target_id"] = targetId }
     if let parentPostId { fields["parent_post_id"] = parentPostId }
     if let parentCommentId { fields["parent_comment_id"] = parentCommentId }
-    return try await api.uploadMultipart("/voice/submissions", fileName: draft.fileURL.lastPathComponent, mimeType: "audio/mp4", data: data, fields: fields)
+    do {
+      return try await api.uploadMultipart("/voice/submissions", fileName: draft.fileURL.lastPathComponent, mimeType: "audio/mp4", data: data, fields: fields)
+    } catch MIRAAPIError.badStatus(404) {
+      throw CaptroVoiceUploadError.serviceUnavailable
+    } catch MIRAAPIError.server(let status, _, _) where status == 404 {
+      throw CaptroVoiceUploadError.serviceUnavailable
+    }
+  }
+}
+
+public enum CaptroVoiceUploadError: LocalizedError {
+  case serviceUnavailable
+
+  public var errorDescription: String? {
+    switch self {
+    case .serviceUnavailable:
+      return "Voice uploads are not available on Captro’s server yet. Your recording is still here; please try again after the voice service is enabled."
+    }
   }
 }
 

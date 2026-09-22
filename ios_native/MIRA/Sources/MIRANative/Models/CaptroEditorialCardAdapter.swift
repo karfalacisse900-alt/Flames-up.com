@@ -1,6 +1,17 @@
 import Foundation
 
 extension MIRAPost {
+  /// Image-free posts have no separate caption below the card. Keep their
+  /// caption in the same surface, without repeating a title or offer terms.
+  var captroTextOnlyCardContent: CaptroEditorialCardContent {
+    var content = captroEditorialCardContent
+    let caption = captroFeedCaptionText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !caption.isEmpty && caption != content.title && content.description == nil {
+      content.description = caption
+    }
+    return content
+  }
+
   /// Live feed data only. Example content belongs in the DEBUG visual fixture, not here.
   var captroEditorialCardContent: CaptroEditorialCardContent {
     let type = CaptroEditorialCardType(stampKind: captroStampKind)

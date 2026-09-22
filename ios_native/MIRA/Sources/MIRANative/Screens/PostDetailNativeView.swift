@@ -225,22 +225,27 @@ final class PostDetailModel: ObservableObject {
     guard !clean.isEmpty || voiceDraft != nil else { return false }
     do {
       var voiceId: String?
+      var voiceSubmission: CaptroVoiceSubmission?
       if let voiceDraft {
         let submission = try await CaptroVoiceUploadService(api: api).submit(
           voiceDraft, targetType: "reply", parentPostId: post.id, parentCommentId: parentId, caption: clean
         )
         voiceId = submission.id
-        pendingVoiceReplies.append(submission)
+        voiceSubmission = submission
       }
       let comment: MIRAComment = try await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean, parentId: parentId, voiceAudioId: voiceId))
-      if voiceId != nil { return true }
+      if let voiceSubmission {
+        pendingVoiceReplies.append(voiceSubmission)
+        return true
+      }
       comments.append(comment)
       await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       post = post.updating(commentsCount: max(comments.count, (post.commentsCount ?? 0) + 1))
       publishEngagement()
       return true
     } catch {
-      actionError = "Couldn't send your comment. Your draft has been kept."
+      actionError = (error as? LocalizedError)?.errorDescription
+        ?? "Couldn't send your comment. Your draft has been kept."
       return false
     }
   }

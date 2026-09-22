@@ -41,13 +41,9 @@ struct CaptroFeedPostView: View {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
       } else {
-        CaptroEditorialOverlayCard(content: post.captroEditorialCardContent, onOpen: onOpenPost)
+        CaptroEditorialOverlayCard(content: post.captroTextOnlyCardContent, onOpen: onOpenPost)
           .frame(width: CaptroEditorialCardLayout.width(for: pageSize?.width ?? UIScreen.main.bounds.width), alignment: .leading)
           .padding(.horizontal, CaptroEditorialCardLayout.inset)
-        if post.captroEditorialCardContent.type != .moment,
-           let caption = post.captroFeedCaptionText {
-          Text(caption).font(.body).lineLimit(5).padding(.horizontal, 16).padding(.top, 8)
-        }
       }
 
       if let voice = post.detail?.voice {

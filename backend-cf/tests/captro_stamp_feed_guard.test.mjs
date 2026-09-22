@@ -32,7 +32,7 @@ test('guest Home reads only the public feed and keeps an isolated cache', () => 
 
 test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.match(postView, /CaptroMediaPager\(/);
-  assert.match(postView, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
+  assert.match(postView, /CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/);
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
@@ -52,7 +52,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(visiblePostIndices, id: \\.self\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -67,6 +67,18 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   const homeRoute = worker.slice(homeStart, homeEnd);
   assert.ok(homeStart >= 0 && homeEnd > homeStart);
   assert.doesNotMatch(homeRoute, /photoOnly:\s*true/);
+});
+
+test('details and image-free feed do not stack a second editorial card or caption', () => {
+  const detail = readIOS('Screens/CaptroPostDetailSections.swift');
+  const commerce = readIOS('Screens/CaptroCommerceDetailViews.swift');
+  const adapter = readIOS('Models/CaptroEditorialCardAdapter.swift');
+  assert.doesNotMatch(detail, /CaptroEditorialOverlayCard\(/);
+  assert.doesNotMatch(commerce, /CaptroEditorialOverlayCard\(/);
+  const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('if let voice = post.detail?.voice'));
+  assert.match(textOnly, /CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/);
+  assert.doesNotMatch(textOnly, /Text\(caption\)/);
+  assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
 });
 
 test('Home preview omits the separate creator and location header', () => {

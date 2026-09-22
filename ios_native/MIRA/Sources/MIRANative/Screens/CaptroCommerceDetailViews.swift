@@ -28,8 +28,6 @@ struct CaptroCommerceDetailSection: View {
   var body: some View {
     if let commerce {
       VStack(alignment: .leading, spacing: 18) {
-        CaptroEditorialOverlayCard(content: model.post.captroEditorialCardContent)
-          .frame(maxWidth: 320, alignment: .leading)
         heading(commerce)
         typeSpecificFacts(commerce)
         purchaseControls(commerce)
