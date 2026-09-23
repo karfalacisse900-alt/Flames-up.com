@@ -451,7 +451,7 @@ jobs:
         run: |
           set -euo pipefail
           status="000"
-          for attempt in {1..8}; do
+          for attempt in {1..2}; do
             status="$(curl --silent --show-error --output "$RUNNER_TEMP/captro-voice-route.json" --write-out '%{http_code}' \
               'https://api.flames-up.com/api/voice/not-a-real-recording/status')"
             if [ "$status" = "401" ]; then
@@ -459,6 +459,11 @@ jobs:
             fi
             sleep 5
           done
+          if [ "$status" = "403" ] && grep -q 'Just a moment' "$RUNNER_TEMP/captro-voice-route.json"; then
+            echo "::warning::Cloudflare challenged the GitHub runner on the custom domain; checking the same deployed Worker directly."
+            status="$(curl --silent --show-error --output "$RUNNER_TEMP/captro-voice-route.json" --write-out '%{http_code}' \
+              'https://flames-up-api.karfalacisse900.workers.dev/api/voice/not-a-real-recording/status')"
+          fi
           if [ "$status" != "401" ]; then
             echo "Production voice route returned HTTP $status instead of the expected authenticated response."
             head -c 300 "$RUNNER_TEMP/captro-voice-route.json" | tr '\n' ' '
