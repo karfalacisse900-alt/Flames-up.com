@@ -108,7 +108,8 @@ struct CaptroFeedPostView: View {
       post.mediaDimensions?.values.first?.heightToWidthRatio
         ?? MIRAMediaSizing.mainFeedDisplayRatio(for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
     )
-    let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0)
+    // Reserve the compact player and transcript action before sizing media.
+    let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0) + (post.detail?.voice == nil ? 0 : 86)
     let availableMediaHeight = max(0, pageSize.height - fixedVerticalContent)
     // A short page may crop the photo vertically, but must never narrow the post.
     return CGSize(width: pageSize.width, height: min(availableMediaHeight, pageSize.width * ratio))

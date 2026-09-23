@@ -308,11 +308,6 @@ public struct ProfileNativeView: View {
             destination: CaptroPaymentsView(api: model.api)
           )
           ProfileToolbarDestinationButton(
-            systemImage: "bookmark",
-            accessibilityLabel: "Bookmarks",
-            destination: LibraryNativeView(api: model.api)
-          )
-          ProfileToolbarDestinationButton(
             systemImage: "checkmark.shield",
             accessibilityLabel: "Verification",
             destination: VerificationNativeView(api: model.api)

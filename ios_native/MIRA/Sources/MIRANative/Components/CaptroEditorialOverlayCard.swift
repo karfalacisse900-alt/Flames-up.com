@@ -48,6 +48,8 @@ enum CaptroEditorialCardLayout {
 struct CaptroEditorialOverlayCard: View {
   let content: CaptroEditorialCardContent
   var condensed = false
+  var expanded = false
+  var showsProfileRow = true
   var onOpen: (() -> Void)? = nil
 
   private let ink = Color(red: 0.07, green: 0.07, blue: 0.07)
@@ -70,11 +72,17 @@ struct CaptroEditorialOverlayCard: View {
 
   private var card: some View {
     VStack(alignment: .leading, spacing: condensed ? 4 : 7) {
+      if content.type == .moment && content.title.caseInsensitiveCompare("Moment") != .orderedSame {
+        Text("MOMENT")
+          .font(.system(size: 10, weight: .semibold))
+          .tracking(1.6)
+          .foregroundStyle(ink.opacity(0.68))
+      }
       Text(content.title)
         .font(.system(size: condensed ? 21 : 26, weight: .bold))
         .tracking(-0.65)
         .lineSpacing(-2)
-        .lineLimit(2)
+        .lineLimit(expanded ? nil : 2)
         .truncationMode(.tail)
         .fixedSize(horizontal: false, vertical: true)
 
@@ -104,16 +112,16 @@ struct CaptroEditorialOverlayCard: View {
           .fixedSize(horizontal: false, vertical: true)
       }
 
-      if !condensed, let description = nonempty(content.description) {
+      if let description = nonempty(content.description), !condensed || content.type == .moment || expanded {
         Text(description)
           .font(.system(size: 15, weight: .regular))
           .lineSpacing(2)
-          .lineLimit(3)
+          .lineLimit(expanded ? nil : (condensed ? 2 : 3))
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, 2)
       }
 
-      if let username = nonempty(content.username) {
+      if showsProfileRow, let username = nonempty(content.username) {
         HStack(spacing: 9) {
           RemoteAvatar(url: content.avatarURL, size: condensed ? 26 : 30)
           Text(username)

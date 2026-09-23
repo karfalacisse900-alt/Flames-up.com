@@ -94,7 +94,7 @@ struct CaptroPostDetailSections: View {
   }
 
   private var regularPost: some View {
-    VStack(alignment: .leading, spacing: 16) {
+    VStack(alignment: .leading, spacing: 12) {
       HStack(spacing: 8) {
         CaptroDetailCreatorRow(post: post, api: model.api)
         Spacer(minLength: 0)
@@ -107,12 +107,8 @@ struct CaptroPostDetailSections: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Post options")
       }
-      if let title = post.captroCleanTitle, title != post.detailCaption {
-        Text(title)
-          .font(.system(size: 22, weight: .bold))
-          .fixedSize(horizontal: false, vertical: true)
-      }
-      fullDescription
+      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
+        expanded: true, showsProfileRow: false)
     }
     .padding(16)
   }

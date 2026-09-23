@@ -114,6 +114,11 @@ database_id = "ce387f44-33eb-42ac-85cb-46b6009b49f5"
 binding = "KV"
 id = "cecde60b06c24da8abfa01a617aac9eb"
 
+# Keep ordinary media fallback available in production, including Story uploads.
+[[env.production.r2_buckets]]
+binding = "MEDIA_BACKUP"
+bucket_name = "flames-up-media-backup"
+
 # Voice recordings are private R2 objects. They are only read through the
 # authenticated Worker playback route and are never exposed as public URLs.
 [[env.production.r2_buckets]]

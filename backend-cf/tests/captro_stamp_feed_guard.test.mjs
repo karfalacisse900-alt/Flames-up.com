@@ -69,16 +69,27 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.doesNotMatch(homeRoute, /photoOnly:\s*true/);
 });
 
-test('details and image-free feed do not stack a second editorial card or caption', () => {
+test('Moment detail keeps writing on one editorial card without a separate caption', () => {
   const detail = readIOS('Screens/CaptroPostDetailSections.swift');
   const commerce = readIOS('Screens/CaptroCommerceDetailViews.swift');
   const adapter = readIOS('Models/CaptroEditorialCardAdapter.swift');
-  assert.doesNotMatch(detail, /CaptroEditorialOverlayCard\(/);
+  const momentDetail = detail.slice(detail.indexOf('private var regularPost'), detail.indexOf('private var eventPost'));
+  assert.match(momentDetail, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
+  assert.match(momentDetail, /expanded: true, showsProfileRow: false/);
+  assert.doesNotMatch(momentDetail, /fullDescription/);
   assert.doesNotMatch(commerce, /CaptroEditorialOverlayCard\(/);
   const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('if let voice = post.detail?.voice'));
   assert.match(textOnly, /CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/);
   assert.doesNotMatch(textOnly, /Text\(caption\)/);
   assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
+});
+
+test('Moment writing stays inside its compact feed card and voice has reserved space', () => {
+  assert.match(editorialCard, /content\.type == \.moment/);
+  assert.match(editorialCard, /!condensed \|\| content\.type == \.moment \|\| expanded/);
+  assert.match(postView, /post\.detail\?\.voice == nil \? 0 : 86/);
+  const profile = readIOS('Screens/ProfileChatVerificationStudio.swift');
+  assert.doesNotMatch(profile, /ProfileToolbarDestinationButton\(destination: \.bookmarks/);
 });
 
 test('Home preview omits the separate creator and location header', () => {
