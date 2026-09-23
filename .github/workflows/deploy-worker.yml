@@ -450,10 +450,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          status="$(curl --silent --show-error --output "$RUNNER_TEMP/captro-voice-route.json" --write-out '%{http_code}' \
-            'https://api.flames-up.com/api/voice/not-a-real-recording/status')"
+          status="000"
+          for attempt in {1..8}; do
+            status="$(curl --silent --show-error --output "$RUNNER_TEMP/captro-voice-route.json" --write-out '%{http_code}' \
+              'https://api.flames-up.com/api/voice/not-a-real-recording/status')"
+            if [ "$status" = "401" ]; then
+              break
+            fi
+            sleep 5
+          done
           if [ "$status" != "401" ]; then
             echo "Production voice route returned HTTP $status instead of the expected authenticated response."
+            head -c 300 "$RUNNER_TEMP/captro-voice-route.json" | tr '\n' ' '
+            echo
             exit 1
           fi
           echo "Production voice route is deployed and authentication-gated."
