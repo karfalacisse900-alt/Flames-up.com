@@ -4174,6 +4174,7 @@ public struct CreateStoryNativeView: View {
   @State private var showMusicPicker = false
   @State private var isTextStory = false
   @State private var storyCaption = ""
+  @FocusState private var isStoryCaptionFocused: Bool
   @State private var storyLocation = ""
   @State private var locationDraft = ""
   @State private var showLocationEntry = false
@@ -4336,7 +4337,15 @@ public struct CreateStoryNativeView: View {
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(.black)
           Spacer()
-          Color.clear.frame(width: 48, height: 48)
+          if isStoryCaptionFocused {
+            Button("Done") { isStoryCaptionFocused = false }
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundStyle(.black)
+              .frame(minWidth: 48, minHeight: 48)
+              .accessibilityLabel("Finish writing status")
+          } else {
+            Color.clear.frame(width: 48, height: 48)
+          }
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
@@ -4377,6 +4386,7 @@ public struct CreateStoryNativeView: View {
                   .font(.system(size: 16))
                   .foregroundStyle(.black)
                   .scrollContentBackground(.hidden)
+                  .focused($isStoryCaptionFocused)
                   .padding(7)
                   .onChange(of: storyCaption) { _, value in
                     if value.count > 500 { storyCaption = String(value.prefix(500)) }
@@ -4426,24 +4436,27 @@ public struct CreateStoryNativeView: View {
           }
           .padding(.horizontal, 24)
         }
+        .scrollDismissesKeyboard(.interactively)
 
-        Button {
-          Task { await submit(media: media) }
-        } label: {
-          HStack(spacing: 8) {
-            if isPosting { ProgressView().tint(.white) }
-            Text(isPosting ? "Posting status" : "Post Status")
-              .font(.system(size: 16, weight: .semibold))
+        if !isStoryCaptionFocused {
+          Button {
+            Task { await submit(media: media) }
+          } label: {
+            HStack(spacing: 8) {
+              if isPosting { ProgressView().tint(.white) }
+              Text(isPosting ? "Posting status" : "Post Status")
+                .font(.system(size: 16, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(.black, in: RoundedRectangle(cornerRadius: 10))
           }
-          .foregroundStyle(.white)
-          .frame(maxWidth: .infinity)
-          .frame(height: 54)
-          .background(.black, in: RoundedRectangle(cornerRadius: 10))
+          .disabled(isPosting || (media == nil && storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+          .opacity(isPosting || media != nil || !storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1 : 0.45)
+          .padding(.horizontal, 24)
+          .padding(.bottom, max(proxy.safeAreaInsets.bottom + 12, 24))
         }
-        .disabled(isPosting || (media == nil && storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-        .opacity(isPosting || media != nil || !storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1 : 0.45)
-        .padding(.horizontal, 24)
-        .padding(.bottom, max(proxy.safeAreaInsets.bottom + 12, 24))
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(.white)

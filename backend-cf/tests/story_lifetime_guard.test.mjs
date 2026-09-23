@@ -47,3 +47,12 @@ test('database enforces the 24-hour story expiry cap', async () => {
   assert.match(migration, /as restrictive/);
   assert.match(migration, /created_at > now\(\) - interval '24 hours'/);
 });
+
+test('status editor keeps the writing area clear of the publish button', async () => {
+  const editor = await readRepoFile('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift');
+  const publishPage = editor.slice(editor.indexOf('private func storyPublishPage'), editor.indexOf('private func storyDetailRow'));
+  assert.match(publishPage, /TextEditor\(text: \$storyCaption\)[\s\S]*?\.focused\(\$isStoryCaptionFocused\)/);
+  assert.match(publishPage, /if isStoryCaptionFocused \{[\s\S]*?Button\("Done"\)/);
+  assert.match(publishPage, /if !isStoryCaptionFocused \{\s*Button \{/);
+  assert.match(publishPage, /\.scrollDismissesKeyboard\(\.interactively\)/);
+});
