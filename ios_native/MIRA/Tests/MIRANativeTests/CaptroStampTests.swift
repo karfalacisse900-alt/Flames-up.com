@@ -98,8 +98,49 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertEqual(card.title, "Joe's Pizza")
     XCTAssertEqual(card.chipText, "Expired")
     XCTAssertEqual(card.supportingText, "Spend $20+")
+    XCTAssertEqual(card.availabilityText, "Expired")
+    XCTAssertEqual(card.priceText, "View offer")
   }
 
+  func testEventMeetupAndDealListingFactsComeFromStructuredData() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let eventJSON = #"""
+    {"id":"event-post","post_type":"event","detail":{"commerce":{"id":"event-1","content_type":"event","fulfillment_type":"ticket","payment_model":"paid","commerce_class":"commerce","title":"Rooftop Movie Night","description":"Outdoor movie night with limited seating.","location_name":"Rooftop Cinema","city":"Brooklyn","starts_at":"2026-09-28T23:00:00Z","ends_at":"2026-09-29T02:00:00Z","time_zone":"America/New_York","joined_count":0,"refund_policy":"none","approval_required":false,"pass_required":true,"status":"active","audience":"public","prices":[{"id":"general","label":"General","unit_amount":1200,"currency":"USD","billing_period":"one_time","active":true}]}}}
+    """#
+    let event = try decoder.decode(MIRAPost.self, from: Data(eventJSON.utf8)).captroEditorialCardContent
+    XCTAssertEqual(event.type, .event)
+    XCTAssertEqual(event.title, "Rooftop Movie Night")
+    XCTAssertNotNil(event.scheduleText)
+    XCTAssertTrue(event.priceText?.contains("$12") == true)
+    XCTAssertEqual(event.locationText, "Rooftop Cinema · Brooklyn")
+    XCTAssertEqual(event.summaryText, "Outdoor movie night with limited seating.")
+
+    let meetupJSON = #"""
+    {"id":"meetup-post","post_type":"meetup","detail":{"commerce":{"id":"meetup-1","content_type":"meetup","fulfillment_type":"attendance","payment_model":"free","commerce_class":"commerce","title":"NYC Photography Walk","description":"Walk through Greenwich Village together.","location_name":"Washington Square Park","starts_at":"2026-09-26T20:00:00Z","joined_count":4,"remaining":8,"refund_policy":"none","approval_required":false,"pass_required":false,"status":"active","audience":"public","prices":[]}}}
+    """#
+    let meetup = try decoder.decode(MIRAPost.self, from: Data(meetupJSON.utf8)).captroEditorialCardContent
+    XCTAssertEqual(meetup.type, .meetup)
+    XCTAssertEqual(meetup.priceText, "Free · 8 SPOTS LEFT")
+    XCTAssertEqual(meetup.locationText, "Washington Square Park")
+    XCTAssertNotNil(meetup.scheduleText)
+
+    let dealJSON = #"""
+    {"id":"deal-post","post_type":"deal","detail":{"commerce":{"id":"deal-1","content_type":"deal","fulfillment_type":"redemption","payment_model":"free","commerce_class":"commerce","title":"Café Luna","description":"A neighborhood café offer.","city":"SoHo","expires_at":"2026-09-30T23:00:00Z","joined_count":0,"refund_policy":"none","approval_required":false,"pass_required":false,"status":"active","audience":"public","public_data":{"benefits":["20% off"],"redemption_rules":"Spend $20+"},"prices":[]}}}
+    """#
+    let deal = try decoder.decode(MIRAPost.self, from: Data(dealJSON.utf8)).captroEditorialCardContent
+    XCTAssertEqual(deal.type, .deal)
+    XCTAssertEqual(deal.headline, "20% off")
+    XCTAssertEqual(deal.priceText, "Claim free")
+    XCTAssertEqual(deal.locationText, "Café Luna · SoHo")
+    XCTAssertEqual(deal.summaryText, "Spend $20+")
+    XCTAssertNotNil(deal.scheduleText)
+    let longRules = String(repeating: "Minimum spend and eligibility apply. ", count: 4)
+    let cautiousJSON = dealJSON.replacingOccurrences(of: "Spend $20+", with: longRules)
+    let cautious = try decoder.decode(MIRAPost.self, from: Data(cautiousJSON.utf8)).captroEditorialCardContent
+    XCTAssertNil(cautious.headline)
+    XCTAssertEqual(cautious.priceText, "View offer")
+    XCTAssertEqual(cautious.summaryText, "Full qualifying conditions in details")
+  }
   func testVoiceMomentAndStampedVoicePostsUseTheSameCard() throws {
     let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
     let moment = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"voice","post_type":"general","caption":"Walking home","detail":{"voice":{"id":"audio-1","duration_ms":42000}}}"#.utf8))

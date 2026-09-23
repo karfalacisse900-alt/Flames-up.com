@@ -27,13 +27,19 @@ public struct CaptroStampVisualTestView: View {
         username: "@karfala")
     case .event:
       return CaptroEditorialCardContent(type: .event, title: "Bronx Run Club", subtitle: "Bronx",
-        chipText: "Sep 28", supportingText: "8:00 PM · $5 entry", username: "@bronxrunclub")
+        chipText: "Sep 28", supportingText: "8:00 PM · $5 entry", username: "@bronxrunclub",
+        scheduleText: "Sep 28 · 8:00 PM", priceText: "$5 one time", locationText: "Bronx",
+        summaryText: "A neighborhood run open to everyone.")
     case .meetup:
       return CaptroEditorialCardContent(type: .meetup, title: "Coffee Walk", subtitle: "Soho",
-        chipText: "12 Going", supportingText: "Sunday · 11 AM", username: "@maya")
+        chipText: "12 Going", supportingText: "Sunday · 11 AM", username: "@maya",
+        scheduleText: "Sunday · 11 AM", priceText: "Free · 8 spots left", locationText: "SoHo",
+        summaryText: "Coffee and a walk with new neighbors.")
     case .deal:
       return CaptroEditorialCardContent(type: .deal, title: "Joe’s Pizza", subtitle: "Greenwich Village",
-        chipText: "20% Off", supportingText: "Today until 8 PM", username: "@joespizza")
+        chipText: "20% Off", supportingText: "Today until 8 PM", username: "@joespizza",
+        headline: "20% off", scheduleText: "Ends today · 8 PM", priceText: "Claim free",
+        locationText: "Joe’s Pizza · Greenwich Village", summaryText: "Spend $20+ at the counter.")
     }
   }
 

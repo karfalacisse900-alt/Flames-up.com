@@ -69,6 +69,29 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.doesNotMatch(homeRoute, /photoOnly:\s*true/);
 });
 
+test('Event, Meetup and Deal use one restrained listing hierarchy without changing Moment', () => {
+  const listing = editorialCard.slice(
+    editorialCard.indexOf('private var listingCard'),
+    editorialCard.indexOf('private var legacyCard'),
+  );
+  const fields = ['content.headline', 'content.scheduleText', 'content.priceText',
+    'content.locationText', 'content.summaryText'];
+  let previous = -1;
+  for (const field of fields) {
+    const position = listing.indexOf(field);
+    assert.ok(position > previous, field + ' must follow the editorial hierarchy');
+    previous = position;
+  }
+  assert.match(editorialCard, /if \[\.event, \.meetup, \.deal\]\.contains\(content\.type\)/);
+  assert.match(editorialCard, /else \{\s*legacyCard/);
+  assert.match(listing, /MIRATheme\.Color\.like/);
+  assert.doesNotMatch(listing, /chipPink|LinearGradient|\.shadow\(/);
+  const adapter = readIOS('Models/CaptroEditorialCardAdapter.swift');
+  assert.match(adapter, /commerce\?\.scheduleLabel/);
+  assert.match(adapter, /commerce\?\.lowestPrice\?\.stampPrice/);
+  assert.match(adapter, /redemptionRules/);
+  assert.match(adapter, /Full qualifying conditions in details/);
+});
 test('Moment detail keeps writing on one editorial card without a separate caption', () => {
   const detail = readIOS('Screens/CaptroPostDetailSections.swift');
   const commerce = readIOS('Screens/CaptroCommerceDetailViews.swift');

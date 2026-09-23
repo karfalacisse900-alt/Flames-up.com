@@ -26,9 +26,20 @@ struct CaptroEditorialCardContent {
   var supportingText: String? = nil
   var username: String? = nil
   var avatarURL: String? = nil
+  var headline: String? = nil
+  var scheduleText: String? = nil
+  var priceText: String? = nil
+  var locationText: String? = nil
+  var summaryText: String? = nil
+  var availabilityText: String? = nil
 
   var accessibilityLabel: String {
-    [type.rawValue.capitalized, title, subtitle, chipText, description, supportingText, username]
+    if [.event, .meetup, .deal].contains(type) {
+      return [type.rawValue.capitalized, headline ?? title, scheduleText, priceText,
+        locationText, summaryText, availabilityText, username]
+        .compactMap { $0 }.joined(separator: ". ")
+    }
+    return [type.rawValue.capitalized, title, subtitle, chipText, description, supportingText, username]
       .compactMap { $0 }.joined(separator: ". ")
   }
 }
@@ -70,7 +81,79 @@ struct CaptroEditorialOverlayCard: View {
     }
   }
 
-  private var card: some View {
+  @ViewBuilder private var card: some View {
+    if [.event, .meetup, .deal].contains(content.type) {
+      listingCard
+    } else {
+      legacyCard
+    }
+  }
+
+  /// A compact editorial listing, not a second stamp or an action surface.
+  private var listingCard: some View {
+    VStack(alignment: .leading, spacing: condensed ? 4 : 6) {
+      HStack(spacing: 8) {
+        Text(content.type.rawValue.uppercased())
+          .font(.system(size: 9, weight: .semibold))
+          .tracking(1.3)
+          .foregroundStyle(ink.opacity(0.68))
+        Spacer(minLength: 0)
+        if let username = nonempty(content.username) {
+          Text(username)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(ink.opacity(0.58))
+            .lineLimit(1)
+        }
+      }
+
+      Text((nonempty(content.headline) ?? content.title).uppercased())
+        .font(.system(size: expanded ? 28 : (condensed ? 20 : 24), weight: .bold))
+        .tracking(-0.55)
+        .lineSpacing(-1)
+        .lineLimit(expanded ? nil : (condensed ? 2 : 3))
+        .minimumScaleFactor(0.88)
+        .fixedSize(horizontal: false, vertical: true)
+
+      if let schedule = nonempty(content.scheduleText) {
+        Text(schedule.uppercased())
+          .font(.system(size: condensed ? 11 : 12, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.like)
+          .lineLimit(expanded ? nil : 2)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      if let price = nonempty(content.priceText) {
+        Text(price.uppercased())
+          .font(.system(size: condensed ? 11 : 12, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.like)
+          .lineLimit(expanded ? nil : 2)
+      }
+      if let availability = nonempty(content.availabilityText) {
+        Text(availability.uppercased())
+          .font(.system(size: 11, weight: .bold))
+          .foregroundStyle(ink)
+      }
+      if let location = nonempty(content.locationText) {
+        Label(location, systemImage: "mappin")
+          .font(.system(size: condensed ? 11 : 12, weight: .medium))
+          .foregroundStyle(ink.opacity(0.86))
+          .lineLimit(expanded ? nil : 2)
+      }
+      if let summary = nonempty(content.summaryText) {
+        Text(summary)
+          .font(.system(size: condensed ? 11 : 12, weight: .regular))
+          .foregroundStyle(ink.opacity(0.72))
+          .lineLimit(expanded ? nil : (condensed ? 1 : 2))
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(condensed ? 10 : 13)
+    .background(Color.white)
+    .overlay(Rectangle().strokeBorder(ink, lineWidth: 1))
+    .contentShape(Rectangle())
+  }
+
+  private var legacyCard: some View {
     VStack(alignment: .leading, spacing: condensed ? 4 : 7) {
       if content.type == .moment && content.title.caseInsensitiveCompare("Moment") != .orderedSame {
         Text("MOMENT")
