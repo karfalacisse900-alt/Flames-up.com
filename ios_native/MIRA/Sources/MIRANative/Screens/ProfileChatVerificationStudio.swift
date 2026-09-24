@@ -100,12 +100,21 @@ final class ProfileNativeModel: ObservableObject {
 
     guard let freshUser = await freshUserRequest,
           loadGeneration == generation else { return }
+    if let knownUserID, knownUserID != freshUser.id {
+      user = nil
+      posts = []
+      receiptEarnings = nil
+      receiptSubmissions = []
+      commerceDashboard = nil
+      profileError = "Your session changed. Please sign in again."
+      return
+    }
     if user != freshUser { user = freshUser }
     await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
     await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     guard loadGeneration == generation else { return }
 
-    if knownUserID == nil || knownUserID != freshUser.id {
+    if knownUserID == nil {
       if let fetchedPosts: [MIRAPost] = try? await api.get("/users/\(freshUser.id)/posts") {
         let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
           existing: posts,
