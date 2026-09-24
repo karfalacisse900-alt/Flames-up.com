@@ -3,52 +3,93 @@ import SwiftUI
 import StripePayments
 
 @MainActor
-private final class CaptroPaymentsModel: ObservableObject {
+final class CaptroPaymentsModel: ObservableObject {
   let api: MIRAAPIClient
+  let earningsModel: CaptroEarningsModel
   @Published var methods: [CaptroSavedPaymentMethod] = []
   @Published var payoutAccount: CaptroPayoutAccount?
   @Published var customerSheet: CustomerSheet?
   @Published var isLoadingCards = false
   @Published var isLoadingPayout = false
+  @Published var isPreparingCardSetup = false
   @Published var cardError: String?
   @Published var payoutError: String?
+  private var currentUserId = ""
+  private var lastRefreshAttemptAt: Date?
 
   init(api: MIRAAPIClient) {
     self.api = api
+    self.earningsModel = CaptroEarningsModel(api: api)
   }
 
-  func load() async {
-    await refreshPaymentMethods()
-    await refreshPayoutAccount()
-    if customerSheet == nil { await prepareCustomerSheet() }
+  func configure(currentUserId: String) {
+    guard self.currentUserId != currentUserId else { return }
+    self.currentUserId = currentUserId
+    earningsModel.configure(currentUserId: currentUserId)
+    methods = []
+    payoutAccount = nil
+    customerSheet = nil
+    cardError = nil
+    payoutError = nil
+    isLoadingCards = false
+    isLoadingPayout = false
+    isPreparingCardSetup = false
+    lastRefreshAttemptAt = nil
+  }
+
+  func load(forceRefresh: Bool = false) async {
+    if !forceRefresh, let lastRefreshAttemptAt,
+       Date().timeIntervalSince(lastRefreshAttemptAt) < 30 { return }
+    lastRefreshAttemptAt = Date()
+    // Neither section waits for the other, and secure card setup only starts
+    // after an explicit tap on its action.
+    async let cards: Void = refreshPaymentMethods()
+    async let payout: Void = refreshPayoutAccount()
+    _ = await (cards, payout)
   }
 
   func refreshPaymentMethods() async {
+    guard !isLoadingCards else { return }
     isLoadingCards = true
-    defer { isLoadingCards = false }
+    let accountID = currentUserId
+    defer { if accountID == currentUserId { isLoadingCards = false } }
     do {
       let response = try await api.loadPaymentMethods()
+      guard accountID == currentUserId else { return }
       methods = response.methods
       cardError = nil
+      MIRAPerformanceTimeline.mark("payment_cards_confirmed")
     } catch {
+      guard accountID == currentUserId else { return }
       cardError = apiMessage(error, fallback: "Could not load your payment cards.")
     }
   }
 
   func refreshPayoutAccount() async {
+    guard !isLoadingPayout else { return }
     isLoadingPayout = true
-    defer { isLoadingPayout = false }
+    let accountID = currentUserId
+    defer { if accountID == currentUserId { isLoadingPayout = false } }
     do {
-      payoutAccount = try await api.loadPayoutAccount().account
+      let freshAccount = try await api.loadPayoutAccount().account
+      guard accountID == currentUserId else { return }
+      payoutAccount = freshAccount
       payoutError = nil
+      MIRAPerformanceTimeline.mark("payout_method_confirmed")
     } catch {
+      guard accountID == currentUserId else { return }
       payoutError = apiMessage(error, fallback: "Could not load your payout method.")
     }
   }
 
   func prepareCustomerSheet() async {
+    guard !isPreparingCardSetup else { return }
+    isPreparingCardSetup = true
+    let accountID = currentUserId
+    defer { if accountID == currentUserId { isPreparingCardSetup = false } }
     do {
       let initialSession = try await api.createPaymentMethodSession()
+      guard accountID == currentUserId else { return }
       guard ["test", "live"].contains(initialSession.mode),
             initialSession.publishableKey.hasPrefix("pk_\(initialSession.mode)_"),
             initialSession.customerId.hasPrefix("cus_"),
@@ -90,6 +131,7 @@ private final class CaptroPaymentsModel: ObservableObject {
       )
       cardError = nil
     } catch {
+      guard accountID == currentUserId else { return }
       customerSheet = nil
       cardError = apiMessage(error, fallback: "Could not open secure card setup.")
     }
@@ -126,6 +168,10 @@ struct CaptroPaymentsView: View {
     _model = StateObject(wrappedValue: CaptroPaymentsModel(api: api))
   }
 
+  init(api: MIRAAPIClient, model: CaptroPaymentsModel) {
+    _model = StateObject(wrappedValue: model)
+  }
+
   private var savedDebitCards: [CaptroSavedPaymentMethod] {
     model.methods.filter { $0.funding.lowercased() == "debit" }
   }
@@ -145,8 +191,11 @@ struct CaptroPaymentsView: View {
     .navigationTitle("Payments")
     .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
+    .onAppear {
+      MIRAPerformanceTimeline.mark("payments_screen_visible", detail: model.methods.isEmpty ? "empty" : "retained")
+    }
     .task { await model.load() }
-    .refreshable { await model.load() }
+    .refreshable { await model.load(forceRefresh: true) }
   }
 
   private var paymentCardsSection: some View {
@@ -199,7 +248,7 @@ struct CaptroPaymentsView: View {
 
       if let customerSheet = model.customerSheet {
         Button {
-          showingCustomerSheet = true
+          openCardSetup()
         } label: {
           Label(model.methods.isEmpty ? "Add Payment Card" : "Manage Payment Cards", systemImage: "creditcard")
             .frame(maxWidth: .infinity, minHeight: 46)
@@ -216,9 +265,9 @@ struct CaptroPaymentsView: View {
         )
       } else {
         Button {
-          Task { await model.prepareCustomerSheet() }
+          openCardSetup()
         } label: {
-          Label("Try Card Setup Again", systemImage: "arrow.clockwise")
+          Label(model.methods.isEmpty ? "Add Payment Card" : "Manage Payment Cards", systemImage: "creditcard")
             .frame(maxWidth: .infinity, minHeight: 46)
         }
         .font(.body.weight(.semibold))
@@ -226,7 +275,11 @@ struct CaptroPaymentsView: View {
         .padding(.vertical, 6)
         .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
         .buttonStyle(.miraPress)
-        .disabled(model.isLoadingCards)
+        .disabled(model.isPreparingCardSetup)
+      }
+      if model.isPreparingCardSetup {
+        ProgressView("Opening secure card setup...")
+          .font(.system(size: 12))
       }
       if let cardError = model.cardError {
         Text(cardError).font(.system(size: 12)).foregroundStyle(.red)
@@ -322,7 +375,7 @@ struct CaptroPaymentsView: View {
 
   private var earningsLink: some View {
     NavigationLink {
-      CaptroEarningsView(api: model.api)
+      CaptroEarningsView(api: model.api, model: model.earningsModel)
     } label: {
       HStack {
         VStack(alignment: .leading, spacing: 3) {
@@ -363,6 +416,14 @@ struct CaptroPaymentsView: View {
       case .failure(let error):
         model.payoutError = error.localizedDescription
       }
+    }
+  }
+
+  private func openCardSetup() {
+    guard !model.isPreparingCardSetup else { return }
+    Task {
+      await model.prepareCustomerSheet()
+      if model.customerSheet != nil { showingCustomerSheet = true }
     }
   }
 }

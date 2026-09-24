@@ -50,22 +50,23 @@ final class MIRAStartupCoordinator: ObservableObject {
   @Published private(set) var isSplashMounted = true
   @Published private(set) var isSplashVisible = true
   @Published private(set) var showSlowStartupCopy = false
-  @Published private(set) var shouldMountAllAuthenticatedTabs = false
 
   let feedModel: MainFeedModel
   let chatModel: ChatNativeModel
   let profileModel: ProfileNativeModel
+  let paymentsModel: CaptroPaymentsModel
 
   private let api: MIRAAPIClient
   private var didStart = false
-  private let minimumSplashDuration: TimeInterval = 0.88
-  private let splashDismissDuration: TimeInterval = 0.32
+  private let minimumSplashDuration: TimeInterval = 0.15
+  private let splashDismissDuration: TimeInterval = 0.18
 
   init(api: MIRAAPIClient) {
     self.api = api
     self.feedModel = MainFeedModel(api: api)
     self.chatModel = ChatNativeModel(api: api)
     self.profileModel = ProfileNativeModel(api: api)
+    self.paymentsModel = CaptroPaymentsModel(api: api)
   }
 
   func start(authSession: MIRAAuthSession) async {
@@ -76,7 +77,6 @@ final class MIRAStartupCoordinator: ObservableObject {
     beginSlowMessageTimer()
 
     phase = .checkingSession
-    await MIRAAppCacheStore.shared.reconcileServerDataState(api: api)
     await authSession.bootstrap(api: api)
 
     guard !Task.isCancelled else { return }
@@ -95,29 +95,32 @@ final class MIRAStartupCoordinator: ObservableObject {
       return
     }
 
-    shouldMountAllAuthenticatedTabs = true
-    phase = .loadingUser
     profileModel.primeUser(authSession.user)
-    await Task.yield()
-
-    phase = .preparingMainTabs
-    await Task.yield()
-
+    chatModel.configure(currentUserId: authSession.user?.id ?? "")
+    paymentsModel.configure(currentUserId: authSession.user?.id ?? "")
     phase = .preparingFeed
-    let feedTask = Task { await feedModel.prepareForStartup() }
-
-    phase = .preparingProfile
-    let profileTask = Task { await profileModel.prepareForStartup(signedInUser: authSession.user) }
-
-    let chatTask = Task { await chatModel.prepareForStartup() }
-
-    _ = await (feedTask.value, profileTask.value, chatTask.value)
-    startInitialMediaPrewarm()
+    // Home may hydrate its scoped snapshot while the brief splash is visible.
+    // Profile, chat and payment requests belong to their own screens.
+    await feedModel.prepareForStartup()
 
     phase = .readyAuthenticated
     await waitForMinimumSplash(since: startedAt)
     MIRAPerformanceTimeline.mark("startup_prepare_ready", detail: "authenticated")
     dismissSplash()
+    let accountID = authSession.user?.id
+    Task { [weak self, weak authSession] in
+      guard let self, let authSession else { return }
+      let invalidated = await MIRAAppCacheStore.shared.reconcileServerDataState(api: self.api)
+      guard invalidated, authSession.user?.id == accountID else { return }
+      self.feedModel.resetForAccountChange()
+      self.profileModel.resetForAccountChange()
+      self.chatModel.configure(currentUserId: "")
+      self.chatModel.configure(currentUserId: accountID ?? "")
+      self.paymentsModel.configure(currentUserId: "")
+      self.paymentsModel.configure(currentUserId: accountID ?? "")
+      self.profileModel.primeUser(authSession.user)
+      await self.feedModel.load(forceRefresh: true)
+    }
   }
 
   private func beginSlowMessageTimer() {
@@ -154,31 +157,6 @@ final class MIRAStartupCoordinator: ObservableObject {
     }
   }
 
-  private func startInitialMediaPrewarm() {
-    let posts = Array(feedModel.posts.prefix(6)) + Array(profileModel.posts.prefix(6))
-    let previewURLs = posts.flatMap { post in
-      post.posterMediaURLs + post.thumbnailMediaURLs
-    }
-    let feedImageURLs = posts
-      .flatMap(\.feedMediaURLs)
-      .filter { !$0.isVideoURL }
-    let urls = Array(orderedMediaURLs(previewURLs + feedImageURLs).prefix(16))
-    guard !urls.isEmpty else { return }
-    Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 16)
-    }
-  }
-
-  private func orderedMediaURLs(_ values: [String]) -> [String] {
-    var seen = Set<String>()
-    var result: [String] = []
-    for value in values {
-      let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.isEmpty, !trimmed.isVideoURL, seen.insert(trimmed).inserted else { continue }
-      result.append(trimmed)
-    }
-    return result
-  }
 }
 
 public struct MIRANativeRootView: View {
@@ -244,20 +222,18 @@ public struct MIRANativeRootView: View {
         startup.feedModel.resetForAccountChange()
         startup.profileModel.resetForAccountChange()
         startup.chatModel.configure(currentUserId: userID ?? "")
+        startup.paymentsModel.configure(currentUserId: userID ?? "")
         if userID != nil {
           startup.profileModel.primeUser(authSession.user)
-          Task {
-            await startup.feedModel.load(forceRefresh: true)
-            await startup.profileModel.load()
-            await startup.chatModel.load(forceRefresh: true)
-          }
+          startup.feedModel.configureGuestMode(false)
+          Task { await startup.feedModel.prepareForStartup() }
         }
       }
       if userID == nil {
         selectedTab = .main
         loadedTabs = [.main]
       } else {
-        loadedTabs.formUnion([.main, .scan, .profile])
+        loadedTabs.insert(.main)
       }
       registerCachedPushTokenIfPossible()
     }
@@ -370,7 +346,13 @@ public struct MIRANativeRootView: View {
             onSignIn: leaveGuestModeForSignIn
           )
         } else {
-          ProfileNativeView(api: api, authSession: authSession, model: startup.profileModel)
+          ProfileNativeView(
+            api: api,
+            authSession: authSession,
+            model: startup.profileModel,
+            chatModel: startup.chatModel,
+            paymentsModel: startup.paymentsModel
+          )
         }
       }
         .tag(MIRATab.profile)
@@ -403,9 +385,6 @@ public struct MIRANativeRootView: View {
   }
 
   private func shouldMountTab(_ tab: MIRATab) -> Bool {
-    if authSession.user != nil && startup.shouldMountAllAuthenticatedTabs {
-      return true
-    }
     return loadedTabs.contains(tab) || selectedTab == tab
   }
 

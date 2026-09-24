@@ -111,22 +111,33 @@ actor MIRAAppCacheStore {
   private let maxCachedComments = 80
   private let maxNotifications = 120
 
-  func reconcileServerDataState(api: MIRAAPIClient) async {
+  @discardableResult
+  func reconcileServerDataState(api: MIRAAPIClient) async -> Bool {
+    let accountScope = MIRALocalJSONCache.currentScopeIdentifier
     do {
       let snapshot: MIRAAppDataStateSnapshot = try await api.get("system/data-state")
+      guard accountScope == MIRALocalJSONCache.currentScopeIdentifier else { return false }
       guard let generation = snapshot.dataGeneration?.trimmingCharacters(in: .whitespacesAndNewlines),
             !generation.isEmpty
-      else { return }
+      else { return false }
 
       let defaults = UserDefaults.standard
       let stored = defaults.string(forKey: Self.dataGenerationDefaultsKey)
-      guard stored != generation else { return }
+      if stored == nil {
+        // Establish the baseline without treating an app upgrade as a server
+        // reset. Normal stale-while-revalidate reads still refresh snapshots.
+        defaults.set(generation, forKey: Self.dataGenerationDefaultsKey)
+        return false
+      }
+      guard stored != generation else { return false }
 
       await purgeContentCaches()
       defaults.set(generation, forKey: Self.dataGenerationDefaultsKey)
       MIRAPerformanceTimeline.mark("app_data_generation_reconciled", detail: snapshot.dataResetAt ?? "unknown")
+      return true
     } catch {
       MIRAPerformanceTimeline.mark("app_data_generation_check_failed", detail: "will_keep_existing_cache")
+      return false
     }
   }
 

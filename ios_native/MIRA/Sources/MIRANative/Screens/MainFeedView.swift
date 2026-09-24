@@ -33,6 +33,7 @@ final class MainFeedModel: ObservableObject {
   private var accountGeneration = 0
   private var localContentVersion = 0
   private var lastRevalidationAttemptAt: Date?
+  private var hasPreparedStartup = false
   private var mediaPrefetchTask: Task<Void, Never>?
   private var followingAuthorIds = Set<String>()
   private var likeMutationVersions: [String: Int] = [:]
@@ -67,6 +68,7 @@ final class MainFeedModel: ObservableObject {
     isLoadingFreshFeed = false
     refreshRequested = false
     lastRevalidationAttemptAt = nil
+    hasPreparedStartup = false
     isLoadingCurrentUser = false
     canLoadMore = true
     isLoading = true
@@ -82,6 +84,8 @@ final class MainFeedModel: ObservableObject {
   }
 
   func prepareForStartup() async {
+    guard !hasPreparedStartup else { return }
+    hasPreparedStartup = true
     MIRAPerformanceTimeline.mark("home_startup_prepare")
     if !isGuestFeedMode && currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
@@ -865,6 +869,8 @@ private enum MainFeedSection: String {
 public struct MainFeedView: View {
   @State private var homeStories: [MIRAStoryGroup] = []
   @State private var homeAvatarURL: String?
+  @State private var isRefreshingHomeStories = false
+  @State private var lastHomeStoriesRefreshAttemptAt: Date?
   @State private var selectedStoryGroup: MIRAStoryGroup?
   @StateObject private var model: MainFeedModel
   private let isTabActive: Bool
@@ -985,11 +991,12 @@ public struct MainFeedView: View {
       }
       .task(id: isGuest) {
         model.configureGuestMode(isGuest)
-        await model.load()
-        await loadHomeStories()
+        async let feed: Void = model.prepareForStartup()
+        async let stories: Void = loadHomeStories()
+        _ = await (feed, stories)
       }
       .onReceive(NotificationCenter.default.publisher(for: Notification.Name("captroStoryDidChange"))) { _ in
-        Task { await loadHomeStories() }
+        Task { await loadHomeStories(forceRefresh: true) }
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
@@ -1016,7 +1023,11 @@ public struct MainFeedView: View {
       }
       .onChange(of: scenePhase) { _, phase in
         guard phase == .active, !model.posts.isEmpty else { return }
-        Task { await model.load(forceRefresh: true) }
+        Task {
+          async let feed: Void = model.revalidateIfStale()
+          async let stories: Void = loadHomeStories()
+          _ = await (feed, stories)
+        }
       }
       .onChange(of: isMediaPlaybackSuppressed) { _, suppressed in
         if suppressed {
@@ -1173,16 +1184,24 @@ public struct MainFeedView: View {
     .contentShape(Circle())
   }
 
-  private func loadHomeStories() async {
+  private func loadHomeStories(forceRefresh: Bool = false) async {
+    guard !isRefreshingHomeStories else { return }
+    if !forceRefresh, let lastHomeStoriesRefreshAttemptAt,
+       Date().timeIntervalSince(lastHomeStoriesRefreshAttemptAt) < 30 { return }
+    isRefreshingHomeStories = true
+    lastHomeStoriesRefreshAttemptAt = Date()
+    defer { isRefreshingHomeStories = false }
     if !isGuest, let profile = await MIRAAppCacheStore.shared.loadCurrentProfile() {
       homeAvatarURL = profile.profileImage
     }
     if let cached = await MIRAAppCacheStore.shared.loadDiscoverStories(), homeStories.isEmpty {
       homeStories = cached.filter { $0.statuses?.isEmpty == false }
+      MIRAPerformanceTimeline.mark("home_stories_visible", detail: "cache")
     }
     do {
       let fresh: [MIRAStoryGroup] = try await model.api.get("/statuses")
       homeStories = fresh.filter { $0.statuses?.isEmpty == false }
+      MIRAPerformanceTimeline.mark("home_stories_visible", detail: "server")
       await MIRAAppCacheStore.shared.saveDiscoverStories(homeStories)
     } catch {
       // Keep cached stories visible when offline.

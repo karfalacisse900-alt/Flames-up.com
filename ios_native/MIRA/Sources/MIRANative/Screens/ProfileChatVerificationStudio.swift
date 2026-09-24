@@ -78,38 +78,63 @@ final class ProfileNativeModel: ObservableObject {
     await hydrateCachedProfileIfNeeded()
     guard loadGeneration == generation else { return }
 
-    guard let freshUser: MIRAUser = try? await api.get("/auth/me"),
+    // A returning user's creations need not wait for a repeated /auth/me call.
+    // Both results are still authorized by the backend and generation-checked.
+    let knownUserID = user?.id
+    async let freshUserRequest: MIRAUser? = try? await api.get("/auth/me")
+    if let knownUserID {
+      let fetchedPosts: [MIRAPost]? = try? await api.get("/users/\(knownUserID)/posts")
+      guard loadGeneration == generation else { return }
+      if let fetchedPosts {
+        let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+          existing: posts,
+          fresh: profileVisiblePosts(fetchedPosts),
+          maxCount: 120
+        )
+        guard loadGeneration == generation else { return }
+        if posts != mergedPosts { posts = mergedPosts }
+        await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: knownUserID)
+        await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey(for: knownUserID))
+      }
+    }
+
+    guard let freshUser = await freshUserRequest,
           loadGeneration == generation else { return }
     if user != freshUser { user = freshUser }
     await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
     await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
     guard loadGeneration == generation else { return }
 
-    let freshPosts = profileVisiblePosts((try? await api.get("/users/\(freshUser.id)/posts")) ?? posts)
-    guard loadGeneration == generation else { return }
-    let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
-      existing: posts,
-      fresh: freshPosts,
-      maxCount: 120
-    )
-    guard loadGeneration == generation else { return }
-    if posts != mergedPosts { posts = mergedPosts }
-    await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: freshUser.id)
-    await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey(for: freshUser.id))
+    if knownUserID == nil || knownUserID != freshUser.id {
+      if let fetchedPosts: [MIRAPost] = try? await api.get("/users/\(freshUser.id)/posts") {
+        let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
+          existing: posts,
+          fresh: profileVisiblePosts(fetchedPosts),
+          maxCount: 120
+        )
+        guard loadGeneration == generation else { return }
+        if posts != mergedPosts { posts = mergedPosts }
+        await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: freshUser.id)
+        await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey(for: freshUser.id))
+      }
+    }
     guard loadGeneration == generation else { return }
 
     // The visible profile and creations must not wait behind three unrelated
     // finance requests. Those remain server-authoritative and never use
     // fabricated cached balances.
-    if let earnings = try? await api.captroReceiptRewardBalance(),
+    async let earningsRequest: CaptroReceiptRewardBalance? = try? await api.captroReceiptRewardBalance()
+    async let submissionsRequest: [CaptroReceiptSubmission]? = try? await api.captroReceiptSubmissionHistory()
+    async let dashboardRequest: CaptroCommerceDashboard? = try? await api.loadCommerceDashboard()
+    if let earnings = await earningsRequest,
        loadGeneration == generation, receiptEarnings != earnings {
       receiptEarnings = earnings
     }
-    if let submissions = try? await api.captroReceiptSubmissionHistory(),
+    if let submissions = await submissionsRequest,
        loadGeneration == generation, receiptSubmissions != submissions {
       receiptSubmissions = submissions
     }
-    if let dashboard = try? await api.loadCommerceDashboard(),
+    if let dashboard = await dashboardRequest,
        loadGeneration == generation {
       commerceDashboard = dashboard
     }
@@ -313,17 +338,29 @@ public struct ProfileNativeView: View {
   @State private var showingWithdrawalInfo = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let authSession: MIRAAuthSession?
+  private let chatModel: ChatNativeModel?
+  private let paymentsModel: CaptroPaymentsModel?
   private var postGridColumns: [GridItem] {
     Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
   }
 
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
     self.authSession = authSession
+    self.chatModel = nil
+    self.paymentsModel = nil
     _model = StateObject(wrappedValue: ProfileNativeModel(api: api))
   }
 
-  init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil, model: ProfileNativeModel) {
+  init(
+    api: MIRAAPIClient,
+    authSession: MIRAAuthSession? = nil,
+    model: ProfileNativeModel,
+    chatModel: ChatNativeModel? = nil,
+    paymentsModel: CaptroPaymentsModel? = nil
+  ) {
     self.authSession = authSession
+    self.chatModel = chatModel
+    self.paymentsModel = paymentsModel
     _model = StateObject(wrappedValue: model)
   }
 
@@ -375,12 +412,12 @@ public struct ProfileNativeView: View {
           ProfileToolbarDestinationButton(
             systemImage: "bubble.left.and.bubble.right",
             accessibilityLabel: "Chats",
-            destination: ChatNativeView(api: model.api, currentUserId: model.user?.id ?? authSession?.user?.id ?? "").miraHideTabBarOnAppear()
+            destination: chatDestination.miraHideTabBarOnAppear()
           )
           ProfileToolbarDestinationButton(
             systemImage: "creditcard",
             accessibilityLabel: "Payments",
-            destination: CaptroPaymentsView(api: model.api)
+            destination: paymentsDestination
           )
           ProfileToolbarDestinationButton(
             systemImage: "checkmark.shield",
@@ -616,7 +653,7 @@ public struct ProfileNativeView: View {
 
   private var paymentsLink: some View {
     NavigationLink {
-      CaptroPaymentsView(api: model.api)
+      paymentsDestination
     } label: {
       HStack(spacing: 12) {
         Image(systemName: "creditcard.fill")
@@ -643,6 +680,21 @@ public struct ProfileNativeView: View {
       }
     }
     .buttonStyle(.plain)
+  }
+
+  private var chatDestination: ChatNativeView {
+    let userID = model.user?.id ?? authSession?.user?.id ?? ""
+    if let chatModel {
+      return ChatNativeView(api: model.api, currentUserId: userID, model: chatModel)
+    }
+    return ChatNativeView(api: model.api, currentUserId: userID)
+  }
+
+  private var paymentsDestination: CaptroPaymentsView {
+    if let paymentsModel {
+      return CaptroPaymentsView(api: model.api, model: paymentsModel)
+    }
+    return CaptroPaymentsView(api: model.api)
   }
 
   private func receiptEarningsSection(_ earnings: CaptroReceiptRewardBalance) -> some View {
@@ -1950,6 +2002,9 @@ final class ChatNativeModel: ObservableObject {
   private var isLoadingFreshConversations = false
   private var refreshRequested = false
   private var consecutiveFailures = 0
+  private var lastRefreshAttemptAt: Date?
+  private var roomModels: [String: ConversationNativeModel] = [:]
+  private var recentRoomIDs: [String] = []
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -1965,6 +2020,9 @@ final class ChatNativeModel: ObservableObject {
     consecutiveFailures = 0
     isLoadingFreshConversations = false
     isLoading = false
+    lastRefreshAttemptAt = nil
+    roomModels.removeAll()
+    recentRoomIDs.removeAll()
     if !conversations.isEmpty {
       conversations = []
     }
@@ -1984,8 +2042,11 @@ final class ChatNativeModel: ObservableObject {
       if forceRefresh { refreshRequested = true }
       return
     }
-    if !forceRefresh && hasLoadedFreshConversations && !conversations.isEmpty { return }
+    if !forceRefresh && hasLoadedFreshConversations && !conversations.isEmpty,
+       let lastRefreshAttemptAt,
+       Date().timeIntervalSince(lastRefreshAttemptAt) < 30 { return }
     isLoadingFreshConversations = true
+    lastRefreshAttemptAt = Date()
     let accountId = currentUserId
     defer {
       if accountId == currentUserId {
@@ -2033,12 +2094,37 @@ final class ChatNativeModel: ObservableObject {
       )
     }
     defer { realtimeTask.cancel() }
+    await load()
     while !Task.isCancelled {
-      await load(forceRefresh: true)
       let delay = min(60, 15 * (1 << consecutiveFailures))
       do { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
       catch { break }
+      await load(forceRefresh: true)
     }
+  }
+
+  func roomModel(for conversation: MIRAConversation) -> ConversationNativeModel? {
+    guard !currentUserId.isEmpty else { return nil }
+    let kind: ConversationNativeKind
+    if let groupID = conversation.groupId {
+      kind = .group(groupId: groupID)
+    } else if let peerID = conversation.otherUserId {
+      kind = .direct(peerId: peerID)
+    } else {
+      return nil
+    }
+    if let cached = roomModels[conversation.id] {
+      recentRoomIDs.removeAll { $0 == conversation.id }
+      recentRoomIDs.append(conversation.id)
+      return cached
+    }
+    let room = ConversationNativeModel(kind: kind, api: api, currentUserId: currentUserId)
+    roomModels[conversation.id] = room
+    recentRoomIDs.append(conversation.id)
+    while recentRoomIDs.count > 4 {
+      roomModels.removeValue(forKey: recentRoomIDs.removeFirst())
+    }
+    return room
   }
 
   private func hydrateCachedConversationsIfNeeded() async {
@@ -2117,6 +2203,7 @@ public struct ChatNativeView: View {
       }
       .task(id: scenePhase == .active && activeConversationRoute == nil) {
         guard scenePhase == .active, activeConversationRoute == nil else { return }
+        model.configure(currentUserId: currentUserId)
         await model.pollActiveConversations(userId: currentUserId)
       }
       .background {
@@ -2206,16 +2293,7 @@ public struct ChatNativeView: View {
     guard openingConversationId == nil else { return }
     openingConversationId = conversation.id
 
-    let roomModel: ConversationNativeModel?
-    if let groupId = conversation.groupId {
-      roomModel = ConversationNativeModel(kind: .group(groupId: groupId), api: model.api, currentUserId: currentUserId)
-    } else if let peerId = conversation.otherUserId {
-      roomModel = ConversationNativeModel(kind: .direct(peerId: peerId), api: model.api, currentUserId: currentUserId)
-    } else {
-      roomModel = nil
-    }
-
-    guard let roomModel else {
+    guard let roomModel = model.roomModel(for: conversation) else {
       openingConversationId = nil
       return
     }

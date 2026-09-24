@@ -74,4 +74,49 @@ final class CaptroCacheIsolationTests: XCTestCase {
     XCTAssertNil(wrongUser)
     await store.removeThread(kind: kind, currentUserId: firstUser)
   }
+
+  func testReturningToChatReusesRoomModelButAccountSwitchDoesNot() async {
+    await MainActor.run {
+      let api = MIRAAPIClient(sessionProvider: StaticSessionProvider(token: "test"))
+      let inbox = ChatNativeModel(api: api)
+      let conversation = MIRAConversation(
+        id: "room", type: "direct", otherUserId: "peer", otherUsername: "peer",
+        otherFullName: nil, otherProfileImage: nil, otherLastSeenAt: nil,
+        otherIsOnline: nil, otherIsTyping: nil, lastMessage: nil,
+        lastMessageTime: nil, updatedAt: nil, unreadCount: nil,
+        groupId: nil, groupName: nil, memberCount: nil
+      )
+
+      inbox.configure(currentUserId: "account-a")
+      let first = inbox.roomModel(for: conversation)
+      XCTAssertNotNil(first)
+      XCTAssertTrue(first === inbox.roomModel(for: conversation))
+
+      inbox.configure(currentUserId: "account-b")
+      let second = inbox.roomModel(for: conversation)
+      XCTAssertNotNil(second)
+      XCTAssertFalse(first === second)
+      XCTAssertEqual(second?.currentUserId, "account-b")
+    }
+  }
+
+  func testPaymentDisplayStateIsClearedOnAccountSwitch() async throws {
+    let method = try JSONDecoder().decode(
+      CaptroSavedPaymentMethod.self,
+      from: Data(#"{"id":"pm_test","brand":"visa","last4":"1234","expirationMonth":12,"expirationYear":2028,"funding":"debit"}"#.utf8)
+    )
+    await MainActor.run {
+      let model = CaptroPaymentsModel(api: MIRAAPIClient(sessionProvider: StaticSessionProvider(token: "test")))
+      model.configure(currentUserId: "account-a")
+      model.methods = [method]
+      model.cardError = "Old account error"
+      model.earningsModel.errorMessage = "Old balance error"
+
+      model.configure(currentUserId: "account-b")
+      XCTAssertTrue(model.methods.isEmpty)
+      XCTAssertNil(model.cardError)
+      XCTAssertNil(model.earningsModel.errorMessage)
+      XCTAssertNil(model.earningsModel.response)
+    }
+  }
 }

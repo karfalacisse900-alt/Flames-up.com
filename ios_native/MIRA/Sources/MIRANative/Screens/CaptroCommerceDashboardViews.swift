@@ -382,31 +382,122 @@ private final class CaptroQRScannerController: UIViewController, AVCaptureMetada
   }
 }
 
+@MainActor
+final class CaptroEarningsModel: ObservableObject {
+  @Published var response: CaptroEarningsResponse?
+  @Published var payoutHistory: CaptroPayoutsResponse?
+  @Published var isLoading = false
+  @Published var isLoadingPayouts = false
+  @Published var errorMessage: String?
+  @Published var payoutError: String?
+  private let api: MIRAAPIClient
+  private var currentUserId = ""
+  private var lastEarningsAttemptAt: Date?
+  private var lastPayoutsAttemptAt: Date?
+  private(set) var lastConfirmedAt: Date?
+
+  init(api: MIRAAPIClient) { self.api = api }
+
+  func configure(currentUserId: String) {
+    guard self.currentUserId != currentUserId else { return }
+    self.currentUserId = currentUserId
+    response = nil
+    payoutHistory = nil
+    isLoading = false
+    isLoadingPayouts = false
+    errorMessage = nil
+    payoutError = nil
+    lastEarningsAttemptAt = nil
+    lastPayoutsAttemptAt = nil
+    lastConfirmedAt = nil
+  }
+
+  var isBalanceFresh: Bool {
+    guard let lastConfirmedAt else { return false }
+    return !isLoading && errorMessage == nil && Date().timeIntervalSince(lastConfirmedAt) < 30
+  }
+
+  func load(forceRefresh: Bool = false) async {
+    guard !isLoading else { return }
+    if !forceRefresh, let lastEarningsAttemptAt,
+       Date().timeIntervalSince(lastEarningsAttemptAt) < 30 { return }
+    lastEarningsAttemptAt = Date()
+    let accountID = currentUserId
+    isLoading = true
+    defer { if accountID == currentUserId { isLoading = false } }
+    do {
+      let fresh = try await api.loadCreatorEarnings()
+      guard accountID == currentUserId else { return }
+      response = fresh
+      lastConfirmedAt = Date()
+      errorMessage = nil
+      MIRAPerformanceTimeline.mark("earnings_confirmed")
+    } catch {
+      guard accountID == currentUserId else { return }
+      errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not refresh earnings."
+    }
+  }
+
+  func loadPayouts(forceRefresh: Bool = false) async {
+    guard !isLoadingPayouts else { return }
+    if !forceRefresh, let lastPayoutsAttemptAt,
+       Date().timeIntervalSince(lastPayoutsAttemptAt) < 30 { return }
+    lastPayoutsAttemptAt = Date()
+    let accountID = currentUserId
+    isLoadingPayouts = true
+    defer { if accountID == currentUserId { isLoadingPayouts = false } }
+    do {
+      let fresh = try await api.loadCreatorPayouts()
+      guard accountID == currentUserId else { return }
+      payoutHistory = fresh
+      payoutError = nil
+    } catch {
+      guard accountID == currentUserId else { return }
+      payoutError = (error as? MIRAAPIError)?.errorDescription ?? "Could not refresh payouts."
+    }
+  }
+}
+
 struct CaptroEarningsView: View {
   let api: MIRAAPIClient
+  @StateObject private var model: CaptroEarningsModel
   @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
-  @State private var response: CaptroEarningsResponse?
-  @State private var isLoading = false
-  @State private var errorMessage: String?
+  @State private var isStartingPayoutSetup = false
+  @State private var payoutSetupError: String?
   @State private var showingWithdrawal = false
+
+  init(api: MIRAAPIClient, model: CaptroEarningsModel) {
+    self.api = api
+    _model = StateObject(wrappedValue: model)
+  }
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 0) {
-        if let response {
+        if let response = model.response {
+          if model.isLoading {
+            ProgressView("Checking current earnings...")
+              .font(.system(size: 12))
+              .padding(16)
+          } else if !model.isBalanceFresh {
+            Text("Last confirmed balance. Refresh to withdraw.")
+              .font(.system(size: 12))
+              .foregroundStyle(CaptroDetailStyle.secondary)
+              .padding(16)
+          }
           balanceSection(response)
           divider
           payoutAccountSection(response.account)
           divider
           recentSection(response.recent)
-        } else if isLoading {
+        } else if model.isLoading {
           ProgressView("Loading earnings...")
             .frame(maxWidth: .infinity, minHeight: 240)
         } else {
           ContentUnavailableView(
             "Earnings unavailable",
             systemImage: "dollarsign",
-            description: Text(errorMessage ?? "Pull to try again.")
+            description: Text(model.errorMessage ?? "Pull to try again.")
           )
           .frame(maxWidth: .infinity, minHeight: 320)
         }
@@ -417,15 +508,18 @@ struct CaptroEarningsView: View {
     .navigationTitle("Earnings")
     .navigationBarTitleDisplayMode(.inline)
     .miraHideTabBarOnAppear()
-    .refreshable { await load() }
-    .task { await load() }
-    .sheet(isPresented: $showingWithdrawal, onDismiss: { Task { await load() } }) {
+    .onAppear {
+      MIRAPerformanceTimeline.mark("earnings_screen_visible", detail: model.response == nil ? "empty" : "retained")
+    }
+    .refreshable { await model.load(forceRefresh: true) }
+    .task { await model.load() }
+    .sheet(isPresented: $showingWithdrawal, onDismiss: { Task { await model.load(forceRefresh: true) } }) {
       CaptroWithdrawView(api: api)
     }
     .alert("Couldn't open payouts", isPresented: Binding(
-      get: { errorMessage != nil && response != nil },
-      set: { if !$0 { errorMessage = nil } }
-    )) { Button("OK", role: .cancel) {} } message: { Text(errorMessage ?? "") }
+      get: { payoutSetupError != nil },
+      set: { if !$0 { payoutSetupError = nil } }
+    )) { Button("OK", role: .cancel) {} } message: { Text(payoutSetupError ?? "") }
   }
 
   private func balanceSection(_ value: CaptroEarningsResponse) -> some View {
@@ -445,6 +539,7 @@ struct CaptroEarningsView: View {
           }
           .buttonStyle(.borderedProminent)
           .tint(CaptroDetailStyle.accent)
+          .disabled(!model.isBalanceFresh)
         }
       } else {
         VStack(alignment: .leading, spacing: 5) {
@@ -497,7 +592,7 @@ struct CaptroEarningsView: View {
         .buttonStyle(.plain)
       }
       NavigationLink {
-        CaptroPayoutsView(api: api)
+        CaptroPayoutsView(model: model)
       } label: {
         HStack {
           Text("Payout History")
@@ -571,40 +666,27 @@ struct CaptroEarningsView: View {
   private var divider: some View { Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5) }
 
   private func openPayoutSetup() {
-    guard !isLoading else { return }
-    isLoading = true
-    errorMessage = nil
+    guard !isStartingPayoutSetup else { return }
+    isStartingPayoutSetup = true
+    payoutSetupError = nil
     payoutOnboarding.start(api: api) { result in
-      isLoading = false
+      isStartingPayoutSetup = false
       switch result {
       case .success(.complete):
-        Task { await load() }
+        Task { await model.load(forceRefresh: true) }
       case .failure(let error):
-        errorMessage = error.localizedDescription
+        payoutSetupError = error.localizedDescription
       }
-    }
-  }
-
-  private func load() async {
-    if response == nil { isLoading = true }
-    defer { isLoading = false }
-    do {
-      response = try await api.loadCreatorEarnings()
-      errorMessage = nil
-    } catch {
-      if response == nil { errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not load earnings." }
     }
   }
 }
 
 private struct CaptroPayoutsView: View {
-  let api: MIRAAPIClient
-  @State private var response: CaptroPayoutsResponse?
-  @State private var errorMessage: String?
+  @ObservedObject var model: CaptroEarningsModel
 
   var body: some View {
     Group {
-      if let response {
+      if let response = model.payoutHistory {
         List(response.payouts) { payout in
           VStack(alignment: .leading, spacing: 5) {
             HStack {
@@ -634,7 +716,7 @@ private struct CaptroPayoutsView: View {
             ContentUnavailableView("No payouts yet", systemImage: "creditcard", description: Text("Your debit-card payouts will appear here."))
           }
         }
-      } else if let errorMessage {
+      } else if let errorMessage = model.payoutError {
         ContentUnavailableView("Payouts unavailable", systemImage: "exclamationmark.circle", description: Text(errorMessage))
       } else {
         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -643,10 +725,8 @@ private struct CaptroPayoutsView: View {
     .background(MIRATheme.Color.surface)
     .navigationTitle("Payouts")
     .navigationBarTitleDisplayMode(.inline)
-    .task {
-      do { response = try await api.loadCreatorPayouts() }
-      catch { errorMessage = (error as? MIRAAPIError)?.errorDescription ?? "Could not load payouts." }
-    }
+    .task { await model.loadPayouts() }
+    .refreshable { await model.loadPayouts(forceRefresh: true) }
   }
 }
 
