@@ -334,6 +334,8 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
   @MainActor
   public func continueAsGuest() {
+    CaptroVoicePlaybackCenter.shared.stop()
+    MIRAPlaybackCoordinator.pauseAll(reason: "account_switched_to_guest")
     MIRALocalJSONCache.setAccountScope(userId: nil)
     token = nil
     refreshToken = nil
@@ -358,6 +360,8 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
   @MainActor
   public func logout() {
+    CaptroVoicePlaybackCenter.shared.stop()
+    MIRAPlaybackCoordinator.pauseAll(reason: "account_signed_out")
     MIRALocalJSONCache.setAccountScope(userId: nil)
     token = nil
     refreshToken = nil

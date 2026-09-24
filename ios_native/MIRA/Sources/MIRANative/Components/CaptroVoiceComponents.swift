@@ -236,8 +236,7 @@ public struct CaptroVoiceRecorderSheet: View {
             Button(isPreviewing ? "Pause" : "Play") { togglePreview() }
               .buttonStyle(.bordered)
             Button("Record again") {
-              previewPlayer?.stop()
-              isPreviewing = false
+              stopPreview()
               recorder.reset()
             }
             .buttonStyle(.bordered)
@@ -273,13 +272,29 @@ public struct CaptroVoiceRecorderSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { recorder.reset(); dismiss() }
+          Button("Cancel") { stopPreview(); recorder.reset(); dismiss() }
         }
       }
       .interactiveDismissDisabled(recorder.isRecording)
+      .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { note in
+        if (note.object as? String) != "voice_preview_started" { stopPreview() }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+        stopPreview()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
+        if let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+           AVAudioSession.InterruptionType(rawValue: raw) == .began { stopPreview() }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { note in
+        if let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+           AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable { stopPreview() }
+      }
+      .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+        if isPreviewing, previewPlayer?.isPlaying == false { stopPreview() }
+      }
       .onDisappear {
-        previewPlayer?.stop()
-        previewPlayer = nil
+        stopPreview()
         if didUseRecording { recorder.stop() }
         else { recorder.reset() }
       }
@@ -296,6 +311,12 @@ public struct CaptroVoiceRecorderSheet: View {
       previewPlayer = player
       isPreviewing = true
     } catch { recorder.errorMessage = "This recording could not be played." }
+  }
+
+  private func stopPreview() {
+    previewPlayer?.stop()
+    previewPlayer = nil
+    isPreviewing = false
   }
 
   private func level(at index: Int) -> Float {
@@ -369,6 +390,31 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
   private let session = MIRAKeychainSessionProvider()
   private var player: AVAudioPlayer?
   private var timer: Timer?
+  private var generation = 0
+  private var observers: [NSObjectProtocol] = []
+
+  private override init() {
+    super.init()
+    let center = NotificationCenter.default
+    observers.append(center.addObserver(forName: .miraPlaybackShouldPause, object: nil, queue: .main) { [weak self] note in
+      guard (note.object as? String) != "voice_playback_started" else { return }
+      Task { @MainActor in self?.stop() }
+    })
+    observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+      Task { @MainActor in self?.stop() }
+    })
+    observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+      guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+      Task { @MainActor in self?.stop() }
+    })
+    observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+      guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+            AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable else { return }
+      // Do not unexpectedly move private speech from headphones to the speaker.
+      Task { @MainActor in self?.stop() }
+    })
+  }
 
   public func toggle(id: String) async {
     if activeId == id, let player {
@@ -380,12 +426,17 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
       isPlaying = player.isPlaying
       return
     }
+    MIRAPlaybackCoordinator.pauseAll(reason: "voice_playback_started")
     stop()
+    let requestGeneration = generation
     do {
       var request = URLRequest(url: MIRAProductionBackend.apiURL("voice/\(id)/playback"))
       request.cachePolicy = .reloadIgnoringLocalCacheData
-      if let token = await session.accessToken() { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+      guard let token = await session.accessToken(), !token.isEmpty else { throw MIRAAPIError.badStatus(401) }
+      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
       let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+      guard generation == requestGeneration,
+            await session.accessToken() == token else { return }
       guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MIRAAPIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0) }
       let next = try AVAudioPlayer(data: data)
       next.delegate = self
@@ -399,6 +450,7 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
         Task { @MainActor in self?.updateProgress() }
       }
     } catch {
+      guard generation == requestGeneration else { return }
       errorMessage = "This recording is unavailable."
       stop(keepError: true)
     }
@@ -411,6 +463,7 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
   }
 
   public func stop(keepError: Bool = false) {
+    generation &+= 1
     player?.stop()
     player = nil
     timer?.invalidate()
