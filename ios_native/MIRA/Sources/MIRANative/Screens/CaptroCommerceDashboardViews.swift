@@ -687,7 +687,18 @@ private struct CaptroPayoutsView: View {
   var body: some View {
     Group {
       if let response = model.payoutHistory {
-        List(response.payouts) { payout in
+        VStack(spacing: 0) {
+          if model.isLoadingPayouts {
+            ProgressView("Refreshing payout history...")
+              .font(.system(size: 12))
+              .padding(12)
+          } else if let refreshError = model.payoutError {
+            Text("Could not refresh payout history: \(refreshError)")
+              .font(.system(size: 12))
+              .foregroundStyle(CaptroDetailStyle.secondary)
+              .padding(12)
+          }
+          List(response.payouts) { payout in
           VStack(alignment: .leading, spacing: 5) {
             HStack {
               Text(CaptroCommerceDate.day(payout.createdAt)).font(.system(size: 14, weight: .semibold))
@@ -709,11 +720,12 @@ private struct CaptroPayoutsView: View {
             }
           }
           .listRowBackground(MIRATheme.Color.surface)
-        }
-        .listStyle(.plain)
-        .overlay {
-          if response.payouts.isEmpty {
-            ContentUnavailableView("No payouts yet", systemImage: "creditcard", description: Text("Your debit-card payouts will appear here."))
+          }
+          .listStyle(.plain)
+          .overlay {
+            if response.payouts.isEmpty {
+              ContentUnavailableView("No payouts yet", systemImage: "creditcard", description: Text("Your debit-card payouts will appear here."))
+            }
           }
         }
       } else if let errorMessage = model.payoutError {

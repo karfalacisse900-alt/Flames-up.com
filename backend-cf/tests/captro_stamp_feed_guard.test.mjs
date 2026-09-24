@@ -49,7 +49,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /let textPosts = rankedPosts\.filter \{ \$0\.feedMediaURLs\.isEmpty \}/);
   assert.match(mainFeed, /wantsMedia\.toggle\(\)/);
   assert.match(mainFeed, /loaded = try await fetchFeedPage\(skip: skip\)/);
-  assert.match(mainFeed, /ForEach\(visiblePostIndices, id: \\.self\)/);
+  assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
     /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/,
@@ -133,7 +133,8 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(postBody, /\.frame\(width: pageSize\.width, height: pageSize\.height, alignment: \.topLeading\)/);
   assert.doesNotMatch(postBody, /\.background\(MIRATheme\.Color\.surface\)/);
   assert.doesNotMatch(postBody, /\.clipShape\(RoundedRectangle|\.cornerRadius\(|\.shadow\(/);
-  assert.match(mainFeed, /\.simultaneousGesture\(horizontalPagerGesture\(pageWidth: size\.width\)\)/);
+  assert.match(mainFeed, /\.scrollTargetBehavior\(\.paging\)/);
+  assert.match(mainFeed, /\.scrollPosition\(id: \$selectedPostID, anchor: \.leading\)/);
   assert.match(mainFeed, /showsCoverMediaOnly: true/);
 });
 

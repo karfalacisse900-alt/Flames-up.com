@@ -484,6 +484,7 @@ public struct ConversationNativeView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportMessage: MIRAMessage?
   @State private var isReportSheetPresented = false
+  @State private var isViewingLatestMessage = true
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -530,6 +531,11 @@ public struct ConversationNativeView: View {
                 messageBubble(message)
                   .id(message.id)
               }
+              Color.clear
+                .frame(height: 1)
+                .id("chat-bottom")
+                .onAppear { isViewingLatestMessage = true }
+                .onDisappear { isViewingLatestMessage = false }
             }
           }
           .padding(.horizontal, 14)
@@ -551,11 +557,12 @@ public struct ConversationNativeView: View {
             }
             return
           }
-          let shouldStayPinnedToBottom = oldIDs.isEmpty || oldIDs.last != last
+          let isOwnNewMessage = model.messages.last?.senderId == model.currentUserId
+          let shouldStayPinnedToBottom = oldIDs.last != last && (isViewingLatestMessage || isOwnNewMessage)
           guard shouldStayPinnedToBottom else { return }
           DispatchQueue.main.async {
             withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-              proxy.scrollTo(last, anchor: .bottom)
+              proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
           }
         }

@@ -17600,13 +17600,23 @@ api.get('/conversations', authMiddleware, async (c) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'conversations_read');
   if (supabaseRequired) return supabaseRequired;
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
-  const blockedIds = await supabaseBlockedUserIds(c, userId);
-  const directRows = await supabaseAdminQueryRows(c, 'app_messages', {
-    select: '*',
-    filters: { or: `(sender_id.eq.${userId},receiver_id.eq.${userId})` },
-    order: 'created_at.desc',
-    limit: Math.max(120, limit * 6),
-  });
+  // These reads do not depend on each other. Keep the inbox's critical path
+  // to one round of independent lookups before assembling the response.
+  const [blockedIds, directRows, memberships] = await Promise.all([
+    supabaseBlockedUserIds(c, userId),
+    supabaseAdminQueryRows(c, 'app_messages', {
+      select: '*',
+      filters: { or: `(sender_id.eq.${userId},receiver_id.eq.${userId})` },
+      order: 'created_at.desc',
+      limit: Math.max(120, limit * 6),
+    }),
+    supabaseAdminQueryRows(c, 'app_group_chat_members', {
+      select: 'group_id',
+      filters: { user_id: postgrestEqFilter(userId) },
+      order: 'created_at.desc',
+      limit: 100,
+    }).catch(() => []),
+  ]);
   const otherIds = Array.from(new Set(directRows.map((row) => publicId(row.sender_id === userId ? row.receiver_id : row.sender_id, 120)).filter(Boolean)));
   const users = await supabaseUsersByAnyIds(c, otherIds);
   const directMap = new Map<string, any>();
@@ -17656,12 +17666,6 @@ api.get('/conversations', authMiddleware, async (c) => {
     }));
   }
 
-  const memberships = await supabaseAdminQueryRows(c, 'app_group_chat_members', {
-    select: 'group_id',
-    filters: { user_id: postgrestEqFilter(userId) },
-    order: 'created_at.desc',
-    limit: 100,
-  }).catch(() => []);
   const groupIds = Array.from(new Set(memberships.map((row) => publicId(row.group_id, 120)).filter(Boolean)));
   let groupConversations: any[] = [];
   if (groupIds.length) {

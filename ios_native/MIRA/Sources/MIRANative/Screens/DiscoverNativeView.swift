@@ -195,7 +195,7 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func prefetchVisibleMedia(_ posts: [MIRAPost]) {
     let previewURLs = posts
-      .prefix(30)
+      .prefix(12)
       .flatMap { post in
         post.posterMediaURLs
           + post.thumbnailMediaURLs
@@ -203,28 +203,26 @@ final class DiscoverNativeModel: ObservableObject {
           + post.fallbackMediaURLs.filter { !$0.isVideoURL }
       }
     let feedURLs = posts
-      .prefix(18)
+      .prefix(4)
       .flatMap { post in
         post.feedMediaURLs.filter { !$0.isVideoURL }
           + post.fallbackMediaURLs.filter { !$0.isVideoURL }
       }
     guard !previewURLs.isEmpty || !feedURLs.isEmpty else { return }
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: 42)
-      await MIRAImagePrefetcher.prefetch(urls: feedURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 24)
+      await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: 12)
+      await MIRAImagePrefetcher.prefetch(urls: feedURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 4)
     }
   }
 
   private func prewarmStoryRailMedia(_ groups: [MIRAStoryGroup]) {
-    let urls = orderedUniqueMediaURLs(
-      groups
-        .prefix(12)
-        .flatMap { ($0.statuses ?? []).prefix(2).compactMap(\.mediaURL) }
-    )
+    let urls = orderedUniqueMediaURLs(groups
+      .prefix(6)
+      .compactMap { $0.statuses?.first?.mediaURL }
+      .filter { !$0.isVideoURL })
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 24)
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 400, limit: 6)
     }
   }
 
@@ -645,11 +643,11 @@ public struct DiscoverNativeView: View {
   }
 
   private func prewarmStoryGroup(_ group: MIRAStoryGroup) {
-    let urls = orderedUniqueStoryMediaURLs((group.statuses ?? []).prefix(5).compactMap(\.mediaURL))
+    let urls = orderedUniqueStoryMediaURLs((group.statuses ?? []).prefix(2).compactMap(\.mediaURL))
     guard !urls.isEmpty else { return }
-    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+    MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(1)))
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 2)
     }
   }
 
@@ -1519,7 +1517,7 @@ struct StoryViewerNativeView: View {
     guard !urls.isEmpty else { return }
     MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 10)
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 4)
     }
   }
 
@@ -1527,7 +1525,7 @@ struct StoryViewerNativeView: View {
     var urls: [String] = []
 
     let lower = max(0, selectedIndex - 1)
-    let upper = min(stories.count - 1, selectedIndex + 5)
+    let upper = min(stories.count - 1, selectedIndex + 2)
     if lower <= upper {
       for index in lower...upper {
         if let url = stories[index].mediaURL {
@@ -1538,10 +1536,10 @@ struct StoryViewerNativeView: View {
 
     let groups = storyRailGroups
     if let groupIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) {
-      for offset in [-1, 1, 2, 3, 4, 5] {
+      for offset in [1] {
         let nextIndex = groupIndex + offset
         guard groups.indices.contains(nextIndex) else { continue }
-        urls.append(contentsOf: (groups[nextIndex].statuses ?? []).prefix(5).compactMap(\.mediaURL))
+        urls.append(contentsOf: (groups[nextIndex].statuses ?? []).prefix(1).compactMap(\.mediaURL))
       }
     }
 
@@ -1550,12 +1548,12 @@ struct StoryViewerNativeView: View {
 
   private func prewarmStoriesStarting(at index: Int) {
     guard stories.indices.contains(index) else { return }
-    let upper = min(stories.count - 1, index + 5)
+    let upper = min(stories.count - 1, index + 2)
     let urls = orderedUniqueStoryURLs((index...upper).compactMap { stories[$0].mediaURL })
     guard !urls.isEmpty else { return }
     MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
     Task.detached(priority: .utility) {
-      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 6)
+      await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 3)
     }
   }
 
@@ -1599,11 +1597,11 @@ struct StoryViewerNativeView: View {
   }
 
   private func selectStoryGroup(_ railGroup: MIRAStoryGroup) {
-    let urls = orderedUniqueStoryURLs((railGroup.statuses ?? []).prefix(5).compactMap(\.mediaURL))
+    let urls = orderedUniqueStoryURLs((railGroup.statuses ?? []).prefix(2).compactMap(\.mediaURL))
     if !urls.isEmpty {
-      MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(5)))
+      MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(1)))
       Task.detached(priority: .utility) {
-        await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 5)
+        await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 1920, limit: 2)
       }
     }
     withAnimation(storyRailAnimation) {
