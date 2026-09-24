@@ -270,6 +270,16 @@ public struct MIRANativeRootView: View {
         loadedTabs = [.main]
       }
     }
+    .onChange(of: selectedTab) { _, tab in
+      guard scenePhase == .active else { return }
+      Task {
+        if tab == .main, authSession.user != nil || authSession.isGuest {
+          await startup.feedModel.revalidateIfStale()
+        } else if tab == .profile, authSession.user != nil {
+          await startup.profileModel.revalidateIfStale()
+        }
+      }
+    }
     .onChange(of: scenePhase) { _, phase in
       withAnimation(.easeOut(duration: phase == .active ? 0.18 : 0.06)) {
         isPrivacyShieldVisible = phase != .active
@@ -278,6 +288,11 @@ public struct MIRANativeRootView: View {
         registerCachedPushTokenIfPossible()
         if selectedTab == .main {
           MIRAPlaybackCoordinator.resumeVisible(reason: "app_active_home")
+          if authSession.user != nil || authSession.isGuest {
+            Task { await startup.feedModel.revalidateIfStale() }
+          }
+        } else if selectedTab == .profile, authSession.user != nil {
+          Task { await startup.profileModel.revalidateIfStale() }
         }
       } else {
         MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")

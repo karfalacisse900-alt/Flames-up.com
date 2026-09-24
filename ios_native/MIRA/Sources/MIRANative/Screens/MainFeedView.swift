@@ -31,6 +31,7 @@ final class MainFeedModel: ObservableObject {
   private var canLoadMore = true
   private var isLoadingCurrentUser = false
   private var accountGeneration = 0
+  private var lastRevalidationAttemptAt: Date?
   private var mediaPrefetchTask: Task<Void, Never>?
   private var followingAuthorIds = Set<String>()
   private var likeMutationVersions: [String: Int] = [:]
@@ -64,6 +65,7 @@ final class MainFeedModel: ObservableObject {
     hasLoadedFreshFeed = false
     isLoadingFreshFeed = false
     refreshRequested = false
+    lastRevalidationAttemptAt = nil
     isLoadingCurrentUser = false
     canLoadMore = true
     isLoading = true
@@ -88,6 +90,13 @@ final class MainFeedModel: ObservableObject {
     Task { await load() }
   }
 
+  func revalidateIfStale(maxAge: TimeInterval = 30) async {
+    guard !isLoadingFreshFeed else { return }
+    if let lastRevalidationAttemptAt,
+       Date().timeIntervalSince(lastRevalidationAttemptAt) < maxAge { return }
+    await load(forceRefresh: true)
+  }
+
   func load(forceRefresh: Bool = false) async {
 #if DEBUG
     if isVisualFixture { return }
@@ -103,6 +112,7 @@ final class MainFeedModel: ObservableObject {
     }
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
     isLoadingFreshFeed = true
+    lastRevalidationAttemptAt = Date()
     let generation = accountGeneration
     defer {
       if accountGeneration == generation {

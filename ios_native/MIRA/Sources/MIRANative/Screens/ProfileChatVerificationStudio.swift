@@ -22,6 +22,7 @@ final class ProfileNativeModel: ObservableObject {
   private var isLoadingFreshProfile = false
   private var refreshRequested = false
   private var loadGeneration = 0
+  private var lastRevalidationAttemptAt: Date?
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -31,6 +32,7 @@ final class ProfileNativeModel: ObservableObject {
     loadGeneration += 1
     isLoadingFreshProfile = false
     refreshRequested = false
+    lastRevalidationAttemptAt = nil
     user = nil
     posts = []
     receiptEarnings = nil
@@ -51,9 +53,17 @@ final class ProfileNativeModel: ObservableObject {
     Task { await load() }
   }
 
+  func revalidateIfStale(maxAge: TimeInterval = 30) async {
+    guard !isLoadingFreshProfile else { return }
+    if let lastRevalidationAttemptAt,
+       Date().timeIntervalSince(lastRevalidationAttemptAt) < maxAge { return }
+    await load()
+  }
+
   func load() async {
     guard !isLoadingFreshProfile else { return }
     isLoadingFreshProfile = true
+    lastRevalidationAttemptAt = Date()
     let generation = loadGeneration
     defer {
       if loadGeneration == generation {
