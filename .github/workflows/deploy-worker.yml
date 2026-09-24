@@ -44,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           supabase link --project-ref "$SUPABASE_PROJECT_REF"
-          if ! supabase db push --linked --dry-run --skip-vault > "$RUNNER_TEMP/pending-migrations.txt" 2>&1; then
+          if ! supabase db push --linked --dry-run > "$RUNNER_TEMP/pending-migrations.txt" 2>&1; then
             cat "$RUNNER_TEMP/pending-migrations.txt"
             exit 1
           fi
@@ -74,7 +74,7 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: supabase db push --linked --skip-vault
+        run: supabase db push --linked
       - name: Deploy Worker without changing payment secrets or webhooks
         if: ${{ inputs.reliability_dry_run != true }}
         working-directory: backend-cf
