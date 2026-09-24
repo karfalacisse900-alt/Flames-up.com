@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 function decide(scores, mediaType = 'image', aiPolicy = '') {
@@ -58,4 +59,10 @@ test('sends ambiguous media to admin review', () => {
 test('does not reject AI-generated likelihood unless policy disallows at high confidence', () => {
   assert.equal(decide({ ...safe, ai_generated_likelihood: 0.7 }, 'image').decision, 'review_required');
   assert.equal(decide({ ...safe, ai_generated_likelihood: 0.93 }, 'image', 'disallow').decision, 'rejected');
+});
+
+test('image upload intent enforces Cloudflare Images hosted-file limit', () => {
+  const worker = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+  assert.match(worker, /mediaType === 'video' \? DIRECT_VIDEO_MAX_BYTES : 10_000_000/);
+  assert.match(worker, /Math\.min\(raw, providerMaxBytes\)/);
 });

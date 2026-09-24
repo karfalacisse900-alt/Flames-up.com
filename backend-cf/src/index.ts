@@ -13086,8 +13086,11 @@ function normalizeMediaAssetType(value: unknown): CaptroMediaType | '' {
 
 function mediaModerationMaxBytes(env: Env, mediaType: CaptroMediaType): number {
   const raw = Number(mediaType === 'video' ? env.MEDIA_MAX_VIDEO_BYTES : env.MEDIA_MAX_IMAGE_BYTES);
-  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, mediaType === 'video' ? DIRECT_VIDEO_MAX_BYTES : 50_000_000);
-  return mediaType === 'video' ? DIRECT_VIDEO_MAX_BYTES : 25_000_000;
+  // Hosted Cloudflare Images reject files above 10 MB. Validate before
+  // creating a direct-upload intent so the user gets an actionable error.
+  const providerMaxBytes = mediaType === 'video' ? DIRECT_VIDEO_MAX_BYTES : 10_000_000;
+  if (Number.isFinite(raw) && raw > 0) return Math.min(raw, providerMaxBytes);
+  return providerMaxBytes;
 }
 
 function isUnsafeUploadExtension(filename: unknown): boolean {
