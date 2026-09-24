@@ -69,6 +69,11 @@ jobs:
           set -euo pipefail
           npx wrangler r2 bucket info flames-up-media-backup --json > "$RUNNER_TEMP/captro-r2-bucket.json"
           npx wrangler deploy --env production --dry-run --outdir "$RUNNER_TEMP/captro-worker-bundle"
+          if npx wrangler secret list --env production | grep -q '"name": "OPENAI_API_KEY"'; then
+            echo 'Voice processing credential is configured on the production Worker.'
+          else
+            echo '::warning::Production Worker has no OPENAI_API_KEY; voice uploads remain private and fail closed.'
+          fi
       - name: Apply only the validated additive migration
         if: ${{ inputs.reliability_dry_run != true }}
         env:
