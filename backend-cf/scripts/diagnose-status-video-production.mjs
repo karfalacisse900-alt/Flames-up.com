@@ -18,6 +18,7 @@ const admin = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
 const scratch = await mkdtemp(join(tmpdir(), 'captro-story-video-'));
 let userId = '';
 let videoId = '';
+let probeVideoId = '';
 
 async function request(url, init = {}) {
   const response = await fetch(url, {
@@ -70,6 +71,16 @@ try {
     body: JSON.stringify({ media_type: 'video', mime_type: 'video/mp4', filename: 'captro-story-smoke.mp4', file_size: data.byteLength, duration_seconds: 1, width: 320, height: 400 }),
   });
   console.log(JSON.stringify({ event: 'video_intent', status: intent.response.status, code: intent.body.code || null }));
+  if (intent.response.status === 502) {
+    const probe = await request(`https://api.cloudflare.com/client/v4/accounts/${account}/stream/direct_upload`, {
+      method: 'POST', headers: { Authorization: `Bearer ${streamToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs: false, meta: { userId, moderation: 'pre_publish', filename: 'captro-story-smoke.mp4' } }),
+    });
+    probeVideoId = String(probe.body.result?.uid || '');
+    const providerMessage = String(probe.body.errors?.[0]?.message || '')
+      .replace(/https?:\/\/\S+|[A-Za-z0-9_-]{40,}/g, '[redacted]').slice(0, 160);
+    console.log(JSON.stringify({ event: 'stream_direct_probe', status: probe.response.status, success: probe.body.success === true, code: probe.body.errors?.[0]?.code || null, message: providerMessage }));
+  }
   assert.equal(intent.response.status, 201, 'Could not create video upload intent');
   const mediaId = intent.body.media_id;
   assert.ok(mediaId && intent.body.upload_url, 'Video intent lacked upload details');
@@ -115,6 +126,11 @@ try {
   if (videoId) {
     try {
       await remove(`https://api.cloudflare.com/client/v4/accounts/${account}/stream/${encodeURIComponent(videoId)}`, { Authorization: `Bearer ${streamToken}` });
+    } catch (error) { failures.push(error); }
+  }
+  if (probeVideoId) {
+    try {
+      await remove(`https://api.cloudflare.com/client/v4/accounts/${account}/stream/${encodeURIComponent(probeVideoId)}`, { Authorization: `Bearer ${streamToken}` });
     } catch (error) { failures.push(error); }
   }
   await rm(scratch, { recursive: true, force: true });
