@@ -135,8 +135,12 @@ public final class MIRAMediaUploadService {
     self.target = target
   }
 
-  public func upload(_ media: MIRAPickedMedia) async throws -> String {
-    let result = try await uploadResult(media)
+  public func upload(
+    _ media: MIRAPickedMedia,
+    onUploadProgress: (@Sendable (Double) -> Void)? = nil,
+    onProcessing: (@Sendable () -> Void)? = nil
+  ) async throws -> String {
+    let result = try await uploadResult(media, onUploadProgress: onUploadProgress, onProcessing: onProcessing)
     return result.url
   }
 

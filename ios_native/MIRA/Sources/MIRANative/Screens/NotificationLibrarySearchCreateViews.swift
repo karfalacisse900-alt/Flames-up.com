@@ -4228,6 +4228,8 @@ public struct CreateStoryNativeView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showCamera = true
   @State private var isPosting = false
+  @State private var storyUploadStage = "Posting status"
+  @State private var storyUploadFraction: Double?
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
   @State private var editedStoryCameraMedia: MIRAPickedMedia?
@@ -4266,6 +4268,8 @@ public struct CreateStoryNativeView: View {
               .foregroundStyle(.white)
               .frame(width: 48, height: 48)
           }
+          .disabled(isPosting)
+          .accessibilityLabel("Close status creator")
 
           Spacer()
         }
@@ -4394,6 +4398,7 @@ public struct CreateStoryNativeView: View {
               .frame(width: 48, height: 48)
           }
           .accessibilityLabel("Back to story camera")
+          .disabled(isPosting)
           Spacer()
           Text("New status")
             .font(.system(size: 17, weight: .semibold))
@@ -4506,13 +4511,21 @@ public struct CreateStoryNativeView: View {
           } label: {
             HStack(spacing: 8) {
               if isPosting { ProgressView().tint(.white) }
-              Text(isPosting ? "Posting status" : "Post Status")
+              Text(isPosting ? storyUploadStage : "Post Status")
                 .font(.system(size: 16, weight: .semibold))
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .frame(height: 54)
             .background(.black, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(alignment: .bottom) {
+              if let storyUploadFraction, isPosting {
+                ProgressView(value: storyUploadFraction)
+                  .tint(.white)
+                  .padding(.horizontal, 8)
+                  .accessibilityLabel("Status upload progress")
+              }
+            }
           }
           .disabled(isPosting || (media == nil && storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
           .opacity(isPosting || media != nil || !storyCaption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1 : 0.45)
@@ -4571,14 +4584,37 @@ public struct CreateStoryNativeView: View {
       return
     }
     isPosting = true
+    storyUploadStage = "Preparing status"
+    storyUploadFraction = nil
     errorMessage = nil
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "story")
-    defer { isPosting = false }
+    defer {
+      isPosting = false
+      storyUploadFraction = nil
+    }
     do {
       var uploaded: String?
       if let media {
-        uploaded = try await MIRAMediaUploadService(api: api).upload(media)
+        uploaded = try await MIRAMediaUploadService(api: api).upload(
+          media,
+          onUploadProgress: { fraction in
+            Task { @MainActor in
+              guard isPosting, storyUploadStage == "Preparing status" || storyUploadStage == "Uploading status" else { return }
+              storyUploadStage = "Uploading status"
+              storyUploadFraction = fraction
+            }
+          },
+          onProcessing: {
+            Task { @MainActor in
+              guard isPosting else { return }
+              storyUploadStage = "Checking media"
+              storyUploadFraction = nil
+            }
+          }
+        )
       }
+      storyUploadStage = "Publishing status"
+      storyUploadFraction = nil
       let _: MIRAStatusPreview = try await api.post(
         "/statuses",
         body: CreateStatusBody(
@@ -4608,7 +4644,18 @@ public struct CreateStoryNativeView: View {
       close()
     } catch {
       MIRAPerformanceTimeline.mark("post_upload_failed", detail: "story")
-      errorMessage = "Status could not be posted. Please try again."
+      if let apiError = error as? MIRAAPIError {
+        switch apiError {
+        case .badStatus(404), .server(404, _, _):
+          errorMessage = "Status posting is not available on Captro’s server yet. Your draft is still here."
+        case .server(503, _, _):
+          errorMessage = "Status posting is temporarily unavailable. Your draft is still here."
+        default:
+          errorMessage = "Status could not be posted. Your draft is still here; please try again."
+        }
+      } else {
+        errorMessage = "Status could not be posted. Your draft is still here; please try again."
+      }
     }
   }
   private func close() {

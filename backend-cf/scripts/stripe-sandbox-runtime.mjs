@@ -636,7 +636,8 @@ async function cleanupStripeFixtures() {
 
 try { await main(); }
 catch (error) {
-  console.error(`Stripe API integration incomplete: ${error.message}`);
+  const source = String(error?.stack || '').match(/stripe-sandbox-runtime\.mjs:\d+:\d+/)?.[0] || 'unknown_step';
+  console.error(`Stripe API integration incomplete at ${source}: ${error.message}`);
   process.exitCode = 1;
 } finally {
   await cleanupStripeFixtures();
