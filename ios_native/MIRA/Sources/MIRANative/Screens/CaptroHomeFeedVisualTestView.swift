@@ -64,14 +64,18 @@ private enum CaptroHomeFeedVisualFixtures {
         }
         try image.pngData()!.write(to: mediaURL)
       }
-      let json: [String: Any] = [
-        "id": "full-bleed-\(name)", "userFullName": "Captro", "userUsername": "captro",
-        "title": "Full-width media", "caption": String(repeating: "Layout fixture. ", count: 10),
-        "images": [mediaURL.absoluteString], "feedMediaUrls": [mediaURL.absoluteString],
-        "mediaDimensions": [["width": size.width, "height": size.height]],
-        "postType": "place", "createdAt": "2026-09-04T09:41:00Z",
-      ]
-      return [try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: json))]
+      let pagerFixture = ProcessInfo.processInfo.arguments.contains("--captro-visual-pager")
+      return try (0..<(pagerFixture ? 3 : 1)).map { index in
+        let json: [String: Any] = [
+          "id": "full-bleed-\(name)-\(index)", "userFullName": "Captro", "userUsername": "captro",
+          "title": pagerFixture ? "Pager post \(index + 1)" : "Full-width media",
+          "caption": String(repeating: "Layout fixture. ", count: 10),
+          "images": [mediaURL.absoluteString], "feedMediaUrls": [mediaURL.absoluteString],
+          "mediaDimensions": [["width": size.width, "height": size.height]],
+          "postType": "place", "createdAt": "2026-09-04T09:41:00Z",
+        ]
+        return try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: json))
+      }
     } catch {
       assertionFailure("Full-bleed visual fixture failed: \(error)")
       return []

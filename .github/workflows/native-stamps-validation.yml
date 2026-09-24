@@ -11,13 +11,13 @@ permissions:
 jobs:
   stamps:
     runs-on: macos-26
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
-      - name: Native stamp tests and focused app screenshots
+      - name: Native stamp and Home paging tests
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
@@ -25,6 +25,7 @@ jobs:
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath "$RUNNER_TEMP/StampBuild" -resultBundlePath "$RUNNER_TEMP/Stamps.xcresult" \
             -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testHomePagerRepeatedSwipesReversalAndPostOpening \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/stamp-build.log"
       - name: Export screenshots
         if: always()

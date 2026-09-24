@@ -857,34 +857,9 @@ final class MainFeedModel: ObservableObject {
 private struct MainPostVisibilityUpdateBody: Encodable {
   let visibility: String
 }
-private enum MainFeedPagerDirection {
-  case previous
-  case next
-
-  var offsetSign: CGFloat {
-    switch self {
-    case .previous: return 1
-    case .next: return -1
-    }
-  }
-
-  var indexDelta: Int {
-    switch self {
-    case .previous: return -1
-    case .next: return 1
-    }
-  }
-}
-
 private enum MainFeedSection: String {
   case forYou
   case friends
-}
-
-private enum MainFeedPagerDragTarget {
-  case post(MainFeedPagerDirection)
-  case edge(MainFeedPagerDirection)
-  case ignored
 }
 
 public struct MainFeedView: View {
@@ -902,9 +877,6 @@ public struct MainFeedView: View {
   @State private var selectedPostFallbackIndex = 0
   @State private var selectedFeedSection: MainFeedSection = .forYou
   @AppStorage("captro.home.selectedCity") private var selectedCity = "NYC"
-  @State private var postDragOffset: CGFloat = 0
-  @State private var pagerDragTarget: MainFeedPagerDragTarget?
-  @State private var isPagerTransitioning = false
   @State private var isShowingCreatePost = false
   @State private var detailPost: MIRAPost?
   @State private var postOptionsTarget: MIRAPost?
@@ -1060,10 +1032,12 @@ public struct MainFeedView: View {
       .onChange(of: selectedFeedSection) { _, _ in
         selectedPostID = nil
         selectedPostFallbackIndex = 0
-        resetPagerOffsets()
         reconcileCurrentPostSelection()
       }
-      .onChange(of: selectedPostID) { _, _ in
+      .onChange(of: selectedPostID) { _, postID in
+        if let postID, let index = displayedPosts.firstIndex(where: { $0.id == postID }) {
+          selectedPostFallbackIndex = index
+        }
         activateCurrentPost(reason: "home_post_changed")
       }
       .onAppear {
@@ -1273,27 +1247,27 @@ public struct MainFeedView: View {
   }
 
   private func horizontalPostPager(size: CGSize) -> some View {
-    ZStack(alignment: .topLeading) {
-      ForEach(visiblePostIndices, id: \.self) { index in
-        let post = displayedPosts[index]
-        let isCurrent = index == currentPostIndex
-
-        feedPage(post: post, size: size, isCurrent: isCurrent)
-          .frame(width: size.width, height: size.height, alignment: .topLeading)
-          .offset(
-            x: CGFloat(index - currentPostIndex) * size.width + postDragOffset,
-            y: 0
-          )
-          .zIndex(isCurrent ? 1 : 0)
-          .allowsHitTesting(isCurrent && !isPagerTransitioning)
-          .accessibilityHidden(!isCurrent)
+    ScrollView(.horizontal) {
+      LazyHStack(spacing: 0) {
+        ForEach(displayedPosts, id: \.id) { post in
+          feedPage(post: post, size: size, isCurrent: post.id == currentPost?.id)
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .id(post.id)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("home.post.page.\(post.id)")
+            .accessibilityHidden(post.id != currentPost?.id)
+        }
       }
+      .scrollTargetLayout()
     }
     .frame(width: size.width, height: size.height, alignment: .topLeading)
     .background(MIRATheme.Color.appBackground)
-    .clipped()
-    .contentShape(Rectangle())
-    .simultaneousGesture(horizontalPagerGesture(pageWidth: size.width))
+    .scrollIndicators(.hidden)
+    .scrollTargetBehavior(.paging)
+    .scrollPosition(id: $selectedPostID, anchor: .leading)
+    .accessibilityLabel("Home posts")
+    .accessibilityValue("Post \(currentPostIndex + 1) of \(displayedPosts.count)")
+    .accessibilityIdentifier("home.post.pager")
   }
 
   private func feedPage(post: MIRAPost, size: CGSize, isCurrent: Bool) -> some View {
@@ -1345,142 +1319,6 @@ public struct MainFeedView: View {
   private var currentPost: MIRAPost? {
     guard displayedPosts.indices.contains(currentPostIndex) else { return nil }
     return displayedPosts[currentPostIndex]
-  }
-
-  private var visiblePostIndices: [Int] {
-    guard !displayedPosts.isEmpty else { return [] }
-    return [currentPostIndex - 1, currentPostIndex, currentPostIndex + 1]
-      .filter { displayedPosts.indices.contains($0) }
-  }
-
-  private func horizontalPagerGesture(pageWidth: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 10, coordinateSpace: .local)
-      .onChanged { value in
-        handlePagerDragChanged(value, pageWidth: pageWidth)
-      }
-      .onEnded { value in
-        handlePagerDragEnded(value, pageWidth: pageWidth)
-      }
-  }
-
-  private func handlePagerDragChanged(_ value: DragGesture.Value, pageWidth: CGFloat) {
-    guard !isPagerTransitioning else { return }
-    let horizontal = value.translation.width
-    let vertical = value.translation.height
-
-    if pagerDragTarget == nil {
-      guard max(abs(horizontal), abs(vertical)) >= 10 else { return }
-      guard abs(horizontal) > abs(vertical) else {
-        pagerDragTarget = .ignored
-        return
-      }
-      let direction: MainFeedPagerDirection = horizontal < 0 ? .next : .previous
-      pagerDragTarget = dragTarget(for: direction)
-      if case .edge(.next)? = pagerDragTarget, let currentPost {
-        Task { await model.loadMoreIfNeeded(after: currentPost) }
-      }
-    }
-
-    guard let pagerDragTarget else { return }
-    switch pagerDragTarget {
-    case let .post(direction):
-      postDragOffset = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
-    case let .edge(direction):
-      let directional = boundedTranslation(horizontal, direction: direction, pageWidth: pageWidth)
-      postDragOffset = min(max(directional * 0.18, -38), 38)
-    case .ignored:
-      postDragOffset = 0
-    }
-  }
-
-  private func handlePagerDragEnded(_ value: DragGesture.Value, pageWidth: CGFloat) {
-    guard !isPagerTransitioning else { return }
-    guard let target = pagerDragTarget else {
-      resetPagerOffsets()
-      return
-    }
-
-    switch target {
-    case let .post(direction):
-      if shouldCommitSwipe(value, direction: direction, pageWidth: pageWidth) {
-        commitPostSwipe(direction: direction, pageWidth: pageWidth)
-      } else {
-        resetPagerOffsets()
-      }
-    case .edge(_), .ignored:
-      resetPagerOffsets()
-    }
-  }
-
-  private func dragTarget(for direction: MainFeedPagerDirection) -> MainFeedPagerDragTarget {
-    guard currentPost != nil else { return .ignored }
-    let nextPostIndex = currentPostIndex + direction.indexDelta
-    return displayedPosts.indices.contains(nextPostIndex) ? .post(direction) : .edge(direction)
-  }
-
-  private func boundedTranslation(
-    _ horizontal: CGFloat,
-    direction: MainFeedPagerDirection,
-    pageWidth: CGFloat
-  ) -> CGFloat {
-    let directional: CGFloat
-    switch direction {
-    case .previous:
-      directional = max(0, horizontal)
-    case .next:
-      directional = min(0, horizontal)
-    }
-    return min(max(directional, -pageWidth), pageWidth)
-  }
-
-  private func shouldCommitSwipe(
-    _ value: DragGesture.Value,
-    direction: MainFeedPagerDirection,
-    pageWidth: CGFloat
-  ) -> Bool {
-    let distance = direction.offsetSign * value.translation.width
-    let predictedDistance = direction.offsetSign * value.predictedEndTranslation.width
-    let threshold = min(max(pageWidth * 0.16, 44), 72)
-    return distance >= threshold || predictedDistance >= pageWidth * 0.34
-  }
-
-  private func commitPostSwipe(direction: MainFeedPagerDirection, pageWidth: CGFloat) {
-    let destination = currentPostIndex + direction.indexDelta
-    guard displayedPosts.indices.contains(destination) else {
-      resetPagerOffsets()
-      return
-    }
-    let destinationPostID = displayedPosts[destination].id
-
-    isPagerTransitioning = true
-    withAnimation(pagerSnapAnimation, completionCriteria: .logicallyComplete) {
-      postDragOffset = direction.offsetSign * pageWidth
-    } completion: {
-      var transaction = Transaction()
-      transaction.disablesAnimations = true
-      withTransaction(transaction) {
-        selectedPostFallbackIndex = destination
-        selectedPostID = destinationPostID
-        postDragOffset = 0
-        pagerDragTarget = nil
-        isPagerTransitioning = false
-      }
-    }
-  }
-
-  private func resetPagerOffsets() {
-    withAnimation(pagerReturnAnimation) {
-      postDragOffset = 0
-    }
-    pagerDragTarget = nil
-  }
-
-  private var pagerSnapAnimation: Animation {
-    reduceMotion ? .linear(duration: 0.01) : .easeOut(duration: 0.24)
-  }
-
-  private var pagerReturnAnimation: Animation {
-    reduceMotion ? .linear(duration: 0.01) : .easeOut(duration: 0.18)
   }
 
   private func reconcileCurrentPostSelection() {

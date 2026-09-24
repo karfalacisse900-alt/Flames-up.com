@@ -1,6 +1,40 @@
 import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
+  func testHomePagerRepeatedSwipesReversalAndPostOpening() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--captro-home-feed-visual-test", "--captro-visual-pager", "--captro-visual-size=portrait"]
+    app.launch()
+
+    let pager = app.scrollViews["home.post.pager"]
+    XCTAssertTrue(pager.waitForExistence(timeout: 15))
+    func assertVisiblePost(_ index: Int) {
+      let page = app.otherElements["home.post.page.full-bleed-portrait-\(index)"]
+      XCTAssertTrue(page.waitForExistence(timeout: 5), "Expected post \(index + 1) to be current")
+      XCTAssertTrue(page.isHittable)
+    }
+
+    assertVisiblePost(0)
+    pager.swipeLeft()
+    assertVisiblePost(1)
+    pager.swipeLeft()
+    assertVisiblePost(2)
+    pager.swipeLeft() // The last post must not skip or wrap.
+    assertVisiblePost(2)
+    pager.swipeRight()
+    assertVisiblePost(1)
+    pager.swipeRight()
+    assertVisiblePost(0)
+
+    XCTAssertFalse(app.buttons["Back"].exists, "A swipe must not open the post")
+    let media = app.otherElements["home.post.media"].firstMatch
+    XCTAssertTrue(media.waitForExistence(timeout: 5))
+    media.tap()
+    XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
+    app.buttons["Back"].tap()
+    assertVisiblePost(0)
+  }
+
   func testVideoFillsScreenWidth() throws {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-home-feed-visual-test", "--captro-visual-size=threefour", "--captro-visual-video"]

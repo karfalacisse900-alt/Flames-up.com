@@ -1,7 +1,6 @@
 import AVFoundation
 import AVKit
 import Foundation
-import ObjectiveC
 import SwiftUI
 import UIKit
 
@@ -211,63 +210,13 @@ public enum MIRAScreenEnterStyle {
   case push
   case modal
   case tab
-
-  fileprivate var offset: CGSize {
-    switch self {
-    case .push: return CGSize(width: 12, height: 0)
-    case .modal: return CGSize(width: 0, height: 18)
-    case .tab: return CGSize(width: 0, height: 8)
-    }
-  }
-
-  fileprivate var scale: CGFloat {
-    switch self {
-    case .push: return 0.996
-    case .modal: return 0.985
-    case .tab: return 0.998
-    }
-  }
-
-  fileprivate var duration: Double {
-    switch self {
-    case .push: return CaptroMotion.Duration.pagePush
-    case .modal: return CaptroMotion.Duration.pageModal
-    case .tab: return CaptroMotion.Duration.pageTab
-    }
-  }
-
-  fileprivate var initialOpacity: Double {
-    switch self {
-    case .push: return 0.96
-    case .modal: return 0.94
-    case .tab: return 1.0
-    }
-  }
-}
-
-private struct MIRAScreenEnterModifier: ViewModifier {
-  let style: MIRAScreenEnterStyle
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var isVisible = false
-
-  func body(content: Content) -> some View {
-    let offset = reduceMotion ? .zero : style.offset
-    content
-      .opacity(isVisible ? 1 : style.initialOpacity)
-      .scaleEffect(isVisible || reduceMotion ? 1 : style.scale)
-      .offset(x: isVisible ? 0 : offset.width, y: isVisible ? 0 : offset.height)
-      .onAppear {
-        guard !isVisible else { return }
-        withAnimation(CaptroMotion.pageEnterAnimation(reduceMotion: reduceMotion, duration: style.duration)) {
-          isVisible = true
-        }
-      }
-  }
 }
 
 public extension View {
-  func miraScreenEnter(_ style: MIRAScreenEnterStyle = .push) -> some View {
-    modifier(MIRAScreenEnterModifier(style: style))
+  func miraScreenEnter(_ style: MIRAScreenEnterStyle = .push) -> Self {
+    // NavigationStack, sheets, and tabs already own their transitions. Keep
+    // existing call sites source-compatible without animating whole screens.
+    self
   }
 }
 
@@ -275,143 +224,14 @@ public enum MIRAScrollFeel: Equatable {
   case feed
   case chat
   case sheet
-
-  fileprivate var decelerationRate: UIScrollView.DecelerationRate {
-    switch self {
-    case .feed:
-      return UIScrollView.DecelerationRate(rawValue: 0.88)
-    case .chat:
-      return UIScrollView.DecelerationRate(rawValue: 0.992)
-    case .sheet:
-      return UIScrollView.DecelerationRate(rawValue: 0.995)
-    }
-  }
-
-  fileprivate var maxFlingDistanceScreens: CGFloat? {
-    switch self {
-    case .feed:
-      return 0.92
-    case .chat, .sheet:
-      return nil
-    }
-  }
-
-  fileprivate var directionalLockEnabled: Bool {
-    switch self {
-    case .feed:
-      return true
-    case .chat, .sheet:
-      return false
-    }
-  }
-}
-
-private var miraScrollDelegateProxyKey: UInt8 = 0
-
-private final class MIRAScrollDelegateProxy: NSObject, UIScrollViewDelegate {
-  let feel: MIRAScrollFeel
-  weak var passthrough: UIScrollViewDelegate?
-
-  init(feel: MIRAScrollFeel) {
-    self.feel = feel
-  }
-
-  override func responds(to aSelector: Selector!) -> Bool {
-    super.responds(to: aSelector) || (passthrough?.responds(to: aSelector) ?? false)
-  }
-
-  override func forwardingTarget(for aSelector: Selector!) -> Any? {
-    if passthrough?.responds(to: aSelector) == true {
-      return passthrough
-    }
-    return super.forwardingTarget(for: aSelector)
-  }
-
-  func scrollViewWillEndDragging(
-    _ scrollView: UIScrollView,
-    withVelocity velocity: CGPoint,
-    targetContentOffset: UnsafeMutablePointer<CGPoint>
-  ) {
-    passthrough?.scrollViewWillEndDragging?(scrollView, withVelocity: velocity, targetContentOffset: targetContentOffset)
-    guard let maxScreens = feel.maxFlingDistanceScreens else { return }
-    guard scrollView.bounds.height > 0, scrollView.contentSize.height > scrollView.bounds.height else { return }
-
-    let currentY = scrollView.contentOffset.y
-    let proposedY = targetContentOffset.pointee.y
-    let maxDistance = scrollView.bounds.height * maxScreens
-    let boundedY = min(max(proposedY, currentY - maxDistance), currentY + maxDistance)
-    let maxOffsetY = max(
-      -scrollView.adjustedContentInset.top,
-      scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
-    )
-    let minOffsetY = -scrollView.adjustedContentInset.top
-    targetContentOffset.pointee.y = min(max(boundedY, minOffsetY), maxOffsetY)
-  }
 }
 
 public extension View {
-  func miraScrollFeel(_ feel: MIRAScrollFeel) -> some View {
-    background(MIRAScrollTuningView(feel: feel).frame(width: 0, height: 0))
-  }
-}
-
-private struct MIRAScrollTuningView: UIViewRepresentable {
-  let feel: MIRAScrollFeel
-
-  func makeUIView(context: Context) -> UIView {
-    let view = UIView(frame: .zero)
-    view.isUserInteractionEnabled = false
-    DispatchQueue.main.async {
-      configureScrollView(from: view)
-    }
-    return view
-  }
-
-  func updateUIView(_ uiView: UIView, context: Context) {
-    DispatchQueue.main.async {
-      configureScrollView(from: uiView)
-    }
-  }
-
-  private func configureScrollView(from view: UIView) {
-    var parent = view.superview
-    while let candidate = parent {
-      if let scrollView = candidate as? UIScrollView {
-        scrollView.decelerationRate = feel.decelerationRate
-        scrollView.delaysContentTouches = false
-        scrollView.canCancelContentTouches = true
-        scrollView.isDirectionalLockEnabled = feel.directionalLockEnabled
-        scrollView.backgroundColor = .clear
-        configureFlingLimiter(on: scrollView)
-        return
-      }
-      parent = candidate.superview
-    }
-  }
-
-  private func configureFlingLimiter(on scrollView: UIScrollView) {
-    guard feel.maxFlingDistanceScreens != nil else {
-      if let proxy = objc_getAssociatedObject(scrollView, &miraScrollDelegateProxyKey) as? MIRAScrollDelegateProxy,
-         scrollView.delegate === proxy {
-        scrollView.delegate = proxy.passthrough
-      }
-      objc_setAssociatedObject(scrollView, &miraScrollDelegateProxyKey, nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-      return
-    }
-    if let proxy = objc_getAssociatedObject(scrollView, &miraScrollDelegateProxyKey) as? MIRAScrollDelegateProxy,
-       proxy.feel == feel {
-      if let delegate = scrollView.delegate, delegate !== proxy {
-        proxy.passthrough = delegate
-      }
-      scrollView.delegate = proxy
-      return
-    }
-    let proxy = MIRAScrollDelegateProxy(feel: feel)
-    if let delegate = scrollView.delegate, delegate !== proxy {
-      proxy.passthrough = delegate
-    }
-    objc_setAssociatedObject(scrollView, &miraScrollDelegateProxyKey, proxy, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-    scrollView.delegate = proxy
+  func miraScrollFeel(_ feel: MIRAScrollFeel) -> Self {
+    // The zero-size UIKit probe previously climbed the view hierarchy and
+    // could tune a different scroll view, then replace SwiftUI's delegate.
+    // Ordinary vertical pages now keep native deceleration/touch handling.
+    self
   }
 }
 
