@@ -24,6 +24,6 @@ test('Workers AI receives only the submitted text and uses a safety model', asyn
   const result = await screenStoryWithWorkersAI({ run: async (...args) => { call = args; return { response: 'safe' }; } }, 'Coffee before the walk');
   assert.equal(result, 'allow');
   assert.equal(call[0], '@cf/meta/llama-guard-3-8b');
-  assert.equal(call[1].messages[1].content, 'Coffee before the walk');
+  assert.deepEqual(call[1].messages, [{ role: 'user', content: 'Coffee before the walk' }]);
   assert.equal(call[1].temperature, 0);
 });
