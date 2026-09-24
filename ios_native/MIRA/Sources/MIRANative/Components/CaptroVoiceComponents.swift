@@ -421,6 +421,7 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
       if player.isPlaying {
         player.pause()
       } else {
+        MIRAPlaybackCoordinator.pauseAll(reason: "voice_playback_started")
         player.play()
       }
       isPlaying = player.isPlaying
