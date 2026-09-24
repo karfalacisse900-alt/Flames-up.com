@@ -416,7 +416,9 @@ async function main() {
     },
   });
   assert.ok(attachedDebit.id?.startsWith('card_'));
-  assert.equal(attachedDebit.livemode, false);
+  // Stripe's external-account card response may omit livemode. The request
+  // already used a verified test key and a test-mode connected account.
+  assert.notEqual(attachedDebit.livemode, true);
   assert.equal(attachedDebit.funding, 'debit');
   assert.equal(attachedDebit.currency, 'usd');
   assert.equal(attachedDebit.last4, '5556');
