@@ -5147,13 +5147,14 @@ const FEED_MEDIA_WIDTH = 1080;
 const FEED_MEDIA_HEIGHT = 1440;
 const FEED_MEDIA_ASPECT_RATIO = FEED_MEDIA_WIDTH / FEED_MEDIA_HEIGHT;
 const SUPPORTED_FEED_MEDIA_RATIOS = [
+  { format: '16:9', feed_width: 1920, feed_height: 1080, feed_aspect_ratio: 1920 / 1080 },
   { format: '4:3', feed_width: 1440, feed_height: 1080, feed_aspect_ratio: 1440 / 1080 },
   { format: '0.65:1', feed_width: 999, feed_height: 1536, feed_aspect_ratio: 999 / 1536 },
   { format: '4:5', feed_width: 1080, feed_height: 1350, feed_aspect_ratio: 1080 / 1350 },
   { format: '3:4', feed_width: 1080, feed_height: 1440, feed_aspect_ratio: 1080 / 1440 },
   { format: '1:1', feed_width: 1080, feed_height: 1080, feed_aspect_ratio: 1 },
 ];
-const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[3];
+const DEFAULT_FEED_MEDIA_RATIO = SUPPORTED_FEED_MEDIA_RATIOS[4];
 
 function supportedFeedMediaVariant(source: any = {}) {
   const format = cleanText(source?.format, 16);

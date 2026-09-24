@@ -1626,6 +1626,7 @@ public enum MIRAMediaSizing {
   public static let feedTargetHeight: CGFloat = 1536
   public static let feedPreviewRatio: CGFloat = 4.0 / 3.0
   public static let feedLandscapeRatio: CGFloat = 3.0 / 4.0
+  public static let feedWideLandscapeRatio: CGFloat = 9.0 / 16.0
   public static let feedTallPortraitRatio: CGFloat = 1536.0 / 999.0
   public static let feedSquareRatio: CGFloat = 1
   public static let feedShortPortraitRatio: CGFloat = 5.0 / 4.0
@@ -1635,6 +1636,7 @@ public enum MIRAMediaSizing {
   public static let fullVerticalRatio: CGFloat = 16.0 / 9.0
   public static let maxMainFeedScreenHeightFraction: CGFloat = 0.78
   public static let supportedPostHeightToWidthRatios: [CGFloat] = [
+    feedWideLandscapeRatio,
     feedLandscapeRatio,
     feedTallPortraitRatio,
     feedShortPortraitRatio,
@@ -1721,7 +1723,7 @@ public enum MIRAMediaSizing {
   }
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
-    let minHeight = width * feedLandscapeRatio
+    let minHeight = width * feedWideLandscapeRatio
     let maxHeight = width * feedTallRatio
     return min(max(height, minHeight), maxHeight)
   }

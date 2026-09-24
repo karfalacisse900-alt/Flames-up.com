@@ -510,6 +510,7 @@ public struct MIRATaggedUserPayload: Codable, Hashable, Identifiable {
 }
 
 public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashable {
+  case landscapeSixteenNine = "16:9"
   case landscapeFourThree = "4:3"
   case portraitPointSixFive = "0.65:1"
   case fourFive = "4:5"
@@ -520,6 +521,7 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
 
   public var feedWidth: Double {
     switch self {
+    case .landscapeSixteenNine: return 1920
     case .landscapeFourThree: return 1440
     case .portraitPointSixFive: return 999
     case .fourFive, .square, .threeFour: return 1080
@@ -528,6 +530,7 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
 
   public var feedHeight: Double {
     switch self {
+    case .landscapeSixteenNine: return 1080
     case .landscapeFourThree, .square: return 1080
     case .portraitPointSixFive: return 1536
     case .fourFive: return 1350

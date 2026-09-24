@@ -174,10 +174,10 @@ test('Home media is a full-width rectangular frame using exactly five supported 
   const swiftRatioEnd = mediaModels.indexOf('public struct MIRAMediaDimension', swiftRatioStart);
   const swiftRatios = mediaModels.slice(swiftRatioStart, swiftRatioEnd);
   assert.ok(swiftRatioStart >= 0 && swiftRatioEnd > swiftRatioStart);
-  const expectedRatios = ['4:3', '0.65:1', '4:5', '3:4', '1:1'];
+  const expectedRatios = ['16:9', '4:3', '0.65:1', '4:5', '3:4', '1:1'];
   const swiftRatioValues = [...swiftRatios.matchAll(/case\s+\w+\s*=\s*"([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(swiftRatioValues, expectedRatios);
-  assert.doesNotMatch(swiftRatios, /16:9|1920|2:3|1620/);
+  assert.doesNotMatch(swiftRatios, /2:3|1620/);
 
   const workerRatioStart = worker.indexOf('const SUPPORTED_FEED_MEDIA_RATIOS');
   const workerRatioEnd = worker.indexOf('function supportedFeedMediaVariant', workerRatioStart);
@@ -186,12 +186,13 @@ test('Home media is a full-width rectangular frame using exactly five supported 
   const workerRatioValues = [...workerRatios.matchAll(/format:\s*'([^']+)'/g)].map((match) => match[1]);
   assert.deepEqual(workerRatioValues, expectedRatios);
   assert.match(workerRatios, /'4:3'[\s\S]*?1440[\s\S]*?1080/);
+  assert.match(workerRatios, /'16:9'[\s\S]*?1920[\s\S]*?1080/);
   assert.match(workerRatios, /'0\.65:1'[\s\S]*?999[\s\S]*?1536/);
   assert.match(workerRatios, /'4:5'[\s\S]*?1080[\s\S]*?1350/);
   assert.match(workerRatios, /'3:4'[\s\S]*?1080[\s\S]*?1440/);
   assert.match(workerRatios, /'1:1'[\s\S]*?1080[\s\S]*?1080/);
-  assert.doesNotMatch(workerRatios, /'16:9'|1920|'2:3'|1620/);
-  assert.match(mediaSizing, /supportedPostHeightToWidthRatios:[\s\S]*?feedLandscapeRatio[\s\S]*?feedTallPortraitRatio[\s\S]*?feedShortPortraitRatio[\s\S]*?feedPreviewRatio[\s\S]*?feedSquareRatio/);
+  assert.doesNotMatch(workerRatios, /'2:3'|1620/);
+  assert.match(mediaSizing, /supportedPostHeightToWidthRatios:[\s\S]*?feedWideLandscapeRatio[\s\S]*?feedLandscapeRatio[\s\S]*?feedTallPortraitRatio[\s\S]*?feedShortPortraitRatio[\s\S]*?feedPreviewRatio[\s\S]*?feedSquareRatio/);
   assert.match(mediaModels, /public var heightToWidthRatio:[\s\S]*?MIRASupportedPostAspectRatio\.from\(format: format\)[\s\S]*?feedWidth[\s\S]*?originalWidth/);
   assert.match(worker, /const explicit = SUPPORTED_FEED_MEDIA_RATIOS\.find[\s\S]*?if \(explicit\) return explicit;/);
 });
@@ -292,11 +293,11 @@ test('post creation matches the simple Photo, Video, Voice composer and keeps me
   assert.match(composer, /let remainingSlots = max\(0, 10 - mediaItems\.count\)/);
   assert.match(composer, /mediaDimensions\.append\(await item\.postMediaDimension\(\)\)/);
   assert.match(mediaUpload, /if target == \.feedPost \{[\s\S]*?dimensions = await media\.postMediaDimension\(\)/);
-  assert.match(mediaEditorView, /case \.post:[\s\S]*?return \[\.landscape4x3, \.portraitPointSixFive, \.portrait4x5, \.portrait3x4, \.square1x1\]/);
+  assert.match(mediaEditorView, /case \.post:[\s\S]*?return \[\.landscape16x9, \.landscape4x3, \.portraitPointSixFive, \.portrait4x5, \.portrait3x4, \.square1x1\]/);
+  assert.match(mediaEditor, /case landscape16x9 = "16:9"/);
   assert.match(mediaEditor, /case landscape4x3 = "4:3"/);
   assert.match(mediaEditor, /case portraitPointSixFive = "0\.65:1"/);
   assert.match(mediaEditor, /case square1x1 = "1:1"/);
-  assert.doesNotMatch(mediaEditorView, /case \.post:[\s\S]*?landscape16x9/);
   assert.match(mediaEditorView, /postAspectRatio: \.nearest\(width: Double\(image\.size\.width\), height: Double\(image\.size\.height\)\)/);
 });
 

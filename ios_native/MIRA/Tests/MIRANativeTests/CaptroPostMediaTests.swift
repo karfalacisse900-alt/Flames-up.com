@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 @testable import MIRANative
 
 final class CaptroPostMediaTests: XCTestCase {
-  func testFiveSupportedRatiosAreUnchangedForBothMediaKinds() {
-    XCTAssertEqual(MIRASupportedPostAspectRatio.allCases.map(\.rawValue), ["4:3", "0.65:1", "4:5", "3:4", "1:1"])
+  func testSupportedRatiosIncludeWideLandscapeAndPreserveLegacyFormats() {
+    XCTAssertEqual(MIRASupportedPostAspectRatio.allCases.map(\.rawValue), ["16:9", "4:3", "0.65:1", "4:5", "3:4", "1:1"])
     for ratio in MIRASupportedPostAspectRatio.allCases {
       XCTAssertEqual(MIRASupportedPostAspectRatio.nearest(width: ratio.feedWidth, height: ratio.feedHeight), ratio)
     }
@@ -35,7 +35,9 @@ final class CaptroPostMediaTests: XCTestCase {
 
   func testFeedUploadKeepsPhotographAspectRatioWithoutCenterCrop() async throws {
     let size = CGSize(width: 2400, height: 1200)
-    let renderer = UIGraphicsImageRenderer(size: size)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    let renderer = UIGraphicsImageRenderer(size: size, format: format)
     let image = renderer.image { _ in
       UIColor.red.setFill()
       UIRectFill(CGRect(x: 0, y: 0, width: size.width / 2, height: size.height))
