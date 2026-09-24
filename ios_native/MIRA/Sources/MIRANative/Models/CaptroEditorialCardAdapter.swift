@@ -30,8 +30,9 @@ extension MIRAPost {
     let handle = cleanEditorialText(userUsername).map {
       "@" + $0.trimmingCharacters(in: CharacterSet(charactersIn: "@"))
     }
-    let price = commerce?.lowestPrice?.stampPrice ?? event?.priceLabel
-      ?? (commerce?.paymentModel == "free" ? "Free" : nil)
+    let price = commerce?.resolvedLowestPrice?.stampPrice ?? event?.priceLabel
+      ?? (commerce?.paymentModel == "free" ? "Free"
+        : (commerce?.paymentModel == "paid" ? "View pricing" : nil))
     let start = commerce?.startsAt ?? event?.startsAt
     let timeZone = commerce?.timeZone ?? event?.timeZone
     let date = CaptroStampAdapter.datePart(start, timeZone: timeZone, format: "MMM d")

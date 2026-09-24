@@ -107,7 +107,9 @@ final class CaptroStampTests: XCTestCase {
     let eventJSON = #"""
     {"id":"event-post","post_type":"event","detail":{"commerce":{"id":"event-1","content_type":"event","fulfillment_type":"ticket","payment_model":"paid","commerce_class":"commerce","title":"Rooftop Movie Night","description":"Outdoor movie night with limited seating.","location_name":"Rooftop Cinema","city":"Brooklyn","starts_at":"2026-09-28T23:00:00Z","ends_at":"2026-09-29T02:00:00Z","time_zone":"America/New_York","joined_count":0,"refund_policy":"none","approval_required":false,"pass_required":true,"status":"active","audience":"public","prices":[{"id":"general","label":"General","unit_amount":1200,"currency":"USD","billing_period":"one_time","active":true}]}}}
     """#
-    let event = try decoder.decode(MIRAPost.self, from: Data(eventJSON.utf8)).captroEditorialCardContent
+    let eventPost = try decoder.decode(MIRAPost.self, from: Data(eventJSON.utf8))
+    let event = eventPost.captroEditorialCardContent
+    XCTAssertEqual(eventPost.detail?.commerce?.resolvedLowestPrice?.unitAmount, 1200)
     XCTAssertEqual(event.type, .event)
     XCTAssertEqual(event.title, "Rooftop Movie Night")
     XCTAssertNotNil(event.scheduleText)

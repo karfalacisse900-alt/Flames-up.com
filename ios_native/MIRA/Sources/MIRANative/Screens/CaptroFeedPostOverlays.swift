@@ -216,7 +216,7 @@ extension MIRAPost {
     switch kind {
     case .event, .meetup, .party, .ticket, .booking, .club, .group, .deal, .localOffer:
       let event = detail?.event
-      let price = commerce?.lowestPrice?.stampPrice
+      let price = commerce?.resolvedLowestPrice?.stampPrice
       let facts = [commerce?.scheduleLabel, event?.calendarDate, event?.timeRange, commerce?.locationName,
         event?.venueName, price, event?.priceLabel, commerce?.compactAvailabilityLabel].compactMap { $0 }
       summary = facts.isEmpty ? captroFeedCaptionText : facts.joined(separator: " · ")

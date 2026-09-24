@@ -37,7 +37,7 @@ enum CaptroStampAdapter {
       let rules = commerce.publicData?.redemptionRules?.trimmingCharacters(in: .whitespacesAndNewlines)
       return rules?.isEmpty == false ? rules : nil
     }
-    guard let lowest = commerce.lowestPrice?.stampPrice else { return "View pricing and terms" }
+    guard let lowest = commerce.resolvedLowestPrice?.stampPrice else { return "View pricing and terms" }
     let price = commerce.prices.count > 1 ? "From \(lowest)" : lowest
     if family == "club" { return price }
     return [datePart(commerce.startsAt, timeZone: commerce.timeZone, format: "MMM d jmm"), price]

@@ -35,7 +35,18 @@ public struct CaptroCommerceDetails: Codable, Hashable, Identifiable {
   public let serviceFeeFixedAmount: Int?
   public let serviceFeeMinimumAmount: Int?
 
-  public var isPaid: Bool { paymentModel == "paid" || (lowestPrice?.unitAmount ?? 0) > 0 }
+  public var resolvedLowestPrice: CaptroCommercePrice? {
+    if let lowestPrice, lowestPrice.active { return lowestPrice }
+    let activePrices = prices.filter(\.active)
+    guard let first = activePrices.first,
+      activePrices.allSatisfy({
+        $0.currency.caseInsensitiveCompare(first.currency) == .orderedSame
+          && $0.billingPeriod == first.billingPeriod
+      }) else { return nil }
+    return activePrices.min { $0.unitAmount < $1.unitAmount }
+  }
+
+  public var isPaid: Bool { paymentModel == "paid" || (resolvedLowestPrice?.unitAmount ?? 0) > 0 }
   public var isActiveForViewer: Bool { ["active", "confirmed", "used"].contains(viewerStatus ?? "") }
   public var requiresPaymentContinuation: Bool { viewerStatus == "payment_pending" }
   public var needsApproval: Bool { viewerStatus == "approval_pending" }
@@ -96,7 +107,7 @@ public struct CaptroCommerceDetails: Codable, Hashable, Identifiable {
     case "booking", "reservation": verb = "BOOK"
     default: verb = "GET TICKET"
     }
-    guard let lowestPrice, lowestPrice.unitAmount > 0 else { return verb }
+    guard let lowestPrice = resolvedLowestPrice, lowestPrice.unitAmount > 0 else { return verb }
     return "\(verb) — \(lowestPrice.money)"
   }
 

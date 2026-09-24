@@ -88,7 +88,7 @@ test('Event, Meetup and Deal use one restrained listing hierarchy without changi
   assert.doesNotMatch(listing, /chipPink|LinearGradient|\.shadow\(/);
   const adapter = readIOS('Models/CaptroEditorialCardAdapter.swift');
   assert.match(adapter, /commerce\?\.scheduleLabel/);
-  assert.match(adapter, /commerce\?\.lowestPrice\?\.stampPrice/);
+  assert.match(adapter, /commerce\?\.resolvedLowestPrice\?\.stampPrice/);
   assert.match(adapter, /redemptionRules/);
   assert.match(adapter, /Full qualifying conditions in details/);
 });

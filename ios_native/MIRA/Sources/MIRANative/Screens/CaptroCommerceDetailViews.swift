@@ -18,7 +18,7 @@ struct CaptroCommerceDetailSection: View {
 
   private var commerce: CaptroCommerceDetails? { model.commerce ?? model.post.detail?.commerce }
   private var selectedPrice: CaptroCommercePrice? {
-    commerce?.prices.first(where: { $0.id == selectedPriceID }) ?? commerce?.lowestPrice ?? commerce?.prices.first
+    commerce?.prices.first(where: { $0.id == selectedPriceID }) ?? commerce?.resolvedLowestPrice ?? commerce?.prices.first
   }
   private var isCreator: Bool {
     guard let current = model.currentUserId, let creator = model.post.userId else { return false }
@@ -48,11 +48,11 @@ struct CaptroCommerceDetailSection: View {
         }
       }
       .onAppear {
-        if selectedPriceID.isEmpty { selectedPriceID = commerce.lowestPrice?.id ?? commerce.prices.first?.id ?? "" }
+        if selectedPriceID.isEmpty { selectedPriceID = commerce.resolvedLowestPrice?.id ?? commerce.prices.first?.id ?? "" }
         if fulfillmentMethod.isEmpty { fulfillmentMethod = commerce.publicData?.fulfillmentMethods?.first ?? "" }
       }
       .onChange(of: commerce.id) { _, _ in
-        selectedPriceID = commerce.lowestPrice?.id ?? commerce.prices.first?.id ?? ""
+        selectedPriceID = commerce.resolvedLowestPrice?.id ?? commerce.prices.first?.id ?? ""
       }
     }
   }
