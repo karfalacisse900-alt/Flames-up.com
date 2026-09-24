@@ -26,6 +26,10 @@ on:
         type: boolean
         default: false
         description: 'Test private Stream video Status upload and publication, then clean up'
+      chat_realtime_diagnostic:
+        type: boolean
+        default: false
+        description: 'Measure authorized two-client chat Realtime delivery and RLS isolation'
       workers_ai_diagnostic:
         type: boolean
         default: false
@@ -46,13 +50,13 @@ jobs:
       - run: npm ci
         working-directory: backend-cf
       - name: Inspect API edge challenge configuration
-        if: ${{ inputs.inspect_edge == true && inputs.workers_ai_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true }}
+        if: ${{ inputs.inspect_edge == true && inputs.workers_ai_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true }}
         working-directory: backend-cf
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/inspect-scan-edge.mjs
       - name: Check private storage and real Veryfi processing
-        if: ${{ inputs.production != true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.workers_ai_diagnostic != true }}
+        if: ${{ inputs.production != true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -63,7 +67,7 @@ jobs:
           VERYFI_API_KEY: ${{ secrets.VERYFI_API_KEY }}
         run: node --experimental-strip-types scripts/verify-scan-provider.mjs
       - name: Verify deployed scan pipeline
-        if: ${{ inputs.production == true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.workers_ai_diagnostic != true }}
+        if: ${{ inputs.production == true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -72,7 +76,7 @@ jobs:
           CAPTRO_SCAN_SMOKE_BASE_URL: ${{ inputs.direct_worker && 'https://flames-up-api.karfalacisse900.workers.dev/api' || 'https://api.flames-up.com/api' }}
         run: node scripts/verify-scan-production.mjs
       - name: Diagnose private Status publication
-        if: ${{ inputs.status_diagnostic == true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.workers_ai_diagnostic != true }}
+        if: ${{ inputs.status_diagnostic == true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -109,9 +113,17 @@ jobs:
           fi
           node scripts/diagnose-status-video-production.mjs
       - name: Diagnose Cloudflare Workers AI model
-        if: ${{ inputs.workers_ai_diagnostic == true }}
+        if: ${{ inputs.workers_ai_diagnostic == true && inputs.chat_realtime_diagnostic != true }}
         working-directory: backend-cf
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/diagnose-workers-ai.mjs
+      - name: Measure authorized chat Realtime delivery
+        if: ${{ inputs.chat_realtime_diagnostic == true }}
+        working-directory: backend-cf
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/diagnose-chat-realtime-production.mjs
