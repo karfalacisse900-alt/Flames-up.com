@@ -112,6 +112,9 @@ final class MIRAStartupCoordinator: ObservableObject {
       guard let self, let authSession else { return }
       let invalidated = await MIRAAppCacheStore.shared.reconcileServerDataState(api: self.api)
       guard invalidated, authSession.user?.id == accountID else { return }
+      MIRAPlaybackCoordinator.pauseAll(reason: "server_data_reset")
+      MIRAVideoPrewarmManager.shared.resetForAccountChange()
+      MIRAMediaCacheMaintenance.clearMemoryForAccountChange()
       self.feedModel.resetForAccountChange()
       self.profileModel.resetForAccountChange()
       self.chatModel.configure(currentUserId: "")
