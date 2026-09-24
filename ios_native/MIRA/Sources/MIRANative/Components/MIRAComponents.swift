@@ -288,24 +288,34 @@ private final class MIRAImageMemoryCache {
     cache.totalCostLimit = 160 * 1024 * 1024
   }
 
-  func image(for url: URL, maxPixelSize: CGFloat) -> UIImage? {
-    cache.object(forKey: cacheKey(for: url, maxPixelSize: maxPixelSize))
+  func image(
+    for url: URL, maxPixelSize: CGFloat,
+    scope: String = MIRALocalJSONCache.currentScopeIdentifier
+  ) -> UIImage? {
+    cache.object(forKey: cacheKey(for: url, maxPixelSize: maxPixelSize, scope: scope))
   }
 
-  func store(_ image: UIImage, for url: URL, maxPixelSize: CGFloat, cost: Int) {
-    cache.setObject(image, forKey: cacheKey(for: url, maxPixelSize: maxPixelSize), cost: cost)
+  func store(
+    _ image: UIImage, for url: URL, maxPixelSize: CGFloat, cost: Int,
+    scope: String = MIRALocalJSONCache.currentScopeIdentifier
+  ) {
+    cache.setObject(image, forKey: cacheKey(for: url, maxPixelSize: maxPixelSize, scope: scope), cost: cost)
   }
 
   func removeAll() {
     cache.removeAllObjects()
   }
 
-  private func cacheKey(for url: URL, maxPixelSize: CGFloat) -> NSString {
-    "\(url.absoluteString)#\(Int(maxPixelSize.rounded()))" as NSString
+  private func cacheKey(for url: URL, maxPixelSize: CGFloat, scope: String) -> NSString {
+    "\(scope):\(url.absoluteString)#\(Int(maxPixelSize.rounded()))" as NSString
   }
 }
 
 public enum MIRAMediaCacheMaintenance {
+  public static func clearMemoryForAccountChange() {
+    MIRAImageMemoryCache.shared.removeAll()
+  }
+
   public static func clearMediaCaches() async -> Bool {
     MIRAImageMemoryCache.shared.removeAll()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
@@ -330,11 +340,16 @@ private actor MIRAImageLoadPipeline {
   static let shared = MIRAImageLoadPipeline()
   private var inFlight: [String: Task<MIRAImageLoadResult?, Never>] = [:]
 
-  func image(for remoteURL: URL, maxPixelSize: CGFloat) async -> MIRAImageLoadResult? {
+  func image(
+    for remoteURL: URL, maxPixelSize: CGFloat,
+    expectedScope: String? = nil
+  ) async -> MIRAImageLoadResult? {
+    let scope = expectedScope ?? MIRALocalJSONCache.currentScopeIdentifier
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
     let resolvedMaxPixelSize = max(64, maxPixelSize)
-    let key = "\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
+    let key = "\(scope):\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
 
-    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+    if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
       MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory")
       return MIRAImageLoadResult(image: cached, source: .memory)
     }
@@ -347,12 +362,14 @@ private actor MIRAImageLoadPipeline {
       if remoteURL.isFileURL,
          let data = try? Data(contentsOf: remoteURL),
          let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) {
-        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
+        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost, scope: scope)
         return MIRAImageLoadResult(image: decoded, source: .disk)
       }
 
-      if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-        MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
+      if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
+        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost, scope: scope)
         MIRAApplePerformanceLogger.event("media_cache_hit", detail: "disk")
         return MIRAImageLoadResult(image: diskCached, source: .disk)
       }
@@ -377,9 +394,10 @@ private actor MIRAImageLoadPipeline {
         await metric.finish(status: String(status), bytes: data.count)
         guard (200..<300).contains(status), data.count <= 24 * 1024 * 1024 else { return nil }
         guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return nil }
+        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
 
-        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost)
-        await MIRAImageDiskCache.store(data: data, for: remoteURL)
+        MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost, scope: scope)
+        await MIRAImageDiskCache.store(data: data, for: remoteURL, scope: scope)
         return MIRAImageLoadResult(image: decoded, source: .network)
       } catch {
         return nil
@@ -405,6 +423,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var uiImage: UIImage?
   @State private var loadedURL: URL?
+  @State private var loadedScope: String?
   @State private var isImageVisible = false
 
   public init(
@@ -429,7 +448,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   public var body: some View {
     Group {
-      if let uiImage {
+      if let uiImage, loadedScope == MIRALocalJSONCache.currentScopeIdentifier {
         content(Image(uiImage: uiImage))
           .opacity(isImageVisible ? 1 : 0)
       } else if let memoryImage = memoryImageForCurrentURL {
@@ -452,7 +471,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   }
 
   private var loadTaskID: String {
-    candidateURLStrings.joined(separator: "|")
+    "\(MIRALocalJSONCache.currentScopeIdentifier)|\(candidateURLStrings.joined(separator: "|"))"
   }
 
   private var candidateURLStrings: [String] {
@@ -471,18 +490,20 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   @MainActor
   private func loadImage() async {
+    let scope = MIRALocalJSONCache.currentScopeIdentifier
     let remoteURLs = candidateURLs
     guard !remoteURLs.isEmpty else {
       await MainActor.run {
         uiImage = nil
         loadedURL = nil
+        loadedScope = nil
       }
       return
     }
 
     let isAlreadyLoaded = await MainActor.run {
       if let loadedURL {
-        return remoteURLs.contains(loadedURL) && uiImage != nil
+        return loadedScope == scope && remoteURLs.contains(loadedURL) && uiImage != nil
       }
       return false
     }
@@ -491,10 +512,12 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     let resolvedMaxPixelSize = max(64, maxPixelSize)
 
     for remoteURL in remoteURLs {
-      if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
+      if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
+        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
         await MainActor.run {
           uiImage = memoryImage
           loadedURL = remoteURL
+          loadedScope = scope
           isImageVisible = true
           onImageLoaded(memoryImage)
         }
@@ -505,27 +528,31 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
     let shouldClear = await MainActor.run {
       if let loadedURL {
-        return !remoteURLs.contains(loadedURL)
+        return loadedScope != scope || !remoteURLs.contains(loadedURL)
       }
       return true
     }
     if shouldClear {
       await MainActor.run {
-        if keepsPreviousImageWhileLoading {
+        if keepsPreviousImageWhileLoading && loadedScope == scope {
           isImageVisible = uiImage != nil
         } else {
           uiImage = nil
+          loadedScope = nil
           isImageVisible = false
         }
       }
     }
 
     for remoteURL in remoteURLs {
-      if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-        guard !Task.isCancelled else { return }
+      if let result = await MIRAImageLoadPipeline.shared.image(
+        for: remoteURL, maxPixelSize: resolvedMaxPixelSize, expectedScope: scope
+      ) {
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
         await MainActor.run {
           uiImage = result.image
           loadedURL = remoteURL
+          loadedScope = scope
           if result.source == .network, animatesNetworkLoad {
             withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
               isImageVisible = true
@@ -638,6 +665,7 @@ public enum MIRAImagePrefetcher {
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     limit: Int = 10
   ) async {
+    let scope = MIRALocalJSONCache.currentScopeIdentifier
     let uniqueURLs = Array(orderedUnique(urls)
       .filter { !$0.isVideoURL }
       .prefix(limit))
@@ -652,7 +680,7 @@ public enum MIRAImagePrefetcher {
         let value = uniqueURLs[nextIndex]
         nextIndex += 1
         group.addTask(priority: .utility) {
-          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize)
+          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize, scope: scope)
         }
       }
 
@@ -661,32 +689,35 @@ public enum MIRAImagePrefetcher {
         let value = uniqueURLs[nextIndex]
         nextIndex += 1
         group.addTask(priority: .utility) {
-          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize)
+          await MIRAImagePrefetcher.prefetchImage(value, maxPixelSize: maxPixelSize, scope: scope)
         }
       }
     }
   }
 
-  private static func prefetchImage(_ value: String, maxPixelSize: CGFloat) async {
-    guard !Task.isCancelled else { return }
+  private static func prefetchImage(_ value: String, maxPixelSize: CGFloat, scope: String) async {
+    guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
     guard let remoteURL = URL(string: value) else { return }
     guard MIRANetworkSecurityPolicy.isSecureMediaURL(remoteURL) else { return }
 
     let resolvedMaxPixelSize = max(64, maxPixelSize)
-    let key = "\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
+    let key = "\(scope):\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
     guard await MIRAImagePrefetchState.shared.begin(key) else { return }
     defer { Task { await MIRAImagePrefetchState.shared.finish(key) } }
 
-    if MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) != nil {
+    if MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) != nil {
       return
     }
-    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost)
+    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
+      guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost, scope: scope)
       return
     }
 
-    guard !Task.isCancelled else { return }
-    _ = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize)
+    guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    _ = await MIRAImageLoadPipeline.shared.image(
+      for: remoteURL, maxPixelSize: resolvedMaxPixelSize, expectedScope: scope
+    )
   }
 
   private static func orderedUnique(_ values: [String]) -> [String] {

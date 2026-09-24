@@ -345,18 +345,26 @@ public enum MIRALocalJSONCache {
 }
 
 public enum MIRAImageDiskCache {
-  public static func image(for url: URL, maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight) async -> UIImage? {
+  public static func image(
+    for url: URL,
+    maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
+    scope: String = MIRALocalJSONCache.currentScopeIdentifier
+  ) async -> UIImage? {
     await Task.detached(priority: .utility) {
-      guard let fileURL = cacheFileURL(for: url.absoluteString),
+      guard let fileURL = cacheFileURL(for: url.absoluteString, scope: scope),
             let data = try? Data(contentsOf: fileURL)
       else { return nil }
       return decodedImage(from: data, maxPixelSize: maxPixelSize)
     }.value
   }
 
-  public static func store(data: Data, for url: URL) async {
+  public static func store(
+    data: Data,
+    for url: URL,
+    scope: String = MIRALocalJSONCache.currentScopeIdentifier
+  ) async {
     await Task.detached(priority: .utility) {
-      guard let fileURL = cacheFileURL(for: url.absoluteString) else { return }
+      guard let fileURL = cacheFileURL(for: url.absoluteString, scope: scope) else { return }
       try? data.write(to: fileURL, options: [.atomic])
     }.value
   }
@@ -438,9 +446,9 @@ public enum MIRAImageDiskCache {
     return UIImage(cgImage: cgImage, scale: 1, orientation: .up)
   }
 
-  private static func cacheFileURL(for key: String) -> URL? {
+  private static func cacheFileURL(for key: String, scope: String) -> URL? {
     guard let directory = cacheDirectory() else { return nil }
-    let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+    let digest = SHA256.hash(data: Data("\(scope):\(key)".utf8)).map { String(format: "%02x", $0) }.joined()
     return directory.appendingPathComponent("\(digest).img")
   }
 

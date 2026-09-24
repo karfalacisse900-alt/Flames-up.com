@@ -49,10 +49,20 @@ public final class MIRAVideoPrewarmManager {
   private var preparedPlayers: [String: AVPlayer] = [:]
   private var preparedOrder: [String] = []
   private var inFlight = Set<String>()
+  private var accountGeneration = 0
   private let maxMetadataPreloads = 10
   private let maxPreparedPlayers = 2
 
   private init() {}
+
+  public func resetForAccountChange() {
+    accountGeneration += 1
+    for player in preparedPlayers.values { player.pause() }
+    preparedPlayers.removeAll()
+    preparedOrder.removeAll()
+    cachedStreamInfo.removeAll()
+    inFlight.removeAll()
+  }
 
   public func prewarm(urls: [String], keepOnly: Set<String> = []) {
     let candidates = Array(orderedUnique(urls).filter(\.isVideoURL).prefix(maxMetadataPreloads))
@@ -105,8 +115,11 @@ public final class MIRAVideoPrewarmManager {
     }
 
     if key.lowercased().hasPrefix("cfstream:") {
+      let generation = accountGeneration
       Task { [weak self] in
-        await self?.resolveCloudflareStream(for: key, shouldPreparePlayer: shouldPreparePlayer)
+        await self?.resolveCloudflareStream(
+          for: key, shouldPreparePlayer: shouldPreparePlayer, generation: generation
+        )
       }
       return
     }
@@ -126,11 +139,14 @@ public final class MIRAVideoPrewarmManager {
     inFlight.remove(key)
   }
 
-  private func resolveCloudflareStream(for key: String, shouldPreparePlayer: Bool) async {
+  private func resolveCloudflareStream(
+    for key: String, shouldPreparePlayer: Bool, generation: Int
+  ) async {
     let uid = String(key.dropFirst("cfstream:".count))
 
     do {
       let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
+      guard generation == accountGeneration else { return }
       let info = result.info
       inFlight.remove(key)
       let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -144,6 +160,7 @@ public final class MIRAVideoPrewarmManager {
         MIRAApplePerformanceLogger.event("video_prewarm_processing", detail: key.videoPrewarmLogLabel)
       }
     } catch {
+      guard generation == accountGeneration else { return }
       inFlight.remove(key)
       MIRAApplePerformanceLogger.event("video_prewarm_failed", detail: key.videoPrewarmLogLabel)
     }

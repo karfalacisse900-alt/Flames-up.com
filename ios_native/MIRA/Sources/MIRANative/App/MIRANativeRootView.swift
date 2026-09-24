@@ -218,6 +218,9 @@ public struct MIRANativeRootView: View {
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
+      MIRAPlaybackCoordinator.pauseAll(reason: "account_changed")
+      MIRAVideoPrewarmManager.shared.resetForAccountChange()
+      MIRAMediaCacheMaintenance.clearMemoryForAccountChange()
       if !startup.isSplashMounted {
         startup.feedModel.resetForAccountChange()
         startup.profileModel.resetForAccountChange()

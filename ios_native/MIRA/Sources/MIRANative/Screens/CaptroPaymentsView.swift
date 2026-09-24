@@ -201,6 +201,10 @@ struct CaptroPaymentsView: View {
   private var paymentCardsSection: some View {
     VStack(alignment: .leading, spacing: 14) {
       sectionHeading("PAYMENT CARDS")
+      if model.isLoadingCards && !model.methods.isEmpty {
+        ProgressView("Checking payment cards...")
+          .font(.system(size: 12))
+      }
       if model.isLoadingCards && model.methods.isEmpty {
         ProgressView("Loading cards...").frame(minHeight: 48)
       } else if model.methods.isEmpty {
@@ -291,6 +295,10 @@ struct CaptroPaymentsView: View {
   private var payoutSection: some View {
     VStack(alignment: .leading, spacing: 14) {
       sectionHeading("SELLER PAYOUT CARD")
+      if model.isLoadingPayout && model.payoutAccount != nil {
+        ProgressView("Checking payout method...")
+          .font(.system(size: 12))
+      }
       if let account = model.payoutAccount {
         if let card = account.payoutCard {
           HStack(spacing: 12) {

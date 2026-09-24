@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import MIRANative
 
 final class CaptroCacheIsolationTests: XCTestCase {
@@ -118,5 +119,24 @@ final class CaptroCacheIsolationTests: XCTestCase {
       XCTAssertNil(model.earningsModel.errorMessage)
       XCTAssertNil(model.earningsModel.response)
     }
+  }
+
+  func testDecodedMediaDiskCacheDoesNotCrossAccounts() async throws {
+    let url = try XCTUnwrap(URL(string: "https://captro.app/cache-isolation-\(UUID().uuidString).png"))
+    let data = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).pngData { context in
+      UIColor.red.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+    }
+    let firstAccount = UUID().uuidString
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+
+    MIRALocalJSONCache.setAccountScope(userId: firstAccount)
+    await MIRAImageDiskCache.store(data: data, for: url)
+    let ownImage = await MIRAImageDiskCache.image(for: url)
+    XCTAssertNotNil(ownImage)
+
+    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    let otherAccountImage = await MIRAImageDiskCache.image(for: url)
+    XCTAssertNil(otherAccountImage)
   }
 }
