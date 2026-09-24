@@ -31,6 +31,7 @@ final class MainFeedModel: ObservableObject {
   private var canLoadMore = true
   private var isLoadingCurrentUser = false
   private var accountGeneration = 0
+  private var localContentVersion = 0
   private var lastRevalidationAttemptAt: Date?
   private var mediaPrefetchTask: Task<Void, Never>?
   private var followingAuthorIds = Set<String>()
@@ -114,6 +115,7 @@ final class MainFeedModel: ObservableObject {
     isLoadingFreshFeed = true
     lastRevalidationAttemptAt = Date()
     let generation = accountGeneration
+    let contentVersion = localContentVersion
     defer {
       if accountGeneration == generation {
         isLoading = false
@@ -141,6 +143,10 @@ final class MainFeedModel: ObservableObject {
       return
     }
     guard accountGeneration == generation else { return }
+    guard localContentVersion == contentVersion else {
+      refreshRequested = true
+      return
+    }
     hasLoadedFreshFeed = true
     canLoadMore = loaded.count >= firstPageLimit
     if loaded.isEmpty {
@@ -154,6 +160,10 @@ final class MainFeedModel: ObservableObject {
 
     let sorted = await sortedByNativeScore(loaded)
     guard accountGeneration == generation else { return }
+    guard localContentVersion == contentVersion else {
+      refreshRequested = true
+      return
+    }
     let merged: [MIRAPost]
     if isGuestFeedMode {
       merged = mergePublicFirstPage(existing: posts, fresh: sorted)
@@ -165,6 +175,10 @@ final class MainFeedModel: ObservableObject {
       )
     }
     guard accountGeneration == generation else { return }
+    guard localContentVersion == contentVersion else {
+      refreshRequested = true
+      return
+    }
     let mixed = interleavePostFormats(merged)
     if posts != mixed { posts = mixed }
     await persistCurrentFeed()
@@ -311,6 +325,7 @@ final class MainFeedModel: ObservableObject {
     guard canLoadMore, !isLoadingMore else { return }
     isLoadingMore = true
     let generation = accountGeneration
+    let contentVersion = localContentVersion
     defer { if accountGeneration == generation { isLoadingMore = false } }
 
     let skip = posts.count
@@ -323,6 +338,10 @@ final class MainFeedModel: ObservableObject {
       return
     }
     guard accountGeneration == generation else { return }
+    guard localContentVersion == contentVersion else {
+      Task { await load(forceRefresh: true) }
+      return
+    }
     guard !loaded.isEmpty else {
       canLoadMore = false
       MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
@@ -339,6 +358,10 @@ final class MainFeedModel: ObservableObject {
 
     let sorted = await sortedByNativeScore(unique)
     guard accountGeneration == generation else { return }
+    guard localContentVersion == contentVersion else {
+      Task { await load(forceRefresh: true) }
+      return
+    }
     posts.append(contentsOf: interleavePostFormats(sorted))
     canLoadMore = loaded.count >= firstPageLimit
     MIRAPerformanceTimeline.mark("home_load_more_done", detail: "added=\(unique.count) total=\(posts.count)")
@@ -506,6 +529,7 @@ final class MainFeedModel: ObservableObject {
     if merged.detail == nil { merged.detail = current.detail }
     guard merged != current else { return }
     posts[index] = merged
+    localContentVersion += 1
     cacheCurrentPosts()
   }
 
@@ -513,6 +537,7 @@ final class MainFeedModel: ObservableObject {
     let updated = posts.map { $0.userId == author.id ? $0.updating(author: author) : $0 }
     guard updated != posts else { return }
     posts = updated
+    localContentVersion += 1
     cacheCurrentPosts()
   }
 
@@ -718,6 +743,7 @@ final class MainFeedModel: ObservableObject {
   func removePostLocally(id postId: String) {
     guard posts.contains(where: { $0.id == postId }) else { return }
     posts.removeAll { $0.id == postId }
+    localContentVersion += 1
     cacheCurrentPosts()
   }
 
