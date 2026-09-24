@@ -17106,10 +17106,10 @@ api.post('/statuses', authMiddleware, async (c) => {
         failureCode = classifyOpenAIServiceFailure(error).code;
       }
     }
-    // Captro already binds Workers AI for media safety. Only use its text
-    // classifier when the primary provider has no usable credentials/credits;
-    // a malformed or failed secondary response keeps the Status unpublished.
-    if (safety === 'unavailable' && ['AI_CREDENTIALS_MISSING', 'AI_CREDITS_EXHAUSTED'].includes(failureCode)) {
+    // Captro already binds Workers AI for media safety. A failed or malformed
+    // primary response may use the independent text classifier, but a flagged
+    // result never gets overridden. Secondary failure keeps Status unpublished.
+    if (safety === 'unavailable') {
       safety = await screenStoryWithWorkersAI(c.env.AI, storyContent, c.env.AI_TEXT_MODERATION_MODEL || '@cf/meta/llama-guard-3-8b');
     }
     if (safety === 'review') return c.json({ detail: 'This status needs a safety review before it can be posted.' }, 409);
