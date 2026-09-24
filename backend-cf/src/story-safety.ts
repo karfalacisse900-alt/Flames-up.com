@@ -10,8 +10,13 @@ export function parseGuardOutcome(response: unknown): StorySafetyOutcome {
   return 'unavailable';
 }
 
-export async function screenStoryWithWorkersAI(ai: any, content: string, model = '@cf/meta/llama-guard-3-8b'): Promise<StorySafetyOutcome> {
-  if (!ai || !content.trim()) return 'unavailable';
+export async function screenStoryWithWorkersAI(
+  ai: any, content: string, model = '@cf/meta/llama-guard-3-8b', onUnavailable?: (code: string) => void,
+): Promise<StorySafetyOutcome> {
+  if (!ai || !content.trim()) {
+    onUnavailable?.('STORY_AI_BINDING_MISSING');
+    return 'unavailable';
+  }
   try {
     const result = await ai.run(model, {
       messages: [
@@ -21,8 +26,12 @@ export async function screenStoryWithWorkersAI(ai: any, content: string, model =
       max_tokens: 32,
       temperature: 0,
     });
-    return parseGuardOutcome(result?.response);
-  } catch {
+    const outcome = parseGuardOutcome(result?.response);
+    if (outcome === 'unavailable') onUnavailable?.('STORY_AI_INVALID_OUTPUT');
+    return outcome;
+  } catch (error: any) {
+    const status = Number(error?.status || 0);
+    onUnavailable?.(status >= 400 && status <= 599 ? `STORY_AI_HTTP_${status}` : 'STORY_AI_REQUEST_FAILED');
     return 'unavailable';
   }
 }

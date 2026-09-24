@@ -17110,7 +17110,7 @@ api.post('/statuses', authMiddleware, async (c) => {
     // primary response may use the independent text classifier, but a flagged
     // result never gets overridden. Secondary failure keeps Status unpublished.
     if (safety === 'unavailable') {
-      safety = await screenStoryWithWorkersAI(c.env.AI, storyContent, c.env.AI_TEXT_MODERATION_MODEL || '@cf/meta/llama-guard-3-8b');
+      safety = await screenStoryWithWorkersAI(c.env.AI, storyContent, c.env.AI_TEXT_MODERATION_MODEL || '@cf/meta/llama-guard-3-8b', code => { failureCode = code; });
     }
     if (safety === 'review') return c.json({ detail: 'This status needs a safety review before it can be posted.' }, 409);
     if (safety !== 'allow') {

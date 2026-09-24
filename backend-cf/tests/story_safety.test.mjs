@@ -11,9 +11,12 @@ test('Workers AI safety accepts only exact valid classifications', () => {
 });
 
 test('Workers AI errors and unexpected shapes fail closed', async () => {
-  assert.equal(await screenStoryWithWorkersAI(null, 'A harmless status'), 'unavailable');
-  assert.equal(await screenStoryWithWorkersAI({ run: async () => ({ other: 'safe' }) }, 'A harmless status'), 'unavailable');
-  assert.equal(await screenStoryWithWorkersAI({ run: async () => { throw new Error('outage'); } }, 'A harmless status'), 'unavailable');
+  const codes = [];
+  const report = code => codes.push(code);
+  assert.equal(await screenStoryWithWorkersAI(null, 'A harmless status', undefined, report), 'unavailable');
+  assert.equal(await screenStoryWithWorkersAI({ run: async () => ({ other: 'safe' }) }, 'A harmless status', undefined, report), 'unavailable');
+  assert.equal(await screenStoryWithWorkersAI({ run: async () => { throw Object.assign(new Error('outage'), { status: 503 }); } }, 'A harmless status', undefined, report), 'unavailable');
+  assert.deepEqual(codes, ['STORY_AI_BINDING_MISSING', 'STORY_AI_INVALID_OUTPUT', 'STORY_AI_HTTP_503']);
 });
 
 test('Workers AI receives only the submitted text and uses a safety model', async () => {
