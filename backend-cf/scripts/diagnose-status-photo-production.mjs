@@ -1,8 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { deflateSync } from 'node:zlib';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const project = process.env.SUPABASE_PROJECT_REF;
@@ -15,7 +12,6 @@ assert.ok(project && serviceKey && publishableKey && account && imagesToken, 'Pr
 const supabase = `https://${project}.supabase.co`;
 const api = 'https://flames-up-api.karfalacisse900.workers.dev/api';
 const admin = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
-const scratch = await mkdtemp(join(tmpdir(), 'captro-story-photo-'));
 let userId = '';
 let mediaId = '';
 let imageId = '';
@@ -34,6 +30,46 @@ async function request(url, init = {}) {
 async function remove(url, headers = admin) {
   const { response } = await request(url, { method: 'DELETE', headers });
   if (!response.ok) throw new Error(`Temporary photo-test cleanup failed: HTTP ${response.status}`);
+}
+
+function syntheticPng(width, height) {
+  const crc = (bytes) => {
+    let value = 0xffffffff;
+    for (const byte of bytes) {
+      value ^= byte;
+      for (let i = 0; i < 8; i++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
+    }
+    return (value ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (name, body) => {
+    const type = Buffer.from(name, 'ascii');
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(body.length);
+    const checksum = Buffer.alloc(4);
+    checksum.writeUInt32BE(crc(Buffer.concat([type, body])));
+    return Buffer.concat([length, type, body, checksum]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2; // RGB; deterministic, synthetic color bands, no personal data.
+  const rows = Buffer.alloc(height * (1 + width * 3));
+  for (let y = 0; y < height; y++) {
+    const offset = y * (1 + width * 3);
+    for (let x = 0; x < width; x++) {
+      const pixel = offset + 1 + x * 3;
+      rows[pixel] = x < width / 2 ? 215 : 125;
+      rows[pixel + 1] = y < height / 2 ? 225 : 180;
+      rows[pixel + 2] = 205;
+    }
+  }
+  return Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(rows)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
 }
 
 try {
@@ -58,13 +94,7 @@ try {
   const profile = await request(`${api}/auth/me`, { headers: bearer });
   assert.equal(profile.response.status, 200, 'Temporary account cannot reach Captro');
 
-  const photo = join(scratch, 'photo.png');
-  const generated = spawnSync('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x400:rate=1',
-    '-frames:v', '1', '-threads', '1', photo,
-  ], { encoding: 'utf8' });
-  assert.equal(generated.status, 0, 'Could not create synthetic test photo');
-  const data = await readFile(photo);
+  const data = syntheticPng(320, 400);
   const intent = await request(`${api}/media/upload-intent`, {
     method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' },
     body: JSON.stringify({ media_type: 'image', mime_type: 'image/png', filename: 'captro-story-smoke.png', file_size: data.byteLength, width: 320, height: 400 }),
@@ -114,7 +144,6 @@ try {
       await remove(`https://api.cloudflare.com/client/v4/accounts/${account}/images/v1/${encodeURIComponent(imageId)}`, { Authorization: `Bearer ${imagesToken}` });
     } catch (error) { failures.push(error); }
   }
-  await rm(scratch, { recursive: true, force: true });
   assert.equal(failures.length, 0, 'Temporary photo, database rows, or account cleanup failed');
   console.log('Temporary private photo Status, provider image, and test account removed.');
 }
