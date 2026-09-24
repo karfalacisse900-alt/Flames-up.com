@@ -30,6 +30,14 @@ export async function screenStoryWithWorkersAI(
     if (outcome === 'unavailable') onUnavailable?.('STORY_AI_INVALID_OUTPUT');
     return outcome;
   } catch (error: any) {
+    if (content === 'Temporary private status publication check.') {
+      console.warn(JSON.stringify({
+        event: 'synthetic_story_ai_failure',
+        name: String(error?.name || '').slice(0, 80),
+        code: String(error?.code || '').slice(0, 80),
+        message: String(error?.message || '').slice(0, 240),
+      }));
+    }
     const status = Number(error?.status || 0);
     onUnavailable?.(status >= 400 && status <= 599 ? `STORY_AI_HTTP_${status}` : 'STORY_AI_REQUEST_FAILED');
     return 'unavailable';
