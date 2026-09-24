@@ -79,7 +79,8 @@ try {
     probeVideoId = String(probe.body.result?.uid || '');
     const providerMessage = String(probe.body.errors?.[0]?.message || '')
       .replace(/https?:\/\/\S+|[A-Za-z0-9_-]{40,}/g, '[redacted]').slice(0, 160);
-    console.log(JSON.stringify({ event: 'stream_direct_probe', status: probe.response.status, success: probe.body.success === true, code: probe.body.errors?.[0]?.code || null, message: providerMessage }));
+    const uploadHost = (() => { try { return new URL(probe.body.result?.uploadURL).hostname; } catch { return null; } })();
+    console.log(JSON.stringify({ event: 'stream_direct_probe', status: probe.response.status, success: probe.body.success === true, code: probe.body.errors?.[0]?.code || null, message: providerMessage, uploadHost, uidPresent: !!probeVideoId }));
   }
   assert.equal(intent.response.status, 201, 'Could not create video upload intent');
   const mediaId = intent.body.media_id;
