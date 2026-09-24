@@ -9,7 +9,7 @@ const project = process.env.SUPABASE_PROJECT_REF;
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const publishableKey = process.env.SUPABASE_ANON_KEY;
 const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-const imagesToken = process.env.CLOUDFLARE_IMAGES_TOKEN || process.env.CLOUDFLARE_MEDIA_API_TOKEN;
+const imagesToken = process.env.CLOUDFLARE_IMAGES_TOKEN || process.env.CLOUDFLARE_MEDIA_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN;
 assert.ok(project && serviceKey && publishableKey && account && imagesToken, 'Production photo-test credentials are required');
 
 const supabase = `https://${project}.supabase.co`;
@@ -37,6 +37,10 @@ async function remove(url, headers = admin) {
 }
 
 try {
+  const imageAccess = await request(`https://api.cloudflare.com/client/v4/accounts/${account}/images/v1?per_page=1`, {
+    headers: { Authorization: `Bearer ${imagesToken}` },
+  });
+  assert.ok(imageAccess.response.ok && imageAccess.body.success, 'Diagnostic token cannot inspect and clean up Cloudflare Images');
   const email = `captro-photo-story-smoke-${crypto.randomUUID()}@captro.invalid`;
   const password = crypto.randomUUID() + crypto.randomUUID();
   const created = await request(`${supabase}/auth/v1/admin/users`, {
