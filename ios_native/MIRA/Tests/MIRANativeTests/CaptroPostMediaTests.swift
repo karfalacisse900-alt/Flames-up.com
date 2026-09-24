@@ -72,4 +72,61 @@ final class CaptroPostMediaTests: XCTestCase {
     XCTAssertEqual(dimension.cropMode, "preserve_aspect")
     XCTAssertEqual(dimension.format, "16:9")
   }
+
+  func testTusVideoUploadSendsAlignedChunksAndChecksProviderOffset() async throws {
+    TusUploadURLProtocol.reset()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [TusUploadURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let api = MIRAAPIClient(directUploadSession: session)
+    let bytes = Data(repeating: 0x41, count: 5 * 1024 * 1024 + 16)
+    let uploadURL = try XCTUnwrap(URL(string: "https://upload.videodelivery.net/test-tus"))
+
+    try await api.uploadTusVideo(to: uploadURL, data: bytes)
+
+    XCTAssertEqual(TusUploadURLProtocol.patchOffsets, [0, 5 * 1024 * 1024])
+    XCTAssertEqual(TusUploadURLProtocol.headRequests, 1)
+  }
+}
+
+private final class TusUploadURLProtocol: URLProtocol {
+  private static let lock = NSLock()
+  private static var offsets: [Int] = []
+  private static var heads = 0
+
+  static var patchOffsets: [Int] { lock.lock(); defer { lock.unlock() }; return offsets }
+  static var headRequests: Int { lock.lock(); defer { lock.unlock() }; return heads }
+  static func reset() { lock.lock(); defer { lock.unlock() }; offsets = []; heads = 0 }
+
+  override class func canInit(with request: URLRequest) -> Bool {
+    request.url?.host == "upload.videodelivery.net"
+  }
+
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    let headers: [String: String]
+    if request.httpMethod == "HEAD" {
+      Self.lock.lock()
+      Self.heads += 1
+      Self.lock.unlock()
+      headers = ["Upload-Offset": "0", "Upload-Length": "5242896"]
+    } else {
+      let offset = Int(request.value(forHTTPHeaderField: "Upload-Offset") ?? "") ?? -1
+      Self.lock.lock()
+      Self.offsets.append(offset)
+      Self.lock.unlock()
+      let next = offset == 0 ? 5 * 1024 * 1024 : 5 * 1024 * 1024 + 16
+      headers = ["Upload-Offset": String(next)]
+    }
+    let response = HTTPURLResponse(
+      url: request.url!, statusCode: request.httpMethod == "HEAD" ? 200 : 204,
+      httpVersion: "HTTP/1.1", headerFields: headers
+    )!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }

@@ -129,6 +129,7 @@ public final class MIRAMediaUploadService {
   private let target: MIRAMediaUploadTarget
   private var approvedUploads: [MIRAPickedMedia: MIRAMediaUploadResult] = [:]
   private var pendingUploads: [MIRAPickedMedia: MIRAMediaUploadCompleteBody] = [:]
+  private var pendingTusIntents: [MIRAPickedMedia: MIRAMediaUploadResponse] = [:]
 
   public init(api: MIRAAPIClient, target: MIRAMediaUploadTarget = .general) {
     self.api = api
@@ -202,6 +203,7 @@ public final class MIRAMediaUploadService {
     let width: Double?
     let height: Double?
     let durationSeconds: Double?
+    let resumable: Bool?
   }
 
   private struct MIRAMediaUploadCompleteBody: Encodable {
@@ -278,18 +280,27 @@ public final class MIRAMediaUploadService {
       if let pending = pendingUploads[media] {
         return try await finishPendingUpload(media, completion: pending)
       }
-      let intent: MIRAMediaUploadResponse = try await api.post(
-        "/media/upload-intent",
-        body: MIRAMediaUploadIntentBody(
-          mediaType: mediaType,
-          filename: fileName,
-          mimeType: mimeType,
-          fileSize: uploadData.count,
-          width: actualWidth,
-          height: actualHeight,
-          durationSeconds: durationSeconds
+      let intent: MIRAMediaUploadResponse
+      if let pending = pendingTusIntents[media] {
+        intent = pending
+      } else {
+        intent = try await api.post(
+          "/media/upload-intent",
+          body: MIRAMediaUploadIntentBody(
+            mediaType: mediaType,
+            filename: fileName,
+            mimeType: mimeType,
+            fileSize: uploadData.count,
+            width: actualWidth,
+            height: actualHeight,
+            durationSeconds: durationSeconds,
+            resumable: mediaType == "video" ? true : nil
+          )
         )
-      )
+        if intent.uploadMethod == "cloudflare_stream_tus" {
+          pendingTusIntents[media] = intent
+        }
+      }
       guard
         let mediaId = intent.mediaId,
         !mediaId.isEmpty,
@@ -298,14 +309,25 @@ public final class MIRAMediaUploadService {
         throw MIRAAPIError.emptyResponse
       }
 
-      let _: EmptyResponse = try await api.uploadMultipart(
-        to: uploadURL,
-        fieldName: "file",
-        fileName: fileName,
-        mimeType: mimeType,
-        data: uploadData,
-        onProgress: onUploadProgress
-      )
+      if intent.uploadMethod == "cloudflare_stream_tus" {
+        do {
+          try await api.uploadTusVideo(to: uploadURL, data: uploadData, onProgress: onUploadProgress)
+        } catch {
+          if case MIRAAPIError.badStatus(let status) = error, status == 404 || status == 410 {
+            pendingTusIntents[media] = nil // Expired one-time URL; request a fresh intent on retry.
+          }
+          throw error
+        }
+      } else {
+        let _: EmptyResponse = try await api.uploadMultipart(
+          to: uploadURL,
+          fieldName: "file",
+          fileName: fileName,
+          mimeType: mimeType,
+          data: uploadData,
+          onProgress: onUploadProgress
+        )
+      }
 
       onProcessing?()
 
@@ -316,6 +338,7 @@ public final class MIRAMediaUploadService {
         height: actualHeight
       )
       pendingUploads[media] = completion
+      pendingTusIntents[media] = nil
       return try await finishPendingUpload(media, completion: completion)
     }
   }

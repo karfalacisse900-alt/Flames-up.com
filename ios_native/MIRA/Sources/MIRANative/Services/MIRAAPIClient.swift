@@ -175,17 +175,20 @@ public final class MIRAAPIClient {
   }()
   private let sessionProvider: MIRASessionProviding?
   private let session: URLSession
+  private let directUploadSession: URLSession
   private let decoder: JSONDecoder
   private let encoder: JSONEncoder
 
   public init(
     baseURL: URL = MIRAProductionBackend.apiBaseURL,
     sessionProvider: MIRASessionProviding? = nil,
-    session: URLSession = MIRAAPIClient.productionSession
+    session: URLSession = MIRAAPIClient.productionSession,
+    directUploadSession: URLSession? = nil
   ) {
     self.baseURL = baseURL
     self.sessionProvider = sessionProvider
     self.session = session
+    self.directUploadSession = directUploadSession ?? Self.directMediaUploadSession
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     self.decoder = decoder
@@ -234,6 +237,89 @@ public final class MIRAAPIClient {
     )
   }
 
+  /// Cloudflare Stream direct-creator tus upload. A lost PATCH is recovered by
+  /// asking the provider for its committed offset before sending more bytes.
+  /// The original media remains in Captro's durable composer draft for retry.
+  public func uploadTusVideo(
+    to url: URL,
+    data: Data,
+    onProgress: (@Sendable (Double) -> Void)? = nil
+  ) async throws {
+    try MIRANetworkSecurityPolicy.validateDirectUploadURL(url)
+    guard !data.isEmpty else { throw MIRAAPIError.emptyResponse }
+    let chunkBytes = 5 * 1024 * 1024 // Cloudflare minimum; divisible by 256 KiB.
+    var offset = try await tusCommittedOffset(at: url, expectedLength: data.count)
+    var failures = 0
+    while offset < data.count {
+      try Task.checkCancellation()
+      let end = min(data.count, offset + chunkBytes)
+      let chunkURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("captro-tus-\(UUID().uuidString).chunk")
+      try Data(data[offset..<end]).write(to: chunkURL, options: [.atomic])
+      defer { try? FileManager.default.removeItem(at: chunkURL) }
+      var request = URLRequest(url: url)
+      request.httpMethod = "PATCH"
+      request.timeoutInterval = 120
+      request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+      request.setValue("application/offset+octet-stream", forHTTPHeaderField: "Content-Type")
+      request.setValue(String(offset), forHTTPHeaderField: "Upload-Offset")
+      let start = offset
+      let delegate = onProgress.map { callback in
+        MIRAMultipartUploadProgressDelegate { fraction in
+          callback(min(1, (Double(start) + Double(end - start) * fraction) / Double(data.count)))
+        }
+      }
+      do {
+        let (_, response) = try await directUploadSession.upload(
+          for: request, fromFile: chunkURL, delegate: delegate
+        )
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status),
+              let nextString = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Upload-Offset"),
+              let next = Int(nextString), next == end else {
+          throw MIRAAPIError.badStatus(status)
+        }
+        offset = next
+        failures = 0
+        onProgress?(Double(offset) / Double(data.count))
+      } catch {
+        if error is CancellationError || (error as? URLError)?.code == .cancelled {
+          throw error
+        }
+        if case MIRAAPIError.badStatus(let status) = error,
+           (400..<500).contains(status),
+           status != 408 && status != 409 && status != 425 && status != 429 {
+          throw error
+        }
+        failures += 1
+        guard failures < 5 else {
+          throw error
+        }
+        try await Task.sleep(nanoseconds: UInt64(min(8, 1 << failures)) * 1_000_000_000)
+        offset = try await tusCommittedOffset(at: url, expectedLength: data.count)
+      }
+    }
+  }
+
+  private func tusCommittedOffset(at url: URL, expectedLength: Int) async throws -> Int {
+    var request = URLRequest(url: url)
+    request.httpMethod = "HEAD"
+    request.setValue("1.0.0", forHTTPHeaderField: "Tus-Resumable")
+    let (_, response) = try await directUploadSession.data(for: request)
+    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+      throw MIRAAPIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+    guard let offsetString = http.value(forHTTPHeaderField: "Upload-Offset"),
+          let offset = Int(offsetString), offset >= 0, offset <= expectedLength else {
+      throw MIRAAPIError.emptyResponse
+    }
+    if let lengthString = http.value(forHTTPHeaderField: "Upload-Length"),
+       let length = Int(lengthString), length != expectedLength {
+      throw MIRAAPIError.server(status: 409, code: "UPLOAD_SIZE_CHANGED", detail: "The selected video changed. Choose it again to retry.")
+    }
+    return offset
+  }
+
   public func uploadMultipart<T: Decodable>(
     to absoluteURL: URL,
     fieldName: String = "file",
@@ -277,7 +363,7 @@ public final class MIRAAPIClient {
     let responseData: Data
     let response: URLResponse
     do {
-      let uploadSession = authorize ? session : Self.directMediaUploadSession
+      let uploadSession = authorize ? session : directUploadSession
       let progressDelegate = onProgress.map(MIRAMultipartUploadProgressDelegate.init)
       (responseData, response) = try await uploadSession.upload(
         for: request,

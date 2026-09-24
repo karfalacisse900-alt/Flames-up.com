@@ -1425,6 +1425,7 @@ public struct MIRAMediaUploadResponse: Decodable, Hashable {
   public let mediaId: String?
   public let videoUid: String?
   public let uploadUrl: String?
+  public let uploadMethod: String?
   public let source: String?
   public let moderationStatus: String?
   public let publicUrl: String?

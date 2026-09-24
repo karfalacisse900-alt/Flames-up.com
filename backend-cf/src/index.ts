@@ -1,6 +1,7 @@
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
+import { cloudflareTusCreationHeaders } from './media-upload';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import OpenAI from 'openai';
@@ -18512,27 +18513,47 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   } else {
     const maxDurationSeconds = POST_VIDEO_MAX_SECONDS;
     const requireSignedURLs = cloudflareStreamRequireSignedUrls(c.env);
-    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        maxDurationSeconds,
-        creator: userId,
-        requireSignedURLs,
-        meta: { userId, moderation: 'pre_publish', filename: validation.filename },
-      }),
-    });
-    const data: any = await res.json().catch(() => ({}));
-    if (!data.success) {
-      console.warn(JSON.stringify({ event: 'cf_stream_upload_intent_failed', status: res.status, code: cleanText(data.errors?.[0]?.code, 80) }));
-      return c.json({ detail: 'Could not prepare video upload.', code: 'upload_intent_failed' }, 502);
+    if (body.resumable === true) {
+      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream?direct_user=true`, {
+        method: 'POST',
+        headers: cloudflareTusCreationHeaders({
+          token, fileSize: validation.fileSize, maxDurationSeconds,
+          requireSignedURLs, creatorId: userId, filename: validation.filename,
+        }),
+      });
+      if (!res.ok) {
+        console.warn(JSON.stringify({ event: 'cf_stream_tus_intent_failed', status: res.status }));
+        return c.json({ detail: 'Could not prepare resumable video upload.', code: 'upload_intent_failed' }, 502);
+      }
+      uploadUrl = String(res.headers.get('Location') || '');
+      storageKey = cleanText(res.headers.get('stream-media-id'), 220);
+    } else {
+      const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/stream/direct_upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          maxDurationSeconds,
+          creator: userId,
+          requireSignedURLs,
+          meta: { userId, moderation: 'pre_publish', filename: validation.filename },
+        }),
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (!data.success) {
+        console.warn(JSON.stringify({ event: 'cf_stream_upload_intent_failed', status: res.status, code: cleanText(data.errors?.[0]?.code, 80) }));
+        return c.json({ detail: 'Could not prepare video upload.', code: 'upload_intent_failed' }, 502);
+      }
+      uploadUrl = String(data.result?.uploadURL || '');
+      storageKey = cleanText(data.result?.uid, 220);
     }
-    uploadUrl = String(data.result?.uploadURL || '');
-    storageKey = cleanText(data.result?.uid, 220);
     storageProvider = 'stream';
   }
 
-  if (!uploadUrl || !storageKey) return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
+  const uploadHost = (() => { try { return new URL(uploadUrl).hostname.toLowerCase(); } catch { return ''; } })();
+  const expectedUploadHost = storageProvider === 'stream' ? 'upload.videodelivery.net' : 'upload.imagedelivery.net';
+  if (!uploadUrl || !storageKey || !uploadHost || (uploadHost !== expectedUploadHost && !uploadHost.endsWith(`.${expectedUploadHost}`))) {
+    return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
+  }
   const mediaId = uuid();
   const assetInput = {
     id: mediaId,
@@ -18559,7 +18580,9 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
   return c.json({
     media_id: mediaId,
     upload_url: uploadUrl,
-    upload_method: storageProvider === 'stream' ? 'cloudflare_stream_direct' : 'cloudflare_images_direct',
+    upload_method: storageProvider === 'stream'
+      ? (body.resumable === true ? 'cloudflare_stream_tus' : 'cloudflare_stream_direct')
+      : 'cloudflare_images_direct',
     storage_provider: storageProvider,
     media_type: validation.mediaType,
     upload_status: 'uploading',
