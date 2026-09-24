@@ -70,7 +70,9 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
       MIRAPlaybackCoordinator.pauseAll(reason: "voice_recording_started")
       CaptroVoicePlaybackCenter.shared.stop()
       let session = AVAudioSession.sharedInstance()
-      try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetoothHFP])
+      // spokenAudio is a playback mode (podcasts/audiobooks). Use the normal
+      // recording mode so capture works consistently across input routes.
+      try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
       try session.setActive(true, options: .notifyOthersOnDeactivation)
       // The route can be empty briefly after activation, even though the
       // recorder can open the built-in microphone. Let AVAudioRecorder decide.
@@ -276,6 +278,8 @@ public struct CaptroVoiceRecorderSheet: View {
       }
       .interactiveDismissDisabled(recorder.isRecording)
       .onDisappear {
+        previewPlayer?.stop()
+        previewPlayer = nil
         if didUseRecording { recorder.stop() }
         else { recorder.reset() }
       }
@@ -309,7 +313,15 @@ public final class CaptroVoiceUploadService {
   private let api: MIRAAPIClient
   public init(api: MIRAAPIClient) { self.api = api }
 
-  public func submit(_ draft: CaptroVoiceDraft, targetType: String, targetId: String? = nil, parentPostId: String? = nil, parentCommentId: String? = nil, caption: String) async throws -> CaptroVoiceSubmission {
+  public func submit(
+    _ draft: CaptroVoiceDraft,
+    targetType: String,
+    targetId: String? = nil,
+    parentPostId: String? = nil,
+    parentCommentId: String? = nil,
+    caption: String,
+    onUploadProgress: (@Sendable (Double) -> Void)? = nil
+  ) async throws -> CaptroVoiceSubmission {
     let data = try Data(contentsOf: draft.fileURL, options: .mappedIfSafe)
     var fields = [
       "target_type": targetType,
@@ -322,7 +334,11 @@ public final class CaptroVoiceUploadService {
     if let parentPostId { fields["parent_post_id"] = parentPostId }
     if let parentCommentId { fields["parent_comment_id"] = parentCommentId }
     do {
-      return try await api.uploadMultipart("/voice/submissions", fileName: draft.fileURL.lastPathComponent, mimeType: "audio/mp4", data: data, fields: fields)
+      return try await api.uploadMultipart(
+        "/voice/submissions", fileName: draft.fileURL.lastPathComponent,
+        mimeType: "audio/mp4", data: data, fields: fields,
+        onProgress: onUploadProgress
+      )
     } catch MIRAAPIError.badStatus(404) {
       throw CaptroVoiceUploadError.serviceUnavailable
     } catch MIRAAPIError.server(let status, _, _) where status == 404 {

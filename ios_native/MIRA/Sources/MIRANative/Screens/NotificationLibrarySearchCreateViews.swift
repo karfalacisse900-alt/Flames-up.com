@@ -973,6 +973,9 @@ public struct CreatePostNativeView: View {
   @State private var hasSelectedStamp = false
   @State private var momentType = "Thought"
   @State private var isPosting = false
+  @State private var postStage = "Preparing post"
+  @State private var postUploadFraction: Double?
+  @State private var activeUploadIndex: Int?
   @State private var showDiscardConfirmation = false
   @State private var postUploader: MIRAMediaUploadService?
   @State private var postRequestID = UUID().uuidString
@@ -1251,9 +1254,12 @@ public struct CreatePostNativeView: View {
 
       Spacer()
 
-      Text("Create Post")
+      Text(isPosting ? postStage : "Create Post")
         .font(.headline)
         .foregroundStyle(MIRATheme.Color.textPrimary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+        .accessibilityAddTraits(isPosting ? [.updatesFrequently] : [])
 
       Spacer()
 
@@ -1276,7 +1282,13 @@ public struct CreatePostNativeView: View {
     .padding(.bottom, 8)
     .frame(minHeight: 56)
     .overlay(alignment: .bottom) {
-      Rectangle().fill(MIRATheme.Color.hairline.opacity(0.75)).frame(height: 0.7)
+      if let postUploadFraction, isPosting {
+        ProgressView(value: postUploadFraction)
+          .tint(MIRATheme.Color.forest)
+          .accessibilityLabel("Upload progress")
+      } else {
+        Rectangle().fill(MIRATheme.Color.hairline.opacity(0.75)).frame(height: 0.7)
+      }
     }
   }
 
@@ -2172,8 +2184,14 @@ public struct CreatePostNativeView: View {
       guard await preparePayoutAccountForPublishing() else { return }
     }
     isPosting = true
+    postStage = "Preparing post"
+    postUploadFraction = nil
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")
-    defer { isPosting = false }
+    defer {
+      isPosting = false
+      postUploadFraction = nil
+      activeUploadIndex = nil
+    }
     do {
       let uploader = postUploader ?? MIRAMediaUploadService(api: api, target: .feedPost)
       postUploader = uploader
@@ -2192,8 +2210,31 @@ public struct CreatePostNativeView: View {
       var mediaAssetIds: [String] = []
       var mediaTypes: [String] = []
       var mediaDimensions: [MIRAMediaDimension] = []
-      for item in mediaItems {
-        let upload = try await uploader.uploadResult(item)
+      let mediaCount = mediaItems.count
+      for (index, item) in mediaItems.enumerated() {
+        activeUploadIndex = index
+        postStage = "Preparing media \(index + 1) of \(mediaCount)"
+        postUploadFraction = nil
+        let upload = try await uploader.uploadResult(
+          item,
+          onUploadProgress: { fraction in
+            Task { @MainActor in
+              guard activeUploadIndex == index, isPosting,
+                    postStage.hasPrefix("Preparing media") || postStage.hasPrefix("Uploading media") else { return }
+              postStage = "Uploading media \(index + 1) of \(mediaCount)"
+              postUploadFraction = (Double(index) + fraction) / Double(mediaCount)
+            }
+          },
+          onProcessing: {
+            Task { @MainActor in
+              guard activeUploadIndex == index, isPosting else { return }
+              postStage = "Checking media"
+              postUploadFraction = nil
+            }
+          }
+        )
+        activeUploadIndex = nil
+        postUploadFraction = nil
         uploaded.append(upload.url)
         if let mediaAssetId = upload.mediaAssetId, !mediaAssetId.isEmpty {
           mediaAssetIds.append(mediaAssetId)
@@ -2206,9 +2247,17 @@ public struct CreatePostNativeView: View {
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")
       if voiceSubmissionId == nil, let voiceDraft {
+        postStage = "Uploading voice"
         let submission = try await CaptroVoiceUploadService(api: api).submit(
-          voiceDraft, targetType: "post", caption: [title, postContent].filter { !$0.isEmpty }.joined(separator: "\n\n")
+          voiceDraft, targetType: "post", caption: [title, postContent].filter { !$0.isEmpty }.joined(separator: "\n\n"),
+          onUploadProgress: { fraction in
+            Task { @MainActor in
+              guard isPosting, postStage == "Uploading voice" else { return }
+              postUploadFraction = fraction
+            }
+          }
         )
+        postUploadFraction = nil
         voiceSubmissionId = submission.id
       }
       let categorySignals = await autoCategorySignals
@@ -2277,6 +2326,7 @@ public struct CreatePostNativeView: View {
       )
       // New posts use one editorial presentation; legacy variant metadata is
       // still decoded for older posts but is not selectable or rendered.
+      postStage = "Publishing post"
       let _: MIRAPost = try await api.post("/posts", body: body)
       // This requests authoritative refreshes; it never renders an unapproved
       // voice attachment as a publicly published post.

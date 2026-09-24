@@ -88,7 +88,7 @@ public struct MIRAPickedMedia: Hashable {
       feedHeight: supported.feedHeight,
       feedAspectRatio: supported.widthToHeightRatio,
       displayAspectRatio: supported.widthToHeightRatio,
-      cropMode: "center_crop",
+      cropMode: "preserve_aspect",
       mediaType: source.mediaType
     )
   }
@@ -140,16 +140,21 @@ public final class MIRAMediaUploadService {
     return result.url
   }
 
-  public func uploadResult(_ media: MIRAPickedMedia) async throws -> MIRAMediaUploadResult {
+  public func uploadResult(
+    _ media: MIRAPickedMedia,
+    onUploadProgress: (@Sendable (Double) -> Void)? = nil,
+    onProcessing: (@Sendable () -> Void)? = nil
+  ) async throws -> MIRAMediaUploadResult {
     if let approved = approvedUploads[media] { return approved }
     if let pending = pendingUploads[media] {
+      onProcessing?()
       return try await finishPendingUpload(media, completion: pending)
     }
     switch media.kind {
     case .image:
-      return try await uploadImageResult(media)
+      return try await uploadImageResult(media, onUploadProgress: onUploadProgress, onProcessing: onProcessing)
     case .video:
-      return try await uploadVideoResult(media)
+      return try await uploadVideoResult(media, onUploadProgress: onUploadProgress, onProcessing: onProcessing)
     }
   }
 
@@ -211,18 +216,28 @@ public final class MIRAMediaUploadService {
     let rejectionMessage: String?
   }
 
-  private func uploadImageResult(_ media: MIRAPickedMedia) async throws -> MIRAMediaUploadResult {
+  private func uploadImageResult(
+    _ media: MIRAPickedMedia,
+    onUploadProgress: (@Sendable (Double) -> Void)?,
+    onProcessing: (@Sendable () -> Void)?
+  ) async throws -> MIRAMediaUploadResult {
     let prepared = await prepareImageUpload(media)
     return try await uploadModeratedMedia(
       media: media,
       uploadData: prepared.data,
       fileName: prepared.fileName,
       mimeType: prepared.mimeType,
-      mediaType: "image"
+      mediaType: "image",
+      onUploadProgress: onUploadProgress,
+      onProcessing: onProcessing
     )
   }
 
-  private func uploadVideoResult(_ media: MIRAPickedMedia) async throws -> MIRAMediaUploadResult {
+  private func uploadVideoResult(
+    _ media: MIRAPickedMedia,
+    onUploadProgress: (@Sendable (Double) -> Void)?,
+    onProcessing: (@Sendable () -> Void)?
+  ) async throws -> MIRAMediaUploadResult {
     let duration = try await media.validatedVideoDuration()
     return try await uploadModeratedMedia(
       media: media,
@@ -230,7 +245,9 @@ public final class MIRAMediaUploadService {
       fileName: media.fileName,
       mimeType: media.mimeType,
       mediaType: "video",
-      durationSeconds: duration
+      durationSeconds: duration,
+      onUploadProgress: onUploadProgress,
+      onProcessing: onProcessing
     )
   }
 
@@ -240,7 +257,9 @@ public final class MIRAMediaUploadService {
     fileName: String,
     mimeType: String,
     mediaType: String,
-    durationSeconds: Double? = nil
+    durationSeconds: Double? = nil,
+    onUploadProgress: (@Sendable (Double) -> Void)?,
+    onProcessing: (@Sendable () -> Void)?
   ) async throws -> MIRAMediaUploadResult {
     let dimensions: MIRAMediaDimension
     if target == .feedPost {
@@ -280,8 +299,11 @@ public final class MIRAMediaUploadService {
         fieldName: "file",
         fileName: fileName,
         mimeType: mimeType,
-        data: uploadData
+        data: uploadData,
+        onProgress: onUploadProgress
       )
+
+      onProcessing?()
 
       let completion = MIRAMediaUploadCompleteBody(
         mediaId: mediaId,

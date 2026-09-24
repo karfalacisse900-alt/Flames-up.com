@@ -53,4 +53,23 @@ final class CaptroPostMediaTests: XCTestCase {
     XCTAssertEqual(output.size.height, 1200, accuracy: 1)
     XCTAssertLessThan(prepared.count, 10_000_000)
   }
+
+  func testPublishedImageMetadataRequestsAspectPreservation() async throws {
+    let size = CGSize(width: 1920, height: 1080)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      UIColor.white.setFill()
+      UIRectFill(CGRect(origin: .zero, size: size))
+    }
+    let media = MIRAPickedMedia(
+      data: try XCTUnwrap(image.jpegData(compressionQuality: 0.8)),
+      kind: .image,
+      fileName: "landscape.jpg",
+      mimeType: "image/jpeg"
+    )
+    let dimension = await media.postMediaDimension()
+    XCTAssertEqual(dimension.cropMode, "preserve_aspect")
+    XCTAssertEqual(dimension.format, "16:9")
+  }
 }

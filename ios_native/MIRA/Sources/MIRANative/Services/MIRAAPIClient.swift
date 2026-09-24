@@ -218,7 +218,8 @@ public final class MIRAAPIClient {
     fileName: String,
     mimeType: String,
     data: Data,
-    fields: [String: String] = [:]
+    fields: [String: String] = [:],
+    onProgress: (@Sendable (Double) -> Void)? = nil
   ) async throws -> T {
     let url = try makeURL(path)
     return try await uploadMultipart(
@@ -228,7 +229,8 @@ public final class MIRAAPIClient {
       mimeType: mimeType,
       data: data,
       fields: fields,
-      authorize: true
+      authorize: true,
+      onProgress: onProgress
     )
   }
 
@@ -239,7 +241,8 @@ public final class MIRAAPIClient {
     mimeType: String,
     data: Data,
     fields: [String: String] = [:],
-    authorize: Bool = false
+    authorize: Bool = false,
+    onProgress: (@Sendable (Double) -> Void)? = nil
   ) async throws -> T {
     var request = URLRequest(url: absoluteURL)
     let boundary = "mira-\(UUID().uuidString)"
@@ -253,7 +256,7 @@ public final class MIRAAPIClient {
     request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
     request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
     request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
-    request.httpBody = multipartBody(
+    let uploadFile = try multipartBodyFile(
       boundary: boundary,
       fieldName: fieldName,
       fileName: fileName,
@@ -261,6 +264,7 @@ public final class MIRAAPIClient {
       data: data,
       fields: fields
     )
+    defer { try? FileManager.default.removeItem(at: uploadFile) }
     if authorize, let token = await sessionProvider?.accessToken(), !token.isEmpty {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
@@ -274,7 +278,12 @@ public final class MIRAAPIClient {
     let response: URLResponse
     do {
       let uploadSession = authorize ? session : Self.directMediaUploadSession
-      (responseData, response) = try await uploadSession.data(for: request)
+      let progressDelegate = onProgress.map(MIRAMultipartUploadProgressDelegate.init)
+      (responseData, response) = try await uploadSession.upload(
+        for: request,
+        fromFile: uploadFile,
+        delegate: progressDelegate
+      )
     } catch {
       await metric.finish(status: "error")
       throw error
@@ -410,28 +419,61 @@ public final class MIRAAPIClient {
     )
   }
 
-  private func multipartBody(
+  private func multipartBodyFile(
     boundary: String,
     fieldName: String,
     fileName: String,
     mimeType: String,
     data: Data,
     fields: [String: String]
-  ) -> Data {
-    var body = Data()
-    for key in fields.keys.sorted() {
-      guard let value = fields[key] else { continue }
-      body.append("--\(boundary)\r\n".data(using: .utf8)!)
-      body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n".data(using: .utf8)!)
-      body.append(value.data(using: .utf8)!)
-      body.append("\r\n".data(using: .utf8)!)
+  ) throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("captro-upload-\(UUID().uuidString)")
+    FileManager.default.createFile(atPath: url.path, contents: nil)
+    do {
+      let handle = try FileHandle(forWritingTo: url)
+      defer { try? handle.close() }
+      func write(_ text: String) throws { try handle.write(contentsOf: Data(text.utf8)) }
+      func safeHeader(_ value: String) -> String {
+        value.replacingOccurrences(of: "\r", with: "")
+          .replacingOccurrences(of: "\n", with: "")
+          .replacingOccurrences(of: "\"", with: "")
+      }
+      for key in fields.keys.sorted() {
+        guard let value = fields[key] else { continue }
+        try write("--\(boundary)\r\n")
+        try write("Content-Disposition: form-data; name=\"\(safeHeader(key))\"\r\n\r\n")
+        try write(value)
+        try write("\r\n")
+      }
+      try write("--\(boundary)\r\n")
+      try write("Content-Disposition: form-data; name=\"\(safeHeader(fieldName))\"; filename=\"\(safeHeader(fileName))\"\r\n")
+      try write("Content-Type: \(safeHeader(mimeType))\r\n\r\n")
+      try handle.write(contentsOf: data)
+      try write("\r\n--\(boundary)--\r\n")
+      return url
+    } catch {
+      try? FileManager.default.removeItem(at: url)
+      throw error
     }
-    body.append("--\(boundary)\r\n".data(using: .utf8)!)
-    body.append("Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-    body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
-    body.append(data)
-    body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-    return body
+  }
+}
+
+private final class MIRAMultipartUploadProgressDelegate: NSObject, URLSessionTaskDelegate {
+  private let onProgress: @Sendable (Double) -> Void
+
+  init(onProgress: @escaping @Sendable (Double) -> Void) {
+    self.onProgress = onProgress
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    didSendBodyData bytesSent: Int64,
+    totalBytesSent: Int64,
+    totalBytesExpectedToSend: Int64
+  ) {
+    guard totalBytesExpectedToSend > 0 else { return }
+    onProgress(min(1, max(0, Double(totalBytesSent) / Double(totalBytesExpectedToSend))))
   }
 }
 
