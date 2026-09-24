@@ -162,6 +162,7 @@ final class ConversationNativeModel: ObservableObject {
   private func refreshRecentMessages() async {
     guard !isSyncing else { return }
     isSyncing = true
+    lastRecentReconcile = Date()
     defer { isSyncing = false }
     do {
       let rows: [MIRAMessage]
@@ -176,8 +177,7 @@ final class ConversationNativeModel: ObservableObject {
       messages = await localStore.reconcileRecent(messages, with: rows)
       lastSyncedAt = latestMessageCursor()
       lastServerSequence = messages.compactMap(\.serverSequence).max()
-      hasOlderMessages = rows.count >= 50 || messages.count > rows.count
-      lastRecentReconcile = Date()
+      hasOlderMessages = rows.count >= 50 || messages.filter { !$0.id.hasPrefix("local-") }.count > rows.count
       prefetchMessageMedia(rows)
       await persistThread()
     } catch {

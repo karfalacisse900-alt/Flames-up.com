@@ -2020,7 +2020,19 @@ final class ChatNativeModel: ObservableObject {
     }
   }
 
-  func pollActiveConversations() async {
+  func pollActiveConversations(userId: String) async {
+    // The inbox shares one user-scoped direct-message subscription; it does
+    // not open a socket for every conversation. Group changes use the bounded
+    // refresh below until those rooms are opened.
+    let realtimeTask = Task { [weak self] in
+      guard let self else { return }
+      await MIRAChatRealtime.observe(
+        kind: .direct(peerId: ""), userId: userId, api: api,
+        onChange: { [weak self] in await self?.load(forceRefresh: true) },
+        onConnectionChange: { _ in }
+      )
+    }
+    defer { realtimeTask.cancel() }
     while !Task.isCancelled {
       await load(forceRefresh: true)
       let delay = min(60, 15 * (1 << consecutiveFailures))
@@ -2105,7 +2117,7 @@ public struct ChatNativeView: View {
       }
       .task(id: scenePhase == .active && activeConversationRoute == nil) {
         guard scenePhase == .active, activeConversationRoute == nil else { return }
-        await model.pollActiveConversations()
+        await model.pollActiveConversations(userId: currentUserId)
       }
       .background {
         NavigationLink(
