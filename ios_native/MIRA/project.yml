@@ -80,6 +80,9 @@ targets:
     platform: iOS
     sources:
       - path: Tests/MIRANativeTests/CaptroStampTests.swift
+      - path: Tests/MIRANativeTests/CaptroPostDetailsTests.swift
+      - path: Tests/MIRANativeTests/CaptroPostMediaTests.swift
+      - path: Tests/MIRANativeTests/CaptroCacheIsolationTests.swift
     dependencies:
       - package: MIRANative
         product: MIRANative
