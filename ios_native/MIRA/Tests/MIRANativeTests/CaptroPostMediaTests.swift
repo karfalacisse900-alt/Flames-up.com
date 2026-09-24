@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 import UniformTypeIdentifiers
 @testable import MIRANative
 
@@ -30,5 +31,24 @@ final class CaptroPostMediaTests: XCTestCase {
     for duration in [0, -1, 61, Double.nan, Double.infinity] {
       XCTAssertThrowsError(try CaptroPostVideoLimits.validate(byteCount: 1_000, duration: duration))
     }
+  }
+
+  func testFeedUploadKeepsPhotographAspectRatioWithoutCenterCrop() async throws {
+    let size = CGSize(width: 2400, height: 1200)
+    let renderer = UIGraphicsImageRenderer(size: size)
+    let image = renderer.image { _ in
+      UIColor.red.setFill()
+      UIRectFill(CGRect(x: 0, y: 0, width: size.width / 2, height: size.height))
+      UIColor.blue.setFill()
+      UIRectFill(CGRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height))
+    }
+    let source = try XCTUnwrap(image.jpegData(compressionQuality: 0.95))
+    let uploader = MIRAMediaUploadService(api: MIRAAPIClient(), target: .feedPost)
+    let preparedData = await uploader.prepareFeedImage(source)
+    let prepared = try XCTUnwrap(preparedData)
+    let output = try XCTUnwrap(UIImage(data: prepared))
+    XCTAssertEqual(output.size.width, 2400, accuracy: 1)
+    XCTAssertEqual(output.size.height, 1200, accuracy: 1)
+    XCTAssertLessThan(prepared.count, 10_000_000)
   }
 }

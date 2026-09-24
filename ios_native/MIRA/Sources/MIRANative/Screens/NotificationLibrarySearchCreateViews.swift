@@ -1082,6 +1082,7 @@ public struct CreatePostNativeView: View {
     .onChange(of: title) { _, _ in cacheComposerDraft() }
     .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
     .onChange(of: mediaItems) { _, _ in cacheComposerDraft(includeMedia: true) }
+    .onChange(of: voiceDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedPlace) { _, place in
       handleSelectedPlaceChange(place)
     }
@@ -2277,6 +2278,9 @@ public struct CreatePostNativeView: View {
       // New posts use one editorial presentation; legacy variant metadata is
       // still decoded for older posts but is not selectable or rendered.
       let _: MIRAPost = try await api.post("/posts", body: body)
+      // This requests authoritative refreshes; it never renders an unapproved
+      // voice attachment as a publicly published post.
+      NotificationCenter.default.post(name: .captroPostSubmissionCompleted, object: nil)
       await MIRAAppCacheStore.shared.clearPostDraft()
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
       if voiceSubmissionId != nil {
@@ -2404,6 +2408,7 @@ public struct CreatePostNativeView: View {
     showBroadLocation = draft.showBroadLocation
     selectedDiscoverCategory = draft.selectedDiscoverCategory
     mediaItems = restoredMedia
+    voiceDraft = draft.voiceDraft?.restore()
     draftMediaSnapshots = draft.media
     isEditingPostDetails = false
     if let message = draft.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
@@ -2428,8 +2433,13 @@ public struct CreatePostNativeView: View {
 
     let mediaSnapshots: [MIRAPostDraftMediaSnapshot]
     if includeMedia {
-      mediaSnapshots = await MIRAAppCacheStore.shared.storePostDraftMedia(mediaItems)
-      draftMediaSnapshots = mediaSnapshots
+      do {
+        mediaSnapshots = try await MIRAAppCacheStore.shared.storePostDraftMedia(mediaItems)
+        draftMediaSnapshots = mediaSnapshots
+      } catch {
+        self.errorMessage = "Could not save this media draft. Keep Captro open and try again."
+        return
+      }
     } else {
       mediaSnapshots = draftMediaSnapshots
     }
@@ -2449,6 +2459,7 @@ public struct CreatePostNativeView: View {
       showBroadLocation: showBroadLocation,
       isEditingPostDetails: isEditingPostDetails,
       media: mediaSnapshots,
+      voiceDraft: voiceDraft.map(MIRAVoiceDraftSnapshot.init),
       uploadStatus: uploadStatus,
       errorMessage: errorMessage,
       savedAt: ISO8601DateFormatter.miraPostDraft.string(from: Date())
@@ -2494,6 +2505,7 @@ public struct CreatePostNativeView: View {
     !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
       !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
       !mediaItems.isEmpty ||
+      voiceDraft != nil ||
       !hashtags.isEmpty ||
       selectedPlace != nil ||
       hasSelectedStamp ||

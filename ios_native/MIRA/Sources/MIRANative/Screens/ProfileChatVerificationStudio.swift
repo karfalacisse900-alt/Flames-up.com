@@ -20,9 +20,28 @@ final class ProfileNativeModel: ObservableObject {
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v5"
   private var isLoadingFreshProfile = false
+  private var refreshRequested = false
+  private var loadGeneration = 0
 
   init(api: MIRAAPIClient) {
     self.api = api
+  }
+
+  func resetForAccountChange() {
+    loadGeneration += 1
+    isLoadingFreshProfile = false
+    refreshRequested = false
+    user = nil
+    posts = []
+    receiptEarnings = nil
+    receiptSubmissions = []
+    commerceDashboard = nil
+    profileError = nil
+  }
+
+  func requestRefresh() {
+    if isLoadingFreshProfile { refreshRequested = true }
+    else { Task { await load() } }
   }
 
   func prepareForStartup(signedInUser: MIRAUser?) async {
@@ -35,37 +54,55 @@ final class ProfileNativeModel: ObservableObject {
   func load() async {
     guard !isLoadingFreshProfile else { return }
     isLoadingFreshProfile = true
-    defer { isLoadingFreshProfile = false }
+    let generation = loadGeneration
+    defer {
+      if loadGeneration == generation {
+        isLoadingFreshProfile = false
+        if refreshRequested {
+          refreshRequested = false
+          Task { await load() }
+        }
+      }
+    }
 
     await hydrateCachedProfileIfNeeded()
+    guard loadGeneration == generation else { return }
 
-    if let earnings = try? await api.captroReceiptRewardBalance(), receiptEarnings != earnings {
-      receiptEarnings = earnings
-    }
-    if let submissions = try? await api.captroReceiptSubmissionHistory(), receiptSubmissions != submissions {
-      receiptSubmissions = submissions
-    }
-    if let dashboard = try? await api.loadCommerceDashboard() {
-      commerceDashboard = dashboard
-    }
-
-    guard let freshUser: MIRAUser = try? await api.get("/auth/me") else { return }
-    if user != freshUser {
-      user = freshUser
-    }
+    guard let freshUser: MIRAUser = try? await api.get("/auth/me"),
+          loadGeneration == generation else { return }
+    if user != freshUser { user = freshUser }
     await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
     await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
+    guard loadGeneration == generation else { return }
+
     let freshPosts = profileVisiblePosts((try? await api.get("/users/\(freshUser.id)/posts")) ?? posts)
+    guard loadGeneration == generation else { return }
     let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
       existing: posts,
       fresh: freshPosts,
       maxCount: 120
     )
-    if posts != mergedPosts {
-      posts = mergedPosts
-    }
+    guard loadGeneration == generation else { return }
+    if posts != mergedPosts { posts = mergedPosts }
     await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: freshUser.id)
     await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey(for: freshUser.id))
+    guard loadGeneration == generation else { return }
+
+    // The visible profile and creations must not wait behind three unrelated
+    // finance requests. Those remain server-authoritative and never use
+    // fabricated cached balances.
+    if let earnings = try? await api.captroReceiptRewardBalance(),
+       loadGeneration == generation, receiptEarnings != earnings {
+      receiptEarnings = earnings
+    }
+    if let submissions = try? await api.captroReceiptSubmissionHistory(),
+       loadGeneration == generation, receiptSubmissions != submissions {
+      receiptSubmissions = submissions
+    }
+    if let dashboard = try? await api.loadCommerceDashboard(),
+       loadGeneration == generation {
+      commerceDashboard = dashboard
+    }
   }
 
   func primeUser(_ signedInUser: MIRAUser?) {
@@ -74,24 +111,50 @@ final class ProfileNativeModel: ObservableObject {
   }
 
   private func hydrateCachedProfileIfNeeded() async {
-    guard user == nil else { return }
-    var cachedUser = await MIRAAppCacheStore.shared.loadCurrentProfile()
-    if cachedUser == nil {
-      cachedUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey, maxAge: 60 * 60 * 24 * 90)
+    let generation = loadGeneration
+    if user == nil {
+      var cachedUser = await MIRAAppCacheStore.shared.loadCurrentProfile()
+      if cachedUser == nil {
+        cachedUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey, maxAge: 60 * 60 * 24 * 90)
+      }
+      guard loadGeneration == generation else { return }
+      if let cachedUser { user = cachedUser }
     }
-    guard let cachedUser else { return }
-    user = cachedUser
-    var cachedPosts = await MIRAAppCacheStore.shared.loadProfilePosts(userId: cachedUser.id)
+    guard let activeUser = user, posts.isEmpty else { return }
+    var cachedPosts = await MIRAAppCacheStore.shared.loadProfilePosts(userId: activeUser.id)
     if cachedPosts == nil {
-      cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: cachedUser.id), maxAge: 60 * 60 * 24 * 90)
+      cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey(for: activeUser.id), maxAge: 60 * 60 * 24 * 90)
     }
-    posts = await MIRAPostEngagementSync.apply(to: profileVisiblePosts(cachedPosts ?? posts))
+    guard let cachedPosts, loadGeneration == generation else { return }
+    let hydrated = await MIRAPostEngagementSync.apply(to: profileVisiblePosts(cachedPosts))
+    guard loadGeneration == generation else { return }
+    posts = hydrated
   }
-
   func applyUpdatedUser(_ updated: MIRAUser) async {
     user = updated
+    posts = posts.map { $0.userId == updated.id ? $0.updating(author: updated) : $0 }
+    NotificationCenter.default.post(name: .captroCurrentProfileUpdated, object: updated)
     await MIRAAppCacheStore.shared.saveCurrentProfile(updated)
     await MIRALocalJSONCache.save(updated, key: userCacheKey)
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: updated.id)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: updated.id))
+  }
+
+  func applyPostRecord(_ record: MIRAPost) async {
+    guard let user, let index = posts.firstIndex(where: { $0.id == record.id }) else { return }
+    let current = posts[index]
+    var merged = record.updating(
+      liked: record.viewerLikedValue ?? current.viewerLikedValue,
+      likesCount: record.likesCount ?? current.likesCount,
+      commentsCount: record.commentsCount ?? current.commentsCount,
+      saved: record.viewerSavedValue ?? current.viewerSavedValue,
+      savesCount: record.savesCount ?? current.savesCount
+    )
+    if merged.detail == nil { merged.detail = current.detail }
+    guard merged != current else { return }
+    posts[index] = merged
+    await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
+    await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
   }
 
   func deletePost(_ post: MIRAPost) async {
@@ -122,6 +185,7 @@ final class ProfileNativeModel: ObservableObject {
       }
       await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
       await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+      NotificationCenter.default.post(name: .captroPostDetailsUpdated, object: updated)
       if visibility == "private" {
         MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
       }
@@ -168,6 +232,7 @@ final class ProfileNativeModel: ObservableObject {
       }
       await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
       await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
+      NotificationCenter.default.post(name: .captroPostDetailsUpdated, object: updated)
       profileError = nil
     } catch {
       posts[index] = previous
@@ -324,6 +389,13 @@ public struct ProfileNativeView: View {
           model.primeUser(authSession?.user)
         }
         await model.load()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .captroPostSubmissionCompleted)) { _ in
+        model.requestRefresh()
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { notification in
+        guard let record = notification.object as? MIRAPost else { return }
+        Task { await model.applyPostRecord(record) }
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
         guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
@@ -1866,6 +1938,8 @@ final class ChatNativeModel: ObservableObject {
   private var currentUserId = ""
   private var hasLoadedFreshConversations = false
   private var isLoadingFreshConversations = false
+  private var refreshRequested = false
+  private var consecutiveFailures = 0
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -1877,6 +1951,10 @@ final class ChatNativeModel: ObservableObject {
     self.currentUserId = clean
     loadError = nil
     hasLoadedFreshConversations = false
+    refreshRequested = false
+    consecutiveFailures = 0
+    isLoadingFreshConversations = false
+    isLoading = false
     if !conversations.isEmpty {
       conversations = []
     }
@@ -1892,35 +1970,60 @@ final class ChatNativeModel: ObservableObject {
   }
 
   func load(forceRefresh: Bool = false) async {
-    if isLoadingFreshConversations && !forceRefresh { return }
+    if isLoadingFreshConversations {
+      if forceRefresh { refreshRequested = true }
+      return
+    }
     if !forceRefresh && hasLoadedFreshConversations && !conversations.isEmpty { return }
     isLoadingFreshConversations = true
-    await hydrateCachedConversationsIfNeeded()
-    if conversations.isEmpty { isLoading = true }
+    let accountId = currentUserId
     defer {
-      isLoading = false
-      isLoadingFreshConversations = false
+      if accountId == currentUserId {
+        isLoading = false
+        isLoadingFreshConversations = false
+        if refreshRequested {
+          refreshRequested = false
+          Task { await load(forceRefresh: true) }
+        }
+      }
     }
+    await hydrateCachedConversationsIfNeeded()
+    guard accountId == currentUserId else { return }
+    if conversations.isEmpty { isLoading = true }
 
-    guard let fresh: [MIRAConversation] = try? await api.get("/conversations") else {
+    do {
+      let fresh: [MIRAConversation] = try await api.get("/conversations")
+      guard accountId == currentUserId else { return }
+      consecutiveFailures = 0
+      loadError = nil
+      hasLoadedFreshConversations = true
+      if conversations != fresh { conversations = fresh }
+      prefetchConversationAvatars(fresh)
+      await localStore.saveConversations(fresh, userId: accountId)
+    } catch {
+      guard accountId == currentUserId else { return }
+      consecutiveFailures = min(3, consecutiveFailures + 1)
       if conversations.isEmpty {
         hasLoadedFreshConversations = false
         loadError = "Check your connection and try again."
       }
-      return
     }
-    loadError = nil
-    hasLoadedFreshConversations = true
-    if conversations != fresh {
-      conversations = fresh
+  }
+
+  func pollActiveConversations() async {
+    while !Task.isCancelled {
+      await load(forceRefresh: true)
+      let delay = min(60, 15 * (1 << consecutiveFailures))
+      do { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
+      catch { break }
     }
-    prefetchConversationAvatars(fresh)
-    await localStore.saveConversations(fresh, userId: currentUserId)
   }
 
   private func hydrateCachedConversationsIfNeeded() async {
+    let accountId = currentUserId
     guard conversations.isEmpty,
-          let cached = await localStore.loadConversations(userId: currentUserId)
+          let cached = await localStore.loadConversations(userId: accountId),
+          accountId == currentUserId
     else { return }
     conversations = cached.conversations
     prefetchConversationAvatars(cached.conversations)
@@ -1942,6 +2045,7 @@ final class ChatNativeModel: ObservableObject {
 public struct ChatNativeView: View {
   @StateObject private var model: ChatNativeModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
   @State private var showCreateGroup = false
   @State private var openingConversationId: String?
   @State private var activeConversationRoute: ChatOpenRoute?
@@ -1989,6 +2093,10 @@ public struct ChatNativeView: View {
         model.configure(currentUserId: currentUserId)
         await model.load()
       }
+      .task(id: scenePhase == .active && activeConversationRoute == nil) {
+        guard scenePhase == .active, activeConversationRoute == nil else { return }
+        await model.pollActiveConversations()
+      }
       .background {
         NavigationLink(
           isActive: Binding(
@@ -2012,7 +2120,7 @@ public struct ChatNativeView: View {
       .miraBottomSheet(isPresented: $showCreateGroup, preferredHeightFraction: 0.76) { dismissCreateGroup in
         CreateGroupChatSheet(api: model.api, currentUserId: currentUserId, onCancel: dismissCreateGroup) {
           dismissCreateGroup()
-          Task { await model.load() }
+          Task { await model.load(forceRefresh: true) }
         }
       }
       .navigationBarTitleDisplayMode(.inline)

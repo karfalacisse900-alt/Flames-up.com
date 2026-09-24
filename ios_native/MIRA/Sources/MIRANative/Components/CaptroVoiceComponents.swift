@@ -74,7 +74,8 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
       try session.setActive(true, options: .notifyOthersOnDeactivation)
       // The route can be empty briefly after activation, even though the
       // recorder can open the built-in microphone. Let AVAudioRecorder decide.
-      let url = FileManager.default.temporaryDirectory.appendingPathComponent("captro-voice-\(UUID().uuidString).m4a")
+      guard let directory = postDraftMediaDirectory() else { throw MIRAAPIError.emptyResponse }
+      let url = directory.appendingPathComponent("captro-voice-\(UUID().uuidString).m4a")
       let settings: [String: Any] = [
         AVFormatIDKey: kAudioFormatMPEG4AAC,
         AVSampleRateKey: 44_100,
@@ -186,6 +187,7 @@ public struct CaptroVoiceRecorderSheet: View {
   @State private var disclosureAccepted = false
   @State private var previewPlayer: AVAudioPlayer?
   @State private var isPreviewing = false
+  @State private var didUseRecording = false
   private let limit: TimeInterval
   private let onUse: (CaptroVoiceDraft) -> Void
 
@@ -248,6 +250,7 @@ public struct CaptroVoiceRecorderSheet: View {
 
           Button("Use recording") {
             guard let fileURL = recorder.fileURL else { return }
+            didUseRecording = true
             onUse(CaptroVoiceDraft(fileURL: fileURL, duration: recorder.duration, levels: recorder.levels,
               disclosureVersion: "voice-ai-processing-v1", disclosureAcceptedAt: Date()))
             dismiss()
@@ -272,7 +275,10 @@ public struct CaptroVoiceRecorderSheet: View {
         }
       }
       .interactiveDismissDisabled(recorder.isRecording)
-      .onDisappear { recorder.stop() }
+      .onDisappear {
+        if didUseRecording { recorder.stop() }
+        else { recorder.reset() }
+      }
     }
   }
 

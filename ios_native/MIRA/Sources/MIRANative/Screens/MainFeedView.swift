@@ -27,8 +27,10 @@ final class MainFeedModel: ObservableObject {
   private var isGuestFeedMode = false
   private var hasLoadedFreshFeed = false
   private var isLoadingFreshFeed = false
+  private var refreshRequested = false
   private var canLoadMore = true
   private var isLoadingCurrentUser = false
+  private var accountGeneration = 0
   private var mediaPrefetchTask: Task<Void, Never>?
   private var followingAuthorIds = Set<String>()
   private var likeMutationVersions: [String: Int] = [:]
@@ -52,18 +54,28 @@ final class MainFeedModel: ObservableObject {
   }
 #endif
 
-  func configureGuestMode(_ isGuest: Bool) {
-    guard isGuestFeedMode != isGuest else { return }
-    isGuestFeedMode = isGuest
+  func resetForAccountChange() {
+    accountGeneration += 1
+    mediaPrefetchTask?.cancel()
     posts = []
     currentUserId = nil
     currentUsername = nil
     errorMessage = nil
     hasLoadedFreshFeed = false
     isLoadingFreshFeed = false
+    refreshRequested = false
+    isLoadingCurrentUser = false
     canLoadMore = true
     isLoading = true
-    mediaPrefetchTask?.cancel()
+    isLoadingMore = false
+    followingAuthorIds.removeAll()
+    likeMutationVersions.removeAll()
+  }
+
+  func configureGuestMode(_ isGuest: Bool) {
+    guard isGuestFeedMode != isGuest else { return }
+    isGuestFeedMode = isGuest
+    resetForAccountChange()
   }
 
   func prepareForStartup() async {
@@ -72,9 +84,7 @@ final class MainFeedModel: ObservableObject {
       Task { await loadCurrentUserIfNeeded() }
     }
     await hydrateCachedFeedIfNeeded()
-    if posts.isEmpty {
-      isLoading = true
-    }
+    if posts.isEmpty { isLoading = true }
     Task { await load() }
   }
 
@@ -85,29 +95,55 @@ final class MainFeedModel: ObservableObject {
     if !isGuestFeedMode && currentUserId == nil && currentUsername == nil {
       Task { await loadCurrentUserIfNeeded() }
     }
-    if isLoadingFreshFeed && !forceRefresh { return }
+    // A foreground refresh and pull-to-refresh should coalesce, not race to
+    // replace the same first page in an arbitrary completion order.
+    if isLoadingFreshFeed {
+      if forceRefresh { refreshRequested = true }
+      return
+    }
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
     isLoadingFreshFeed = true
+    let generation = accountGeneration
     defer {
-      isLoading = false
-      isLoadingFreshFeed = false
+      if accountGeneration == generation {
+        isLoading = false
+        isLoadingFreshFeed = false
+        if refreshRequested {
+          refreshRequested = false
+          Task { await load(forceRefresh: true) }
+        }
+      }
     }
     MIRAPerformanceTimeline.mark("home_load_start", detail: forceRefresh ? "refresh" : "normal")
 
     await hydrateCachedFeedIfNeeded()
+    guard accountGeneration == generation else { return }
 
     if posts.isEmpty { isLoading = true }
-    hasLoadedFreshFeed = true
-    let loaded = await fetchFeedPage(skip: 0)
-    guard !loaded.isEmpty else {
-      canLoadMore = false
-      if posts.isEmpty {
-        hasLoadedFreshFeed = false
-        errorMessage = "Check your connection and try again."
-      }
+    let loaded: [MIRAPost]
+    do {
+      loaded = try await fetchFeedPage(skip: 0)
+    } catch {
+      guard accountGeneration == generation else { return }
+      hasLoadedFreshFeed = false
+      if posts.isEmpty { errorMessage = "Check your connection and try again." }
+      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "first_page")
       return
     }
+    guard accountGeneration == generation else { return }
+    hasLoadedFreshFeed = true
+    canLoadMore = loaded.count >= firstPageLimit
+    if loaded.isEmpty {
+      // A successful empty response is not a network error. Retire stale
+      // cached first-page posts instead of leaving deleted content on screen.
+      posts = []
+      errorMessage = nil
+      await persistCurrentFeed()
+      return
+    }
+
     let sorted = await sortedByNativeScore(loaded)
+    guard accountGeneration == generation else { return }
     let merged: [MIRAPost]
     if isGuestFeedMode {
       merged = mergePublicFirstPage(existing: posts, fresh: sorted)
@@ -118,11 +154,9 @@ final class MainFeedModel: ObservableObject {
         pageLimit: firstPageLimit
       )
     }
+    guard accountGeneration == generation else { return }
     let mixed = interleavePostFormats(merged)
-    if posts != mixed {
-      posts = mixed
-    }
-    canLoadMore = loaded.count >= firstPageLimit
+    if posts != mixed { posts = mixed }
     await persistCurrentFeed()
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
     errorMessage = nil
@@ -132,8 +166,10 @@ final class MainFeedModel: ObservableObject {
 
   private func hydrateCachedFeedIfNeeded() async {
     guard posts.isEmpty else { return }
+    let generation = accountGeneration
+    let guest = isGuestFeedMode
     let cached: [MIRAPost]?
-    if isGuestFeedMode {
+    if guest {
       cached = await MIRALocalJSONCache.load(
         [MIRAPost].self,
         key: publicFeedCacheKey,
@@ -150,18 +186,17 @@ final class MainFeedModel: ObservableObject {
       }
       cached = authenticatedCache
     }
-    guard let cached else { return }
-    if isGuestFeedMode {
-      posts = interleavePostFormats(cached)
-    } else {
-      posts = interleavePostFormats(await MIRAPostEngagementSync.apply(to: cached))
-    }
+    guard accountGeneration == generation, isGuestFeedMode == guest, let cached else { return }
+    let hydrated: [MIRAPost]
+    if guest { hydrated = cached }
+    else { hydrated = await MIRAPostEngagementSync.apply(to: cached) }
+    guard accountGeneration == generation else { return }
+    posts = interleavePostFormats(hydrated)
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
     isLoading = false
     prefetchInitialMediaWindow()
   }
-
   func loadMoreIfNeeded(after post: MIRAPost) async {
     guard !isLoading else { return }
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
@@ -265,18 +300,26 @@ final class MainFeedModel: ObservableObject {
   private func loadNextPage(reason: String) async {
     guard canLoadMore, !isLoadingMore else { return }
     isLoadingMore = true
-    defer { isLoadingMore = false }
+    let generation = accountGeneration
+    defer { if accountGeneration == generation { isLoadingMore = false } }
 
     let skip = posts.count
     MIRAPerformanceTimeline.mark("home_load_more_start", detail: "\(reason) skip=\(skip)")
-    let loaded = await fetchFeedPage(skip: skip)
+    let loaded: [MIRAPost]
+    do {
+      loaded = try await fetchFeedPage(skip: skip)
+    } catch {
+      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "skip=\(skip)")
+      return
+    }
+    guard accountGeneration == generation else { return }
     guard !loaded.isEmpty else {
       canLoadMore = false
       MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
       return
     }
     let existing = Set(posts.map(\.id))
-    var unique = loaded.filter { !existing.contains($0.id) }
+    let unique = loaded.filter { !existing.contains($0.id) }
 
     if unique.isEmpty {
       canLoadMore = loaded.count >= firstPageLimit
@@ -284,8 +327,10 @@ final class MainFeedModel: ObservableObject {
       return
     }
 
-    posts.append(contentsOf: interleavePostFormats(await sortedByNativeScore(unique)))
-    canLoadMore = loaded.count >= firstPageLimit || unique.count >= firstPageLimit
+    let sorted = await sortedByNativeScore(unique)
+    guard accountGeneration == generation else { return }
+    posts.append(contentsOf: interleavePostFormats(sorted))
+    canLoadMore = loaded.count >= firstPageLimit
     MIRAPerformanceTimeline.mark("home_load_more_done", detail: "added=\(unique.count) total=\(posts.count)")
     cacheCurrentPosts()
   }
@@ -429,12 +474,36 @@ final class MainFeedModel: ObservableObject {
         posts[currentIndex] = updated
       }
       cacheCurrentPosts()
+      NotificationCenter.default.post(name: .captroPostDetailsUpdated, object: updated)
     } catch {
       if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
         posts[currentIndex] = previous
       }
       errorMessage = "Could not update pinned post."
     }
+  }
+
+  func applyPostRecord(_ record: MIRAPost) {
+    guard let index = posts.firstIndex(where: { $0.id == record.id }) else { return }
+    let current = posts[index]
+    var merged = record.updating(
+      liked: record.viewerLikedValue ?? current.viewerLikedValue,
+      likesCount: record.likesCount ?? current.likesCount,
+      commentsCount: record.commentsCount ?? current.commentsCount,
+      saved: record.viewerSavedValue ?? current.viewerSavedValue,
+      savesCount: record.savesCount ?? current.savesCount
+    )
+    if merged.detail == nil { merged.detail = current.detail }
+    guard merged != current else { return }
+    posts[index] = merged
+    cacheCurrentPosts()
+  }
+
+  func applyCurrentAuthor(_ author: MIRAUser) {
+    let updated = posts.map { $0.userId == author.id ? $0.updating(author: author) : $0 }
+    guard updated != posts else { return }
+    posts = updated
+    cacheCurrentPosts()
   }
 
   func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
@@ -573,6 +642,7 @@ final class MainFeedModel: ObservableObject {
         posts[index] = updated
       }
       cacheCurrentPosts()
+      NotificationCenter.default.post(name: .captroPostDetailsUpdated, object: updated)
       if visibility == "private" {
         MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
       }
@@ -586,9 +656,11 @@ final class MainFeedModel: ObservableObject {
     guard !isGuestFeedMode else { return }
     guard currentUserId == nil && currentUsername == nil else { return }
     guard !isLoadingCurrentUser else { return }
+    let generation = accountGeneration
     isLoadingCurrentUser = true
-    defer { isLoadingCurrentUser = false }
+    defer { if accountGeneration == generation { isLoadingCurrentUser = false } }
     let me: MIRAUser? = try? await api.get("/auth/me")
+    guard accountGeneration == generation, !isGuestFeedMode else { return }
     currentUserId = me?.id
     currentUsername = me?.username
   }
@@ -652,36 +724,15 @@ final class MainFeedModel: ObservableObject {
     )
   }
 
-  private func fetchFeedPage(skip: Int) async -> [MIRAPost] {
+  private func fetchFeedPage(skip: Int) async throws -> [MIRAPost] {
     if isGuestFeedMode {
-      do {
-        let publicPosts: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
-        MIRAPerformanceTimeline.mark("home_feed_public", detail: "guest skip=\(skip)")
-        return publicPosts
-      } catch {
-        MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "guest_public skip=\(skip)")
-        return []
-      }
-    }
-
-    do {
-      let loaded: [MIRAPost] = try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)")
-      if !loaded.isEmpty { return loaded }
-      MIRAPerformanceTimeline.mark("home_feed_page_empty", detail: "authenticated skip=\(skip)")
-    } catch {
-      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "authenticated skip=\(skip)")
-    }
-
-    do {
       let publicPosts: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
-      if !publicPosts.isEmpty {
-        MIRAPerformanceTimeline.mark("home_feed_public_fallback", detail: "skip=\(skip)")
-        return publicPosts
-      }
-    } catch {
-      MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "public skip=\(skip)")
+      MIRAPerformanceTimeline.mark("home_feed_public", detail: "guest skip=\(skip)")
+      return publicPosts
     }
-    return []
+    // A failed or legitimately empty personalized feed must not silently turn
+    // into a different public feed while retaining the signed-in UI state.
+    return try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)")
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
@@ -936,11 +987,16 @@ public struct MainFeedView: View {
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
       }
+      .onReceive(NotificationCenter.default.publisher(for: .captroPostSubmissionCompleted)) { _ in
+        Task { await model.load(forceRefresh: true) }
+      }
       .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { notification in
-        guard let post = notification.object as? MIRAPost,
-              let index = model.posts.firstIndex(where: { $0.id == post.id }) else { return }
-        model.posts[index].detail = post.detail
-        Task { await MIRAAppCacheStore.shared.saveFeed(model.posts) }
+        guard let post = notification.object as? MIRAPost else { return }
+        model.applyPostRecord(post)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .captroCurrentProfileUpdated)) { notification in
+        guard let author = notification.object as? MIRAUser else { return }
+        model.applyCurrentAuthor(author)
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
         guard let update = MIRAPostRemovalSync.update(from: notification) else { return }

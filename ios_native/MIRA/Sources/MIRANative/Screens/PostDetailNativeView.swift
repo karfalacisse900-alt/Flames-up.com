@@ -173,6 +173,26 @@ final class PostDetailModel: ObservableObject {
       && currentUserId != nil && currentUserId == post.userId
   }
 
+  func applyPostRecord(_ record: MIRAPost) {
+    guard record.id == post.id else { return }
+    let current = post
+    var merged = record.updating(
+      liked: record.viewerLikedValue ?? current.viewerLikedValue,
+      likesCount: record.likesCount ?? current.likesCount,
+      commentsCount: record.commentsCount ?? current.commentsCount,
+      saved: record.viewerSavedValue ?? current.viewerSavedValue,
+      savesCount: record.savesCount ?? current.savesCount
+    )
+    if merged.detail == nil { merged.detail = current.detail }
+    if merged.detail?.commerce == nil { merged.detail?.commerce = current.detail?.commerce }
+    if merged != current { post = merged }
+  }
+
+  func applyCurrentAuthor(_ author: MIRAUser) {
+    guard post.userId == author.id else { return }
+    post = post.updating(author: author)
+  }
+
   func updateEvent(_ input: CaptroEventInput) async throws {
     guard canEditEvent else { throw MIRAAPIError.badStatus(403) }
     let updated: MIRAPost = try await api.put("/posts/\(post.id)/event", body: input)
@@ -689,6 +709,14 @@ public struct PostDetailNativeView: View {
       await model.loadCommerce()
       await model.loadPrivateObject()
       await model.loadComments()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { notification in
+      guard let record = notification.object as? MIRAPost else { return }
+      model.applyPostRecord(record)
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .captroCurrentProfileUpdated)) { notification in
+      guard let author = notification.object as? MIRAUser else { return }
+      model.applyCurrentAuthor(author)
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
       guard let update = MIRAPostEngagementSync.update(from: notification) else { return }

@@ -38,6 +38,33 @@ struct MIRAPostDraftMediaSnapshot: Codable, Hashable, Identifiable {
   let editorMetadata: MIRANativeEditedMediaMetadata?
 }
 
+struct MIRAVoiceDraftSnapshot: Codable, Hashable {
+  let localFilePath: String
+  let duration: TimeInterval
+  let levels: [Float]
+  let disclosureVersion: String
+  let disclosureAcceptedAt: Date
+
+  init(_ draft: CaptroVoiceDraft) {
+    localFilePath = draft.fileURL.path
+    duration = draft.duration
+    levels = draft.levels
+    disclosureVersion = draft.disclosureVersion
+    disclosureAcceptedAt = draft.disclosureAcceptedAt
+  }
+
+  func restore() -> CaptroVoiceDraft? {
+    guard let directory = postDraftMediaDirectory() else { return nil }
+    let url = URL(fileURLWithPath: localFilePath).standardizedFileURL
+    guard url.deletingLastPathComponent() == directory.standardizedFileURL,
+          FileManager.default.fileExists(atPath: url.path) else { return nil }
+    return CaptroVoiceDraft(
+      fileURL: url, duration: duration, levels: levels,
+      disclosureVersion: disclosureVersion, disclosureAcceptedAt: disclosureAcceptedAt
+    )
+  }
+}
+
 struct MIRAPostDraftSnapshot: Codable, Hashable {
   let title: String
   let bodyText: String
@@ -54,6 +81,7 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let showBroadLocation: Bool
   let isEditingPostDetails: Bool?
   let media: [MIRAPostDraftMediaSnapshot]
+  var voiceDraft: MIRAVoiceDraftSnapshot? = nil
   let uploadStatus: String
   let errorMessage: String?
   let savedAt: String
@@ -279,36 +307,46 @@ actor MIRAAppCacheStore {
 
   func savePostDraft(_ draft: MIRAPostDraftSnapshot) async {
     await MIRALocalJSONCache.save(draft, key: CacheKey.postDraft)
+    // Never delete the prior media until the new snapshot can be read back.
+    guard let verified = await loadPostDraft(), verified == draft,
+          let directory = postDraftMediaDirectory() else { return }
+    let retained = Set(draft.media.map(\.localFilePath))
+    pruneStoredPostDraftMedia(in: directory, keeping: retained)
   }
 
   func clearPostDraftFromPreviousProcessIfNeeded() async {
     guard !didClearPostDraftFromPreviousProcess else { return }
     didClearPostDraftFromPreviousProcess = true
     // Keep the existing entry point, but do not silently discard a saved composer
-    // attachment on relaunch. Explicit discard, publish and sign-out still clear it.
+    // attachment on relaunch. An explicit discard or completed post clears it.
   }
 
-  func storePostDraftMedia(_ mediaItems: [MIRAPickedMedia]) async -> [MIRAPostDraftMediaSnapshot] {
-    guard let directory = postDraftMediaDirectory() else { return [] }
-    clearDirectory(directory)
-    return mediaItems.compactMap { item in
-      let safeName = item.fileName
-        .replacingOccurrences(of: "/", with: "-")
-        .replacingOccurrences(of: ":", with: "-")
-      let fileURL = directory.appendingPathComponent("\(UUID().uuidString)-\(safeName)")
-      do {
+  func storePostDraftMedia(_ mediaItems: [MIRAPickedMedia]) async throws -> [MIRAPostDraftMediaSnapshot] {
+    guard let directory = postDraftMediaDirectory() else { throw MIRAAPIError.emptyResponse }
+    var written: [URL] = []
+    var snapshots: [MIRAPostDraftMediaSnapshot] = []
+    do {
+      for item in mediaItems {
+        let safeName = item.fileName
+          .replacingOccurrences(of: "/", with: "-")
+          .replacingOccurrences(of: "\\", with: "-")
+          .replacingOccurrences(of: ":", with: "-")
+        let fileURL = directory.appendingPathComponent("captro-post-draft-\(UUID().uuidString)-\(safeName)")
         try item.data.write(to: fileURL, options: [.atomic])
-        return MIRAPostDraftMediaSnapshot(
+        written.append(fileURL)
+        snapshots.append(MIRAPostDraftMediaSnapshot(
           id: UUID().uuidString,
           localFilePath: fileURL.path,
           kind: item.kind.rawValue,
           fileName: item.fileName,
           mimeType: item.mimeType,
           editorMetadata: item.editorMetadata
-        )
-      } catch {
-        return nil
+        ))
       }
+      return snapshots
+    } catch {
+      for url in written { try? FileManager.default.removeItem(at: url) }
+      throw error
     }
   }
 
@@ -328,9 +366,15 @@ actor MIRAAppCacheStore {
   }
 
   func clearPostDraft() async {
+    let draft = await loadPostDraft()
     await MIRALocalJSONCache.remove(key: CacheKey.postDraft)
     guard let directory = postDraftMediaDirectory() else { return }
-    clearDirectory(directory)
+    pruneStoredPostDraftMedia(in: directory, keeping: [])
+    // Comment recordings use the same durable directory. Delete only the
+    // recording attached to this post draft, never another composer’s audio.
+    if let voice = draft?.voiceDraft?.restore() {
+      try? FileManager.default.removeItem(at: voice.fileURL)
+    }
   }
 
   func cleanup() async {
@@ -429,18 +473,24 @@ private extension ISO8601DateFormatter {
   }()
 }
 
-private func postDraftMediaDirectory() -> URL? {
-  guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
-  let directory = caches.appendingPathComponent("MIRAPostDraftMedia", isDirectory: true)
+func postDraftMediaDirectory() -> URL? {
+  guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+  var directory = support
+    .appendingPathComponent("MIRAPostDraftMedia", isDirectory: true)
+    .appendingPathComponent(MIRALocalJSONCache.currentScopeIdentifier, isDirectory: true)
   if !FileManager.default.fileExists(atPath: directory.path) {
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   }
+  guard FileManager.default.fileExists(atPath: directory.path) else { return nil }
+  var values = URLResourceValues()
+  values.isExcludedFromBackup = true
+  try? directory.setResourceValues(values)
   return directory
 }
 
-private func clearDirectory(_ directory: URL) {
+private func pruneStoredPostDraftMedia(in directory: URL, keeping paths: Set<String>) {
   guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
-  for file in files {
+  for file in files where file.lastPathComponent.hasPrefix("captro-post-draft-") && !paths.contains(file.path) {
     try? FileManager.default.removeItem(at: file)
   }
 }

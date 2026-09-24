@@ -48,7 +48,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /let mediaPosts = rankedPosts\.filter \{ !\$0\.feedMediaURLs\.isEmpty \}/);
   assert.match(mainFeed, /let textPosts = rankedPosts\.filter \{ \$0\.feedMediaURLs\.isEmpty \}/);
   assert.match(mainFeed, /wantsMedia\.toggle\(\)/);
-  assert.match(mainFeed, /let loaded = await fetchFeedPage\(skip: skip\)/);
+  assert.match(mainFeed, /loaded = try await fetchFeedPage\(skip: skip\)/);
   assert.match(mainFeed, /ForEach\(visiblePostIndices, id: \\.self\)/);
   assert.match(
     postView,
@@ -322,10 +322,10 @@ test('composer stays on a single writing page with compact tools and an explicit
   assert.doesNotMatch(composer, /private var finalPostPage/);
 });
 
-test('feed image uploads are rendered into the selected supported ratio', () => {
-  assert.match(mediaUpload, /cropMode: "center_crop"/);
-  assert.match(mediaUpload, /width: CGFloat\(supported\.feedWidth\),[\s\S]*?height: CGFloat\(supported\.feedHeight\)/);
-  assert.match(mediaUpload, /let scale = max\(targetSize\.width \/ image\.size\.width, targetSize\.height \/ image\.size\.height\)/);
-  assert.match(mediaUpload, /let drawOrigin = CGPoint/);
-  assert.match(mediaUpload, /image\.draw\(in: CGRect\(origin: drawOrigin, size: drawSize\)\)/);
+test('feed image upload preserves composition and stays within the hosted-image limit', () => {
+  assert.match(mediaUpload, /let scale = min\(1, maxSide \/ max\(image\.size\.width, image\.size\.height\)\)/);
+  assert.match(mediaUpload, /image\.draw\(in: CGRect\(origin: \.zero, size: targetSize\)\)/);
+  assert.match(mediaUpload, /\.first \{ \$0\.count <= 9_500_000 \}/);
+  assert.match(mediaUpload, /width: actualWidth,[\s\S]*?height: actualHeight/);
+  assert.doesNotMatch(mediaUpload, /let drawOrigin = CGPoint/);
 });

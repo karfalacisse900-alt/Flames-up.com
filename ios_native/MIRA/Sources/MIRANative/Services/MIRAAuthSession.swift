@@ -68,6 +68,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       await MainActor.run {
         token = response.accessToken
         refreshToken = response.refreshToken ?? storedRefreshToken
+        MIRALocalJSONCache.setAccountScope(userId: response.user.id)
         user = response.user
         keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken ?? storedRefreshToken)
       }
@@ -86,6 +87,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
         return false
       }
       await MainActor.run {
+        MIRALocalJSONCache.setAccountScope(userId: nil)
         token = nil
         refreshToken = nil
         user = nil
@@ -103,6 +105,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
     MIRAAuthDiagnostics.sessionStage("restore_started")
     isBootstrapping = true
     guard let storedToken = await keychain.accessToken(), !storedToken.isEmpty else {
+      MIRALocalJSONCache.setAccountScope(userId: nil)
       token = nil
       refreshToken = nil
       user = nil
@@ -121,6 +124,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       cachedUser = await MIRALocalJSONCache.load(MIRAUser.self, key: cachedUserKey)
     }
     if let cachedUser {
+      MIRALocalJSONCache.setAccountScope(userId: cachedUser.id)
       user = cachedUser
       isBootstrapping = false
       MIRAPerformanceTimeline.mark("auth_cached_user_ready")
@@ -131,6 +135,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
     do {
       let freshUser: MIRAUser = try await api.get("/auth/me")
+      MIRALocalJSONCache.setAccountScope(userId: freshUser.id)
       user = freshUser
       await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
       await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
@@ -140,12 +145,14 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       if (error.isUnauthorizedAPIError || error.isForbiddenAPIError), await refreshAccessTokenIfNeeded(api: api) {
         do {
           let refreshedUser: MIRAUser = try await api.get("/auth/me")
+          MIRALocalJSONCache.setAccountScope(userId: refreshedUser.id)
           user = refreshedUser
           await MIRAAppCacheStore.shared.saveCurrentProfile(refreshedUser)
           await MIRALocalJSONCache.save(refreshedUser, key: cachedUserKey)
           errorMessage = nil
           MIRAAuthDiagnostics.sessionStage("restore_refreshed")
         } catch {
+          MIRALocalJSONCache.setAccountScope(userId: nil)
           token = nil
           refreshToken = nil
           user = nil
@@ -154,6 +161,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
           MIRAAuthDiagnostics.sessionStage("restore_rejected")
         }
       } else if error.isUnauthorizedAPIError || error.isForbiddenAPIError {
+        MIRALocalJSONCache.setAccountScope(userId: nil)
         token = nil
         refreshToken = nil
         user = nil
@@ -175,6 +183,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
   private func refreshCachedSession(api: MIRAAPIClient) async {
     do {
       let freshUser: MIRAUser = try await api.get("/auth/me")
+      MIRALocalJSONCache.setAccountScope(userId: freshUser.id)
       user = freshUser
       await MIRAAppCacheStore.shared.saveCurrentProfile(freshUser)
       await MIRALocalJSONCache.save(freshUser, key: cachedUserKey)
@@ -184,12 +193,14 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       if (error.isUnauthorizedAPIError || error.isForbiddenAPIError), await refreshAccessTokenIfNeeded(api: api) {
         do {
           let refreshedUser: MIRAUser = try await api.get("/auth/me")
+          MIRALocalJSONCache.setAccountScope(userId: refreshedUser.id)
           user = refreshedUser
           await MIRAAppCacheStore.shared.saveCurrentProfile(refreshedUser)
           await MIRALocalJSONCache.save(refreshedUser, key: cachedUserKey)
           errorMessage = nil
           MIRAPerformanceTimeline.mark("auth_cached_user_recovered")
         } catch {
+          MIRALocalJSONCache.setAccountScope(userId: nil)
           token = nil
           refreshToken = nil
           user = nil
@@ -198,6 +209,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
           MIRAPerformanceTimeline.mark("auth_cached_user_rejected")
         }
       } else if error.isUnauthorizedAPIError || error.isForbiddenAPIError {
+        MIRALocalJSONCache.setAccountScope(userId: nil)
         token = nil
         refreshToken = nil
         user = nil
@@ -287,6 +299,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       )
       token = response.accessToken
       refreshToken = response.refreshToken
+      MIRALocalJSONCache.setAccountScope(userId: response.user.id)
       user = response.user
       setGuestMode(false)
       self.passwordResetContext = nil
@@ -321,6 +334,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
   @MainActor
   public func continueAsGuest() {
+    MIRALocalJSONCache.setAccountScope(userId: nil)
     token = nil
     refreshToken = nil
     user = nil
@@ -344,6 +358,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
 
   @MainActor
   public func logout() {
+    MIRALocalJSONCache.setAccountScope(userId: nil)
     token = nil
     refreshToken = nil
     user = nil
@@ -390,6 +405,7 @@ public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProv
       MIRAAuthDiagnostics.stage(provider, "backend_session_created")
       token = response.accessToken
       refreshToken = response.refreshToken
+      MIRALocalJSONCache.setAccountScope(userId: response.user.id)
       user = response.user
       setGuestMode(false)
       keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)

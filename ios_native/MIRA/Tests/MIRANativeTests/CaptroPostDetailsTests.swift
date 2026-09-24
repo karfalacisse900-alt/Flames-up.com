@@ -149,6 +149,24 @@ final class CaptroPostDetailsTests: XCTestCase {
     XCTAssertNotNil(post.detail?.event?.timeRange)
   }
 
+  func testUpdatingAuthorPreservesPostFactsAndChangesAvatar() throws {
+    let post = try decode([
+      "id": "post", "user_id": "user", "user_username": "oldname",
+      "user_profile_image": "https://example.com/old.jpg", "title": "Unchanged title",
+    ])
+    let userData = try JSONSerialization.data(withJSONObject: [
+      "id": "user", "username": "newname", "profile_image": "https://example.com/new.jpg",
+    ])
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let user = try decoder.decode(MIRAUser.self, from: userData)
+    let updated = post.updating(author: user)
+    XCTAssertEqual(updated.userUsername, "newname")
+    XCTAssertEqual(updated.userProfileImage, "https://example.com/new.jpg")
+    XCTAssertEqual(updated.title, post.title)
+    XCTAssertEqual(updated.id, post.id)
+  }
+
   private func decode(_ json: [String: Any]) throws -> MIRAPost {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase

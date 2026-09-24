@@ -240,6 +240,19 @@ public struct MIRANativeRootView: View {
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
+      if !startup.isSplashMounted {
+        startup.feedModel.resetForAccountChange()
+        startup.profileModel.resetForAccountChange()
+        startup.chatModel.configure(currentUserId: userID ?? "")
+        if userID != nil {
+          startup.profileModel.primeUser(authSession.user)
+          Task {
+            await startup.feedModel.load(forceRefresh: true)
+            await startup.profileModel.load()
+            await startup.chatModel.load(forceRefresh: true)
+          }
+        }
+      }
       if userID == nil {
         selectedTab = .main
         loadedTabs = [.main]

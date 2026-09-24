@@ -46,6 +46,7 @@ final class ConversationNativeModel: ObservableObject {
   private var didBeginInitialLoad = false
   private var lastSyncedAt: String?
   private var lastServerSequence: Int?
+  private var consecutiveSyncFailures = 0
 
   init(kind: ConversationNativeKind, api: MIRAAPIClient, currentUserId: String = "") {
     self.kind = kind
@@ -119,11 +120,24 @@ final class ConversationNativeModel: ObservableObject {
         prefetchMessageMedia(messages)
         await persistThread()
       }
+      consecutiveSyncFailures = 0
       errorMessage = nil
     } catch {
+      consecutiveSyncFailures = min(4, consecutiveSyncFailures + 1)
       if messages.isEmpty {
         errorMessage = "Could not load this chat."
       }
+    }
+  }
+
+  func pollMessagesWhileActive() async {
+    // The Worker currently exposes a cursor-based read API, not an authorized
+    // client Realtime channel. This bounded fallback runs only while visible.
+    while !Task.isCancelled {
+      await syncNewMessages()
+      let delay = min(60, 5 * (1 << consecutiveSyncFailures))
+      do { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
+      catch { break }
     }
   }
 
@@ -433,6 +447,7 @@ public struct ConversationNativeView: View {
   @State private var reportMessage: MIRAMessage?
   @State private var isReportSheetPresented = false
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let title: String
   private let initialAvatarURL: String?
@@ -516,7 +531,14 @@ public struct ConversationNativeView: View {
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
     .task { await model.load() }
-    .task { await model.pollPresence() }
+    .task(id: scenePhase == .active) {
+      guard scenePhase == .active else { return }
+      await model.pollMessagesWhileActive()
+    }
+    .task(id: scenePhase == .active) {
+      guard scenePhase == .active else { return }
+      await model.pollPresence()
+    }
     .miraActionModal(isPresented: $showProfileOptions) { dismissOptions in
       ChatProfileOptionsSheet(
         isGroup: model.isGroup,

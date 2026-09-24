@@ -253,9 +253,28 @@ public final class MIRAMainThreadStallMonitor {
 }
 
 public enum MIRALocalJSONCache {
+  private static let accountScopeKey = "native.cache.account_scope.v1"
+
+  // Set synchronously before publishing a new auth state. The scope is part of
+  // every filename, so a previous account's disk snapshots cannot hydrate a
+  // newly signed-in account while asynchronous cleanup is still running.
+  public static func setAccountScope(userId: String?) {
+    let clean = userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    UserDefaults.standard.set(clean.isEmpty ? "guest" : "user:\(clean)", forKey: accountScopeKey)
+  }
+
+  private static var accountScope: String {
+    UserDefaults.standard.string(forKey: accountScopeKey) ?? "guest"
+  }
+
+  public static var currentScopeIdentifier: String {
+    SHA256.hash(data: Data(accountScope.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
   public static func load<T: Decodable>(_ type: T.Type, key: String, maxAge: TimeInterval = 60 * 60 * 24) async -> T? {
-    await Task.detached(priority: .utility) {
-      guard let fileURL = cacheFileURL(for: key) else { return nil }
+    let scope = accountScope
+    return await Task.detached(priority: .utility) {
+      guard let fileURL = cacheFileURL(for: key, scope: scope) else { return nil }
       guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
             let modified = attributes[.modificationDate] as? Date
       else { return nil }
@@ -266,16 +285,18 @@ public enum MIRALocalJSONCache {
   }
 
   public static func save<T: Encodable>(_ value: T, key: String) async {
+    let scope = accountScope
     await Task.detached(priority: .utility) {
-      guard let fileURL = cacheFileURL(for: key) else { return }
+      guard let fileURL = cacheFileURL(for: key, scope: scope) else { return }
       guard let data = try? JSONEncoder().encode(value) else { return }
       try? data.write(to: fileURL, options: [.atomic])
     }.value
   }
 
   public static func remove(key: String) async {
+    let scope = accountScope
     await Task.detached(priority: .utility) {
-      guard let fileURL = cacheFileURL(for: key) else { return }
+      guard let fileURL = cacheFileURL(for: key, scope: scope) else { return }
       try? FileManager.default.removeItem(at: fileURL)
     }.value
   }
@@ -307,9 +328,9 @@ public enum MIRALocalJSONCache {
     }.value
   }
 
-  private static func cacheFileURL(for key: String) -> URL? {
+  private static func cacheFileURL(for key: String, scope: String) -> URL? {
     guard let directory = cacheDirectory() else { return nil }
-    let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+    let digest = SHA256.hash(data: Data("\(scope):\(key)".utf8)).map { String(format: "%02x", $0) }.joined()
     return directory.appendingPathComponent("\(digest).json")
   }
 

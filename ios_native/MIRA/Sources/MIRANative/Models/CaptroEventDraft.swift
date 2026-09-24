@@ -2,6 +2,8 @@ import Foundation
 
 extension Notification.Name {
   static let captroPostDetailsUpdated = Notification.Name("captro.post.detailsUpdated")
+  static let captroPostSubmissionCompleted = Notification.Name("captro.post.submissionCompleted")
+  static let captroCurrentProfileUpdated = Notification.Name("captro.profile.currentUserUpdated")
 }
 
 // Creator-entered public event facts, never an issued ticket or an attendance count.

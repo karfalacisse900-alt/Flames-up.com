@@ -279,6 +279,33 @@ final class DiscoverNativeModel: ObservableObject {
     Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: activePostsCategory) }
   }
 
+  func applyPostRecord(_ record: MIRAPost) {
+    guard let index = posts.firstIndex(where: { $0.id == record.id }) else { return }
+    let current = posts[index]
+    var merged = record.updating(
+      liked: record.viewerLikedValue ?? current.viewerLikedValue,
+      likesCount: record.likesCount ?? current.likesCount,
+      commentsCount: record.commentsCount ?? current.commentsCount,
+      saved: record.viewerSavedValue ?? current.viewerSavedValue,
+      savesCount: record.savesCount ?? current.savesCount
+    )
+    if merged.detail == nil { merged.detail = current.detail }
+    guard merged != current else { return }
+    posts[index] = merged
+    let snapshot = posts
+    let category = activePostsCategory
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: category) }
+  }
+
+  func applyCurrentAuthor(_ author: MIRAUser) {
+    let updated = posts.map { $0.userId == author.id ? $0.updating(author: author) : $0 }
+    guard updated != posts else { return }
+    posts = updated
+    let snapshot = posts
+    let category = activePostsCategory
+    Task { await MIRAAppCacheStore.shared.saveDiscoverPosts(snapshot, category: category) }
+  }
+
   func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
     guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
     posts[index] = posts[index].updating(
@@ -490,6 +517,14 @@ public struct DiscoverNativeView: View {
       .task { await model.load() }
       .onReceive(NotificationCenter.default.publisher(for: Notification.Name("captroStoryDidChange"))) { _ in
         Task { await model.refreshStories() }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { notification in
+        guard let record = notification.object as? MIRAPost else { return }
+        model.applyPostRecord(record)
+      }
+      .onReceive(NotificationCenter.default.publisher(for: .captroCurrentProfileUpdated)) { notification in
+        guard let author = notification.object as? MIRAUser else { return }
+        model.applyCurrentAuthor(author)
       }
       .onReceive(NotificationCenter.default.publisher(for: .miraPostEngagementDidChange)) { notification in
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }

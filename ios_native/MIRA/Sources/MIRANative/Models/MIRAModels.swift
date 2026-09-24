@@ -331,14 +331,15 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     commentsCount: Int? = nil,
     saved: Bool? = nil,
     savesCount: Int? = nil,
-    following: Bool? = nil
+    following: Bool? = nil,
+    author: MIRAUser? = nil
   ) -> MIRAPost {
     MIRAPost(
       id: id,
       userId: userId,
-      userUsername: userUsername,
-      userFullName: userFullName,
-      userProfileImage: userProfileImage,
+      userUsername: author == nil ? userUsername : author?.username,
+      userFullName: author == nil ? userFullName : author?.fullName,
+      userProfileImage: author == nil ? userProfileImage : author?.profileImage,
       title: title,
       content: content,
       caption: caption,

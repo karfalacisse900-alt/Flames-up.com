@@ -248,6 +248,9 @@ public final class MIRAMediaUploadService {
     } else {
       dimensions = await media.mediaDimension()
     }
+    let uploadedImageSize = mediaType == "image" ? await imagePixelSize(uploadData) : nil
+    let actualWidth = uploadedImageSize.map { Double($0.width) } ?? dimensions.width
+    let actualHeight = uploadedImageSize.map { Double($0.height) } ?? dimensions.height
     return try await performUpload(kind: mediaType, bytes: uploadData.count) {
       if let pending = pendingUploads[media] {
         return try await finishPendingUpload(media, completion: pending)
@@ -259,8 +262,8 @@ public final class MIRAMediaUploadService {
           filename: fileName,
           mimeType: mimeType,
           fileSize: uploadData.count,
-          width: mediaType == "video" ? dimensions.width : (dimensions.feedWidth ?? dimensions.width),
-          height: mediaType == "video" ? dimensions.height : (dimensions.feedHeight ?? dimensions.height),
+          width: actualWidth,
+          height: actualHeight,
           durationSeconds: durationSeconds
         )
       )
@@ -283,8 +286,8 @@ public final class MIRAMediaUploadService {
       let completion = MIRAMediaUploadCompleteBody(
         mediaId: mediaId,
         fileSize: uploadData.count,
-        width: mediaType == "video" ? dimensions.width : (dimensions.feedWidth ?? dimensions.width),
-        height: mediaType == "video" ? dimensions.height : (dimensions.feedHeight ?? dimensions.height)
+        width: actualWidth,
+        height: actualHeight
       )
       pendingUploads[media] = completion
       return try await finishPendingUpload(media, completion: completion)
@@ -430,36 +433,39 @@ public final class MIRAMediaUploadService {
     )
   }
 
-  private func prepareFeedImage(_ data: Data) async -> Data? {
+  private func imagePixelSize(_ data: Data) async -> CGSize? {
+    await Task.detached(priority: .utility) {
+      guard let image = UIImage(data: data) else { return nil }
+      return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+    }.value
+  }
+
+  func prepareFeedImage(_ data: Data) async -> Data? {
     await Task.detached(priority: .userInitiated) {
       guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
-      let supported = MIRASupportedPostAspectRatio.nearest(
-        width: Double(image.size.width),
-        height: Double(image.size.height)
-      )
+      // Cloudflare Images accepts at most 10 MB. Keep the selected composition
+      // intact; the feed layout must not crop pixels from the uploaded source.
+      let maxSide: CGFloat = 2560
+      let scale = min(1, maxSide / max(image.size.width, image.size.height))
       let targetSize = CGSize(
-        width: CGFloat(supported.feedWidth),
-        height: CGFloat(supported.feedHeight)
-      )
-      let scale = max(targetSize.width / image.size.width, targetSize.height / image.size.height)
-      let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-      let drawOrigin = CGPoint(
-        x: (targetSize.width - drawSize.width) / 2,
-        y: (targetSize.height - drawSize.height) / 2
+        width: (image.size.width * scale).rounded(),
+        height: (image.size.height * scale).rounded()
       )
       let format = UIGraphicsImageRendererFormat()
       format.scale = 1
       format.opaque = true
       let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
       let rendered = renderer.image { _ in
-        image.draw(in: CGRect(origin: drawOrigin, size: drawSize))
+        image.draw(in: CGRect(origin: .zero, size: targetSize))
       }
-      let renderedData = rendered.jpegData(compressionQuality: 0.94)
+      let renderedData = [0.94, 0.88, 0.82, 0.76].lazy
+        .compactMap { rendered.jpegData(compressionQuality: $0) }
+        .first { $0.count <= 9_500_000 }
       #if DEBUG
       if let renderedData {
         print(
           "CaptroCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
-          "feed=\(Int(targetSize.width))x\(Int(targetSize.height)) mode=\(supported.rawValue) bytes=\(renderedData.count) compression=0.94"
+          "upload=\(Int(targetSize.width))x\(Int(targetSize.height)) mode=preserve_aspect bytes=\(renderedData.count)"
         )
       }
       #endif
