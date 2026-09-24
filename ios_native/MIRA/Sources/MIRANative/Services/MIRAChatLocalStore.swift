@@ -94,6 +94,24 @@ actor MIRAChatLocalStore {
     sortedMessages(dedupedMessages(existing + incoming))
   }
 
+  // The server returns the latest 50 rows. Keep older cached history only
+  // when a full page proves there may be more; remove deleted recent rows.
+  func reconcileRecent(_ existing: [MIRAMessage], with serverRows: [MIRAMessage], pageLimit: Int = 50) -> [MIRAMessage] {
+    let oldestServerDate = serverRows.compactMap(\.createdAt).map(dateValue).min()
+    let retained = existing.filter { message in
+      if message.id.hasPrefix("local-") { return true }
+      guard serverRows.count >= pageLimit,
+            let oldestServerDate,
+            let createdAt = message.createdAt else { return false }
+      return dateValue(createdAt) < oldestServerDate
+    }
+    return sortedMessages(dedupedMessages(retained + serverRows))
+  }
+
+  func removeThread(kind: ConversationNativeKind, currentUserId: String) async {
+    await MIRALocalJSONCache.remove(key: threadKey(kind: kind, currentUserId: currentUserId))
+  }
+
   func loadDownloadSettings() async -> MIRAChatMediaDownloadSettings {
     await MIRALocalJSONCache.load(
       MIRAChatMediaDownloadSettings.self,
@@ -131,7 +149,7 @@ actor MIRAChatLocalStore {
     case let .direct(peerId):
       return "native.chat.thread.local.v1.\(currentUserId.isEmpty ? "anonymous" : currentUserId).direct.\(peerId)"
     case let .group(groupId):
-      return "native.chat.thread.local.v1.group.\(groupId)"
+      return "native.chat.thread.local.v1.\(currentUserId.isEmpty ? "anonymous" : currentUserId).group.\(groupId)"
     }
   }
 

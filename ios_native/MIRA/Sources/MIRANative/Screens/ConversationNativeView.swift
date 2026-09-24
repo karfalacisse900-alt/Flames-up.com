@@ -47,6 +47,8 @@ final class ConversationNativeModel: ObservableObject {
   private var lastSyncedAt: String?
   private var lastServerSequence: Int?
   private var consecutiveSyncFailures = 0
+  private var isRealtimeConnected = false
+  private var lastRecentReconcile = Date.distantPast
 
   init(kind: ConversationNativeKind, api: MIRAAPIClient, currentUserId: String = "") {
     self.kind = kind
@@ -124,6 +126,7 @@ final class ConversationNativeModel: ObservableObject {
       errorMessage = nil
     } catch {
       consecutiveSyncFailures = min(4, consecutiveSyncFailures + 1)
+      if await clearIfAccessRevoked(error) { return }
       if messages.isEmpty {
         errorMessage = "Could not load this chat."
       }
@@ -131,11 +134,26 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   func pollMessagesWhileActive() async {
-    // The Worker currently exposes a cursor-based read API, not an authorized
-    // client Realtime channel. This bounded fallback runs only while visible.
+    let realtimeTask = Task { [weak self] in
+      guard let self else { return }
+      await MIRAChatRealtime.observe(
+        kind: kind, userId: currentUserId, api: api,
+        onChange: { [weak self] in await self?.syncNewMessages() },
+        onConnectionChange: { [weak self] connected in self?.isRealtimeConnected = connected }
+      )
+    }
+    defer {
+      realtimeTask.cancel()
+      isRealtimeConnected = false
+    }
     while !Task.isCancelled {
       await syncNewMessages()
-      let delay = min(60, 5 * (1 << consecutiveSyncFailures))
+      if Date().timeIntervalSince(lastRecentReconcile) >= 45 {
+        await refreshRecentMessages()
+      }
+      // A healthy socket still gets occasional reconciliation for removals,
+      // changed permissions, and events missed while the app was suspended.
+      let delay = isRealtimeConnected ? 45 : min(60, 5 * (1 << consecutiveSyncFailures))
       do { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
       catch { break }
     }
@@ -155,15 +173,35 @@ final class ConversationNativeModel: ObservableObject {
         groupInfo = response.group
         rows = response.messages
       }
-      guard !rows.isEmpty else { return }
-      messages = await localStore.merge(messages, with: rows)
-      lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
-      lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
+      messages = await localStore.reconcileRecent(messages, with: rows)
+      lastSyncedAt = latestMessageCursor()
+      lastServerSequence = messages.compactMap(\.serverSequence).max()
+      hasOlderMessages = rows.count >= 50 || messages.count > rows.count
+      lastRecentReconcile = Date()
       prefetchMessageMedia(rows)
       await persistThread()
     } catch {
+      if await clearIfAccessRevoked(error) { return }
       // Keep the cached chat visible; foreground sync will retry next open/poll.
     }
+  }
+
+  private func clearIfAccessRevoked(_ error: Error) async -> Bool {
+    let status: Int
+    switch error {
+    case MIRAAPIError.server(let code, _, _): status = code
+    case MIRAAPIError.badStatus(let code): status = code
+    default: return false
+    }
+    guard status == 403 || status == 404 else { return false }
+    messages = []
+    groupInfo = nil
+    lastSyncedAt = nil
+    lastServerSequence = nil
+    hasOlderMessages = false
+    await localStore.removeThread(kind: kind, currentUserId: currentUserId)
+    errorMessage = "This conversation is no longer available."
+    return true
   }
 
   func loadOlderMessagesIfNeeded() async {

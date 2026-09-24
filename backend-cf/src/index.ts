@@ -14585,6 +14585,17 @@ api.get('/auth/oauth/config', async (c) => {
   });
 });
 
+// The publishable key is intentionally public; never expose the service-role key.
+// A signed-in client uses its own short-lived Supabase JWT for row-level security.
+api.get('/chat/realtime-config', authMiddleware, async (c) => {
+  const url = String(c.env.SUPABASE_URL || '').trim();
+  const publishableKey = String(c.env.SUPABASE_PUBLISHABLE_KEY || c.env.SUPABASE_ANON_KEY || '').trim();
+  if (!url.startsWith('https://') || !publishableKey) {
+    return c.json({ detail: 'Live chat is not configured.', code: 'REALTIME_UNAVAILABLE' }, 503);
+  }
+  return c.json({ url, publishable_key: publishableKey });
+});
+
 api.post('/auth/refresh', async (c) => {
   try {
     const bodyTooLarge = rejectLargeRequest(c, 40_000);

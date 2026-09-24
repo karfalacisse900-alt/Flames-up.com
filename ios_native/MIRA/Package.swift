@@ -12,7 +12,8 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/google/GoogleSignIn-iOS.git", exact: "9.1.0"),
-    .package(url: "https://github.com/stripe/stripe-ios.git", exact: "26.9.0")
+    .package(url: "https://github.com/stripe/stripe-ios.git", exact: "26.9.0"),
+    .package(url: "https://github.com/supabase/supabase-swift.git", exact: "2.49.0")
   ],
   targets: [
     .target(
@@ -26,7 +27,8 @@ let package = Package(
         .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS"),
         .product(name: "StripeConnect", package: "stripe-ios"),
         .product(name: "StripePaymentSheet", package: "stripe-ios"),
-        .product(name: "StripePayments", package: "stripe-ios")
+        .product(name: "StripePayments", package: "stripe-ios"),
+        .product(name: "Realtime", package: "supabase-swift")
       ],
       resources: [.process("Resources")]
     ),

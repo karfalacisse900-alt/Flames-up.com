@@ -42,4 +42,36 @@ final class CaptroCacheIsolationTests: XCTestCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: voice.path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: photo.path))
   }
+
+  func testRecentChatReconciliationRemovesDeletedRowsButKeepsPendingSend() async {
+    let store = MIRAChatLocalStore.shared
+    let old = MIRAMessage(id: "old", createdAt: "2026-09-24T10:00:00Z")
+    let deleted = MIRAMessage(id: "deleted", createdAt: "2026-09-24T10:01:00Z")
+    let kept = MIRAMessage(id: "kept", createdAt: "2026-09-24T10:02:00Z")
+    let pending = MIRAMessage(id: "local-pending", createdAt: "2026-09-24T10:03:00Z", status: "sending")
+
+    let current = await store.reconcileRecent([old, deleted, kept, pending], with: [old, kept])
+    XCTAssertEqual(Set(current.map(\.id)), Set(["old", "kept", "local-pending"]))
+
+    let empty = await store.reconcileRecent([old, deleted, pending], with: [])
+    XCTAssertEqual(empty.map(\.id), ["local-pending"])
+  }
+
+  func testGroupChatCacheKeyIncludesSignedInUser() async {
+    let store = MIRAChatLocalStore.shared
+    let groupId = UUID().uuidString
+    let firstUser = UUID().uuidString
+    let secondUser = UUID().uuidString
+    let kind = ConversationNativeKind.group(groupId: groupId)
+    MIRALocalJSONCache.setAccountScope(userId: firstUser)
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    await store.saveThread(
+      kind: kind, currentUserId: firstUser,
+      messages: [MIRAMessage(id: "private", content: "Private club message")],
+      lastSyncedAt: nil, lastServerSequence: nil, hasOlderRemote: false
+    )
+    let wrongUser = await store.loadThread(kind: kind, currentUserId: secondUser)
+    XCTAssertNil(wrongUser)
+    await store.removeThread(kind: kind, currentUserId: firstUser)
+  }
 }
