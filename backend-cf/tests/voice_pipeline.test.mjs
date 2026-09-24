@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
-import { decideVoiceModeration, inspectVoiceAudio, validatedContextEvidence } from '../src/voice.ts';
+import { classifyOpenAIServiceFailure, decideVoiceModeration, inspectVoiceAudio, validatedContextEvidence } from '../src/voice.ts';
 
 function syntheticWav(seconds = 1, sampleRate = 8000) {
   const samples = Math.round(seconds * sampleRate);
@@ -43,6 +43,18 @@ test('automatic rejection requires the flag, explicit configuration, certainty, 
 
 test('review evidence must occur in the submitting author content', () => {
   assert.deepEqual(validatedContextEvidence(['exact words', 'invented evidence'], 'caption\nexact words'), ['exact words']);
+});
+
+test('exhausted AI credits stop retries without exposing provider responses', () => {
+  assert.deepEqual(classifyOpenAIServiceFailure({ status: 429, message: 'You have no credits remaining. Add credits to continue using the API.' }), {
+    code: 'AI_CREDITS_EXHAUSTED', retryable: false,
+  });
+  assert.deepEqual(classifyOpenAIServiceFailure({ status: 429, code: 'rate_limit_exceeded' }), {
+    code: 'AI_SERVICE_TEMPORARY_FAILURE', retryable: true,
+  });
+  assert.deepEqual(classifyOpenAIServiceFailure(new Error('OPENAI_API_KEY_MISSING')), {
+    code: 'AI_CREDENTIALS_MISSING', retryable: false,
+  });
 });
 
 test('source keeps Cloudflare R2 storage private and publishing version-bound', () => {

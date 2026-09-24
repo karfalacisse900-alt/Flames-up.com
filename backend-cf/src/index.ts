@@ -5,6 +5,7 @@ import { cloudflareTusCreationHeaders } from './media-upload';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import OpenAI from 'openai';
+import { screenStoryWithWorkersAI } from './story-safety';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
@@ -18,7 +19,7 @@ import {
   stripeV2RecipientTransferStatus,
   stripeV2RecipientTransfersEnabled,
 } from './stripe-connect-v2';
-import { bindVoiceAttachment, createVoiceRoutes, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
+import { bindVoiceAttachment, classifyOpenAIServiceFailure, createVoiceRoutes, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -17090,21 +17091,30 @@ api.post('/statuses', authMiddleware, async (c) => {
   if (limited) return limited;
   const storyContent = cleanMultilineText(b.content || '', 2000);
   if (storyContent) {
-    if (!c.env.OPENAI_API_KEY) {
-      return c.json({ detail: 'Story text screening is unavailable. Please try again later.' }, 503);
+    let safety: 'allow' | 'review' | 'unavailable' = 'unavailable';
+    let failureCode = 'AI_CREDENTIALS_MISSING';
+    if (c.env.OPENAI_API_KEY) {
+      try {
+        const moderation = await new OpenAI({ apiKey: c.env.OPENAI_API_KEY, timeout: 12_000, maxRetries: 0 })
+          .moderations.create({ model: c.env.OPENAI_MODERATION_MODEL || 'omni-moderation-latest', input: storyContent });
+        const result = moderation.results?.[0];
+        if (result && typeof result.flagged === 'boolean') {
+          if (result.flagged) safety = 'review';
+          else safety = 'allow';
+        } else failureCode = 'AI_SERVICE_TEMPORARY_FAILURE';
+      } catch (error) {
+        failureCode = classifyOpenAIServiceFailure(error).code;
+      }
     }
-    try {
-      const moderation = await new OpenAI({ apiKey: c.env.OPENAI_API_KEY, timeout: 12_000, maxRetries: 0 })
-        .moderations.create({ model: c.env.OPENAI_MODERATION_MODEL || 'omni-moderation-latest', input: storyContent });
-      const result = moderation.results?.[0];
-      if (!result || typeof result.flagged !== 'boolean') {
-        return c.json({ detail: 'Story text screening is unavailable. Please try again later.' }, 503);
-      }
-      if (result.flagged) {
-        return c.json({ detail: 'This status needs a safety review before it can be posted.' }, 409);
-      }
-    } catch {
-      return c.json({ detail: 'Story text screening is unavailable. Please try again later.' }, 503);
+    // Captro already binds Workers AI for media safety. Only use its text
+    // classifier when the primary provider has no usable credentials/credits;
+    // a malformed or failed secondary response keeps the Status unpublished.
+    if (safety === 'unavailable' && ['AI_CREDENTIALS_MISSING', 'AI_CREDITS_EXHAUSTED'].includes(failureCode)) {
+      safety = await screenStoryWithWorkersAI(c.env.AI, storyContent, c.env.AI_TEXT_MODERATION_MODEL || '@cf/meta/llama-guard-3-8b');
+    }
+    if (safety === 'review') return c.json({ detail: 'This status needs a safety review before it can be posted.' }, 409);
+    if (safety !== 'allow') {
+      return c.json({ detail: 'Story text screening is unavailable. Please try again later.', code: failureCode }, 503);
     }
   }
   const id = uuid(); let expiresAt = new Date(Date.now() + storyLifetimeMs).toISOString();

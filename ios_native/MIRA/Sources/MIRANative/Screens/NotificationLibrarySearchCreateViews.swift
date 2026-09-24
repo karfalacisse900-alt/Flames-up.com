@@ -4648,6 +4648,8 @@ public struct CreateStoryNativeView: View {
         switch apiError {
         case .badStatus(404), .server(404, _, _):
           errorMessage = "Status posting is not available on Captro’s server yet. Your draft is still here."
+        case .server(503, "AI_CREDITS_EXHAUSTED", _):
+          errorMessage = "Captro's status safety check is unavailable because its AI service is out of credits. Your draft is still here; please try again after service is restored."
         case .server(503, _, _):
           errorMessage = "Status posting is temporarily unavailable. Your draft is still here."
         default:

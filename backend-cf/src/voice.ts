@@ -1,6 +1,26 @@
 import { Hono } from 'hono';
 import OpenAI from 'openai';
 
+export type OpenAIServiceFailure = {
+  code: 'AI_CREDITS_EXHAUSTED' | 'AI_CREDENTIALS_INVALID' | 'AI_CREDENTIALS_MISSING' | 'AI_SERVICE_TEMPORARY_FAILURE';
+  retryable: boolean;
+};
+
+// Keep provider response text out of durable jobs and client-facing errors.
+// A generic rate limit can clear; exhausted credits and bad credentials cannot.
+export function classifyOpenAIServiceFailure(error: unknown): OpenAIServiceFailure {
+  const detail = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const message = String(detail.message || error || '').toLowerCase();
+  const providerCode = String(detail.code || '').toLowerCase();
+  const status = Number(detail.status || 0);
+  if (message.includes('openai_api_key_missing')) return { code: 'AI_CREDENTIALS_MISSING', retryable: false };
+  if (providerCode === 'insufficient_quota' || /no credits remaining|insufficient.quota|billing.hard.limit/.test(message)) {
+    return { code: 'AI_CREDITS_EXHAUSTED', retryable: false };
+  }
+  if (status === 401 || providerCode === 'invalid_api_key') return { code: 'AI_CREDENTIALS_INVALID', retryable: false };
+  return { code: 'AI_SERVICE_TEMPORARY_FAILURE', retryable: true };
+}
+
 export type VoiceJobMessage = { kind: 'voice'; jobId: string; voiceId: string; contentVersion: number };
 
 type VoiceEnv = {
@@ -307,14 +327,16 @@ export async function processVoiceJob(env: VoiceEnv, message: VoiceJobMessage) {
     }
     await patchRows(env, 'app_voice_processing_jobs', new URLSearchParams({ id: `eq.${message.jobId}` }), { status: 'completed', completed_at: new Date().toISOString(), last_error_code: null });
   } catch (error: any) {
-    const code = clean(error?.message || error?.code || 'VOICE_PROCESSING_FAILED', 160);
+    const failure = classifyOpenAIServiceFailure(error);
     const job = (await rows(env, 'app_voice_processing_jobs', new URLSearchParams({ id: `eq.${message.jobId}`, select: '*', limit: '1' })))[0];
-    const retry = Number(job?.attempts || 1) < Number(job?.max_attempts || 4);
+    const retry = failure.retryable && Number(job?.attempts || 1) < Number(job?.max_attempts || 4);
     await patchRows(env, 'app_voice_processing_jobs', new URLSearchParams({ id: `eq.${message.jobId}` }), {
-      status: retry ? 'retry' : 'failed', last_error_code: code,
+      status: retry ? 'retry' : 'failed', last_error_code: failure.code,
       run_after: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** Number(job?.attempts || 1))).toISOString(),
     });
-    await patchRows(env, 'app_voice_recordings', new URLSearchParams({ id: `eq.${voice.id}` }), { processing_state: 'failed', decision_reason: 'processing_failure' });
+    await patchRows(env, 'app_voice_recordings', new URLSearchParams({ id: `eq.${voice.id}`, content_version: `eq.${message.contentVersion}` }), {
+      processing_state: 'failed', decision_reason: failure.code,
+    });
     // The queue message is acknowledged. Durable retry timing is controlled by run_after and recoverVoiceJobs.
   }
 }
