@@ -23,3 +23,17 @@ export function cloudflareTusCreationHeaders(input: {
     'Upload-Creator': input.creatorId,
   };
 }
+
+export function allowedCloudflareDirectUploadUrl(provider: 'images' | 'stream', value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return false;
+    const host = url.hostname.toLowerCase();
+    const allowed = provider === 'stream'
+      ? ['upload.cloudflarestream.com', 'upload.videodelivery.net']
+      : ['upload.imagedelivery.net'];
+    return allowed.some((domain) => host === domain || host.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}

@@ -1,7 +1,7 @@
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
-import { cloudflareTusCreationHeaders } from './media-upload';
+import { allowedCloudflareDirectUploadUrl, cloudflareTusCreationHeaders } from './media-upload';
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import OpenAI from 'openai';
@@ -18559,9 +18559,7 @@ api.post('/media/upload-intent', authMiddleware, async (c) => {
     storageProvider = 'stream';
   }
 
-  const uploadHost = (() => { try { return new URL(uploadUrl).hostname.toLowerCase(); } catch { return ''; } })();
-  const expectedUploadHost = storageProvider === 'stream' ? 'upload.videodelivery.net' : 'upload.imagedelivery.net';
-  if (!uploadUrl || !storageKey || !uploadHost || (uploadHost !== expectedUploadHost && !uploadHost.endsWith(`.${expectedUploadHost}`))) {
+  if (!uploadUrl || !storageKey || !allowedCloudflareDirectUploadUrl(storageProvider, uploadUrl)) {
     return c.json({ detail: 'Could not prepare upload.', code: 'upload_intent_failed' }, 502);
   }
   const mediaId = uuid();
