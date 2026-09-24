@@ -59,9 +59,15 @@ try {
     detail: String(result.body.detail || '').slice(0, 180),
     created: !!result.body.id,
   }));
-  if (result.response.ok) {
-    assert.ok(result.body.id, 'Successful Status response lacked an ID');
-  }
+  assert.ok(result.response.ok, 'A harmless private Status was not created');
+  assert.ok(result.body.id, 'Successful Status response lacked an ID');
+  const threat = await request(`${api}/statuses`, {
+    method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: 'I am going to hurt you tonight.', media_type: 'text', visibility: 'private' }),
+  });
+  console.log(JSON.stringify({ event: 'private_status_threat_check', httpStatus: threat.response.status, created: !!threat.body.id }));
+  assert.equal(threat.response.status, 409, 'A synthetic threat must not be published');
+  assert.equal(!!threat.body.id, false, 'A synthetic threat unexpectedly created a Status');
 } finally {
   if (userId) {
     // The account and its private fixture are created solely for this run.
