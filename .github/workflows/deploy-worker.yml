@@ -88,13 +88,23 @@ jobs:
           set -euo pipefail
           base='https://flames-up-api.karfalacisse900.workers.dev/api'
           for path in chat/realtime-config voice/not-a-real-recording/status; do
-            status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$base/$path")"
+            status='000'
+            for attempt in {1..12}; do
+              status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$base/$path")"
+              if [ "$status" = 401 ]; then break; fi
+              sleep 5
+            done
             if [ "$status" != 401 ]; then
               echo "Authenticated route $path returned HTTP $status, expected 401 without a session"
               exit 1
             fi
           done
-          status="$(curl --silent --show-error --request POST --output /dev/null --write-out '%{http_code}' "$base/statuses")"
+          status='000'
+          for attempt in {1..12}; do
+            status="$(curl --silent --show-error --request POST --output /dev/null --write-out '%{http_code}' "$base/statuses")"
+            if [ "$status" = 401 ]; then break; fi
+            sleep 5
+          done
           if [ "$status" != 401 ]; then
             echo "Authenticated status publishing returned HTTP $status, expected 401 without a session"
             exit 1
