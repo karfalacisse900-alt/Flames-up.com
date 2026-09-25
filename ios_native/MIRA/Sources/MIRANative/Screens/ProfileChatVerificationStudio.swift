@@ -109,13 +109,7 @@ final class ProfileNativeModel: ObservableObject {
     guard let freshUser = await freshUserRequest,
           loadGeneration == generation else { return }
     if let knownUserID, knownUserID != freshUser.id {
-      user = nil
-      posts = []
-      receiptEarnings = nil
-      receiptSubmissions = []
-      commerceDashboard = nil
-      hasLoadedActivity = false
-      activityError = nil
+      resetForAccountChange()
       profileError = "Your session changed. Please sign in again."
       return
     }
