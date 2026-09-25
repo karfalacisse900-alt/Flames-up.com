@@ -16,6 +16,9 @@ final class ProfileNativeModel: ObservableObject {
   @Published var receiptEarnings: CaptroReceiptRewardBalance?
   @Published var receiptSubmissions: [CaptroReceiptSubmission] = []
   @Published var commerceDashboard: CaptroCommerceDashboard?
+  @Published private(set) var isLoadingActivity = false
+  @Published private(set) var hasLoadedActivity = false
+  @Published private(set) var activityError: String?
   @Published var profileError: String?
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v5"
@@ -23,6 +26,7 @@ final class ProfileNativeModel: ObservableObject {
   private var refreshRequested = false
   private var loadGeneration = 0
   private var lastRevalidationAttemptAt: Date?
+  private var lastActivityRefreshAt: Date?
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -33,6 +37,10 @@ final class ProfileNativeModel: ObservableObject {
     isLoadingFreshProfile = false
     refreshRequested = false
     lastRevalidationAttemptAt = nil
+    isLoadingActivity = false
+    hasLoadedActivity = false
+    activityError = nil
+    lastActivityRefreshAt = nil
     user = nil
     posts = []
     receiptEarnings = nil
@@ -106,6 +114,8 @@ final class ProfileNativeModel: ObservableObject {
       receiptEarnings = nil
       receiptSubmissions = []
       commerceDashboard = nil
+      hasLoadedActivity = false
+      activityError = nil
       profileError = "Your session changed. Please sign in again."
       return
     }
@@ -128,23 +138,41 @@ final class ProfileNativeModel: ObservableObject {
       }
     }
     guard loadGeneration == generation else { return }
+  }
 
-    // The visible profile and creations must not wait behind three unrelated
-    // finance requests. Those remain server-authoritative and never use
-    // fabricated cached balances.
+  func loadActivity(forceRefresh: Bool = false) async {
+    guard !isLoadingActivity else { return }
+    if !forceRefresh, let lastActivityRefreshAt,
+       Date().timeIntervalSince(lastActivityRefreshAt) < 30 { return }
+    isLoadingActivity = true
+    let generation = loadGeneration
+    defer {
+      if loadGeneration == generation {
+        isLoadingActivity = false
+        lastActivityRefreshAt = Date()
+      }
+    }
+
+    // Finance and purchase history remain authoritative, but no longer load
+    // just because the user opened their profile grid.
     async let earningsRequest: CaptroReceiptRewardBalance? = try? await api.captroReceiptRewardBalance()
     async let submissionsRequest: [CaptroReceiptSubmission]? = try? await api.captroReceiptSubmissionHistory()
     async let dashboardRequest: CaptroCommerceDashboard? = try? await api.loadCommerceDashboard()
-    if let earnings = await earningsRequest,
-       loadGeneration == generation, receiptEarnings != earnings {
+    let earnings = await earningsRequest
+    let submissions = await submissionsRequest
+    let dashboard = await dashboardRequest
+    guard loadGeneration == generation else { return }
+    hasLoadedActivity = true
+    activityError = earnings == nil && submissions == nil && dashboard == nil
+      ? "Could not refresh your activity. Pull down to try again."
+      : nil
+    if let earnings, receiptEarnings != earnings {
       receiptEarnings = earnings
     }
-    if let submissions = await submissionsRequest,
-       loadGeneration == generation, receiptSubmissions != submissions {
+    if let submissions, receiptSubmissions != submissions {
       receiptSubmissions = submissions
     }
-    if let dashboard = await dashboardRequest,
-       loadGeneration == generation {
+    if let dashboard {
       commerceDashboard = dashboard
     }
   }
@@ -344,7 +372,6 @@ public struct ProfileNativeView: View {
   @State private var isDeletePostConfirmationPresented = false
   @State private var reportTarget: MIRAReportTarget?
   @State private var isReportSheetPresented = false
-  @State private var showingWithdrawalInfo = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   private let authSession: MIRAAuthSession?
   private let chatModel: ChatNativeModel?
@@ -378,21 +405,6 @@ public struct ProfileNativeView: View {
       ScrollView {
         VStack(spacing: MIRATheme.Space.lg) {
           profileHeader
-          paymentsLink
-          if let earnings = model.receiptEarnings {
-            receiptEarningsSection(earnings)
-          }
-          if !model.receiptSubmissions.isEmpty {
-            receiptSubmissionsSection(model.receiptSubmissions)
-          }
-          if let dashboard = model.commerceDashboard,
-             !dashboard.myStuff.isEmpty || !dashboard.created.isEmpty || !dashboard.pendingRequests.isEmpty {
-            CaptroCommerceDashboardView(
-              dashboard: dashboard,
-              api: model.api,
-              onDecision: { id, approved in await model.decideCommercePurchase(id: id, approved: approved) }
-            )
-          }
           if model.posts.isEmpty && model.user == nil {
             ProfileGridSkeleton()
           } else {
@@ -424,11 +436,6 @@ public struct ProfileNativeView: View {
             destination: chatDestination.miraHideTabBarOnAppear()
           )
           ProfileToolbarDestinationButton(
-            systemImage: "creditcard",
-            accessibilityLabel: "Payments",
-            destination: paymentsDestination
-          )
-          ProfileToolbarDestinationButton(
             systemImage: "checkmark.shield",
             accessibilityLabel: "Verification",
             destination: VerificationNativeView(api: model.api)
@@ -436,7 +443,12 @@ public struct ProfileNativeView: View {
           ProfileToolbarDestinationButton(
             systemImage: "gearshape",
             accessibilityLabel: "Settings",
-            destination: SettingsNativeView(api: model.api, authSession: authSession)
+            destination: SettingsNativeView(
+              api: model.api,
+              authSession: authSession,
+              profileModel: model,
+              paymentsModel: paymentsModel
+            )
           )
         }
       }
@@ -507,11 +519,6 @@ public struct ProfileNativeView: View {
         } else {
           Color.clear
         }
-      }
-      .alert("Withdraw receipt earnings", isPresented: $showingWithdrawalInfo) {
-        Button("OK", role: .cancel) {}
-      } message: {
-        Text("Withdrawals are being prepared. Your private balance will remain available in Captro.")
       }
       .miraActionModal(
         isPresented: $isProfilePostActionModalPresented,
@@ -660,200 +667,12 @@ public struct ProfileNativeView: View {
     .padding(.horizontal, MIRATheme.Space.md)
   }
 
-  private var paymentsLink: some View {
-    NavigationLink {
-      paymentsDestination
-    } label: {
-      HStack(spacing: 12) {
-        Image(systemName: "creditcard.fill")
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(CaptroDetailStyle.accent)
-          .frame(width: 34, height: 34)
-        VStack(alignment: .leading, spacing: 2) {
-          Text("Payments").font(.body.weight(.medium))
-          Text("Your debit card, earnings, and withdrawals")
-            .font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        Spacer(minLength: 8)
-        Image(systemName: "chevron.right")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(minHeight: 54)
-      .padding(.vertical, 12)
-      .padding(.horizontal, 16)
-      .overlay(alignment: .bottom) {
-        Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
-      }
-    }
-    .buttonStyle(.plain)
-  }
-
   private var chatDestination: ChatNativeView {
     let userID = model.user?.id ?? authSession?.user?.id ?? ""
     if let chatModel {
       return ChatNativeView(api: model.api, currentUserId: userID, model: chatModel)
     }
     return ChatNativeView(api: model.api, currentUserId: userID)
-  }
-
-  private var paymentsDestination: CaptroPaymentsView {
-    if let paymentsModel {
-      return CaptroPaymentsView(api: model.api, model: paymentsModel)
-    }
-    return CaptroPaymentsView(api: model.api)
-  }
-
-  private func receiptEarningsSection(_ earnings: CaptroReceiptRewardBalance) -> some View {
-    VStack(alignment: .leading, spacing: 15) {
-      HStack(alignment: .firstTextBaseline) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Receipt Earnings")
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Label("Private", systemImage: "lock.fill")
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-        }
-        Spacer()
-        Button("Withdraw") {
-          CaptroHaptics.light()
-          showingWithdrawalInfo = true
-        }
-        .font(.system(size: 14, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.forest)
-        .frame(minWidth: 78, minHeight: 44)
-        .accessibilityHint(earnings.withdrawalEnabled ? "Start a withdrawal" : "Withdrawal availability information")
-      }
-
-      HStack(spacing: 0) {
-        earningsValue("Available", cents: earnings.availableBalanceCents)
-        Divider().frame(height: 42).padding(.horizontal, 10)
-        earningsValue("Pending", cents: earnings.pendingRewardCents)
-        Divider().frame(height: 42).padding(.horizontal, 10)
-        earningsValue("Lifetime", cents: earnings.lifetimeEarnedCents)
-      }
-    }
-    .padding(.horizontal, MIRATheme.Space.xl)
-    .padding(.vertical, 18)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(MIRATheme.Color.surface)
-    .overlay(alignment: .top) { Divider().overlay(MIRATheme.Color.hairline) }
-    .overlay(alignment: .bottom) { Divider().overlay(MIRATheme.Color.hairline) }
-  }
-
-  private func earningsValue(_ label: String, cents: Int) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(receiptMoney(cents))
-        .font(.system(size: 21, weight: .semibold, design: .rounded))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .monospacedDigit()
-      Text(label)
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-  }
-
-  private func receiptSubmissionsSection(_ submissions: [CaptroReceiptSubmission]) -> some View {
-    let visibleSubmissions = Array(submissions.prefix(8))
-    return VStack(alignment: .leading, spacing: 0) {
-      Text("My Receipt Submissions")
-        .font(.system(size: 17, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-        .padding(.horizontal, MIRATheme.Space.xl)
-        .padding(.vertical, 15)
-
-      Divider().overlay(MIRATheme.Color.hairline)
-
-      ForEach(visibleSubmissions) { submission in
-        NavigationLink {
-          CaptroReceiptSubmissionDetailView(submission: submission, api: model.api)
-        } label: {
-          receiptSubmissionRow(submission)
-        }
-        .buttonStyle(.plain)
-
-        if submission.id != visibleSubmissions.last?.id {
-          Divider()
-            .overlay(MIRATheme.Color.hairline)
-            .padding(.leading, MIRATheme.Space.xl)
-        }
-      }
-    }
-    .background(MIRATheme.Color.surface)
-    .overlay(alignment: .top) { Divider().overlay(MIRATheme.Color.hairline) }
-    .overlay(alignment: .bottom) { Divider().overlay(MIRATheme.Color.hairline) }
-  }
-
-  private func receiptSubmissionRow(_ submission: CaptroReceiptSubmission) -> some View {
-    HStack(spacing: 12) {
-      Image(systemName: submission.documentType == "invoice" ? "doc.text" : "receipt")
-        .font(.system(size: 17, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.forest)
-        .frame(width: 32, height: 32)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Circle())
-
-      VStack(alignment: .leading, spacing: 3) {
-        Text(submission.merchantName ?? (submission.documentType == "invoice" ? "Invoice" : "Receipt"))
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        Text(submissionHistoryMetadata(submission))
-          .font(.system(size: 12, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .lineLimit(1)
-      }
-
-      Spacer(minLength: 8)
-
-      VStack(alignment: .trailing, spacing: 3) {
-        if submission.earnedCents > 0 {
-          Text("+\(receiptMoney(submission.earnedCents))")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.forest)
-        }
-        Text(receiptSubmissionStatus(submission))
-          .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-
-      Image(systemName: "chevron.right")
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-    }
-    .padding(.horizontal, MIRATheme.Space.xl)
-    .padding(.vertical, 12)
-    .contentShape(Rectangle())
-  }
-
-  private func submissionHistoryMetadata(_ submission: CaptroReceiptSubmission) -> String {
-    let kind = submission.documentType == "invoice" ? "Invoice" : "Receipt"
-    let date = submission.purchaseDate ?? submission.createdAt.prefix(10).description
-    return date.isEmpty ? kind : "\(kind) - \(date)"
-  }
-
-  private func receiptSubmissionStatus(_ submission: CaptroReceiptSubmission) -> String {
-    if submission.duplicate { return "Already submitted" }
-    switch submission.status {
-    case "completed": return "Completed"
-    case "feedback_pending": return "Feedback pending"
-    case "reward_pending": return "Reward processing"
-    case "failed", "unsupported": return "Couldn't verify"
-    default: return "Processing"
-    }
-  }
-
-  private func receiptMoney(_ cents: Int) -> String {
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .currency
-    formatter.currencyCode = "USD"
-    formatter.minimumFractionDigits = 2
-    formatter.maximumFractionDigits = 2
-    return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "$0.00"
   }
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {
@@ -868,6 +687,126 @@ public struct ProfileNativeView: View {
       return fullName
     }
     return model.user?.username ?? "captro"
+  }
+}
+
+struct ProfileActivityNativeView: View {
+  @ObservedObject var model: ProfileNativeModel
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 24) {
+        if !hasVisibleActivity && model.isLoadingActivity {
+          ProgressView("Loading activity…")
+            .frame(maxWidth: .infinity, minHeight: 120)
+        } else if !hasVisibleActivity && model.hasLoadedActivity && model.activityError == nil {
+          MIRAEmptyState(title: "No activity yet", message: "Your receipts and joins will appear here.", systemImage: "list.bullet")
+        }
+        if let activityError = model.activityError {
+          Text(activityError)
+            .font(.system(size: 13))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+        if let earnings = model.receiptEarnings {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Receipt earnings")
+              .font(.system(size: 17, weight: .semibold))
+            HStack(spacing: 16) {
+              amount("Available", cents: earnings.availableBalanceCents)
+              amount("Pending", cents: earnings.pendingRewardCents)
+              amount("Lifetime", cents: earnings.lifetimeEarnedCents)
+            }
+          }
+        }
+
+        if !model.receiptSubmissions.isEmpty {
+          VStack(alignment: .leading, spacing: 0) {
+            Text("Receipt submissions")
+              .font(.system(size: 17, weight: .semibold))
+              .padding(.bottom, 8)
+            ForEach(model.receiptSubmissions) { submission in
+              NavigationLink {
+                CaptroReceiptSubmissionDetailView(submission: submission, api: model.api)
+              } label: {
+                HStack(spacing: 12) {
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(submission.merchantName ?? (submission.documentType == "invoice" ? "Invoice" : "Receipt"))
+                      .font(.system(size: 14, weight: .semibold))
+                      .lineLimit(1)
+                    Text(submission.purchaseDate ?? String(submission.createdAt.prefix(10)))
+                      .font(.system(size: 12))
+                      .foregroundStyle(MIRATheme.Color.textMuted)
+                  }
+                  Spacer(minLength: 8)
+                  Text(submissionStatus(submission))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(MIRATheme.Color.textSecondary)
+                  Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MIRATheme.Color.textMuted)
+                }
+                .frame(minHeight: 52)
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+              Divider()
+            }
+          }
+        }
+
+        if let dashboard = model.commerceDashboard,
+           !dashboard.myStuff.isEmpty || !dashboard.created.isEmpty || !dashboard.pendingRequests.isEmpty {
+          CaptroCommerceDashboardView(
+            dashboard: dashboard,
+            api: model.api,
+            onDecision: { id, approved in await model.decideCommercePurchase(id: id, approved: approved) }
+          )
+        }
+      }
+      .padding(18)
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .background(MIRATheme.Color.appBackground)
+    .navigationTitle("Your activity")
+    .navigationBarTitleDisplayMode(.inline)
+    .miraHideTabBarOnAppear()
+    .task { await model.loadActivity() }
+    .refreshable { await model.loadActivity(forceRefresh: true) }
+  }
+
+  private var hasVisibleActivity: Bool {
+    model.receiptEarnings != nil || !model.receiptSubmissions.isEmpty ||
+      (model.commerceDashboard.map { !$0.myStuff.isEmpty || !$0.created.isEmpty || !$0.pendingRequests.isEmpty } ?? false)
+  }
+
+  private func amount(_ label: String, cents: Int) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(currency(cents))
+        .font(.system(size: 17, weight: .semibold))
+        .monospacedDigit()
+      Text(label)
+        .font(.system(size: 11))
+        .foregroundStyle(MIRATheme.Color.textMuted)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func currency(_ cents: Int) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = "USD"
+    return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "—"
+  }
+
+  private func submissionStatus(_ submission: CaptroReceiptSubmission) -> String {
+    if submission.duplicate { return "Already submitted" }
+    switch submission.status {
+    case "completed": return "Completed"
+    case "feedback_pending": return "Feedback pending"
+    case "reward_pending": return "Reward processing"
+    case "failed", "unsupported": return "Couldn't verify"
+    default: return "Processing"
+    }
   }
 }
 

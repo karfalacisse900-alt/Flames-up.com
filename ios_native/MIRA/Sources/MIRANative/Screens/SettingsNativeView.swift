@@ -217,10 +217,25 @@ final class SettingsNativeModel: ObservableObject {
 
 public struct SettingsNativeView: View {
   @StateObject private var model: SettingsNativeModel
+  private let profileModel: ProfileNativeModel?
+  private let paymentsModel: CaptroPaymentsModel?
   @EnvironmentObject private var localization: MIRALocalization
 
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
     _model = StateObject(wrappedValue: SettingsNativeModel(api: api, authSession: authSession))
+    profileModel = nil
+    paymentsModel = nil
+  }
+
+  init(
+    api: MIRAAPIClient,
+    authSession: MIRAAuthSession? = nil,
+    profileModel: ProfileNativeModel,
+    paymentsModel: CaptroPaymentsModel?
+  ) {
+    _model = StateObject(wrappedValue: SettingsNativeModel(api: api, authSession: authSession))
+    self.profileModel = profileModel
+    self.paymentsModel = paymentsModel
   }
 
   public var body: some View {
@@ -236,6 +251,20 @@ public struct SettingsNativeView: View {
         }
 
         SettingsCard(title: localization.string("settings.account")) {
+          SettingsNavigationRow(
+            title: "Payments & payouts",
+            subtitle: "Cards, balances, and withdrawals",
+            systemImage: "creditcard",
+            destination: paymentsDestination
+          )
+          if let profileModel {
+            SettingsNavigationRow(
+              title: "Your activity",
+              subtitle: "Receipts, joins, and creations",
+              systemImage: "list.bullet.rectangle",
+              destination: ProfileActivityNativeView(model: profileModel)
+            )
+          }
           SettingsNavigationRow(
             title: localization.string("settings.privacy"),
             subtitle: model.user == nil ? "Account settings unavailable" : (model.isPrivate ? "Private account is on" : "Public account"),
@@ -304,6 +333,13 @@ public struct SettingsNativeView: View {
     .miraHideTabBarOnAppear()
     .task { await model.load() }
     .refreshable { await model.load() }
+  }
+
+  private var paymentsDestination: CaptroPaymentsView {
+    if let paymentsModel {
+      return CaptroPaymentsView(api: model.api, model: paymentsModel)
+    }
+    return CaptroPaymentsView(api: model.api)
   }
 
   private var settingsHero: some View {

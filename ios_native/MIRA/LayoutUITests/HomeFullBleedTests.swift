@@ -8,6 +8,12 @@ final class HomeFullBleedTests: XCTestCase {
 
     let pager = app.scrollViews["home.post.pager"]
     XCTAssertTrue(pager.waitForExistence(timeout: 15))
+    let fixedControls = app.otherElements["home.fixed.controls"]
+    let storyRail = app.scrollViews["home.story.rail"]
+    XCTAssertTrue(fixedControls.waitForExistence(timeout: 5))
+    XCTAssertTrue(storyRail.waitForExistence(timeout: 5))
+    XCTAssertGreaterThanOrEqual(storyRail.frame.minX, fixedControls.frame.maxX - 1,
+                                "Stories must be clipped before they reach NYC and Post")
     func assertVisiblePost(_ index: Int) {
       let page = app.otherElements["home.post.page.full-bleed-portrait-\(index)"]
       XCTAssertTrue(page.waitForExistence(timeout: 5), "Expected post \(index + 1) to be current")

@@ -880,6 +880,7 @@ public struct MainFeedView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var activeVideoPostID: String?
   @State private var selectedPostID: String?
+  @State private var postActivationTask: Task<Void, Never>?
   @State private var selectedPostFallbackIndex = 0
   @State private var selectedFeedSection: MainFeedSection = .forYou
   @AppStorage("captro.home.selectedCity") private var selectedCity = "NYC"
@@ -1045,11 +1046,8 @@ public struct MainFeedView: View {
         selectedPostFallbackIndex = 0
         reconcileCurrentPostSelection()
       }
-      .onChange(of: selectedPostID) { _, postID in
-        if let postID, let index = displayedPosts.firstIndex(where: { $0.id == postID }) {
-          selectedPostFallbackIndex = index
-        }
-        activateCurrentPost(reason: "home_post_changed")
+      .onChange(of: selectedPostID) { _, _ in
+        scheduleCurrentPostActivation()
       }
       .onAppear {
         reconcileCurrentPostSelection()
@@ -1060,37 +1058,14 @@ public struct MainFeedView: View {
         }
       }
       .onDisappear {
+        postActivationTask?.cancel()
         pauseVisibleMedia(reason: "home_feed_disappeared")
       }
     }
   }
 
   private var homeTopBar: some View {
-    ZStack(alignment: .leading) {
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 12) {
-          if !isGuest {
-            NavigationLink(destination: CreateStoryNativeView(api: model.api).miraHideTabBarOnAppear()) {
-              homeStoryAvatar(url: homeAvatarURL, unseen: false, add: true)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Add story")
-          }
-          ForEach(homeStories) { group in
-            Button {
-              selectedStoryGroup = group
-            } label: {
-              homeStoryAvatar(url: group.userProfileImage, unseen: group.hasUnviewed == true, add: false, clubName: group.ownerType == "club" ? group.displayName : nil)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("View \(group.displayName)'s story")
-          }
-        }
-        .padding(.leading, 176)
-        .padding(.trailing, 14)
-      }
-      .frame(maxWidth: .infinity)
-
+    HStack(spacing: 0) {
       HStack(spacing: 8) {
         Menu {
           ForEach(homeCities, id: \.self) { city in
@@ -1142,8 +1117,34 @@ public struct MainFeedView: View {
       }
       .frame(width: 162, alignment: .leading)
       .padding(.leading, 14)
-      .background(MIRATheme.Color.surface)
-      .zIndex(1)
+      .accessibilityElement(children: .contain)
+      .accessibilityIdentifier("home.fixed.controls")
+
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 12) {
+          if !isGuest {
+            NavigationLink(destination: CreateStoryNativeView(api: model.api).miraHideTabBarOnAppear()) {
+              homeStoryAvatar(url: homeAvatarURL, unseen: false, add: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add story")
+          }
+          ForEach(homeStories) { group in
+            Button {
+              selectedStoryGroup = group
+            } label: {
+              homeStoryAvatar(url: group.userProfileImage, unseen: group.hasUnviewed == true, add: false, clubName: group.ownerType == "club" ? group.displayName : nil)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("View \(group.displayName)'s story")
+          }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 14)
+      }
+      .frame(maxWidth: .infinity)
+      .clipped()
+      .accessibilityIdentifier("home.story.rail")
     }
     .frame(height: 78)
     .background(MIRATheme.Color.surface)
@@ -1380,6 +1381,28 @@ public struct MainFeedView: View {
     )
     model.prefetchMedia(around: post)
     Task { await model.loadMoreIfNeeded(after: post) }
+  }
+
+  private func scheduleCurrentPostActivation() {
+    postActivationTask?.cancel()
+    let expectedPostID = selectedPostID
+    if activeVideoPostID != nil {
+      var transaction = Transaction()
+      transaction.disablesAnimations = true
+      withTransaction(transaction) { activeVideoPostID = nil }
+    }
+    guard expectedPostID != nil else { return }
+    postActivationTask = Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(140))
+      guard !Task.isCancelled, selectedPostID == expectedPostID, !isMediaPlaybackSuppressed else { return }
+      if let expectedPostID,
+         let index = displayedPosts.firstIndex(where: { $0.id == expectedPostID }) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { selectedPostFallbackIndex = index }
+      }
+      activateCurrentPost(reason: "home_post_settled")
+    }
   }
 
   private func pauseVisibleMedia(reason: String) {
