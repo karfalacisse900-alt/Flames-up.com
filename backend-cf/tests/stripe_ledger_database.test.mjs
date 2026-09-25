@@ -14,7 +14,8 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
     for (const file of ['20260904193517_captro_commerce_entitlements.sql', '20260904221545_stripe_connect_creator_earnings.sql',
       '20260904221847_stripe_connect_fk_indexes.sql', '20260904231905_stripe_native_payments.sql',
       '20260908224758_isolate_stripe_connected_accounts_by_mode.sql', '20260912214322_captro_custom_payout_accounts.sql',
-      '20260912225447_allow_unused_legacy_express_payout_migration.sql']) {
+      '20260912225447_allow_unused_legacy_express_payout_migration.sql',
+      '20260925120000_seller_identity_verification.sql']) {
       await db.exec(readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), 'utf8'));
     }
     const one = async (sql, params = []) => (await db.query(sql, params)).rows[0];
@@ -25,6 +26,11 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
     const testConnected = await one(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,
       charges_enabled,transfers_enabled,payouts_enabled,eligible_debit_card_exists)
       values($1,'seller','acct_fixture','test','ready',true,false,true,true,true) returning id`, [seller]);
+    await db.query(`insert into app_seller_identity_verifications(user_id,app_user_id,stripe_mode,connected_account_id,provider_session_id,status)
+      values($1,'seller','test',$2,'vs_fixture','processing')`, [seller,testConnected.id]);
+    await assert.rejects(db.query(`insert into app_seller_identity_verifications(user_id,app_user_id,stripe_mode,connected_account_id)
+      values($1,'seller','test',$2)`, [seller,testConnected.id]), /duplicate key/);
+    assert.equal((await one('select status from app_seller_identity_verifications where user_id=$1', [seller])).status, 'processing');
     await db.query(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,
       charges_enabled,transfers_enabled,payouts_enabled,eligible_debit_card_exists)
       values($1,'seller','acct_live_fixture','live','ready',true,false,true,true,true)`, [seller]);

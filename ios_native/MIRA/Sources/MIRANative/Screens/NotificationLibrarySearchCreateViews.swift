@@ -1008,6 +1008,7 @@ public struct CreatePostNativeView: View {
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
   @State private var isCameraReviewingMedia = false
   @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
+  @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
   public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
@@ -2568,8 +2569,19 @@ public struct CreatePostNativeView: View {
       let account = try await api.loadPayoutAccount().account
       if account.ready { return true }
       await persistComposerDraft(uploadStatus: "draft", errorMessage: nil, includeMedia: true)
-      startPayoutOnboarding()
-      errorMessage = nil
+      if account.sellerIdentityPending {
+        if account.identityStatus == "processing" {
+          errorMessage = "Stripe is reviewing your identity. Your paid-post draft is saved."
+        } else {
+          startSellerIdentity()
+          errorMessage = nil
+        }
+      } else if account.payoutSchedule != nil && account.payoutSchedule != "manual" {
+        errorMessage = "Payout scheduling needs review before this paid post can go live. Your draft is saved."
+      } else {
+        startPayoutOnboarding()
+        errorMessage = nil
+      }
       return false
     } catch {
       let message = (error as? MIRAAPIError)?.errorDescription ?? "Could not open secure payout card setup."
@@ -2589,7 +2601,7 @@ public struct CreatePostNativeView: View {
             let account = try await api.loadPayoutAccount().account
             if account.ready {
               errorMessage = nil
-            } else if account.needsIdentityVerification {
+            } else if account.sellerIdentityPending || account.needsIdentityVerification {
               errorMessage = "Complete the required identity verification before publishing this paid post."
             } else {
               errorMessage = "Finish adding your payout debit card before publishing this paid post."
@@ -2600,6 +2612,27 @@ public struct CreatePostNativeView: View {
         }
       case .failure(let error):
         errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  @MainActor
+  private func startSellerIdentity() {
+    sellerIdentity.start(api: api) { result in
+      switch result {
+      case .success(.submitted), .success(.processing):
+        errorMessage = "Stripe is reviewing your identity. Your paid-post draft is saved."
+      case .success(.alreadyVerified):
+        errorMessage = "Identity verified. Finish payout setup, then publish your saved draft."
+      case .success(.canceled):
+        errorMessage = "Your paid-post draft is saved. Complete seller verification when you're ready."
+      case .failure(let error):
+        errorMessage = error.localizedDescription
+      }
+      Task {
+        if let confirmed = try? await api.loadSellerIdentity(), confirmed.status == "verified" {
+          errorMessage = "Identity verified. Finish payout setup, then publish your saved draft."
+        }
       }
     }
   }

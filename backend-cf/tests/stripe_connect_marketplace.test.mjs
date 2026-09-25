@@ -379,7 +379,7 @@ test('payout setup errors are safe for users and never expose database responses
 test('checkout distinguishes seller readiness from temporary Stripe failures', () => {
   assert.match(worker, /Your saved payment card was not charged/);
   assert.match(worker, /commerce_creator_payout_check_failed/);
-  assert.match(worker, /code !== 'CAPTRO_PAYOUTS_NOT_READY'/);
+  assert.match(worker, /'CAPTRO_PAYOUTS_NOT_READY', 'CAPTRO_SELLER_IDENTITY_REQUIRED'/);
 });
 
 test('stamp has one detail target while saving remains available in the detail header', () => {

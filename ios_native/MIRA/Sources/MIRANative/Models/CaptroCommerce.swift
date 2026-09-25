@@ -482,6 +482,9 @@ public struct CaptroPayoutAccount: Decodable, Hashable {
   public let chargesEnabled: Bool
   public let payoutsEnabled: Bool
   public let payoutCard: CaptroPayoutCard?
+  public let identityRequired: Bool?
+  public let identityStatus: String?
+  public let identityFailureCode: String?
   public let identityRequirementsComplete: Bool?
   public let payoutSchedule: String?
   public let requirementsCount: Int
@@ -497,6 +500,10 @@ public extension CaptroPayoutAccount {
     if payoutCard == nil { return "Add Debit Card" }
     if needsIdentityVerification { return "Verify Identity" }
     return "Continue Payout Card Setup"
+  }
+
+  var sellerIdentityPending: Bool {
+    identityRequired == true && identityStatus != "verified"
   }
 
   var payoutCardStatusTitle: String {
@@ -539,6 +546,19 @@ public struct CaptroPayoutAccountSession: Decodable {
   public let mode: String
   public let accountSessionClientSecret: String
   public let expiresAt: String?
+}
+
+public struct CaptroSellerIdentityStatus: Decodable {
+  public let required: Bool
+  public let status: String
+  public let failureCode: String?
+}
+
+public struct CaptroSellerIdentitySession: Decodable {
+  public let status: String
+  public let verificationSessionId: String?
+  public let clientSecret: String?
+  public let ephemeralKeySecret: String?
 }
 
 public struct CaptroEarningsBalance: Decodable, Hashable {
@@ -681,6 +701,14 @@ extension MIRAAPIClient {
 
   public func createPayoutAccountSession() async throws -> CaptroPayoutAccountSession {
     try await post("/commerce/payout-account/session", body: EmptyBody())
+  }
+
+  public func loadSellerIdentity() async throws -> CaptroSellerIdentityStatus {
+    try await get("/commerce/seller-identity")
+  }
+
+  public func createSellerIdentitySession() async throws -> CaptroSellerIdentitySession {
+    try await post("/commerce/seller-identity/session", body: EmptyBody())
   }
 
   public func loadCreatorEarnings() async throws -> CaptroEarningsResponse {

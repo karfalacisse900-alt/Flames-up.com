@@ -109,7 +109,11 @@ export function validateCommerceInput(value: unknown, options: {
   const fulfillmentType = FULFILLMENT_BY_TYPE[contentType];
   const paymentModel = text(read(input, 'paymentModel', 'payment_model'), 20)?.toLowerCase() || 'free';
   if (!['free', 'paid'].includes(paymentModel)) throw new Error('Choose Free or Paid.');
-  const commerceClass = text(read(input, 'commerceClass', 'commerce_class'), 30)?.toLowerCase() || 'outside_app';
+  const declaredCommerceClass = text(read(input, 'commerceClass', 'commerce_class'), 30)?.toLowerCase();
+  if (paymentModel === 'paid' && !declaredCommerceClass) {
+    throw new Error('Choose whether this paid purchase is used inside or outside the app.');
+  }
+  const commerceClass = declaredCommerceClass || 'outside_app';
   if (!['outside_app', 'digital'].includes(commerceClass)) throw new Error('Choose where this purchase is used.');
   const title = text(input.title, 180) || text(options.title, 180);
   if (!title) throw new Error('Add a title before enabling access or payment.');

@@ -462,8 +462,11 @@ struct CaptroEarningsView: View {
   let api: MIRAAPIClient
   @StateObject private var model: CaptroEarningsModel
   @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
+  @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
   @State private var isStartingPayoutSetup = false
+  @State private var isStartingIdentity = false
   @State private var payoutSetupError: String?
+  @State private var identityProgressMessage: String?
   @State private var showingWithdrawal = false
 
   init(api: MIRAAPIClient, model: CaptroEarningsModel) {
@@ -576,6 +579,43 @@ struct CaptroEarningsView: View {
         Button("Replace Card") { openPayoutSetup() }
           .buttonStyle(CaptroOutlineButtonStyle())
       } else {
+        Text("Set up your earnings")
+          .font(.system(size: 20, weight: .bold))
+        Text("To receive money from Captro sales, verify your identity and add a payout method.")
+          .font(.system(size: 14)).foregroundStyle(CaptroDetailStyle.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        if account.sellerIdentityPending {
+          if account.identityStatus == "processing" {
+            Label("Identity verification in progress", systemImage: "clock")
+              .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+          } else {
+            Text("Verify your identity")
+              .font(.system(size: 15, weight: .semibold))
+            Text("Complete a secure identity check with Stripe. Submitted documents do not enable payouts until Stripe confirms the result.")
+              .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+            if account.identityStatus == "requires_input" {
+              Text(account.identityFailureCode == "document_expired"
+                   ? "That document has expired. Please use a current document."
+                   : "Stripe needs another verification attempt. You can try again or contact support.")
+                .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+            }
+            Button(isStartingIdentity ? "Opening verification…" : "Verify identity") { openSellerIdentity() }
+              .font(.system(size: 14, weight: .semibold))
+              .foregroundStyle(.white)
+              .frame(maxWidth: .infinity, minHeight: 46)
+              .background(CaptroDetailStyle.accent)
+              .buttonStyle(.plain)
+              .disabled(isStartingIdentity)
+          }
+        } else if account.identityRequired == true {
+          Label("Identity verified. Finish payout setup to receive earnings.", systemImage: "checkmark.circle")
+            .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+        }
+        if let identityProgressMessage {
+          Text(identityProgressMessage)
+            .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
+        }
         Text(account.payoutCardGuidance)
           .font(.system(size: 14)).foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -590,6 +630,10 @@ struct CaptroEarningsView: View {
         .frame(maxWidth: .infinity, minHeight: 46)
         .background(CaptroDetailStyle.accent)
         .buttonStyle(.plain)
+        if account.payoutSchedule != nil && account.payoutSchedule != "manual" {
+          Text("Payout scheduling needs review before new withdrawals can be enabled.")
+            .font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
+        }
       }
       NavigationLink {
         CaptroPayoutsView(model: model)
@@ -676,6 +720,33 @@ struct CaptroEarningsView: View {
         Task { await model.load(forceRefresh: true) }
       case .failure(let error):
         payoutSetupError = error.localizedDescription
+      }
+    }
+  }
+
+  private func openSellerIdentity() {
+    guard !isStartingIdentity else { return }
+    isStartingIdentity = true
+    identityProgressMessage = nil
+    sellerIdentity.start(api: api) { result in
+      isStartingIdentity = false
+      switch result {
+      case .success(.submitted):
+        identityProgressMessage = "Verification submitted. Stripe is checking your information."
+      case .success(.processing):
+        identityProgressMessage = "Verification is in progress."
+      case .success(.alreadyVerified):
+        identityProgressMessage = "Identity verified."
+      case .success(.canceled):
+        break
+      case .failure(let error):
+        payoutSetupError = error.localizedDescription
+      }
+      Task {
+        if let confirmed = try? await api.loadSellerIdentity(), confirmed.status == "verified" {
+          identityProgressMessage = "Identity verified. Finish your payout setup to receive earnings."
+        }
+        await model.load(forceRefresh: true)
       }
     }
   }

@@ -13,6 +13,7 @@ import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } fr
 import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote, proportionalAmount } from './stripe-money';
 import { supabaseRuntimeURL } from './runtime-urls';
 import { decodeStripeResponse, stripeFailureCode } from './stripe-response';
+import { sellerGateFailure } from './seller-policy';
 import {
   STRIPE_ACCOUNTS_V2_VERSION,
   stripeRecipientAccountPayload,
@@ -9437,11 +9438,146 @@ function connectedAccountIsReady(row: any): boolean {
     && Array.isArray(row?.requirements_currently_due) && row.requirements_currently_due.length === 0;
 }
 
-function connectedAccountPublicPayload(c: any, row: any) {
+function sellerIdentityUsesStripeIdentity(c: any): boolean {
+  // Connect already performs its required KYC. A separate Stripe Identity check
+  // is opt-in because it may collect the same document twice and costs money.
+  return c.env.CAPTRO_SELLER_IDENTITY_MODE === 'stripe_identity';
+}
+
+function sellerManualPayoutScheduleRequired(c: any): boolean {
+  // Test-mode rollout must prove that no scheduled route bypasses Captro's
+  // withdrawal gate. Do not silently change existing live seller schedules.
+  return getStripeConfig(c).mode === 'test'
+    || sellerIdentityUsesStripeIdentity(c)
+    || c.env.CAPTRO_REQUIRE_MANUAL_PAYOUTS === 'true';
+}
+
+async function sellerIdentityRow(c: any, authUserId: string): Promise<any | null> {
+  const rows = await supabaseAdminSelectRows(c, 'app_seller_identity_verifications', {
+    user_id: postgrestEqFilter(authUserId),
+    stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
+  }, '*', 1);
+  return rows[0] || null;
+}
+
+async function syncSellerIdentityFromStripe(c: any, row: any): Promise<any> {
+  const sessionId = cleanText(row?.provider_session_id, 180);
+  if (!sessionId.startsWith('vs_')) return row;
+  const response = await stripeApiGet(c, `/identity/verification_sessions/${encodeURIComponent(sessionId)}`);
+  if (!response.ok) throw stripeProviderError(response, 'STRIPE_IDENTITY_READ_FAILED');
+  const session = response.data;
+  if (session?.id !== sessionId || session?.livemode !== getStripeConfig(c).liveMode
+      || session?.metadata?.captro_auth_user_id !== row.user_id
+      || session?.metadata?.captro_connected_account_id !== row.connected_account_id
+      || session?.metadata?.captro_mode !== row.stripe_mode) {
+    throw new Error('STRIPE_IDENTITY_OWNER_MISMATCH');
+  }
+  const status = ['requires_input', 'processing', 'verified', 'canceled'].includes(session.status)
+    ? session.status : 'processing';
+  const patch = {
+    status,
+    failure_code: cleanText(session?.last_error?.code, 80) || null,
+    updated_at: now(),
+  };
+  await supabaseAdminPatchRows(c, 'app_seller_identity_verifications', {
+    id: postgrestEqFilter(row.id), provider_session_id: postgrestEqFilter(sessionId),
+  }, patch);
+  return { ...row, ...patch };
+}
+
+async function createOrResumeSellerIdentitySession(c: any, authUserId: string, appUserId: string, account: any) {
+  let row = await sellerIdentityRow(c, authUserId);
+  if (!row) {
+    try {
+      const inserted = await supabaseAdminInsertRows(c, 'app_seller_identity_verifications', [{
+        user_id: authUserId,
+        app_user_id: appUserId,
+        stripe_mode: configuredStripeMode(c),
+        connected_account_id: account.id,
+      }]);
+      row = inserted[0];
+    } catch (error: any) {
+      // Unique (user, mode) also protects concurrent taps. Re-read the winner.
+      row = await sellerIdentityRow(c, authUserId);
+      if (!row) throw error;
+    }
+  }
+  if (!row || row.app_user_id !== appUserId || row.connected_account_id !== account.id) {
+    throw new Error('STRIPE_IDENTITY_OWNER_MISMATCH');
+  }
+  let session: any;
+  if (row.provider_session_id) {
+    row = await syncSellerIdentityFromStripe(c, row);
+    if (row.status === 'verified') return { row, session: null };
+    if (row.status === 'canceled') throw new Error('STRIPE_IDENTITY_SUPPORT_REQUIRED');
+    const current = await stripeApiGet(c,
+      `/identity/verification_sessions/${encodeURIComponent(row.provider_session_id)}`);
+    if (!current.ok) throw stripeProviderError(current, 'STRIPE_IDENTITY_READ_FAILED');
+    session = current.data;
+  } else {
+    const params: Record<string, string | number | boolean> = {
+      type: 'document',
+      client_reference_id: authUserId,
+      'metadata[captro_auth_user_id]': authUserId,
+      'metadata[captro_connected_account_id]': account.id,
+      'metadata[captro_mode]': configuredStripeMode(c),
+    };
+    if (c.env.CAPTRO_IDENTITY_REQUIRE_SELFIE === 'true') {
+      params['options[document][require_matching_selfie]'] = true;
+    }
+    const created = await stripeApiRequest(c, '/identity/verification_sessions', params,
+      `captro-seller-identity:${row.id}`);
+    if (!created.ok || !cleanText(created.data?.id, 180).startsWith('vs_')) {
+      throw stripeProviderError(created, 'STRIPE_IDENTITY_CREATE_FAILED');
+    }
+    session = created.data;
+    if (session.livemode !== getStripeConfig(c).liveMode
+        || session.metadata?.captro_auth_user_id !== authUserId
+        || session.metadata?.captro_connected_account_id !== account.id) {
+      throw new Error('STRIPE_IDENTITY_OWNER_MISMATCH');
+    }
+    await supabaseAdminPatchRows(c, 'app_seller_identity_verifications', {
+      id: postgrestEqFilter(row.id), provider_session_id: 'is.null',
+    }, { provider_session_id: session.id, status: session.status, updated_at: now() });
+    row = await sellerIdentityRow(c, authUserId);
+    if (!row || row.provider_session_id !== session.id) throw new Error('STRIPE_IDENTITY_CONCURRENT_SESSION');
+  }
+  if (session.status !== 'requires_input') return { row, session: null };
+  // The pinned StripeIdentity 26.9.0 native initializer is invitation-only.
+  // Its officially supported web sheet works with the VerificationSession
+  // client secret until Stripe enables native capture for this account.
+  if (c.env.CAPTRO_IDENTITY_NATIVE_ENABLED !== 'true') {
+    const clientSecret = cleanText(session.client_secret, 1000);
+    if (!clientSecret.startsWith('vs_')) throw new Error('STRIPE_IDENTITY_CLIENT_SECRET_MISSING');
+    return { row, session: { id: session.id, clientSecret } };
+  }
+  const key = await stripeApiRequest(c, '/ephemeral_keys', {
+    verification_session: session.id,
+  }, undefined, undefined, STRIPE_ACCOUNTS_V2_VERSION);
+  if (!key.ok || key.data?.object !== 'ephemeral_key'
+      || !cleanText(key.data?.secret, 1000).startsWith('ek_')) {
+    throw stripeProviderError(key, 'STRIPE_IDENTITY_EPHEMERAL_KEY_FAILED');
+  }
+  return { row, session: { id: session.id, ephemeralKeySecret: key.data.secret } };
+}
+
+async function connectedAccountPublicPayload(c: any, row: any) {
+  const identityRequired = sellerIdentityUsesStripeIdentity(c);
+  let identity = identityRequired && row?.user_id ? await sellerIdentityRow(c, row.user_id) : null;
+  if (identity?.provider_session_id) identity = await syncSellerIdentityFromStripe(c, identity);
   return {
     stripeConfigured: getStripeConfig(c).configured,
     status: row?.status || 'not_started',
-    ready: connectedAccountIsReady(row),
+    ready: sellerGateFailure({
+      connectReady: connectedAccountIsReady(row),
+      manualScheduleRequired: sellerManualPayoutScheduleRequired(c),
+      payoutSchedule: row?.payout_schedule || null,
+      identityRequired,
+      identityStatus: identity?.status || null,
+    }) === null,
+    identityRequired,
+    identityStatus: identityRequired ? (identity?.status || 'not_started') : 'connect',
+    identityFailureCode: identityRequired ? (identity?.failure_code || null) : null,
     detailsSubmitted: row?.details_submitted === true,
     chargesEnabled: row?.charges_enabled === true,
     transfersEnabled: row?.transfers_enabled === true,
@@ -9637,10 +9773,23 @@ async function readCreatedRecipientV1Account(c: any, accountId: string): Promise
   return v1Account.data;
 }
 
+async function setNewSellerManualPayoutSchedule(c: any, accountId: string): Promise<void> {
+  // Only called for a just-created, Captro-owned no-dashboard recipient.
+  // Existing sellers' schedules are never changed as a side effect of reads.
+  const updated = await stripeApiRequest(c, `/accounts/${encodeURIComponent(accountId)}`, {
+    'settings[payouts][schedule][interval]': 'manual',
+  }, `captro-manual-payout-schedule:${accountId}`);
+  if (!updated.ok || updated.data?.id !== accountId
+      || updated.data?.settings?.payouts?.schedule?.interval !== 'manual') {
+    throw stripeProviderError(updated, 'CAPTRO_MANUAL_PAYOUT_SCHEDULE_FAILED');
+  }
+}
+
 async function createCaptroManagedConnectedAccount(c: any, authUserId: string, appUserId: string, userRow: any): Promise<any> {
   const input = payoutRecipientAccountInput(authUserId, appUserId, userRow);
   const created = await createRecipientStripeAccount(c, input,
     `captro-managed-payout-account-${getStripeConfig(c).mode}-${authUserId}`);
+  await setNewSellerManualPayoutSchedule(c, created.accountId);
   const v1Account = await readCreatedRecipientV1Account(c, created.accountId);
   const expectedOwner = expectedConnectedAccountOwner(authUserId, appUserId);
   const connected = await syncConnectedAccountFromStripe(c, v1Account, undefined, created.account, expectedOwner);
@@ -9669,6 +9818,7 @@ async function migrateUntouchedLegacyExpressPayoutAccount(
   };
   const created = await createRecipientStripeAccount(c, input,
     `captro-managed-payout-upgrade-${getStripeConfig(c).mode}-${authUserId}-${legacyAccountId}`);
+  await setNewSellerManualPayoutSchedule(c, created.accountId);
   const v1Account = await readCreatedRecipientV1Account(c, created.accountId);
   // Creating the replacement may take long enough for a legacy account event
   // to arrive. Re-check the provider and local financial state immediately
@@ -9712,7 +9862,24 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
 
 async function requireReadyConnectedAccount(c: any, creatorAuthUserId: string): Promise<any> {
   const row = await connectedAccountForUser(c, creatorAuthUserId, true);
-  if (!connectedAccountIsReady(row)) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  let identity = sellerIdentityUsesStripeIdentity(c) && row
+    ? await sellerIdentityRow(c, creatorAuthUserId) : null;
+  if (identity?.provider_session_id) identity = await syncSellerIdentityFromStripe(c, identity);
+  const failure = sellerGateFailure({
+    connectReady: connectedAccountIsReady(row),
+    manualScheduleRequired: sellerManualPayoutScheduleRequired(c),
+    payoutSchedule: row?.payout_schedule || null,
+    identityRequired: sellerIdentityUsesStripeIdentity(c),
+    identityStatus: identity?.status || null,
+  });
+  if (failure) throw new Error(failure);
+  if (sellerIdentityUsesStripeIdentity(c)) {
+    if (!identity || identity.connected_account_id !== row.id) {
+      throw new Error('CAPTRO_SELLER_IDENTITY_REQUIRED');
+    }
+    // The gate above used a fresh Stripe read. A delayed/out-of-order webhook
+    // or a client screen completion cannot approve this seller.
+  }
   return row;
 }
 
@@ -16233,7 +16400,8 @@ api.post('/posts', authMiddleware, async (c) => {
       await requireReadyConnectedAccount(c, commerceCreatorId!);
     } catch (error: any) {
       const code = commerceErrorCode(error);
-      if (code !== 'CAPTRO_PAYOUTS_NOT_READY') {
+      if (!['CAPTRO_PAYOUTS_NOT_READY', 'CAPTRO_SELLER_IDENTITY_REQUIRED',
+          'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED'].includes(code)) {
         console.warn(JSON.stringify({ event: 'paid_post_payout_check_failed', code,
           diagnostic: commerceErrorDiagnostic(error) }));
         return c.json({
@@ -16242,8 +16410,12 @@ api.post('/posts', authMiddleware, async (c) => {
         }, 503);
       }
       return c.json({
-        detail: 'Add and finish setting up your payout card before publishing this paid post.',
-        code: 'PAYOUT_SETUP_REQUIRED',
+        detail: code === 'CAPTRO_SELLER_IDENTITY_REQUIRED'
+          ? 'Complete seller identity verification before publishing this paid post.'
+          : code === 'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED'
+            ? 'Payout scheduling needs review before this paid post can go live.'
+            : 'Finish seller payout setup before publishing this paid post.',
+        code: code === 'CAPTRO_SELLER_IDENTITY_REQUIRED' ? code : 'PAYOUT_SETUP_REQUIRED',
       }, 409);
     }
   }
@@ -18922,7 +19094,8 @@ const beginCommercePurchaseHandler = async (c: any) => {
         await requireReadyConnectedAccount(c, purchasable.creator_id);
       } catch (error: any) {
         const code = commerceErrorCode(error);
-        if (code !== 'CAPTRO_PAYOUTS_NOT_READY') {
+        if (!['CAPTRO_PAYOUTS_NOT_READY', 'CAPTRO_SELLER_IDENTITY_REQUIRED',
+            'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED'].includes(code)) {
           console.warn(JSON.stringify({ event: 'commerce_creator_payout_check_failed', code,
             diagnostic: commerceErrorDiagnostic(error) }));
           return c.json({
@@ -18931,8 +19104,8 @@ const beginCommercePurchaseHandler = async (c: any) => {
           }, 503);
         }
         return c.json({
-          detail: "This paid item is not accepting payments yet because the creator's payout card is not ready. Your saved payment card was not charged.",
-          code: 'CAPTRO_PAYOUTS_NOT_READY',
+          detail: 'This paid item is not accepting payments until its creator finishes seller setup. Your card was not charged.',
+          code,
         }, 409);
       }
     }
@@ -19301,6 +19474,8 @@ api.post('/internal/stripe/connect-webhook/bootstrap', async (c) => {
       idempotencyKey: 'captro-platform-webhook-v1',
       events: [
         'payment_intent.succeeded', 'payment_intent.payment_failed', 'payment_intent.canceled',
+        'identity.verification_session.verified', 'identity.verification_session.requires_input',
+        'identity.verification_session.processing', 'identity.verification_session.canceled',
         'charge.refunded', 'refund.created', 'refund.updated',
         'charge.dispute.created', 'charge.dispute.updated', 'charge.dispute.closed',
         'checkout.session.completed', 'checkout.session.async_payment_succeeded',
@@ -19371,10 +19546,57 @@ api.get('/commerce/payout-account', authMiddleware, async (c) => {
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
     const account = await connectedAccountForUser(c, authUserId, true);
     c.header('Cache-Control', 'private, no-store');
-    return c.json({ account: connectedAccountPublicPayload(c, account) });
+    return c.json({ account: await connectedAccountPublicPayload(c, account) });
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'commerce_payout_account_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load your payout card status.', code: 'PAYOUT_ACCOUNT_READ_FAILED' }, 500);
+  }
+});
+
+api.get('/commerce/seller-identity', authMiddleware, async (c) => {
+  const limited = await enforceRateLimit(c, 'seller_identity_read', getUserId(c), 30, 60);
+  if (limited) return limited;
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const required = sellerIdentityUsesStripeIdentity(c);
+    let row = required ? await sellerIdentityRow(c, authUserId) : null;
+    if (row?.provider_session_id) row = await syncSellerIdentityFromStripe(c, row);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ required, status: required ? (row?.status || 'not_started') : 'connect',
+      failureCode: row?.failure_code || null });
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'seller_identity_read_failed', code: commerceErrorCode(error) }));
+    return c.json({ detail: 'Could not confirm identity status.', code: 'SELLER_IDENTITY_READ_FAILED' }, 502);
+  }
+});
+
+api.post('/commerce/seller-identity/session', authMiddleware, async (c) => {
+  const bodyTooLarge = rejectLargeRequest(c, 1_000);
+  if (bodyTooLarge) return bodyTooLarge;
+  const appUserId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'seller_identity_session', appUserId, 5, 3600);
+  if (limited) return limited;
+  if (!sellerIdentityUsesStripeIdentity(c)) {
+    return c.json({ detail: 'Connect onboarding handles this seller identity check.',
+      code: 'SELLER_IDENTITY_CONNECT_FLOW' }, 409);
+  }
+  try {
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    const userRows = await supabaseAdminSelectRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, '*', 1);
+    const account = await createOrLoadConnectedAccount(c, authUserId, appUserId, userRows[0] || {});
+    const result = await createOrResumeSellerIdentitySession(c, authUserId, appUserId, account);
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({ status: result.row.status,
+      verificationSessionId: result.session?.id || null,
+      clientSecret: result.session?.clientSecret || null,
+      ephemeralKeySecret: result.session?.ephemeralKeySecret || null });
+  } catch (error: any) {
+    const code = commerceErrorCode(error);
+    console.warn(JSON.stringify({ event: 'seller_identity_session_failed', code }));
+    return c.json({ detail: 'Could not open secure identity verification. Please try again or contact support.',
+      code }, 409);
   }
 });
 
@@ -19395,7 +19617,7 @@ api.post('/commerce/payout-account/session', authMiddleware, async (c) => {
     const session = await createConnectedAccountOnboardingSession(c, account);
     c.header('Cache-Control', 'private, no-store');
     return c.json({
-      account: connectedAccountPublicPayload(c, session.account),
+      account: await connectedAccountPublicPayload(c, session.account),
       publishableKey: session.publishableKey,
       mode: session.mode,
       accountSessionClientSecret: session.accountSessionClientSecret,
@@ -19573,7 +19795,7 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
     });
     c.header('Cache-Control', 'private, no-store');
     return c.json({
-      account: connectedAccountPublicPayload(c, account),
+      account: await connectedAccountPublicPayload(c, account),
       balance: { status: balanceStatus, currency, available, pending, instantAvailable },
       recent,
     });
@@ -19631,7 +19853,7 @@ api.get('/commerce/payouts', authMiddleware, async (c) => {
     const account = await connectedAccountForUser(c, authUserId, true);
     if (!account) {
       c.header('Cache-Control', 'private, no-store');
-      return c.json({ account: connectedAccountPublicPayload(c, null), payouts: [] });
+      return c.json({ account: await connectedAccountPublicPayload(c, null), payouts: [] });
     }
     const stripePayouts = await stripeApiGet(c, '/payouts?limit=100', account.provider_account_id);
     if (!stripePayouts.ok) throw stripeProviderError(stripePayouts, 'STRIPE_PAYOUTS_READ_FAILED');
@@ -19642,7 +19864,7 @@ api.get('/commerce/payouts', authMiddleware, async (c) => {
       filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 100,
     });
     c.header('Cache-Control', 'private, no-store');
-    return c.json({ account: connectedAccountPublicPayload(c, account), payouts: payouts.map(payoutPublicPayload) });
+    return c.json({ account: await connectedAccountPublicPayload(c, account), payouts: payouts.map(payoutPublicPayload) });
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'commerce_payouts_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load payouts.', code: 'PAYOUTS_READ_FAILED' }, 502);
@@ -19963,6 +20185,15 @@ const stripeWebhookHandler = async (c: any) => {
       });
     } else if (event.type === 'payment_intent.payment_failed') {
       await recordMarketplacePaymentFailure(c, cleanText(event?.id, 180), object);
+    } else if (event.type.startsWith('identity.verification_session.')) {
+      const sessionId = cleanText(object?.id, 180);
+      if (sessionId.startsWith('vs_')) {
+        const rows = await supabaseAdminSelectRows(c, 'app_seller_identity_verifications', {
+          provider_session_id: postgrestEqFilter(sessionId),
+          stripe_mode: postgrestEqFilter(configuredStripeMode(c)),
+        }, '*', 1);
+        if (rows[0]) await syncSellerIdentityFromStripe(c, rows[0]);
+      }
     } else if (event.type === 'account.updated') {
       const accountId = cleanText(object?.id, 180);
       const stripeMode = configuredStripeMode(c);

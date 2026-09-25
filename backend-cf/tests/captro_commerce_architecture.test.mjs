@@ -81,8 +81,26 @@ test('free access is truly zero and paid prices cannot be less than fifty cents'
     enabled: true,
     contentType: 'deal',
     paymentModel: 'paid',
+    commerceClass: 'outside_app',
     prices: [{ label: 'Deal', unitAmount: 49 }],
   }, baseOptions), /at least \$0\.50/);
+});
+
+test('paid checkout requires an explicit outside-app or digital classification', () => {
+  assert.throws(() => validateCommerceInput({
+    enabled: true,
+    contentType: 'club',
+    paymentModel: 'paid',
+    prices: [{ label: 'Membership', unitAmount: 800 }],
+  }, baseOptions), /inside or outside the app/);
+  const digital = validateCommerceInput({
+    enabled: true,
+    contentType: 'club',
+    paymentModel: 'paid',
+    commerceClass: 'digital',
+    prices: [{ label: 'Membership', unitAmount: 800 }],
+  }, baseOptions);
+  assert.equal(digital.purchasable.commerce_class, 'digital');
 });
 
 test('the Home payload exposes compact commerce facts without private configuration', () => {
