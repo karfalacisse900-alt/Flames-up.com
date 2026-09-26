@@ -342,7 +342,7 @@ async function runBuyerOnly(local, admin, api) {
     }
     assert.equal((await rows('app_entitlements?purchase_id=eq.'+attempt.purchase.id)).length,0);
     const canceled=await stripe('/payment_intents/'+pi+'/cancel',{method:'POST'});assert.equal(canceled.status,'canceled');
-    await waitFor('cancel releases hold',async()=>(await rows('app_purchases?id=eq.'+attempt.purchase.id))[0]?.status==='cancelled');
+    await waitFor('cancel releases hold',async()=>(await rows('app_purchases?id=eq.'+attempt.purchase.id))[0]?.status==='expired');
   }
   const replacement=(await rows('app_stripe_customers?user_id=eq.'+stale.authUser.id))[0];assert.notEqual(replacement.provider_customer_id,'cus_captroDeletedFixture');
   const refund=await stripe('/refunds',{method:'POST',params:{payment_intent:receipts[0].paymentIntentId}});assert.equal(refund.status,'succeeded');
