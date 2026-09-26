@@ -827,3 +827,9 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY || secrets.PUBLISHABLEKEY }}
         run: node backend-cf/scripts/production-checkout-readiness.mjs
+      - name: Audit buyer Customer and card redisplay metadata without charging
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || secrets.SECRETKEY }}
+        run: node backend-cf/scripts/audit-buyer-payment-methods.mjs
