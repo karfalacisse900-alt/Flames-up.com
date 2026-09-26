@@ -6,6 +6,14 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      configure_retained_platform:
+        description: Set only Captro platform payout schedule to manual for retained earnings
+        type: boolean
+        default: false
+      retention_mode:
+        type: choice
+        options: [test, live]
+        default: test
       payment_diagnostics_only:
         description: Read live Stripe capabilities and requirements without changing payments
         type: boolean
@@ -25,7 +33,7 @@ on:
 
 jobs:
   payment-diagnostics:
-    if: ${{ inputs.payment_diagnostics_only == true }}
+    if: ${{ inputs.payment_diagnostics_only == true && inputs.configure_retained_platform != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
@@ -56,7 +64,7 @@ jobs:
           print(json.dumps({'webhooks': [{'enabled': hook.get('status') == 'enabled', 'captro_worker': 'flames-up-api.karfalacisse900.workers.dev' in hook.get('url','') or 'api.flames-up.com' in hook.get('url',''), 'events': hook.get('enabled_events')} for hook in hooks.get('data', [])]}))
           PY
   deploy-reliability:
-    if: ${{ inputs.reliability_only == true && inputs.payment_diagnostics_only != true }}
+    if: ${{ inputs.reliability_only == true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     timeout-minutes: 30
@@ -167,7 +175,7 @@ jobs:
             exit 1
           fi
   deploy:
-    if: ${{ inputs.reliability_only != true && inputs.payment_diagnostics_only != true }}
+    if: ${{ inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
@@ -765,3 +773,36 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: node scripts/verify-event-editor.mjs
+
+  configure-platform-retention:
+    if: ${{ inputs.configure_retained_platform == true }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.retention_mode == 'live' && 'captro-payments-live' || 'captro-payments-test' }}
+    steps:
+      - name: Retain platform funds in Stripe for later reviewed seller transfers
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || secrets.SECRETKEY }}
+          STRIPE_MODE: ${{ inputs.retention_mode }}
+        run: |
+          python3 - <<'PY'
+          import os,json,urllib.request,urllib.error,urllib.parse
+          key=os.environ['STRIPE_SECRET_KEY']; mode=os.environ['STRIPE_MODE']
+          assert key.startswith(('sk_'+mode+'_','rk_'+mode+'_'))
+          def request(path,values=None):
+              body=urllib.parse.urlencode(values).encode() if values is not None else None
+              req=urllib.request.Request('https://api.stripe.com/v1/'+path,data=body,headers={'Authorization':'Bearer '+key})
+              try: return json.load(urllib.request.urlopen(req,timeout=30))
+              except urllib.error.HTTPError as e:
+                  error=json.load(e).get('error',{})
+                  raise RuntimeError('Stripe HTTP '+str(e.code)+' '+str(error.get('code') or error.get('type')))
+          before=request('account')
+          assert before.get('id','').startswith('acct_')
+          schedule=before.get('settings',{}).get('payouts',{}).get('schedule',{})
+          print(json.dumps({'platformAccount':before['id'],'mode':mode,'previousSchedule':schedule}))
+          if schedule.get('interval')!='manual':
+              request('balance_settings',{'payments[payouts][schedule][interval]':'manual'})
+          after=request('account')
+          assert after['id']==before['id']
+          assert after['settings']['payouts']['schedule']['interval']=='manual'
+          print(json.dumps({'platformRetainedEarningsConfigured':True,'sellerSchedulesChanged':False,'moneyMoved':False}))
+          PY
