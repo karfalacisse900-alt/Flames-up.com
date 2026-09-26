@@ -1,6 +1,22 @@
+/** Extract the database's exception, never its RPC function name. */
+export function paymentErrorCode(error: any): string {
+  const raw = String(error?.code || error?.message || '');
+  const value = raw.replace(/^SUPABASE_RPC_FAILED:[^:]+:\d+:/, '');
+  const appCode = value.match(/\b(?:CAPTRO|COMMERCE|STRIPE|PAYOUT)_[A-Z0-9_]+\b/);
+  if (appCode) return appCode[0];
+  const providerCodes: Record<string, string> = {
+    card_declined: 'STRIPE_CARD_DECLINED', authentication_required: 'STRIPE_AUTHENTICATION_REQUIRED',
+    resource_missing: 'STRIPE_RESOURCE_MISSING', api_connection_error: 'STRIPE_CONNECTION_ERROR',
+  };
+  return providerCodes[value] || 'COMMERCE_REQUEST_FAILED';
+}
+
 /** Public, actionable recovery text; never expose provider secrets or SQL errors. */
 export function purchaseFailureMessage(code: string): string {
   switch (code) {
+    case 'STRIPE_CARD_DECLINED': return 'Your card was declined. Try another payment method.';
+    case 'STRIPE_AUTHENTICATION_REQUIRED': return 'Complete your bank authentication in the payment sheet.';
+    case 'STRIPE_CONNECTION_ERROR': return 'Could not connect. Please try again.';
     case 'CAPTRO_CREATOR_CANNOT_PURCHASE': return 'You own this item. Open its management options instead of buying or joining it.';
     case 'CAPTRO_ITEM_EXPIRED': return 'This item has expired and is no longer accepting purchases or joins.';
     case 'CAPTRO_ITEM_UNAVAILABLE': return 'This item is no longer available.';

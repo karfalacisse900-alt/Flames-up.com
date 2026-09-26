@@ -1,4 +1,4 @@
-import { purchaseFailureMessage } from './purchase-errors';
+import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
@@ -8918,9 +8918,7 @@ async function verifyStripeWebhookSignature(rawBody: string, signatureHeader: st
 }
 
 function commerceErrorCode(error: any): string {
-  const value = getErrorCode(error).toUpperCase();
-  const match = value.match(/(?:CAPTRO|COMMERCE|STRIPE)_[A-Z0-9_]+/);
-  return match?.[0] || 'COMMERCE_REQUEST_FAILED';
+  return paymentErrorCode(error);
 }
 
 function commerceErrorDiagnostic(error: any): string {
@@ -20175,6 +20173,8 @@ const stripeWebhookHandler = async (c: any) => {
     }, 'provider_event_id', 1);
     if (processedEvents.length) return c.json({ received: true });
     const object = event?.data?.object || {};
+    paymentTrace(c, 'webhook_received', { eventId: event.id, eventType: event.type,
+      paymentIntentId: String(object.id || '').startsWith('pi_') ? object.id : null });
     if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
       const source = cleanText(object?.metadata?.source, 80);
       if (source === 'captro_commerce') {

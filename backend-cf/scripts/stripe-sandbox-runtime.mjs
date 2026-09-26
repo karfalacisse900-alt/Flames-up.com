@@ -319,6 +319,7 @@ async function runBuyerOnly(local, admin, api) {
     const transfers=await stripe('/transfers?transfer_group='+encodeURIComponent(paid.transfer_group));assert.equal(transfers.data.length,0);
     const reconciled=await json(api+'/payments/purchases/'+order.id,{headers:customer.authorized});
     assert.equal(reconciled.purchase.status,'confirmed');assert.equal((await rows('app_entitlements?purchase_id=eq.'+order.id)).length,1);
+    console.log(JSON.stringify({event:'buyer_payment_confirmed',paymentIntentId:pi,orderId:order.id,amount:order.total_amount,quantity,ticketIssued:true,noTransfer:true}));
     receipts.push({paymentIntentId:pi,orderId:order.id,amount:order.total_amount,quantity,ticketIssued:true,qrIssued:true,sellerPending:true,transferCreated:false});
   }
   const soldOut=await createLocalUser(local,admin,api,'soldout');
