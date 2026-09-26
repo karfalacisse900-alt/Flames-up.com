@@ -32,3 +32,8 @@ for (const mapping of await db.json()) {
   cursor=page.has_more?page.data.at(-1).id:'';
  }while(cursor);
 }
+const recent=await read('/payment_intents?limit=50');
+for(const pi of recent?.data||[]) {
+ if(pi.metadata?.source!=='captro_commerce')continue;
+ console.log(JSON.stringify({event:'buyer_intent_audit',paymentIntentId:pi.id,created:pi.created,customerId:pi.customer,paymentMethodId:pi.payment_method,status:pi.status,amount:pi.amount,live:pi.livemode,errorType:pi.last_payment_error?.type,errorCode:pi.last_payment_error?.code,declineCode:pi.last_payment_error?.decline_code,errorPaymentMethodId:pi.last_payment_error?.payment_method?.id}));
+}
