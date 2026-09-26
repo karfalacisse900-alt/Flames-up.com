@@ -51,7 +51,7 @@ test('Stripe Connect stores Captro-managed payout accounts without raw card data
   assert.doesNotMatch(worker, /payout-account\/debit-card/);
 });
 
-test('paid posts create reusable Stripe products and prices only after payout readiness', () => {
+test('paid posts create reusable Stripe products and prices independently of payout readiness', () => {
   assert.match(migration, /add column if not exists stripe_product_id text/);
   assert.match(migration, /add column if not exists stripe_price_id text/);
   assert.match(worker, /async function ensureStripeProductAndPrice/);
@@ -319,7 +319,8 @@ test('native checkout displays saved buyer cards while payout remains debit-only
   const paymentIntent = worker.slice(worker.indexOf('async function createCommercePaymentIntent'), worker.indexOf('async function completeCommercePurchaseFromIntent'));
   assert.match(paymentIntent, /buyerStripeCustomerForUser/);
   assert.match(paymentIntent, /stripeApiRequest\(c, '\/payment_intents'/);
-  assert.doesNotMatch(paymentIntent, /stripeAccount|Stripe-Account|on_behalf_of/);
+  assert.doesNotMatch(paymentIntent, /stripeAccount|Stripe-Account|on_behalf_of\s*:/);
+  assert.match(paymentIntent, /intent\.on_behalf_of/); // Reject unexpected destination charges.
 });
 
 test('native payout requests accept Codable snake_case identifiers', () => {
@@ -376,10 +377,12 @@ test('payout setup errors are safe for users and never expose database responses
   assert.doesNotMatch(payoutOnboardingRoute, /SUPABASE_|23505|duplicate key/);
 });
 
-test('checkout distinguishes seller readiness from temporary Stripe failures', () => {
-  assert.match(worker, /Your saved payment card was not charged/);
-  assert.match(worker, /commerce_creator_payout_check_failed/);
-  assert.match(worker, /'CAPTRO_PAYOUTS_NOT_READY', 'CAPTRO_SELLER_IDENTITY_REQUIRED'/);
+test('buyer checkout never runs seller verification or payout setup', () => {
+  const checkout = worker.slice(worker.indexOf('const beginCommercePurchaseHandler'), worker.indexOf("api.post('/commerce/purchases'"));
+  assert.doesNotMatch(checkout, /requireReadyConnectedAccount|seller_readiness/);
+  assert.match(checkout, /captro_begin_marketplace_purchase_v2/);
+  assert.match(checkout, /createCommercePaymentIntent/);
+  assert.match(checkout, /commerce_purchase_begin_failed/);
 });
 
 test('stamp has one detail target while saving remains available in the detail header', () => {

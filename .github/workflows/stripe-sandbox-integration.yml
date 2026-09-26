@@ -1,6 +1,11 @@
 name: Stripe Sandbox Integration
 on:
   workflow_dispatch:
+    inputs:
+      buyer_only:
+        type: boolean
+        default: true
+        description: Verify deferred platform checkout before seller release
   push:
     branches: [fix/oauth-guest-access]
     paths:
@@ -64,6 +69,7 @@ jobs:
           STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+          CAPTRO_BUYER_ONLY: ${{ inputs.buyer_only }}
         run: node scripts/stripe-sandbox-runtime.mjs
       - name: Stop only this runner's disposable stack
         if: always()

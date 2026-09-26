@@ -273,6 +273,62 @@ async function createReadyTestConnectedAccount(creator) {
   throw new Error(`Stripe test connected account not ready: ${JSON.stringify(lastReadiness)}`);
 }
 
+async function runBuyerOnly(local, admin, api) {
+  const rows = path => json(local.API_URL + '/rest/v1/' + path, {headers:admin});
+  const seller = await createLocalUser(local,admin,api,'unonboarded');
+  const buyer = await createLocalUser(local,admin,api,'freshbuyer');
+  assert.equal((await rows('app_connected_accounts?user_id=eq.'+seller.authUser.id)).length,0);
+  assert.equal((await rows('app_stripe_customers?user_id=eq.'+buyer.authUser.id)).length,0);
+  await json(api+'/stripe/webhook',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'},400);
+  const post = await json(api+'/posts',{method:'POST',headers:seller.authorized,body:JSON.stringify({
+    client_request_id:randomUUID(),post_type:'event',title:'Captro Five Dollar Sandbox Ticket',content:'Isolated payment acceptance test.',visibility:'public',
+    commerce:{enabled:true,contentType:'event',paymentModel:'paid',commerceClass:'outside_app',title:'Captro Five Dollar Sandbox Ticket',
+      description:'Sandbox only',locationName:'Test Venue',city:'New York',startsAt:new Date(Date.now()+86400000).toISOString(),
+      endsAt:new Date(Date.now()+90000000).toISOString(),capacity:3,passRequired:true,prices:[{label:'General',unitAmount:500,capacity:3}]}
+  })});
+  const commerce=(await json(api+'/commerce/posts/'+post.id,{headers:buyer.authorized})).commerce;
+  assert.equal(commerce.lowestPrice.unitAmount,500);assert.equal(commerce.lowestPrice.buyerTotal,500);
+  for(const p of await rows('app_prices?purchasable_id=eq.'+commerce.id))if(p.stripe_price_id)cleanupPrices.add(p.stripe_price_id);
+  for(const p of await rows('app_purchasables?id=eq.'+commerce.id))if(p.stripe_product_id)cleanupProducts.add(p.stripe_product_id);
+  const receipts=[];
+  for(const quantity of [1,2]) {
+    const customer=quantity===1?buyer:await createLocalUser(local,admin,api,'quantitytwo');
+    const body={contentId:post.id,contentType:'event',quantity,selectedPriceId:commerce.lowestPrice.id,idempotencyKey:randomUUID()};
+    const options={method:'POST',headers:customer.authorized,body:JSON.stringify(body)};
+    const checkout=await json(api+'/payments/create',options);
+    assert.equal(checkout.purchase.totalAmount,500*quantity);assert.equal(checkout.paymentSheet.mode,'test');
+    const replay=await json(api+'/payments/create',options);assert.equal(replay.purchase.id,checkout.purchase.id);
+    const pi=checkout.paymentSheet.paymentIntentClientSecret.split('_secret_')[0];
+    const pending=await stripe('/payment_intents/'+pi);
+    assert.equal(pending.payment_method,null);assert.equal(pending.transfer_data,null);assert.equal(pending.on_behalf_of,null);
+    assert.equal(pending.amount,500*quantity);assert.equal(pending.livemode,false);
+    assert.equal((await rows('app_entitlements?purchase_id=eq.'+checkout.purchase.id)).length,0);
+    const paid=await stripe('/payment_intents/'+pi+'/confirm',{method:'POST',params:{payment_method:'pm_card_visa',return_url:'https://captro.app/payments/return'}});
+    assert.equal(paid.status,'succeeded');
+    // Read DB directly: GET purchase cannot conceal a broken webhook by reconciling it.
+    const order=await waitFor('signed webhook issues fresh buyer ticket',async()=>{
+      const data=await rows('app_purchases?id=eq.'+checkout.purchase.id);
+      return data[0]?.status==='confirmed'?data[0]:null;
+    });
+    assert.equal(order.settlement_model,'deferred');assert.equal(order.provider_transfer_id,null);assert.equal(order.connected_account_id,null);
+    const entitlements=await rows('app_entitlements?purchase_id=eq.'+order.id);assert.equal(entitlements.length,1);assert.equal(entitlements[0].status,'active');
+    const pass=await json(api+'/commerce/entitlements/'+entitlements[0].id+'/pass',{headers:customer.authorized});
+    assert.ok(pass.pass.token.startsWith('captro:'));assert.ok(pass.pass.code);
+    const earnings=await rows('app_creator_earnings?purchase_id=eq.'+order.id);assert.equal(earnings.length,1);assert.equal(earnings[0].status,'pending');assert.equal(earnings[0].provider_transfer_id,null);
+    const ledger=await rows('app_marketplace_ledger?order_id=eq.'+order.id);assert.equal(ledger.filter(x=>x.account==='pending').length,1);
+    const transfers=await stripe('/transfers?transfer_group='+encodeURIComponent(paid.transfer_group));assert.equal(transfers.data.length,0);
+    const reconciled=await json(api+'/commerce/purchases/'+order.id,{headers:customer.authorized});
+    assert.equal(reconciled.purchase.status,'confirmed');assert.equal((await rows('app_entitlements?purchase_id=eq.'+order.id)).length,1);
+    receipts.push({paymentIntentId:pi,orderId:order.id,amount:order.total_amount,quantity,ticketIssued:true,qrIssued:true,sellerPending:true,transferCreated:false});
+  }
+  const soldOut=await createLocalUser(local,admin,api,'soldout');
+  const full=await json(api+'/payments/create',{method:'POST',headers:soldOut.authorized,body:JSON.stringify({contentId:post.id,contentType:'event',quantity:1,selectedPriceId:commerce.lowestPrice.id,idempotencyKey:randomUUID()})},409);
+  assert.match(full.code,/CAPACITY|SOLD_OUT/);
+  assert.equal((await rows('app_connected_accounts?user_id=eq.'+seller.authUser.id)).length,0);
+  assert.equal((await rows('app_connected_accounts?user_id=eq.'+buyer.authUser.id)).length,0);
+  console.log(JSON.stringify({event:'deferred_buyer_acceptance',mode:'test',realStripe:true,signedWebhook:true,newBuyerNoSavedCard:true,sellerWithoutConnect:true,receipts,nativePaymentSheetDeviceTest:false}));
+}
+
 async function main() {
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.equal(process.env.STRIPE_MODE, 'test');
@@ -312,7 +368,7 @@ async function main() {
     d1_databases: [{ binding: 'DB', database_name: 'captro-payments-ephemeral', database_id: '00000000-0000-0000-0000-000000000001' }],
     kv_namespaces: [{ binding: 'KV', id: '00000000000000000000000000000001' }],
     vars: { ENVIRONMENT: 'test', STRIPE_MODE: 'test', DATABASE_PRIMARY: 'supabase_postgres', SUPABASE_URL: local.API_URL,
-      FRONTEND_URL: 'https://captro.app', CAPTRO_SERVICE_FEE_BPS: '500', CAPTRO_SERVICE_FEE_FIXED_CENTS: '50',
+      FRONTEND_URL: 'https://captro.app', CAPTRO_SERVICE_FEE_BPS: process.env.CAPTRO_BUYER_ONLY === 'true' ? '0' : '500', CAPTRO_SERVICE_FEE_FIXED_CENTS: process.env.CAPTRO_BUYER_ONLY === 'true' ? '0' : '50',
       CAPTRO_PAYOUT_FEE_POLICY: 'platform_absorbs' },
   };
   await writeFile(join(directory, 'wrangler.json'), JSON.stringify(config));
@@ -335,6 +391,8 @@ async function main() {
   }
   assert.ok(healthy, 'Isolated Worker must start');
   const admin = { apikey: local.SERVICE_ROLE_KEY, Authorization: `Bearer ${local.SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' };
+
+  if (process.env.CAPTRO_BUYER_ONLY === 'true') return runBuyerOnly(local, admin, api);
 
   // Verify Captro's native, Captro-managed payout setup without opening a hosted
   // Stripe Express or Account Link flow.

@@ -9097,7 +9097,16 @@ async function buyerStripeCustomerForUser(c: any, authUserId: string, appUserId:
     user_id: postgrestEqFilter(authUserId),
     stripe_mode: postgrestEqFilter(stripe.mode),
   }, '*', 1);
-  if (cleanText(existing[0]?.provider_customer_id, 180).startsWith('cus_')) return existing[0];
+  const previousCustomerId = cleanText(existing[0]?.provider_customer_id, 180);
+  if (previousCustomerId.startsWith('cus_')) {
+    const current = await stripeApiGet(c, '/customers/' + encodeURIComponent(previousCustomerId));
+    if (current.ok && current.data?.deleted !== true && current.data?.livemode === stripe.liveMode
+        && current.data?.metadata?.captro_auth_user_id === authUserId) return existing[0];
+    if (!current.ok && !(current.status === 404 && current.data?.error?.code === 'resource_missing')) {
+      throw stripeProviderError(current, 'STRIPE_CUSTOMER_READ_FAILED');
+    }
+    paymentTrace(c, 'stale_customer_ignored', { buyerId: authUserId, customerId: previousCustomerId });
+  }
 
   const userRows = await supabaseAdminSelectRows(c, 'app_users', {
     id: postgrestEqFilter(appUserId),
@@ -9113,7 +9122,7 @@ async function buyerStripeCustomerForUser(c: any, authUserId: string, appUserId:
   };
   if (email && !isInternalOAuthEmail(email)) params.email = email;
   if (displayName) params.name = displayName;
-  const result = await stripeApiRequest(c, '/customers', params, `buyer-customer:${stripe.mode}:${authUserId}`);
+  const result = await stripeApiRequest(c, '/customers', params, `buyer-customer:${stripe.mode}:${authUserId}:${previousCustomerId || "new"}`);
   if (!result.ok || !cleanText(result.data?.id, 180).startsWith('cus_')) {
     throw stripeProviderError(result, 'STRIPE_CUSTOMER_CREATE_FAILED');
   }
@@ -10267,7 +10276,10 @@ async function marketplaceSettlementForIntent(c: any, intent: any, purchase: any
 
   let balanceTransaction = charge.balance_transaction;
   const balanceTransactionId = stripeExpandableId(balanceTransaction, 'txn_');
-  if (!balanceTransactionId) throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  if (!balanceTransactionId) {
+    if (purchase.settlement_model === 'deferred') return { charge, balanceTransaction: null, transferId: null };
+    throw new Error('STRIPE_PAYMENT_SETTLEMENT_PENDING');
+  }
   if (typeof balanceTransaction === 'string') {
     const balanceResult = await stripeApiGet(c, `/balance_transactions/${encodeURIComponent(balanceTransactionId)}`);
     if (!balanceResult.ok) throw stripeProviderError(balanceResult, 'STRIPE_BALANCE_TRANSACTION_READ_FAILED');
@@ -10279,6 +10291,10 @@ async function marketplaceSettlementForIntent(c: any, intent: any, purchase: any
     throw new Error('STRIPE_PAYMENT_MISMATCH');
   }
 
+  if (purchase.settlement_model === 'deferred') {
+    if (intent.transfer_data || intent.on_behalf_of || charge.transfer) throw new Error('CAPTRO_PREMATURE_TRANSFER');
+    return { charge, balanceTransaction, transferId: null };
+  }
   const transferGroup = marketplaceTransferGroup(purchase.id);
   let transferId = stripeExpandableId(charge.transfer, 'tr_');
   let transfer: any = null;
@@ -10384,7 +10400,7 @@ async function completeCommercePurchaseFromSession(c: any, eventId: string, sess
     p_provider_charge_id: settlement.charge.id,
     p_provider_transfer_id: settlement.transferId,
     p_amount: amount,
-    p_processing_amount: cents(settlement.balanceTransaction.fee),
+    p_processing_amount: settlement.balanceTransaction ? cents(settlement.balanceTransaction.fee) : -1,
     p_tax_amount: tax,
     p_currency: cleanText(session?.currency || 'usd', 3).toUpperCase(),
     p_available_at: null,
@@ -10394,56 +10410,70 @@ async function completeCommercePurchaseFromSession(c: any, eventId: string, sess
   return { processed: true, purchase: confirmedPurchase };
 }
 
+function paymentTrace(c: any, stage: string, data: Record<string, unknown> = {}) {
+  if (c.env.ENVIRONMENT !== 'test' && c.env.CAPTRO_PAYMENT_DIAGNOSTICS !== 'true') return;
+  console.info(JSON.stringify({ event: 'captro_checkout', stage, requestId: c.get?.('requestId') || null,
+    mode: configuredStripeMode(c), ...data }));
+}
+
 async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = false) {
   const stripe = getStripeConfig(c);
   if (!stripe.configured || !stripe.webhookConfigured) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
   if (purchase.status !== 'payment_pending' || purchase.payment_interface !== 'native') throw new Error('CAPTRO_PURCHASE_NOT_PAYABLE');
-  const buyerCustomer = await buyerStripeCustomerForUser(c, purchase.buyer_id, purchase.buyer_app_user_id);
-  const customerId = cleanText(buyerCustomer.provider_customer_id, 180);
-  const connected = forExpiry ? await connectedAccountForUser(c, purchase.creator_id)
-    : await requireReadyConnectedAccount(c, purchase.creator_id);
-  if (!connected) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
-  if (connected.provider_account_id !== purchase.stripe_destination_account_id) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  if (purchase.stripe_mode && purchase.stripe_mode !== stripe.mode) throw new Error('STRIPE_PAYMENT_MODE_MISMATCH');
   const transferGroup = marketplaceTransferGroup(purchase.id);
-  const params = {
-    amount: cents(purchase.total_amount, 1), currency: purchase.currency.toLowerCase(),
-    customer: customerId,
-    'automatic_payment_methods[enabled]': true,
-    transfer_group: transferGroup,
-    'metadata[source]': 'captro_commerce',
-    'metadata[captro_purchase_id]': purchase.id,
-    'metadata[captro_tax_amount]': purchase.tax_amount,
-    'metadata[captro_mode]': stripe.mode,
-    description: cleanText(purchase.item_title, 180),
-  };
-  let result = purchase.provider_payment_id
-    ? await stripeApiGet(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`)
-    : await stripeApiRequest(c, '/payment_intents', params, `payment:${purchase.id}`);
-  if (result.ok && purchase.provider_payment_id && !stripeExpandableId(result.data?.customer, 'cus_')
-      && ['requires_payment_method', 'requires_confirmation'].includes(cleanText(result.data?.status, 60))) {
-    result = await stripeApiRequest(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`, {
-      customer: customerId,
-    });
+  let customerId: string | null = null;
+  let result: any;
+  if (purchase.provider_payment_id) {
+    result = await stripeApiGet(c, '/payment_intents/' + encodeURIComponent(purchase.provider_payment_id));
+    customerId = stripeExpandableId(result.data?.customer, 'cus_') || null;
+  } else {
+    // Customer and saved-card presentation are optional. A provider outage in
+    // CustomerSession must not prevent paying with a new card or Apple Pay.
+    try {
+      const customer = await buyerStripeCustomerForUser(c, purchase.buyer_id, purchase.buyer_app_user_id);
+      customerId = customer.provider_customer_id;
+    } catch (error) {
+      console.warn(JSON.stringify({ event: 'checkout_customer_unavailable', orderId: purchase.id,
+        code: commerceErrorCode(error) }));
+    }
+    paymentTrace(c, 'payment_intent_create', { buyerId: purchase.buyer_id, orderId: purchase.id,
+      accessId: purchase.purchasable_id, tierId: purchase.price_id, quantity: purchase.quantity,
+      amount: purchase.total_amount, currency: purchase.currency, customerId });
+    result = await stripeApiRequest(c, '/payment_intents', {
+      amount: cents(purchase.total_amount, 1), currency: purchase.currency.toLowerCase(),
+      ...(customerId ? { customer: customerId } : {}),
+      'automatic_payment_methods[enabled]': true, transfer_group: transferGroup,
+      'metadata[source]': 'captro_commerce', 'metadata[captro_purchase_id]': purchase.id,
+      'metadata[captro_tax_amount]': purchase.tax_amount, 'metadata[captro_mode]': stripe.mode,
+      description: cleanText(purchase.item_title, 180),
+    }, 'payment:' + purchase.id);
   }
   if (!result.ok || !result.data?.id) throw stripeProviderError(result, 'STRIPE_PAYMENT_CREATE_FAILED');
   const intent = result.data;
   if (intent.livemode !== stripe.liveMode || intent.amount !== purchase.total_amount
-      || intent.currency !== purchase.currency.toLowerCase()
-      || stripeExpandableId(intent.customer, 'cus_') !== customerId
-      || intent.transfer_group !== transferGroup
-      || (intent.transfer_data?.destination
-        && (intent.transfer_data.destination !== connected.provider_account_id
-          || intent.transfer_data.amount !== purchase.creator_amount))) throw new Error('STRIPE_PAYMENT_MISMATCH');
+      || intent.currency !== purchase.currency.toLowerCase() || intent.transfer_group !== transferGroup
+      || intent.metadata?.captro_purchase_id !== purchase.id
+      || (purchase.settlement_model === 'deferred' && (intent.transfer_data || intent.on_behalf_of))) {
+    throw new Error('STRIPE_PAYMENT_MISMATCH');
+  }
   await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
     provider_payment_id: intent.id, payment_provider: 'stripe', updated_at: now(),
   });
   purchase.provider_payment_id = intent.id;
-  const customerSession = await createBuyerCustomerSession(c, customerId);
+  paymentTrace(c, 'payment_intent_ready', { orderId: purchase.id, paymentIntentId: intent.id,
+    status: intent.status, stripeRequestId: result.requestId, httpStatus: result.status });
+  let customerSession: any = null;
+  if (customerId && !forExpiry) {
+    try { customerSession = await createBuyerCustomerSession(c, customerId); }
+    catch (error) { console.warn(JSON.stringify({ event: 'checkout_saved_cards_unavailable', orderId: purchase.id,
+      code: commerceErrorCode(error) })); }
+  }
   return {
     purchaseId: purchase.id, publishableKey: stripe.publishableKey,
     paymentIntentClientSecret: intent.client_secret,
-    customerId,
-    customerSessionClientSecret: customerSession.client_secret,
+    customerId: customerSession ? customerId : null,
+    customerSessionClientSecret: customerSession?.client_secret || null,
     mode: stripe.mode, merchantDisplayName: 'Captro', returnURL: 'captro://stripe-redirect',
     applePayMerchantId: cleanText(c.env.CAPTRO_APPLE_PAY_MERCHANT_ID, 160) || null,
     merchantCountryCode: 'US',
@@ -10472,13 +10502,20 @@ async function completeCommercePurchaseFromIntent(c: any, eventId: string, objec
     p_purchase_id: purchaseId, p_provider_event_id: eventId, p_provider_checkout_id: null,
     p_provider_payment_id: intent.id, p_provider_charge_id: settlement.charge.id,
     p_provider_transfer_id: settlement.transferId,
-    p_amount: intent.amount_received, p_processing_amount: cents(settlement.balanceTransaction.fee),
+    p_amount: intent.amount_received, p_processing_amount: settlement.balanceTransaction ? cents(settlement.balanceTransaction.fee) : -1,
     p_tax_amount: purchase.tax_amount, p_currency: intent.currency.toUpperCase(),
     // Platform settlement time is not the connected account's available balance.
     p_available_at: null,
     p_payload_digest: await sha256Hex(JSON.stringify({ eventId, intentId: intent.id, amount: intent.amount_received })),
   });
-  await reconcileCreatorEarnings(c, purchase.connected_account_id);
+  const card = settlement.charge.payment_method_details?.card;
+  if (card && /^\d{4}$/.test(String(card.last4 || ''))) {
+    await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
+      receipt_payment_method: { brand: cleanText(card.brand, 30), last4: card.last4, wallet: cleanText(card.wallet?.type, 30) || null },
+    });
+  }
+  paymentTrace(c, 'order_paid_ticket_issued', { orderId: purchase.id, paymentIntentId: intent.id, status: 'confirmed' });
+  if (purchase.connected_account_id) await reconcileCreatorEarnings(c, purchase.connected_account_id);
 }
 
 async function reconcileCreatorEarnings(c: any, connectedAccountId: string) {
@@ -10576,7 +10613,11 @@ async function recordCommerceRefund(c: any, eventId: string, refund: any) {
   }
   // The buyer refund is real even if recovering the creator transfer subsequently fails.
   await record();
-  if (refund.status === 'succeeded' && desiredReversal > 0) {
+  if (refund.status === 'succeeded' && purchase.settlement_model === 'deferred' && !purchase.provider_transfer_id) {
+    creatorReversal = desiredReversal;
+    await record();
+  }
+  if (refund.status === 'succeeded' && desiredReversal > 0 && (purchase.provider_transfer_id || purchase.settlement_model !== 'deferred')) {
     if (!purchase.provider_transfer_id) throw new Error('STRIPE_REFUND_TRANSFER_REQUIRED');
     const transferId = encodeURIComponent(purchase.provider_transfer_id);
     const reversalId = cleanText(refund.transfer_reversal?.id || refund.transfer_reversal, 180);
@@ -10625,11 +10666,6 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
   const purchasable = purchasableRows[0];
   const price = priceRows[0];
   if (!purchasable || !price) throw new Error('CAPTRO_PRICE_UNAVAILABLE');
-  const connected = await requireReadyConnectedAccount(c, purchase.creator_id);
-  if (connected.id !== purchase.connected_account_id
-      || connected.provider_account_id !== purchase.stripe_destination_account_id) {
-    throw new Error('CAPTRO_PAYOUTS_NOT_READY');
-  }
   const existingSessionId = cleanText(purchase?.provider_checkout_id, 180);
   if (existingSessionId) {
     const existing = await stripeApiGet(c, `/checkout/sessions/${encodeURIComponent(existingSessionId)}`);
@@ -16408,28 +16444,7 @@ api.post('/posts', authMiddleware, async (c) => {
     if (!getStripeConfig(c).configured) {
       return c.json({ detail: 'Card payments are temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
     }
-    try {
-      await requireReadyConnectedAccount(c, commerceCreatorId!);
-    } catch (error: any) {
-      const code = commerceErrorCode(error);
-      if (!['CAPTRO_PAYOUTS_NOT_READY', 'CAPTRO_SELLER_IDENTITY_REQUIRED',
-          'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED'].includes(code)) {
-        console.warn(JSON.stringify({ event: 'paid_post_payout_check_failed', code,
-          diagnostic: commerceErrorDiagnostic(error) }));
-        return c.json({
-          detail: 'Paid publishing is temporarily unavailable. Your draft is safe; try again shortly.',
-          code: 'COMMERCE_PAYMENTS_UNAVAILABLE',
-        }, 503);
-      }
-      return c.json({
-        detail: code === 'CAPTRO_SELLER_IDENTITY_REQUIRED'
-          ? 'Complete seller identity verification before publishing this paid post.'
-          : code === 'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED'
-            ? 'Payout scheduling needs review before this paid post can go live.'
-            : 'Finish seller payout setup before publishing this paid post.',
-        code: code === 'CAPTRO_SELLER_IDENTITY_REQUIRED' ? code : 'PAYOUT_SETUP_REQUIRED',
-      }, 409);
-    }
+
   }
 
   const createdAt = now();
@@ -19110,38 +19125,17 @@ const beginCommercePurchaseHandler = async (c: any) => {
     if (Number(price.unit_amount || 0) > 0 && !getStripeConfig(c).configured) {
       return c.json({ detail: 'Card checkout is temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
     }
-    if (Number(price.unit_amount || 0) > 0) {
-      try {
-        stage = 'seller_readiness';
-        await requireReadyConnectedAccount(c, purchasable.creator_id);
-      } catch (error: any) {
-        const code = commerceErrorCode(error);
-        if (!['CAPTRO_PAYOUTS_NOT_READY', 'CAPTRO_SELLER_IDENTITY_REQUIRED',
-            'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED'].includes(code)) {
-          console.warn(JSON.stringify({ event: 'commerce_creator_payout_check_failed', endpoint: 'POST /payments/create',
-            stage, code, diagnostic: commerceErrorDiagnostic(error),
-            request_id: c.get?.('requestId') || '' }));
-          return c.json({
-            detail: 'Payments are temporarily unavailable. Your saved payment card was not charged.',
-            code: 'COMMERCE_PAYMENTS_UNAVAILABLE',
-          }, 503);
-        }
-        return c.json({
-          detail: 'This paid item is not accepting payments until its creator finishes seller setup. Your card was not charged.',
-          code,
-        }, 409);
-      }
-    }
     const selection = constrainCommerceSelection(
       sanitizeCommerceSelection(body.selection, purchasable.fulfillment_type),
       purchasable
     );
-    const native = c.req.path.endsWith('/payments/create') || body.paymentInterface === 'native';
+    const native = c.req.path.endsWith('/payments/create') || c.req.path.endsWith('/checkout/create-payment-intent') || body.paymentInterface === 'native';
     const suppliedKey = cleanText(body.idempotency_key || body.idempotencyKey, 120);
     if (native && !isUuidText(suppliedKey)) return c.json({ detail: 'A payment request ID is required.', code: 'CAPTRO_IDEMPOTENCY_KEY_REQUIRED' }, 400);
     const idempotencyKey = suppliedKey || `purchase-${uuid()}`;
     const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity);
     stage = 'purchase_hold';
+    paymentTrace(c, 'checkout_start', { buyerId: buyerAuthId, accessId: purchasable.id, tierId: price.id, quantity, amount: amounts.buyerTotal });
     let purchase: any = await supabaseAdminRpc(c, 'captro_begin_marketplace_purchase_v2', {
       p_buyer_id: buyerAuthId,
       p_buyer_app_user_id: buyerAppUserId,
@@ -19193,6 +19187,7 @@ const beginCommercePurchaseHandler = async (c: any) => {
 };
 api.post('/commerce/purchases', authMiddleware, beginCommercePurchaseHandler);
 api.post('/payments/create', authMiddleware, beginCommercePurchaseHandler);
+api.post('/checkout/create-payment-intent', authMiddleware, beginCommercePurchaseHandler);
 
 api.get('/payments/purchases/:purchaseId', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
