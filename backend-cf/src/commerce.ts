@@ -253,3 +253,11 @@ export const captroCommerceTestSupport = {
   CONTENT_TYPES,
   FULFILLMENT_BY_TYPE,
 };
+
+/** Receipt display precision is seconds; accepts Postgres microseconds and timezones.
+ * Keep ledger timestamps untouched. Foundation's default ISO parser rejects fractions. */
+export function receiptTimestamp(value: unknown): string | null {
+  if(typeof value!=='string' || !value.trim())return null;
+  const date=new Date(value);
+  return Number.isFinite(date.getTime())?date.toISOString().replace(/\.\d{3}Z$/,'Z'):null;
+}

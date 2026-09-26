@@ -10,7 +10,7 @@ import { screenStoryWithWorkersAI } from './story-safety';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
-import { attachPublicCommerce, publicCommercePayload, validateCommerceInput } from './commerce';
+import { attachPublicCommerce, publicCommercePayload, validateCommerceInput, receiptTimestamp } from './commerce';
 import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote, proportionalAmount } from './stripe-money';
 import { supabaseRuntimeURL } from './runtime-urls';
 import { decodeStripeResponse, stripeFailureCode } from './stripe-response';
@@ -9006,7 +9006,7 @@ function commercePurchasePayload(row: any, entitlement?: any) {
     totalAmount: Math.max(0, Number(row?.total_amount || 0)),
     currency: cleanText(row?.currency || 'USD', 3).toUpperCase(),
     status: cleanText(row?.status, 40),
-    purchasedAt: row?.confirmed_at || row?.created_at || null,
+    purchasedAt: receiptTimestamp(row?.confirmed_at || row?.created_at),
     receiptPaymentMethod: row?.confirmed_at ? row.receipt_payment_method || null : null,
     entitlement: entitlement ? {
       id: publicId(entitlement.id, 120),

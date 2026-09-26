@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import {
   captroCommerceTestSupport,
+  receiptTimestamp,
   publicCommercePayload,
   validateCommerceInput,
 } from '../src/commerce.ts';
@@ -181,4 +182,9 @@ test('creator, Details and Me surfaces use the shared commerce API without chang
   assert.match(dashboard, /dashboardHeading\("My Stuff"\)/);
   assert.match(dashboard, /dashboardHeading\("Created"\)/);
   assert.match(dashboard, /CaptroPassScannerSheet/);
+});
+
+test('receipt dates accept real Stripe/Postgres fractions without losing the day or timezone',()=>{
+ assert.equal(receiptTimestamp('2026-09-26T18:00:12.123456-04:00'),'2026-09-26T22:00:12Z');
+ assert.equal(receiptTimestamp(null),null);assert.equal(receiptTimestamp('invalid'),null);
 });
