@@ -9,10 +9,10 @@ async function readRepoFile(relativePath) {
   return readFile(path.join(repoRoot, relativePath), 'utf8');
 }
 
-test('new statuses expire after 24 hours and legacy reports use the same window', async () => {
+test('new statuses expire after 14 days and legacy reports use the same window', async () => {
   const worker = await readRepoFile('backend-cf/src/index.ts');
-  assert.match(worker, /const storyLifetimeMs = 24 \* 60 \* 60 \* 1000;/);
-  assert.match(worker, /s\.created_at >= datetime\('now', '-1 day'\)/);
+  assert.match(worker, /const storyLifetimeMs = 14 \* 24 \* 60 \* 60 \* 1000;/);
+  assert.match(worker, /s\.created_at >= datetime\('now', '-14 days'\)/);
   assert.match(worker, /expires_at: `gt\.\${now\(\)\}`/);
 });
 
@@ -41,11 +41,11 @@ test('story text and media must pass server-side publication checks', async () =
   assert.match(worker, /submittedMediaUrl === safeMediaReference\(asset\.public_url\)/);
 });
 
-test('database enforces the 24-hour story expiry cap', async () => {
-  const migration = await readRepoFile('supabase/migrations/20260922213005_story_24_hour_expiry_guard.sql');
-  assert.match(migration, /app_stories_max_24h/);
+test('database replaces the 24-hour story expiry cap with 14 days', async () => {
+  const migration = await readRepoFile('supabase/migrations/20260926204501_story_14_day_lifetime.sql');
+  assert.match(migration, /app_stories_max_14d/);
   assert.match(migration, /as restrictive/);
-  assert.match(migration, /created_at > now\(\) - interval '24 hours'/);
+  assert.match(migration, /created_at > now\(\) - interval '14 days'/);
 });
 
 test('status editor keeps the writing area clear of the publish button', async () => {

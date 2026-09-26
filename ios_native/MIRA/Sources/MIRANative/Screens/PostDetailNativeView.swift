@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import os
 
 @MainActor
 final class PostDetailModel: ObservableObject {
@@ -7,6 +8,7 @@ final class PostDetailModel: ObservableObject {
   @Published var comments: [MIRAComment] = []
   @Published var isLoadingComments = false
   @Published var currentUserId: String?
+  @Published var didAttemptCurrentUserLoad = false
   @Published var isSaving = false
   @Published var isUpdatingAttendance = false
   @Published var actionError: String?
@@ -24,6 +26,7 @@ final class PostDetailModel: ObservableObject {
   @Published var commerceError: String?
 
   let api: MIRAAPIClient
+  private let commerceLog = Logger(subsystem: "com.captro.app", category: "commerce")
   private var likeMutationVersions: [String: Int] = [:]
   private var likingCommentIds = Set<String>()
   private var paymentRequestKey: String?
@@ -82,7 +85,10 @@ final class PostDetailModel: ObservableObject {
         await loadCommercePass(entitlementId: entitlementId)
       }
     } catch {
-      commerceError = "Could not refresh access details."
+      logCommerceError(error, endpoint: "GET /commerce/posts/:postId")
+      let detail = (error as? MIRAAPIError)?.errorDescription
+        ?? ((error as? URLError) != nil ? "Could not connect to refresh access details." : "Could not refresh access details.")
+      commerceError = commerce == nil ? detail : "\(detail) Showing the last loaded details; price and availability are checked before payment."
     }
   }
 
@@ -91,7 +97,7 @@ final class PostDetailModel: ObservableObject {
     quantity: Int,
     selection: CaptroCommerceSelection
   ) async {
-    guard let commerce, !isUpdatingCommerce else { return }
+    guard let commerce, currentUserId != nil, !isUpdatingCommerce else { return }
     isUpdatingCommerce = true
     commerceError = nil
     defer { isUpdatingCommerce = false }
@@ -127,7 +133,23 @@ final class PostDetailModel: ObservableObject {
         await loadCommerce()
       }
     } catch {
-      commerceError = (error as? MIRAAPIError)?.errorDescription ?? "Could not complete this request."
+      logCommerceError(error, endpoint: "POST /payments/create")
+      commerceError = (error as? MIRAAPIError)?.errorDescription ?? "Could not complete this request. Please try again."
+    }
+  }
+
+  private func logCommerceError(_ error: Error, endpoint: String) {
+    switch error {
+    case MIRAAPIError.server(let status, let code, _):
+      commerceLog.error("\(endpoint, privacy: .public) status=\(status) code=\(code ?? "unknown", privacy: .public)")
+    case MIRAAPIError.badStatus(let status):
+      commerceLog.error("\(endpoint, privacy: .public) status=\(status)")
+    case MIRAAPIError.decodingFailed:
+      commerceLog.error("\(endpoint, privacy: .public) response_decode_failed")
+    case let network as URLError:
+      commerceLog.error("\(endpoint, privacy: .public) network_code=\(network.errorCode)")
+    default:
+      commerceLog.error("\(endpoint, privacy: .public) request_failed")
     }
   }
 
@@ -566,10 +588,15 @@ final class PostDetailModel: ObservableObject {
     }
   }
 
-  private func loadCurrentUserIfNeeded() async {
+  func loadCurrentUserIfNeeded() async {
     guard currentUserId == nil else { return }
-    let me: MIRAUser? = try? await api.get("/auth/me")
-    currentUserId = me?.id
+    defer { didAttemptCurrentUserLoad = true }
+    do {
+      let me: MIRAUser = try await api.get("/auth/me")
+      currentUserId = me.id
+    } catch {
+      logCommerceError(error, endpoint: "GET /auth/me")
+    }
   }
 }
 
@@ -705,6 +732,7 @@ public struct PostDetailNativeView: View {
     }
     .task {
       await model.hydrateFromLocalCache()
+      await model.loadCurrentUserIfNeeded()
       await model.refreshPost()
       await model.loadCommerce()
       await model.loadPrivateObject()

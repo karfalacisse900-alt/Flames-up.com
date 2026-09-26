@@ -3897,7 +3897,7 @@ async function resolveReportTarget(c: any, reporterId: string, type: string, rep
     if (type === 'story') {
       const storySql = [
         'SELECT s.id, s.user_id FROM statuses s JOIN users u ON s.user_id = u.id',
-        `WHERE s.id = ? AND s.created_at >= datetime('now', '-1 day') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
+        `WHERE s.id = ? AND s.created_at >= datetime('now', '-14 days') AND ${visibleStatusWhere('u', 's')} LIMIT 1`,
       ].join(' ');
       const row: any = await c.env.DB.prepare(storySql).bind(reportedId, reporterId, reporterId).first();
       if (!row) return { ok: false, status: 404, detail: 'Reported story was not found.' };
@@ -9862,7 +9862,18 @@ async function createOrLoadConnectedAccount(c: any, authUserId: string, appUserI
 }
 
 async function requireReadyConnectedAccount(c: any, creatorAuthUserId: string): Promise<any> {
-  const row = await connectedAccountForUser(c, creatorAuthUserId, true);
+  const stored = await connectedAccountForUser(c, creatorAuthUserId, false);
+  if (!stored) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+  let row: any;
+  try {
+    row = await refreshConnectedAccount(c, stored);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'commerce_seller_refresh_failed', endpoint: 'stripe_connect_account',
+      code: commerceErrorCode(error), diagnostic: commerceErrorDiagnostic(error),
+      request_id: c.get?.('requestId') || '' }));
+    if (!connectedAccountIsReady(stored)) throw new Error('CAPTRO_PAYOUTS_NOT_READY');
+    throw error;
+  }
   let identity = sellerIdentityUsesStripeIdentity(c) && row
     ? await sellerIdentityRow(c, creatorAuthUserId) : null;
   if (identity?.provider_session_id) identity = await syncSellerIdentityFromStripe(c, identity);
@@ -17154,7 +17165,7 @@ async function supabaseReadVisibleStories(c: any, viewerId: string, friendsOnly 
     filters: {
       status: postgrestEqFilter('active'),
       expires_at: `gt.${now()}`,
-      created_at: `gt.${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`,
+      created_at: `gt.${new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()}`,
     },
     order: 'created_at.desc',
     limit: 120,
@@ -17215,7 +17226,7 @@ async function supabaseGetVisibleStory(c: any, storyId: string, viewerId: string
       id: postgrestEqFilter(storyId),
       status: postgrestEqFilter('active'),
       expires_at: `gt.${now()}`,
-      created_at: `gt.${new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()}`,
+      created_at: `gt.${new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()}`,
     },
     limit: 1,
   });
@@ -17259,7 +17270,7 @@ api.post('/statuses', authMiddleware, async (c) => {
   const userId = getUserId(c); const b = await c.req.json();
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'story_create');
   if (supabaseRequired) return supabaseRequired;
-  const storyLifetimeMs = 24 * 60 * 60 * 1000;
+  const storyLifetimeMs = 14 * 24 * 60 * 60 * 1000;
   const limited = await enforceRateLimit(c, 'story_create', userId, 24, 86400);
   if (limited) return limited;
   const storyContent = cleanMultilineText(b.content || '', 2000);
@@ -19023,15 +19034,19 @@ api.get('/commerce/posts/:postId', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_post_read', viewerId, 120, 60);
   if (limited) return limited;
+  let stage = 'visible_post';
   try {
     const [post] = await supabaseReadVisiblePosts(c, viewerId, { postId: c.req.param('postId'), limit: 1 });
     if (!post) return c.json({ detail: 'Post not found.', code: 'POST_NOT_FOUND' }, 404);
+    stage = 'commerce_details';
     const commerce = await commerceDetailsForVisiblePost(c, post, viewerId);
     if (!commerce) return c.json({ detail: 'This post is free to view and has no checkout.', code: 'COMMERCE_NOT_AVAILABLE' }, 404);
     c.header('Cache-Control', 'private, no-store');
     return c.json({ commerce });
   } catch (error: any) {
-    console.warn(JSON.stringify({ event: 'commerce_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    console.warn(JSON.stringify({ event: 'commerce_post_read_failed', endpoint: 'GET /commerce/posts/:postId', stage,
+      code: commerceErrorCode(error), diagnostic: commerceErrorDiagnostic(error),
+      request_id: c.get?.('requestId') || '' }));
     return c.json({ detail: 'Could not load access details.', code: 'COMMERCE_READ_FAILED' }, 500);
   }
 });
@@ -19042,6 +19057,7 @@ const beginCommercePurchaseHandler = async (c: any) => {
   const buyerAppUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_purchase_begin', buyerAppUserId, 20, 60);
   if (limited) return limited;
+  let stage = 'request_validation';
   try {
     const body: any = await c.req.json().catch(() => ({}));
     const postId = publicId(body.contentId || body.post_id || body.postId, 120);
@@ -19060,8 +19076,12 @@ const beginCommercePurchaseHandler = async (c: any) => {
     }
     if (!post || !purchasable) return c.json({ detail: 'This item is no longer available.', code: 'CAPTRO_ITEM_UNAVAILABLE' }, 404);
     if (body.contentType && body.contentType !== purchasable.content_type) return c.json({ detail: 'Post type does not match.', code: 'CAPTRO_ITEM_MISMATCH' }, 400);
+    stage = 'buyer_identity';
     const buyerAuthId = await supabaseAuthUserIdForAppUserId(c, buyerAppUserId);
     if (!buyerAuthId) return c.json({ detail: 'Reconnect your account before joining or buying.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
+    if (buyerAuthId === purchasable.creator_id || buyerAppUserId === purchasable.creator_app_user_id) {
+      return c.json({ detail: 'You own this item. Open its management options instead of buying it.', code: 'CAPTRO_CREATOR_CANNOT_PURCHASE' }, 409);
+    }
     if (purchasable.audience === 'followers') {
       const following = await supabaseFollowingUserIds(c, buyerAppUserId, [purchasable.creator_app_user_id]);
       if (!following.has(purchasable.creator_app_user_id)) return c.json({ detail: 'This is available to followers only.', code: 'COMMERCE_AUDIENCE_RESTRICTED' }, 403);
@@ -19092,13 +19112,15 @@ const beginCommercePurchaseHandler = async (c: any) => {
     }
     if (Number(price.unit_amount || 0) > 0) {
       try {
+        stage = 'seller_readiness';
         await requireReadyConnectedAccount(c, purchasable.creator_id);
       } catch (error: any) {
         const code = commerceErrorCode(error);
         if (!['CAPTRO_PAYOUTS_NOT_READY', 'CAPTRO_SELLER_IDENTITY_REQUIRED',
             'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED'].includes(code)) {
-          console.warn(JSON.stringify({ event: 'commerce_creator_payout_check_failed', code,
-            diagnostic: commerceErrorDiagnostic(error) }));
+          console.warn(JSON.stringify({ event: 'commerce_creator_payout_check_failed', endpoint: 'POST /payments/create',
+            stage, code, diagnostic: commerceErrorDiagnostic(error),
+            request_id: c.get?.('requestId') || '' }));
           return c.json({
             detail: 'Payments are temporarily unavailable. Your saved payment card was not charged.',
             code: 'COMMERCE_PAYMENTS_UNAVAILABLE',
@@ -19119,6 +19141,7 @@ const beginCommercePurchaseHandler = async (c: any) => {
     if (native && !isUuidText(suppliedKey)) return c.json({ detail: 'A payment request ID is required.', code: 'CAPTRO_IDEMPOTENCY_KEY_REQUIRED' }, 400);
     const idempotencyKey = suppliedKey || `purchase-${uuid()}`;
     const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity);
+    stage = 'purchase_hold';
     let purchase: any = await supabaseAdminRpc(c, 'captro_begin_marketplace_purchase_v2', {
       p_buyer_id: buyerAuthId,
       p_buyer_app_user_id: buyerAppUserId,
@@ -19138,6 +19161,7 @@ const beginCommercePurchaseHandler = async (c: any) => {
     if (purchase?.status === 'payment_pending') {
       try {
         if (purchase.payment_interface === 'native') {
+          stage = 'payment_intent';
           paymentSheet = await createCommercePaymentIntent(c, purchase);
         } else {
           const session = await createCommerceCheckoutSession(c, purchase);
@@ -19159,7 +19183,7 @@ const beginCommercePurchaseHandler = async (c: any) => {
   } catch (error: any) {
     const code = commerceErrorCode(error);
     console.warn(JSON.stringify({
-      event: 'commerce_purchase_begin_failed',
+      event: 'commerce_purchase_begin_failed', endpoint: 'POST /payments/create', stage,
       code,
       diagnostic: commerceErrorDiagnostic(error),
       request_id: c.get?.('requestId') || '',

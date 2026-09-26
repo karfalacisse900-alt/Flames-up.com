@@ -12,7 +12,7 @@ test('Stripe failures retain correlation without logging sensitive provider cont
   assert.equal(result.ok, false);
   assert.equal(result.data.error.code, 'STRIPE_CONNECT_ACTIVATION_REQUIRED');
   assert.equal(stripeFailureCode(result.data, 'fallback'), 'STRIPE_CONNECT_ACTIVATION_REQUIRED');
-  assert.deepEqual(lines, [{ event: 'stripe_api_failed', status: 400, requestId: 'req_Test123', code: 'STRIPE_CONNECT_ACTIVATION_REQUIRED' }]);
+  assert.deepEqual(lines, [{ event: 'stripe_api_failed', endpoint: '/accounts', status: 400, requestId: 'req_Test123', code: 'STRIPE_CONNECT_ACTIVATION_REQUIRED' }]);
 });
 
 test('Malformed Stripe responses fail closed, including successful HTTP responses', async t => {
@@ -51,5 +51,5 @@ test('Provider-controlled error fields cannot inject secrets into diagnostics', 
   assert.equal(stripeFailureCode({ error: { code: 'card_declined' } }, 'fallback'), 'card_declined');
   assert.equal(stripeFailureCode({ error: { code: 'private@example.com', type: 'private data' } }, 'fallback'), 'fallback');
   await decodeStripeResponse(Response.json(data, { status: 402, headers: { 'Request-Id': 'sk_test_secret' } }), '/payment_intents');
-  assert.deepEqual(lines, [{ event: 'stripe_api_failed', status: 402, requestId: null, code: 'card_error' }]);
+  assert.deepEqual(lines, [{ event: 'stripe_api_failed', endpoint: '/payment_intents', status: 402, requestId: null, code: 'card_error' }]);
 });
