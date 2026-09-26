@@ -969,7 +969,8 @@ public struct MainFeedView: View {
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api, onClose: { isShowingCreatePost = false })
       }
-      .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
+      .fullScreenCover(item: $selectedStoryGroup) { group in
+        let dismissStory = { selectedStoryGroup = nil }
         StoryViewerNativeView(
           group: group,
           allGroups: homeStories,

@@ -536,7 +536,8 @@ public struct DiscoverNativeView: View {
         guard phase == .active, !model.posts.isEmpty else { return }
         Task { await model.refreshVisiblePosts() }
       }
-      .miraFullScreenOverlay(item: $selectedStoryGroup, background: .black) { group, dismissStory in
+      .fullScreenCover(item: $selectedStoryGroup) { group in
+        let dismissStory = { selectedStoryGroup = nil }
         StoryViewerNativeView(
           group: group,
           allGroups: model.stories,

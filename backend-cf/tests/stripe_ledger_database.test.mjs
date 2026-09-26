@@ -10,7 +10,7 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
     await db.exec(`create role anon; create role authenticated; create role service_role;
       create schema auth; create table auth.users(id uuid primary key);
       create table public.app_posts(id uuid primary key);
-      create table public.app_group_chat_members(group_id text,user_id text,role text,joined_at timestamptz,primary key(group_id,user_id));`);
+      create table public.app_group_chat_members(id text,group_id text,user_id text,role text,legacy_created_at timestamptz,created_at timestamptz,updated_at timestamptz,primary key(group_id,user_id));`);
     for (const file of ['20260904193517_captro_commerce_entitlements.sql', '20260904221545_stripe_connect_creator_earnings.sql',
       '20260904221847_stripe_connect_fk_indexes.sql', '20260904231905_stripe_native_payments.sql',
       '20260908224758_isolate_stripe_connected_accounts_by_mode.sql', '20260912214322_captro_custom_payout_accounts.sql',
@@ -117,5 +117,21 @@ test('native payment migrations enforce snapshots, idempotency, ticket issuance 
       provider_account_id: 'acct_legacyupgrade', stripe_mode: 'test', replacement_provider_account_id: 'acct_captromigrated',
       migrated_to_connected_account_id: legacyPayout.id, retirement_reason: 'captro_managed_payout_account_upgrade'
     });
+    // Execute the actual free-club membership path with a restricted seller.
+    // This must not create Stripe accounts for the buyer or require seller KYC.
+    await db.query("update app_connected_accounts set status='restricted',transfers_enabled=false,payouts_enabled=false where user_id=$1", [seller]);
+    const freePost = (await one('insert into app_posts values(gen_random_uuid()) returning id')).id;
+    const freeClub = (await one("insert into app_purchasables(post_id,creator_id,creator_app_user_id,content_type,fulfillment_type,payment_model,title,private_config) values($1,$2,'seller','club','membership','free','Free club','{\"group_chat_id\":\"test-group\"}') returning id", [freePost,seller])).id;
+    const freePrice = (await one("insert into app_prices(purchasable_id,unit_amount,currency) values($1,0,'USD') returning id", [freeClub])).id;
+    const join = key => one("select * from captro_begin_marketplace_purchase_v2($1,'buyer',$2,$3,1,$4,'{}',0,0,0,'native')", [buyer,freeClub,freePrice,key]);
+    const joined = await join('free-join-one');
+    assert.equal(joined.status,'confirmed');
+    assert.equal(joined.total_amount,0);
+    assert.equal((await join('free-join-one')).id,joined.id);
+    assert.equal((await join('free-join-again')).id,joined.id);
+    assert.equal((await one("select count(*)::int n from app_group_chat_members where group_id='test-group' and user_id='buyer'")).n,1);
+    assert.equal((await one('select count(*)::int n from app_connected_accounts where user_id=$1',[buyer])).n,0);
+    await assert.rejects(one("select * from captro_begin_marketplace_purchase_v2($1,'seller',$2,$3,1,'own-join-test','{}',0,0,0,'native')", [seller,freeClub,freePrice]), /CREATOR_CANNOT_PURCHASE/);
+    await assert.rejects(begin('restricted-seller-test'), /PAYOUTS_NOT_READY/);
   } finally { await db.close(); }
 });
