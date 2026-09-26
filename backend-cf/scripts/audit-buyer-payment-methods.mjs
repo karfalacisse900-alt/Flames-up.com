@@ -37,3 +37,19 @@ for(const pi of recent?.data||[]) {
  if(pi.metadata?.source!=='captro_commerce')continue;
  console.log(JSON.stringify({event:'buyer_intent_audit',paymentIntentId:pi.id,created:pi.created,customerId:pi.customer,paymentMethodId:pi.payment_method,status:pi.status,amount:pi.amount,live:pi.livemode,errorType:pi.last_payment_error?.type,errorCode:pi.last_payment_error?.code,declineCode:pi.last_payment_error?.decline_code,errorPaymentMethodId:pi.last_payment_error?.payment_method?.id}));
 }
+const end=Date.now();
+const logs=await fetch('https://api.cloudflare.com/client/v4/accounts/'+process.env.CLOUDFLARE_ACCOUNT_ID+'/workers/observability/telemetry/query',{method:'POST',headers:{Authorization:'Bearer '+process.env.CLOUDFLARE_API_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({queryId:'captro-buyer-failure-audit',timeframe:{from:end-86400000,to:end},view:'events',dry:true,limit:100,parameters:{needle:{value:'commerce_purchase_begin_failed',isRegex:false,matchCase:false}}})});
+const logData=await logs.json();
+console.log(JSON.stringify({event:'checkout_log_query',status:logs.status,success:logData.success,errorCodes:logData.errors?.map(x=>x.code),resultKeys:Object.keys(logData.result||{})}));
+// Print only existing structured checkout diagnostics, never arbitrary log bodies.
+function inspect(value){
+ if(!value)return;
+ if(typeof value==='string'&&value.startsWith('{')){try{inspect(JSON.parse(value))}catch{}return;}
+ if(typeof value!=='object')return;
+ if(value.event==='commerce_purchase_begin_failed'){
+  const safe={event:value.event,stage:value.stage,code:value.code,endpoint:value.endpoint};
+  console.log(JSON.stringify(safe));return;
+ }
+ for(const item of Object.values(value))inspect(item);
+}
+inspect(logData.result);
