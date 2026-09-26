@@ -20,6 +20,10 @@ for (const mapping of await db.json()) {
  const customer=await read('/customers/'+id);
  console.log(JSON.stringify({event:'buyer_customer_audit',customerId:id,exists:!!customer&&!customer.deleted,live:customer?.livemode}));
  if(!customer||customer.deleted)continue;
+ // Short-lived session probe only: does not attach, confirm, charge, or change consent.
+ const probe=await fetch('https://api.stripe.com/v1/customer_sessions',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({customer:id,'components[customer_sheet][enabled]':'true','components[customer_sheet][features][payment_method_remove]':'enabled','components[mobile_payment_element][enabled]':'true','components[mobile_payment_element][features][payment_method_save]':'enabled','components[mobile_payment_element][features][payment_method_redisplay]':'enabled','components[mobile_payment_element][features][payment_method_remove]':'enabled'})});
+ const probeData=await probe.json();
+ console.log(JSON.stringify({event:'buyer_session_probe',customerId:id,status:probe.status,code:probeData.error?.code,param:probeData.error?.param,requestId:probe.headers.get('request-id'),componentEnabled:probeData.components?.mobile_payment_element?.enabled,features:probeData.components?.mobile_payment_element?.features}));
  let cursor='';
  do {
   const page=await read('/payment_methods?customer='+id+'&type=card&limit=100'+(cursor?'&starting_after='+cursor:''));
