@@ -6,6 +6,10 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      payment_diagnostics_only:
+        description: Read live Stripe capabilities and requirements without changing payments
+        type: boolean
+        default: false
       reliability_only:
         description: Deploy only the additive chat migration and Worker, without payment secret or webhook changes
         type: boolean
@@ -20,8 +24,39 @@ on:
         default: false
 
 jobs:
+  payment-diagnostics:
+    if: ${{ inputs.payment_diagnostics_only == true }}
+    runs-on: ubuntu-latest
+    environment: captro-payments-live
+    steps:
+      - name: Read current Stripe live eligibility without charges or configuration changes
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || secrets.SECRETKEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY || secrets.PUBLISHABLEKEY }}
+        run: |
+          python3 - <<'PY'
+          import os, json, urllib.request, urllib.error
+          key = os.environ['STRIPE_SECRET_KEY']
+          assert key.startswith(('sk_live_', 'rk_live_')), 'Live Stripe key is not configured'
+          assert os.environ['STRIPE_PUBLISHABLE_KEY'].startswith('pk_live_'), 'Live publishable key is missing'
+          def get(path):
+              request = urllib.request.Request('https://api.stripe.com/v1/' + path, headers={'Authorization': 'Bearer ' + key})
+              try:
+                  return json.load(urllib.request.urlopen(request, timeout=30))
+              except urllib.error.HTTPError as error:
+                  payload = json.load(error).get('error', {})
+                  raise RuntimeError('Stripe HTTP ' + str(error.code) + ': ' + str(payload.get('code', payload.get('type', 'unknown'))))
+          def safe(account):
+              requirements = account.get('requirements') or {}
+              return {'charges_enabled': account.get('charges_enabled'), 'payouts_enabled': account.get('payouts_enabled'), 'details_submitted': account.get('details_submitted'), 'capabilities': account.get('capabilities'), 'disabled_reason': requirements.get('disabled_reason'), 'currently_due': requirements.get('currently_due'), 'past_due': requirements.get('past_due')}
+          print(json.dumps({'platform': safe(get('account'))}))
+          accounts = get('accounts?limit=100')
+          print(json.dumps({'connected_accounts': [safe(account) for account in accounts.get('data', [])], 'has_more': accounts.get('has_more')}))
+          hooks = get('webhook_endpoints?limit=100')
+          print(json.dumps({'webhooks': [{'enabled': hook.get('status') == 'enabled', 'captro_worker': 'flames-up-api.karfalacisse900.workers.dev' in hook.get('url','') or 'api.flames-up.com' in hook.get('url',''), 'events': hook.get('enabled_events')} for hook in hooks.get('data', [])]}))
+          PY
   deploy-reliability:
-    if: ${{ inputs.reliability_only == true }}
+    if: ${{ inputs.reliability_only == true && inputs.payment_diagnostics_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     timeout-minutes: 30
@@ -132,7 +167,7 @@ jobs:
             exit 1
           fi
   deploy:
-    if: ${{ inputs.reliability_only != true }}
+    if: ${{ inputs.reliability_only != true && inputs.payment_diagnostics_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
