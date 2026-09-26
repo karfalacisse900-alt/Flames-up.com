@@ -291,6 +291,7 @@ async function runBuyerOnly(local, admin, api) {
   for(const p of await rows('app_prices?purchasable_id=eq.'+commerce.id))if(p.stripe_price_id)cleanupPrices.add(p.stripe_price_id);
   for(const p of await rows('app_purchasables?id=eq.'+commerce.id))if(p.stripe_product_id)cleanupProducts.add(p.stripe_product_id);
   const receipts=[];
+  const receiptBuyers=[];
   for(const quantity of [1,2]) {
     const customer=quantity===1?buyer:await createLocalUser(local,admin,api,'quantitytwo');
     const body={contentId:post.id,contentType:'event',quantity,selectedPriceId:commerce.lowestPrice.id,idempotencyKey:randomUUID()};
@@ -303,7 +304,7 @@ async function runBuyerOnly(local, admin, api) {
     assert.equal(pending.payment_method,null);assert.equal(pending.transfer_data,null);assert.equal(pending.on_behalf_of,null);
     assert.equal(pending.amount,500*quantity);assert.equal(pending.livemode,false);
     assert.equal((await rows('app_entitlements?purchase_id=eq.'+checkout.purchase.id)).length,0);
-    const paid=await stripe('/payment_intents/'+pi+'/confirm',{method:'POST',params:{payment_method:'pm_card_visa',return_url:'https://captro.app/payments/return'}});
+    const paid=await stripe('/payment_intents/'+pi+'/confirm',{method:'POST',params:{payment_method:quantity===2?'pm_card_bypassPending':'pm_card_visa',return_url:'https://captro.app/payments/return'}});
     assert.equal(paid.status,'succeeded');
     // Read DB directly: GET purchase cannot conceal a broken webhook by reconciling it.
     const order=await waitFor('signed webhook issues fresh buyer ticket',async()=>{
@@ -320,6 +321,7 @@ async function runBuyerOnly(local, admin, api) {
     const reconciled=await json(api+'/payments/purchases/'+order.id,{headers:customer.authorized});
     assert.equal(reconciled.purchase.status,'confirmed');assert.equal((await rows('app_entitlements?purchase_id=eq.'+order.id)).length,1);
     console.log(JSON.stringify({event:'buyer_payment_confirmed',paymentIntentId:pi,orderId:order.id,amount:order.total_amount,quantity,ticketIssued:true,noTransfer:true}));
+    receiptBuyers.push(customer);
     receipts.push({paymentIntentId:pi,orderId:order.id,amount:order.total_amount,quantity,ticketIssued:true,qrIssued:true,sellerPending:true,transferCreated:false});
   }
   const soldOut=await createLocalUser(local,admin,api,'soldout');
@@ -348,6 +350,41 @@ async function runBuyerOnly(local, admin, api) {
   const refund=await stripe('/refunds',{method:'POST',params:{payment_intent:receipts[0].paymentIntentId}});assert.equal(refund.status,'succeeded');
   await waitFor('refund revokes ticket',async()=>(await rows('app_entitlements?purchase_id=eq.'+receipts[0].orderId))[0]?.status==='refunded');
   assert.equal((await rows('app_creator_earnings?purchase_id=eq.'+receipts[0].orderId))[0].status,'refunded');
+  const beforeSetup=await json(api+'/commerce/earnings',{headers:seller.authorized});
+  assert.ok(beforeSetup.balance.pending>0);assert.equal(beforeSetup.balance.available,0);
+  if(process.env.CAPTRO_RELEASE_CHECKS==='true') {
+    const order=receipts[1]; const buyerTwo=receiptBuyers[1];
+    const reviewer=await createLocalUser(local,admin,api,'reviewer');
+    await json(local.API_URL+'/rest/v1/app_users?id=eq.'+reviewer.appUser.id,{method:'PATCH',headers:admin,body:JSON.stringify({metadata:{admin_role:'admin'}})},204);
+    const review={method:'POST',headers:reviewer.authorized,body:JSON.stringify({note:'Sandbox service completion and clearing reviewed',releaseAfter:new Date().toISOString()})};
+    await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',{...review,headers:buyerTwo.authorized},403);
+    const incomplete=await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review,409);assert.equal(incomplete.code,'CAPTRO_FULFILLMENT_NOT_COMPLETED');
+    await json(api+'/commerce/purchases/'+order.orderId+'/complete',{method:'POST',headers:buyer.authorized,body:'{}'},404);
+    await json(api+'/commerce/purchases/'+order.orderId+'/complete',{method:'POST',headers:buyerTwo.authorized,body:'{}'});
+    const noAccount=await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review,409);assert.equal(noAccount.code,'CAPTRO_PAYOUTS_NOT_READY');
+    const ready=await createReadyTestConnectedAccount(seller);
+    await json(local.API_URL+'/rest/v1/app_connected_accounts',{method:'POST',headers:admin,body:JSON.stringify({user_id:seller.authUser.id,app_user_id:seller.appUser.id,provider_account_id:ready.account.id,stripe_mode:'test',account_type:'custom'})},201);
+    const released=await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review);assert.equal(released.status,'transferred');
+    const replay=await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review);assert.equal(replay.transferId,released.transferId);
+    const earning=(await rows('app_creator_earnings?purchase_id=eq.'+order.orderId))[0];
+    assert.equal(earning.status,'transferred');assert.ok(earning.creator_amount<order.amount);
+    const balance=await waitFor('released funds in actual Stripe payout balance',async()=>{
+      const result=await json(api+'/commerce/earnings',{headers:seller.authorized});
+      return result.balance.instantAvailable>=earning.creator_amount?result:null;
+    });
+    assert.equal(balance.balance.available,earning.creator_amount);
+    const quote=await json(api+'/creator/payouts/quote',{method:'POST',headers:seller.authorized,body:JSON.stringify({requestId:randomUUID(),amount:earning.creator_amount})});
+    const payoutOptions={method:'POST',headers:seller.authorized,body:JSON.stringify({quoteId:quote.id})};
+    const paid=await json(api+'/creator/payouts',payoutOptions);
+    const repeated=await json(api+'/creator/payouts',payoutOptions);assert.equal(paid.payout.id,repeated.payout.id);
+    const settled=await waitFor('signed payout paid webhook',async()=>{
+      const data=await rows('app_payouts?id=eq.'+paid.payout.id);
+      return data[0]?.status==='paid'?data[0]:null;
+    });
+    const final=await json(api+'/commerce/earnings',{headers:seller.authorized});
+    assert.equal(final.balance.paidOut,earning.creator_amount);assert.equal(final.balance.available,0);
+    console.log(JSON.stringify({event:'deferred_release_and_payout_acceptance',transferId:released.transferId,payoutId:settled.provider_payout_id,amount:earning.creator_amount,reviewRequired:true,connectKYC:true,separateIdentitySDKTest:false,duplicateTransferPrevented:true,duplicatePayoutPrevented:true}));
+  }
   console.log(JSON.stringify({event:'deferred_buyer_acceptance',mode:'test',realStripe:true,signedWebhook:true,newBuyerNoSavedCard:true,sellerWithoutConnect:true,receipts,nativePaymentSheetDeviceTest:false}));
 }
 

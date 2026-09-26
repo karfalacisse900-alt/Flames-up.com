@@ -6,7 +6,7 @@ test('platform payment issues access independently of seller setup and appends i
  const db=new PGlite();
  try {
  await db.exec(`create role anon; create role authenticated; create role service_role; create schema auth; create table auth.users(id uuid primary key); create table app_posts(id uuid primary key); create table app_group_chat_members(id text,group_id text,user_id text,role text,legacy_created_at timestamptz,created_at timestamptz,updated_at timestamptz,primary key(group_id,user_id));`);
- for(const f of ['20260904193517_captro_commerce_entitlements.sql','20260904221545_stripe_connect_creator_earnings.sql','20260904231905_stripe_native_payments.sql','20260908224758_isolate_stripe_connected_accounts_by_mode.sql','20260926214527_deferred_marketplace_settlement.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+f,import.meta.url),'utf8'));
+ for(const f of ['20260904193517_captro_commerce_entitlements.sql','20260904221545_stripe_connect_creator_earnings.sql','20260904231905_stripe_native_payments.sql','20260908224758_isolate_stripe_connected_accounts_by_mode.sql','20260925120000_seller_identity_verification.sql','20260926214527_deferred_marketplace_settlement.sql','20260926222000_marketplace_release_controls.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+f,import.meta.url),'utf8'));
  const one=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
  const seller=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
  const buyer=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
@@ -37,5 +37,30 @@ test('platform payment issues access independently of seller setup and appends i
  assert.equal((await one('select status from app_entitlements')).status,'refunded');
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='pending'",[seller])).amount,0);
  await confirm();assert.equal((await one('select status from app_entitlements')).status,'refunded');
+
+ // Later completion/review/transfer is distinct from buyer confirmation.
+ await db.query("update app_purchases set provider_payment_id='pi_two' where id=$1",[two.id]);
+ await one("select * from captro_confirm_marketplace_purchase($1,'evt_two',null,'pi_two','ch_two',null,1000,59,0,'USD',null,'digest')",[two.id]);
+ const review=()=>db.query("select captro_review_earning_release($1,'admin','Confirmed event completion',now())",[two.id]);
+ await assert.rejects(review(),/FULFILLMENT_NOT_COMPLETED/);
+ assert.equal((await one('select captro_confirm_fulfillment($1,$2) as ok',[two.id,seller])).ok,false);
+ assert.equal((await one('select captro_confirm_fulfillment($1,$2) as ok',[two.id,buyer])).ok,true);
+ await review();
+ const account=await one("insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,charges_enabled,transfers_enabled,payouts_enabled,eligible_debit_card_exists) values($1,'seller','acct_release','test','ready',true,false,true,true,true) returning id",[seller]);
+ const claim=()=>one("select * from captro_claim_earning_transfer($1,$2,'acct_release',gen_random_uuid())",[two.id,account.id]);
+ await assert.rejects(claim(),/IDENTITY_REQUIRED/);
+ await db.query("insert into app_seller_identity_verifications(user_id,app_user_id,stripe_mode,connected_account_id,status) values($1,'seller','test',$2,'verified')",[seller,account.id]);
+ const release=await claim();assert.equal(release.amount,941);
+ assert.equal((await claim())?.id,null,'concurrent request cannot claim an active lease');
+ const finish=()=>one("select captro_finish_earning_transfer($1,'tr_later',941,'acct_release') as reverse",[two.id]);
+ assert.equal((await finish()).reverse,false);await finish();
+ assert.equal((await one("select amount from captro_ledger_balances($1) where account='transferred'",[seller])).amount,941);
+ await db.query("insert into app_payouts(connected_account_id,creator_id,provider_payout_id,currency,amount,status) values($1,$2,'po_later','USD',941,'pending')",[account.id,seller]);
+ await db.exec("update app_payouts set status='paid' where provider_payout_id='po_later'");
+ const count=(await one('select count(*)::int n from app_marketplace_ledger')).n;
+ await db.exec("update app_payouts set status='paid' where provider_payout_id='po_later'");
+ assert.equal((await one('select count(*)::int n from app_marketplace_ledger')).n,count);
+ assert.equal((await one("select amount from captro_ledger_balances($1) where account='paid_out'",[seller])).amount,941);
+ assert.equal((await one("select amount from captro_ledger_balances($1) where account='transferred'",[seller])).amount,0);
  }finally{await db.close();}
 });

@@ -25,6 +25,7 @@ const pending = [
   [relationExists('app_stripe_customers'), '../../supabase/migrations/20260908205030_captro_buyer_payment_methods.sql'],
   [columnExists('app_connected_accounts', 'stripe_mode'), '../../supabase/migrations/20260908224758_isolate_stripe_connected_accounts_by_mode.sql'],
   [columnExists('app_purchases', 'settlement_model'), '../../supabase/migrations/20260926214527_deferred_marketplace_settlement.sql'],
+  [relationExists('app_earning_releases'), '../../supabase/migrations/20260926222000_marketplace_release_controls.sql'],
 ].filter(([isApplied]) => !isApplied);
 const pendingMigrations = await Promise.all(
   pending.map(([, path]) => readFile(new URL(path, import.meta.url), 'utf8'))

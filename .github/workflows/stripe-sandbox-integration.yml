@@ -2,6 +2,10 @@ name: Stripe Sandbox Integration
 on:
   workflow_dispatch:
     inputs:
+      release_checks:
+        type: boolean
+        default: false
+        description: After buyer acceptance, verify later reviewed transfer and payout
       buyer_only:
         type: boolean
         default: true
@@ -70,6 +74,7 @@ jobs:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
           CAPTRO_BUYER_ONLY: ${{ inputs.buyer_only }}
+          CAPTRO_RELEASE_CHECKS: ${{ inputs.release_checks }}
         run: node scripts/stripe-sandbox-runtime.mjs
       - name: Stop only this runner's disposable stack
         if: always()

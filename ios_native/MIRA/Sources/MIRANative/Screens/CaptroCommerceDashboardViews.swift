@@ -567,6 +567,12 @@ struct CaptroEarningsView: View {
           balanceValue("Available", amount: available, currency: value.balance.currency)
           balanceValue("Pending", amount: pending, currency: value.balance.currency)
         }
+        HStack(spacing: 28) {
+          balanceValue("Clearing", amount: value.balance.clearing ?? 0, currency: value.balance.currency)
+          balanceValue("Paid out", amount: value.balance.paidOut ?? 0, currency: value.balance.currency)
+        }
+        Text("Pending earnings are not withdrawable. Completed sales clear after review; withdrawals depend on Stripe eligibility.")
+          .font(.caption).foregroundStyle(.secondary)
         if value.account.ready, (value.balance.instantAvailable ?? 0) > 0 {
           Button { showingWithdrawal = true } label: {
             Label("Withdraw", systemImage: "creditcard")

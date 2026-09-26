@@ -574,6 +574,9 @@ public struct CaptroEarningsBalance: Decodable, Hashable {
   public let available: Int?
   public let pending: Int?
   public let instantAvailable: Int?
+  public var clearing: Int? = nil
+  public var paidOut: Int? = nil
+  public var payoutBalanceStatus: String? = nil
 }
 
 public struct CaptroPayoutQuote: Decodable, Identifiable {

@@ -10120,7 +10120,11 @@ async function recordStripeDispute(c: any, eventId: string, dispute: any): Promi
         }
       }
       const desiredReversal = proportionalAmount(cents(dispute.amount), cents(purchase.creator_amount), cents(purchase.total_amount, 1));
-      if (desiredReversal > 0) {
+      if (desiredReversal > 0 && purchase.settlement_model === 'deferred' && !purchase.provider_transfer_id) {
+        await supabaseAdminPatchRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(purchase.id) }, {
+          status: 'reversed', disputed_amount: desiredReversal, updated_at: now(),
+        });
+      } else if (desiredReversal > 0) {
         if (!purchase.provider_transfer_id) throw new Error('STRIPE_DISPUTE_TRANSFER_REQUIRED');
         const transferId = encodeURIComponent(purchase.provider_transfer_id);
         const reversal = await existingRefundReversal(c, transferId, disputeId)
@@ -19774,6 +19778,136 @@ api.post('/creator/payouts', authMiddleware, async (c) => {
   }
 });
 
+// Called only after an audited completion/release decision, never from checkout.
+async function releaseDeferredEarning(c: any, purchaseId: string) {
+  const purchase = (await supabaseAdminSelectRows(c, 'app_purchases', {id: postgrestEqFilter(purchaseId)}, '*', 1))[0];
+  if (!purchase || purchase.settlement_model !== 'deferred' || purchase.stripe_mode !== configuredStripeMode(c)) throw new Error('CAPTRO_RELEASE_NOT_ELIGIBLE');
+  const prior = (await supabaseAdminSelectRows(c,'app_earning_releases',{purchase_id:postgrestEqFilter(purchase.id)},'*',1))[0];
+  if(prior?.status==='reversed')return {status:'reversed',transferId:prior.provider_transfer_id};
+  if(prior) {
+    const found=await stripeApiGet(c,'/transfers?transfer_group='+encodeURIComponent(marketplaceTransferGroup(purchase.id))+'&limit=100');
+    if(!found.ok || found.data.has_more || (found.data.data||[]).length>1)throw new Error('CAPTRO_RELEASE_REVIEW_REQUIRED');
+    if(found.data.data?.[0])return finishDeferredTransfer(c,purchase,prior,found.data.data[0]);
+  }
+  const account = await requireReadyConnectedAccount(c, purchase.creator_id);
+  if(account.payout_schedule!=='manual')throw new Error('CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED');
+  const intent = await stripeApiGet(c, '/payment_intents/' + encodeURIComponent(purchase.provider_payment_id));
+  if (!intent.ok || intent.data.status !== 'succeeded' || intent.data.livemode !== getStripeConfig(c).liveMode) throw new Error('STRIPE_PAYMENT_MISMATCH');
+  const settlement = await marketplaceSettlementForIntent(c, intent.data, purchase);
+  const charge = settlement.charge;
+  const balance = settlement.balanceTransaction;
+  if (charge.disputed || charge.amount_refunded > 0 || !balance || balance.status !== 'available') throw new Error('CAPTRO_FUNDS_NOT_CLEARED');
+  await supabaseAdminRpc(c, 'captro_record_processing_cost', {p_purchase_id: purchase.id,p_cost: cents(balance.fee)});
+  let release: any = await supabaseAdminRpc(c, 'captro_claim_earning_transfer', {
+    p_purchase_id: purchase.id,p_account_id: account.id,p_destination: account.provider_account_id,p_lease: uuid(),p_identity_required:sellerIdentityUsesStripeIdentity(c),
+  });
+  if (Array.isArray(release)) release=release[0];
+  if (!release?.id) throw new Error('CAPTRO_RELEASE_ALREADY_PROCESSING');
+  const group = marketplaceTransferGroup(purchase.id);
+  // Lookup is required even after Stripe's 24-hour idempotency retention expires.
+  const existing = await stripeApiGet(c, '/transfers?transfer_group='+encodeURIComponent(group)+'&limit=100');
+  if (!existing.ok || existing.data.has_more) throw new Error('CAPTRO_RELEASE_REVIEW_REQUIRED');
+  const transfers = existing.data.data || [];
+  if (transfers.length > 1) throw new Error('CAPTRO_RELEASE_REVIEW_REQUIRED');
+  let transfer = transfers[0];
+  if (!transfer) {
+    if (Date.now()-Date.parse(release.first_attempt_at)>23*3600_000) throw new Error('CAPTRO_RELEASE_REVIEW_REQUIRED');
+    const result = await stripeApiRequest(c, '/transfers', {
+      amount: release.amount,currency: release.currency.toLowerCase(),destination: release.destination,
+      source_transaction: charge.id,transfer_group: group,'metadata[captro_purchase_id]': purchase.id,
+      'metadata[captro_release_id]': release.id,
+    }, 'captro-release:'+release.id);
+    if (!result.ok) throw stripeProviderError(result,'STRIPE_TRANSFER_CREATE_FAILED');
+    transfer=result.data;
+  }
+  return finishDeferredTransfer(c,purchase,release,transfer);
+}
+
+async function finishDeferredTransfer(c:any,purchase:any,release:any,transfer:any) {
+  if(transfer.livemode!==getStripeConfig(c).liveMode || transfer.destination!==release.destination
+     || transfer.amount!==release.amount || transfer.currency!==release.currency.toLowerCase()
+     || transfer.source_transaction!==purchase.provider_charge_id || transfer.transfer_group!==marketplaceTransferGroup(purchase.id))throw new Error('CAPTRO_RELEASE_SNAPSHOT_MISMATCH');
+  const mustReverse=await supabaseAdminRpc(c,'captro_finish_earning_transfer',{
+    p_purchase_id:purchase.id,p_transfer_id:transfer.id,p_amount:transfer.amount,p_destination:release.destination,
+  });
+  const charge=await stripeApiGet(c,'/charges/'+encodeURIComponent(purchase.provider_charge_id));
+  if(!charge.ok)throw new Error('CAPTRO_RELEASE_REVIEW_REQUIRED');
+  const reverse=mustReverse===true || charge.data.disputed || charge.data.amount_refunded>0 || transfer.reversed;
+  if(reverse)await reverseDeferredRelease(c,release,transfer);
+  return {transferId:transfer.id,status:reverse?'reversed':'transferred'};
+}
+
+async function reverseDeferredRelease(c: any, release: any, transfer: any) {
+  if (!transfer.reversed) {
+    const result=await stripeApiRequest(c,'/transfers/'+encodeURIComponent(transfer.id)+'/reversals',{
+      amount: Math.max(0,transfer.amount-transfer.amount_reversed),'metadata[captro_release_id]': release.id,
+    },'captro-release-reversal:'+release.id);
+    if (!result.ok) throw stripeProviderError(result,'STRIPE_TRANSFER_REVERSAL_FAILED');
+  }
+  await supabaseAdminPatchRows(c,'app_earning_releases',{id:postgrestEqFilter(release.id)},{status:'reversed',last_checked_at:now()});
+  const purchase=(await supabaseAdminSelectRows(c,'app_purchases',{id:postgrestEqFilter(release.purchase_id)},'*',1))[0];
+  await supabaseAdminPatchRows(c,'app_creator_earnings',{purchase_id:postgrestEqFilter(release.purchase_id)},
+    {status:purchase?.status==='partially_refunded'?'clearing':'reversed',release_approved_at:null,release_approved_by:null,updated_at:now()});
+}
+
+async function auditDeferredReleases(c: any) {
+  const due=await supabaseAdminQueryRows(c,'app_creator_earnings',{
+    filters:{status:'eq.clearing',release_approved_at:'not.is.null',release_not_before:'lte.'+now()},order:'updated_at.asc',limit:20,
+  });
+  for(const earning of due) {
+    try {await releaseDeferredEarning(c,earning.purchase_id);}
+    catch(error){console.warn(JSON.stringify({event:'earning_release_waiting',earningId:earning.id,code:commerceErrorCode(error)}));}
+    finally {await supabaseAdminPatchRows(c,'app_creator_earnings',{id:postgrestEqFilter(earning.id)},{updated_at:now()});}
+  }
+  const rows=await supabaseAdminQueryRows(c,'app_earning_releases',{
+    filters:{status:'in.(transferring,transferred,review_required)'},order:'last_checked_at.asc',limit:20,
+  });
+  for(const release of rows) {
+    try {
+      const purchase=(await supabaseAdminSelectRows(c,'app_purchases',{id:postgrestEqFilter(release.purchase_id)},'*',1))[0];
+      if (purchase?.stripe_mode!==configuredStripeMode(c)) continue;
+      if (!release.provider_transfer_id) {
+        if (Date.parse(release.lease_expires_at)<=Date.now()) await releaseDeferredEarning(c,release.purchase_id);
+      } else {
+        const [charge,transfer]=await Promise.all([
+          stripeApiGet(c,'/charges/'+encodeURIComponent(purchase.provider_charge_id)),
+          stripeApiGet(c,'/transfers/'+encodeURIComponent(release.provider_transfer_id)),
+        ]);
+        if (!charge.ok || !transfer.ok) throw new Error('CAPTRO_RELEASE_REVIEW_REQUIRED');
+        if (charge.data.disputed || charge.data.amount_refunded>0 || purchase.status!=='confirmed') await reverseDeferredRelease(c,release,transfer.data);
+      }
+    } catch(error) {
+      console.warn(JSON.stringify({event:'deferred_release_reconcile',releaseId:release.id,code:commerceErrorCode(error)}));
+    } finally {
+      await supabaseAdminPatchRows(c,'app_earning_releases',{id:postgrestEqFilter(release.id)},{last_checked_at:now()});
+    }
+  }
+}
+
+api.post('/commerce/purchases/:purchaseId/complete',authMiddleware,async(c)=>{
+  const buyerId=await supabaseAuthUserIdForAppUserId(c,getUserId(c));
+  const id=isUuidText(c.req.param('purchaseId'));
+  if(!buyerId || !id)return c.json({recorded:false},404);
+  const recorded=await supabaseAdminRpc(c,'captro_confirm_fulfillment',{p_purchase_id:id,p_buyer_id:buyerId});
+  return c.json({recorded:recorded===true},recorded===true?200:404); // No earnings are released by a buyer acknowledgement.
+});
+
+api.post('/admin/commerce/purchases/:purchaseId/release',authMiddleware,async(c)=>{
+  try {
+    const admin=await requireAdminRole(c,'payments:refund');
+    const limited=await requireAdminWriteRateLimit(c,admin,'earning_release');if(limited)return limited;
+    const body:any=await c.req.json();const purchaseId=isUuidText(c.req.param('purchaseId'));
+    const releaseAfter=cleanText(body.releaseAfter,80);const note=cleanText(body.note,500);
+    if(!purchaseId || !Number.isFinite(Date.parse(releaseAfter)) || note.length<10) return c.json({code:'CAPTRO_RELEASE_REVIEW_REQUIRED'},400);
+    await supabaseAdminRpc(c,'captro_review_earning_release',{p_purchase_id:purchaseId,p_admin_id:admin.userId,p_note:note,p_release_after:releaseAfter});
+    await writeAdminAuditLog(c,admin,{actionType:'earning_release_reviewed',targetType:'purchase',targetId:purchaseId,reason:'fulfillment_completed',note,afterState:{releaseAfter}});
+    if(Date.parse(releaseAfter)>Date.now())return c.json({status:'clearing'});
+    return c.json(await releaseDeferredEarning(c,purchaseId));
+  } catch(error) {
+    const code=commerceErrorCode(error);return c.json({code,detail:'Earnings have not been released. Check completion, clearing and seller requirements.'},getErrorCode(error)==='FORBIDDEN'?403:409);
+  }
+});
+
 api.get('/commerce/earnings', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_earnings', appUserId, 120, 60);
@@ -19781,7 +19915,9 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
   try {
     const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
-    const account = await connectedAccountForUser(c, authUserId, true);
+    let account = await connectedAccountForUser(c, authUserId);
+    if(account) account = await refreshConnectedAccount(c,account).catch(()=>account);
+    const ledger:any[] = await supabaseAdminRpc(c,'captro_ledger_balances',{p_seller_id:authUserId});
     const earnings = await supabaseAdminQueryRows(c, 'app_creator_earnings', {
       filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 200,
     });
@@ -19816,7 +19952,12 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
     c.header('Cache-Control', 'private, no-store');
     return c.json({
       account: await connectedAccountPublicPayload(c, account),
-      balance: { status: balanceStatus, currency, available, pending, instantAvailable },
+      balance: { status: 'available', currency,
+        available: ledger.filter(x=>x.currency===currency && ['available','transferred'].includes(x.account)).reduce((n,x)=>n+Number(x.amount),0),
+        pending: ledger.filter(x=>x.currency===currency && x.account==='pending').reduce((n,x)=>n+Number(x.amount),0),
+        clearing: ledger.filter(x=>x.currency===currency && x.account==='clearing').reduce((n,x)=>n+Number(x.amount),0),
+        paidOut: ledger.filter(x=>x.currency===currency && x.account==='paid_out').reduce((n,x)=>n+Number(x.amount),0),
+        instantAvailable, payoutBalanceStatus: balanceStatus },
       recent,
     });
   } catch (error: any) {
@@ -25102,6 +25243,7 @@ async function reconcileStripeFinancialState(env: Env) {
     }
   }
 
+  await auditDeferredReleases(c);
   const payouts = await supabaseAdminQueryRows(c, 'app_payouts', {
     filters: { status: postgrestInFilter(['pending', 'in_transit']) },
     order: 'updated_at.asc', limit: 40,

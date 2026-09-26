@@ -96,9 +96,18 @@ struct CaptroPaymentSheetView: View {
     sheet = PaymentSheet(paymentIntentClientSecret: configuration.paymentIntentClientSecret, configuration: settings)
   }
 
+  private func trace(_ stage: String, error: Error? = nil) {
+    #if DEBUG
+    let failure = error as NSError?
+    // No client secrets, provider error descriptions, card details, or userInfo.
+    print("captro_payment_sheet stage=\(stage) order=\(purchase.id) mode=\(configuration.mode) errorDomain=\(failure?.domain ?? "none") errorCode=\(failure?.code ?? 0)")
+    #endif
+  }
+
   private func handlePayment(_ result: PaymentSheetResult) {
     switch result {
     case .completed:
+      trace("completed_awaiting_server")
       confirming = true
       Task {
         defer { confirming = false }
@@ -118,8 +127,10 @@ struct CaptroPaymentSheetView: View {
         message = "Payment is being confirmed. Your purchase will appear in My Stuff when confirmation arrives."
       }
     case .canceled:
+      trace("canceled")
       message = nil
-    case .failed:
+    case .failed(let error):
+      trace("failed", error: error)
       message = "Payment could not be completed. Please try again."
     }
   }

@@ -1,0 +1,43 @@
+name: Configure Captro platform retained earnings
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [test, live]
+        default: test
+        description: Set only the Captro PLATFORM payout schedule to manual; never change seller schedules
+permissions:
+  contents: read
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.mode == 'live' && 'captro-payments-live' || 'captro-payments-test' }}
+    steps:
+      - name: Retain platform funds in Stripe for later reviewed seller transfers
+        env:
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || secrets.SECRETKEY }}
+          STRIPE_MODE: ${{ inputs.mode }}
+        run: |
+          python3 - <<'PY'
+          import os,json,urllib.request,urllib.error,urllib.parse
+          key=os.environ['STRIPE_SECRET_KEY']; mode=os.environ['STRIPE_MODE']
+          assert key.startswith(('sk_'+mode+'_','rk_'+mode+'_'))
+          def request(path,values=None):
+              body=urllib.parse.urlencode(values).encode() if values is not None else None
+              req=urllib.request.Request('https://api.stripe.com/v1/'+path,data=body,headers={'Authorization':'Bearer '+key})
+              try: return json.load(urllib.request.urlopen(req,timeout=30))
+              except urllib.error.HTTPError as e:
+                  error=json.load(e).get('error',{})
+                  raise RuntimeError('Stripe HTTP '+str(e.code)+' '+str(error.get('code') or error.get('type')))
+          before=request('account')
+          assert before.get('id','').startswith('acct_')
+          schedule=before.get('settings',{}).get('payouts',{}).get('schedule',{})
+          print(json.dumps({'platformAccount':before['id'],'mode':mode,'previousSchedule':schedule}))
+          if schedule.get('interval')!='manual':
+              request('balance_settings',{'payments[payouts][schedule][interval]':'manual'})
+          after=request('account')
+          assert after['id']==before['id']
+          assert after['settings']['payouts']['schedule']['interval']=='manual'
+          print(json.dumps({'platformRetainedEarningsConfigured':True,'sellerSchedulesChanged':False,'moneyMoved':False}))
+          PY
