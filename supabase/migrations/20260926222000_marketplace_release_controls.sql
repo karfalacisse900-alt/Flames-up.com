@@ -24,7 +24,10 @@ begin
  select * into item from public.app_purchasables where id=p.purchasable_id;
  if item.status in ('cancelled','canceled') then raise exception 'CAPTRO_ITEM_UNAVAILABLE'; end if;
  completed:=p.fulfillment_completed_at;
- if completed is null and item.content_type in ('event','meetup') and item.ends_at<=now() then completed:=item.ends_at; end if;
+ if item.content_type in ('event','meetup') and item.ends_at is not null then
+   if item.ends_at>now() then raise exception 'CAPTRO_FULFILLMENT_NOT_COMPLETED'; end if;
+   completed:=item.ends_at;
+ end if;
  if completed is null or completed>now() then raise exception 'CAPTRO_FULFILLMENT_NOT_COMPLETED'; end if;
  if p.provider_transfer_id is not null then return; end if;
  insert into public.app_marketplace_ledger(entry_key,order_id,seller_id,event_type,account,amount,currency,metadata)
@@ -60,6 +63,7 @@ begin
  or a.id is null or a.user_id<>p.creator_id or a.provider_account_id<>p_destination or a.stripe_mode<>p.stripe_mode
  or a.status<>'ready' or not a.details_submitted or a.requirements_currently_due<>'[]'::jsonb or not a.transfers_enabled or not a.payouts_enabled
  then raise exception 'CAPTRO_RELEASE_NOT_ELIGIBLE'; end if;
+ if exists(select 1 from app_purchasables where id=p.purchasable_id and (status<>'active' or (content_type in ('event','meetup') and ends_at>now()))) then raise exception 'CAPTRO_RELEASE_NOT_ELIGIBLE'; end if;
  if p_identity_required and not exists(select 1 from public.app_seller_identity_verifications where user_id=p.creator_id and stripe_mode=p.stripe_mode and status='verified')
  then raise exception 'CAPTRO_SELLER_IDENTITY_REQUIRED'; end if;
  if exists(select 1 from public.app_payment_reconciliation_issues where purchase_id=p.id and not resolved)

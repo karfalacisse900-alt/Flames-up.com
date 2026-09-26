@@ -368,6 +368,9 @@ async function runBuyerOnly(local, admin, api) {
     const incomplete=await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review,409);assert.equal(incomplete.code,'CAPTRO_FULFILLMENT_NOT_COMPLETED');
     await json(api+'/commerce/purchases/'+order.orderId+'/complete',{method:'POST',headers:buyer.authorized,body:'{}'},404);
     await json(api+'/commerce/purchases/'+order.orderId+'/complete',{method:'POST',headers:buyerTwo.authorized,body:'{}'});
+    await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review,409); // Buyer acknowledgement cannot override a future event end.
+    // Advance only the disposable fixture's service clock; never modify a live event.
+    await json(local.API_URL+'/rest/v1/app_purchasables?id=eq.'+commerce.id,{method:'PATCH',headers:admin,body:JSON.stringify({starts_at:new Date(Date.now()-7200000).toISOString(),ends_at:new Date(Date.now()-60000).toISOString()})},204);
     const noAccount=await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review,409);assert.equal(noAccount.code,'CAPTRO_PAYOUTS_NOT_READY');
     const ready=await createReadyTestConnectedAccount(seller);
     await json(local.API_URL+'/rest/v1/app_connected_accounts',{method:'POST',headers:admin,body:JSON.stringify({user_id:seller.authUser.id,app_user_id:seller.appUser.id,provider_account_id:ready.account.id,stripe_mode:'test',account_type:'custom'})},201);
