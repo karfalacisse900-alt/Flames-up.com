@@ -3,6 +3,10 @@ name: Native iOS TestFlight
 on:
   workflow_dispatch:
     inputs:
+      read_testflight_status:
+        description: Read Apple processing and tester availability without rebuilding
+        type: boolean
+        default: false
       configure_only:
         description: Configure the Captro Scan in-app purchase without rebuilding the app
         type: boolean
@@ -19,7 +23,22 @@ env:
   SCHEME: Captro
 
 jobs:
+  testflight-status:
+    if: ${{ inputs.read_testflight_status == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Read TestFlight processing and availability
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: node scripts/app-store/testflight-status.mjs
   build-testflight:
+    if: ${{ inputs.read_testflight_status != true }}
     name: Build native SwiftUI iOS app and upload to TestFlight
     runs-on: macos-26
     timeout-minutes: 60
