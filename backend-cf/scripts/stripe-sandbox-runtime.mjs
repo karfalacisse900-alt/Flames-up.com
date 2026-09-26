@@ -290,6 +290,8 @@ async function runBuyerOnly(local, admin, api) {
   assert.equal(commerce.lowestPrice.unitAmount,500);assert.equal(commerce.lowestPrice.buyerTotal,500);
   for(const p of await rows('app_prices?purchasable_id=eq.'+commerce.id))if(p.stripe_price_id)cleanupPrices.add(p.stripe_price_id);
   for(const p of await rows('app_purchasables?id=eq.'+commerce.id))if(p.stripe_product_id)cleanupProducts.add(p.stripe_product_id);
+  let savedCard;
+  let firstCustomerId;
   const receipts=[];
   const receiptBuyers=[];
   for(const quantity of [1,2]) {
@@ -299,12 +301,19 @@ async function runBuyerOnly(local, admin, api) {
     const checkout=await json(api+'/payments/create',options);
     assert.equal(checkout.purchase.totalAmount,500*quantity);assert.equal(checkout.paymentSheet.mode,'test');
     const replay=await json(api+'/payments/create',options);assert.equal(replay.purchase.id,checkout.purchase.id);
+    assert.match(checkout.paymentSheet.customerId,/^cus_/);
+    assert.match(checkout.paymentSheet.customerSessionClientSecret,/^cuss_/);
     const pi=checkout.paymentSheet.paymentIntentClientSecret.split('_secret_')[0];
     const pending=await stripe('/payment_intents/'+pi);
     assert.equal(pending.payment_method,null);assert.equal(pending.transfer_data,null);assert.equal(pending.on_behalf_of,null);
     assert.equal(pending.amount,500*quantity);assert.equal(pending.livemode,false);
     assert.equal((await rows('app_entitlements?purchase_id=eq.'+checkout.purchase.id)).length,0);
-    const paid=await stripe('/payment_intents/'+pi+'/confirm',{method:'POST',params:{payment_method:quantity===2?'pm_card_bypassPending':'pm_card_visa',return_url:'https://captro.app/payments/return'}});
+    if(quantity===1){
+      firstCustomerId=checkout.paymentSheet.customerId;
+      // Synthetic sandbox buyer explicitly consents. Never migrate live consent.
+      savedCard=await stripe('/payment_methods',{method:'POST',params:{type:'card','card[token]':'tok_visa',allow_redisplay:'always'}});
+    }
+    const paid=await stripe('/payment_intents/'+pi+'/confirm',{method:'POST',params:{payment_method:quantity===2?'pm_card_bypassPending':savedCard.id,...(quantity===1?{setup_future_usage:'on_session'}:{}),return_url:'https://captro.app/payments/return'}});
     assert.equal(paid.status,'succeeded');
     // Read DB directly: GET purchase cannot conceal a broken webhook by reconciling it.
     const order=await waitFor('signed webhook issues fresh buyer ticket',async()=>{
@@ -331,6 +340,23 @@ async function runBuyerOnly(local, admin, api) {
     receiptBuyers.push(customer);
     receipts.push({paymentIntentId:pi,orderId:order.id,amount:order.total_amount,quantity,ticketIssued:true,qrIssued:true,sellerPending:true,transferCreated:false});
   }
+  // Second purchase by the SAME buyer, using Stripe's saved method, not a local PM reference.
+  const secondPost=await json(api+'/posts',{method:'POST',headers:seller.authorized,body:JSON.stringify({client_request_id:randomUUID(),post_type:'event',title:'Second Sandbox Ticket',content:'Saved-card integration fixture',visibility:'public',commerce:{enabled:true,contentType:'event',paymentModel:'paid',commerceClass:'outside_app',title:'Second Sandbox Ticket',startsAt:new Date(Date.now()+86400000).toISOString(),endsAt:new Date(Date.now()+90000000).toISOString(),capacity:10,prices:[{label:'General',unitAmount:500,capacity:10}]}})});
+  const secondAccess=(await json(api+'/commerce/posts/'+secondPost.id,{headers:buyer.authorized})).commerce;
+  const second=await json(api+'/payments/create',{method:'POST',headers:buyer.authorized,body:JSON.stringify({contentId:secondPost.id,contentType:'event',quantity:1,selectedPriceId:secondAccess.lowestPrice.id,idempotencyKey:randomUUID()})});
+  assert.equal(second.paymentSheet.customerId,firstCustomerId);
+  assert.match(second.paymentSheet.customerSessionClientSecret,/^cuss_/);
+  const methods=await stripe('/payment_methods?customer='+firstCustomerId+'&type=card');
+  const saved=methods.data.find(x=>x.id===savedCard.id);
+  assert.equal(saved?.allow_redisplay,'always');assert.equal(saved.customer,firstCustomerId);
+  const secondPI=second.paymentSheet.paymentIntentClientSecret.split('_secret_')[0];
+  const beforePay=await stripe('/payment_intents/'+secondPI);
+  assert.equal(beforePay.customer,firstCustomerId);assert.equal(beforePay.payment_method,null);assert.equal(beforePay.status,'requires_payment_method');
+  const paidSecond=await stripe('/payment_intents/'+secondPI+'/confirm',{method:'POST',params:{payment_method:saved.id,return_url:'https://captro.app/payments/return'}});
+  assert.equal(paidSecond.status,'succeeded');
+  await waitFor('second saved-card ticket',async()=>(await rows('app_purchases?id=eq.'+second.purchase.id))[0]?.status==='confirmed');
+  assert.equal((await rows('app_stripe_customers?user_id=eq.'+buyer.authUser.id)).length,1);
+  console.log(JSON.stringify({event:'saved_card_server_acceptance',customerId:firstCustomerId,firstPaymentIntentId:receipts[0].paymentIntentId,secondPaymentIntentId:secondPI,paymentMethodId:saved.id,allowRedisplay:saved.allow_redisplay,customerReused:true,noAutoConfirmation:true,physicalDevice:false}));
   const soldOut=await createLocalUser(local,admin,api,'soldout');
   const full=await json(api+'/payments/create',{method:'POST',headers:soldOut.authorized,body:JSON.stringify({contentId:post.id,contentType:'event',quantity:20,selectedPriceId:commerce.lowestPrice.id,idempotencyKey:randomUUID()})},409);
   assert.match(full.code,/CAPACITY|SOLD_OUT/);
