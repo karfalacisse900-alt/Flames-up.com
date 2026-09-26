@@ -104,7 +104,7 @@ $$;
 -- Payout state changes append reversals plus the new state; repeated webhooks append nothing.
 alter table public.app_payouts add column ledger_revision integer not null default 0;
 create function public.captro_append_payout_ledger() returns trigger language plpgsql set search_path=public as $$
-declare previous_bucket text; next_bucket text; mode text;
+declare previous_bucket text; next_bucket text; mode text; mutation_id uuid:=gen_random_uuid();
 begin
  select stripe_mode into mode from public.app_connected_accounts where id=new.connected_account_id;
  if mode is null then return new; end if;
@@ -113,17 +113,16 @@ begin
  if tg_op='UPDATE' then
    previous_bucket:=case when old.status='paid' then 'paid_out' when old.status in ('pending','in_transit') then 'payout_pending' else 'transferred' end;
    new.ledger_revision:=old.ledger_revision;
-   if previous_bucket=next_bucket then return new; end if;
    if old.creator_id<>new.creator_id or old.amount<>new.amount or old.currency<>new.currency then raise exception 'CAPTRO_PAYOUT_SNAPSHOT_IMMUTABLE'; end if;
  end if;
  if previous_bucket=next_bucket then return new; end if;
  new.ledger_revision:=new.ledger_revision+1;
  insert into public.app_marketplace_ledger(entry_key,seller_id,event_type,account,amount,currency,stripe_object_id,metadata) values
- (new.id||':payout:'||new.ledger_revision||':debit',new.creator_id,'PAYOUT_STATE_CHANGED',previous_bucket,-new.amount,new.currency,new.provider_payout_id,jsonb_build_object('stripe_mode',mode)),
- (new.id||':payout:'||new.ledger_revision||':credit',new.creator_id,case when new.status='paid' then 'PAYOUT_PAID' else 'PAYOUT_STATE_CHANGED' end,next_bucket,new.amount,new.currency,new.provider_payout_id,jsonb_build_object('stripe_mode',mode));
+ (new.id||':payout:'||mutation_id||':debit',new.creator_id,'PAYOUT_STATE_CHANGED',previous_bucket,-new.amount,new.currency,new.provider_payout_id,jsonb_build_object('stripe_mode',mode)),
+ (new.id||':payout:'||mutation_id||':credit',new.creator_id,case when new.status='paid' then 'PAYOUT_PAID' else 'PAYOUT_STATE_CHANGED' end,next_bucket,new.amount,new.currency,new.provider_payout_id,jsonb_build_object('stripe_mode',mode));
  return new;
 end; $$;
-create trigger app_payouts_ledger before insert or update on public.app_payouts for each row execute function public.captro_append_payout_ledger();
+create trigger app_payouts_ledger after insert or update on public.app_payouts for each row execute function public.captro_append_payout_ledger();
 revoke all on function public.captro_review_earning_release(uuid,text,text,timestamptz),public.captro_record_processing_cost(uuid,integer),public.captro_claim_earning_transfer(uuid,uuid,text,uuid,boolean),public.captro_finish_earning_transfer(uuid,text,integer,text),public.captro_append_payout_ledger() from public,anon,authenticated;
 grant execute on function public.captro_review_earning_release(uuid,text,text,timestamptz),public.captro_record_processing_cost(uuid,integer),public.captro_claim_earning_transfer(uuid,uuid,text,uuid,boolean),public.captro_finish_earning_transfer(uuid,text,integer,text),public.captro_append_payout_ledger() to service_role;
 

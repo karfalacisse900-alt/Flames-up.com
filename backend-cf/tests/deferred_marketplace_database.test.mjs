@@ -59,6 +59,7 @@ test('platform payment issues access independently of seller setup and appends i
  await db.exec("update app_payouts set status='paid' where provider_payout_id='po_later'");
  const count=(await one('select count(*)::int n from app_marketplace_ledger')).n;
  await db.exec("update app_payouts set status='paid' where provider_payout_id='po_later'");
+ await db.query("insert into app_payouts(connected_account_id,creator_id,provider_payout_id,currency,amount,status) values($1,$2,'po_later','USD',941,'paid') on conflict(provider_payout_id) do update set status=excluded.status",[account.id,seller]);
  assert.equal((await one('select count(*)::int n from app_marketplace_ledger')).n,count);
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='paid_out'",[seller])).amount,941);
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='transferred'",[seller])).amount,0);

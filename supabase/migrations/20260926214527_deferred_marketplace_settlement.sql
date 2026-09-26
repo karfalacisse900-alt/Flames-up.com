@@ -46,7 +46,7 @@ language sql immutable set search_path=public as $$
    else p_status end;
 $$;
 create function public.captro_append_earning_ledger() returns trigger language plpgsql set search_path=public as $$
-declare old_amount bigint:=0; new_amount bigint; old_bucket text; new_bucket text; entry_type text;
+declare old_amount bigint:=0; new_amount bigint; old_bucket text; new_bucket text; entry_type text; mutation_id uuid:=gen_random_uuid();
 begin
  new_amount:=greatest(0,new.creator_amount-new.refunded_amount);
  new_bucket:=public.captro_earning_bucket(new.status,new.provider_transfer_id);
@@ -63,11 +63,11 @@ begin
  entry_type:=case when tg_op='INSERT' then 'SELLER_PENDING' when new.status='refunded' or new.refunded_amount>old.refunded_amount then 'REFUND' when new.status='disputed' then 'DISPUTE' when new.status='transferred' then 'TRANSFER_CREATED' when new.status='available' then 'SELLER_RELEASED' else 'EARNING_STATE_CHANGED' end;
  if old_amount>0 then
    insert into public.app_marketplace_ledger(entry_key,order_id,seller_id,event_type,account,amount,currency,stripe_object_id)
-   values(new.id||':'||new.ledger_revision||':debit',new.purchase_id,new.creator_id,entry_type,old_bucket,-old_amount,new.currency,new.provider_payment_id);
+   values(new.id||':'||mutation_id||':debit',new.purchase_id,new.creator_id,entry_type,old_bucket,-old_amount,new.currency,new.provider_payment_id);
  end if;
  if new_amount>0 then
    insert into public.app_marketplace_ledger(entry_key,order_id,seller_id,event_type,account,amount,currency,stripe_object_id)
-   values(new.id||':'||new.ledger_revision||':credit',new.purchase_id,new.creator_id,entry_type,new_bucket,new_amount,new.currency,coalesce(new.provider_transfer_id,new.provider_payment_id));
+   values(new.id||':'||mutation_id||':credit',new.purchase_id,new.creator_id,entry_type,new_bucket,new_amount,new.currency,coalesce(new.provider_transfer_id,new.provider_payment_id));
  end if;
  if tg_op='INSERT' then
    insert into public.app_marketplace_ledger(entry_key,order_id,seller_id,event_type,account,amount,currency,stripe_object_id) values
@@ -76,11 +76,11 @@ begin
    (new.id||':processing_fee',new.purchase_id,new.creator_id,'PROCESSING_FEE','processing_fee',new.processing_amount,new.currency,new.provider_charge_id);
  elsif new.processing_amount<>old.processing_amount then
    insert into public.app_marketplace_ledger(entry_key,order_id,seller_id,event_type,account,amount,currency,stripe_object_id)
-   values(new.id||':'||new.ledger_revision||':processing',new.purchase_id,new.creator_id,'PROCESSING_FEE','processing_fee',new.processing_amount-old.processing_amount,new.currency,new.provider_charge_id);
+   values(new.id||':'||mutation_id||':processing',new.purchase_id,new.creator_id,'PROCESSING_FEE','processing_fee',new.processing_amount-old.processing_amount,new.currency,new.provider_charge_id);
  end if;
  return new;
 end; $$;
-create trigger app_creator_earnings_ledger before insert or update on public.app_creator_earnings
+create trigger app_creator_earnings_ledger after insert or update on public.app_creator_earnings
   for each row execute function public.captro_append_earning_ledger();
 -- Opening balances preserve existing accounting; no existing Stripe money moves.
 insert into public.app_marketplace_ledger(entry_key,order_id,seller_id,event_type,account,amount,currency,stripe_object_id)
