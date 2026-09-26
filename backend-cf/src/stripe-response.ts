@@ -36,7 +36,7 @@ export async function decodeStripeResponse(response: Response, path: string) {
   if (!ok) {
     // Never log provider messages, URLs, bodies, account details or request headers.
     const endpoint = path.replace(/\/(?:acct|cus|pi|pm|cs|vs|tr|po)_[A-Za-z0-9]+/g, '/:id').split('?')[0];
-    console.warn(JSON.stringify({ event: 'stripe_api_failed', endpoint, status: response.status, requestId, code }));
+    console.warn(JSON.stringify({ event: 'stripe_api_failed', endpoint, status: response.status, requestId, code, errorType: providerTypes.has(data.error?.type) ? data.error.type : null }));
   }
   return { ok, status: response.status, data, requestId };
 }

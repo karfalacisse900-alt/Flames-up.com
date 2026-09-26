@@ -48,7 +48,7 @@ jobs:
                   raise RuntimeError('Stripe HTTP ' + str(error.code) + ': ' + str(payload.get('code', payload.get('type', 'unknown'))))
           def safe(account):
               requirements = account.get('requirements') or {}
-              return {'charges_enabled': account.get('charges_enabled'), 'payouts_enabled': account.get('payouts_enabled'), 'details_submitted': account.get('details_submitted'), 'capabilities': account.get('capabilities'), 'disabled_reason': requirements.get('disabled_reason'), 'currently_due': requirements.get('currently_due'), 'past_due': requirements.get('past_due')}
+              return {'charges_enabled': account.get('charges_enabled'), 'payouts_enabled': account.get('payouts_enabled'), 'details_submitted': account.get('details_submitted'), 'capabilities': account.get('capabilities'), 'disabled_reason': requirements.get('disabled_reason'), 'currently_due': requirements.get('currently_due'), 'past_due': requirements.get('past_due'), 'payout_schedule': (account.get('settings') or {}).get('payouts', {}).get('schedule')}
           print(json.dumps({'platform': safe(get('account'))}))
           accounts = get('accounts?limit=100')
           print(json.dumps({'connected_accounts': [safe(account) for account in accounts.get('data', [])], 'has_more': accounts.get('has_more')}))

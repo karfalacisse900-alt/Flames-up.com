@@ -343,9 +343,16 @@ public struct CaptroCommercePurchase: Decodable, Hashable, Identifiable {
   public let currency: String
   public let status: String
   public let purchasedAt: String?
+  public var receiptPaymentMethod: CaptroReceiptPaymentMethod? = nil
   public let entitlement: CaptroEntitlementSummary?
 
   public var totalLabel: String { CaptroMoney.format(minorUnits: totalAmount, currency: currency) }
+}
+
+public struct CaptroReceiptPaymentMethod: Decodable, Hashable {
+  public let brand: String
+  public let last4: String
+  public let wallet: String?
 }
 
 public struct CaptroEntitlementSummary: Decodable, Hashable, Identifiable {

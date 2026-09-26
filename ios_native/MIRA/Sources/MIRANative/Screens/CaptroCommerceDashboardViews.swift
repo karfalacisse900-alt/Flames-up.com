@@ -252,6 +252,7 @@ private struct CaptroDashboardPassView: View {
 
   var body: some View {
     NavigationStack {
+      ScrollView {
       VStack(spacing: 18) {
         Text(presentation.pass.kind == "redemption" ? "REDEMPTION PASS" : "ACCESS PASS")
           .font(.system(size: 11, weight: .bold)).foregroundStyle(CaptroDetailStyle.accent)
@@ -265,11 +266,42 @@ private struct CaptroDashboardPassView: View {
         Text(presentation.pass.status.replacingOccurrences(of: "_", with: " ").uppercased())
           .font(.system(size: 12, weight: .bold))
           .foregroundStyle(presentation.pass.status == "active" ? MIRATheme.Color.forest : CaptroDetailStyle.secondary)
+        receipt
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24).background(MIRATheme.Color.surface).privacySensitive()
+      .frame(maxWidth: .infinity).padding(24)
+      }.background(MIRATheme.Color.surface).privacySensitive()
       .navigationTitle("Pass").navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
+  }
+  private var receipt: some View {
+    let purchase = presentation.purchase
+    return VStack(alignment: .leading, spacing: 12) {
+      Divider()
+      Text("CAPTRO RECEIPT").font(.caption.weight(.bold))
+      Text("Order \(purchase.id)").font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+      receiptLine(purchase.priceLabel + " × \(purchase.quantity)", amount: purchase.itemAmount ?? purchase.unitAmount * purchase.quantity)
+      if let tax = purchase.taxAmount { receiptLine("Tax", amount: tax) }
+      if let fee = purchase.serviceFeeAmount { receiptLine("Service fee", amount: fee) }
+      receiptLine("TOTAL", amount: purchase.totalAmount).fontWeight(.bold)
+      Text(purchase.status == "confirmed" ? "PAID" : purchase.status.replacingOccurrences(of: "_", with: " ").uppercased())
+        .font(.caption.weight(.bold))
+      if let card = purchase.receiptPaymentMethod {
+        Text("Paid with \(card.brand.capitalized) •••• \(card.last4)").font(.footnote)
+      }
+      if let value = purchase.purchasedAt,
+         let date = ISO8601DateFormatter().date(from: value) {
+        Text(date.formatted(date: .abbreviated, time: .shortened)).font(.footnote).foregroundStyle(.secondary)
+      }
+    }.frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func receiptLine(_ title: String, amount: Int) -> some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text(title)
+      Spacer(minLength: 12)
+      Text(CaptroMoney.format(minorUnits: amount, currency: presentation.purchase.currency))
+    }.font(.subheadline)
   }
 }
 

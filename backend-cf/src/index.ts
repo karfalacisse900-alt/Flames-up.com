@@ -9009,6 +9009,7 @@ function commercePurchasePayload(row: any, entitlement?: any) {
     currency: cleanText(row?.currency || 'USD', 3).toUpperCase(),
     status: cleanText(row?.status, 40),
     purchasedAt: row?.confirmed_at || row?.created_at || null,
+    receiptPaymentMethod: row?.confirmed_at ? row.receipt_payment_method || null : null,
     entitlement: entitlement ? {
       id: publicId(entitlement.id, 120),
       kind: cleanText(entitlement.kind, 40),
@@ -10274,6 +10275,7 @@ async function marketplaceSettlementForIntent(c: any, intent: any, purchase: any
     throw new Error('STRIPE_PAYMENT_MISMATCH');
   }
 
+  if (purchase.settlement_model === 'deferred' && (intent.transfer_data || intent.on_behalf_of || charge.transfer)) throw new Error('CAPTRO_PREMATURE_TRANSFER');
   let balanceTransaction = charge.balance_transaction;
   const balanceTransactionId = stripeExpandableId(balanceTransaction, 'txn_');
   if (!balanceTransactionId) {

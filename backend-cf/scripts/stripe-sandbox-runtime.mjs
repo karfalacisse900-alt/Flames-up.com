@@ -284,7 +284,7 @@ async function runBuyerOnly(local, admin, api) {
     client_request_id:randomUUID(),post_type:'event',title:'Captro Five Dollar Sandbox Ticket',content:'Isolated payment acceptance test.',visibility:'public',
     commerce:{enabled:true,contentType:'event',paymentModel:'paid',commerceClass:'outside_app',title:'Captro Five Dollar Sandbox Ticket',
       description:'Sandbox only',locationName:'Test Venue',city:'New York',startsAt:new Date(Date.now()+86400000).toISOString(),
-      endsAt:new Date(Date.now()+90000000).toISOString(),capacity:3,passRequired:true,prices:[{label:'General',unitAmount:500,capacity:3}]}
+      endsAt:new Date(Date.now()+90000000).toISOString(),capacity:20,passRequired:true,prices:[{label:'General',unitAmount:500,capacity:20}]}
   })});
   const commerce=(await json(api+'/commerce/posts/'+post.id,{headers:buyer.authorized})).commerce;
   assert.equal(commerce.lowestPrice.unitAmount,500);assert.equal(commerce.lowestPrice.buyerTotal,500);
@@ -317,15 +317,36 @@ async function runBuyerOnly(local, admin, api) {
     const earnings=await rows('app_creator_earnings?purchase_id=eq.'+order.id);assert.equal(earnings.length,1);assert.equal(earnings[0].status,'pending');assert.equal(earnings[0].provider_transfer_id,null);
     const ledger=await rows('app_marketplace_ledger?order_id=eq.'+order.id);assert.equal(ledger.filter(x=>x.account==='pending').length,1);
     const transfers=await stripe('/transfers?transfer_group='+encodeURIComponent(paid.transfer_group));assert.equal(transfers.data.length,0);
-    const reconciled=await json(api+'/commerce/purchases/'+order.id,{headers:customer.authorized});
+    const reconciled=await json(api+'/payments/purchases/'+order.id,{headers:customer.authorized});
     assert.equal(reconciled.purchase.status,'confirmed');assert.equal((await rows('app_entitlements?purchase_id=eq.'+order.id)).length,1);
     receipts.push({paymentIntentId:pi,orderId:order.id,amount:order.total_amount,quantity,ticketIssued:true,qrIssued:true,sellerPending:true,transferCreated:false});
   }
   const soldOut=await createLocalUser(local,admin,api,'soldout');
-  const full=await json(api+'/payments/create',{method:'POST',headers:soldOut.authorized,body:JSON.stringify({contentId:post.id,contentType:'event',quantity:1,selectedPriceId:commerce.lowestPrice.id,idempotencyKey:randomUUID()})},409);
+  const full=await json(api+'/payments/create',{method:'POST',headers:soldOut.authorized,body:JSON.stringify({contentId:post.id,contentType:'event',quantity:20,selectedPriceId:commerce.lowestPrice.id,idempotencyKey:randomUUID()})},409);
   assert.match(full.code,/CAPACITY|SOLD_OUT/);
   assert.equal((await rows('app_connected_accounts?user_id=eq.'+seller.authUser.id)).length,0);
   assert.equal((await rows('app_connected_accounts?user_id=eq.'+buyer.authUser.id)).length,0);
+  // A stale customer from an old account must not strand checkout.
+  const stale=await createLocalUser(local,admin,api,'stale');
+  await json(local.API_URL+'/rest/v1/app_stripe_customers',{method:'POST',headers:admin,body:JSON.stringify({user_id:stale.authUser.id,app_user_id:stale.appUser.id,stripe_mode:'test',provider_customer_id:'cus_captroDeletedFixture'})},201);
+  for(const [label,method] of [['declined','pm_card_chargeDeclined'],['3ds','pm_card_threeDSecure2Required'],['cancel',null]]) {
+    const who=label==='declined'?stale:await createLocalUser(local,admin,api,label);
+    const attempt=await json(api+'/payments/create',{method:'POST',headers:who.authorized,body:JSON.stringify({contentId:post.id,contentType:'event',quantity:1,selectedPriceId:commerce.lowestPrice.id,idempotencyKey:randomUUID()})});
+    const pi=attempt.paymentSheet.paymentIntentClientSecret.split('_secret_')[0];
+    if(method) {
+      const response=await fetch('https://api.stripe.com/v1/payment_intents/'+pi+'/confirm',{method:'POST',headers:{Authorization:'Bearer '+process.env.STRIPE_SECRET_KEY,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({payment_method:method,return_url:'https://captro.app/payments/return'})});
+      const data=await response.json();
+      if(label==='declined'){assert.equal(response.status,402);assert.equal(data.error.code,'card_declined');}
+      else {assert.equal(data.status,'requires_action');assert.ok(data.next_action);}
+    }
+    assert.equal((await rows('app_entitlements?purchase_id=eq.'+attempt.purchase.id)).length,0);
+    const canceled=await stripe('/payment_intents/'+pi+'/cancel',{method:'POST'});assert.equal(canceled.status,'canceled');
+    await waitFor('cancel releases hold',async()=>(await rows('app_purchases?id=eq.'+attempt.purchase.id))[0]?.status==='cancelled');
+  }
+  const replacement=(await rows('app_stripe_customers?user_id=eq.'+stale.authUser.id))[0];assert.notEqual(replacement.provider_customer_id,'cus_captroDeletedFixture');
+  const refund=await stripe('/refunds',{method:'POST',params:{payment_intent:receipts[0].paymentIntentId}});assert.equal(refund.status,'succeeded');
+  await waitFor('refund revokes ticket',async()=>(await rows('app_entitlements?purchase_id=eq.'+receipts[0].orderId))[0]?.status==='refunded');
+  assert.equal((await rows('app_creator_earnings?purchase_id=eq.'+receipts[0].orderId))[0].status,'refunded');
   console.log(JSON.stringify({event:'deferred_buyer_acceptance',mode:'test',realStripe:true,signedWebhook:true,newBuyerNoSavedCard:true,sellerWithoutConnect:true,receipts,nativePaymentSheetDeviceTest:false}));
 }
 
