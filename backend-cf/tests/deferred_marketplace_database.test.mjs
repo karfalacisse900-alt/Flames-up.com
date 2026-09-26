@@ -23,7 +23,9 @@ test('platform payment issues access independently of seller setup and appends i
  await db.query("update app_purchases set provider_payment_id='pi_test_newbuyer' where id=$1",[first.id]);
  const confirm=(amount=500,transfer=null)=>one("select * from captro_confirm_marketplace_purchase($1,'evt_test',null,'pi_test_newbuyer','ch_test',$2,$3,45,0,'USD',now(),'digest')",[first.id,transfer,amount]);
  await assert.rejects(confirm(5),/AMOUNT_MISMATCH/);await assert.rejects(confirm(500,'tr_early'),/PREMATURE_TRANSFER/);
+ assert.equal((await one('select confirmed_quantity from app_purchasables where id=$1',[item])).confirmed_quantity,0);
  await confirm();await confirm();
+ assert.equal((await one('select confirmed_quantity from app_purchasables where id=$1',[item])).confirmed_quantity,1);
  const earning=await one('select * from app_creator_earnings');assert.equal(earning.status,'pending');assert.equal(earning.creator_amount,455);assert.equal(earning.provider_transfer_id,null);
  assert.equal((await one('select count(*)::int n from app_commerce_tickets')).n,1);
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='pending'",[seller])).amount,455);
@@ -37,6 +39,7 @@ test('platform payment issues access independently of seller setup and appends i
  assert.equal((await one('select status from app_entitlements')).status,'refunded');
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='pending'",[seller])).amount,0);
  await confirm();assert.equal((await one('select status from app_entitlements')).status,'refunded');
+ assert.equal((await one('select confirmed_quantity from app_purchasables where id=$1',[item])).confirmed_quantity,0);
 
  // Later completion/review/transfer is distinct from buyer confirmation.
  await db.query("update app_purchases set provider_payment_id='pi_two' where id=$1",[two.id]);
@@ -63,5 +66,15 @@ test('platform payment issues access independently of seller setup and appends i
  assert.equal((await one('select count(*)::int n from app_marketplace_ledger')).n,count);
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='paid_out'",[seller])).amount,941);
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='transferred'",[seller])).amount,0);
+ const ticket=await one('select t.* from app_commerce_tickets t join app_entitlements e on e.id=t.entitlement_id where e.purchase_id=$1',[two.id]);
+ const validate=(owner=seller)=>one("select captro_validate_pass('ticket',$1,$2,1) result",[ticket.id,owner]);
+ await assert.rejects(validate(buyer),/PASS_INVALID/);
+ assert.equal((await validate()).result.status,'valid');
+ assert.equal((await one('select status from app_commerce_tickets where id=$1',[ticket.id])).status,'active');
+ await one("select * from captro_consume_ticket($1,$2,1,'check-in')",[ticket.id,seller]);
+ await assert.rejects(validate(),/ALREADY_USED/);
+ await assert.rejects(one("select * from captro_consume_ticket($1,$2,1,'duplicate')",[ticket.id,seller]),/ALREADY_USED/);
+ const refunded=await one('select t.* from app_commerce_tickets t join app_entitlements e on e.id=t.entitlement_id where e.purchase_id=$1',[first.id]);
+ await assert.rejects(one("select captro_validate_pass('ticket',$1,$2,1)",[refunded.id,seller]),/PASS_REFUNDED/);
  }finally{await db.close();}
 });

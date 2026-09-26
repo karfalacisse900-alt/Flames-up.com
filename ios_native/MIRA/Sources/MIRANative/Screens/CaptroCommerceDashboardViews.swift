@@ -312,14 +312,23 @@ private struct CaptroPassScannerSheet: View {
   @State private var result: String?
   @State private var error: String?
   @State private var scanAttempt = 0
+  @State private var pendingToken: String?
+  @State private var validation: CaptroCommercePassValidation?
 
   var body: some View {
     NavigationStack {
       VStack(spacing: 16) {
-        CaptroQRScanner { token in consume(token) }
+        CaptroQRScanner { token in validate(token) }
           .id(scanAttempt)
           .overlay { RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.85), lineWidth: 2).frame(width: 230, height: 230) }
         if isConsuming { ProgressView("Checking pass...") }
+        if let validation, let pendingToken {
+          Text(validation.title).font(.headline)
+          Text("Valid · Quantity \(validation.quantity)").font(.subheadline)
+          Button(validation.kind == "ticket" ? "Check In" : "Redeem") { consume(pendingToken) }
+            .buttonStyle(.borderedProminent).tint(MIRATheme.Color.forest).disabled(isConsuming)
+          Button("Cancel") { self.validation = nil; self.pendingToken = nil; scanAttempt += 1 }
+        }
         if let result {
           Label(result, systemImage: "checkmark.circle.fill")
             .font(.system(size: 17, weight: .semibold)).foregroundStyle(MIRATheme.Color.forest)
@@ -336,11 +345,24 @@ private struct CaptroPassScannerSheet: View {
     }
   }
 
+  private func validate(_ token: String) {
+    guard !isConsuming, result == nil, pendingToken == nil else { return }
+    isConsuming = true
+    Task {
+      defer { isConsuming = false }
+      do {
+        let checked = try await api.validateCommercePass(token: token)
+        guard checked.status == "valid" else { return }
+        pendingToken = token; validation = checked; error = nil
+      } catch { self.error = (error as? MIRAAPIError)?.errorDescription ?? "This pass could not be validated." }
+    }
+  }
+
   private func consume(_ token: String) {
     guard !isConsuming, result == nil else { return }
     isConsuming = true
     Task {
-      defer { isConsuming = false }
+      defer { isConsuming = false; pendingToken = nil; validation = nil }
       do {
         let response = try await api.consumeCommercePass(token: token)
         result = response.status == "checked_in" ? "Checked In" : "Redeemed"

@@ -115,6 +115,7 @@ test('the Home payload exposes compact commerce facts without private configurat
     description: 'Saturday night',
     capacity: 150,
     quantity_committed: 72,
+    confirmed_quantity: 70,
     status: 'active',
     public_data: { ageRequirement: '21+' },
     private_config: { group_chat_id: 'private-chat' },
@@ -123,6 +124,7 @@ test('the Home payload exposes compact commerce facts without private configurat
     currency: 'USD', billing_period: 'one_time', capacity: 150, quantity_committed: 72, active: true,
   }]);
   assert.equal(payload.remaining, 78);
+  assert.equal(payload.joinedCount, 70);
   assert.equal(payload.lowestPrice.unitAmount, 2000);
   assert.equal(payload.viewerDestinationId, null);
   assert.doesNotMatch(JSON.stringify(payload), /private-chat|private_config/);

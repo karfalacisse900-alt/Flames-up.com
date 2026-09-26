@@ -27,6 +27,8 @@ begin
  if completed is null and item.content_type in ('event','meetup') and item.ends_at<=now() then completed:=item.ends_at; end if;
  if completed is null or completed>now() then raise exception 'CAPTRO_FULFILLMENT_NOT_COMPLETED'; end if;
  if p.provider_transfer_id is not null then return; end if;
+ insert into public.app_marketplace_ledger(entry_key,order_id,seller_id,event_type,account,amount,currency,metadata)
+ values(p.id||':release-review:'||gen_random_uuid(),p.id,p.creator_id,'RELEASE_REVIEWED','audit',0,p.currency,jsonb_build_object('reviewer',p_admin_id,'note',p_note,'release_after',p_release_after));
  update public.app_purchases set fulfillment_completed_at=completed,
  fulfillment_completion_source=coalesce(fulfillment_completion_source,'event_ended_operator_review') where id=p.id;
  update public.app_creator_earnings set status='clearing',release_not_before=greatest(completed,p_release_after),
@@ -137,3 +139,115 @@ begin
 end; $$;
 revoke all on function public.captro_confirm_fulfillment(uuid,uuid) from public,anon,authenticated;
 grant execute on function public.captro_confirm_fulfillment(uuid,uuid) to service_role;
+
+-- Inventory includes temporary payment holds; public attendance must not.
+alter table public.app_purchasables add column confirmed_quantity integer not null default 0 check(confirmed_quantity>=0);
+update public.app_purchasables item set confirmed_quantity=coalesce((select sum(p.quantity) from public.app_entitlements e join public.app_purchases p on p.id=e.purchase_id where e.purchasable_id=item.id and e.status in ('active','used')),0);
+create function public.captro_count_confirmed_access() returns trigger language plpgsql set search_path=public as $$
+declare previous_count integer:=0; current_count integer:=0; qty integer;
+begin
+ select quantity into qty from public.app_purchases where id=new.purchase_id;
+ if tg_op='UPDATE' then
+   if old.purchase_id<>new.purchase_id or old.purchasable_id<>new.purchasable_id then raise exception 'CAPTRO_ENTITLEMENT_OWNER_IMMUTABLE'; end if;
+   if old.status in ('active','used') then previous_count:=qty; end if;
+ end if;
+ if new.status in ('active','used') then current_count:=qty; end if;
+ if current_count<>previous_count then
+   update public.app_purchasables set confirmed_quantity=confirmed_quantity+current_count-previous_count where id=new.purchasable_id;
+ end if;
+ return new;
+end; $$;
+create trigger app_entitlements_confirmed_count after insert or update on public.app_entitlements for each row execute function public.captro_count_confirmed_access();
+revoke all on function public.captro_count_confirmed_access() from public,anon,authenticated;
+grant execute on function public.captro_count_confirmed_access() to service_role;
+
+-- Preview never consumes access. The explicit host confirmation rechecks under locks.
+create function public.captro_validate_pass(p_kind text,p_id uuid,p_creator_id uuid,p_token_version integer)
+returns jsonb language plpgsql set search_path=public as $$
+declare pass jsonb; e public.app_entitlements%rowtype; p public.app_purchases%rowtype; item public.app_purchasables%rowtype;
+begin
+ if p_kind='ticket' then select to_jsonb(t) into pass from app_commerce_tickets t where id=p_id;
+ elsif p_kind='redemption' then select to_jsonb(t) into pass from app_commerce_redemptions t where id=p_id;
+ else raise exception 'CAPTRO_PASS_INVALID'; end if;
+ select * into e from app_entitlements where id=(pass->>'entitlement_id')::uuid;
+ select * into p from app_purchases where id=e.purchase_id;
+ select * into item from app_purchasables where id=e.purchasable_id;
+ if pass is null or e.id is null or item.creator_id<>p_creator_id or (pass->>'token_version')::integer<>p_token_version then raise exception 'CAPTRO_PASS_INVALID'; end if;
+ if pass->>'status'='refunded' or e.status='refunded' or p.status='refunded' then raise exception 'CAPTRO_PASS_REFUNDED'; end if;
+ if pass->>'status' in ('checked_in','used') then raise exception 'CAPTRO_PASS_ALREADY_USED'; end if;
+ if pass->>'status'<>'active' or e.status<>'active' or p.status not in ('confirmed','partially_refunded')
+ or item.status<>'active' or e.ends_at<=now() or item.expires_at<=now() then raise exception 'CAPTRO_PASS_INVALID'; end if;
+ return jsonb_build_object('status','valid','kind',p_kind,'title',item.title,'quantity',p.quantity);
+end; $$;
+revoke all on function public.captro_validate_pass(text,uuid,uuid,integer) from public,anon,authenticated;
+grant execute on function public.captro_validate_pass(text,uuid,uuid,integer) to service_role;
+
+create or replace function public.captro_consume_ticket(
+  p_ticket_id uuid,
+  p_creator_id uuid,
+  p_token_version integer,
+  p_request_id text
+)
+returns public.app_commerce_tickets
+language plpgsql
+set search_path = public
+as $$
+declare ticket_row public.app_commerce_tickets%rowtype;
+declare entitlement_row public.app_entitlements%rowtype;
+begin
+  perform 1 from app_purchases p join app_entitlements e on e.purchase_id=p.id join app_commerce_tickets t on t.entitlement_id=e.id where t.id=p_ticket_id for update of p;
+  perform public.captro_validate_pass('ticket',p_ticket_id,p_creator_id,p_token_version);
+  select * into ticket_row from public.app_commerce_tickets where id = p_ticket_id for update;
+  if not found then raise exception 'CAPTRO_PASS_NOT_FOUND'; end if;
+  select e.* into entitlement_row from public.app_entitlements e
+    join public.app_purchasables p on p.id = e.purchasable_id
+    where e.id = ticket_row.entitlement_id and p.creator_id = p_creator_id;
+  if not found or ticket_row.token_version <> p_token_version then raise exception 'CAPTRO_PASS_INVALID'; end if;
+  if ticket_row.status <> 'active' then
+    insert into public.app_commerce_access_events (entitlement_id, actor_id, event_type, request_id)
+      values (ticket_row.entitlement_id, p_creator_id, 'duplicate_attempt', p_request_id);
+    raise exception 'CAPTRO_PASS_ALREADY_USED';
+  end if;
+  update public.app_commerce_tickets set status = 'checked_in', checked_in_at = now(), checked_in_by = p_creator_id,
+    updated_at = now() where id = ticket_row.id returning * into ticket_row;
+  update public.app_entitlements set status = 'used', updated_at = now() where id = ticket_row.entitlement_id;
+  insert into public.app_commerce_access_events (entitlement_id, actor_id, event_type, request_id)
+    values (ticket_row.entitlement_id, p_creator_id, 'checked_in', p_request_id);
+  return ticket_row;
+end;
+$$;
+
+create or replace function public.captro_consume_redemption(
+  p_redemption_id uuid,
+  p_creator_id uuid,
+  p_token_version integer,
+  p_request_id text
+)
+returns public.app_commerce_redemptions
+language plpgsql
+set search_path = public
+as $$
+declare pass_row public.app_commerce_redemptions%rowtype;
+declare entitlement_row public.app_entitlements%rowtype;
+begin
+  perform 1 from app_purchases p join app_entitlements e on e.purchase_id=p.id join app_commerce_redemptions t on t.entitlement_id=e.id where t.id=p_redemption_id for update of p;
+  perform public.captro_validate_pass('redemption',p_redemption_id,p_creator_id,p_token_version);
+  select * into pass_row from public.app_commerce_redemptions where id = p_redemption_id for update;
+  if not found then raise exception 'CAPTRO_PASS_NOT_FOUND'; end if;
+  select e.* into entitlement_row from public.app_entitlements e
+    join public.app_purchasables p on p.id = e.purchasable_id
+    where e.id = pass_row.entitlement_id and p.creator_id = p_creator_id;
+  if not found or pass_row.token_version <> p_token_version then raise exception 'CAPTRO_PASS_INVALID'; end if;
+  if pass_row.status <> 'active' then
+    insert into public.app_commerce_access_events (entitlement_id, actor_id, event_type, request_id)
+      values (pass_row.entitlement_id, p_creator_id, 'duplicate_attempt', p_request_id);
+    raise exception 'CAPTRO_PASS_ALREADY_USED';
+  end if;
+  update public.app_commerce_redemptions set status = 'used', redeemed_at = now(), redeemed_by = p_creator_id,
+    updated_at = now() where id = pass_row.id returning * into pass_row;
+  update public.app_entitlements set status = 'used', updated_at = now() where id = pass_row.entitlement_id;
+  insert into public.app_commerce_access_events (entitlement_id, actor_id, event_type, request_id)
+    values (pass_row.entitlement_id, p_creator_id, 'redeemed', p_request_id);
+  return pass_row;
+end;
+$$;

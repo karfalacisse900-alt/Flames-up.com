@@ -216,7 +216,7 @@ export function publicCommercePayload(row: any, prices: any[], viewer?: any) {
     endsAt: row?.ends_at || null,
     timeZone: row?.timezone || null,
     capacity,
-    joinedCount: committed,
+    joinedCount: Math.max(0, Number(row?.confirmed_quantity || 0)),
     remaining: capacity == null ? null : Math.max(0, capacity - committed),
     expiresAt: row?.expires_at || null,
     refundPolicy: String(row?.refund_policy || ''),

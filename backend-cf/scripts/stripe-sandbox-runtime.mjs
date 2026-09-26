@@ -315,6 +315,13 @@ async function runBuyerOnly(local, admin, api) {
     const entitlements=await rows('app_entitlements?purchase_id=eq.'+order.id);assert.equal(entitlements.length,1);assert.equal(entitlements[0].status,'active');
     const pass=await json(api+'/commerce/entitlements/'+entitlements[0].id+'/pass',{headers:customer.authorized});
     assert.ok(pass.pass.token.startsWith('captro:'));assert.ok(pass.pass.code);
+    const check={method:'POST',headers:seller.authorized,body:JSON.stringify({token:pass.pass.token})};
+    await json(api+'/commerce/passes/validate',{...check,headers:customer.authorized},409);
+    const valid=await json(api+'/commerce/passes/validate',check);assert.equal(valid.status,'valid');assert.equal(valid.quantity,quantity);
+    if(quantity===2){
+      assert.equal((await json(api+'/commerce/passes/consume',check)).status,'checked_in');
+      const used=await json(api+'/commerce/passes/validate',check,409);assert.equal(used.code,'CAPTRO_PASS_ALREADY_USED');
+    }
     const earnings=await rows('app_creator_earnings?purchase_id=eq.'+order.id);assert.equal(earnings.length,1);assert.equal(earnings[0].status,'pending');assert.equal(earnings[0].provider_transfer_id,null);
     const ledger=await rows('app_marketplace_ledger?order_id=eq.'+order.id);assert.equal(ledger.filter(x=>x.account==='pending').length,1);
     const transfers=await stripe('/transfers?transfer_group='+encodeURIComponent(paid.transfer_group));assert.equal(transfers.data.length,0);

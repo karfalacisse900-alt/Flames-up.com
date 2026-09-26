@@ -10420,6 +10420,22 @@ function paymentTrace(c: any, stage: string, data: Record<string, unknown> = {})
     mode: configuredStripeMode(c), ...data }));
 }
 
+// A short, account-keyed capability cache avoids repeating platform reads on every tap.
+// This checks actual Stripe settings, not a database balance or client claim.
+let retainedPlatform: {key:string;until:number;pending:Promise<void>} | undefined;
+async function requireRetainedPlatform(c:any) {
+  const key=getStripeConfig(c).secretKey;
+  if(retainedPlatform?.key===key && retainedPlatform.until>Date.now()) return retainedPlatform.pending;
+  const pending=(async()=>{
+    const result=await stripeApiGet(c,'/account');
+    if(!result.ok) throw stripeProviderError(result,'STRIPE_PLATFORM_UNAVAILABLE');
+    if(!result.data.charges_enabled || result.data.settings?.payouts?.schedule?.interval!=='manual')
+      throw new Error('STRIPE_PLATFORM_RETENTION_REQUIRED');
+  })();
+  const entry={key,until:Date.now()+60000,pending};retainedPlatform=entry;
+  try {await pending;} catch(error){if(retainedPlatform===entry)retainedPlatform=undefined;throw error;}
+}
+
 async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = false) {
   const stripe = getStripeConfig(c);
   if (!stripe.configured || !stripe.webhookConfigured) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
@@ -10432,6 +10448,7 @@ async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = fa
     result = await stripeApiGet(c, '/payment_intents/' + encodeURIComponent(purchase.provider_payment_id));
     customerId = stripeExpandableId(result.data?.customer, 'cus_') || null;
   } else {
+    if(purchase.settlement_model==='deferred') await requireRetainedPlatform(c);
     // Customer and saved-card presentation are optional. A provider outage in
     // CustomerSession must not prevent paying with a new card or Apple Pay.
     try {
@@ -10680,6 +10697,7 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
   const successUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/success', '/checkout/success');
   const cancelUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/cancelled', '/checkout/cancelled');
   const currency = cleanText(purchase.currency || 'USD', 3).toLowerCase();
+  if(purchase.settlement_model==='deferred') await requireRetainedPlatform(c);
   const stripePriceId = await ensureStripeProductAndPrice(c, purchasable, price);
   const serviceFee = Math.max(0, Math.trunc(Number(purchase.service_fee_amount || 0)));
   const tax = Math.max(0, Math.trunc(Number(purchase.tax_amount || 0)));
@@ -19312,6 +19330,16 @@ api.get('/commerce/entitlements/:entitlementId/pass', authMiddleware, async (c) 
     const code = commerceErrorCode(error);
     return c.json({ detail: 'Could not load this pass.', code }, code.endsWith('_MISSING') ? 503 : commerceErrorStatus(code) as any);
   }
+});
+
+api.post('/commerce/passes/validate', authMiddleware, async(c)=>{
+  const limited=await enforceRateLimit(c,'commerce_pass_validate',getUserId(c),120,60);if(limited)return limited;
+  try {
+    const owner=await supabaseAuthUserIdForAppUserId(c,getUserId(c));
+    const body:any=await c.req.json();const pass=await parseCommercePassToken(c,body.token);
+    if(!owner || !pass)return c.json({code:'CAPTRO_PASS_INVALID',detail:'This pass is not valid.'},403);
+    return c.json(await supabaseAdminRpc(c,'captro_validate_pass',{p_kind:pass.kind,p_id:pass.id,p_creator_id:owner,p_token_version:pass.version}));
+  }catch(error){const code=commerceErrorCode(error);return c.json({code,detail:code==='CAPTRO_PASS_ALREADY_USED'?'This pass has already been used.':code==='CAPTRO_PASS_REFUNDED'?'This pass was refunded.':'This pass is not valid.'},409);}
 });
 
 api.post('/commerce/passes/consume', authMiddleware, async (c) => {

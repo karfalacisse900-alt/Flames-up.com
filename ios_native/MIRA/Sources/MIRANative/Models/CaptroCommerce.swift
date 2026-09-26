@@ -477,6 +477,13 @@ public struct CaptroCommerceSelection: Encodable, Hashable {
   }
 }
 
+public struct CaptroCommercePassValidation: Decodable {
+  public let status: String
+  public let kind: String
+  public let title: String
+  public let quantity: Int
+}
+
 public struct CaptroCommerceConsumeResponse: Decodable {
   public let status: String
 }
@@ -745,6 +752,10 @@ extension MIRAAPIClient {
 
   public func decideCommercePurchase(purchaseId: String, approved: Bool) async throws -> CaptroCommerceActionResponse {
     try await post("/commerce/purchases/\(purchaseId)/decision", body: CaptroCommerceDecisionRequest(approved: approved))
+  }
+
+  public func validateCommercePass(token: String) async throws -> CaptroCommercePassValidation {
+    try await post("/commerce/passes/validate", body: CaptroCommerceConsumeRequest(token: token))
   }
 
   public func consumeCommercePass(token: String) async throws -> CaptroCommerceConsumeResponse {
