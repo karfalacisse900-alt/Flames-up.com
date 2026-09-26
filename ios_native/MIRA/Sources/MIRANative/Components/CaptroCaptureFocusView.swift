@@ -26,13 +26,8 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
     GeometryReader { geometry in
       let width = geometry.size.width
       ZStack(alignment: .leading) {
-        Color.black
-        media
-          .frame(width: width, height: geometry.size.height)
-          .clipped()
-          .offset(x: drag)
-          .allowsHitTesting(false)
         Color.clear
+          .ignoresSafeArea()
           .contentShape(Rectangle())
           .onTapGesture { withAnimation(fade) { hidden.toggle() } }
           .gesture(focusGesture(width: width))
@@ -44,7 +39,7 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
         VStack {
           identity
             .padding(.horizontal, 16)
-            .padding(.top, geometry.safeAreaInsets.top + 8)
+            .padding(.top, 8)
             .opacity(chromeVisible ? 1 : 0)
             .allowsHitTesting(chromeVisible)
             .accessibilityHidden(!chromeVisible)
@@ -55,7 +50,7 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
               .foregroundStyle(.white)
               .padding(.horizontal, 9).padding(.vertical, 5)
               .background(.black.opacity(0.42), in: Capsule())
-              .padding(.bottom, max(18, geometry.safeAreaInsets.bottom + 8))
+              .padding(.bottom, 18)
               .transition(.opacity)
           }
         }
@@ -69,10 +64,19 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
           .allowsHitTesting(false).accessibilityHidden(true)
       }
       .frame(width: width, height: geometry.size.height)
-      .clipped()
+      // Keep controls inside the actual safe area, but extend the existing
+      // media instance behind the notch and home indicator.
+      .background {
+        media
+          .frame(width: width, height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
+          .clipped()
+          .offset(x: drag)
+          .ignoresSafeArea()
+          .allowsHitTesting(false)
+      }
       .animation(fade, value: holding)
     }
-    .ignoresSafeArea()
+    .background(Color.black.ignoresSafeArea())
     .task(id: captureID) {
       withAnimation(fade) { showCounter = true }
       do { try await Task.sleep(for: .seconds(1.4)) } catch { return }
