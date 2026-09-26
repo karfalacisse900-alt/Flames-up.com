@@ -6,6 +6,10 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      checkout_readiness_only:
+        description: Read deployed Stripe and access routes using a disposable authenticated account, no charges
+        type: boolean
+        default: false
       configure_retained_platform:
         description: Set only Captro platform payout schedule to manual for retained earnings
         type: boolean
@@ -33,7 +37,7 @@ on:
 
 jobs:
   payment-diagnostics:
-    if: ${{ inputs.payment_diagnostics_only == true && inputs.configure_retained_platform != true }}
+    if: ${{ inputs.payment_diagnostics_only == true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
@@ -64,7 +68,7 @@ jobs:
           print(json.dumps({'webhooks': [{'enabled': hook.get('status') == 'enabled', 'captro_worker': 'flames-up-api.karfalacisse900.workers.dev' in hook.get('url','') or 'api.flames-up.com' in hook.get('url',''), 'events': hook.get('enabled_events')} for hook in hooks.get('data', [])]}))
           PY
   deploy-reliability:
-    if: ${{ inputs.reliability_only == true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true }}
+    if: ${{ inputs.reliability_only == true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     timeout-minutes: 30
@@ -175,7 +179,7 @@ jobs:
             exit 1
           fi
   deploy:
-    if: ${{ inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true }}
+    if: ${{ inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
@@ -775,7 +779,7 @@ jobs:
         run: node scripts/verify-event-editor.mjs
 
   configure-platform-retention:
-    if: ${{ inputs.configure_retained_platform == true }}
+    if: ${{ inputs.configure_retained_platform == true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.retention_mode == 'live' && 'captro-payments-live' || 'captro-payments-test' }}
     steps:
@@ -806,3 +810,20 @@ jobs:
           assert after['settings']['payouts']['schedule']['interval']=='manual'
           print(json.dumps({'platformRetainedEarningsConfigured':True,'sellerSchedulesChanged':False,'moneyMoved':False}))
           PY
+
+  checkout-readiness:
+    if: ${{ inputs.checkout_readiness_only == true }}
+    runs-on: ubuntu-latest
+    environment: captro-payments-live
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Read deployed configuration and existing paid access as a fresh signed-in buyer
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY || secrets.PUBLISHABLEKEY }}
+        run: node backend-cf/scripts/production-checkout-readiness.mjs
