@@ -168,6 +168,6 @@ private struct CaptroCaptureEdgeDock: View {
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("\(stamp), \(title). View details")
     .accessibilityAddTraits(.isButton)
-    .accessibilityAction(onOpen)
+    .accessibilityAction { onOpen() }
   }
 }
