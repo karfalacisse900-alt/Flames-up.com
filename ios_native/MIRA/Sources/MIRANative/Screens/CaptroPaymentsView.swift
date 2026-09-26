@@ -244,7 +244,7 @@ struct CaptroPaymentsView: View {
         .fixedSize(horizontal: false, vertical: true)
 
       if !model.methods.isEmpty, model.payoutAccount?.ready != true {
-        Text("Your payment card is ready for purchases. To receive sales earnings, add an eligible debit card in Seller Payout Card below.")
+        Text("Your payment card is ready for purchases. To receive sales earnings, add an eligible debit card in Seller Setup below.")
           .font(.system(size: 12, weight: .semibold))
           .foregroundStyle(CaptroDetailStyle.ink)
           .fixedSize(horizontal: false, vertical: true)
@@ -294,7 +294,7 @@ struct CaptroPaymentsView: View {
 
   private var payoutSection: some View {
     VStack(alignment: .leading, spacing: 14) {
-      sectionHeading("SELLER PAYOUT CARD")
+      sectionHeading("SELLER SETUP")
       if model.isLoadingPayout && model.payoutAccount != nil {
         ProgressView("Checking payout method...")
           .font(.system(size: 12))
@@ -327,13 +327,13 @@ struct CaptroPaymentsView: View {
           .font(.system(size: 13))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
-        Text("Only needed when you receive earnings from paid posts. This is a separate payout debit card. If you use the same debit card for purchases, securely enter it again in Payout Card Setup—your saved payment card is never copied. Stripe may request details needed to verify payouts. Credit cards cannot receive payouts.")
+        Text("Before your paid listings can accept purchases, complete the business and identity details Stripe requires, accept its terms, and add an eligible payout destination. Saving a payment card does not complete seller setup. Buying and free posts do not require seller setup. Credit cards cannot receive payouts.")
           .font(.system(size: 12))
           .foregroundStyle(CaptroDetailStyle.secondary)
           .fixedSize(horizontal: false, vertical: true)
         if account.payoutCard == nil && !savedDebitCards.isEmpty {
           VStack(alignment: .leading, spacing: 8) {
-            Text("USE A SAVED DEBIT CARD")
+            Text("ADD A PAYOUT DEBIT CARD")
               .font(.system(size: 11, weight: .bold))
               .foregroundStyle(CaptroDetailStyle.secondary)
             ForEach(savedDebitCards) { method in
@@ -355,9 +355,7 @@ struct CaptroPaymentsView: View {
               .fixedSize(horizontal: false, vertical: true)
           }
         }
-        Button(account.payoutCard == nil && !savedDebitCards.isEmpty
-          ? "Use a Different Debit Card"
-          : account.payoutCardActionTitle) {
+        Button(account.ready ? account.payoutCardActionTitle : "Continue Seller Setup") {
           openPayoutSetup()
         }
         .font(.system(size: 14, weight: .semibold))

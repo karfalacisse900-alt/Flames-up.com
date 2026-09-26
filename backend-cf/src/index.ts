@@ -1,3 +1,4 @@
+import { purchaseFailureMessage } from './purchase-errors';
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
@@ -19163,7 +19164,7 @@ const beginCommercePurchaseHandler = async (c: any) => {
       diagnostic: commerceErrorDiagnostic(error),
       request_id: c.get?.('requestId') || '',
     }));
-    return c.json({ detail: code === 'COMMERCE_REQUEST_FAILED' ? 'Could not begin this purchase.' : 'This item could not be reserved.', code }, commerceErrorStatus(code) as any);
+    return c.json({ detail: purchaseFailureMessage(code), code }, commerceErrorStatus(code) as any);
   }
 };
 api.post('/commerce/purchases', authMiddleware, beginCommercePurchaseHandler);

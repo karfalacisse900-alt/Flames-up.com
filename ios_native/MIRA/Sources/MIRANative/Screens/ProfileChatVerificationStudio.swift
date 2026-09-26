@@ -425,6 +425,11 @@ public struct ProfileNativeView: View {
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
           ProfileToolbarDestinationButton(
+            systemImage: "creditcard",
+            accessibilityLabel: "Payments",
+            destination: paymentsDestination.miraHideTabBarOnAppear()
+          )
+          ProfileToolbarDestinationButton(
             systemImage: "bubble.left.and.bubble.right",
             accessibilityLabel: "Chats",
             destination: chatDestination.miraHideTabBarOnAppear()
@@ -659,6 +664,11 @@ public struct ProfileNativeView: View {
     .frame(maxWidth: .infinity)
     .miraCardSurface()
     .padding(.horizontal, MIRATheme.Space.md)
+  }
+
+  private var paymentsDestination: CaptroPaymentsView {
+    if let paymentsModel { return CaptroPaymentsView(api: model.api, model: paymentsModel) }
+    return CaptroPaymentsView(api: model.api)
   }
 
   private var chatDestination: ChatNativeView {

@@ -1159,7 +1159,8 @@ struct StoryViewerNativeView: View {
   @State private var currentUserId: String?
   @State private var showStoryMenu = false
   @State private var showViewers = false
-  @State private var storyProgressValue: CGFloat = 0
+  @State private var showCaptureDetails = false
+  @State private var showPrivateReply = false
   @State private var isStoryPaused = false
   @State private var isCanvasVisible = false
   @State private var isStoryPlaybackArmed = false
@@ -1199,120 +1200,25 @@ struct StoryViewerNativeView: View {
   }
 
   var body: some View {
-    ZStack {
-      Color.black.ignoresSafeArea()
-      GeometryReader { proxy in
-        let safeTop = proxy.safeAreaInsets.top
-        let safeBottom = proxy.safeAreaInsets.bottom
-
-        ZStack {
-          storyMediaLayer
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .clipped()
-            .ignoresSafeArea()
-
-          LinearGradient(colors: [.black.opacity(0.48), .clear], startPoint: .top, endPoint: .bottom)
-            .frame(height: min(200, proxy.size.height * 0.25))
-            .frame(maxHeight: .infinity, alignment: .top)
-            .allowsHitTesting(false)
-          LinearGradient(colors: [.clear, .black.opacity(0.68)], startPoint: .top, endPoint: .bottom)
-            .frame(height: min(310, proxy.size.height * 0.40))
-            .frame(maxHeight: .infinity, alignment: .bottom)
-            .allowsHitTesting(false)
-
-          HStack(spacing: 0) {
-            Color.clear.contentShape(Rectangle()).onTapGesture { goToPreviousStory() }
-            Color.clear.contentShape(Rectangle()).onTapGesture { goToNextStory() }
-          }
-          .padding(.top, safeTop + 116)
-          .padding(.bottom, safeBottom + (currentStory?.linkedItem == nil ? 170 : 270))
-          .simultaneousGesture(
-            DragGesture(minimumDistance: 32).onEnded(handleStoryGroupSwipe)
-          )
-          .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.15)
-              .onChanged { _ in isStoryPaused = true }
-              .onEnded { _ in isStoryPaused = false }
-          )
-
-          VStack(alignment: .leading, spacing: 0) {
-            storyProgress
-              .padding(.bottom, 20)
-            storyTopBar
-            Spacer(minLength: 20)
-            if let caption = currentStory?.content, !caption.isEmpty, currentStory?.mediaURL != nil {
-              Text(caption)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(4)
-                .shadow(color: .black.opacity(0.4), radius: 3)
-                .padding(.bottom, 20)
-            }
-            if let linkedItem = currentStory?.linkedItem {
-              Button {
-                onOpenLinkedPost(linkedItem.postId ?? linkedItem.id)
-              } label: {
-                HStack(spacing: 12) {
-                  VStack(alignment: .leading, spacing: 5) {
-                    Text(linkedItem.title)
-                      .font(.system(size: 15, weight: .semibold))
-                      .foregroundStyle(.black)
-                      .lineLimit(2)
-                    Text(linkedItem.type.uppercased() + " · VIEW ON CAPTRO")
-                      .font(.system(size: 11, weight: .medium))
-                      .foregroundStyle(.secondary)
-                  }
-                  Spacer(minLength: 4)
-                  Image(systemName: "arrow.up.right")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.black)
-                }
-                .padding(16)
-                .background(.white, in: RoundedRectangle(cornerRadius: 10))
-              }
-              .buttonStyle(.plain)
-              .accessibilityLabel("Open linked Captro \(linkedItem.type), \(linkedItem.title)")
-              .padding(.bottom, 18)
-            }
-            if currentUserId == currentStory?.userId {
-              Button { showViewers = true } label: {
-                Text("View viewers")
-                  .font(.system(size: 14, weight: .medium))
-                  .foregroundStyle(.white)
-                  .frame(maxWidth: .infinity, minHeight: 48)
-                  .overlay(RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.55), lineWidth: 1))
-              }
-              .buttonStyle(.plain)
-            } else {
-              storyBottomActions
-            }
-          }
-          .padding(.horizontal, 18)
-          .padding(.top, safeTop + 12)
-          .padding(.bottom, max(12, safeBottom + 8))
-        }
-        .frame(width: proxy.size.width, height: proxy.size.height)
-      }
-    }
+    CaptroCaptureFocusView(
+      captureID: currentStory?.id ?? activeGroup.id,
+      counter: captureCounter,
+      stamp: captureStamp,
+      title: currentStory?.linkedItem?.title ?? activeGroup.displayName,
+      subtitle: currentStory?.locationName,
+      onPrevious: goToPreviousStory,
+      onNext: goToNextStory,
+      onClose: closeStoryViewer,
+      onDetails: { showCaptureDetails = true },
+      media: storyMediaLayer,
+      identity: storyTopBar
+    )
     .opacity(isCanvasVisible ? 1 : 0.001)
     .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
     .miraStatusBarHidden(true)
     .onAppear {
       armStoryPlaybackForCurrentStory(reason: "story_view_open")
       withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) { isCanvasVisible = true }
-    }
-    .task(id: currentStory?.id) {
-      storyProgressValue = 0
-      guard let story = currentStory else { return }
-      let seconds = Double(story.mediaType == "video" ? max(1, story.durationSeconds ?? 15) : 6)
-      while !Task.isCancelled && storyProgressValue < 1 {
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        guard !Task.isCancelled else { return }
-        if !isStoryPaused && !isReplyFocused && !showStoryMenu && !showViewers && scenePhase == .active {
-          storyProgressValue = min(1, storyProgressValue + CGFloat(0.05 / seconds))
-        }
-      }
-      if !Task.isCancelled { goToNextStory() }
     }
     .task(id: currentStory?.id) {
       guard let id = currentStory?.id else { return }
@@ -1329,6 +1235,22 @@ struct StoryViewerNativeView: View {
     }
     .miraActionModal(isPresented: $showStoryMenu) { dismissMenu in
       MIRAActionModalCard {
+        MIRAActionModalButton(title: "Capture details", systemImage: "info.circle", staggerIndex: 0) {
+          dismissMenu()
+          showCaptureDetails = true
+        }
+        if currentStory?.hasAudio == true {
+          MIRAActionModalButton(title: isStoryAudioPlaying ? "Mute sound" : "Play sound", systemImage: "speaker.wave.2", staggerIndex: 0) {
+            dismissMenu()
+            toggleStoryAudio()
+          }
+        }
+        if currentUserId != currentStory?.userId {
+          MIRAActionModalButton(title: "Reply privately", systemImage: "bubble.left", staggerIndex: 0) {
+            dismissMenu()
+            showPrivateReply = true
+          }
+        }
         if currentUserId == currentStory?.userId {
           MIRAActionModalButton(title: "View viewers", systemImage: "eye", staggerIndex: 0) {
             dismissMenu()
@@ -1349,6 +1271,26 @@ struct StoryViewerNativeView: View {
           }
         }
       }
+    }
+    .sheet(isPresented: $showCaptureDetails) {
+      CaptroCaptureDetailsSheet(api: api, story: currentStory, stamp: captureStamp) { postId in
+        showCaptureDetails = false
+        onOpenLinkedPost(postId)
+      }
+      .presentationDetents([.fraction(0.55)])
+      .presentationDragIndicator(.visible)
+      .presentationBackgroundInteraction(.disabled)
+    }
+    .sheet(isPresented: $showPrivateReply) {
+      VStack(alignment: .leading, spacing: 28) {
+        Text("Private reply").font(.headline).foregroundStyle(.white)
+        storyBottomActions
+        Spacer()
+      }
+      .padding(24).padding(.top, 16)
+      .background(Color.black)
+      .presentationDetents([.height(220)])
+      .presentationDragIndicator(.visible)
     }
     .sheet(isPresented: $showViewers) {
       if let id = currentStory?.id { StoryViewersSheet(api: api, storyId: id) }
@@ -1398,8 +1340,7 @@ struct StoryViewerNativeView: View {
           }
       }
     }
-    .transition(.opacity)
-    .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: currentStory?.id)
+
   }
 
   private var storyThoughtOverlay: some View {
@@ -1503,7 +1444,7 @@ struct StoryViewerNativeView: View {
 
   private func storyRailNeighbor(offset: Int) -> MIRAStoryGroup? {
     let groups = storyRailGroups
-    guard let index = groups.firstIndex(where: { $0.userId == activeGroup.userId }) else { return nil }
+    guard let index = groups.firstIndex(where: { $0.id == activeGroup.id }) else { return nil }
     let neighborIndex = index + offset
     guard groups.indices.contains(neighborIndex) else { return nil }
     return groups[neighborIndex]
@@ -1535,7 +1476,7 @@ struct StoryViewerNativeView: View {
     }
 
     let groups = storyRailGroups
-    if let groupIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) {
+    if let groupIndex = groups.firstIndex(where: { $0.id == activeGroup.id }) {
       for offset in [1] {
         let nextIndex = groupIndex + offset
         guard groups.indices.contains(nextIndex) else { continue }
@@ -1619,9 +1560,9 @@ struct StoryViewerNativeView: View {
     if vertical > 90, abs(vertical) > abs(horizontal) * 1.3 { closeStoryViewer(); return }
     guard abs(horizontal) > 44, abs(horizontal) > abs(vertical) * 1.35 else { return }
     if horizontal < 0 {
-      goToNextStoryGroup()
+      goToNextStory()
     } else {
-      goToPreviousStoryGroup()
+      goToPreviousStory()
     }
   }
 
@@ -1635,77 +1576,54 @@ struct StoryViewerNativeView: View {
 
   private func switchStoryGroup(offset: Int) {
     let groups = storyRailGroups
-    guard let currentIndex = groups.firstIndex(where: { $0.userId == activeGroup.userId }) else { return }
+    guard let currentIndex = groups.firstIndex(where: { $0.id == activeGroup.id }) else { return }
     let nextIndex = currentIndex + offset
     guard groups.indices.contains(nextIndex) else { return }
     selectStoryGroup(groups[nextIndex])
+    if offset < 0 { selectedIndex = max(0, (groups[nextIndex].statuses?.count ?? 1) - 1) }
   }
 
-  private var storyProgress: some View {
-    HStack(spacing: 4) {
-      ForEach(stories.indices, id: \.self) { index in
-        GeometryReader { geometry in
-          Capsule()
-            .fill(.white.opacity(0.35))
-            .overlay(alignment: .leading) {
-              Capsule()
-                .fill(.white)
-                .frame(width: geometry.size.width * (index < selectedIndex ? 1 : index == selectedIndex ? storyProgressValue : 0))
-            }
-        }
-        .frame(height: 2)
-      }
+  private var captureStamp: String {
+    switch currentStory?.linkedItem?.type.lowercased() {
+    case "club": return "CLUB"
+    case "event": return "EVENT"
+    case "meetup": return "MEETUP"
+    case "deal", "offer": return "DEAL"
+    default: return activeGroup.ownerType == "club" ? "CLUB" : "MOMENT"
     }
-    .accessibilityLabel("Story \(selectedIndex + 1) of \(stories.count)")
+  }
+
+  private var captureCounter: String {
+    let preceding = storyRailGroups.prefix { $0.id != activeGroup.id }
+      .reduce(0) { $0 + ($1.statuses?.count ?? 0) }
+    let total = storyRailGroups.reduce(0) { $0 + ($1.statuses?.count ?? 0) }
+    return "\(preceding + selectedIndex + 1) / \(max(1, total))"
   }
 
   private var storyTopBar: some View {
-    HStack(spacing: 11) {
-      RemoteAvatar(url: activeGroup.userProfileImage, size: 38)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(activeGroup.displayName)
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(.white)
-          .lineLimit(1)
-        HStack(spacing: 4) {
-          if activeGroup.ownerType == "club" {
-            Text("Club")
-            Text("·")
-          }
-          Text(storyAge(currentStory?.createdAt))
-          if let location = currentStory?.locationName, !location.isEmpty {
-            Text("·")
-            Text(location).lineLimit(1)
-          }
-        }
-        .font(.system(size: 12, weight: .regular))
-        .foregroundStyle(.white.opacity(0.8))
-      }
-      Spacer()
-      if currentStory?.hasAudio == true {
-        Button { toggleStoryAudio() } label: {
-          Image(systemName: isStoryAudioPlaying ? "speaker.wave.2" : "speaker.slash")
-            .font(.system(size: 17))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-        }
-        .accessibilityLabel(isStoryAudioPlaying ? "Mute story sound" : "Play story sound")
-      }
+    HStack(spacing: 12) {
       Button { showStoryMenu = true } label: {
-        Image(systemName: "ellipsis")
-          .font(.system(size: 19, weight: .medium))
-          .foregroundStyle(.white)
-          .frame(width: 44, height: 44)
+        HStack(spacing: 10) {
+          RemoteAvatar(url: activeGroup.userProfileImage, size: 34)
+          VStack(alignment: .leading, spacing: 3) {
+            Text(activeGroup.displayName).font(.system(size: 14, weight: .semibold)).lineLimit(1)
+            Text((activeGroup.ownerType == "club" ? "Club · " : "") + storyAge(currentStory?.createdAt))
+              .font(.system(size: 11)).foregroundStyle(.white.opacity(0.85))
+          }
+        }
+        .padding(.vertical, 5).padding(.horizontal, 8)
+        .background(.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 6))
       }
-      .accessibilityLabel("Story options")
-      Button { closeStoryViewer() } label: {
-        Image(systemName: "xmark")
-          .font(.system(size: 21, weight: .regular))
-          .foregroundStyle(.white)
+      .accessibilityLabel("\(activeGroup.displayName), capture options")
+      Spacer(minLength: 8)
+      Button(action: closeStoryViewer) {
+        Image(systemName: "xmark").font(.system(size: 19, weight: .regular))
           .frame(width: 44, height: 44)
+          .background(.black.opacity(0.28), in: Circle())
       }
-      .accessibilityLabel("Close story")
+      .accessibilityLabel("Close capture")
     }
+    .foregroundStyle(.white)
     .buttonStyle(.plain)
   }
 
@@ -2019,7 +1937,7 @@ struct StoryViewerNativeView: View {
   private func goToNextStory() {
     guard selectedIndex < stories.count - 1 else {
       let groups = storyRailGroups
-      if let index = groups.firstIndex(where: { $0.userId == activeGroup.userId }), index < groups.count - 1 {
+      if let index = groups.firstIndex(where: { $0.id == activeGroup.id }), index < groups.count - 1 {
         goToNextStoryGroup()
       } else {
         closeStoryViewer()

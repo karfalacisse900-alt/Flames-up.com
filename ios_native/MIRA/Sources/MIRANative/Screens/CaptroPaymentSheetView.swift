@@ -61,10 +61,16 @@ struct CaptroPaymentSheetView: View {
   }
 
   private func prepare() {
-    guard sheet == nil,
+    guard sheet == nil else { return }
+    guard
           ["test", "live"].contains(configuration.mode),
           configuration.publishableKey.hasPrefix("pk_\(configuration.mode)_"),
-          configuration.purchaseId == purchase.id else { return }
+          configuration.purchaseId == purchase.id,
+          configuration.paymentIntentClientSecret.hasPrefix("pi_"),
+          configuration.paymentIntentClientSecret.contains("_secret_") else {
+      message = "Secure checkout could not be verified. Close this screen and try again. Your card has not been charged."
+      return
+    }
     var settings = PaymentSheet.Configuration()
     settings.apiClient = STPAPIClient(publishableKey: configuration.publishableKey)
     settings.merchantDisplayName = configuration.merchantDisplayName

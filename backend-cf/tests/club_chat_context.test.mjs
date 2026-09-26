@@ -24,7 +24,8 @@ test('club room keeps live message transport and only shows supplied activity', 
 
 test('Home status rail is API-backed, neutral, and masked by fixed controls', () => {
   assert.match(home, /try await model\.api\.get\("\/statuses"\)/);
-  assert.match(home, /\.padding\(\.leading, 176\)/);
-  assert.match(home, /\.background\(MIRATheme\.Color\.surface\)\s*\.zIndex\(1\)/);
+  assert.ok(home.includes('.accessibilityIdentifier("home.fixed.controls")'));
+  assert.match(home, /\.clipped\(\)\s*\.accessibilityIdentifier\("home\.story\.rail"\)/);
+  assert.ok(home.includes('.frame(width: 162, alignment: .leading)'));
   assert.doesNotMatch(home.slice(home.indexOf('private var homeTopBar'), home.indexOf('private func homeSectionButton')), /linearGradient|AngularGradient|rainbow/i);
 });

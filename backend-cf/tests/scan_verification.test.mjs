@@ -430,11 +430,12 @@ test('iOS Scan uses centered review, adaptive feedback, and a private reward bal
   assert.match(models, /\/scan\/rewards\/balance/);
   assert.match(models, /\/scan\/receipts\/history/);
   assert.match(models, /\/scan\/receipts\/\\\(id\)\/original/);
-  assert.match(profile, /Receipt Earnings/);
-  assert.match(profile, /My Receipt Submissions/);
-  assert.match(profile, /earningsValue\("Pending", cents: earnings\.pendingRewardCents\)/);
-  assert.match(profile, /Label\("Private", systemImage: "lock\.fill"\)/);
-  assert.match(profile, /Button\("Withdraw"\)/);
+  // Receipt history moved into private activity; do not restore removed Profile shortcuts.
+  assert.match(profile, /struct ProfileActivityNativeView/);
+  assert.ok(profile.includes('Text("Receipt earnings")'));
+  assert.ok(profile.includes('Text("Receipt submissions")'));
+  assert.ok(profile.includes('amount("Pending", cents: earnings.pendingRewardCents)'));
+  assert.ok(profile.includes('CaptroPrivateReceiptOriginal(receiptID: submission.receiptId, api: api)'));
   assert.doesNotMatch(screen, /Verify for \$0\.10/);
   assert.doesNotMatch(scanSources, /Aura/);
 });

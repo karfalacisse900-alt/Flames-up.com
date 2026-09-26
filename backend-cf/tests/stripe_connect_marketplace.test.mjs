@@ -306,7 +306,7 @@ test('native checkout displays saved buyer cards while payout remains debit-only
   assert.match(payments, /Debit and credit cards saved here are available when you pay in Captro/);
   assert.match(payments, /no Stripe account connection is needed for purchases/);
   assert.match(payments, /Credit cards cannot receive payouts/);
-  assert.match(payments, /SELLER PAYOUT CARD/);
+  assert.match(payments, /SELLER SETUP/);
   assert.match(payments, /private var savedDebitCards/);
   assert.match(payments, /funding\.lowercased\(\) == "debit"/);
   assert.match(payments, /Label\("Use /);
