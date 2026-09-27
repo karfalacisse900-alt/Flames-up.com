@@ -10716,8 +10716,8 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
   }
   const purchaseId = isUuidText(purchase?.id || '');
   if (!purchaseId || purchase?.status !== 'payment_pending') throw new Error('CAPTRO_PURCHASE_NOT_PAYABLE');
-  const successUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/success', '/checkout/success');
-  const cancelUrl = allowedStripeReturnUrl(c, 'https://captro.app/checkout/cancelled', '/checkout/cancelled');
+  const successUrl = allowedStripeReturnUrl(c, null, '/checkout/success');
+  const cancelUrl = allowedStripeReturnUrl(c, null, '/checkout/cancelled');
   const currency = cleanText(purchase.currency || 'USD', 3).toLowerCase();
   if(purchase.settlement_model==='deferred') await requireRetainedPlatform(c);
   const stripePriceId = await ensureStripeProductAndPrice(c, purchasable, price);
@@ -19167,7 +19167,8 @@ const beginCommercePurchaseHandler = async (c: any) => {
     priceId = price.id;
     const quantity = body.quantity ?? 1;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 20) return c.json({ detail: 'Choose a valid quantity.', code: 'CAPTRO_QUANTITY_INVALID' }, 400);
-    if (purchasable.payment_model === 'paid' && purchasable.commerce_class === 'digital') {
+    const native = c.req.path.endsWith('/payments/create') || c.req.path.endsWith('/checkout/create-payment-intent') || body.paymentInterface === 'native';
+    if (native && purchasable.payment_model === 'paid' && purchasable.commerce_class === 'digital') {
       return c.json({
         detail: 'Digital-only access must use an App Store purchase. This creator has not configured one yet.',
         code: 'COMMERCE_STOREKIT_REQUIRED',
@@ -19180,7 +19181,6 @@ const beginCommercePurchaseHandler = async (c: any) => {
       sanitizeCommerceSelection(body.selection, purchasable.fulfillment_type),
       purchasable
     );
-    const native = c.req.path.endsWith('/payments/create') || c.req.path.endsWith('/checkout/create-payment-intent') || body.paymentInterface === 'native';
     const suppliedKey = cleanText(body.idempotency_key || body.idempotencyKey, 120);
     if (native && !isUuidText(suppliedKey)) return c.json({ detail: 'A payment request ID is required.', code: 'CAPTRO_IDEMPOTENCY_KEY_REQUIRED' }, 400);
     const idempotencyKey = suppliedKey || `purchase-${uuid()}`;
@@ -19285,7 +19285,7 @@ api.post('/commerce/purchases/:purchaseId/checkout', authMiddleware, async (c) =
     if (!purchase) return c.json({ detail: 'Purchase not found.', code: 'CAPTRO_PURCHASE_NOT_FOUND' }, 404);
     if (purchase.status !== 'payment_pending') return c.json({ purchase: commercePurchasePayload(purchase), checkoutUrl: null });
     const purchasables = await supabaseAdminSelectRows(c, 'app_purchasables', { id: postgrestEqFilter(purchase.purchasable_id) }, '*', 1);
-    if (purchasables[0]?.commerce_class === 'digital') return c.json({ detail: 'App Store checkout is required.', code: 'COMMERCE_STOREKIT_REQUIRED' }, 409);
+    if (purchasables[0]?.commerce_class === 'digital' && purchase.payment_interface === 'native') return c.json({ detail: 'App Store checkout is required.', code: 'COMMERCE_STOREKIT_REQUIRED' }, 409);
     if (purchase.payment_interface === 'native') {
       const paymentSheet = await createCommercePaymentIntent(c, purchase);
       c.header('Cache-Control', 'private, no-store');

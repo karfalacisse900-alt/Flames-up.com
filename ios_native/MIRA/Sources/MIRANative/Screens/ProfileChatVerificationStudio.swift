@@ -435,11 +435,6 @@ public struct ProfileNativeView: View {
             destination: chatDestination.miraHideTabBarOnAppear()
           )
           ProfileToolbarDestinationButton(
-            systemImage: "checkmark.shield",
-            accessibilityLabel: "Verification",
-            destination: VerificationNativeView(api: model.api)
-          )
-          ProfileToolbarDestinationButton(
             systemImage: "gearshape",
             accessibilityLabel: "Settings",
             destination: SettingsNativeView(

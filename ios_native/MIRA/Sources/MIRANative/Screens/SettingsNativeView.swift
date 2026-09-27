@@ -316,7 +316,7 @@ public struct SettingsNativeView: View {
 
         SettingsCard(title: "Support & safety") {
           SettingsNavigationRow(title: "Help & support", subtitle: "", systemImage: "questionmark.circle", destination: SupportSettingsNativeView())
-          SettingsNavigationRow(title: "Safety & reporting", subtitle: "", systemImage: "shield", destination: SafetySettingsNativeView(api: model.api))
+          SettingsNavigationRow(title: "Safety & reporting", subtitle: "", systemImage: "shield", destination: SafetySettingsNativeView(model: model))
         }
         SettingsCard(title: "Legal") {
           SettingsNavigationRow(
@@ -416,7 +416,7 @@ private struct PrivacySettingsNativeView: View {
       SettingsCard(title: "Privacy tools") {
         SettingsNavigationRow(title: "Blocked accounts", subtitle: "Review and unblock people.", systemImage: "person.crop.circle.badge.xmark", destination: BlockedAccountsNativeView(api: model.api))
         SettingsNavigationRow(title: "Privacy Policy", subtitle: "Read how data is handled", systemImage: "hand.raised", destination: PrivacyPolicyView())
-        SettingsNavigationRow(title: "Safety & Reporting", subtitle: "Report abuse or unsafe behavior", systemImage: "shield.lefthalf.filled", destination: SafetyReportingView())
+        SettingsNavigationRow(title: "Safety & Reporting", subtitle: "Report abuse or unsafe behavior", systemImage: "shield.lefthalf.filled", destination: SafetySettingsNativeView(model: model))
         SettingsLinkRow(title: "Data deletion", subtitle: "Learn how account deletion works", systemImage: "trash", url: MIRAProductionBackend.siteURL("data-deletion"))
       }
       if let message = model.bannerMessage {
@@ -775,13 +775,27 @@ private struct SupportSettingsNativeView: View {
 }
 
 private struct SafetySettingsNativeView: View {
-  let api: MIRAAPIClient
+  @ObservedObject var model: SettingsNativeModel
   var body: some View {
-    SettingsDetailScaffold(title: "Safety & reporting") {
-      SettingsCard(title: "Safety tools") {
-        SettingsNavigationRow(title: "Blocked accounts", subtitle: "", systemImage: "person.crop.circle.badge.xmark", destination: BlockedAccountsNativeView(api: api))
-        SettingsNavigationRow(title: "How to report", subtitle: "", systemImage: "flag", destination: SafetyReportingView())
-        SettingsLinkRow(title: "Ask about a report", subtitle: "Contact the safety team", systemImage: "envelope", url: captroSupportURL(subject: "Safety report follow-up"))
+    SettingsDetailScaffold(title: "Safety") {
+      Section {
+        Text("Tools and resources to help you stay safe on Captro.")
+          .font(.body)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .listRowBackground(Color.clear)
+      }
+      SettingsCard(title: "Get support") {
+        SettingsLinkRow(title: "Report content", subtitle: "Report unsafe content or behavior.", systemImage: "flag", url: captroSupportURL(subject: "Report content"))
+        SettingsNavigationRow(title: "Blocked accounts", subtitle: "Manage people you have blocked.", systemImage: "person.crop.circle.badge.xmark", destination: BlockedAccountsNativeView(api: model.api))
+        SettingsNavigationRow(title: "Chat safety", subtitle: "Tips for safer conversations.", systemImage: "bubble.left.and.bubble.right", destination: ChatSafetyNativeView())
+        SettingsNavigationRow(title: "Account security", subtitle: "Protect your account.", systemImage: "lock", destination: SecuritySettingsNativeView(model: model))
+        SettingsLinkRow(title: "Contact Support", subtitle: "Get help from Captro.", systemImage: "envelope", url: captroSupportURL(subject: "Safety support"))
+      }
+      SettingsCard(title: "Policies") {
+        SettingsNavigationRow(title: "Community Guidelines", subtitle: "Our rules for a respectful community.", systemImage: "person.2", destination: CommunityGuidelinesView())
+        SettingsNavigationRow(title: "Safety & Reporting Policy", subtitle: "How Captro handles reports.", systemImage: "shield", destination: SafetyReportingView())
+        SettingsNavigationRow(title: "Terms of Service", subtitle: "The rules for using Captro.", systemImage: "doc.text", destination: TermsOfServiceView())
+        SettingsNavigationRow(title: "Privacy Policy", subtitle: "How Captro handles information.", systemImage: "hand.raised", destination: PrivacyPolicyView())
       }
       Section {
         Text("For immediate danger, contact local emergency services. Captro is not an emergency service.").font(.footnote).foregroundStyle(.secondary)

@@ -1116,8 +1116,8 @@ public struct MainFeedView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Create post")
       }
-      .frame(width: 162, alignment: .leading)
-      .padding(.leading, 14)
+      .frame(width: 158, alignment: .leading)
+      .padding(.leading, 8)
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("home.fixed.controls")
 
@@ -1161,14 +1161,14 @@ public struct MainFeedView: View {
         if let clubName {
           Circle()
             .fill(MIRATheme.Color.surfaceSoft)
-            .frame(width: 60, height: 60)
+            .frame(width: 64, height: 64)
             .overlay {
               Text(String(clubName.prefix(2)).uppercased())
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(MIRATheme.Color.textPrimary)
             }
         } else {
-          RemoteAvatar(url: url, size: 60)
+          RemoteAvatar(url: url, size: 64)
         }
       }
       .padding(3)
@@ -1182,7 +1182,7 @@ public struct MainFeedView: View {
           .overlay(Circle().stroke(MIRATheme.Color.surface, lineWidth: 2))
       }
     }
-    .frame(width: 68, height: 68)
+    .frame(width: 72, height: 72)
     .contentShape(Circle())
   }
 

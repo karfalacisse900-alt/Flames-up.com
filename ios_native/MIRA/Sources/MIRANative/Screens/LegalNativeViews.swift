@@ -58,13 +58,13 @@ private enum CaptroLegalPage: CaseIterable, Hashable {
   var summary: String {
     switch self {
     case .terms:
-      return "The rules for using Captro, posting photos and videos, using chat, and participating safely in Feed, Profile, Discover, Stories, and gallery-style experiences."
+      return "These Terms explain the rules for using Captro, including posting, messaging, purchases, and other app features."
     case .privacy:
-      return "How Captro collects, uses, shares, protects, and retains account, media, chat, location, device, and safety information."
+      return "How Captro collects, uses, protects, and retains your information."
     case .communityGuidelines:
-      return "The culture and safety rules for posts, comments, chat, Discover, stories, check-ins, profiles, and gallery content."
+      return "These guidelines help keep Captro safe and respectful."
     case .safety:
-      return "How to report content, block users, stay safer in chat, and understand what may happen after a report."
+      return "How Captro handles reports and helps protect its community."
     }
   }
 
@@ -98,6 +98,32 @@ public struct SafetyReportingView: View {
   public var body: some View { LegalDocumentView(page: .safety) }
 }
 
+struct ChatSafetyNativeView: View {
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 22) {
+        Text("Chat safety")
+          .font(.title.weight(.bold))
+          .accessibilityAddTraits(.isHeader)
+        if let section = safetySections.first(where: { $0.title == "Chat Safety" }) {
+          PolicySection(section: section)
+        }
+      }
+      .frame(maxWidth: 640, alignment: .leading)
+      .padding(.horizontal, 20)
+      .padding(.top, 14)
+      .padding(.bottom, 36)
+      .frame(maxWidth: .infinity)
+      .textSelection(.enabled)
+    }
+    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .navigationTitle("Chat safety")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.visible, for: .navigationBar)
+    .miraHideTabBarOnAppear()
+  }
+}
+
 private struct LegalDestinationView: View {
   let page: CaptroLegalPage
 
@@ -116,20 +142,24 @@ private struct LegalDocumentView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 24) {
-        legalHero
+      VStack(alignment: .leading, spacing: 0) {
+        PolicyHeader(page: page)
+          .padding(.bottom, 24)
 
-        ForEach(page.sections) { section in
-          LegalSectionCard(section: section)
+        ForEach(page.sections.indices, id: \.self) { index in
+          if index > 0 { PolicyDivider().padding(.vertical, 22) }
+          PolicySection(section: page.sections[index])
         }
 
-        supportCard
+        PolicyDivider().padding(.vertical, 22)
+        supportAction
         LegalFooterLinks(current: page)
+          .padding(.top, 30)
       }
       .frame(maxWidth: 640, alignment: .leading)
       .padding(.horizontal, 20)
-      .padding(.top, 16)
-      .padding(.bottom, MIRATheme.Space.xxl)
+      .padding(.top, 14)
+      .padding(.bottom, 36)
       .frame(maxWidth: .infinity)
       .textSelection(.enabled)
     }
@@ -140,56 +170,67 @@ private struct LegalDocumentView: View {
     .miraHideTabBarOnAppear()
   }
 
-  private var legalHero: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-        VStack(alignment: .leading, spacing: 6) {
-          Text(page.title)
-            .font(.title2.weight(.semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityAddTraits(.isHeader)
-          Text("Last updated: \(captroLegalLastUpdated)")
-            .font(.footnote)
-            .foregroundStyle(MIRATheme.Color.textMuted)
-        }
-
-      Text(page.summary)
-        .font(.body)
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .lineSpacing(3)
-        .fixedSize(horizontal: false, vertical: true)
-
-    }
-  }
-
-  private var supportCard: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
-      Text("Questions or Requests")
+  private var supportAction: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Questions or requests")
         .font(.headline)
-        .accessibilityAddTraits(.isHeader)
         .foregroundStyle(MIRATheme.Color.textPrimary)
-      Text("For support, safety, privacy, account deletion, or legal questions, contact Captro support.")
-        .font(.body)
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .fixedSize(horizontal: false, vertical: true)
-      Link(captroSupportEmail, destination: URL(string: "mailto:\(captroSupportEmail)")!)
+        .accessibilityAddTraits(.isHeader)
+      Link(destination: URL(string: "mailto:\(captroSupportEmail)")!) {
+        HStack {
+          Text("Contact Support")
+          Spacer()
+          Image(systemName: "arrow.up.right")
+        }
         .font(.body)
         .foregroundStyle(MIRATheme.Color.forest)
-        .frame(minHeight: 44, alignment: .leading)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+      }
       Text(captroLegalDisclaimer)
         .font(.footnote)
         .foregroundStyle(MIRATheme.Color.textMuted)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(.top, MIRATheme.Space.xs)
     }
   }
 }
 
-private struct LegalSectionCard: View {
+private struct PolicyHeader: View {
+  let page: CaptroLegalPage
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      Text(page.title)
+        .font(.title.weight(.bold))
+        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityAddTraits(.isHeader)
+      Text("Updated \(captroLegalLastUpdated)")
+        .font(.footnote)
+        .foregroundStyle(MIRATheme.Color.textMuted)
+      Text(page.summary)
+        .font(.body)
+        .foregroundStyle(MIRATheme.Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 16)
+    }
+  }
+}
+
+private struct PolicyDivider: View {
+  var body: some View {
+    Rectangle()
+      .fill(MIRATheme.Color.hairline)
+      .frame(height: 0.5)
+      .accessibilityHidden(true)
+  }
+}
+
+private struct PolicySection: View {
   let section: LegalSection
 
   var body: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
+    VStack(alignment: .leading, spacing: 9) {
       Text(section.title)
         .font(.headline)
         .foregroundStyle(MIRATheme.Color.textPrimary)
@@ -199,27 +240,27 @@ private struct LegalSectionCard: View {
         Text(paragraph)
           .font(.body)
           .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineSpacing(3)
+          .lineSpacing(2)
           .fixedSize(horizontal: false, vertical: true)
+          .padding(.bottom, 3)
       }
 
       if !section.bullets.isEmpty {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
           ForEach(Array(section.bullets.enumerated()), id: \.offset) { _, bullet in
-            HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
-              Circle()
-                .fill(MIRATheme.Color.forest)
-                .frame(width: 5, height: 5)
-                .padding(.top, 8)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+              Text("•")
+                .font(.body)
+                .foregroundStyle(MIRATheme.Color.textPrimary)
               Text(bullet)
                 .font(.body)
                 .foregroundStyle(MIRATheme.Color.textSecondary)
-                .lineSpacing(3)
+                .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
             }
           }
         }
-        .padding(.top, MIRATheme.Space.xs)
+        .padding(.top, 2)
       }
     }
   }
@@ -584,7 +625,7 @@ private let safetySections: [LegalSection] = [
     bullets: [
       "Choose the closest report reason and include helpful context when the app allows it.",
       "The reported user should not be told who reported them by Captro.",
-      "For urgent support or account issues, contact karfalacisse900@gmail.com."
+      "For urgent support or account issues, use Contact Support in Safety settings."
     ]
   ),
   LegalSection(

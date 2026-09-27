@@ -1763,6 +1763,11 @@ public struct CreatePostNativeView: View {
           Text("In person / service").tag(true)
           Text("Digital access").tag(false)
         }
+        if !commerceDraft.isUsedOutsideApp {
+          Text("US App Store buyers open a secure browser checkout. Other regions may require an App Store product.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
         TextField("Refund / cancellation policy (optional)", text: $commerceDraft.refundPolicy, axis: .vertical)
           .lineLimit(2...4)
       }

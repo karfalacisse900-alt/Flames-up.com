@@ -472,6 +472,7 @@ private struct CaptroCommercePurchaseRequest: Encodable {
   let quantity: Int
   let idempotencyKey: String
   let selection: CaptroCommerceSelection
+  let paymentInterface: String?
 }
 
 public struct CaptroCommerceSelection: Encodable, Hashable {
@@ -692,15 +693,17 @@ extension MIRAAPIClient {
     priceId: String,
     quantity: Int = 1,
     selection: CaptroCommerceSelection = CaptroCommerceSelection(),
-    idempotencyKey: String
+    idempotencyKey: String,
+    useHostedCheckout: Bool = false
   ) async throws -> CaptroCommerceActionResponse {
-    try await post("/payments/create", body: CaptroCommercePurchaseRequest(
+    try await post(useHostedCheckout ? "/commerce/purchases" : "/payments/create", body: CaptroCommercePurchaseRequest(
       postId: postId,
       purchasableId: commerce.id,
       priceId: priceId,
       quantity: quantity,
       idempotencyKey: idempotencyKey,
-      selection: selection
+      selection: selection,
+      paymentInterface: useHostedCheckout ? "checkout" : "native"
     ))
   }
 

@@ -33,7 +33,7 @@ struct CaptroCommerceEditorFields: View {
             }
             .pickerStyle(.segmented)
             if !draft.isUsedOutsideApp {
-              Text("Paid digital access needs an App Store product before buyers can check out. Free digital groups and clubs work now.")
+              Text("US App Store buyers open a secure browser checkout. Other App Store regions may require an App Store product before buyers can pay.")
                 .font(.system(size: 12))
                 .foregroundStyle(MIRATheme.Color.textMuted)
                 .fixedSize(horizontal: false, vertical: true)

@@ -67,11 +67,28 @@ final class SettingsSystemTests: XCTestCase {
     capture(app, "settings-dark-accessibility")
     tapRow("Privacy Policy", app: app)
     XCTAssertTrue(app.navigationBars["Privacy"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Updated September 12, 2026"].exists)
+    XCTAssertTrue(app.staticTexts["Age and Children"].exists)
     XCTAssertFalse(app.tabBars.firstMatch.isHittable)
     capture(app, "privacy-document-dark-accessibility")
     app.swipeUp(); capture(app, "privacy-document-scrolled")
     app.navigationBars.buttons.firstMatch.tap()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+  }
+
+  func testSafetyToolsAndGuidelinesNavigation() {
+    let app = launch(["--captro-quality-settings"])
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
+    tapRow("Safety & reporting", app: app)
+    XCTAssertTrue(app.navigationBars["Safety"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Blocked accounts'")).firstMatch.exists)
+    XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Contact Support'")).firstMatch.exists)
+    capture(app, "safety-tools")
+    tapRow("Community Guidelines", app: app)
+    XCTAssertTrue(app.navigationBars["Guidelines"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Updated September 12, 2026"].exists)
+    XCTAssertFalse(app.tabBars.firstMatch.isHittable)
+    capture(app, "community-guidelines")
   }
   func testWelcomeLoginSignupAndBack() {
     let app = launch(["--captro-quality-auth"])

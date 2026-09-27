@@ -156,10 +156,11 @@ test('purchase snapshots are immutable inputs and payment confirmation alone iss
   assert.doesNotMatch(worker, /success_url[\s\S]{0,300}captro_create_entitlement_for_purchase/);
 });
 
-test('digital goods cannot enter external card checkout while outside-app goods can', () => {
-  assert.match(worker, /purchasable\.payment_model === 'paid' && purchasable\.commerce_class === 'digital'/);
+test('digital access uses hosted checkout while native card checkout remains gated', () => {
+  assert.match(worker, /if \(native && purchasable\.payment_model === 'paid' && purchasable\.commerce_class === 'digital'\)/);
   assert.match(worker, /COMMERCE_STOREKIT_REQUIRED/);
-  assert.match(worker, /purchasables\[0\]\?\.commerce_class === 'digital'/);
+  assert.match(worker, /purchasables\[0\]\?\.commerce_class === 'digital' && purchase\.payment_interface === 'native'/);
+  assert.match(worker, /createCommerceCheckoutSession\(c, purchase\)/);
   assert.match(editor, /In person \/ service/);
   assert.match(editor, /Digital access/);
 });

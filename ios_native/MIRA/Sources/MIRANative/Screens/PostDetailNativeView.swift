@@ -1,4 +1,5 @@
 import SwiftUI
+import StoreKit
 import UIKit
 import os
 
@@ -102,6 +103,18 @@ final class PostDetailModel: ObservableObject {
     commerceError = nil
     defer { isUpdatingCommerce = false }
     do {
+      let isPaidDigitalAccess = commerce.paymentModel == "paid" && commerce.commerceClass == "digital"
+      let useHostedCheckout: Bool
+      if isPaidDigitalAccess {
+        let storefront = await Storefront.current
+        guard storefront?.countryCode == "USA" else {
+          commerceError = "This digital access cannot be purchased in the app for your App Store region yet."
+          return
+        }
+        useHostedCheckout = true
+      } else {
+        useHostedCheckout = false
+      }
       let response: CaptroCommerceActionResponse
       if commerce.requiresPaymentContinuation, let purchaseId = commerce.viewerPurchaseId {
         response = try await api.continueCommerceCheckout(purchaseId: purchaseId)
@@ -119,7 +132,8 @@ final class PostDetailModel: ObservableObject {
           priceId: priceId,
           quantity: quantity,
           selection: selection,
-          idempotencyKey: paymentRequestKey!
+          idempotencyKey: paymentRequestKey!,
+          useHostedCheckout: useHostedCheckout
         )
       }
       commercePurchase = response.purchase
