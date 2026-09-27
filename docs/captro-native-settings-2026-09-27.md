@@ -22,7 +22,7 @@ Active app: SwiftUI `Captro` scheme in `ios_native/MIRA`, bundle `com.captro.app
 
 The former activity-status, message-request, story-reply and per-category notification switches only wrote local preferences; no other code consumed those values. They were not real controls. They are no longer presented as if they change server behavior.
 
-This pass does **not** implement missing two-factor enrollment, an active-session management API, per-category server notification preferences, muted-account management, phone-number editing, discovery-radius preferences, or self-service account export/deactivation. Data requests and report follow-up use the existing support address. No dead rows or fake success states were added for those features.
+This pass does **not** implement missing two-factor enrollment, an active-session management API, per-category server notification preferences, muted-account management, phone-number editing, discovery-radius preferences, or self-service account export/deactivation. Data requests and report follow-up use the existing support address. A dedicated licenses listing was not added. No dead rows or fake success states were added for those features.
 
 ## Files
 
@@ -40,6 +40,33 @@ All Swift paths above are relative to `ios_native/MIRA/Sources/MIRANative`, exce
 
 ## Validation
 
-Native build/UI validation is being run on GitHub's macOS 26 runner with the iPhone 17 simulator. Final results and artifact references will be recorded after the runs complete. These UI-only tests do not submit credentials, modify production account settings, or perform payments.
+Native validation uses GitHub's macOS 26 runner, Xcode and the iPhone 17 simulator (iOS 26). These UI-only tests do not submit credentials, modify production account settings, or perform payments. Screenshots therefore include the honest unauthenticated/error state, not a fabricated signed-in profile or fake cards.
+
+- Source `3cbacfd3`: [native Settings validation](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/36354171378) passed all five UI tests. They exercise buyer/seller separation and logout cancellation; dark/accessibility-size legal documents; native back/swipe-back, hidden tabs and email/password validation; separate Appearance/Storage and cache cancellation; welcome/login/signup/back navigation.
+- Source `3cbacfd3`: [Home/Stamp regression](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/36354171371) passed 37 unit tests and two UI tests.
+- An earlier Settings run exposed an iOS 26 confirmation-dialog adaptation: the system showed a dismissible popover without a Cancel button. Cache clearing and main Settings logout now use native alerts with explicit Cancel actions; the rerun passed.
+- Reviewed actual simulator screenshots of main Settings, Security, login/signup/welcome, dark large-text legal documents, buyer payment methods and cache confirmation. Tightened list row/top insets and removed the nested decorative error container based on those screenshots.
+- Final source `fc844783`: [Settings validation](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/36354702983) passed all five UI tests; [Home/Stamp regression](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/36354702809) also passed. This includes the fractional-second-aware purchase date parsing update.
+
+Test runtimes are not app responsiveness benchmarks. No physical-device frame-rate, tap-latency or launch-time claim is made. iOS 26 renders its standard native back control with a system background; Captro no longer supplies a custom floating circular back button for these screens.
 
 No dependencies, migrations, production API deployments, payment configuration changes, or payout schedule changes are required by this refactor. A physical iPhone is not available in this environment; device, VoiceOver, authenticated account-change and live Stripe-management testing remain distinct acceptance checks.
+
+## TestFlight delivery
+
+- Release source: `fc844783440b46ea947ab402b961ae49bc677a9b`.
+- Version/build: **1.0.1 (499.1)**.
+- [Release build and upload](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/36355937872): succeeded. IPA export succeeded; Apple upload reported `UPLOAD SUCCEEDED with no errors` at 22:52:18 UTC on September 27, 2026.
+- [Read-only Apple status verification](https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/36357028799), September 27 at 22:57:21 UTC: build `499.1`, version `1.0.1`, processing `VALID`, internal state `IN_BETA_TESTING`, assigned to `Captro private` and `Captro private2`. External state is `READY_FOR_BETA_SUBMISSION`; this is not an external-beta approval or public App Store release.
+
+## Actual simulator captures
+
+These are captures from the final-source validation run, not mockups. The unsigned test host intentionally shows real account-loading errors where authentication is required.
+
+- [Main Settings](C:/Users/The-s/AppData/Local/Temp/captro-settings-final/settings-screenshots/settings-main-light.png)
+- [Security menu](C:/Users/The-s/AppData/Local/Temp/captro-settings-final/settings-screenshots/settings-security-menu.png)
+- [Appearance](C:/Users/The-s/AppData/Local/Temp/captro-settings-final/settings-screenshots/settings-appearance.png)
+- [Login](C:/Users/The-s/AppData/Local/Temp/captro-settings-final/settings-screenshots/login-native.png)
+- [Signup](C:/Users/The-s/AppData/Local/Temp/captro-settings-final/settings-screenshots/signup-native.png)
+
+The screenshots also remain in the final-source GitHub validation artifact; local temporary copies are not permanent repository assets.
