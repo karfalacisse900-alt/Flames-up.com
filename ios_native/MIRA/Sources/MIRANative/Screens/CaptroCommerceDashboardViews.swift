@@ -587,10 +587,9 @@ struct CaptroEarningsView: View {
          let pending = value.balance.pending {
         HStack(spacing: 28) {
           balanceValue("Available", amount: available, currency: value.balance.currency)
-          balanceValue("Pending", amount: pending, currency: value.balance.currency)
+          balanceValue("Pending", amount: pending + (value.balance.clearing ?? 0), currency: value.balance.currency)
         }
         HStack(spacing: 28) {
-          balanceValue("Clearing", amount: value.balance.clearing ?? 0, currency: value.balance.currency)
           balanceValue("Paid out", amount: value.balance.paidOut ?? 0, currency: value.balance.currency)
         }
         Text("Pending earnings are not withdrawable. Completed sales clear after review; withdrawals depend on Stripe eligibility.")
@@ -728,7 +727,7 @@ struct CaptroEarningsView: View {
                 Text(earning.title).font(.system(size: 15, weight: .semibold)).lineLimit(2)
                 Text("\(earning.contentType.replacingOccurrences(of: "_", with: " ").capitalized) · \(CaptroCommerceDate.short(earning.purchasedAt))")
                   .font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
-                Text(earning.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                Text(earning.financeStatusLabel)
                   .font(.system(size: 11)).foregroundStyle(CaptroDetailStyle.secondary)
               }
               Spacer(minLength: 8)

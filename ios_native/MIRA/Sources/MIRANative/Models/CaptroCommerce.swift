@@ -620,6 +620,16 @@ public struct CaptroCreatorEarning: Decodable, Hashable, Identifiable {
   public let availableAt: String?
   public let purchasedAt: String?
 
+  public let financeStatus: String?
+  public var financeStatusLabel: String {
+    if ["refunded", "reversed"].contains(status) { return "Refunded" }
+    switch financeStatus ?? status {
+    case "paid", "paid_out": return "Paid out"
+    case "available", "transferred": return "Available"
+    case "refunded", "reversed": return "Refunded" // Transaction exception, not a money pool.
+    default: return "Pending"
+    }
+  }
   public var netCreatorAmount: Int { max(0, creatorAmount - refundedAmount - (status == "reversed" ? disputedAmount ?? 0 : 0)) }
 }
 
