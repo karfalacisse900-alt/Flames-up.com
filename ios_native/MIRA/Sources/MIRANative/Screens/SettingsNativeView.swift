@@ -352,7 +352,11 @@ public struct SettingsNativeView: View {
     }
     .task { await model.load() }
     .refreshable { await model.load() }
-    .confirmationDialog("Log out of Captro?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+    .onChange(of: model.user) { _, updated in
+      guard let updated, let profileModel, profileModel.user?.id == updated.id else { return }
+      Task { await profileModel.applyUpdatedUser(updated) }
+    }
+    .alert("Log out of Captro?", isPresented: $showLogoutConfirm) {
       Button("Log out", role: .destructive) { model.logout() }
       Button("Cancel", role: .cancel) {}
     }
@@ -1213,10 +1217,11 @@ private struct StorageSettingsNativeView: View {
         .disabled(isClearingMediaCache)
         if let cacheNotice { SettingsBanner(message: cacheNotice, isError: cacheClearFailed) }
       }
-      Text("This removes downloaded media copies only. Your posts, account and unfinished uploads are kept.")
-        .font(.footnote).foregroundStyle(.secondary)
+      Section {} footer: {
+        Text("This removes downloaded media copies only. Your posts, account and unfinished uploads are kept.")
+      }
     }
-    .confirmationDialog("Clear downloaded media?", isPresented: $confirmClear, titleVisibility: .visible) {
+    .alert("Clear downloaded media?", isPresented: $confirmClear) {
       Button("Clear cache", role: .destructive) {
           guard !isClearingMediaCache else { return }
           isClearingMediaCache = true
@@ -1246,10 +1251,12 @@ struct SettingsDetailScaffold<Content: View>: View {
     List {
       content
         .listRowBackground(MIRATheme.Color.surfaceSoft)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
     }
     .listStyle(.insetGrouped)
     .listSectionSpacing(16)
     .contentMargins(.horizontal, 16, for: .scrollContent)
+    .contentMargins(.top, 8, for: .scrollContent)
     .scrollContentBackground(.hidden)
     .scrollDismissesKeyboard(.interactively)
     .environment(\.defaultMinListRowHeight, 52)
@@ -1467,10 +1474,7 @@ private struct SettingsBanner: View {
       Spacer()
     }
     .foregroundStyle(isError ? Color.red : MIRATheme.Color.forest)
-    .padding(.horizontal, 14)
-    .padding(.vertical, 12)
-    .background((isError ? Color.red : MIRATheme.Color.forest).opacity(0.08))
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small, style: .continuous))
+    .padding(.vertical, 8)
   }
 }
 

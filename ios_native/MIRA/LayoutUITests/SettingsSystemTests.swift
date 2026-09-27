@@ -87,4 +87,23 @@ final class SettingsSystemTests: XCTestCase {
     XCTAssertTrue(app.textFields["Username"].waitForExistence(timeout: 5))
     capture(app, "signup-native")
   }
+
+  func testBuyerMethodsRemainSeparateAndLogoutCanCancel() {
+    let app = launch(["--captro-quality-settings"])
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 15))
+    tapRow("Payments & payouts", app: app)
+    XCTAssertTrue(app.navigationBars["Payments & payouts"].waitForExistence(timeout: 5))
+    tapRow("Payment methods", app: app)
+    XCTAssertTrue(app.navigationBars["Payment methods"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["Add payment method"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Continue setup"].exists)
+    capture(app, "buyer-payment-methods")
+    app.navigationBars.buttons.firstMatch.tap()
+    app.navigationBars.buttons.firstMatch.tap()
+    tapRow("Log out", app: app)
+    XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+    capture(app, "logout-confirmation")
+    app.buttons["Cancel"].tap()
+    XCTAssertTrue(app.navigationBars["Settings"].exists)
+  }
 }
