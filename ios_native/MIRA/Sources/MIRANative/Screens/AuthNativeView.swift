@@ -17,7 +17,6 @@ public struct AuthNativeView: View {
   @State private var username = ""
   @State private var fullName = ""
   @State private var isCreatingAccount = false
-  @State private var selectedWelcomePage = 0
   @State private var isAuthPanelVisible = false
   @State private var isForgotPasswordVisible = false
   @State private var forgotPasswordEmail = ""
@@ -37,8 +36,7 @@ public struct AuthNativeView: View {
 
   public var body: some View {
     NavigationStack {
-      CaptroWelcomePager(
-        selectedPage: $selectedWelcomePage,
+      CaptroWelcomeView(
         onLogin: { presentAuthPanel(createAccount: false) },
         onSignup: { presentAuthPanel(createAccount: true) },
         onGuest: { session.continueAsGuest() }
@@ -91,16 +89,7 @@ public struct AuthNativeView: View {
     CaptroHaptics.light()
     session.errorMessage = nil
     isCreatingAccount = createAccount
-    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-      isAuthPanelVisible = true
-    }
-  }
-
-  private func closeAuthPanel() {
-    CaptroHaptics.light()
-    withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-      isAuthPanelVisible = false
-    }
+    isAuthPanelVisible = true
   }
 
   private var formBlock: some View {
@@ -141,6 +130,7 @@ public struct AuthNativeView: View {
       }
       .buttonStyle(.miraPress)
       .disabled(session.isWorking || !canSubmit)
+      .opacity(session.isWorking || !canSubmit ? 0.55 : 1)
 
       Button {
         withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
@@ -162,15 +152,13 @@ public struct AuthNativeView: View {
           forgotPasswordNotice = ""
           session.errorMessage = nil
           CaptroHaptics.light()
-          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-            isForgotPasswordVisible = true
-          }
+          isForgotPasswordVisible = true
         } label: {
           Text("Forgot password?")
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.forest)
             .frame(maxWidth: .infinity)
-            .frame(height: 40)
+            .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
       }
@@ -560,8 +548,7 @@ public struct AuthNativeView: View {
 }
 
 
-private struct CaptroWelcomePager: View {
-  @Binding var selectedPage: Int
+private struct CaptroWelcomeView: View {
   let onLogin: () -> Void
   let onSignup: () -> Void
   let onGuest: () -> Void

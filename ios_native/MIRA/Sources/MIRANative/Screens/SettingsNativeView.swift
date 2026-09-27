@@ -427,6 +427,8 @@ private struct BlockedAccountsNativeView: View {
   @State private var rows: [SettingsBlockedAccount] = []
   @State private var isLoading = false
   @State private var errorMessage: String?
+  @State private var pendingUnblock: SettingsBlockedAccount?
+  @State private var isUnblocking = false
 
   var body: some View {
     SettingsDetailScaffold(title: "Blocked accounts") {
@@ -440,7 +442,7 @@ private struct BlockedAccountsNativeView: View {
               .redacted(reason: .placeholder)
             }
           }
-        } else if rows.isEmpty {
+        } else if rows.isEmpty && errorMessage == nil {
           VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
             Image(systemName: "person.crop.circle.badge.checkmark")
               .font(.system(size: 24, weight: .semibold))
@@ -462,9 +464,21 @@ private struct BlockedAccountsNativeView: View {
 
       if let errorMessage {
         SettingsBanner(message: errorMessage, isError: true)
+        Button("Try again") { Task { await load() } }
+          .disabled(isLoading || isUnblocking)
       }
     }
     .task { await load() }
+    .refreshable { await load() }
+    .confirmationDialog("Unblock this account?", isPresented: Binding(
+      get: { pendingUnblock != nil },
+      set: { if !$0 { pendingUnblock = nil } }
+    ), titleVisibility: .visible) {
+      if let row = pendingUnblock {
+        Button("Unblock") { Task { await unblock(row) } }
+      }
+      Button("Cancel", role: .cancel) { pendingUnblock = nil }
+    }
   }
 
   private func blockedRow(_ row: SettingsBlockedAccount) -> some View {
@@ -482,17 +496,16 @@ private struct BlockedAccountsNativeView: View {
       }
       Spacer()
       Button {
-        Task { await unblock(row) }
+        pendingUnblock = row
       } label: {
         Text("Unblock")
-          .font(.system(size: 12, weight: .bold))
-          .foregroundStyle(.white)
+          .font(.subheadline.weight(.medium))
+          .foregroundStyle(MIRATheme.Color.forest)
           .padding(.horizontal, 12)
-          .frame(height: 30)
-          .background(MIRATheme.Color.forest)
-          .clipShape(Capsule())
+          .frame(minHeight: 44)
       }
-      .buttonStyle(.miraPress)
+      .buttonStyle(.borderless)
+      .disabled(isUnblocking)
     }
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
@@ -515,6 +528,9 @@ private struct BlockedAccountsNativeView: View {
 
   @MainActor
   private func unblock(_ row: SettingsBlockedAccount) async {
+    guard !isUnblocking else { return }
+    isUnblocking = true
+    defer { isUnblocking = false }
     do {
       let _: SettingsMessageResponse = try await api.delete("/users/\(row.blockedId)/block")
       rows.removeAll { $0.id == row.id }
@@ -876,8 +892,6 @@ private struct DeleteAccountNativeView: View {
           warningRow("Signing in during that window lets you restore the account.")
           warningRow("After permanent deletion, old posts, followers, likes, messages, username, and media are not restored.")
         }
-        .padding(16)
-        .settingsPillSurface(cornerRadius: 28)
       }
 
       SettingsCard(title: "Confirm") {
@@ -885,8 +899,9 @@ private struct DeleteAccountNativeView: View {
           .font(.system(size: 13, weight: .semibold))
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .padding(.horizontal, 8)
-        SettingsTextField(title: "DELETE", text: $confirmation)
+        TextField("DELETE", text: $confirmation)
           .textInputAutocapitalization(.characters)
+          .autocorrectionDisabled()
       }
 
       if needsOAuthReauth {
@@ -911,7 +926,7 @@ private struct DeleteAccountNativeView: View {
         }
       } else {
         SettingsCard(title: "Password") {
-          SettingsSecureField(title: "Current password", text: $password)
+          SecureField("Current password", text: $password).textContentType(.password)
           Text("Recent authentication is required before Captro can schedule deletion.")
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textMuted)
@@ -985,7 +1000,7 @@ private struct DeleteAccountNativeView: View {
     }
     .signInWithAppleButtonStyle(.black)
     .frame(height: 52)
-    .clipShape(Capsule())
+    .clipShape(RoundedRectangle(cornerRadius: 8))
   }
 
   private var googleReauthButton: some View {
@@ -1002,7 +1017,7 @@ private struct DeleteAccountNativeView: View {
       .frame(maxWidth: .infinity)
       .frame(height: 52)
       .background(MIRATheme.Color.surface)
-      .clipShape(Capsule())
+      .clipShape(RoundedRectangle(cornerRadius: 8))
     }
     .buttonStyle(.miraPress)
   }
@@ -1054,7 +1069,6 @@ private struct DeleteAccountNativeView: View {
 }
 
 struct PreferenceSettingsNativeView: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
 
   var body: some View {
@@ -1200,7 +1214,6 @@ private struct SettingsLinkRow: View {
 
   var body: some View {
     Button {
-      CaptroHaptics.light()
       openURL(url)
     } label: {
       SettingsRowContent(title: title, subtitle: subtitle, systemImage: systemImage) {
@@ -1222,7 +1235,6 @@ private struct SettingsButtonRow: View {
 
   var body: some View {
     Button {
-      CaptroHaptics.light()
       action()
     } label: {
       SettingsRowContent(title: title, subtitle: subtitle, systemImage: systemImage, tint: tint) {
