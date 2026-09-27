@@ -1,6 +1,12 @@
 name: Validate Native Settings
 on:
   workflow_dispatch:
+  push:
+    branches: [feature/recorded-voice-moderation]
+    paths:
+      - '.github/workflows/native-settings-validation.yml'
+      - 'ios_native/MIRA/Sources/**'
+      - 'ios_native/MIRA/LayoutUITests/**'
 permissions:
   contents: read
 jobs:
