@@ -115,8 +115,8 @@ private struct LegalDocumentView: View {
   let page: CaptroLegalPage
 
   var body: some View {
-    ScrollView(showsIndicators: false) {
-      VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 24) {
         legalHero
 
         ForEach(page.sections) { section in
@@ -126,71 +126,62 @@ private struct LegalDocumentView: View {
         supportCard
         LegalFooterLinks(current: page)
       }
-      .padding(.horizontal, MIRATheme.Space.md)
-      .padding(.top, MIRATheme.Space.md)
+      .frame(maxWidth: 640, alignment: .leading)
+      .padding(.horizontal, 20)
+      .padding(.top, 16)
       .padding(.bottom, MIRATheme.Space.xxl)
+      .frame(maxWidth: .infinity)
+      .textSelection(.enabled)
     }
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
     .navigationTitle(page.shortTitle)
     .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.visible, for: .navigationBar)
+    .miraHideTabBarOnAppear()
   }
 
   private var legalHero: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      HStack(alignment: .top, spacing: MIRATheme.Space.md) {
-        Image(systemName: page.icon)
-          .font(.system(size: 21, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.forest)
-          .frame(width: 48, height: 48)
-          .background(MIRATheme.Color.forestSoft)
-          .clipShape(Circle())
-
         VStack(alignment: .leading, spacing: 6) {
           Text(page.title)
-            .font(.title.weight(.semibold))
+            .font(.title2.weight(.semibold))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
           Text("Last updated: \(captroLegalLastUpdated)")
-            .font(.system(size: 13, weight: .semibold))
+            .font(.footnote)
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
-      }
 
       Text(page.summary)
-        .font(.system(size: 15, weight: .medium))
+        .font(.body)
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .lineSpacing(3)
         .fixedSize(horizontal: false, vertical: true)
 
-      Text("Website/domain: \(captroWebsiteDomain)")
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
     }
-    .padding(MIRATheme.Space.lg)
-    .miraCardSurface(cornerRadius: 24)
   }
 
   private var supportCard: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       Text("Questions or Requests")
-        .font(.system(size: 17, weight: .semibold))
+        .font(.headline)
+        .accessibilityAddTraits(.isHeader)
         .foregroundStyle(MIRATheme.Color.textPrimary)
       Text("For support, safety, privacy, account deletion, or legal questions, contact Captro support.")
-        .font(.system(size: 14, weight: .medium))
+        .font(.body)
         .foregroundStyle(MIRATheme.Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
       Link(captroSupportEmail, destination: URL(string: "mailto:\(captroSupportEmail)")!)
-        .font(.system(size: 15, weight: .semibold))
+        .font(.body)
         .foregroundStyle(MIRATheme.Color.forest)
+        .frame(minHeight: 44, alignment: .leading)
       Text(captroLegalDisclaimer)
-        .font(.system(size: 12, weight: .medium))
+        .font(.footnote)
         .foregroundStyle(MIRATheme.Color.textMuted)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.top, MIRATheme.Space.xs)
     }
-    .padding(MIRATheme.Space.lg)
-    .background(MIRATheme.Color.forestSoft)
-    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
   }
 }
 
@@ -202,6 +193,7 @@ private struct LegalSectionCard: View {
       Text(section.title)
         .font(.headline)
         .foregroundStyle(MIRATheme.Color.textPrimary)
+        .accessibilityAddTraits(.isHeader)
 
       ForEach(Array(section.paragraphs.enumerated()), id: \.offset) { _, paragraph in
         Text(paragraph)
@@ -230,11 +222,6 @@ private struct LegalSectionCard: View {
         .padding(.top, MIRATheme.Space.xs)
       }
     }
-    .padding(MIRATheme.Space.lg)
-    .background(MIRATheme.Color.surfaceRaised)
-    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
-    .modifier(MIRATheme.softShadow())
   }
 }
 
@@ -256,31 +243,23 @@ private struct LegalFooterLinks: View {
               Image(systemName: page.icon)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(MIRATheme.Color.forest)
-                .frame(width: 34, height: 34)
-                .background(MIRATheme.Color.surfaceSoft)
-                .clipShape(Circle())
+                .frame(width: 24, height: 24)
               VStack(alignment: .leading, spacing: 2) {
                 Text(page.title)
                   .font(.system(size: 15, weight: .semibold))
                   .foregroundStyle(MIRATheme.Color.textPrimary)
-                Text(page.route)
-                  .font(.system(size: 11.5, weight: .medium, design: .monospaced))
-                  .foregroundStyle(MIRATheme.Color.textMuted)
               }
               Spacer()
               Image(systemName: "chevron.right")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(MIRATheme.Color.textMuted)
             }
-            .padding(.horizontal, MIRATheme.Space.md)
             .padding(.vertical, 12)
+            .frame(minHeight: 44)
           }
           .buttonStyle(.plain)
         }
       }
-      .background(MIRATheme.Color.surfaceRaised)
-      .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
     }
   }
 }

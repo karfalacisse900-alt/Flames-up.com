@@ -16,7 +16,7 @@ public struct CaptroDesignQualityTestView: View {
       if ProcessInfo.processInfo.arguments.contains("--captro-quality-auth") {
         AuthNativeView(session: session, api: api)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-settings") {
-        NavigationStack { SettingsNativeView(api: api) }
+        SettingsNavigationTestHost(api: api)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-appearance") {
         NavigationStack { PreferenceSettingsNativeView() }
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-search") {
@@ -69,6 +69,23 @@ public struct CaptroDesignQualityTestView: View {
     .environmentObject(MIRALocalization.shared)
     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
+  }
+}
+
+/// Exercises pushes inside a real tab hierarchy, rather than a standalone mockup.
+private struct SettingsNavigationTestHost: View {
+  let api: MIRAAPIClient
+  @State private var openSettings = false
+  var body: some View {
+    TabView {
+      NavigationStack {
+        Button("Open Settings") { openSettings = true }
+          .navigationTitle("Me")
+          .navigationDestination(isPresented: $openSettings) { SettingsNativeView(api: api) }
+          .task { openSettings = true }
+      }.tabItem { Label("Me", systemImage: "person") }
+      Text("Home").tabItem { Label("Home", systemImage: "house") }
+    }
   }
 }
 #endif

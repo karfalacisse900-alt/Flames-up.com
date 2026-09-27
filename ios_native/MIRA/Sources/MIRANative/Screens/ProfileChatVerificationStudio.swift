@@ -1669,7 +1669,7 @@ private struct ProfilePostOwnerActionModal: View {
   }
 }
 
-private struct EditProfileNativeView: View {
+struct EditProfileNativeView: View {
   let user: MIRAUser?
   let api: MIRAAPIClient
   let onCancel: (() -> Void)?

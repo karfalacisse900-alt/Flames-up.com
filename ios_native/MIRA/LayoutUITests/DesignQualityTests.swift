@@ -45,8 +45,8 @@ final class DesignQualityTests: XCTestCase {
     login.tap()
     XCTAssertTrue(app.secureTextFields.firstMatch.waitForExistence(timeout: 5))
     capture(app, "auth-large-text")
-    XCTAssertTrue(app.buttons["Close"].exists)
-    app.buttons["Close"].tap()
+    XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
+    app.navigationBars.buttons.firstMatch.tap()
     XCTAssertTrue(app.buttons["Continue as Guest"].waitForExistence(timeout: 5))
   }
 
@@ -100,12 +100,16 @@ final class DesignQualityTests: XCTestCase {
   }
 
   func testCacheClearReportsActualCompletion() {
-    let app = launch(["--captro-quality-appearance"])
-    XCTAssertTrue(app.staticTexts["Appearance & cache"].waitForExistence(timeout: 10))
+    let app = launch(["--captro-quality-settings"])
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
+    let storage = app.buttons["Storage & cache"]
+    for _ in 0..<6 where !storage.isHittable { app.swipeUp() }
+    storage.tap()
     let clear = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Clear media cache")).firstMatch
     XCTAssertTrue(clear.waitForExistence(timeout: 5))
     for _ in 0..<4 where !clear.isHittable { app.swipeUp() }
     clear.tap()
+    app.buttons["Clear cache"].tap()
     XCTAssertTrue(app.staticTexts["Cached media cleared. Images reload as needed."].waitForExistence(timeout: 10))
     capture(app, "cache-completed")
   }

@@ -1,0 +1,33 @@
+name: Validate Native Settings
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  settings:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Native Settings navigation and visual checks
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath "$RUNNER_TEMP/SettingsBuild" -resultBundlePath "$RUNNER_TEMP/Settings.xcresult" \
+            -only-testing:CaptroLayoutUITests/SettingsSystemTests \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/settings-build.log"
+      - name: Export screenshots
+        if: always()
+        run: xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Settings.xcresult" --output-path "$RUNNER_TEMP/settings-screenshots"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captro-settings-validation
+          path: |
+            ${{ runner.temp }}/settings-build.log
+            ${{ runner.temp }}/settings-screenshots/

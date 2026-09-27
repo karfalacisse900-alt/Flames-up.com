@@ -3,6 +3,7 @@ import GoogleSignIn
 import SwiftUI
 import UIKit
 import UserNotifications
+import CoreLocation
 
 private struct SettingsProfileUpdateBody: Encodable {
   let isPrivate: Bool?
@@ -197,6 +198,12 @@ final class SettingsNativeModel: ObservableObject {
     authSession?.logout()
   }
 
+  func profileDidChange(_ updated: MIRAUser) {
+    apply(user: updated)
+    authSession?.replaceUser(updated)
+    Task { await MIRAAppCacheStore.shared.saveSettings(user: updated, language: language, isPrivate: isPrivate) }
+  }
+
   private func apply(user: MIRAUser?) {
     self.user = user
     isPrivate = user?.isPrivate == true
@@ -220,6 +227,8 @@ public struct SettingsNativeView: View {
   private let profileModel: ProfileNativeModel?
   private let paymentsModel: CaptroPaymentsModel?
   @EnvironmentObject private var localization: MIRALocalization
+  @Environment(\.dismiss) private var dismiss
+  @State private var showLogoutConfirm = false
 
   public init(api: MIRAAPIClient, authSession: MIRAAuthSession? = nil) {
     _model = StateObject(wrappedValue: SettingsNativeModel(api: api, authSession: authSession))
@@ -239,9 +248,12 @@ public struct SettingsNativeView: View {
   }
 
   public var body: some View {
-    ScrollView(showsIndicators: false) {
-      VStack(alignment: .leading, spacing: 14) {
-        settingsHero
+    SettingsDetailScaffold(title: localization.string("settings.title")) {
+        Section {
+          Button { dismiss() } label: { settingsHero }
+            .buttonStyle(.automatic)
+            .accessibilityLabel("View your profile")
+        }
 
         if let loadError = model.loadError {
           SettingsBanner(message: loadError, isError: true)
@@ -252,87 +264,98 @@ public struct SettingsNativeView: View {
 
         SettingsCard(title: localization.string("settings.account")) {
           SettingsNavigationRow(
-            title: "Payments & payouts",
-            subtitle: "Cards, balances, and withdrawals",
-            systemImage: "creditcard",
-            destination: paymentsDestination
+            title: "Account", subtitle: "", systemImage: "person",
+            destination: AccountSettingsNativeView(model: model)
           )
           if let profileModel {
             SettingsNavigationRow(
               title: "Your activity",
-              subtitle: "Receipts, joins, and creations",
+            subtitle: "",
               systemImage: "list.bullet.rectangle",
               destination: ProfileActivityNativeView(model: profileModel)
             )
           }
           SettingsNavigationRow(
             title: localization.string("settings.privacy"),
-            subtitle: model.user == nil ? "Account settings unavailable" : (model.isPrivate ? "Private account is on" : "Public account"),
+            subtitle: "",
             systemImage: "lock",
             destination: PrivacySettingsNativeView(model: model)
           )
           .disabled(model.user == nil)
           SettingsNavigationRow(
             title: localization.string("settings.notifications"),
-            subtitle: "Push, likes, comments, messages",
+            subtitle: "",
             systemImage: "bell",
             destination: NotificationSettingsNativeView()
           )
           SettingsNavigationRow(
             title: localization.string("settings.security"),
-            subtitle: "Email, password, account actions",
+            subtitle: "",
             systemImage: "shield",
             destination: SecuritySettingsNativeView(model: model)
           )
         }
 
+        SettingsCard(title: "Payments") {
+          SettingsNavigationRow(title: "Payments & payouts", subtitle: "", systemImage: "creditcard", destination: paymentsDestination)
+          if let profileModel {
+            SettingsNavigationRow(title: "Purchases & receipts", subtitle: "", systemImage: "doc.text", destination: SettingsPurchasesView(model: profileModel))
+          }
+        }
         SettingsCard(title: localization.string("settings.preferences")) {
           SettingsNavigationRow(
-            title: "Appearance & cache",
-            subtitle: "Dark mode and clear cache",
+            title: "Appearance",
+            subtitle: "",
             systemImage: "circle.lefthalf.filled",
             destination: PreferenceSettingsNativeView()
           )
+          SettingsNavigationRow(title: "Storage & cache", subtitle: "", systemImage: "internaldrive", destination: StorageSettingsNativeView())
+          SettingsNavigationRow(title: "Location & permissions", subtitle: "", systemImage: "location", destination: DevicePermissionsSettingsView())
+          SettingsNavigationRow(title: "Accessibility", subtitle: "", systemImage: "accessibility", destination: AccessibilitySettingsNativeView())
         }
 
-        SettingsCard(title: localization.string("settings.legal_safety")) {
+        SettingsCard(title: "Support & safety") {
+          SettingsNavigationRow(title: "Help & support", subtitle: "", systemImage: "questionmark.circle", destination: SupportSettingsNativeView())
+          SettingsNavigationRow(title: "Safety & reporting", subtitle: "", systemImage: "shield", destination: SafetySettingsNativeView(api: model.api))
+        }
+        SettingsCard(title: "Legal") {
           SettingsNavigationRow(
             title: localization.string("legal.terms"),
-            subtitle: "Rules for using Captro",
+            subtitle: "",
             systemImage: "doc.text",
             destination: TermsOfServiceView()
           )
           SettingsNavigationRow(
             title: localization.string("legal.privacy"),
-            subtitle: "How Captro handles data",
+            subtitle: "",
             systemImage: "hand.raised",
             destination: PrivacyPolicyView()
           )
           SettingsNavigationRow(
             title: localization.string("legal.community"),
-            subtitle: "Posting, chat, and safety rules",
+            subtitle: "",
             systemImage: "person.2",
             destination: CommunityGuidelinesView()
           )
-          SettingsNavigationRow(
-            title: localization.string("legal.safety"),
-            subtitle: "Report, block, and stay safe",
-            systemImage: "shield.lefthalf.filled",
-            destination: SafetyReportingView()
-          )
+          SettingsNavigationRow(title: "About Captro", subtitle: "", systemImage: "info.circle", destination: AboutCaptroSettingsView())
         }
-      }
-      .padding(.horizontal, 18)
-      .padding(.top, 12)
-      .padding(.bottom, MIRATheme.Space.xxl)
+        Section {
+          Button("Log out") { showLogoutConfirm = true }
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .frame(minHeight: 44)
+        }
+        Section {
+          NavigationLink(destination: DeleteAccountNativeView(model: model)) {
+            Text("Delete account").foregroundStyle(.red).frame(minHeight: 44)
+          }
+        }
     }
-    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-    .miraScreenEnter(.push)
-    .navigationTitle(localization.string("settings.title"))
-    .navigationBarTitleDisplayMode(.inline)
-    .miraHideTabBarOnAppear()
     .task { await model.load() }
     .refreshable { await model.load() }
+    .confirmationDialog("Log out of Captro?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+      Button("Log out", role: .destructive) { model.logout() }
+      Button("Cancel", role: .cancel) {}
+    }
   }
 
   private var paymentsDestination: CaptroPaymentsView {
@@ -346,11 +369,11 @@ public struct SettingsNativeView: View {
     HStack(spacing: 12) {
       RemoteAvatar(url: model.user?.profileImage, size: 48)
       VStack(alignment: .leading, spacing: 2) {
-        Text(model.user?.displayName ?? "Captro")
-          .font(.system(size: 20, weight: .bold))
+        Text(model.user?.username.map { "@\(MIRAUsernameRules.normalized($0))" } ?? "Your profile")
+          .font(.body.weight(.semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text(model.email.isEmpty ? localization.string("settings.manage_account") : model.email)
-          .font(.system(size: 12, weight: .semibold))
+        Text(model.user?.displayName ?? "View profile")
+          .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
       }
@@ -359,18 +382,16 @@ public struct SettingsNativeView: View {
         ProgressView()
           .tint(MIRATheme.Color.forest)
       }
+      Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 11)
-    .settingsPillSurface(cornerRadius: 28)
+    .padding(.vertical, 4)
+    .frame(minHeight: 60)
+    .contentShape(Rectangle())
   }
 }
 
 private struct PrivacySettingsNativeView: View {
   @ObservedObject var model: SettingsNativeModel
-  @AppStorage("mira.settings.show_activity_status") private var showActivityStatus = true
-  @AppStorage("mira.settings.allow_message_requests") private var allowMessageRequests = true
-  @AppStorage("mira.settings.story_replies") private var allowStoryReplies = true
 
   var body: some View {
     SettingsDetailScaffold(title: "Privacy") {
@@ -387,32 +408,15 @@ private struct PrivacySettingsNativeView: View {
         )
       }
 
-      SettingsCard(title: "Interactions") {
-        SettingsToggleRow(
-          title: "Activity status",
-          subtitle: "Let people see when you are recently active.",
-          systemImage: "dot.radiowaves.left.and.right",
-          isOn: $showActivityStatus
-        )
-        SettingsToggleRow(
-          title: "Message requests",
-          subtitle: "Allow people to message you from your profile.",
-          systemImage: "message",
-          isOn: $allowMessageRequests
-        )
-        SettingsToggleRow(
-          title: "Story replies",
-          subtitle: "Allow replies on stories.",
-          systemImage: "bubble.left",
-          isOn: $allowStoryReplies
-        )
-      }
-
+      // Do not expose local-only flags as server-enforced privacy controls.
       SettingsCard(title: "Privacy tools") {
         SettingsNavigationRow(title: "Blocked accounts", subtitle: "Review and unblock people.", systemImage: "person.crop.circle.badge.xmark", destination: BlockedAccountsNativeView(api: model.api))
         SettingsNavigationRow(title: "Privacy Policy", subtitle: "Read how data is handled", systemImage: "hand.raised", destination: PrivacyPolicyView())
         SettingsNavigationRow(title: "Safety & Reporting", subtitle: "Report abuse or unsafe behavior", systemImage: "shield.lefthalf.filled", destination: SafetyReportingView())
         SettingsLinkRow(title: "Data deletion", subtitle: "Learn how account deletion works", systemImage: "trash", url: MIRAProductionBackend.siteURL("data-deletion"))
+      }
+      if let message = model.bannerMessage {
+        SettingsBanner(message: message, isError: model.bannerIsError)
       }
     }
   }
@@ -493,7 +497,7 @@ private struct BlockedAccountsNativeView: View {
     .padding(.horizontal, 12)
     .padding(.vertical, 8)
     .frame(minHeight: 58)
-    .settingsPillSurface(cornerRadius: 26)
+    .contentShape(Rectangle())
   }
 
   @MainActor
@@ -522,13 +526,10 @@ private struct BlockedAccountsNativeView: View {
 }
 
 private struct NotificationSettingsNativeView: View {
-  @AppStorage("mira.settings.push_enabled") private var pushEnabled = false
-  @AppStorage("mira.settings.notify_likes") private var notifyLikes = true
-  @AppStorage("mira.settings.notify_comments") private var notifyComments = true
-  @AppStorage("mira.settings.notify_follows") private var notifyFollows = true
-  @AppStorage("mira.settings.notify_messages") private var notifyMessages = true
-  @AppStorage("mira.settings.notify_posts") private var notifyPosts = true
-  @AppStorage("mira.settings.email_updates") private var emailUpdates = false
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var pushEnabled = false
+  @State private var hasRequested = false
+  @State private var isChecking = true
   @State private var authorizationStatus = "Checking..."
 
   var body: some View {
@@ -536,34 +537,32 @@ private struct NotificationSettingsNativeView: View {
       SettingsCard(title: "Device") {
         SettingsToggleRow(
           title: "Push notifications",
-          subtitle: "Captro sends notifications about activity on your posts, comments, follows, messages, and important account updates.",
+          subtitle: "Permission is controlled by iOS.",
           systemImage: "bell.badge",
           isOn: Binding(
             get: { pushEnabled },
             set: { value in
-              if value {
+              if value && !hasRequested {
                 Task { await requestPushPermission() }
               } else {
-                pushEnabled = false
+                // iOS permission cannot be revoked with a local preference.
+                openAppSettings()
               }
             }
-          )
+          ), isLoading: isChecking
         )
         SettingsButtonRow(title: "iOS notification settings", subtitle: authorizationStatus, systemImage: "gearshape") {
           openAppSettings()
         }
       }
 
-      SettingsCard(title: "Activity") {
-        SettingsToggleRow(title: "Likes", subtitle: "When someone likes your post.", systemImage: "heart", isOn: $notifyLikes)
-        SettingsToggleRow(title: "Comments and replies", subtitle: "When someone comments or replies.", systemImage: "bubble.left", isOn: $notifyComments)
-        SettingsToggleRow(title: "Follows", subtitle: "When someone follows you.", systemImage: "person.badge.plus", isOn: $notifyFollows)
-        SettingsToggleRow(title: "Messages", subtitle: "New chat messages.", systemImage: "message", isOn: $notifyMessages)
-        SettingsToggleRow(title: "New posts", subtitle: "When people you follow post.", systemImage: "photo.on.rectangle", isOn: $notifyPosts)
-        SettingsToggleRow(title: "Email updates", subtitle: "Occasional account and safety emails.", systemImage: "envelope", isOn: $emailUpdates)
-      }
+      Text("Choose alerts, sounds, badges and previews in iOS notification settings.")
+        .font(.footnote).foregroundStyle(.secondary)
     }
     .task { await refreshNotificationStatus() }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active { Task { await refreshNotificationStatus() } }
+    }
   }
 
   private func requestPushPermission() async {
@@ -582,6 +581,8 @@ private struct NotificationSettingsNativeView: View {
 
   private func refreshNotificationStatus() async {
     let settings = await UNUserNotificationCenter.current().notificationSettings()
+    hasRequested = settings.authorizationStatus != .notDetermined
+    isChecking = false
     switch settings.authorizationStatus {
     case .authorized:
       authorizationStatus = "Allowed"
@@ -602,40 +603,13 @@ private struct NotificationSettingsNativeView: View {
 
 private struct SecuritySettingsNativeView: View {
   @ObservedObject var model: SettingsNativeModel
-  @State private var newEmail = ""
-  @State private var newPassword = ""
   @State private var showLogoutConfirm = false
 
   var body: some View {
     SettingsDetailScaffold(title: "Security") {
-      SettingsCard(title: "Email") {
-        SettingsTextField(title: "Email", text: $newEmail, keyboardType: .emailAddress)
-        Text("Uses your signed-in Captro session. Log out on shared devices.")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .padding(.horizontal, 8)
-          .padding(.bottom, 2)
-        SettingsActionButton(title: model.isSavingEmail ? "Saving..." : "Update email", disabled: model.isSavingEmail) {
-          Task {
-            _ = await model.updateEmail(newEmail: newEmail)
-          }
-        }
-      }
-
-      SettingsCard(title: "Password") {
-        SettingsSecureField(title: "New password", text: $newPassword)
-        Text("Minimum 8 characters. This updates the login password for your signed-in account.")
-          .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-          .padding(.horizontal, 8)
-          .padding(.bottom, 2)
-        SettingsActionButton(title: model.isSavingPassword ? "Saving..." : "Update password", disabled: model.isSavingPassword) {
-          Task {
-            if await model.updatePassword(newPassword: newPassword) {
-              newPassword = ""
-            }
-          }
-        }
+      SettingsCard(title: "Sign-in details") {
+        SettingsNavigationRow(title: "Email", subtitle: model.email, systemImage: "envelope", destination: SettingsEmailEditor(model: model))
+        SettingsNavigationRow(title: "Password", subtitle: "", systemImage: "key", destination: SettingsPasswordEditor(model: model))
       }
 
       SettingsCard(title: "Account") {
@@ -644,22 +618,226 @@ private struct SecuritySettingsNativeView: View {
         }
         NavigationLink(destination: DeleteAccountNativeView(model: model)) {
           SettingsRowContent(title: "Delete account", subtitle: "Hide now, permanently delete after 30 days.", systemImage: "trash", tint: .red) {
-            Image(systemName: "chevron.right")
-              .font(.system(size: 13, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.textMuted)
+            EmptyView()
           }
         }
-        .buttonStyle(.miraPress)
+        .buttonStyle(.automatic)
 
       }
-    }
-    .onAppear {
-      if newEmail.isEmpty { newEmail = model.email }
     }
     .confirmationDialog("Log out?", isPresented: $showLogoutConfirm) {
       Button("Log out", role: .destructive) { model.logout() }
       Button("Cancel", role: .cancel) {}
     }
+  }
+}
+
+private struct AccountSettingsNativeView: View {
+  @ObservedObject var model: SettingsNativeModel
+  @State private var editingProfile = false
+
+  var body: some View {
+    SettingsDetailScaffold(title: "Account") {
+      SettingsCard(title: "Profile") {
+        SettingsButtonRow(title: "Edit profile", subtitle: "Photo, name and username", systemImage: "person.crop.circle") { editingProfile = true }
+          .disabled(model.user == nil)
+        SettingsNavigationRow(title: "Email", subtitle: model.email, systemImage: "envelope", destination: SettingsEmailEditor(model: model))
+      }
+      SettingsCard(title: "Security") {
+        SettingsNavigationRow(title: "Sign-in & security", subtitle: "", systemImage: "lock", destination: SecuritySettingsNativeView(model: model))
+      }
+      SettingsCard(title: "Your data") {
+        SettingsLinkRow(title: "Request your data", subtitle: "Contact Captro support", systemImage: "square.and.arrow.down", url: captroSupportURL(subject: "Personal data request"))
+      }
+      SettingsCard(title: "Account removal") {
+        NavigationLink(destination: DeleteAccountNativeView(model: model)) {
+          Text("Delete account").foregroundStyle(.red).frame(minHeight: 44)
+        }
+      }
+    }
+    .sheet(isPresented: $editingProfile) {
+      EditProfileNativeView(user: model.user, api: model.api, onCancel: { editingProfile = false }) { updated in
+        model.profileDidChange(updated)
+        editingProfile = false
+      }
+    }
+  }
+}
+
+private struct SettingsEmailEditor: View {
+  @ObservedObject var model: SettingsNativeModel
+  @State private var email = ""
+  @FocusState private var focused: Bool
+
+  private var valid: Bool {
+    let value = email.trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.contains("@") && value.contains(".") && !value.contains(" ") && value.lowercased() != model.email.lowercased()
+  }
+  var body: some View {
+    SettingsDetailScaffold(title: "Email") {
+      Section {
+        TextField("Email address", text: $email)
+          .keyboardType(.emailAddress).textContentType(.emailAddress)
+          .textInputAutocapitalization(.never).autocorrectionDisabled()
+          .focused($focused).submitLabel(.done).onSubmit { save() }
+          .accessibilityIdentifier("settings.email.input")
+      } header: { Text("Email address") } footer: { Text("Use an address you can access.") }
+      Section {
+        Button { save() } label: {
+          HStack { Text("Save email"); Spacer(); if model.isSavingEmail { ProgressView() } }
+        }.disabled(!valid || model.isSavingEmail)
+      }
+      if let message = model.bannerMessage { SettingsBanner(message: message, isError: model.bannerIsError) }
+    }
+    .onAppear { email = model.email; model.bannerMessage = nil }
+  }
+  private func save() {
+    guard valid, !model.isSavingEmail else { return }
+    focused = false
+    Task { _ = await model.updateEmail(newEmail: email) }
+  }
+}
+
+private struct SettingsPasswordEditor: View {
+  @ObservedObject var model: SettingsNativeModel
+  @State private var password = ""
+  @State private var confirmation = ""
+  @FocusState private var field: Int?
+  private var valid: Bool { password.count >= 8 && password == confirmation }
+  var body: some View {
+    SettingsDetailScaffold(title: "Password") {
+      Section {
+        SecureField("New password", text: $password).textContentType(.newPassword)
+          .focused($field, equals: 1).submitLabel(.next).onSubmit { field = 2 }
+        SecureField("Confirm password", text: $confirmation).textContentType(.newPassword)
+          .focused($field, equals: 2).submitLabel(.done).onSubmit { save() }
+      } header: { Text("New password") } footer: {
+        Text(!confirmation.isEmpty && password != confirmation ? "Passwords do not match." : "Use at least 8 characters.")
+      }
+      Section {
+        Button { save() } label: {
+          HStack { Text("Update password"); Spacer(); if model.isSavingPassword { ProgressView() } }
+        }.disabled(!valid || model.isSavingPassword)
+      }
+      if let message = model.bannerMessage { SettingsBanner(message: message, isError: model.bannerIsError) }
+    }.onAppear { model.bannerMessage = nil }
+  }
+  private func save() {
+    guard valid, !model.isSavingPassword else { return }
+    field = nil
+    Task { if await model.updatePassword(newPassword: password) { password = ""; confirmation = "" } }
+  }
+}
+
+private func captroSupportURL(subject: String) -> URL {
+  var components = URLComponents()
+  components.scheme = "mailto"
+  components.path = "karfalacisse900@gmail.com"
+  components.queryItems = [URLQueryItem(name: "subject", value: "Captro — \(subject)")]
+  return components.url!
+}
+
+private struct SupportSettingsNativeView: View {
+  var body: some View {
+    SettingsDetailScaffold(title: "Help & support") {
+      SettingsCard(title: "Contact Captro") {
+        SettingsLinkRow(title: "Contact support", subtitle: "", systemImage: "envelope", url: captroSupportURL(subject: "Support"))
+        SettingsLinkRow(title: "Report a problem", subtitle: "", systemImage: "exclamationmark.bubble", url: captroSupportURL(subject: "Report a problem"))
+        SettingsLinkRow(title: "Payment help", subtitle: "", systemImage: "creditcard", url: captroSupportURL(subject: "Payment help"))
+      }
+      SettingsCard(title: "Guidance") {
+        SettingsNavigationRow(title: "Safety help", subtitle: "", systemImage: "shield", destination: SafetyReportingView())
+        SettingsNavigationRow(title: "Community Guidelines", subtitle: "", systemImage: "person.2", destination: CommunityGuidelinesView())
+      }
+      Text("Never include passwords, card numbers or verification codes in a support request.").font(.footnote).foregroundStyle(.secondary)
+    }
+  }
+}
+
+private struct SafetySettingsNativeView: View {
+  let api: MIRAAPIClient
+  var body: some View {
+    SettingsDetailScaffold(title: "Safety & reporting") {
+      SettingsCard(title: "Safety tools") {
+        SettingsNavigationRow(title: "Blocked accounts", subtitle: "", systemImage: "person.crop.circle.badge.xmark", destination: BlockedAccountsNativeView(api: api))
+        SettingsNavigationRow(title: "How to report", subtitle: "", systemImage: "flag", destination: SafetyReportingView())
+        SettingsLinkRow(title: "Ask about a report", subtitle: "Contact the safety team", systemImage: "envelope", url: captroSupportURL(subject: "Safety report follow-up"))
+      }
+      Section {
+        Text("For immediate danger, contact local emergency services. Captro is not an emergency service.").font(.footnote).foregroundStyle(.secondary)
+      }
+    }
+  }
+}
+
+private struct AboutCaptroSettingsView: View {
+  var body: some View {
+    SettingsDetailScaffold(title: "About Captro") {
+      SettingsCard(title: "Captro") {
+        LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unavailable")
+        LabeledContent("Build", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unavailable")
+      }
+      SettingsCard(title: "Legal") {
+        SettingsNavigationRow(title: "Terms of Service", subtitle: "", systemImage: "doc.text", destination: TermsOfServiceView())
+        SettingsNavigationRow(title: "Privacy Policy", subtitle: "", systemImage: "hand.raised", destination: PrivacyPolicyView())
+        SettingsNavigationRow(title: "Community Guidelines", subtitle: "", systemImage: "person.2", destination: CommunityGuidelinesView())
+      }
+    }
+  }
+}
+
+private struct DevicePermissionsSettingsView: View {
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var locationStatus = "Checking…"
+  var body: some View {
+    SettingsDetailScaffold(title: "Location & permissions") {
+      Section {
+        LabeledContent("Location access", value: locationStatus)
+        SettingsButtonRow(title: "Open iOS Settings", subtitle: "Location, camera, microphone and photos", systemImage: "gearshape") { openAppSettings() }
+      } footer: { Text("Precise location is controlled by iOS. Captro does not publish your live location. Places you choose to tag can appear on your posts.") }
+    }.onAppear { refresh() }.onChange(of: scenePhase) { _, phase in if phase == .active { refresh() } }
+  }
+  private func refresh() {
+    switch CLLocationManager().authorizationStatus {
+    case .authorizedAlways: locationStatus = "Always"
+    case .authorizedWhenInUse: locationStatus = "While using the app"
+    case .denied: locationStatus = "Not allowed"
+    case .restricted: locationStatus = "Restricted by iOS"
+    case .notDetermined: locationStatus = "Not requested"
+    @unknown default: locationStatus = "Unavailable"
+    }
+  }
+}
+
+private struct AccessibilitySettingsNativeView: View {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  var body: some View {
+    SettingsDetailScaffold(title: "Accessibility") {
+      Section {
+        LabeledContent("Reduce Motion", value: reduceMotion ? "On" : "Off")
+        Text("Captro follows your iPhone’s text size, VoiceOver and Reduce Motion settings. Change these in Settings → Accessibility.")
+          .font(.subheadline).foregroundStyle(.secondary)
+      }
+    }
+  }
+}
+
+private struct SettingsPurchasesView: View {
+  @ObservedObject var model: ProfileNativeModel
+  var body: some View {
+    ScrollView {
+      if let dashboard = model.commerceDashboard {
+        if dashboard.myStuff.isEmpty { ContentUnavailableView("No purchases yet", systemImage: "doc.text", description: Text("Your purchases and access will appear here.")) }
+        else {
+          CaptroCommerceDashboardView(dashboard: CaptroCommerceDashboard(myStuff: dashboard.myStuff, created: [], pendingRequests: []), api: model.api, onDecision: { _, _ in })
+        }
+      } else if model.isLoadingActivity { ProgressView("Loading purchases…").padding() }
+      if let error = model.activityError { Text(error).foregroundStyle(.red).padding() }
+    }
+    .navigationTitle("Purchases & receipts").navigationBarTitleDisplayMode(.inline)
+    .toolbar(.visible, for: .navigationBar).miraHideTabBarOnAppear()
+    .background(MIRATheme.Color.appBackground)
+    .task { await model.loadActivity() }.refreshable { await model.loadActivity(forceRefresh: true) }
   }
 }
 
@@ -878,20 +1056,13 @@ private struct DeleteAccountNativeView: View {
 struct PreferenceSettingsNativeView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
-  @State private var isClearingMediaCache = false
-  @State private var cacheNotice: String?
-  @State private var cacheClearFailed = false
 
   var body: some View {
-    SettingsDetailScaffold(title: "Appearance & cache") {
-      SettingsCard(title: "Appearance") {
-        VStack(spacing: 8) {
+    SettingsDetailScaffold(title: "Appearance") {
+      SettingsCard(title: "Theme") {
           ForEach(MIRAAppearance.allCases) { option in
             Button {
-              CaptroHaptics.light()
-              withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-                appearancePreference = option.rawValue
-              }
+              appearancePreference = option.rawValue
             } label: {
               HStack(spacing: 12) {
                 Image(systemName: option.systemImage)
@@ -908,23 +1079,44 @@ struct PreferenceSettingsNativeView: View {
               }
               .foregroundStyle(MIRATheme.Color.textPrimary)
               .frame(maxWidth: .infinity)
-              .padding(14)
+              .padding(.vertical, 4)
               .frame(minHeight: 48)
-              .background(MIRATheme.Color.surfaceSoft)
-              .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
             }
-            .buttonStyle(.miraPress)
+            .buttonStyle(.automatic)
             .accessibilityAddTraits(appearancePreference == option.rawValue ? .isSelected : [])
           }
-        }
       }
+      SettingsCard(title: "Reading & motion") {
+        SettingsNavigationRow(title: "Text size & Reduce Motion", subtitle: "Uses your iPhone preferences", systemImage: "textformat.size", destination: AccessibilitySettingsNativeView())
+      }
+    }
+  }
+}
 
+private struct StorageSettingsNativeView: View {
+  @State private var isClearingMediaCache = false
+  @State private var cacheNotice: String?
+  @State private var cacheClearFailed = false
+  @State private var confirmClear = false
+
+  var body: some View {
+    SettingsDetailScaffold(title: "Storage & cache") {
       SettingsCard(title: "Storage") {
         SettingsButtonRow(
           title: isClearingMediaCache ? "Clearing media cache..." : "Clear media cache",
           subtitle: "Remove old cached thumbnails, posters, and feed images.",
           systemImage: "externaldrive.badge.xmark"
         ) {
+          confirmClear = true
+        }
+        .disabled(isClearingMediaCache)
+        if let cacheNotice { SettingsBanner(message: cacheNotice, isError: cacheClearFailed) }
+      }
+      Text("This removes downloaded media copies only. Your posts, account and unfinished uploads are kept.")
+        .font(.footnote).foregroundStyle(.secondary)
+    }
+    .confirmationDialog("Clear downloaded media?", isPresented: $confirmClear, titleVisibility: .visible) {
+      Button("Clear cache", role: .destructive) {
           guard !isClearingMediaCache else { return }
           isClearingMediaCache = true
           cacheNotice = nil
@@ -934,18 +1126,15 @@ struct PreferenceSettingsNativeView: View {
             cacheNotice = cleared ? "Cached media cleared. Images reload as needed." : "Some cached files couldn't be cleared. Try again."
             isClearingMediaCache = false
           }
-        }
-        .disabled(isClearingMediaCache)
-        if let cacheNotice { SettingsBanner(message: cacheNotice, isError: cacheClearFailed) }
       }
+      Button("Cancel", role: .cancel) {}
     }
   }
 }
 
-private struct SettingsDetailScaffold<Content: View>: View {
+struct SettingsDetailScaffold<Content: View>: View {
   let title: String
   private let content: Content
-  @Environment(\.dismiss) private var dismiss
 
   init(title: String, @ViewBuilder content: () -> Content) {
     self.title = title
@@ -953,50 +1142,26 @@ private struct SettingsDetailScaffold<Content: View>: View {
   }
 
   var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: MIRATheme.Space.sm) {
-        Button {
-          CaptroHaptics.light()
-          dismiss()
-        } label: {
-          Image(systemName: "chevron.left")
-            .font(.system(size: 18, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 44, height: 44)
-        }
-        .buttonStyle(.miraPress)
-        .accessibilityLabel("Back")
-
-        Text(title)
-          .font(.system(size: 20, weight: .bold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .fixedSize(horizontal: false, vertical: true)
-        Spacer()
-      }
-      .padding(.horizontal, 18)
-      .padding(.vertical, 8)
-      .background(MIRATheme.Color.appBackground)
-      .overlay(alignment: .bottom) {
-        Rectangle().fill(MIRATheme.Color.hairline.opacity(0.55)).frame(height: 0.5)
-      }
-
-      ScrollView(showsIndicators: false) {
-        VStack(alignment: .leading, spacing: 14) {
-          content
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 12)
-        .padding(.bottom, MIRATheme.Space.xxl)
-      }
+    List {
+      content
+        .listRowBackground(MIRATheme.Color.surfaceSoft)
     }
+    .listStyle(.insetGrouped)
+    .listSectionSpacing(16)
+    .contentMargins(.horizontal, 16, for: .scrollContent)
+    .scrollContentBackground(.hidden)
+    .scrollDismissesKeyboard(.interactively)
+    .environment(\.defaultMinListRowHeight, 52)
+    .tint(MIRATheme.Color.forest)
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-    .navigationBarBackButtonHidden(true)
-    .toolbar(.hidden, for: .navigationBar)
+    .navigationTitle(title)
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar(.visible, for: .navigationBar)
     .miraHideTabBarOnAppear()
   }
 }
 
-private struct SettingsCard<Content: View>: View {
+struct SettingsCard<Content: View>: View {
   let title: String
   private let content: Content
 
@@ -1006,20 +1171,11 @@ private struct SettingsCard<Content: View>: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text(title)
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .padding(.horizontal, 8)
-
-      VStack(spacing: 8) {
-        content
-      }
-    }
+    Section { content } header: { Text(title).textCase(nil) }
   }
 }
 
-private struct SettingsNavigationRow<Destination: View>: View {
+struct SettingsNavigationRow<Destination: View>: View {
   let title: String
   let subtitle: String
   let systemImage: String
@@ -1028,13 +1184,10 @@ private struct SettingsNavigationRow<Destination: View>: View {
   var body: some View {
     NavigationLink(destination: destination) {
       SettingsRowContent(title: title, subtitle: subtitle, systemImage: systemImage) {
-        Image(systemName: "chevron.right")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
+        EmptyView()
       }
     }
-    .buttonStyle(.miraPress)
-    .simultaneousGesture(TapGesture().onEnded { CaptroHaptics.light() })
+    .buttonStyle(.automatic)
   }
 }
 
@@ -1056,7 +1209,7 @@ private struct SettingsLinkRow: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
     }
-    .buttonStyle(.miraPress)
+    .buttonStyle(.automatic)
   }
 }
 
@@ -1078,7 +1231,7 @@ private struct SettingsButtonRow: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
       }
     }
-    .buttonStyle(.miraPress)
+    .buttonStyle(.automatic)
   }
 }
 
@@ -1128,29 +1281,29 @@ private struct SettingsRowContent<Trailing: View>: View {
   var body: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Image(systemName: systemImage)
-        .font(.system(size: 15, weight: .semibold))
+        .font(.body.weight(.regular))
         .foregroundStyle(tint)
-        .frame(width: 34, height: 34)
+        .frame(width: 24, height: 24)
         .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.body.weight(.medium))
+          .font(.body)
           .foregroundStyle(tint)
           .fixedSize(horizontal: false, vertical: true)
-        Text(subtitle)
-          .font(.subheadline)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
+        if !subtitle.isEmpty {
+          Text(subtitle)
+            .font(.footnote)
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
 
       Spacer(minLength: MIRATheme.Space.sm)
       trailing
     }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 12)
-    .frame(minHeight: 58)
-    .settingsPillSurface(cornerRadius: 26)
+    .padding(.vertical, 4)
+    .frame(minHeight: 44)
     .contentShape(Rectangle())
   }
 }

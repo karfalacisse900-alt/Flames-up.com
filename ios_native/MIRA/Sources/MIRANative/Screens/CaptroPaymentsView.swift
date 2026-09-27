@@ -159,255 +159,138 @@ private enum CaptroPaymentsError: LocalizedError {
   }
 }
 
+enum CaptroPaymentSettingsPage {
+  case overview, cards, payout
+  var title: String {
+    switch self { case .overview: return "Payments & payouts"; case .cards: return "Payment methods"; case .payout: return "Payout account" }
+  }
+}
+
 struct CaptroPaymentsView: View {
   @StateObject private var model: CaptroPaymentsModel
   @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
   @State private var showingCustomerSheet = false
+  private let page: CaptroPaymentSettingsPage
 
   init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: CaptroPaymentsModel(api: api))
+    page = .overview
   }
-
-  init(api: MIRAAPIClient, model: CaptroPaymentsModel) {
+  init(api: MIRAAPIClient, model: CaptroPaymentsModel, page: CaptroPaymentSettingsPage = .overview) {
     _model = StateObject(wrappedValue: model)
-  }
-
-  private var savedDebitCards: [CaptroSavedPaymentMethod] {
-    model.methods.filter { $0.funding.lowercased() == "debit" }
+    self.page = page
   }
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 0) {
-        paymentCardsSection
-        divider
-        payoutSection
-        divider
-        earningsLink
+    SettingsDetailScaffold(title: page.title) {
+      switch page {
+      case .overview:
+        SettingsCard(title: "Buying") {
+          SettingsNavigationRow(title: "Payment methods", subtitle: "Cards saved for purchases", systemImage: "creditcard",
+            destination: CaptroPaymentsView(api: model.api, model: model, page: .cards))
+        }
+        SettingsCard(title: "Selling") {
+          if let account = model.payoutAccount, account.status != "not_started" {
+            SettingsNavigationRow(title: "Your earnings", subtitle: "", systemImage: "dollarsign",
+              destination: CaptroEarningsView(api: model.api, model: model.earningsModel))
+            SettingsNavigationRow(title: "Payout account", subtitle: "", systemImage: "building.columns",
+              destination: CaptroPaymentsView(api: model.api, model: model, page: .payout))
+          } else if model.isLoadingPayout {
+            ProgressView("Checking seller setup…")
+          } else if let error = model.payoutError {
+            Text(error).foregroundStyle(.red).font(.subheadline)
+            Button("Try again") { Task { await model.refreshPayoutAccount() } }
+          } else {
+            SettingsNavigationRow(title: "Set up earnings", subtitle: "For creators who want to sell", systemImage: "building.columns",
+              destination: CaptroPaymentsView(api: model.api, model: model, page: .payout))
+          }
+        }
+      case .cards: paymentCardsSection
+      case .payout: payoutSection
       }
     }
-    .background(MIRATheme.Color.surface)
-    .foregroundStyle(CaptroDetailStyle.ink)
-    .navigationTitle("Payments")
-    .navigationBarTitleDisplayMode(.inline)
-    .miraHideTabBarOnAppear()
-    .onAppear {
-      MIRAPerformanceTimeline.mark("payments_screen_visible", detail: model.methods.isEmpty ? "empty" : "retained")
+    .task { await refresh() }
+    .refreshable { await refresh(force: true) }
+  }
+
+  private func refresh(force: Bool = false) async {
+    switch page {
+    case .overview: await model.refreshPayoutAccount()
+    case .cards: await model.refreshPaymentMethods()
+    case .payout: await model.refreshPayoutAccount()
     }
-    .task { await model.load() }
-    .refreshable { await model.load(forceRefresh: true) }
   }
 
   private var paymentCardsSection: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      sectionHeading("PAYMENT CARDS")
-      if model.isLoadingCards && !model.methods.isEmpty {
-        ProgressView("Checking payment cards...")
-          .font(.system(size: 12))
-      }
-      if model.isLoadingCards && model.methods.isEmpty {
-        ProgressView("Loading cards...").frame(minHeight: 48)
-      } else if model.methods.isEmpty {
-        Text("No saved payment card")
-          .font(.system(size: 15, weight: .semibold))
-      } else {
+    Group {
+      Section {
+        if model.isLoadingCards && model.methods.isEmpty { ProgressView("Loading payment methods…") }
+        else if model.methods.isEmpty && model.cardError == nil {
+          Text("No saved cards").foregroundStyle(.secondary)
+        }
         ForEach(model.methods) { method in
-          HStack(spacing: 12) {
-            Image(systemName: "creditcard")
-              .font(.system(size: 18, weight: .semibold))
-              .foregroundStyle(CaptroDetailStyle.accent)
-              .frame(width: 34, height: 34)
+          Label {
             VStack(alignment: .leading, spacing: 3) {
-              Text("\(method.brand) ···· \(method.last4)")
-                .font(.system(size: 15, weight: .semibold))
+              Text("\(method.brand) •••• \(method.last4)")
               Text("Expires \(String(format: "%02d", method.expirationMonth))/\(String(method.expirationYear).suffix(2))")
-                .font(.system(size: 12))
-                .foregroundStyle(CaptroDetailStyle.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
-            Text(method.funding.capitalized)
-              .font(.system(size: 11, weight: .semibold))
-              .foregroundStyle(CaptroDetailStyle.secondary)
-          }
-          .frame(minHeight: 50)
+          } icon: { Image(systemName: "creditcard").foregroundStyle(MIRATheme.Color.textPrimary) }
+            .frame(minHeight: 44)
         }
+        if let customerSheet = model.customerSheet {
+          cardManagementButton.customerSheet(isPresented: $showingCustomerSheet, customerSheet: customerSheet, onCompletion: model.handleCustomerSheet)
+        } else { cardManagementButton }
+      } header: { Text("Saved cards") } footer: {
+        Text("Saving a card is optional. Choose your payment method at checkout. Card details are securely managed by Stripe.")
       }
-
-      Text("Debit and credit cards saved here are available when you pay in Captro.")
-        .font(.system(size: 13))
-        .foregroundStyle(CaptroDetailStyle.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      Text("You are a Captro customer when you pay—no Stripe account connection is needed for purchases.")
-        .font(.system(size: 12))
-        .foregroundStyle(CaptroDetailStyle.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-
-      if !model.methods.isEmpty, model.payoutAccount?.ready != true {
-        Text("Your payment card is ready for purchases. To receive sales earnings, add an eligible debit card in Seller Setup below.")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(CaptroDetailStyle.ink)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      if let customerSheet = model.customerSheet {
-        Button {
-          openCardSetup()
-        } label: {
-          Label(model.methods.isEmpty ? "Add Payment Card" : "Manage Payment Cards", systemImage: "creditcard")
-            .frame(maxWidth: .infinity, minHeight: 46)
+      if let error = model.cardError {
+        Section { Text(error).font(.subheadline).foregroundStyle(.red)
+          Button("Reload payment methods") { Task { await model.refreshPaymentMethods() } }
         }
-        .font(.body.weight(.semibold))
-        .foregroundStyle(MIRATheme.Color.onPrimary)
-        .padding(.vertical, 6)
-        .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
-        .buttonStyle(.miraPress)
-        .customerSheet(
-          isPresented: $showingCustomerSheet,
-          customerSheet: customerSheet,
-          onCompletion: model.handleCustomerSheet
-        )
-      } else {
-        Button {
-          openCardSetup()
-        } label: {
-          Label(model.methods.isEmpty ? "Add Payment Card" : "Manage Payment Cards", systemImage: "creditcard")
-            .frame(maxWidth: .infinity, minHeight: 46)
-        }
-        .font(.body.weight(.semibold))
-        .foregroundStyle(MIRATheme.Color.onPrimary)
-        .padding(.vertical, 6)
-        .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
-        .buttonStyle(.miraPress)
-        .disabled(model.isPreparingCardSetup)
-      }
-      if model.isPreparingCardSetup {
-        ProgressView("Opening secure card setup...")
-          .font(.system(size: 12))
-      }
-      if let cardError = model.cardError {
-        Text(cardError).font(.system(size: 12)).foregroundStyle(.red)
       }
     }
-    .padding(16)
+  }
+
+  private var cardManagementButton: some View {
+    Button { openCardSetup() } label: {
+      HStack {
+        Label(model.methods.isEmpty ? "Add payment method" : "Manage payment methods", systemImage: "plus")
+        Spacer()
+        if model.isPreparingCardSetup { ProgressView() }
+      }.frame(minHeight: 44)
+    }.disabled(model.isPreparingCardSetup)
   }
 
   private var payoutSection: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      sectionHeading("SELLER SETUP")
-      if model.isLoadingPayout && model.payoutAccount != nil {
-        ProgressView("Checking payout method...")
-          .font(.system(size: 12))
-      }
-      if let account = model.payoutAccount {
-        if let card = account.payoutCard {
-          HStack(spacing: 12) {
-            Image(systemName: "rectangle.and.hand.point.up.left.filled")
-              .font(.system(size: 18, weight: .semibold))
-              .foregroundStyle(CaptroDetailStyle.accent)
-              .frame(width: 34, height: 34)
-            VStack(alignment: .leading, spacing: 3) {
-              Text("\(card.brand) Debit ···· \(card.last4)")
-                .font(.system(size: 15, weight: .semibold))
-              Text(account.ready ? "Ready for earnings" : "Setup needs attention")
-                .font(.system(size: 12))
-                .foregroundStyle(CaptroDetailStyle.secondary)
-            }
-            Spacer(minLength: 8)
-            if account.ready {
-              Image(systemName: "checkmark.circle.fill").foregroundStyle(CaptroDetailStyle.accent)
-            }
-          }
-          .frame(minHeight: 50)
-        } else {
-          Text(account.payoutCardStatusTitle)
-            .font(.system(size: 15, weight: .semibold))
-        }
-        Text(account.payoutCardGuidance)
-          .font(.system(size: 13))
-          .foregroundStyle(CaptroDetailStyle.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-        Text("Before your paid listings can accept purchases, complete the business and identity details Stripe requires, accept its terms, and add an eligible payout destination. Saving a payment card does not complete seller setup. Buying and free posts do not require seller setup. Credit cards cannot receive payouts.")
-          .font(.system(size: 12))
-          .foregroundStyle(CaptroDetailStyle.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-        if account.payoutCard == nil && !savedDebitCards.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
-            Text("ADD A PAYOUT DEBIT CARD")
-              .font(.system(size: 11, weight: .bold))
-              .foregroundStyle(CaptroDetailStyle.secondary)
-            ForEach(savedDebitCards) { method in
-              Button {
-                openPayoutSetup()
-              } label: {
-                Label("Use \(method.brand) ···· \(method.last4) for payouts", systemImage: "creditcard")
-                  .frame(maxWidth: .infinity, minHeight: 44)
+    Group {
+      Section {
+        if let account = model.payoutAccount {
+          if let card = account.payoutCard {
+            Label {
+              VStack(alignment: .leading, spacing: 3) {
+                Text("\(card.brand) Debit •••• \(card.last4)")
+                Text(account.ready ? "Ready" : "Setup needs attention").font(.footnote).foregroundStyle(.secondary)
               }
-              .font(.system(size: 14, weight: .semibold))
-              .foregroundStyle(CaptroDetailStyle.ink)
-              .overlay(Rectangle().stroke(CaptroDetailStyle.divider, lineWidth: 1))
-              .buttonStyle(.plain)
-              .disabled(model.isLoadingPayout)
-            }
-            Text("For security, enter this same debit card in the next screen. Captro never copies your saved card details.")
-              .font(.system(size: 12))
-              .foregroundStyle(CaptroDetailStyle.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        Button(account.ready ? account.payoutCardActionTitle : "Continue Seller Setup") {
-          openPayoutSetup()
-        }
-        .font(.system(size: 14, weight: .semibold))
-        .frame(maxWidth: .infinity, minHeight: 46)
-        .foregroundStyle(CaptroDetailStyle.ink)
-        .overlay(Rectangle().stroke(CaptroDetailStyle.divider, lineWidth: 1))
-        .buttonStyle(.plain)
-        .disabled(model.isLoadingPayout)
-      } else if model.isLoadingPayout {
-        ProgressView("Loading payout method...").frame(minHeight: 48)
-      } else {
-        Button("Try Payout Card Setup Again") {
-          Task { await model.refreshPayoutAccount() }
-        }
-        .font(.system(size: 14, weight: .semibold))
+            } icon: { Image(systemName: "building.columns") }.frame(minHeight: 44)
+          } else { Text(account.payoutCardStatusTitle) }
+          Text(account.payoutCardGuidance).font(.subheadline).foregroundStyle(.secondary)
+          Button { openPayoutSetup() } label: {
+            HStack { Text(account.ready ? "Manage payout method" : "Continue setup"); Spacer(); if model.isLoadingPayout { ProgressView() } }
+              .frame(minHeight: 44)
+          }.disabled(model.isLoadingPayout)
+          SettingsNavigationRow(title: "Earnings & verification", subtitle: "", systemImage: "checkmark.shield",
+            destination: CaptroEarningsView(api: model.api, model: model.earningsModel))
+        } else if model.isLoadingPayout { ProgressView("Loading payout account…") }
+      } header: { Text("Seller payouts") } footer: {
+        Text("Complete the required identity and payout details to receive earnings. A card saved for purchases is not a payout destination.")
       }
-      if let payoutError = model.payoutError {
-        Text(payoutError).font(.system(size: 12)).foregroundStyle(.red)
+      if let error = model.payoutError {
+        Section { Text(error).foregroundStyle(.red).font(.subheadline)
+          Button("Try again") { Task { await model.refreshPayoutAccount() } }
+        }
       }
     }
-    .padding(16)
-  }
-
-  private var earningsLink: some View {
-    NavigationLink {
-      CaptroEarningsView(api: model.api, model: model.earningsModel)
-    } label: {
-      HStack {
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Earnings and Payouts").font(.system(size: 15, weight: .semibold))
-          Text("Balance, sales, withdrawals, and payout history")
-            .font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
-        }
-        Spacer(minLength: 8)
-        Image(systemName: "chevron.right")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(CaptroDetailStyle.secondary)
-      }
-      .frame(minHeight: 58)
-      .padding(16)
-    }
-    .buttonStyle(.plain)
-  }
-
-  private func sectionHeading(_ title: String) -> some View {
-    Text(title)
-      .font(.system(size: 11, weight: .bold))
-      .foregroundStyle(CaptroDetailStyle.secondary)
-  }
-
-  private var divider: some View {
-    Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
   }
 
   private func openPayoutSetup() {

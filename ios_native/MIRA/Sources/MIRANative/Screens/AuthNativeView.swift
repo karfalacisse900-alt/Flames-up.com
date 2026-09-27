@@ -37,109 +37,54 @@ public struct AuthNativeView: View {
 
   public var body: some View {
     NavigationStack {
-      ZStack {
-        CaptroWelcomePager(
-          selectedPage: $selectedWelcomePage,
-          onLogin: { presentAuthPanel(createAccount: false) },
-          onSignup: { presentAuthPanel(createAccount: true) },
-          onGuest: {
-            CaptroHaptics.light()
-            session.continueAsGuest()
-          }
-        )
-        .accessibilityHidden(isAuthPanelVisible || isForgotPasswordVisible || session.passwordResetContext != nil)
-
-        if isAuthPanelVisible {
-          Color.black.opacity(0.24)
-            .ignoresSafeArea()
-            .transition(.opacity)
-            .onTapGesture {
-              closeAuthPanel()
-            }
-            .zIndex(1)
-
-          authPanel
-            .accessibilityAddTraits(.isModal)
-            .accessibilityAction(.escape) { closeAuthPanel() }
-            .accessibilityHidden(isForgotPasswordVisible || session.passwordResetContext != nil)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .zIndex(2)
-        }
-
-        if isForgotPasswordVisible || session.passwordResetContext != nil {
-          Color.black.opacity(0.26)
-            .ignoresSafeArea()
-            .transition(.opacity)
-            .zIndex(3)
-
-          passwordResetOverlay
-            .accessibilityAddTraits(.isModal)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-            .zIndex(4)
-        }
-      }
-      .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: isAuthPanelVisible)
-      .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: isForgotPasswordVisible)
-      .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: session.passwordResetContext != nil)
+      CaptroWelcomePager(
+        selectedPage: $selectedWelcomePage,
+        onLogin: { presentAuthPanel(createAccount: false) },
+        onSignup: { presentAuthPanel(createAccount: true) },
+        onGuest: { session.continueAsGuest() }
+      )
       .toolbar(.hidden, for: .navigationBar)
+      .navigationDestination(isPresented: $isAuthPanelVisible) { authPanel }
+    }
+    .tint(MIRATheme.Color.forest)
+    .sheet(isPresented: Binding(
+      get: { session.passwordResetContext != nil },
+      set: { if !$0 { session.clearPasswordResetContext() } }
+    )) {
+      NavigationStack {
+        resetPasswordPanel
+          .toolbar { ToolbarItem(placement: .cancellationAction) {
+            Button("Cancel") { session.clearPasswordResetContext(); resetPassword = ""; confirmResetPassword = "" }
+              .disabled(session.isWorking)
+          } }
+      }
+      .interactiveDismissDisabled(session.isWorking)
     }
   }
 
   private var authPanel: some View {
-    VStack(spacing: 0) {
-      Capsule()
-        .fill(MIRATheme.Color.textMuted.opacity(0.28))
-        .frame(width: 42, height: 5)
-        .padding(.top, 10)
-        .padding(.bottom, MIRATheme.Space.md)
-
-      HStack(spacing: MIRATheme.Space.sm) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text(isCreatingAccount ? "Sign up" : "Log in")
-            .font(.title2.weight(.semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text(isCreatingAccount ? "Create your Captro account." : "Welcome back to Captro.")
-            .font(.system(size: 14.5, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-
-        Spacer()
-
-        Button {
-          closeAuthPanel()
-        } label: {
-          Image(systemName: "xmark")
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 44, height: 44)
-            .background(MIRATheme.Color.surfaceSoft)
-            .clipShape(Circle())
-        }
-        .buttonStyle(.miraPress)
-        .accessibilityLabel("Close")
+    ScrollView {
+      VStack(spacing: 24) {
+        VStack(spacing: 12) {
+          Text("Captro").font(.title.weight(.bold)).foregroundStyle(MIRATheme.Color.forest)
+          Text(isCreatingAccount ? "Create account" : "Log in").font(.title2.weight(.bold))
+          Text(isCreatingAccount ? "Join Captro and start sharing." : "Welcome back.")
+            .font(.body).foregroundStyle(.secondary)
+        }.frame(maxWidth: .infinity).padding(.vertical, 12)
+        formBlock
+        authDivider
+        socialAuthBlock
+        legalFooter
       }
-      .padding(.horizontal, MIRATheme.Space.xl)
-
-      ScrollView {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-          termsAcceptanceBlock
-          socialAuthBlock
-          authDivider
-          formBlock
-          legalFooter
-        }
-        .padding(.horizontal, MIRATheme.Space.xl)
-        .padding(.top, MIRATheme.Space.lg)
-        .padding(.bottom, MIRATheme.Space.xxl)
-      }
+      .frame(maxWidth: 480)
+      .padding(.horizontal, 24).padding(.bottom, 24)
+      .frame(maxWidth: .infinity)
     }
-    .frame(maxWidth: .infinity)
-    .frame(maxHeight: isCreatingAccount ? 740 : 680, alignment: .bottom)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
-    .modifier(MIRATheme.floatingShadow())
-    .frame(maxHeight: .infinity, alignment: .bottom)
-    .ignoresSafeArea(edges: .bottom)
+    .scrollDismissesKeyboard(.interactively)
+    .background(MIRATheme.Color.appBackground)
+    .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+    .toolbar(.visible, for: .navigationBar)
+    .navigationDestination(isPresented: $isForgotPasswordVisible) { forgotPasswordPanel }
   }
 
   private func presentAuthPanel(createAccount: Bool) {
@@ -160,16 +105,13 @@ public struct AuthNativeView: View {
 
   private var formBlock: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      Text(isCreatingAccount ? "Create with email" : "Continue with email")
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-
       if isCreatingAccount {
         authField("Username", text: $username, systemImage: "person")
         authField("Full name", text: $fullName, systemImage: "textformat")
       }
       authField("Email", text: $email, systemImage: "envelope", keyboard: .emailAddress)
       secureField
+      termsAcceptanceBlock
 
       if let error = session.errorMessage {
         Text(error)
@@ -235,207 +177,57 @@ public struct AuthNativeView: View {
     }
   }
 
-  @ViewBuilder
-  private var passwordResetOverlay: some View {
-    if session.passwordResetContext != nil {
-      resetPasswordPanel
-    } else if isForgotPasswordVisible {
-      forgotPasswordPanel
-    }
-  }
-
   private var forgotPasswordPanel: some View {
-    VStack(spacing: 0) {
-      Capsule()
-        .fill(MIRATheme.Color.textMuted.opacity(0.28))
-        .frame(width: 42, height: 5)
-        .padding(.top, 10)
-        .padding(.bottom, MIRATheme.Space.md)
-
-      HStack {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Reset password")
-            .font(.title2.weight(.semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text("We’ll send a reset link to your email.")
-            .font(.system(size: 14.5, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-        Spacer()
-        Button {
-          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-            isForgotPasswordVisible = false
-          }
-          forgotPasswordNotice = ""
-          session.errorMessage = nil
-        } label: {
-          Image(systemName: "xmark")
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 44, height: 44)
-            .background(MIRATheme.Color.surfaceSoft)
-            .clipShape(Circle())
-        }
-        .buttonStyle(.miraPress)
-      }
-      .padding(.horizontal, MIRATheme.Space.xl)
-
-      VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-        authField("Email", text: $forgotPasswordEmail, systemImage: "envelope", keyboard: .emailAddress)
-
-        if !forgotPasswordNotice.isEmpty {
-          Text(forgotPasswordNotice)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.forest)
-        }
-
-        if let error = session.errorMessage {
-          Text(error)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.red.opacity(0.82))
-        }
-
+    SettingsDetailScaffold(title: "Reset password") {
+      Section {
+        TextField("Email address", text: $forgotPasswordEmail).keyboardType(.emailAddress)
+          .textContentType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+      } footer: { Text("We’ll send a secure reset link to your email.") }
+      Section {
         Button {
           Task {
-            let ok = await session.requestPasswordReset(email: forgotPasswordEmail, api: api)
-            if ok {
+            if await session.requestPasswordReset(email: forgotPasswordEmail, api: api) {
               forgotPasswordNotice = "Check your email for a reset link."
             }
           }
         } label: {
-          HStack {
-            Spacer()
-            if session.isWorking {
-              ProgressView().tint(.white)
-            } else {
-              Text("Send reset link")
-                .font(.body.weight(.semibold))
-            }
-            Spacer()
-          }
-          .foregroundStyle(MIRATheme.Color.onPrimary)
-          .padding(.vertical, 12)
-          .frame(minHeight: 50)
-          .background(MIRATheme.Color.forest)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
-        }
-        .buttonStyle(.miraPress)
-        .disabled(session.isWorking || !forgotPasswordEmail.contains("@"))
+          HStack { Text("Send reset link"); Spacer(); if session.isWorking { ProgressView() } }
+        }.disabled(session.isWorking || !forgotPasswordEmail.contains("@"))
       }
-      .padding(.horizontal, MIRATheme.Space.xl)
-      .padding(.top, MIRATheme.Space.lg)
-      .padding(.bottom, MIRATheme.Space.xxl)
+      if !forgotPasswordNotice.isEmpty { Text(forgotPasswordNotice).foregroundStyle(MIRATheme.Color.forest) }
+      if let error = session.errorMessage { Text(error).foregroundStyle(.red) }
     }
-    .frame(maxWidth: .infinity)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
-    .modifier(MIRATheme.floatingShadow())
-    .frame(maxHeight: .infinity, alignment: .bottom)
-    .ignoresSafeArea(edges: .bottom)
   }
 
   private var resetPasswordPanel: some View {
-    VStack(spacing: 0) {
-      Capsule()
-        .fill(MIRATheme.Color.textMuted.opacity(0.28))
-        .frame(width: 42, height: 5)
-        .padding(.top, 10)
-        .padding(.bottom, MIRATheme.Space.md)
-
-      HStack {
-        VStack(alignment: .leading, spacing: 4) {
-          Text("Create a new password")
-            .font(.title2.weight(.semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text("Use the reset link email to finish signing back in.")
-            .font(.system(size: 14.5, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-        }
-        Spacer()
+    SettingsDetailScaffold(title: "New password") {
+      Section {
+        SecureField("New password", text: $resetPassword).textContentType(.newPassword)
+        SecureField("Confirm password", text: $confirmResetPassword).textContentType(.newPassword)
+      } footer: { Text("Use at least 8 characters.") }
+      Section {
         Button {
-          session.clearPasswordResetContext()
-          resetPassword = ""
-          confirmResetPassword = ""
-        } label: {
-          Image(systemName: "xmark")
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 44, height: 44)
-            .background(MIRATheme.Color.surfaceSoft)
-            .clipShape(Circle())
-        }
-        .buttonStyle(.miraPress)
-      }
-      .padding(.horizontal, MIRATheme.Space.xl)
-
-      VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-        secureResetField("New password", text: $resetPassword)
-        secureResetField("Confirm password", text: $confirmResetPassword)
-
-        if let error = session.errorMessage {
-          Text(error)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.red.opacity(0.82))
-        }
-
-        Button {
-          guard resetPassword == confirmResetPassword else {
-            session.errorMessage = "Passwords do not match."
-            return
-          }
           Task {
-            let ok = await session.completePasswordReset(password: resetPassword, api: api)
-            if ok {
-              resetPassword = ""
-              confirmResetPassword = ""
+            if await session.completePasswordReset(password: resetPassword, api: api) {
+              resetPassword = ""; confirmResetPassword = ""
               session.clearPasswordResetContext()
-              withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-                isAuthPanelVisible = false
-                isForgotPasswordVisible = false
-              }
+              isForgotPasswordVisible = false
+              isAuthPanelVisible = false
             }
           }
-        } label: {
-          HStack {
-            Spacer()
-            if session.isWorking {
-              ProgressView().tint(.white)
-            } else {
-              Text("Save new password")
-                .font(.body.weight(.semibold))
-            }
-            Spacer()
-          }
-          .foregroundStyle(MIRATheme.Color.onPrimary)
-          .padding(.vertical, 12)
-          .frame(minHeight: 50)
-          .background(MIRATheme.Color.forest)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
-        }
-        .buttonStyle(.miraPress)
-        .disabled(session.isWorking || resetPassword.count < 6 || confirmResetPassword.count < 6)
+        } label: { HStack { Text("Save new password"); Spacer(); if session.isWorking { ProgressView() } } }
+          .disabled(session.isWorking || resetPassword.count < 8 || resetPassword != confirmResetPassword)
       }
-      .padding(.horizontal, MIRATheme.Space.xl)
-      .padding(.top, MIRATheme.Space.lg)
-      .padding(.bottom, MIRATheme.Space.xxl)
+      if !confirmResetPassword.isEmpty && resetPassword != confirmResetPassword { Text("Passwords do not match.").foregroundStyle(.red) }
+      if let error = session.errorMessage { Text(error).foregroundStyle(.red) }
     }
-    .frame(maxWidth: .infinity)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
-    .modifier(MIRATheme.floatingShadow())
-    .frame(maxHeight: .infinity, alignment: .bottom)
-    .ignoresSafeArea(edges: .bottom)
   }
 
   private var socialAuthBlock: some View {
     VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      Text(isCreatingAccount ? "Create your account" : "Sign in faster")
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
-
       VStack(spacing: MIRATheme.Space.sm) {
-        googleButton
         appleButton
+        googleButton
       }
     }
   }
@@ -475,7 +267,7 @@ public struct AuthNativeView: View {
           finishAppleSignIn(result)
         }
       }
-      .signInWithAppleButtonStyle(.black)
+      .signInWithAppleButtonStyle(.whiteOutline)
       .allowsHitTesting(hasAcceptedCurrentTerms && !session.isWorking && !isSocialSignInWorking)
 
       if !hasAcceptedCurrentTerms {
@@ -496,95 +288,33 @@ public struct AuthNativeView: View {
   }
 
   private var termsAcceptanceBlock: some View {
-    VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-      Button {
-        CaptroHaptics.light()
-        if hasAcceptedCurrentTerms {
-          acceptedTermsVersion = ""
-          acceptedTermsAt = ""
-        } else {
-          acceptedTermsVersion = captroTermsVersion
-          acceptedTermsAt = ISO8601DateFormatter().string(from: Date())
-        }
+    Toggle(isOn: Binding(
+      get: { hasAcceptedCurrentTerms },
+      set: { accepted in
+        acceptedTermsVersion = accepted ? captroTermsVersion : ""
+        acceptedTermsAt = accepted ? ISO8601DateFormatter().string(from: Date()) : ""
         session.errorMessage = nil
-      } label: {
-        HStack(alignment: .top, spacing: MIRATheme.Space.sm) {
-          Image(systemName: hasAcceptedCurrentTerms ? "checkmark.circle.fill" : "circle")
-            .font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(hasAcceptedCurrentTerms ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
-            .frame(width: 28)
-
-          VStack(alignment: .leading, spacing: 6) {
-            Text("I am 16 or older and accept Captro's Terms and Community Rules.")
-              .font(.system(size: 14.5, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .fixedSize(horizontal: false, vertical: true)
-            Text("Captro has zero tolerance for objectionable content or abusive users. You can report posts, stories, comments, profiles, and messages, and you can block users at any time.")
-              .font(.system(size: 12.5, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-              .lineSpacing(2)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-          Spacer(minLength: 0)
-        }
-        .padding(MIRATheme.Space.md)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel("Accept Captro Terms and Community Rules")
-      .accessibilityValue(hasAcceptedCurrentTerms ? "Accepted" : "Not accepted")
-
-      HStack(spacing: MIRATheme.Space.sm) {
-        NavigationLink(destination: TermsOfServiceView()) {
-          legalFooterPill("Terms")
-        }
-        NavigationLink(destination: CommunityGuidelinesView()) {
-          legalFooterPill("Community Rules")
-        }
-      }
+    )) {
+      Text("I am 16 or older and accept the Terms and Community Guidelines.")
+        .font(.footnote).fixedSize(horizontal: false, vertical: true)
     }
+    .tint(MIRATheme.Color.forest)
+    .frame(minHeight: 44)
   }
 
   private var legalFooter: some View {
-    VStack(spacing: MIRATheme.Space.sm) {
-      Text("By continuing, you agree to Captro's legal and safety terms.")
-        .font(.system(size: 12.5, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
-
-      LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: MIRATheme.Space.sm) {
-        NavigationLink(destination: TermsOfServiceView()) {
-          legalFooterPill("Terms")
-        }
-        NavigationLink(destination: PrivacyPolicyView()) {
-          legalFooterPill("Privacy")
-        }
-        NavigationLink(destination: CommunityGuidelinesView()) {
-          legalFooterPill("Guidelines")
-        }
-        NavigationLink(destination: SafetyReportingView()) {
-          legalFooterPill("Safety")
-        }
+    VStack(spacing: 4) {
+      HStack(spacing: 16) {
+        NavigationLink(destination: TermsOfServiceView()) { Text("Terms").frame(minWidth: 44, minHeight: 44) }
+        NavigationLink(destination: PrivacyPolicyView()) { Text("Privacy").frame(minWidth: 44, minHeight: 44) }
       }
-
-      Text("Support: karfalacisse900@gmail.com")
-        .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .textSelection(.enabled)
+      NavigationLink(destination: CommunityGuidelinesView()) { Text("Community Guidelines").frame(minHeight: 44) }
     }
-  }
-
-  private func legalFooterPill(_ title: String) -> some View {
-    Text(title)
-      .font(.subheadline.weight(.medium))
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .frame(maxWidth: .infinity)
-      .padding(.vertical, 8)
-      .frame(minHeight: 44)
-      .background(MIRATheme.Color.surfaceSoft)
-      .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+    .font(.footnote).foregroundStyle(.secondary)
+    .buttonStyle(.plain)
+    .frame(maxWidth: .infinity)
+    .environment(\.defaultMinListRowHeight, 44)
   }
 
   private func authField(
@@ -900,34 +630,27 @@ private struct CaptroWelcomePager: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack {
-        CaptroWelcomeWordmark(color: MIRATheme.Color.textPrimary)
-        Spacer()
-        CaptroWelcomePageIndicator(selectedPage: selectedPage, tint: MIRATheme.Color.textSecondary)
-      }
-      .padding(.horizontal, 24)
-      .padding(.vertical, 20)
-
-      TabView(selection: $selectedPage) {
-        ForEach(CaptroWelcomePage.all) { page in
-          CaptroWelcomeSlide(page: page).tag(page.id)
+      Text("Captro").font(.title.weight(.bold)).foregroundStyle(MIRATheme.Color.forest)
+        .padding(.top, 32).padding(.bottom, 16)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 16) {
+          Text("Find your people.")
+            .font(.largeTitle.weight(.bold)).accessibilityAddTraits(.isHeader)
+          Text("Share moments, discover places, and connect through what matters.")
+            .font(.title3).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: 480, alignment: .leading)
+        .padding(.horizontal, 24).padding(.vertical, 48)
+        .frame(maxWidth: .infinity)
       }
-      .tabViewStyle(.page(indexDisplayMode: .never))
-
       VStack(spacing: 12) {
         CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: onLogin)
         CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: onSignup)
-        Button(action: onGuest) {
-          Text("Continue as Guest")
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-            .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(.miraPress)
+        Button("Continue as Guest", action: onGuest)
+          .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
       }
-      .padding(.horizontal, 24)
-      .padding(.bottom, 12)
+      .frame(maxWidth: 480).padding(.horizontal, 24).padding(.bottom, 16)
     }
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
   }
