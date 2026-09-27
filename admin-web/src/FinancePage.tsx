@@ -1,5 +1,5 @@
 import {useEffect,useState} from 'react';
-import {AdminApi} from './api';
+import {AdminApi,ApiError} from './api';
 import type {FinanceSummary,FinanceRecord,FinanceOrder} from './types';
 const categories=[['event','Events'],['club','Clubs'],['meetup','Meetups'],['deal','Deals'],['group_access','Group access'],['local_offer','Local offers']] as const;
 function money(amount:number,currency:string){
@@ -21,7 +21,7 @@ export function FinancePage({token}:{token:string}){
     if(orderId){const result=await AdminApi.financeOrder(token,orderId,offset);if(current){setOrder(result);setNext(result.nextOffset);}}
     else if(selection){const q=new URLSearchParams({...selection,offset:String(offset)});const result=await AdminApi.financeRecords(token,'?'+q);if(current){setRecords(result.items);setNext(result.nextOffset);}}
     else{const result=await AdminApi.financePools(token);if(current){setSummary(result);setNext(null);}}
-   }catch(e){if(current)setError(e instanceof Error?e.message:'Could not load funds.');}
+   }catch(e){if(current){setError(e instanceof Error?e.message:'Could not load funds.');if(e instanceof ApiError&&[401,403].includes(e.status)){setSummary(null);setOrder(null);setRecords([]);setNext(null);}}}
    finally{if(current)setLoading(false);}
   };void load();return()=>{current=false;};
  },[token,selection,orderId,offset,refresh]);
