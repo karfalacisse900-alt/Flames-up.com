@@ -859,6 +859,9 @@ private struct SettingsPurchasesView: View {
                   Text(purchase.itemTitle).font(.body)
                   Text("\(purchase.totalLabel) · \(purchase.status.replacingOccurrences(of: "_", with: " ").capitalized)")
                     .font(.footnote).foregroundStyle(.secondary)
+                  if let date = CaptroStampAdapter.date(purchase.purchasedAt) {
+                    Text(date, style: .date).font(.caption).foregroundStyle(.secondary)
+                  }
                 }.frame(minHeight: 44)
               }
             }
@@ -901,7 +904,7 @@ private struct SettingsPurchaseDetailView: View {
           LabeledContent("Payment method", value: "\(method.brand.capitalized) •••• \(method.last4)")
         }
         if let dateString = purchase.purchasedAt {
-          if let date = ISO8601DateFormatter().date(from: dateString) {
+          if let date = CaptroStampAdapter.date(dateString) {
             LabeledContent("Date", value: date.formatted(date: .abbreviated, time: .shortened))
           }
         }
