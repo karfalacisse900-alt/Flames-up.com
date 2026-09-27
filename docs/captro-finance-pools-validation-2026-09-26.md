@@ -56,3 +56,14 @@ TestFlight 491.1 is live Stripe: never enter Stripe test-card numbers there. Aut
 ## Deployment and remaining verification
 
 Deployment results will be recorded below after CI completes. Existing sellers' payout schedules, fee policies and payment secrets/webhooks are not changed by this reporting deployment. Historical records whose environment/source cannot be verified must be reconciled, never guessed. Pool totals are accounting reports, not authorization for withdrawal and not legal escrow.
+
+### Final deployment results
+
+- Final sandbox validation: run 36282073360, attempt 2, PASS. Attempt 1 was interrupted before any test by a temporary Supabase CLI login failure while another workflow was using that login; the sequential retry passed. Customer cus_VKlOjvNFVAls8V; first PI pi_3UK5rM2KVcRiAcs90UYownsy; second PI pi_3UK5rT2KVcRiAcs90sNGlf0S; consented PM pm_1UK5rN2KVcRiAcs9RJnQqpQ1, allow_redisplay=always. Still not a device test.
+- Final sandbox event order 81552750-eaff-40b7-ac49-49311925cf40: paid-out ledger amount 941 USD cents; transfer tr_3UK5rQ2KVcRiAcs91oNIjJb5; payout po_1UK5s92KVck0sJQhYzz3FMly.
+- Scoped production deployment 36282412969: SUCCESS. Migration 20260926235356 applied; Worker version 95e7f3f1-bb19-4e3f-957d-3d551e7e8246. No Stripe secret/bootstrap/webhook workflow steps executed.
+- Live checks: all three admin finance routes reject unauthenticated access with HTTP 401. All five finance views use security_invoker=true, deny anon/authenticated SELECT and allow service_role SELECT. No production finance rows were invented: purchases, earnings and payouts were empty at validation time.
+- Supabase post-deploy security advisor: no new finance warning; existing service-only/RLS-without-policy informational notices and pre-existing leaked-password-protection warning remain.
+- Admin deploy 36282565637: SUCCESS. Main URL https://captro-admin.pages.dev serves the new Captro Funds bundle. Fixed the prior workflow's accidental preview deployment by reading the existing Pages production_branch (main), without changing project settings. This required .github/workflows/admin-web-deploy.yml in addition to the files above.
+- Native Release archive/export/upload 36281747661: SUCCESS, source 1d23a638. Apple read-back 36282578773 confirms Captro 1.0.1 (494.1), VALID, IN_BETA_TESTING, auto-notify enabled, assigned to Captro private and Captro private2.
+- Physical-iPhone PaymentSheet: NOT VERIFIED for 494.1. The user's 491.1 failure is not claimed resolved. Saved-card visibility, actual on-device new/saved-card payment and completed 3DS remain acceptance gates requiring device evidence.
