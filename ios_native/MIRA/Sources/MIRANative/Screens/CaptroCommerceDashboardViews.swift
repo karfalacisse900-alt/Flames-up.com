@@ -246,7 +246,7 @@ struct CaptroDashboardPassPresentation: Identifiable {
   var id: String { pass.id }
 }
 
-private struct CaptroDashboardPassView: View {
+struct CaptroDashboardPassView: View {
   @Environment(\.dismiss) private var dismiss
   let presentation: CaptroDashboardPassPresentation
 

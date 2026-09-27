@@ -841,19 +841,106 @@ private struct AccessibilitySettingsNativeView: View {
 private struct SettingsPurchasesView: View {
   @ObservedObject var model: ProfileNativeModel
   var body: some View {
-    ScrollView {
+    SettingsDetailScaffold(title: "Purchases & receipts") {
       if let dashboard = model.commerceDashboard {
-        if dashboard.myStuff.isEmpty { ContentUnavailableView("No purchases yet", systemImage: "doc.text", description: Text("Your purchases and access will appear here.")) }
-        else {
-          CaptroCommerceDashboardView(dashboard: CaptroCommerceDashboard(myStuff: dashboard.myStuff, created: [], pendingRequests: []), api: model.api, onDecision: { _, _ in })
+        if dashboard.myStuff.isEmpty {
+          ContentUnavailableView("No purchases yet", systemImage: "doc.text", description: Text("Your purchases and access will appear here."))
+        } else {
+          Section {
+            ForEach(dashboard.myStuff) { purchase in
+              NavigationLink {
+                SettingsPurchaseDetailView(purchase: purchase, api: model.api)
+              } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(purchase.itemTitle).font(.body)
+                  Text("\(purchase.totalLabel) · \(purchase.status.replacingOccurrences(of: "_", with: " ").capitalized)")
+                    .font(.footnote).foregroundStyle(.secondary)
+                }.frame(minHeight: 44)
+              }
+            }
+          }
         }
-      } else if model.isLoadingActivity { ProgressView("Loading purchases…").padding() }
-      if let error = model.activityError { Text(error).foregroundStyle(.red).padding() }
+      } else if model.isLoadingActivity { ProgressView("Loading purchases…") }
+      if let error = model.activityError {
+        Section {
+          Text(error).foregroundStyle(.red)
+          Button("Try again") { Task { await model.loadActivity(forceRefresh: true) } }
+            .disabled(model.isLoadingActivity)
+        }
+      }
     }
-    .navigationTitle("Purchases & receipts").navigationBarTitleDisplayMode(.inline)
-    .toolbar(.visible, for: .navigationBar).miraHideTabBarOnAppear()
-    .background(MIRATheme.Color.appBackground)
     .task { await model.loadActivity() }.refreshable { await model.loadActivity(forceRefresh: true) }
+  }
+}
+
+private struct SettingsPurchaseDetailView: View {
+  let purchase: CaptroCommercePurchase
+  let api: MIRAAPIClient
+  @State private var pass: CaptroDashboardPassPresentation?
+  @State private var isLoadingPass = false
+  @State private var error: String?
+
+  var body: some View {
+    SettingsDetailScaffold(title: "Purchase") {
+      Section {
+        Text(purchase.itemTitle).font(.headline)
+        LabeledContent("Ticket / option", value: purchase.priceLabel)
+        LabeledContent("Quantity", value: String(purchase.quantity))
+        LabeledContent("Status", value: purchase.status.replacingOccurrences(of: "_", with: " ").capitalized)
+      }
+      Section("Receipt") {
+        if let subtotal = purchase.itemAmount { amountRow("Subtotal", subtotal) }
+        if let fee = purchase.serviceFeeAmount { amountRow("Service fee", fee) }
+        if let tax = purchase.taxAmount { amountRow("Tax", tax) }
+        amountRow("Total", purchase.totalAmount).fontWeight(.semibold)
+        if let method = purchase.receiptPaymentMethod {
+          LabeledContent("Payment method", value: "\(method.brand.capitalized) •••• \(method.last4)")
+        }
+        if let dateString = purchase.purchasedAt {
+          if let date = ISO8601DateFormatter().date(from: dateString) {
+            LabeledContent("Date", value: date.formatted(date: .abbreviated, time: .shortened))
+          }
+        }
+        LabeledContent("Order") { Text(purchase.id).font(.footnote).textSelection(.enabled) }
+      }
+      if let entitlement = purchase.entitlement {
+        Section("Access") {
+          LabeledContent("Status", value: entitlement.status.replacingOccurrences(of: "_", with: " ").capitalized)
+          if entitlement.hasPass == true || ["ticket", "redemption"].contains(entitlement.kind) {
+            Button {
+              guard !isLoadingPass else { return }
+              isLoadingPass = true; error = nil
+              Task {
+                defer { isLoadingPass = false }
+                do {
+                  let response = try await api.loadCommercePass(entitlementId: entitlement.id)
+                  if let returned = response.pass {
+                    pass = CaptroDashboardPassPresentation(purchase: response.purchase, pass: returned)
+                  } else { error = "No scannable pass is available for this purchase." }
+                } catch { self.error = (error as? MIRAAPIError)?.errorDescription ?? "Could not load your pass. Try again." }
+              }
+            } label: {
+              HStack { Label("View ticket & QR", systemImage: "qrcode"); Spacer(); if isLoadingPass { ProgressView() } }
+            }.disabled(isLoadingPass)
+          }
+          if let destinationId = entitlement.destinationId, ["membership", "group_access"].contains(entitlement.kind) {
+            NavigationLink("Open access") {
+              ConversationNativeView(groupId: destinationId, title: purchase.itemTitle, api: api).miraHideTabBarOnAppear()
+            }
+          }
+        }
+      }
+      if let error { Text(error).foregroundStyle(.red).font(.subheadline) }
+      Section {
+        SettingsLinkRow(title: "Purchase & refund help", subtitle: "", systemImage: "questionmark.circle", url: captroSupportURL(subject: "Purchase help"))
+      }
+    }
+    .privacySensitive()
+    .sheet(item: $pass) { CaptroDashboardPassView(presentation: $0) }
+  }
+
+  private func amountRow(_ title: String, _ amount: Int) -> some View {
+    LabeledContent(title, value: CaptroMoney.format(minorUnits: amount, currency: purchase.currency))
   }
 }
 
