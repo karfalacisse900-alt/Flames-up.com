@@ -37,6 +37,21 @@ jobs:
         working-directory: ./admin-web
         run: npm run build
 
+      - name: Resolve the existing Pages production branch
+        id: pages-project
+        run: |
+          node --input-type=module <<'JS'
+          import {appendFileSync} from 'node:fs';
+          const response=await fetch('https://api.cloudflare.com/client/v4/accounts/'+process.env.CLOUDFLARE_ACCOUNT_ID+'/pages/projects/captro-admin',{
+            headers:{Authorization:'Bearer '+process.env.CLOUDFLARE_API_TOKEN},signal:AbortSignal.timeout(30000)
+          });
+          const result=await response.json();
+          const branch=result.result?.production_branch;
+          if(!response.ok||!result.success||typeof branch!=='string'||! /^[A-Za-z0-9/_.-]+$/.test(branch)) throw Error('Could not verify the existing Pages production branch: HTTP '+response.status);
+          appendFileSync(process.env.GITHUB_OUTPUT,'branch='+branch+'\n');
+          console.log('Deploying existing Captro admin production branch: '+branch);
+          JS
+
       - name: Deploy to Cloudflare Pages
         working-directory: ./admin-web
-        run: npx wrangler pages deploy dist --project-name captro-admin --branch production
+        run: npx wrangler pages deploy dist --project-name captro-admin --branch "${{ steps.pages-project.outputs.branch }}"
