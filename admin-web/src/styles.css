@@ -1230,3 +1230,10 @@ button:disabled {
     width: 100%;
   }
 }
+
+.finance-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+.finance-totals { display:flex; gap:24px; flex-wrap:wrap; }
+.finance-totals dt { color:var(--muted); font-size:13px; }
+.finance-totals dd { margin:6px 0; font-weight:600; font-size:20px; }
+.finance-record { padding:16px 0; border-bottom:1px solid #ddd; }
+.finance-record code { overflow-wrap:anywhere; }

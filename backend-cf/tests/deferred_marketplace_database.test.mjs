@@ -6,7 +6,7 @@ test('platform payment issues access independently of seller setup and appends i
  const db=new PGlite();
  try {
  await db.exec(`create role anon; create role authenticated; create role service_role; create schema auth; create table auth.users(id uuid primary key); create table app_posts(id uuid primary key); create table app_group_chat_members(id text,group_id text,user_id text,role text,legacy_created_at timestamptz,created_at timestamptz,updated_at timestamptz,primary key(group_id,user_id));`);
- for(const f of ['20260904193517_captro_commerce_entitlements.sql','20260904221545_stripe_connect_creator_earnings.sql','20260904231905_stripe_native_payments.sql','20260908224758_isolate_stripe_connected_accounts_by_mode.sql','20260925120000_seller_identity_verification.sql','20260926214527_deferred_marketplace_settlement.sql','20260926222000_marketplace_release_controls.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+f,import.meta.url),'utf8'));
+ for(const f of ['20260904193517_captro_commerce_entitlements.sql','20260904221545_stripe_connect_creator_earnings.sql','20260904231905_stripe_native_payments.sql','20260908224758_isolate_stripe_connected_accounts_by_mode.sql','20260925120000_seller_identity_verification.sql','20260926214527_deferred_marketplace_settlement.sql','20260926222000_marketplace_release_controls.sql','20260926235356_finance_category_reports.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+f,import.meta.url),'utf8'));
  const one=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
  const seller=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
  const buyer=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
@@ -25,6 +25,8 @@ test('platform payment issues access independently of seller setup and appends i
  await assert.rejects(confirm(5),/AMOUNT_MISMATCH/);await assert.rejects(confirm(500,'tr_early'),/PREMATURE_TRANSFER/);
  assert.equal((await one('select confirmed_quantity from app_purchasables where id=$1',[item])).confirmed_quantity,0);
  await confirm();await confirm();
+ assert.equal((await one("select pending from app_finance_pool_totals where category='event' and stripe_mode='test'")).pending,455);
+ await db.exec('set role authenticated');await assert.rejects(db.exec('select * from app_finance_pool_totals'),/permission denied/);await db.exec('reset role');
  assert.equal((await one('select confirmed_quantity from app_purchasables where id=$1',[item])).confirmed_quantity,1);
  const earning=await one('select * from app_creator_earnings');assert.equal(earning.status,'pending');assert.equal(earning.creator_amount,455);assert.equal(earning.provider_transfer_id,null);
  assert.equal((await one('select count(*)::int n from app_commerce_tickets')).n,1);
@@ -39,6 +41,7 @@ test('platform payment issues access independently of seller setup and appends i
  assert.equal((await one('select status from app_entitlements')).status,'refunded');
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='pending'",[seller])).amount,0);
  await confirm();assert.equal((await one('select status from app_entitlements')).status,'refunded');
+ assert.equal((await one("select gross from app_finance_pool_totals where category='event'")).gross,0);
  assert.equal((await one('select confirmed_quantity from app_purchasables where id=$1',[item])).confirmed_quantity,0);
 
  // Later completion/review/transfer is distinct from buyer confirmation.
@@ -66,6 +69,43 @@ test('platform payment issues access independently of seller setup and appends i
  assert.equal((await one('select count(*)::int n from app_marketplace_ledger')).n,count);
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='paid_out'",[seller])).amount,941);
  assert.equal((await one("select amount from captro_ledger_balances($1) where account='transferred'",[seller])).amount,0);
+ assert.equal((await one("select paid_out from app_finance_order_totals where order_id=$1",[two.id])).paid_out,941);
+ assert.equal((await one("select count(*)::int n from app_marketplace_ledger where stripe_object_id='po_later' and order_id is null")).n,0);
+ await db.exec("update app_payouts set status='failed' where provider_payout_id='po_later'");
+ assert.equal((await one("select available from app_finance_order_totals where order_id=$1",[two.id])).available,941);
+ assert.equal((await one("select paid_out from app_finance_order_totals where order_id=$1",[two.id])).paid_out,0);
+ await db.exec("update app_payouts set status='paid' where provider_payout_id='po_later'");
+ assert.equal((await one("select paid_out from app_finance_order_totals where order_id=$1",[two.id])).paid_out,941);
+ assert.deepEqual((await db.query("select captro_finance_category(x) as category from unnest(array['event','club','meetup','deal','group','offer']) x")).rows.map(x=>x.category),['event','club','meetup','deal','group_access','local_offer']);
+ // FIFO order attribution must never consume another seller, currency or mode.
+ await db.query('update app_purchasables set capacity=null where id=$1',[item]);
+ const extra=[];
+ for(const suffix of ['a','b']){
+  const p=await begin('pool-allocation-'+suffix);extra.push(p);
+  await db.query('update app_purchases set provider_payment_id=$2 where id=$1',[p.id,'pi_pool_'+suffix]);
+  await one("select * from captro_confirm_marketplace_purchase($1,$2,null,$3,$4,null,500,45,0,'USD',null,'digest')",[p.id,'evt_pool_'+suffix,'pi_pool_'+suffix,'ch_pool_'+suffix]);
+  await db.query("update app_creator_earnings set status='transferred',provider_transfer_id=$2 where purchase_id=$1",[p.id,'tr_pool_'+suffix]);
+ }
+ const otherSeller=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
+ for(const [key,owner,currency,mode] of [['other-seller',otherSeller,'USD','test'],['other-currency',seller,'EUR','test'],['other-mode',seller,'USD','live']]){
+  await db.query("insert into app_marketplace_ledger(entry_key,seller_id,event_type,account,amount,currency,metadata) values($1,$2,'OPENING_BALANCE','transferred',999,$3,jsonb_build_object('stripe_mode',$4::text))",[key,owner,currency,mode]);
+ }
+ await db.query("insert into app_payouts(connected_account_id,creator_id,provider_payout_id,currency,amount,status) values($1,$2,'po_partial','USD',500,'paid')",[account.id,seller]);
+ const allocations=(await db.query("select order_id,amount from app_marketplace_ledger where stripe_object_id='po_partial' and account='paid_out' order by amount desc")).rows;
+ assert.deepEqual(allocations.map(x=>x.amount),[455,45]);
+ assert.ok(allocations.every(x=>extra.some(p=>p.id===x.order_id)));
+ assert.equal((await one("select sum(amount)::int n from app_marketplace_ledger where seller_id=$1 and account='transferred'",[otherSeller])).n,999);
+ assert.equal((await one("select sum(amount)::int n from app_marketplace_ledger where currency='EUR' and account='transferred'")).n,999);
+ assert.equal((await one("select sum(amount)::int n from app_marketplace_ledger where metadata->>'stripe_mode'='live' and account='transferred'")).n,999);
+ await db.exec("update app_payouts set status='failed' where provider_payout_id='po_partial'");
+ assert.equal((await one("select sum(available)::int n from app_finance_order_totals where order_id=any($1::uuid[])",[extra.map(p=>p.id)])).n,910);
+ await assert.rejects(db.exec("update app_payouts set amount=1 where provider_payout_id='po_partial'"),/SNAPSHOT_IMMUTABLE/);
+ for(const role of ['anon','authenticated']){
+  await db.exec('set role '+role);
+  await assert.rejects(db.exec('select * from app_finance_order_totals'),/permission denied/);
+  await assert.rejects(db.exec('select * from app_finance_ledger'),/permission denied/);
+  await db.exec('reset role');
+ }
  const ticket=await one('select t.* from app_commerce_tickets t join app_entitlements e on e.id=t.entitlement_id where e.purchase_id=$1',[two.id]);
  const validate=(owner=seller)=>one("select captro_validate_pass('ticket',$1,$2,1) result",[ticket.id,owner]);
  await assert.rejects(validate(buyer),/PASS_INVALID/);

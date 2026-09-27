@@ -1,4 +1,5 @@
 import type {
+  FinanceSummary, FinanceRecord, FinanceOrder,
   AdminComment,
   AdminPost,
   AdminSession,
@@ -127,6 +128,9 @@ export async function login(email: string, password: string) {
 }
 
 export const AdminApi = {
+  financePools: (token:string)=>request<FinanceSummary>('/admin/finance/pools',token),
+  financeRecords: (token:string,query:string)=>request<{items:FinanceRecord[];nextOffset:number|null}>('/admin/finance/records'+query,token),
+  financeOrder: (token:string,id:string,offset=0)=>request<FinanceOrder>('/admin/finance/orders/'+encodeURIComponent(id)+'?offset='+offset,token),
   me: (token: string) => request<AdminSession>('/admin/me', token),
   health: (token: string) => request<Record<string, string>>('/admin/health', token),
   dashboard: (token: string) => request<DashboardResponse>('/admin/dashboard', token),

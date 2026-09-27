@@ -9959,7 +9959,7 @@ function stripeBalanceAmount(rows: any, currency: string): number {
     .reduce((sum: number, row: any) => sum + Math.trunc(Number(row?.amount || 0)), 0);
 }
 
-function creatorEarningPayload(row: any, purchase?: any, buyer?: any) {
+function creatorEarningPayload(row: any, purchase?: any, buyer?: any, finance?: any) {
   return {
     id: publicId(row?.id, 120),
     purchaseId: publicId(row?.purchase_id, 120),
@@ -9968,6 +9968,7 @@ function creatorEarningPayload(row: any, purchase?: any, buyer?: any) {
     title: cleanText(purchase?.item_title, 180) || 'Captro sale',
     priceLabel: cleanText(purchase?.price_label, 80) || null,
     buyerHandle: cleanText(buyer?.username, 80) || null,
+    financeStatus: finance ? (Number(finance.pending)>0 ? 'pending' : Number(finance.available)>0 ? 'available' : Number(finance.paid_out)>0 ? 'paid_out' : 'pending') : null,
     currency: cleanText(row?.currency || 'USD', 3).toUpperCase(),
     itemAmount: Math.max(0, Number(row?.item_amount || 0)),
     creatorAmount: Math.max(0, Number(row?.creator_amount || 0)),
@@ -19936,6 +19937,50 @@ api.post('/admin/commerce/purchases/:purchaseId/release',authMiddleware,async(c)
   }
 });
 
+// Read-only finance reporting. These routes never initiate payments/transfers.
+api.get('/admin/finance/pools', authMiddleware, async (c) => {
+ try {
+  await requireAdminRole(c,'payments:read');
+  const mode=configuredStripeMode(c);
+  const pools=await supabaseAdminQueryRows(c,'app_finance_pool_totals',{filters:{stripe_mode:postgrestEqFilter(mode)},order:'category.asc,currency.asc',limit:100});
+  let platform:any=null;
+  try { const result=await stripeApiGet(c,'/balance'); if(result.ok) platform={available:result.data.available.map((x:any)=>({currency:x.currency.toUpperCase(),amount:x.amount})),pending:result.data.pending.map((x:any)=>({currency:x.currency.toUpperCase(),amount:x.amount})),observedAt:now()}; }catch{}
+  c.header('Cache-Control','private, no-store');
+  return c.json({mode,pools,platform,asOf:now()});
+ }catch(error){return c.json({detail:getErrorCode(error)==='FORBIDDEN'?'Finance access required.':'Could not read finance totals.'},getErrorCode(error)==='FORBIDDEN'?403:500);}
+});
+api.get('/admin/finance/records', authMiddleware, async(c)=>{
+ try {
+  await requireAdminRole(c,'payments:read');
+  const category=cleanText(c.req.query('category'),40);
+  if(!['event','club','meetup','deal','group_access','local_offer','unassigned'].includes(category))return c.json({detail:'Choose a valid category.'},400);
+  const currency=cleanText(c.req.query('currency'),3).toUpperCase();
+  if(!/^[A-Z]{3}$/.test(currency))return c.json({detail:'Choose a currency.'},400);
+  const objectId=c.req.query('objectId'); const sellerId=c.req.query('sellerId');
+  if((objectId&&!isUuidText(objectId))||(sellerId&&!isUuidText(sellerId)))return c.json({detail:'Invalid finance filter.'},400);
+  const offset=Math.max(0,Math.min(100000,Math.trunc(Number(c.req.query('offset'))||0)));
+  const filters:Record<string,string>={category:postgrestEqFilter(category),currency:postgrestEqFilter(currency),stripe_mode:postgrestEqFilter(configuredStripeMode(c))};
+  if(objectId)filters.object_id=postgrestEqFilter(objectId);
+  if(sellerId)filters.seller_id=postgrestEqFilter(sellerId);
+  const items=await supabaseAdminQueryRows(c,objectId?'app_finance_order_totals':'app_finance_object_totals',{filters,order:objectId?'created_at.desc,order_id.asc':'object_id.asc,seller_id.asc',limit:51,offset});
+  c.header('Cache-Control','private, no-store');
+  return c.json({items:items.slice(0,50),nextOffset:items.length>50?offset+50:null});
+ }catch(error){return c.json({detail:getErrorCode(error)==='FORBIDDEN'?'Finance access required.':'Could not read finance records.'},getErrorCode(error)==='FORBIDDEN'?403:500);}
+});
+api.get('/admin/finance/orders/:orderId',authMiddleware,async(c)=>{
+ try {
+  await requireAdminRole(c,'payments:read');
+  const id=isUuidText(c.req.param('orderId'));if(!id)return c.json({detail:'Order not found.'},404);
+  const filters={order_id:postgrestEqFilter(id),stripe_mode:postgrestEqFilter(configuredStripeMode(c))};
+  const orders=await supabaseAdminQueryRows(c,'app_finance_order_totals',{filters,limit:1});
+  if(!orders[0])return c.json({detail:'Order not found.'},404);
+  const offset=Math.max(0,Math.min(100000,Math.trunc(Number(c.req.query('offset'))||0)));
+  const entries=await supabaseAdminQueryRows(c,'app_finance_ledger',{filters,order:'created_at.asc,id.asc',limit:101,offset});
+  c.header('Cache-Control','private, no-store');
+  return c.json({order:orders[0],entries:entries.slice(0,100),nextOffset:entries.length>100?offset+100:null});
+ }catch(error){return c.json({detail:getErrorCode(error)==='FORBIDDEN'?'Finance access required.':'Could not read order ledger.'},getErrorCode(error)==='FORBIDDEN'?403:500);}
+});
+
 api.get('/commerce/earnings', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_earnings', appUserId, 120, 60);
@@ -19971,10 +20016,13 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
         balanceStatus = 'available';
       }
     }
+    const orderFunds = purchaseIds.length ? await supabaseAdminQueryRows(c,'app_finance_order_totals',{
+      filters:{order_id:postgrestInFilter(purchaseIds),seller_id:postgrestEqFilter(authUserId),stripe_mode:postgrestEqFilter(configuredStripeMode(c))},limit:200,
+    }) : [];
     const recent = earnings.map(row => {
       const purchase = purchases.find(item => item.id === row.purchase_id);
       const buyer = buyers.find(item => item.id === purchase?.buyer_app_user_id);
-      const payload = creatorEarningPayload(row, purchase, buyer);
+      const payload = creatorEarningPayload(row, purchase, buyer, orderFunds.find(f=>f.order_id===row.purchase_id));
       return payload;
     });
     c.header('Cache-Control', 'private, no-store');
@@ -19982,8 +20030,8 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
       account: await connectedAccountPublicPayload(c, account),
       balance: { status: 'available', currency,
         available: ledger.filter(x=>x.currency===currency && ['available','transferred'].includes(x.account)).reduce((n,x)=>n+Number(x.amount),0),
-        pending: ledger.filter(x=>x.currency===currency && x.account==='pending').reduce((n,x)=>n+Number(x.amount),0),
-        clearing: ledger.filter(x=>x.currency===currency && x.account==='clearing').reduce((n,x)=>n+Number(x.amount),0),
+        pending: ledger.filter(x=>x.currency===currency && ['pending','clearing','held','payout_pending'].includes(x.account)).reduce((n,x)=>n+Number(x.amount),0),
+        clearing: 0, // Included in Pending for compatibility with older clients.
         paidOut: ledger.filter(x=>x.currency===currency && x.account==='paid_out').reduce((n,x)=>n+Number(x.amount),0),
         instantAvailable, payoutBalanceStatus: balanceStatus },
       recent,
@@ -20524,6 +20572,7 @@ const ADMIN_PERMISSIONS: Record<AdminRole, Set<string>> = {
     'messages:reported:write',
     'audit:read',
     'payments:refund',
+    'payments:read',
     'roles:write',
   ]),
   moderator: new Set([

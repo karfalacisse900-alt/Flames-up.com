@@ -26,6 +26,7 @@ const pending = [
   [columnExists('app_connected_accounts', 'stripe_mode'), '../../supabase/migrations/20260908224758_isolate_stripe_connected_accounts_by_mode.sql'],
   [columnExists('app_purchases', 'settlement_model'), '../../supabase/migrations/20260926214527_deferred_marketplace_settlement.sql'],
   [relationExists('app_earning_releases'), '../../supabase/migrations/20260926222000_marketplace_release_controls.sql'],
+  [/CREATE (?:OR REPLACE )?VIEW\s+(?:"public"|public)\.(?:"app_finance_pool_totals"|app_finance_pool_totals)/i.test(schema), '../../supabase/migrations/20260926235356_finance_category_reports.sql'],
 ].filter(([isApplied]) => !isApplied);
 const pendingMigrations = await Promise.all(
   pending.map(([, path]) => readFile(new URL(path, import.meta.url), 'utf8'))

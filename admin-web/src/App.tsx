@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { FinancePage } from './FinancePage';
 import { ADMIN_REFRESH_TOKEN_KEY, ADMIN_TOKEN_KEY, AdminApi, ApiError, API_BASE, login } from './api';
 import type {
   AdminComment,
@@ -15,7 +16,7 @@ import type {
   VoiceReview,
 } from './types';
 
-type ViewKey = 'dashboard' | 'reports' | 'voice' | 'posts' | 'comments' | 'users' | 'messages' | 'discover' | 'audit' | 'settings';
+type ViewKey = 'finance' | 'dashboard' | 'reports' | 'voice' | 'posts' | 'comments' | 'users' | 'messages' | 'discover' | 'audit' | 'settings';
 type PostAction = 'remove' | 'restore' | 'discover' | 'safe' | 'clearLocation';
 
 type ActionDialogState = {
@@ -39,6 +40,7 @@ type MediaPreviewModel = {
 
 const navItems: Array<{ key: ViewKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
+  { key: 'finance', label: 'Captro Funds' },
   { key: 'reports', label: 'Reports' },
   { key: 'voice', label: 'Voice Review' },
   { key: 'posts', label: 'Posts' },
@@ -453,7 +455,7 @@ function AdminLayout({
           </div>
         </div>
         <nav aria-label="Admin navigation">
-          {navItems.map((item) => (
+          {navItems.filter(item => item.key !== 'finance' || can(session, 'payments:read')).map((item) => (
             <button key={item.key} className={active === item.key ? 'active' : ''} onClick={() => setActive(item.key)}>
               {item.label}
             </button>
@@ -1599,6 +1601,7 @@ function App() {
   }
 
   const content = (() => {
+    if (active === 'finance' && can(session, 'payments:read')) return <FinancePage token={token} />;
     if (active === 'dashboard') return <DashboardPage token={token} openReport={(id) => { setSelectedReportId(id); setActive('reports'); }} />;
     if (active === 'reports') return <ReportsPage token={token} selectedId={selectedReportId} setSelectedId={setSelectedReportId} openAction={openAction} />;
     if (active === 'voice') return <VoiceReviewPage token={token} openAction={openAction} />;

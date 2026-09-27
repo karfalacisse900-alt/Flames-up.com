@@ -389,6 +389,14 @@ async function runBuyerOnly(local, admin, api) {
     const order=receipts[1]; const buyerTwo=receiptBuyers[1];
     const reviewer=await createLocalUser(local,admin,api,'reviewer');
     await json(local.API_URL+'/rest/v1/app_users?id=eq.'+reviewer.appUser.id,{method:'PATCH',headers:admin,body:JSON.stringify({metadata:{admin_role:'admin'}})},204);
+    await json(api+'/admin/finance/pools',{},401);
+    await json(api+'/admin/finance/pools',{headers:buyer.authorized},403);
+    await json(api+'/admin/finance/pools',{headers:seller.authorized},403);
+    const poolBefore=await json(api+'/admin/finance/pools',{headers:reviewer.authorized});
+    assert.equal(poolBefore.mode,'test');
+    assert.ok(poolBefore.pools.some(p=>p.category==='event'&&p.pending>0));
+    const poolRecords=await json(api+'/admin/finance/records?category=event&currency=USD',{headers:reviewer.authorized});
+    assert.ok(poolRecords.items.some(p=>p.object_id===commerce.id&&p.seller_id===seller.authUser.id));
     const review={method:'POST',headers:reviewer.authorized,body:JSON.stringify({note:'Sandbox service completion and clearing reviewed',releaseAfter:new Date().toISOString()})};
     await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',{...review,headers:buyerTwo.authorized},403);
     const incomplete=await json(api+'/admin/commerce/purchases/'+order.orderId+'/release',review,409);assert.equal(incomplete.code,'CAPTRO_FULFILLMENT_NOT_COMPLETED');
@@ -419,6 +427,16 @@ async function runBuyerOnly(local, admin, api) {
     });
     const final=await json(api+'/commerce/earnings',{headers:seller.authorized});
     assert.equal(final.balance.paidOut,earning.creator_amount);assert.equal(final.balance.available,0);
+    const finance=await json(api+'/admin/finance/orders/'+order.orderId,{headers:reviewer.authorized});
+    assert.equal(finance.order.paid_out,earning.creator_amount);
+    assert.equal(finance.order.available,0);
+    assert.equal(finance.order.pending,0);
+    assert.equal(finance.order.category,'event');
+    assert.ok(finance.entries.some(e=>e.stripe_object_id===settled.provider_payout_id&&e.account==='paid_out'));
+    await json(api+'/admin/finance/orders/'+order.orderId,{headers:buyer.authorized},403);
+    const poolsAfter=await json(api+'/admin/finance/pools',{headers:reviewer.authorized});
+    assert.equal(poolsAfter.pools.find(p=>p.category==='event'&&p.currency==='USD').paid_out,earning.creator_amount);
+    console.log(JSON.stringify({event:'finance_pool_acceptance',adminOnly:true,category:'event',orderId:order.orderId,paidOut:earning.creator_amount,ledgerDerived:true}));
     console.log(JSON.stringify({event:'deferred_release_and_payout_acceptance',transferId:released.transferId,payoutId:settled.provider_payout_id,amount:earning.creator_amount,reviewRequired:true,connectKYC:true,separateIdentitySDKTest:false,duplicateTransferPrevented:true,duplicatePayoutPrevented:true}));
   }
   console.log(JSON.stringify({event:'deferred_buyer_acceptance',mode:'test',realStripe:true,signedWebhook:true,newBuyerNoSavedCard:true,sellerWithoutConnect:true,receipts,nativePaymentSheetDeviceTest:false}));

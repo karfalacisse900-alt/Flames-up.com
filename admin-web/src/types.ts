@@ -237,3 +237,11 @@ export type ReportedMessageDetail = {
     is_reported: boolean;
   }>;
 };
+
+export interface FinanceRecord {
+ category:string;currency:string;stripe_mode?:string;orders?:number;gross:number;pending:number;available:number;paid_out:number;
+ seller_id:string;buyer_id?:string;object_id?:string;order_id?:string;item_title?:string;title?:string;
+ captro_fee?:number;processing_fee?:number|null;stripe_payment_intent_id?:string;stripe_transfer_id?:string;
+}
+export interface FinanceSummary {mode:string;asOf:string;pools:FinanceRecord[];platform:null|{observedAt:string;available:{currency:string;amount:number}[];pending:{currency:string;amount:number}[]};}
+export interface FinanceOrder {order:FinanceRecord;entries:{id:string;event_type:string;account:string;amount:number;currency:string;stripe_object_id?:string;created_at:string}[];nextOffset:number|null;}
