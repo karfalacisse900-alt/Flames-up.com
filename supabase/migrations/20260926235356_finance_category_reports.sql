@@ -104,7 +104,10 @@ create view public.app_finance_object_totals with (security_invoker=true) as
  select category,currency,stripe_mode,seller_id,object_id,max(item_title) as title,count(distinct order_id)::bigint as orders,
  sum(gross)::bigint as gross,sum(pending)::bigint as pending,sum(available)::bigint as available,sum(paid_out)::bigint as paid_out
  from public.app_finance_order_totals group by category,currency,stripe_mode,seller_id,object_id;
-revoke all on public.app_finance_ledger,public.app_finance_order_totals,public.app_finance_pool_totals,public.app_finance_object_totals from public,anon,authenticated;
-grant select on public.app_finance_ledger,public.app_finance_order_totals,public.app_finance_pool_totals,public.app_finance_object_totals to service_role;
+create view public.app_finance_seller_totals with (security_invoker=true) as
+ select seller_id,currency,stripe_mode,sum(pending)::bigint as pending,sum(available)::bigint as available,sum(paid_out)::bigint as paid_out
+ from public.app_finance_order_totals group by seller_id,currency,stripe_mode;
+revoke all on public.app_finance_ledger,public.app_finance_order_totals,public.app_finance_pool_totals,public.app_finance_object_totals,public.app_finance_seller_totals from public,anon,authenticated;
+grant select on public.app_finance_ledger,public.app_finance_order_totals,public.app_finance_pool_totals,public.app_finance_object_totals,public.app_finance_seller_totals to service_role;
 revoke all on function public.captro_finance_category(text),public.captro_append_refund_finance() from public,anon,authenticated;
 grant execute on function public.captro_finance_category(text),public.captro_append_refund_finance() to service_role;

@@ -106,6 +106,8 @@ test('platform payment issues access independently of seller setup and appends i
   await assert.rejects(db.exec('select * from app_finance_ledger'),/permission denied/);
   await db.exec('reset role');
  }
+ assert.equal((await one("select available from app_finance_seller_totals where seller_id=$1 and currency='USD' and stripe_mode='test'",[seller])).available,910);
+ assert.equal((await one("select available from app_finance_seller_totals where seller_id=$1 and currency='USD' and stripe_mode='live'",[seller])).available,999);
  const ticket=await one('select t.* from app_commerce_tickets t join app_entitlements e on e.id=t.entitlement_id where e.purchase_id=$1',[two.id]);
  const validate=(owner=seller)=>one("select captro_validate_pass('ticket',$1,$2,1) result",[ticket.id,owner]);
  await assert.rejects(validate(buyer),/PASS_INVALID/);

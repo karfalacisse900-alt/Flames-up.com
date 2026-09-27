@@ -19990,7 +19990,10 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
     if (!authUserId) return c.json({ detail: 'Reconnect your account.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
     let account = await connectedAccountForUser(c, authUserId);
     if(account) account = await refreshConnectedAccount(c,account).catch(()=>account);
-    const ledger:any[] = await supabaseAdminRpc(c,'captro_ledger_balances',{p_seller_id:authUserId});
+    const financeMode = configuredStripeMode(c);
+    const ledger = await supabaseAdminQueryRows(c,'app_finance_seller_totals',{
+      filters:{seller_id:postgrestEqFilter(authUserId),stripe_mode:postgrestEqFilter(financeMode)},limit:100,
+    });
     const earnings = await supabaseAdminQueryRows(c, 'app_creator_earnings', {
       filters: { creator_id: postgrestEqFilter(authUserId) }, order: 'created_at.desc', limit: 200,
     });
@@ -20019,7 +20022,7 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
     const orderFunds = purchaseIds.length ? await supabaseAdminQueryRows(c,'app_finance_order_totals',{
       filters:{order_id:postgrestInFilter(purchaseIds),seller_id:postgrestEqFilter(authUserId),stripe_mode:postgrestEqFilter(configuredStripeMode(c))},limit:200,
     }) : [];
-    const recent = earnings.map(row => {
+    const recent = earnings.filter(row => purchases.some(p => p.id === row.purchase_id && p.stripe_mode === financeMode)).map(row => {
       const purchase = purchases.find(item => item.id === row.purchase_id);
       const buyer = buyers.find(item => item.id === purchase?.buyer_app_user_id);
       const payload = creatorEarningPayload(row, purchase, buyer, orderFunds.find(f=>f.order_id===row.purchase_id));
@@ -20029,10 +20032,10 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
     return c.json({
       account: await connectedAccountPublicPayload(c, account),
       balance: { status: 'available', currency,
-        available: ledger.filter(x=>x.currency===currency && ['available','transferred'].includes(x.account)).reduce((n,x)=>n+Number(x.amount),0),
-        pending: ledger.filter(x=>x.currency===currency && ['pending','clearing','held','payout_pending'].includes(x.account)).reduce((n,x)=>n+Number(x.amount),0),
+        available: Number(ledger.find(x=>x.currency===currency)?.available ?? 0),
+        pending: Number(ledger.find(x=>x.currency===currency)?.pending ?? 0),
         clearing: 0, // Included in Pending for compatibility with older clients.
-        paidOut: ledger.filter(x=>x.currency===currency && x.account==='paid_out').reduce((n,x)=>n+Number(x.amount),0),
+        paidOut: Number(ledger.find(x=>x.currency===currency)?.paid_out ?? 0),
         instantAvailable, payoutBalanceStatus: balanceStatus },
       recent,
     });
@@ -20055,6 +20058,10 @@ api.get('/commerce/earnings/:earningId', authMiddleware, async (c) => {
     if (!earning) return c.json({ detail: 'Earning not found.', code: 'EARNING_NOT_FOUND' }, 404);
     const purchases = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(earning.purchase_id) }, '*', 1);
     const purchase = purchases[0];
+    if (!purchase || purchase.stripe_mode !== configuredStripeMode(c)) return c.json({detail:'Earning not found.',code:'EARNING_NOT_FOUND'},404);
+    const orderFunds=await supabaseAdminQueryRows(c,'app_finance_order_totals',{
+      filters:{order_id:postgrestEqFilter(purchase.id),seller_id:postgrestEqFilter(authUserId),stripe_mode:postgrestEqFilter(configuredStripeMode(c))},limit:1,
+    });
     const buyers = purchase?.buyer_app_user_id ? await supabaseAdminSelectRows(c, 'app_users', {
       id: postgrestEqFilter(purchase.buyer_app_user_id),
     }, 'id,username', 1) : [];
@@ -20063,7 +20070,7 @@ api.get('/commerce/earnings/:earningId', authMiddleware, async (c) => {
     });
     c.header('Cache-Control', 'private, no-store');
     return c.json({
-      earning: creatorEarningPayload(earning, purchase, buyers[0]),
+      earning: creatorEarningPayload(earning, purchase, buyers[0], orderFunds[0]),
       purchase: commercePurchasePayload(purchase),
       purchaseReference: `CAP-${String(purchase.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`,
       refunds: refunds.map(row => ({
