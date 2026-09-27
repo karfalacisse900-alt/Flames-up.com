@@ -176,8 +176,8 @@ async function createLocalUser(local, admin, api, label) {
     method: 'POST', headers: admin,
     body: JSON.stringify({ email, password, email_confirm: true, user_metadata: { full_name: `Captro Sandbox ${label}` } }),
   });
-  const session = await json(`${local.API_URL}/auth/v1/token?grant_type=password`, {
-    method: 'POST', headers: { apikey: local.ANON_KEY, 'Content-Type': 'application/json' },
+  const session = await json(`${api}/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
   const authorized = { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' };

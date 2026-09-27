@@ -20,6 +20,7 @@ const columnExists = (relation, column) => new RegExp(
   `(?:^|\\n)\\s*(?:"${column}"|${column})\\s+`, 'i'
 ).test(relationDefinition(relation));
 const pending = [
+  [schema.includes('captro_guard_new_purchase_dates'), '../../supabase/migrations/20260927012001_commerce_ended_event_guard.sql'],
   [relationExists('app_payout_requests'), '../../supabase/migrations/20260904231905_stripe_native_payments.sql'],
   [relationExists('app_payment_environment'), '../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql'],
   [relationExists('app_stripe_customers'), '../../supabase/migrations/20260908205030_captro_buyer_payment_methods.sql'],

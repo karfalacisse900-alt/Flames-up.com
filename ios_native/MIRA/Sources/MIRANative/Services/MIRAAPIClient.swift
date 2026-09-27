@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 
 public enum MIRAProductionBackend {
   public static let apiBaseURL = URL(string: "https://flames-up-api.karfalacisse900.workers.dev/api")!
@@ -72,6 +73,7 @@ private struct MIRAAPIErrorPayload: Decodable {
   let error: String?
   let code: String?
   let errorCode: String?
+  let requestId: String?
 }
 
 public enum MIRANetworkSecurityPolicy {
@@ -421,8 +423,33 @@ public final class MIRAAPIClient {
     do {
       return try decoder.decode(T.self, from: data)
     } catch {
+      // Log the failing field/type, never the response body (which may contain secrets).
+      if path.contains("commerce/") || path.contains("payments/") {
+        let context: DecodingError.Context?
+        let kind: String
+        switch error {
+        case DecodingError.keyNotFound(_, let value): context = value; kind = "keyNotFound"
+        case DecodingError.typeMismatch(_, let value): context = value; kind = "typeMismatch"
+        case DecodingError.valueNotFound(_, let value): context = value; kind = "valueNotFound"
+        case DecodingError.dataCorrupted(let value): context = value; kind = "dataCorrupted"
+        default: context = nil; kind = "decodeFailure"
+        }
+        let fields = context?.codingPath.map(\.stringValue).joined(separator: ".") ?? ""
+        Logger(subsystem: "com.captro.app", category: "CheckoutAPI").error("decode=\(kind, privacy: .public) field=\(fields, privacy: .public)")
+      }
       throw MIRAAPIError.decodingFailed
     }
+  }
+
+  private func logCheckoutResponse(_ request: URLRequest, response: URLResponse, data: Data) {
+    let path = request.url?.path ?? ""
+    guard path.contains("/commerce/") || path.contains("/payments/") else { return }
+    let http = response as? HTTPURLResponse
+    let status = http?.statusCode ?? 0
+    let requestId = http?.value(forHTTPHeaderField: "X-Request-ID") ?? request.value(forHTTPHeaderField: "X-Request-ID") ?? ""
+    let code = (try? decoder.decode(MIRAAPIErrorPayload.self, from: data))?.code ?? ""
+    // No body, headers, client secret, raw provider descriptions or card data.
+    Logger(subsystem: "com.captro.app", category: "CheckoutAPI").notice("endpoint=\(path, privacy: .public) status=\(status) request=\(requestId, privacy: .public) code=\(code, privacy: .public)")
   }
 
   private func responseData(for request: URLRequest, metricLabel: String) async throws -> Data {
@@ -437,6 +464,7 @@ public final class MIRAAPIClient {
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: data.count)
+    logCheckoutResponse(request, response: response, data: data)
     let requestPath = request.url?.path ?? ""
     let isRefreshRequest = requestPath.hasSuffix("/auth/refresh")
     let isCredentialRequest = requestPath.hasSuffix("/auth/login")
@@ -462,6 +490,7 @@ public final class MIRAAPIClient {
         await retryMetric.finish(status: "error")
         throw error
       }
+      logCheckoutResponse(retry, response: retryResponse, data: retryData)
       let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
       await retryMetric.finish(status: "\(retryStatus)", bytes: retryData.count)
       guard (200..<300).contains(retryStatus) else { throw apiError(status: retryStatus, data: retryData) }

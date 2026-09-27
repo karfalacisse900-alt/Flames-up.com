@@ -84,6 +84,16 @@ public struct CaptroCommerceDetails: Codable, Hashable, Identifiable {
     return joinedCount > 0 ? "\(joinedCount) JOINED" : nil
   }
 
+  // Cached data can outlive an event. Never infer an end from a start-only date.
+  public var unavailablePurchaseTitle: String? {
+    if ["cancelled", "canceled"].contains(status) { return "CANCELLED" }
+    if status == "ended" || (["event", "meetup", "party"].contains(contentType)
+        && Self.date(endsAt).map({ $0 <= Date() }) == true) { return "EVENT ENDED" }
+    if status == "expired" || Self.date(expiresAt).map({ $0 <= Date() }) == true { return "EXPIRED" }
+    if !["active", "sold_out"].contains(status) { return "UNAVAILABLE" }
+    return nil
+  }
+
   public var primaryActionTitle: String {
     if isActiveForViewer {
       switch fulfillmentType {
@@ -95,6 +105,7 @@ public struct CaptroCommerceDetails: Codable, Hashable, Identifiable {
       default: return "ORDER PLACED"
       }
     }
+    if let unavailablePurchaseTitle { return unavailablePurchaseTitle }
     if needsApproval { return "REQUEST PENDING" }
     if requiresPaymentContinuation { return "CONTINUE CHECKOUT" }
     let verb: String

@@ -6,7 +6,7 @@ test('platform payment issues access independently of seller setup and appends i
  const db=new PGlite();
  try {
  await db.exec(`create role anon; create role authenticated; create role service_role; create schema auth; create table auth.users(id uuid primary key); create table app_posts(id uuid primary key); create table app_group_chat_members(id text,group_id text,user_id text,role text,legacy_created_at timestamptz,created_at timestamptz,updated_at timestamptz,primary key(group_id,user_id));`);
- for(const f of ['20260904193517_captro_commerce_entitlements.sql','20260904221545_stripe_connect_creator_earnings.sql','20260904231905_stripe_native_payments.sql','20260908224758_isolate_stripe_connected_accounts_by_mode.sql','20260925120000_seller_identity_verification.sql','20260926214527_deferred_marketplace_settlement.sql','20260926222000_marketplace_release_controls.sql','20260926235356_finance_category_reports.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+f,import.meta.url),'utf8'));
+ for(const f of ['20260904193517_captro_commerce_entitlements.sql','20260904221545_stripe_connect_creator_earnings.sql','20260904231905_stripe_native_payments.sql','20260908224758_isolate_stripe_connected_accounts_by_mode.sql','20260925120000_seller_identity_verification.sql','20260926214527_deferred_marketplace_settlement.sql','20260926222000_marketplace_release_controls.sql','20260926235356_finance_category_reports.sql','20260927012001_commerce_ended_event_guard.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+f,import.meta.url),'utf8'));
  const one=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
  const seller=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
  const buyer=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
@@ -15,6 +15,12 @@ test('platform payment issues access independently of seller setup and appends i
  const item=(await one("insert into app_purchasables(post_id,creator_id,creator_app_user_id,content_type,fulfillment_type,payment_model,title,capacity) values($1,$2,'seller','event','ticket','paid','Five dollar ticket',3) returning id",[post,seller])).id;
  const price=(await one("insert into app_prices(purchasable_id,unit_amount,currency) values($1,500,'USD') returning id",[item])).id;
  const begin=(key,quantity=1)=>one("select * from captro_begin_marketplace_purchase_v2($1,'buyer',$2,$3,$4,$5,'{}',0,0,0,'native')",[buyer,item,price,quantity,key]);
+ // Exact production defect: an active status must not override an explicit past end.
+ await db.query("update app_purchasables set ends_at=now()-interval '1 day' where id=$1",[item]);
+ await assert.rejects(begin('expired-event-attempt'),/EVENT_ENDED/);
+ assert.equal((await one('select count(*)::int n from app_purchases')).n,0);
+ assert.equal((await one('select quantity_committed from app_purchasables where id=$1',[item])).quantity_committed,0);
+ await db.query("update app_purchasables set starts_at=now()+interval '1 day',ends_at=now()+interval '2 days' where id=$1",[item]);
  const first=await begin('new-buyer-one');
  assert.equal(first.total_amount,500);assert.equal(first.connected_account_id,null);assert.equal(first.settlement_model,'deferred');
  assert.equal((await begin('new-buyer-one')).id,first.id);
@@ -51,6 +57,7 @@ test('platform payment issues access independently of seller setup and appends i
  await assert.rejects(review(),/FULFILLMENT_NOT_COMPLETED/);
  assert.equal((await one('select captro_confirm_fulfillment($1,$2) as ok',[two.id,seller])).ok,false);
  assert.equal((await one('select captro_confirm_fulfillment($1,$2) as ok',[two.id,buyer])).ok,true);
+ await db.query("update app_purchasables set starts_at=now()-interval '2 hours',ends_at=now()-interval '1 hour' where id=$1",[item]);
  await review();
  const account=await one("insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,charges_enabled,transfers_enabled,payouts_enabled,eligible_debit_card_exists) values($1,'seller','acct_release','test','ready',true,false,true,true,true) returning id",[seller]);
  const claim=()=>one("select * from captro_claim_earning_transfer($1,$2,'acct_release',gen_random_uuid())",[two.id,account.id]);
@@ -78,7 +85,7 @@ test('platform payment issues access independently of seller setup and appends i
  assert.equal((await one("select paid_out from app_finance_order_totals where order_id=$1",[two.id])).paid_out,941);
  assert.deepEqual((await db.query("select captro_finance_category(x) as category from unnest(array['event','club','meetup','deal','group','offer']) x")).rows.map(x=>x.category),['event','club','meetup','deal','group_access','local_offer']);
  // FIFO order attribution must never consume another seller, currency or mode.
- await db.query('update app_purchasables set capacity=null where id=$1',[item]);
+ await db.query("update app_purchasables set capacity=null,starts_at=now()+interval '1 day',ends_at=now()+interval '2 days' where id=$1",[item]);
  const extra=[];
  for(const suffix of ['a','b']){
   const p=await begin('pool-allocation-'+suffix);extra.push(p);

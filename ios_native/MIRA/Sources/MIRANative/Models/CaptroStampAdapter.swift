@@ -47,6 +47,7 @@ enum CaptroStampAdapter {
     guard let commerce else { return nil }
     if ["cancelled", "canceled"].contains(commerce.status) { return "Cancelled" }
     if ["removed", "archived", "inactive", "draft"].contains(commerce.status) { return "Unavailable" }
+    if commerce.unavailablePurchaseTitle == "EVENT ENDED" { return "Event ended" }
     if commerce.status == "expired" || date(commerce.expiresAt).map({ $0 <= now }) == true { return "Expired" }
     if commerce.status == "sold_out" || commerce.remaining == 0 { return "Full" }
     return nil

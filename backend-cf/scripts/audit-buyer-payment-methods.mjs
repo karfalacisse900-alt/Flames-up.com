@@ -32,6 +32,16 @@ for (const mapping of await db.json()) {
   cursor=page.has_more?page.data.at(-1).id:'';
  }while(cursor);
 }
+// Payout timing is an independent control: inspect, never mutate schedules.
+const platform=await read('/account');
+console.log(JSON.stringify({event:'platform_payout_schedule_audit',accountId:platform?.id,country:platform?.country,schedule:platform?.settings?.payouts?.schedule,changesMade:false}));
+const accountsResponse=await fetch('https://'+process.env.SUPABASE_PROJECT_REF+'.supabase.co/rest/v1/app_connected_accounts?stripe_mode=eq.live&select=provider_account_id&limit=100',{headers:{apikey:service,Authorization:'Bearer '+service}});
+assert.ok(accountsResponse.ok,'Seller schedule audit failed');
+for(const mapping of await accountsResponse.json()){
+ const id=mapping.provider_account_id;if(!/^acct_[A-Za-z0-9]+$/.test(id))continue;
+ const account=await read('/accounts/'+id);
+ console.log(JSON.stringify({event:'seller_payout_schedule_audit',accountId:id,country:account?.country,schedule:account?.settings?.payouts?.schedule,payoutsEnabled:account?.payouts_enabled,changesMade:false}));
+}
 const recent=await read('/payment_intents?limit=50');
 for(const pi of recent?.data||[]) {
  if(pi.metadata?.source!=='captro_commerce')continue;

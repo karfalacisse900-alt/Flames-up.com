@@ -10,7 +10,7 @@ import { screenStoryWithWorkersAI } from './story-safety';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
 import { DIRECT_VIDEO_MAX_BYTES, POST_VIDEO_MAX_SECONDS, orderPostMediaAssets, streamProcessingState, streamUID } from './post-media';
-import { attachPublicCommerce, publicCommercePayload, validateCommerceInput, receiptTimestamp } from './commerce';
+import { attachPublicCommerce, publicCommercePayload, validateCommerceInput, receiptTimestamp, commerceAvailability } from './commerce';
 import { cents, stripeMode, saleAmounts, eligibleDebitCard, payoutCardMetadata, instantBalance, payoutQuote, proportionalAmount } from './stripe-money';
 import { supabaseRuntimeURL } from './runtime-urls';
 import { decodeStripeResponse, stripeFailureCode } from './stripe-response';
@@ -153,7 +153,7 @@ interface Env {
   ARWEAVE_GATEWAY?: string;
 }
 
-type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string } };
+type HonoApp = { Bindings: Env; Variables: { userId: string; requestId: string; commerceStage: string; identityAliasReads: Map<string, Promise<string[]>> } };
 
 const app = new Hono<HonoApp>();
 const API_VERSION = '2.0';
@@ -5559,6 +5559,8 @@ const SUPABASE_APP_POST_SELECT = [
 ].join(',');
 
 type SupabasePostReadOptions = {
+  // Checkout needs visibility authorization, not comments, reactions or media hydration.
+  hydration?: 'full' | 'access';
   postId?: string;
   postIds?: string[];
   ownerId?: string;
@@ -5658,7 +5660,21 @@ async function supabaseAccountIdentityActorKeyMap(c: any, userIds: string[]): Pr
   return actorKeys;
 }
 
+// Request-scoped only: coalesce parallel authorization/engagement identity reads.
+// Never share private identities across users, requests, logout or permission changes.
 async function supabaseRelatedInteractionUserIds(c: any, userId: string): Promise<string[]> {
+  let cache: Map<string, Promise<string[]>> = c.get('identityAliasReads');
+  if (!cache) { cache = new Map(); c.set('identityAliasReads', cache); }
+  const key = publicId(userId, 120);
+  const existing = cache.get(key);
+  if (existing) return existing;
+  const pending = readSupabaseRelatedInteractionUserIds(c, key);
+  cache.set(key, pending);
+  try { return await pending; }
+  catch (error) { cache.delete(key); throw error; }
+}
+
+async function readSupabaseRelatedInteractionUserIds(c: any, userId: string): Promise<string[]> {
   const ids = new Set<string>();
   const cleanUserId = publicId(userId, 120);
   if (cleanUserId) ids.add(cleanUserId);
@@ -7017,11 +7033,12 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     return !cleanText((metadata as any).discover_blocked_at, 80);
   });
   const authorIds = candidateRows.flatMap((row) => [publicId(row?.app_user_id, 120), isUuidText(row?.user_id) || '']).filter(Boolean);
+  if (options.hydration === 'access') c.set('commerceStage', 'post_visibility');
   const [viewerAliases, blockedIds, authorMap, commentCounts] = await Promise.all([
     supabaseRelatedInteractionUserIds(c, viewerId),
     supabaseBlockedUserIds(c, viewerId),
     supabaseUsersByAnyIds(c, authorIds),
-    supabasePostCommentCounts(c, candidateRows),
+    options.hydration === 'access' ? Promise.resolve(new Map<string, number>()) : supabasePostCommentCounts(c, candidateRows),
   ]);
   const followingIds = await supabaseFollowingUserIds(c, viewerId, Array.from(new Set(authorIds.map((id) => publicId(id, 120)).filter(Boolean))));
   const viewerSet = new Set(viewerAliases);
@@ -7051,6 +7068,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const ordered = postIds.length
     ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
     : mapped;
+  if (options.hydration === 'access') return ordered;
   await attachPublicPostObjects(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   await attachPublicCommerce(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   return overlaySupabaseViewerEngagement(c, photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
@@ -8975,7 +8993,7 @@ function payoutSetupFailure(error: any): PayoutSetupFailure {
 }
 
 function commerceErrorStatus(code: string): number {
-  if (['CAPTRO_ITEM_UNAVAILABLE', 'CAPTRO_ITEM_EXPIRED', 'CAPTRO_CAPACITY_REACHED', 'CAPTRO_TIER_SOLD_OUT',
+  if (['CAPTRO_ITEM_UNAVAILABLE', 'CAPTRO_ITEM_EXPIRED', 'CAPTRO_EVENT_ENDED', 'CAPTRO_CAPACITY_REACHED', 'CAPTRO_TIER_SOLD_OUT',
     'CAPTRO_BOOKING_SLOT_UNAVAILABLE', 'CAPTRO_PASS_ALREADY_USED', 'CAPTRO_PURCHASE_NOT_PAYABLE',
     'CAPTRO_PAYOUTS_NOT_READY', 'PAYOUT_SETUP_REQUIRED', 'COMMERCE_STOREKIT_REQUIRED'].includes(code)) return 409;
   if (['CAPTRO_PURCHASE_NOT_FOUND', 'CAPTRO_PASS_NOT_FOUND'].includes(code)) return 404;
@@ -9041,10 +9059,13 @@ async function commerceViewerState(c: any, purchasableId: string, authUserId: st
 }
 
 async function commerceDetailsForVisiblePost(c: any, post: any, viewerAppUserId: string) {
+  c.set('commerceStage', 'access_record');
   const rows = await supabaseAdminSelectRows(c, 'app_purchasables', { post_id: postgrestEqFilter(post.supabase_post_id) }, '*', 1);
   const purchasable = rows[0];
   if (!purchasable) return null;
+  c.set('commerceStage', 'access_buyer_identity');
   const authUserId = await supabaseAuthUserIdForAppUserId(c, viewerAppUserId);
+  c.set('commerceStage', 'access_prices_and_entitlements');
   const [prices, viewer] = await Promise.all([
     supabaseAdminQueryRows(c, 'app_prices', {
       filters: { purchasable_id: postgrestEqFilter(purchasable.id), active: postgrestEqFilter('true') },
@@ -19074,18 +19095,19 @@ api.get('/commerce/posts/:postId', authMiddleware, async (c) => {
   if (limited) return limited;
   let stage = 'visible_post';
   try {
-    const [post] = await supabaseReadVisiblePosts(c, viewerId, { postId: c.req.param('postId'), limit: 1 });
+    const [post] = await supabaseReadVisiblePosts(c, viewerId, { postId: c.req.param('postId'), limit: 1, hydration: 'access' });
     if (!post) return c.json({ detail: 'Post not found.', code: 'POST_NOT_FOUND' }, 404);
     stage = 'commerce_details';
+    c.set('commerceStage', stage);
     const commerce = await commerceDetailsForVisiblePost(c, post, viewerId);
     if (!commerce) return c.json({ detail: 'This post is free to view and has no checkout.', code: 'COMMERCE_NOT_AVAILABLE' }, 404);
     c.header('Cache-Control', 'private, no-store');
     return c.json({ commerce });
   } catch (error: any) {
-    console.warn(JSON.stringify({ event: 'commerce_post_read_failed', endpoint: 'GET /commerce/posts/:postId', stage,
+    console.warn(JSON.stringify({ event: 'commerce_post_read_failed', endpoint: 'GET /commerce/posts/:postId', stage: c.get('commerceStage') || stage,
       code: commerceErrorCode(error), diagnostic: commerceErrorDiagnostic(error),
       request_id: c.get?.('requestId') || '' }));
-    return c.json({ detail: 'Could not load access details.', code: 'COMMERCE_READ_FAILED' }, 500);
+    return c.json({ detail: 'Could not load access details.', code: 'COMMERCE_READ_FAILED', requestId: c.get('requestId') }, 500);
   }
 });
 
@@ -19103,18 +19125,24 @@ const beginCommercePurchaseHandler = async (c: any) => {
     let post: any = null;
     let purchasable: any = null;
     if (postId) {
-      [post] = await supabaseReadVisiblePosts(c, buyerAppUserId, { postId, limit: 1 });
+      [post] = await supabaseReadVisiblePosts(c, buyerAppUserId, { postId, limit: 1, hydration: 'access' });
       if (!post) return c.json({ detail: 'Post not found.', code: 'POST_NOT_FOUND' }, 404);
       const rows = await supabaseAdminSelectRows(c, 'app_purchasables', { post_id: postgrestEqFilter(post.supabase_post_id) }, '*', 1);
       purchasable = rows[0];
     } else if (purchasableId) {
       const rows = await supabaseAdminSelectRows(c, 'app_purchasables', { id: postgrestEqFilter(purchasableId) }, '*', 1);
       purchasable = rows[0];
-      if (purchasable) [post] = await supabaseReadVisiblePosts(c, buyerAppUserId, { postId: purchasable.post_id, limit: 1 });
+      if (purchasable) [post] = await supabaseReadVisiblePosts(c, buyerAppUserId, { postId: purchasable.post_id, limit: 1, hydration: 'access' });
     }
     if (!post || !purchasable) return c.json({ detail: 'This item is no longer available.', code: 'CAPTRO_ITEM_UNAVAILABLE' }, 404);
     if (body.contentType && body.contentType !== purchasable.content_type) return c.json({ detail: 'Post type does not match.', code: 'CAPTRO_ITEM_MISMATCH' }, 400);
     stage = 'buyer_identity';
+    c.set('commerceStage', stage);
+    const availability = commerceAvailability(purchasable);
+    if (availability === 'ended' || availability === 'expired') {
+      const code = availability === 'ended' ? 'CAPTRO_EVENT_ENDED' : 'CAPTRO_ITEM_EXPIRED';
+      return c.json({ detail: purchaseFailureMessage(code), code }, 409);
+    }
     const buyerAuthId = await supabaseAuthUserIdForAppUserId(c, buyerAppUserId);
     if (!buyerAuthId) return c.json({ detail: 'Reconnect your account before joining or buying.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
     if (buyerAuthId === purchasable.creator_id || buyerAppUserId === purchasable.creator_app_user_id) {

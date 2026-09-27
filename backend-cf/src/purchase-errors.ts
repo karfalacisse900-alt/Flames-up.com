@@ -18,6 +18,7 @@ export function purchaseFailureMessage(code: string): string {
     case 'STRIPE_AUTHENTICATION_REQUIRED': return 'Complete your bank authentication in the payment sheet.';
     case 'STRIPE_CONNECTION_ERROR': return 'Could not connect. Please try again.';
     case 'CAPTRO_CREATOR_CANNOT_PURCHASE': return 'You own this item. Open its management options instead of buying or joining it.';
+    case 'CAPTRO_EVENT_ENDED': return 'This event has ended and is no longer accepting purchases or joins.';
     case 'CAPTRO_ITEM_EXPIRED': return 'This item has expired and is no longer accepting purchases or joins.';
     case 'CAPTRO_ITEM_UNAVAILABLE': return 'This item is no longer available.';
     case 'CAPTRO_CAPACITY_REACHED':

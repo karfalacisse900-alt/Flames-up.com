@@ -323,11 +323,12 @@ struct CaptroCommerceDetailSection: View {
   }
 
   private func actionDisabled(_ commerce: CaptroCommerceDetails) -> Bool {
-    if model.currentUserId == nil || isCreator || commerce.status != "active" && commerce.status != "sold_out" { return true }
+    if model.currentUserId == nil || isCreator { return true }
     if commerce.needsApproval { return true }
     if commerce.isActiveForViewer {
       return !["ticket", "redemption"].contains(commerce.fulfillmentType) && !commerce.passRequired
     }
+    if commerce.unavailablePurchaseTitle != nil { return true }
     if commerce.remaining == 0 || selectedPrice?.remaining == 0 { return true }
     return selectedPrice == nil
   }
@@ -335,11 +336,13 @@ struct CaptroCommerceDetailSection: View {
   private func actionTitle(_ commerce: CaptroCommerceDetails) -> String {
     if model.currentUserId == nil { return model.didAttemptCurrentUserLoad ? "SIGN IN TO CONTINUE" : "CHECKING ACCOUNT…" }
     if isCreator { return "CREATOR MANAGEMENT" }
-    if commerce.remaining == 0 || selectedPrice?.remaining == 0 { return "SOLD OUT" }
+
     if commerce.isActiveForViewer {
       if ["ticket", "redemption"].contains(commerce.fulfillmentType) || commerce.passRequired { return "VIEW PASS" }
       return commerce.primaryActionTitle
     }
+    if let unavailable = commerce.unavailablePurchaseTitle { return unavailable }
+    if commerce.remaining == 0 || selectedPrice?.remaining == 0 { return "SOLD OUT" }
     if commerce.needsApproval { return "REQUEST PENDING" }
     if commerce.requiresPaymentContinuation { return "CONTINUE CHECKOUT" }
     let base = commerce.primaryActionTitle.components(separatedBy: " — ").first ?? commerce.primaryActionTitle

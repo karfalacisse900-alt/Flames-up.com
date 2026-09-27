@@ -194,6 +194,17 @@ function pricePayload(row: any) {
   };
 }
 
+/** A past start alone is not an end date. Memberships retain their own validity. */
+export function commerceAvailability(row: any, now = Date.now()): string {
+  const status = String(row?.status || 'active');
+  if (!['active', 'sold_out'].includes(status)) return status;
+  const expires = Date.parse(String(row?.expires_at || ''));
+  if (Number.isFinite(expires) && expires <= now) return 'expired';
+  const end = Date.parse(String(row?.ends_at || ''));
+  if (['event', 'meetup', 'party'].includes(row?.content_type) && Number.isFinite(end) && end <= now) return 'ended';
+  return status;
+}
+
 export function publicCommercePayload(row: any, prices: any[], viewer?: any) {
   const capacity = row?.capacity == null ? null : Math.max(0, Number(row.capacity));
   const committed = Math.max(0, Number(row?.quantity_committed || 0));
@@ -222,7 +233,7 @@ export function publicCommercePayload(row: any, prices: any[], viewer?: any) {
     refundPolicy: String(row?.refund_policy || ''),
     approvalRequired: row?.approval_required === true,
     passRequired: row?.pass_required === true,
-    status: String(row?.status || 'active'),
+    status: commerceAvailability(row),
     audience: String(row?.audience || 'anyone'),
     publicData: row?.public_data && typeof row.public_data === 'object' ? row.public_data : {},
     prices: priceRows.map(pricePayload),
