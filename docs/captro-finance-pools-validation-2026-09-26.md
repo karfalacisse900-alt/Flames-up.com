@@ -1,5 +1,7 @@
 # Captro category accounting and buyer checkout — 26 September 2026
 
+Update: the checkout investigation below is superseded by [the reproduced root cause and deployed repair](captro-checkout-root-cause-2026-09-27.md). Captro-login requests exhausted the Worker subrequest limit; direct Supabase-login checks had missed the path. Physical-iPhone and full financial-rollout gates remain open as listed in the newer report.
+
 ## Scope
 
 The existing Captro SwiftUI app (com.captro.app, scheme Captro), Cloudflare Worker, Supabase database and Stripe integration are retained. Branch: feature/recorded-voice-moderation. Stripe iOS SDK: 26.9.0. No new SDK, bank account, wallet, subscription or Stripe account per category was added.
