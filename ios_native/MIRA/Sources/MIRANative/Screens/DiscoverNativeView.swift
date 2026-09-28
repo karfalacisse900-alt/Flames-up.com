@@ -1321,11 +1321,13 @@ struct StoryViewerNativeView: View {
           url: mediaURL,
           isVideo: mediaURL.isVideoURL,
           placeholderURL: storyPosterURL(for: mediaURL),
-          contentMode: .fill,
+          // Stories reproduce the creator-approved frame. Landscape, square,
+          // and portrait media all remain visible instead of filling by crop.
+          contentMode: .fit,
           shouldPlay: shouldPlayCurrentStory,
           videoMuted: currentStory?.hasAudio == true,
           maxPixelSize: 1920,
-          placeholderColor: storyFallbackColor,
+          placeholderColor: .black,
           placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
         )
         .id(storyPlaybackIdentity(for: mediaURL))

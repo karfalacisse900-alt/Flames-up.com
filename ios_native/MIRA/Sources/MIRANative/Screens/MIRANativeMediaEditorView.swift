@@ -11,6 +11,7 @@ public enum MIRANativeMediaEditorMode {
 public struct MIRANativeMediaEditorView: View {
   private let media: MIRAPickedMedia
   private let mode: MIRANativeMediaEditorMode
+  private let suggestedPlan: CaptroAssistantEditPlan?
   private let onClose: (() -> Void)?
   private let onComplete: (MIRAPickedMedia) -> Void
 
@@ -32,17 +33,21 @@ public struct MIRANativeMediaEditorView: View {
   public init(
     media: MIRAPickedMedia,
     mode: MIRANativeMediaEditorMode,
+    suggestedPlan: CaptroAssistantEditPlan? = nil,
     onClose: (() -> Void)? = nil,
     onComplete: @escaping (MIRAPickedMedia) -> Void
   ) {
     self.media = media
     self.mode = mode
+    self.suggestedPlan = suggestedPlan
     self.onClose = onClose
     self.onComplete = onComplete
     let mediaType: MIRANativeEditorMediaType = media.kind == .video ? .video : .photo
     let initialAspectRatio: MIRANativeEditorAspectRatio
     if mode == .story {
-      initialAspectRatio = .story9x16
+      // An intentional creator selection may crop later; opening the editor
+      // must not silently reframe the original recording or photo.
+      initialAspectRatio = .original
     } else if let image = UIImage(data: media.data), image.size.width > 0, image.size.height > 0 {
       initialAspectRatio = MIRANativeEditorAspectRatio(
         postAspectRatio: .nearest(width: Double(image.size.width), height: Double(image.size.height))
@@ -179,7 +184,7 @@ public struct MIRANativeMediaEditorView: View {
       if let previewImage {
         Image(uiImage: previewImage)
           .resizable()
-          .scaledToFill()
+          .scaledToFit()
       } else {
         Color.black
           .overlay { ProgressView().tint(.white) }
@@ -192,7 +197,7 @@ public struct MIRANativeMediaEditorView: View {
         } else if let videoThumbnail {
           Image(uiImage: videoThumbnail)
             .resizable()
-            .scaledToFill()
+            .scaledToFit()
         } else {
           Color.black
             .overlay { ProgressView().tint(.white) }
@@ -531,7 +536,7 @@ public struct MIRANativeMediaEditorView: View {
     case .post:
       return [.landscape16x9, .landscape4x3, .portraitPointSixFive, .portrait4x5, .portrait3x4, .square1x1]
     case .story:
-      return [.story9x16, .portrait3x4, .portrait4x5, .portrait2x3]
+      return [.original, .story9x16, .portrait3x4, .portrait4x5, .portrait2x3, .square1x1, .landscape16x9]
     }
   }
 
@@ -571,6 +576,12 @@ public struct MIRANativeMediaEditorView: View {
       let duration = try await asset.load(.duration)
       let seconds = max(0, CMTimeGetSeconds(duration))
       videoDurationSeconds = seconds
+      if let suggestedPlan, seconds > 0.4 {
+        let start = min(max(0, suggestedPlan.trimStartSeconds ?? 0), seconds - 0.4)
+        let requestedDuration = suggestedPlan.trimDurationSeconds ?? (seconds - start)
+        recipe.trimStartSeconds = start
+        recipe.trimEndSeconds = min(seconds, start + max(0.4, requestedDuration))
+      }
       if mode == .post,
          !didManuallySelectAspectRatio,
          let track = try await asset.loadTracks(withMediaType: .video).first {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Gesture and dock state stay here, away from the media loader and its player.
+/// Story navigation and dock state stay here, away from the media player.
 struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
   let captureID: String
   let counter: String
@@ -13,13 +13,10 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
   let onDetails: () -> Void
   let media: Media
   let identity: Identity
-  @State private var hidden = false
   @State private var drag: CGFloat = 0
   @State private var showCounter = false
-  @GestureState private var holding = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-  private var chromeVisible: Bool { !hidden && !holding }
   private var fade: Animation { .easeOut(duration: reduceMotion ? 0.1 : 0.2) }
 
   var body: some View {
@@ -29,9 +26,14 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
         Color.clear
           .ignoresSafeArea()
           .contentShape(Rectangle())
-          .onTapGesture { withAnimation(fade) { hidden.toggle() } }
-          .gesture(focusGesture(width: width))
-          .accessibilityLabel("Capture. Tap to hide controls, swipe to change capture.")
+          .gesture(storySwipeGesture(width: width))
+          .simultaneousGesture(
+            SpatialTapGesture().onEnded { value in
+              if value.location.x < width * 0.4 { onPrevious() }
+              else if value.location.x > width * 0.6 { onNext() }
+            }
+          )
+          .accessibilityLabel("Story. Tap left for previous, right for next, or swipe down to close.")
           .accessibilityAction(named: "Next capture", onNext)
           .accessibilityAction(named: "Previous capture", onPrevious)
           .accessibilityAction(named: "Capture details", onDetails)
@@ -40,11 +42,8 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
           identity
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            .opacity(chromeVisible ? 1 : 0)
-            .allowsHitTesting(chromeVisible)
-            .accessibilityHidden(!chromeVisible)
           Spacer()
-          if showCounter && chromeVisible {
+          if showCounter {
             Text(counter)
               .font(.system(size: 11, weight: .medium, design: .monospaced))
               .foregroundStyle(.white)
@@ -55,13 +54,6 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
           }
         }
         CaptroCaptureEdgeDock(stamp: stamp, title: title, subtitle: subtitle, onOpen: onDetails)
-          .opacity(chromeVisible ? 1 : 0)
-          .allowsHitTesting(chromeVisible)
-          .accessibilityHidden(!chromeVisible)
-        RoundedRectangle(cornerRadius: 2)
-          .fill(.white.opacity(0.6)).frame(width: 3, height: 22)
-          .opacity(hidden && !holding ? 1 : 0)
-          .allowsHitTesting(false).accessibilityHidden(true)
       }
       .frame(width: width, height: geometry.size.height)
       // Keep controls inside the actual safe area, but extend the existing
@@ -74,7 +66,6 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
           .ignoresSafeArea()
           .allowsHitTesting(false)
       }
-      .animation(fade, value: holding)
     }
     .background(Color.black.ignoresSafeArea())
     .task(id: captureID) {
@@ -84,23 +75,14 @@ struct CaptroCaptureFocusView<Media: View, Identity: View>: View {
     }
   }
 
-  // Exclusivity locks a touch into hold OR swipe. Releasing a hold cannot
-  // accidentally navigate, and a moving finger cancels the hold recognizer.
-  private func focusGesture(width: CGFloat) -> some Gesture {
-    LongPressGesture(minimumDuration: 0.28, maximumDistance: 10)
-      .sequenced(before: DragGesture(minimumDistance: 0))
-      .exclusively(before: DragGesture(minimumDistance: 18))
-      .updating($holding) { value, state, _ in
-        if case .first(.second(true, _)) = value { state = true }
-      }
-      .onChanged { value in
-        if case .second(let swipe) = value,
-           abs(swipe.translation.width) > abs(swipe.translation.height) * 1.2 {
+  private func storySwipeGesture(width: CGFloat) -> some Gesture {
+    DragGesture(minimumDistance: 18)
+      .onChanged { swipe in
+        if abs(swipe.translation.width) > abs(swipe.translation.height) * 1.2 {
           drag = swipe.translation.width
         }
       }
-      .onEnded { value in
-        guard case .second(let swipe) = value else { return }
+      .onEnded { swipe in
         let x = swipe.translation.width
         let y = swipe.translation.height
         if y > 110, abs(y) > abs(x) * 1.4 { onClose(); return }

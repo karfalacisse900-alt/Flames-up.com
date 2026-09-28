@@ -7,6 +7,11 @@ enum CaptroAssistantEditorDestination: Equatable {
   case post
 }
 
+struct CaptroAssistantEditPlan: Decodable {
+  let trimStartSeconds: Double?
+  let trimDurationSeconds: Double?
+}
+
 private struct CaptroAssistantTurn: Codable {
   let role: String
   let text: String
@@ -21,13 +26,15 @@ private struct CaptroAssistantRequest: Encodable {
 private struct CaptroAssistantReply: Decodable {
   let reply: String
   let action: String
+  let trimStartSeconds: Double?
+  let trimDurationSeconds: Double?
 }
 
 struct CaptroCaptureAssistantView: View {
   let api: MIRAAPIClient
   let hasCurrentRecording: Bool
   let onClose: () -> Void
-  let onOpenEditor: (CaptroAssistantEditorDestination) -> Void
+  let onOpenEditor: (CaptroAssistantEditorDestination, CaptroAssistantEditPlan) -> Void
   @StateObject private var session = CaptroCaptureAssistantSession()
 
   var body: some View {
@@ -71,7 +78,7 @@ struct CaptroCaptureAssistantView: View {
         if let action = session.suggestedAction {
           Button(action == .story ? "Review Story" : "Review Post") {
             session.stop()
-            onOpenEditor(action)
+            onOpenEditor(action, session.suggestedEditPlan)
           }
           .buttonStyle(.borderedProminent)
           .tint(MIRATheme.Color.forest)
@@ -117,6 +124,7 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
   @Published var isListening = false
   @Published var isWaiting = false
   @Published var suggestedAction: CaptroAssistantEditorDestination?
+  @Published var suggestedEditPlan = CaptroAssistantEditPlan(trimStartSeconds: nil, trimDurationSeconds: nil)
 
   private let engine = AVAudioEngine()
   private let speaker = AVSpeechSynthesizer()
@@ -134,6 +142,7 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
     speaker.stopSpeaking(at: .immediate)
     errorMessage = nil
     suggestedAction = nil
+    suggestedEditPlan = CaptroAssistantEditPlan(trimStartSeconds: nil, trimDurationSeconds: nil)
     transcript = nil
 
     let speechPermission = await withCheckedContinuation { continuation in
@@ -211,6 +220,7 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
       turns.append(CaptroAssistantTurn(role: "user", text: utterance))
       turns.append(CaptroAssistantTurn(role: "assistant", text: reply.reply))
       answer = reply.reply
+      suggestedEditPlan = CaptroAssistantEditPlan(trimStartSeconds: reply.trimStartSeconds, trimDurationSeconds: reply.trimDurationSeconds)
       if hasCurrentRecording {
         switch reply.action {
         case "open_story_editor": suggestedAction = .story

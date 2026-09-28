@@ -15,7 +15,9 @@ public struct CaptroScanView: View {
   @State private var pendingRecordPreview = false
   @State private var showingVoiceAssistant = false
   @State private var pendingVoiceFromPreview = false
-  @State private var pendingAssistantDestination: CaptroCaptureDestination?
+  @State private var pendingAssistantEdit: CaptroAssistantEditorRequest?
+  @State private var assistantEditorRequest: CaptroAssistantEditorRequest?
+  @State private var completedAssistantDestination: CaptroCaptureDestination?
   @State private var pendingRetake = false
   @State private var recordedMedia: MIRAPickedMedia?
   @State private var handoffMedia: MIRAPickedMedia?
@@ -129,18 +131,38 @@ public struct CaptroScanView: View {
       }
     }
     .fullScreenCover(isPresented: $showingVoiceAssistant, onDismiss: {
-      if let pendingAssistantDestination, let recordedMedia {
-        self.pendingAssistantDestination = nil
-        handoffMedia = recordedMedia
-        creationDestination = pendingAssistantDestination
+      if let pendingAssistantEdit, recordedMedia != nil {
+        self.pendingAssistantEdit = nil
+        assistantEditorRequest = pendingAssistantEdit
       }
     }) {
       CaptroCaptureAssistantView(api: api, hasCurrentRecording: recordedMedia != nil, onClose: {
         showingVoiceAssistant = false
-      }, onOpenEditor: { destination in
-        pendingAssistantDestination = destination == .story ? .story : .post
+      }, onOpenEditor: { destination, plan in
+        pendingAssistantEdit = CaptroAssistantEditorRequest(
+          destination: destination == .story ? .story : .post,
+          plan: plan
+        )
         showingVoiceAssistant = false
       })
+    }
+    .fullScreenCover(item: $assistantEditorRequest, onDismiss: {
+      if let completedAssistantDestination {
+        self.completedAssistantDestination = nil
+        creationDestination = completedAssistantDestination
+      }
+    }) { request in
+      if let recordedMedia {
+        MIRANativeMediaEditorView(
+          media: recordedMedia,
+          mode: request.destination == .story ? .story : .post,
+          suggestedPlan: request.plan,
+          onClose: { assistantEditorRequest = nil }
+        ) { edited in
+          handoffMedia = edited
+          completedAssistantDestination = request.destination
+        }
+      }
     }
     .onChange(of: selectedPhoto) { _, item in
       guard let item else { return }
@@ -1069,6 +1091,12 @@ private enum CaptroCaptureDestination: String, Identifiable {
   case story
   case post
   var id: String { rawValue }
+}
+
+private struct CaptroAssistantEditorRequest: Identifiable {
+  let id = UUID()
+  let destination: CaptroCaptureDestination
+  let plan: CaptroAssistantEditPlan
 }
 
 private struct CaptroRecordPreview: View {

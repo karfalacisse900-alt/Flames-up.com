@@ -13,10 +13,12 @@ test('capture navigation is capture-by-capture and identifies groups by stable I
   assert.doesNotMatch(viewer, /storyProgressValue|private var storyProgress:/);
   assert.match(viewer, /selectedIndex = max\(0, \(groups\[nextIndex\]\.statuses\?\.count/);
 });
-test('focus chrome does not control player lifetime and details leave media mounted', () => {
-  assert.match(focus, /hidden\.toggle\(\)/);
-  assert.doesNotMatch(focus, /AVPlayer|\.pause\(|\.id\(hidden\)/);
-  assert.match(focus, /maximumDistance: 10/);
+test('Story navigation uses left and right taps plus swipe down, without hiding media controls', () => {
+  assert.match(focus, /SpatialTapGesture\(\)/);
+  assert.match(focus, /value\.location\.x < width \* 0\.4 \{ onPrevious\(\) \}/);
+  assert.match(focus, /value\.location\.x > width \* 0\.6 \{ onNext\(\) \}/);
+  assert.match(focus, /if y > 110.*onClose\(\)/);
+  assert.doesNotMatch(focus, /hidden\.toggle\(\)|AVPlayer|\.pause\(/);
   assert.match(viewer, /presentationDetents\(\[\.fraction\(0\.55\)\]\)/);
   assert.match(viewer, /Reply privately/);
   assert.match(viewer, /Report/);
