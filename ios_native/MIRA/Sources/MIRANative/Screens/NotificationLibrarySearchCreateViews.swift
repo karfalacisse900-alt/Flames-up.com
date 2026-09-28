@@ -959,6 +959,7 @@ public struct CreatePostNativeView: View {
   private let onClose: (() -> Void)?
   private let initialMedia: MIRAPickedMedia?
   private let initialVoiceDraft: CaptroVoiceDraft?
+  private let initialCaption: String?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
@@ -1014,10 +1015,11 @@ public struct CreatePostNativeView: View {
   @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
-  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialVoiceDraft: CaptroVoiceDraft? = nil, onClose: (() -> Void)? = nil) {
+  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialVoiceDraft: CaptroVoiceDraft? = nil, initialCaption: String? = nil, onClose: (() -> Void)? = nil) {
     self.api = api
     self.initialMedia = initialMedia
     self.initialVoiceDraft = initialVoiceDraft
+    self.initialCaption = initialCaption
     self.onClose = onClose
   }
 
@@ -2385,6 +2387,9 @@ public struct CreatePostNativeView: View {
       }
       if let initialVoiceDraft, voiceDraft == nil {
         voiceDraft = initialVoiceDraft
+      }
+      if let initialCaption, !initialCaption.isEmpty {
+        bodyText = bodyText.isEmpty ? initialCaption : bodyText + "\n\n" + initialCaption
       }
     }
     await loadBroadLocationDefaultIfNeeded()

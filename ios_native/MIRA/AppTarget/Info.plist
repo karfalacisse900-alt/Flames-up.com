@@ -49,6 +49,8 @@
   <string>Captro uses your camera to create posts and stories, update your profile, scan documents you choose to verify, and securely capture identity documents when required for payouts.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Captro uses your microphone only when you choose to record voice posts, voice replies, or videos with audio.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Captro uses on-device speech recognition only when you choose to turn a recording into text.</string>
   <key>NSPhotoLibraryUsageDescription</key>
   <string>Captro uses your photo library so you can choose media for posts and profiles or privately select a receipt or invoice that you choose to verify.</string>
   <key>NSPhotoLibraryAddUsageDescription</key>
