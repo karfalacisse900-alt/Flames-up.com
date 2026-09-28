@@ -10723,8 +10723,19 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
   const stripePriceId = await ensureStripeProductAndPrice(c, purchasable, price);
   const serviceFee = Math.max(0, Math.trunc(Number(purchase.service_fee_amount || 0)));
   const tax = Math.max(0, Math.trunc(Number(purchase.tax_amount || 0)));
+  let buyerCustomerId: string | null = null;
+  try {
+    const customer = await buyerStripeCustomerForUser(c, purchase.buyer_id, purchase.buyer_app_user_id);
+    buyerCustomerId = cleanText(customer?.provider_customer_id, 180) || null;
+  } catch (error) {
+    // A missing saved-card association must not prevent a new-card checkout.
+    paymentTrace(c, 'hosted_customer_unavailable', {
+      purchaseId, code: commerceErrorCode(error),
+    });
+  }
   const params: Record<string, string | number | boolean | null | undefined> = {
     mode: 'payment',
+    customer: buyerCustomerId,
     success_url: `${successUrl}${successUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}`,
     client_reference_id: purchase.buyer_id,

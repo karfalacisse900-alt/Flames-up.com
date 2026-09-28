@@ -161,6 +161,8 @@ test('digital access uses hosted checkout while native card checkout remains gat
   assert.match(worker, /COMMERCE_STOREKIT_REQUIRED/);
   assert.match(worker, /purchasables\[0\]\?\.commerce_class === 'digital' && purchase\.payment_interface === 'native'/);
   assert.match(worker, /createCommerceCheckoutSession\(c, purchase\)/);
+  assert.match(worker, /buyerStripeCustomerForUser\(c, purchase\.buyer_id, purchase\.buyer_app_user_id\)/);
+  assert.match(worker, /customer: buyerCustomerId/);
   assert.match(editor, /In person \/ service/);
   assert.match(editor, /Digital access/);
 });
