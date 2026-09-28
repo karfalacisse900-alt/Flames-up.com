@@ -95,7 +95,13 @@ public struct CaptroScanView: View {
       }
     }) {
       if let recordedMedia {
-        CaptroRecordPreview(media: recordedMedia, previewURL: $recordedMediaURL, onClose: { showingRecordPreview = false }) { destination, chosenMedia in
+        CaptroRecordPreview(media: recordedMedia, previewURL: $recordedMediaURL, onClose: { showingRecordPreview = false }, onDiscard: {
+          if let recordedMediaURL { try? FileManager.default.removeItem(at: recordedMediaURL) }
+          recordedMediaURL = nil
+          self.recordedMedia = nil
+          handoffMedia = nil
+          showingRecordPreview = false
+        }) { destination, chosenMedia in
           postUsesVoice = false
           handoffMedia = chosenMedia
           pendingCreationDestination = destination
@@ -1088,12 +1094,14 @@ private struct CaptroRecordPreview: View {
   let media: MIRAPickedMedia
   @Binding var previewURL: URL?
   let onClose: () -> Void
+  let onDiscard: () -> Void
   let onUse: (CaptroCaptureDestination, MIRAPickedMedia) -> Void
   @State private var player: AVPlayer?
   @State private var errorMessage: String?
   @State private var editingDestination: CaptroCaptureDestination?
   @State private var editedMedia: MIRAPickedMedia?
   @State private var completedEditDestination: CaptroCaptureDestination?
+  @State private var showingDiscardConfirmation = false
 
   var body: some View {
     NavigationStack {
@@ -1115,6 +1123,7 @@ private struct CaptroRecordPreview: View {
           Button("Edit for Story") { editingDestination = .story }
           Button("Edit for Post") { editingDestination = .post }
           Button("Use original in Post") { onUse(.post, media) }
+          Button("Discard recording", role: .destructive) { showingDiscardConfirmation = true }
         }
         .buttonStyle(.borderedProminent)
         .tint(MIRATheme.Color.forest)
@@ -1129,6 +1138,12 @@ private struct CaptroRecordPreview: View {
       .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done", action: onClose) } }
       .task { await preparePreview() }
       .onDisappear { player?.pause(); player = nil }
+      .confirmationDialog("Discard this recording?", isPresented: $showingDiscardConfirmation) {
+        Button("Discard recording", role: .destructive, action: onDiscard)
+        Button("Keep recording", role: .cancel) {}
+      } message: {
+        Text("This removes the local original from Capture.")
+      }
       .fullScreenCover(item: $editingDestination, onDismiss: {
         if let completedEditDestination, let editedMedia {
           self.completedEditDestination = nil
@@ -1163,6 +1178,10 @@ private struct CaptroRecordPreview: View {
     let mediaData = media.data
     do {
       try await Task.detached(priority: .utility) { try mediaData.write(to: url, options: [.atomic]) }.value
+      if Task.isCancelled {
+        try? FileManager.default.removeItem(at: url)
+        return
+      }
       previewURL = url
       player = AVPlayer(url: url)
     } catch {
@@ -1274,6 +1293,15 @@ private struct CaptroVoicePreview: View {
            AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable {
           player?.pause(); isPlaying = false
         }
+      }
+      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
+        if let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+           AVAudioSession.InterruptionType(rawValue: raw) == .began {
+          player?.pause(); isPlaying = false
+        }
+      }
+      .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+        if isPlaying && player?.isPlaying == false { isPlaying = false }
       }
     }
   }
