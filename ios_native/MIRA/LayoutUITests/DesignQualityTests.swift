@@ -45,6 +45,13 @@ final class DesignQualityTests: XCTestCase {
     XCTAssertFalse(app.buttons["Upload"].exists)
     XCTAssertFalse(app.buttons["AI"].exists)
     capture(app, "capture-hub")
+    app.buttons["Scan, Receipts and documents"].tap()
+    XCTAssertTrue(app.buttons["Close Scan"].waitForExistence(timeout: 5))
+    app.buttons["Close Scan"].tap()
+    XCTAssertTrue(app.buttons["Voice, Record your voice"].waitForExistence(timeout: 5))
+    app.buttons["Voice, Record your voice"].tap()
+    XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+    app.buttons["Cancel"].tap()
   }
 
   func testWelcomeAndFormsAtLargeText() {

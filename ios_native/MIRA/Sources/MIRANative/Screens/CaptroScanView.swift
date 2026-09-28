@@ -240,6 +240,7 @@ public struct CaptroScanView: View {
     }
     .padding(.horizontal, 20)
     .background(CaptroReceiptPalette.background.ignoresSafeArea())
+    .tint(MIRATheme.Color.forest)
   }
 
   private func hubMode(_ title: String, detail: String, symbol: String, action: @escaping () -> Void) -> some View {
@@ -1105,6 +1106,7 @@ private struct CaptroRecordPreview: View {
       .background(CaptroReceiptPalette.background)
       .navigationTitle("Preview")
       .navigationBarTitleDisplayMode(.inline)
+      .tint(MIRATheme.Color.forest)
       .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done", action: onClose) } }
       .task { await preparePreview() }
       .onDisappear { player?.pause(); player = nil }
