@@ -1,0 +1,38 @@
+name: Validate Native Capture
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/recorded-voice-moderation]
+    paths:
+      - 'ios_native/MIRA/**'
+      - '.github/workflows/native-capture-validation.yml'
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Build and test Capture hub
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath "$RUNNER_TEMP/CaptureBuild" -resultBundlePath "$RUNNER_TEMP/Capture.xcresult" \
+            -only-testing:CaptroLayoutUITests/DesignQualityTests/testCaptureHubHasThreeClearModes \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/capture-build.log"
+      - name: Export screenshots
+        if: always()
+        run: xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Capture.xcresult" --output-path "$RUNNER_TEMP/capture-screenshots"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captro-capture-validation
+          path: |
+            ${{ runner.temp }}/capture-build.log
+            ${{ runner.temp }}/capture-screenshots/
