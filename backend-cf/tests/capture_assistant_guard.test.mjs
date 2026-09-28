@@ -25,6 +25,8 @@ test('Capture Voice opens the AI assistant, not a voice-post recorder', () => {
   assert.match(backend, /c\.env\.OPENAI_API_KEY/);
   assert.match(backend, /trim_duration_seconds/);
   assert.match(editor, /suggestedPlan\.trimDurationSeconds/);
+  assert.match(assistant, /Button\("Use original", action: onClose\)/);
+  assert.match(capture, /showingRecordPreview = true/);
 });
 
 test('Post Assist uses the same server-side OpenAI key and does not return fake suggestions on failure', () => {

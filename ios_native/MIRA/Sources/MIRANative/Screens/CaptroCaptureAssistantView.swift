@@ -84,6 +84,11 @@ struct CaptroCaptureAssistantView: View {
           .tint(MIRATheme.Color.forest)
           .frame(minHeight: 44)
         }
+        if session.errorMessage != nil && hasCurrentRecording {
+          Button("Use original", action: onClose)
+            .buttonStyle(.bordered)
+            .frame(minHeight: 44)
+        }
         Button {
           if session.isListening {
             Task { await session.sendTurn(api: api, hasCurrentRecording: hasCurrentRecording) }
@@ -235,7 +240,7 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
     } catch {
       isWaiting = false
       status = "Couldn't connect"
-      errorMessage = "Captro Voice couldn't respond. Your recording is safe; try speaking again."
+      errorMessage = "Captro AI is temporarily unavailable. Your recording is safe. Try again or use the original."
     }
   }
 

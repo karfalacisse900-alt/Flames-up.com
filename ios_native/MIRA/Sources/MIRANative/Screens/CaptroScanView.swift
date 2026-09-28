@@ -134,6 +134,9 @@ public struct CaptroScanView: View {
       if let pendingAssistantEdit, recordedMedia != nil {
         self.pendingAssistantEdit = nil
         assistantEditorRequest = pendingAssistantEdit
+      } else if recordedMedia != nil {
+        // A failed or cancelled AI request never strands the original video.
+        showingRecordPreview = true
       }
     }) {
       CaptroCaptureAssistantView(api: api, hasCurrentRecording: recordedMedia != nil, onClose: {
