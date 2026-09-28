@@ -15,6 +15,7 @@ public struct CaptroScanView: View {
   @State private var pendingRecordPreview = false
   @State private var showingVoiceRecorder = false
   @State private var recordedMedia: MIRAPickedMedia?
+  @State private var handoffMedia: MIRAPickedMedia?
   @State private var recordedMediaURL: URL?
   @State private var recordedVoice: CaptroVoiceDraft?
   @State private var showingVoiceChoice = false
@@ -91,8 +92,9 @@ public struct CaptroScanView: View {
       }
     }) {
       if let recordedMedia {
-        CaptroRecordPreview(media: recordedMedia, previewURL: $recordedMediaURL, onClose: { showingRecordPreview = false }) { destination in
+        CaptroRecordPreview(media: recordedMedia, previewURL: $recordedMediaURL, onClose: { showingRecordPreview = false }) { destination, chosenMedia in
           postUsesVoice = false
+          handoffMedia = chosenMedia
           pendingCreationDestination = destination
           showingRecordPreview = false
         }
@@ -101,12 +103,17 @@ public struct CaptroScanView: View {
     .fullScreenCover(item: $creationDestination) { destination in
       switch destination {
       case .story:
-        if let recordedMedia {
-          CreateStoryNativeView(api: api, initialMedia: recordedMedia) { creationDestination = nil }
+        if let handoffMedia {
+          CreateStoryNativeView(api: api, initialMedia: handoffMedia) {
+            creationDestination = nil
+            self.handoffMedia = nil
+          }
         }
       case .post:
-        CreatePostNativeView(api: api, initialMedia: postUsesVoice ? nil : recordedMedia, initialVoiceDraft: postUsesVoice ? recordedVoice : nil) {
+        CreatePostNativeView(api: api, initialMedia: postUsesVoice ? nil : handoffMedia, initialVoiceDraft: postUsesVoice ? recordedVoice : nil) {
           creationDestination = nil
+          handoffMedia = nil
+          postUsesVoice = false
         }
       }
     }
@@ -188,16 +195,19 @@ public struct CaptroScanView: View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
         Text("Capture")
-          .font(.system(size: 28, weight: .bold, design: .rounded))
+          .font(.system(.title, design: .rounded).weight(.bold))
           .foregroundStyle(CaptroReceiptPalette.ink)
         Spacer()
-        if recordedMedia != nil {
-          Button { showingRecordPreview = true } label: {
+        if recordedMedia != nil || recordedVoice != nil {
+          Menu {
+            if recordedMedia != nil { Button("Recent video") { showingRecordPreview = true } }
+            if recordedVoice != nil { Button("Recent voice") { showingVoiceChoice = true } }
+          } label: {
             Image(systemName: "clock.arrow.circlepath")
               .font(.system(size: 17))
               .frame(width: 44, height: 44)
           }
-          .accessibilityLabel("Recent recording")
+          .accessibilityLabel("Recent captures")
         }
         Button(action: onClose) {
           Image(systemName: "xmark")
@@ -211,21 +221,21 @@ public struct CaptroScanView: View {
       Spacer(minLength: 32)
 
       Text("Scan, record, or speak.")
-        .font(.system(size: 27, weight: .semibold))
+        .font(.title2.weight(.semibold))
         .foregroundStyle(CaptroReceiptPalette.ink)
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
 
       Spacer(minLength: 32)
 
-      VStack(spacing: 0) {
+      HStack(spacing: 0) {
         hubMode("Scan", detail: "Receipts and documents", symbol: "viewfinder") { stage = .capture }
-        Divider().padding(.leading, 60)
+        Divider().frame(height: 64)
         hubMode("Record", detail: "Video and media", symbol: "video") { showingRecordCamera = true }
-        Divider().padding(.leading, 60)
+        Divider().frame(height: 64)
         hubMode("Voice", detail: "Record your voice", symbol: "waveform") { showingVoiceRecorder = true }
       }
-      .background(.white, in: RoundedRectangle(cornerRadius: 18))
+      .background(.white, in: RoundedRectangle(cornerRadius: 20))
       .padding(.bottom, 44)
     }
     .padding(.horizontal, 20)
@@ -234,21 +244,14 @@ public struct CaptroScanView: View {
 
   private func hubMode(_ title: String, detail: String, symbol: String, action: @escaping () -> Void) -> some View {
     Button(action: action) {
-      HStack(spacing: 16) {
+      VStack(spacing: 12) {
         Image(systemName: symbol)
-          .font(.system(size: 22, weight: .regular))
-          .frame(width: 40)
-        VStack(alignment: .leading, spacing: 3) {
-          Text(title).font(.system(size: 18, weight: .semibold))
-          Text(detail).font(.system(size: 13)).foregroundStyle(CaptroReceiptPalette.secondaryInk)
-        }
-        Spacer()
-        Image(systemName: "chevron.right")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(CaptroReceiptPalette.secondaryInk)
+          .font(.system(size: 25, weight: .regular))
+          .frame(height: 30)
+        Text(title).font(.subheadline.weight(.semibold))
       }
       .foregroundStyle(CaptroReceiptPalette.ink)
-      .frame(minHeight: 76)
+      .frame(maxWidth: .infinity, minHeight: 112)
       .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
@@ -1065,9 +1068,12 @@ private struct CaptroRecordPreview: View {
   let media: MIRAPickedMedia
   @Binding var previewURL: URL?
   let onClose: () -> Void
-  let onUse: (CaptroCaptureDestination) -> Void
+  let onUse: (CaptroCaptureDestination, MIRAPickedMedia) -> Void
   @State private var player: AVPlayer?
   @State private var errorMessage: String?
+  @State private var editingDestination: CaptroCaptureDestination?
+  @State private var editedMedia: MIRAPickedMedia?
+  @State private var completedEditDestination: CaptroCaptureDestination?
 
   var body: some View {
     NavigationStack {
@@ -1086,9 +1092,9 @@ private struct CaptroRecordPreview: View {
         .background(.black)
 
         VStack(spacing: 10) {
-          Button("Edit for Story") { onUse(.story) }
-          Button("Edit for Post") { onUse(.post) }
-          Button("Use original in Post") { onUse(.post) }
+          Button("Edit for Story") { editingDestination = .story }
+          Button("Edit for Post") { editingDestination = .post }
+          Button("Use original in Post") { onUse(.post, media) }
         }
         .buttonStyle(.borderedProminent)
         .tint(MIRATheme.Color.forest)
@@ -1102,6 +1108,22 @@ private struct CaptroRecordPreview: View {
       .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done", action: onClose) } }
       .task { await preparePreview() }
       .onDisappear { player?.pause(); player = nil }
+      .fullScreenCover(item: $editingDestination, onDismiss: {
+        if let completedEditDestination, let editedMedia {
+          self.completedEditDestination = nil
+          self.editedMedia = nil
+          onUse(completedEditDestination, editedMedia)
+        }
+      }) { destination in
+        MIRANativeMediaEditorView(
+          media: media,
+          mode: destination == .story ? .story : .post,
+          onClose: { editingDestination = nil }
+        ) { result in
+          editedMedia = result
+          completedEditDestination = destination
+        }
+      }
     }
   }
 

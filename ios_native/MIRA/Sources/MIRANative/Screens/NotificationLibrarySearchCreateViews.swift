@@ -4276,7 +4276,6 @@ private struct PostHashtagSheet: View {
 public struct CreateStoryNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
-  private let initialMedia: MIRAPickedMedia?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showCamera = true
@@ -4304,7 +4303,6 @@ public struct CreateStoryNativeView: View {
   public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, onClose: (() -> Void)? = nil) {
     self.api = api
     self.onClose = onClose
-    self.initialMedia = initialMedia
     _showCamera = State(initialValue: initialMedia == nil)
     _pendingStoryMedia = State(initialValue: initialMedia)
   }
