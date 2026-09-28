@@ -271,7 +271,8 @@ test('Earnings UI is backed by private live endpoints and never invents balances
   assert.match(earnings, /Add a payout debit card to receive money from paid posts\./);
   assert.match(earnings, /separate payout debit card/);
   assert.match(commerceModels, /var payoutCardActionTitle: String/);
-  assert.doesNotMatch(`${earnings}\n${payments}\n${composer}`, /Set Up Earnings|Connect Stripe Account/i);
+  assert.match(payments, /SettingsNavigationRow\(title: "Set up earnings"/);
+  assert.doesNotMatch(`${earnings}\n${payments}\n${composer}`, /Connect Stripe Account/i);
   assert.doesNotMatch(earnings, /Available\s*\$72|Pending\s*\$16|\+ \$8\.00/);
 });
 
@@ -303,15 +304,11 @@ test('native checkout displays saved buyer cards while payout remains debit-only
   assert.match(paymentSheet, /customerSessionClientSecret: customerSessionClientSecret/);
   assert.match(paymentSheet, /billingDetailsCollectionConfiguration\.name = \.always/);
   assert.match(paymentSheet, /billingDetailsCollectionConfiguration\.address = \.full/);
-  assert.match(payments, /Debit and credit cards saved here are available when you pay in Captro/);
-  assert.match(payments, /no Stripe account connection is needed for purchases/);
-  assert.match(payments, /Credit cards cannot receive payouts/);
-  assert.match(payments, /SELLER SETUP/);
-  assert.match(payments, /private var savedDebitCards/);
-  assert.match(payments, /funding\.lowercased\(\) == "debit"/);
-  assert.match(payments, /Label\("Use /);
-  assert.match(payments, /for payouts", systemImage: "creditcard"/);
-  assert.match(payments, /For security, enter this same debit card in the next screen/);
+  assert.match(payments, /Saving a card is optional\. Choose your payment method at checkout/);
+  assert.match(payments, /case \.cards: paymentCardsSection/);
+  assert.match(payments, /case \.payout: payoutSection/);
+  assert.match(payments, /A card saved for purchases is not a payout destination/);
+  assert.match(payments, /cardManagementButton\.customerSheet/);
   assert.doesNotMatch(payments, /method\.id/);
   assert.doesNotMatch(payments, /payoutDebitCardPendingConfirmation/);
   assert.match(packageManifest, /\.product\(name: "StripeConnect"/);

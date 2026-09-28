@@ -38,7 +38,7 @@ test('guest access is persisted and routed into the app without an auth token', 
   assert.match(authSession, /public func exitGuestMode\(\)[\s\S]*setGuestMode\(false\)/);
   assert.match(rootView, /if authSession\.user == nil && !authSession\.isGuest/);
   assert.match(rootView, /GuestSignInRequiredView/);
-  assert.match(authView, /Text\("Continue as Guest"\)/);
+  assert.match(authView, /Button\("Continue as Guest", action: onGuest\)/);
   assert.match(mainFeed, /\/posts\/world-board\?limit=/);
   assert.match(mainFeed, /private let publicFeedCacheKey = "native\.main\.public\.feed\.v1"/);
   assert.match(mainFeed, /if isGuestFeedMode \{[\s\S]*?\/posts\/world-board\?limit=/);
