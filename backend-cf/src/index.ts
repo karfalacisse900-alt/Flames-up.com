@@ -17136,7 +17136,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
     if (content) {
       const safety = await screenCaptroText(c.env, content);
-      if (safety === 'review') return c.json({ detail: 'This comment needs a safety review before it can be posted.', code: 'TEXT_REVIEW_REQUIRED' }, 409);
+      if (safety === 'review') return c.json({ detail: 'This comment could not be posted under Captro’s safety rules. Please revise it and try again.', code: 'TEXT_NEEDS_REVISION' }, 409);
       if (safety === 'unavailable') return c.json({ detail: 'Comment safety screening is unavailable. Your text was not posted; try again.', code: 'TEXT_SCREENING_UNAVAILABLE' }, 503);
     }
     if (voiceAudioId) {
@@ -17770,7 +17770,7 @@ api.post('/statuses/:statusId/reply', authMiddleware, async (c) => {
   const reply = cleanMultilineText(body.body || '', 500);
   if (!reply) return c.json({ detail: 'Write a reply.' }, 400);
   const replySafety = await screenCaptroText(c.env, reply);
-  if (replySafety === 'review') return c.json({ detail: 'This reply needs a safety review before it can be sent.', code: 'TEXT_REVIEW_REQUIRED' }, 409);
+  if (replySafety === 'review') return c.json({ detail: 'This reply could not be sent under Captro’s safety rules. Please revise it and try again.', code: 'TEXT_NEEDS_REVISION' }, 409);
   if (replySafety === 'unavailable') return c.json({ detail: 'Reply safety screening is unavailable. Try again.', code: 'TEXT_SCREENING_UNAVAILABLE' }, 503);
   const id = uuid(); const ts = now();
   const content = `Replied to your status\n${reply}`;
@@ -17840,7 +17840,7 @@ api.post('/statuses/:statusId/thoughts', authMiddleware, async (c) => {
   const text = cleanText(body.body || body.text || body.thought || '', 180);
   if (!text) return c.json({ detail: 'Thought is required.' }, 400);
   const thoughtSafety = await screenCaptroText(c.env, text);
-  if (thoughtSafety === 'review') return c.json({ detail: 'This thought needs a safety review before it can be posted.', code: 'TEXT_REVIEW_REQUIRED' }, 409);
+  if (thoughtSafety === 'review') return c.json({ detail: 'This thought could not be posted under Captro’s safety rules. Please revise it and try again.', code: 'TEXT_NEEDS_REVISION' }, 409);
   if (thoughtSafety === 'unavailable') return c.json({ detail: 'Thought safety screening is unavailable. Try again.', code: 'TEXT_SCREENING_UNAVAILABLE' }, 503);
 
   const story = await supabaseGetVisibleStory(c, statusId, userId);
