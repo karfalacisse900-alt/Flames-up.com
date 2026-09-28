@@ -42,10 +42,6 @@ struct CaptroMediaPager: View {
       .clipped()
       .contentShape(Rectangle())
       .accessibilityElement(children: .contain)
-      .accessibilityIdentifier("home.post.media")
-      .accessibilityLabel(mediaAccessibilityLabel)
-      .accessibilityHint(currentMediaIsVideo ? "Tap to pause or play video" : "Opens the post detail screen")
-      .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
       .onAppear(perform: prefetchCarouselNeighbors)
       .onChange(of: mediaURLs) { _, urls in
         measuredCoverHeightToWidthRatio = nil
@@ -91,6 +87,11 @@ struct CaptroMediaPager: View {
           .frame(width: proxy.size.width, height: proxy.size.height)
           .contentShape(Rectangle())
           .onTapGesture(perform: handleMediaTap)
+          .accessibilityElement(children: .ignore)
+          .accessibilityIdentifier("home.post.media")
+          .accessibilityLabel(mediaAccessibilityLabel)
+          .accessibilityHint(currentMediaIsVideo ? "Tap to pause or play video" : "Opens the post detail screen")
+          .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
 
         overlayContent(mediaWidth: proxy.size.width, mediaHeight: proxy.size.height)
 
