@@ -7,9 +7,14 @@ enum CaptroAssistantEditorDestination: Equatable {
   case post
 }
 
-struct CaptroAssistantEditPlan: Decodable {
-  let trimStartSeconds: Double?
-  let trimDurationSeconds: Double?
+public struct CaptroAssistantEditPlan: Decodable {
+  public let trimStartSeconds: Double?
+  public let trimDurationSeconds: Double?
+
+  public init(trimStartSeconds: Double?, trimDurationSeconds: Double?) {
+    self.trimStartSeconds = trimStartSeconds
+    self.trimDurationSeconds = trimDurationSeconds
+  }
 }
 
 private struct CaptroAssistantTurn: Codable {
