@@ -41,8 +41,8 @@ struct CaptroFeedPostView: View {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
       } else {
-        CaptroEditorialOverlayCard(content: post.captroTextOnlyCardContent, onOpen: onOpenPost)
-          .frame(width: CaptroEditorialCardLayout.width(for: pageSize?.width ?? UIScreen.main.bounds.width), alignment: .leading)
+        CaptroEditorialOverlayCard(content: post.captroTextOnlyCardContent, feedCaptionMaxLines: 5, onOpen: onOpenPost)
+          .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
           .padding(.horizontal, CaptroEditorialCardLayout.inset)
       }
 
@@ -116,11 +116,8 @@ struct CaptroFeedPostView: View {
   }
 
   private var showsMoreButton: Bool {
-    if post.containsVideoMedia { return true }
-    guard let caption = post.captroFeedCaptionText?.trimmingCharacters(in: .whitespacesAndNewlines) else {
-      return false
-    }
-    return caption.count > 110 || caption.split(separator: "\n", omittingEmptySubsequences: false).count > 3
+    // Caption overflow is measured by the card's native text layout.
+    return post.containsVideoMedia
   }
 }
 

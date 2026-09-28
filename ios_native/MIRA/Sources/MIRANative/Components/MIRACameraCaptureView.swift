@@ -341,7 +341,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     updateFlashButton()
     setReviewMode(false)
     prepareCamera()
-    loadRecentGalleryThumbnailIfAllowed()
+    if !simpleCaptureUI { loadRecentGalleryThumbnailIfAllowed() }
   }
 
   override func viewDidLayoutSubviews() {
@@ -946,7 +946,8 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     shutterButton.accessibilityLabel = isReviewing ? "Retake" : "Capture"
     nextButton.isHidden = !isReviewing
     modeStack.isHidden = availableCameraModes.count <= 1
-    galleryButton.isHidden = false
+    galleryButton.isHidden = simpleCaptureUI
+    galleryRailButton.isHidden = simpleCaptureUI
     effectsButton.isHidden = true
   }
 
@@ -1276,6 +1277,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   @objc private func openGallery() {
+    guard !simpleCaptureUI else { return }
     var configuration = PHPickerConfiguration(photoLibrary: .shared())
     configuration.filter = captureMode == .videoOnly ? .videos : captureMode == .photoOnly ? .images : .any(of: [.images, .videos])
     configuration.selectionLimit = captureMode == .photoOnly ? 10 : 1

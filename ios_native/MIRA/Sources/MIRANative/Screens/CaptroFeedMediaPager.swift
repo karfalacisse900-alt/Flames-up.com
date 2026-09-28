@@ -176,8 +176,9 @@ struct CaptroMediaPager: View {
 
       CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
         condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: mediaWidth, mediaHeight: mediaHeight),
+        feedCaptionMaxLines: mediaHeight < 300 ? 2 : (mediaHeight < 420 ? 4 : 5),
         onOpen: openPostUnlessPeeking)
-        .frame(width: CaptroEditorialCardLayout.width(for: mediaWidth), alignment: .leading)
+        .frame(width: max(0, mediaWidth - 32), alignment: .leading)
       .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
       .allowsHitTesting(showsStampOnCurrentSlide)

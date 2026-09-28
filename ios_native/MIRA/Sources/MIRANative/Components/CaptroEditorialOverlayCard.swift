@@ -60,6 +60,7 @@ struct CaptroEditorialOverlayCard: View {
   let content: CaptroEditorialCardContent
   var condensed = false
   var expanded = false
+  var feedCaptionMaxLines: Int? = nil
   var showsProfileRow = true
   var onOpen: (() -> Void)? = nil
 
@@ -139,11 +140,9 @@ struct CaptroEditorialOverlayCard: View {
           .lineLimit(expanded ? nil : 2)
       }
       if let summary = nonempty(content.summaryText) {
-        Text(summary)
-          .font(.system(size: condensed ? 11 : 12, weight: .regular))
+        CaptroMeasuredCaption(text: summary, size: condensed ? 11 : 12,
+          maxLines: expanded ? nil : (feedCaptionMaxLines ?? (condensed ? 1 : 2)))
           .foregroundStyle(ink.opacity(0.72))
-          .lineLimit(expanded ? nil : (condensed ? 1 : 2))
-          .fixedSize(horizontal: false, vertical: true)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -196,11 +195,8 @@ struct CaptroEditorialOverlayCard: View {
       }
 
       if let description = nonempty(content.description), !condensed || content.type == .moment || expanded {
-        Text(description)
-          .font(.system(size: 15, weight: .regular))
-          .lineSpacing(2)
-          .lineLimit(expanded ? nil : (condensed ? 2 : 3))
-          .fixedSize(horizontal: false, vertical: true)
+        CaptroMeasuredCaption(text: description, size: 15,
+          maxLines: expanded ? nil : (feedCaptionMaxLines ?? (condensed ? 2 : 3)))
           .padding(.top, 2)
       }
 
@@ -228,4 +224,60 @@ struct CaptroEditorialOverlayCard: View {
     let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return trimmed.isEmpty ? nil : trimmed
   }
+}
+
+/// Measures the actual laid-out text, so short captions use only their own height.
+/// The entire parent card opens details when the full caption exceeds the feed cap.
+private struct CaptroMeasuredCaption: View {
+  let text: String
+  let size: CGFloat
+  let maxLines: Int?
+  @State private var fullHeight: CGFloat = 0
+  @State private var visibleHeight: CGFloat = 0
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(text)
+        .font(.system(size: size))
+        .lineSpacing(2)
+        .lineLimit(maxLines)
+        .truncationMode(.tail)
+        .fixedSize(horizontal: false, vertical: true)
+        .background {
+          GeometryReader { geometry in
+            Color.clear.preference(key: CaptroVisibleCaptionHeightKey.self, value: geometry.size.height)
+          }
+        }
+        .background(alignment: .topLeading) {
+          Text(text)
+            .font(.system(size: size))
+            .lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .background {
+              GeometryReader { geometry in
+                Color.clear.preference(key: CaptroFullCaptionHeightKey.self, value: geometry.size.height)
+              }
+            }
+        }
+      if maxLines != nil && fullHeight > visibleHeight + 1 {
+        Text("More")
+          .font(.system(size: size, weight: .semibold))
+          .foregroundStyle(MIRATheme.Color.forest)
+          .accessibilityLabel("More. Open full post")
+      }
+    }
+    .onPreferenceChange(CaptroFullCaptionHeightKey.self) { fullHeight = $0 }
+    .onPreferenceChange(CaptroVisibleCaptionHeightKey.self) { visibleHeight = $0 }
+  }
+}
+
+private struct CaptroFullCaptionHeightKey: PreferenceKey {
+  static var defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct CaptroVisibleCaptionHeightKey: PreferenceKey {
+  static var defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }

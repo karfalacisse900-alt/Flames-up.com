@@ -2,7 +2,6 @@ import Foundation
 import AVFoundation
 import AVKit
 import PhotosUI
-import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
@@ -14,18 +13,16 @@ public struct CaptroScanView: View {
   @State private var stage: CaptroReceiptStage = .hub
   @State private var showingRecordCamera = false
   @State private var pendingRecordPreview = false
-  @State private var showingVoiceRecorder = false
+  @State private var showingVoiceAssistant = false
+  @State private var pendingVoiceFromPreview = false
+  @State private var pendingAssistantDestination: CaptroCaptureDestination?
+  @State private var pendingRetake = false
   @State private var recordedMedia: MIRAPickedMedia?
   @State private var handoffMedia: MIRAPickedMedia?
   @State private var recordedMediaURL: URL?
-  @State private var recordedVoice: CaptroVoiceDraft?
-  @State private var showingVoicePreview = false
-  @State private var pendingVoiceUse: CaptroVoiceUse?
-  @State private var captionFromVoice: String?
   @State private var showingRecordPreview = false
   @State private var pendingCreationDestination: CaptroCaptureDestination?
   @State private var creationDestination: CaptroCaptureDestination?
-  @State private var postUsesVoice = false
   @State private var selectedDocument: CaptroLocalDocument?
   @State private var review: CaptroReceiptReview?
   @State private var reward: CaptroReceiptRewardResult?
@@ -77,32 +74,38 @@ public struct CaptroScanView: View {
           pendingRecordPreview = true
           showingRecordCamera = false
         },
-        onCancel: { showingRecordCamera = false },
-        onGallerySelection: { items in
-          guard let media = items.first(where: { $0.kind == .video }) else { return }
-          recordedMedia = media
-          recordedMediaURL = nil
-          pendingRecordPreview = true
-          showingRecordCamera = false
-        }
+        onCancel: { showingRecordCamera = false }
       )
       .ignoresSafeArea()
     }
     .fullScreenCover(isPresented: $showingRecordPreview, onDismiss: {
+      if pendingRetake {
+        pendingRetake = false
+        showingRecordCamera = true
+      }
+      if pendingVoiceFromPreview {
+        pendingVoiceFromPreview = false
+        showingVoiceAssistant = true
+      }
       if let pendingCreationDestination {
         self.pendingCreationDestination = nil
         creationDestination = pendingCreationDestination
       }
     }) {
       if let recordedMedia {
-        CaptroRecordPreview(media: recordedMedia, previewURL: $recordedMediaURL, onClose: { showingRecordPreview = false }, onDiscard: {
+        CaptroRecordPreview(media: recordedMedia, previewURL: $recordedMediaURL, onClose: { showingRecordPreview = false }, onAskCaptro: {
+          pendingVoiceFromPreview = true
+          showingRecordPreview = false
+        }, onRetake: {
+          pendingRetake = true
+          showingRecordPreview = false
+        }, onDiscard: {
           if let recordedMediaURL { try? FileManager.default.removeItem(at: recordedMediaURL) }
           recordedMediaURL = nil
           self.recordedMedia = nil
           handoffMedia = nil
           showingRecordPreview = false
         }) { destination, chosenMedia in
-          postUsesVoice = false
           handoffMedia = chosenMedia
           pendingCreationDestination = destination
           showingRecordPreview = false
@@ -119,46 +122,25 @@ public struct CaptroScanView: View {
           }
         }
       case .post:
-        CreatePostNativeView(api: api, initialMedia: postUsesVoice ? nil : handoffMedia, initialVoiceDraft: postUsesVoice ? recordedVoice : nil, initialCaption: captionFromVoice) {
+        CreatePostNativeView(api: api, initialMedia: handoffMedia) {
           creationDestination = nil
           handoffMedia = nil
-          postUsesVoice = false
-          captionFromVoice = nil
         }
       }
     }
-    .sheet(isPresented: $showingVoiceRecorder, onDismiss: {
-      if recordedVoice != nil { showingVoicePreview = true }
-    }) {
-      CaptroVoiceRecorderSheet(limit: 60) { draft in
-        recordedVoice = draft
-        showingVoiceRecorder = false
-      }
-    }
-    .fullScreenCover(isPresented: $showingVoicePreview, onDismiss: {
-      if let pendingVoiceUse {
-        self.pendingVoiceUse = nil
-        switch pendingVoiceUse {
-        case .voicePost:
-          postUsesVoice = true
-          captionFromVoice = nil
-        case .caption(let text):
-          postUsesVoice = false
-          captionFromVoice = text
-        }
-        creationDestination = .post
+    .fullScreenCover(isPresented: $showingVoiceAssistant, onDismiss: {
+      if let pendingAssistantDestination, let recordedMedia {
+        self.pendingAssistantDestination = nil
+        handoffMedia = recordedMedia
+        creationDestination = pendingAssistantDestination
       }
     }) {
-      if let recordedVoice {
-        CaptroVoicePreview(draft: recordedVoice, onClose: { showingVoicePreview = false }, onDiscard: {
-          try? FileManager.default.removeItem(at: recordedVoice.fileURL)
-          self.recordedVoice = nil
-          showingVoicePreview = false
-        }) { choice in
-          pendingVoiceUse = choice
-          showingVoicePreview = false
-        }
-      }
+      CaptroCaptureAssistantView(api: api, hasCurrentRecording: recordedMedia != nil, onClose: {
+        showingVoiceAssistant = false
+      }, onOpenEditor: { destination in
+        pendingAssistantDestination = destination == .story ? .story : .post
+        showingVoiceAssistant = false
+      })
     }
     .onChange(of: selectedPhoto) { _, item in
       guard let item else { return }
@@ -223,10 +205,9 @@ public struct CaptroScanView: View {
           .font(.system(.title, design: .rounded).weight(.bold))
           .foregroundStyle(CaptroReceiptPalette.ink)
         Spacer()
-        if recordedMedia != nil || recordedVoice != nil {
+        if recordedMedia != nil {
           Menu {
             if recordedMedia != nil { Button("Recent video") { showingRecordPreview = true } }
-            if recordedVoice != nil { Button("Recent voice") { showingVoicePreview = true } }
           } label: {
             Image(systemName: "clock.arrow.circlepath")
               .font(.system(size: 17))
@@ -256,9 +237,9 @@ public struct CaptroScanView: View {
       HStack(spacing: 0) {
         hubMode("Scan", detail: "Receipts and documents", symbol: "viewfinder") { stage = .capture }
         Divider().frame(height: 64)
-        hubMode("Record", detail: "Video and media", symbol: "video") { showingRecordCamera = true }
+        hubMode("Record", detail: "New camera video", symbol: "video") { showingRecordCamera = true }
         Divider().frame(height: 64)
-        hubMode("Voice", detail: "Record your voice", symbol: "waveform") { showingVoiceRecorder = true }
+        hubMode("Voice", detail: "Talk to Captro", symbol: "waveform") { showingVoiceAssistant = true }
       }
       .background(.white, in: RoundedRectangle(cornerRadius: 20))
       .padding(.bottom, 44)
@@ -1094,6 +1075,8 @@ private struct CaptroRecordPreview: View {
   let media: MIRAPickedMedia
   @Binding var previewURL: URL?
   let onClose: () -> Void
+  let onAskCaptro: () -> Void
+  let onRetake: () -> Void
   let onDiscard: () -> Void
   let onUse: (CaptroCaptureDestination, MIRAPickedMedia) -> Void
   @State private var player: AVPlayer?
@@ -1120,10 +1103,16 @@ private struct CaptroRecordPreview: View {
         .background(.black)
 
         VStack(spacing: 10) {
-          Button("Edit for Story") { editingDestination = .story }
-          Button("Edit for Post") { editingDestination = .post }
-          Button("Use original in Post") { onUse(.post, media) }
+          Button("Ask Captro", action: onAskCaptro)
+          Button("Use original", action: { onUse(.post, media) })
+          HStack(spacing: 12) {
+            Button("Story") { editingDestination = .story }
+            Button("Post") { editingDestination = .post }
+          }
+          Button("Retake", action: onRetake)
+            .buttonStyle(.bordered)
           Button("Discard recording", role: .destructive) { showingDiscardConfirmation = true }
+            .buttonStyle(.bordered)
         }
         .buttonStyle(.borderedProminent)
         .tint(MIRATheme.Color.forest)
@@ -1187,199 +1176,6 @@ private struct CaptroRecordPreview: View {
     } catch {
       errorMessage = "This recording could not be prepared. The original remains in this Capture session."
     }
-  }
-}
-
-private enum CaptroVoiceUse {
-  case voicePost
-  case caption(String)
-}
-
-private struct CaptroVoicePreview: View {
-  let draft: CaptroVoiceDraft
-  let onClose: () -> Void
-  let onDiscard: () -> Void
-  let onUse: (CaptroVoiceUse) -> Void
-  @StateObject private var transcriber = CaptroOnDeviceVoiceTranscriber()
-  @State private var player: AVAudioPlayer?
-  @State private var isPlaying = false
-  @State private var playbackError: String?
-
-  var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: 24) {
-          VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: "waveform")
-              .font(.system(size: 32, weight: .light))
-              .foregroundStyle(MIRATheme.Color.forest)
-            Text("Voice capture")
-              .font(.title2.weight(.semibold))
-            Text(String(format: "%d:%02d", Int(draft.duration) / 60, Int(draft.duration) % 60))
-              .font(.body.monospacedDigit())
-              .foregroundStyle(.secondary)
-          }
-
-          Button(isPlaying ? "Pause recording" : "Play recording") { togglePlayback() }
-            .buttonStyle(.bordered)
-            .frame(minHeight: 44)
-
-          if let playbackError {
-            Text(playbackError).font(.footnote).foregroundStyle(.red)
-          }
-
-          Divider()
-
-          VStack(alignment: .leading, spacing: 10) {
-            Text("Turn voice into text")
-              .font(.headline)
-            Text("Optional. Recognition runs on this iPhone when supported; your recording is not sent to a new service for this step.")
-              .font(.subheadline)
-              .foregroundStyle(.secondary)
-            if transcriber.isTranscribing {
-              ProgressView("Transcribing…")
-            } else {
-              Button("Transcribe on this iPhone") {
-                Task { await transcriber.transcribe(draft.fileURL) }
-              }
-              .buttonStyle(.bordered)
-            }
-            if let transcript = transcriber.transcript {
-              Text(transcript)
-                .font(.body)
-                .textSelection(.enabled)
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 12))
-            }
-            if let error = transcriber.errorMessage {
-              Text(error).font(.footnote).foregroundStyle(.secondary)
-            }
-          }
-
-          Divider()
-
-          VStack(spacing: 12) {
-            Button("Create voice post") { onUse(.voicePost) }
-              .buttonStyle(.borderedProminent)
-            Button("Use text as post caption") {
-              if let transcript = transcriber.transcript { onUse(.caption(transcript)) }
-            }
-            .buttonStyle(.bordered)
-            .disabled(transcriber.transcript == nil)
-          }
-          .frame(maxWidth: .infinity)
-
-          Text("Automatic voice commands, Story narration, and AI video edits are not available in this version. Your recording will not be published until you confirm a post.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-
-          Button("Discard recording", role: .destructive, action: onDiscard)
-            .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .padding(20)
-      }
-      .background(CaptroReceiptPalette.background)
-      .navigationTitle("Voice")
-      .navigationBarTitleDisplayMode(.inline)
-      .tint(MIRATheme.Color.forest)
-      .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done", action: onClose) } }
-      .onDisappear { player?.stop(); player = nil; transcriber.cancel() }
-      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-        player?.pause(); isPlaying = false
-      }
-      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { note in
-        if let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-           AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable {
-          player?.pause(); isPlaying = false
-        }
-      }
-      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
-        if let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-           AVAudioSession.InterruptionType(rawValue: raw) == .began {
-          player?.pause(); isPlaying = false
-        }
-      }
-      .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
-        if isPlaying && player?.isPlaying == false { isPlaying = false }
-      }
-    }
-  }
-
-  private func togglePlayback() {
-    if isPlaying { player?.pause(); isPlaying = false; return }
-    do {
-      MIRAPlaybackCoordinator.pauseAll(reason: "capture_voice_preview")
-      let next = try AVAudioPlayer(contentsOf: draft.fileURL)
-      next.play()
-      player = next
-      isPlaying = true
-      playbackError = nil
-    } catch {
-      playbackError = "This recording could not be played. The saved original is unchanged."
-    }
-  }
-}
-
-@MainActor
-private final class CaptroOnDeviceVoiceTranscriber: ObservableObject {
-  @Published private(set) var transcript: String?
-  @Published private(set) var errorMessage: String?
-  @Published private(set) var isTranscribing = false
-  private var recognitionTask: SFSpeechRecognitionTask?
-  private var activeID: UUID?
-
-  func transcribe(_ url: URL) async {
-    cancel()
-    let id = UUID()
-    activeID = id
-    transcript = nil
-    errorMessage = nil
-    isTranscribing = true
-
-    let authorization: SFSpeechRecognizerAuthorizationStatus = await withCheckedContinuation { continuation in
-      SFSpeechRecognizer.requestAuthorization { status in continuation.resume(returning: status) }
-    }
-    guard activeID == id else { return }
-    guard authorization == .authorized else {
-      errorMessage = "Speech recognition is off. You can still use the original voice recording."
-      isTranscribing = false
-      return
-    }
-    guard let recognizer = SFSpeechRecognizer(locale: Locale.current),
-          recognizer.supportsOnDeviceRecognition, recognizer.isAvailable else {
-      errorMessage = "On-device transcription is unavailable for this language or device. The recording is still saved."
-      isTranscribing = false
-      return
-    }
-
-    let request = SFSpeechURLRecognitionRequest(url: url)
-    request.requiresOnDeviceRecognition = true
-    request.shouldReportPartialResults = false
-    request.taskHint = .dictation
-    recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-      DispatchQueue.main.async {
-        guard let self, self.activeID == id else { return }
-        if let result, result.isFinal {
-          let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
-          self.transcript = text.isEmpty ? nil : text
-          if text.isEmpty { self.errorMessage = "No clear speech was detected. The recording is unchanged." }
-          self.isTranscribing = false
-          self.recognitionTask = nil
-        } else if error != nil {
-          self.errorMessage = "Transcription could not finish. You can retry or use the original recording."
-          self.isTranscribing = false
-          self.recognitionTask = nil
-        }
-      }
-    }
-  }
-
-  func cancel() {
-    activeID = nil
-    recognitionTask?.cancel()
-    recognitionTask = nil
-    isTranscribing = false
   }
 }
 

@@ -402,7 +402,7 @@ test('iOS Scan uses centered review, adaptive feedback, and a private reward bal
   const scanSources = `${screen}\n${camera}\n${models}\n${profile}`;
 
   assert.match(root, /lazyTab\(\.scan\)/);
-  assert.match(root, /Label\("Scan", systemImage: "doc\.viewfinder\.fill"\)/);
+  assert.match(root, /Label\("Capture", systemImage: "viewfinder"\)/);
   assert.match(root, /CaptroScanView\(api: api\) \{\s*selectedTab = \.main/);
   assert.doesNotMatch(root, /lazyTab\(\.discover\)/);
   assert.match(screen, /CaptroReceiptCameraView\(/);
