@@ -329,8 +329,8 @@ public struct MIRANativeRootView: View {
       lazyTab(.scan) {
         if authSession.isGuest {
           GuestSignInRequiredView(
-            title: "Sign in to use Scan",
-            message: "Create an account or sign in to submit receipt feedback and keep your earnings private.",
+            title: "Sign in to use Capture",
+            message: "Create an account or sign in to capture, post, and submit receipt feedback.",
             systemImage: "doc.viewfinder.fill",
             onSignIn: leaveGuestModeForSignIn
           )
@@ -341,7 +341,7 @@ public struct MIRANativeRootView: View {
         }
       }
         .tag(MIRATab.scan)
-        .tabItem { Label("Scan", systemImage: "doc.viewfinder.fill") }
+        .tabItem { Label("Capture", systemImage: "viewfinder") }
 
       lazyTab(.profile) {
         if authSession.isGuest {

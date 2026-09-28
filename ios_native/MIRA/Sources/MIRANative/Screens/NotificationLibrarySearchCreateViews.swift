@@ -957,6 +957,8 @@ private final class MIRABroadLocationResolver: NSObject, ObservableObject, CLLoc
 public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
+  private let initialMedia: MIRAPickedMedia?
+  private let initialVoiceDraft: CaptroVoiceDraft?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
@@ -1004,6 +1006,7 @@ public struct CreatePostNativeView: View {
   @State private var isGeneratingPostAssist = false
   @State private var postAssistError: String?
   @State private var hasRestoredPostDraft = false
+  @State private var didApplyInitialCapture = false
   @State private var isRestoringPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
   @State private var isCameraReviewingMedia = false
@@ -1011,8 +1014,10 @@ public struct CreatePostNativeView: View {
   @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
-  public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
+  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialVoiceDraft: CaptroVoiceDraft? = nil, onClose: (() -> Void)? = nil) {
     self.api = api
+    self.initialMedia = initialMedia
+    self.initialVoiceDraft = initialVoiceDraft
     self.onClose = onClose
   }
 
@@ -2373,6 +2378,15 @@ public struct CreatePostNativeView: View {
   @MainActor
   private func preparePostComposerForDisplay() async {
     await restorePostDraftIfNeeded()
+    if !didApplyInitialCapture {
+      didApplyInitialCapture = true
+      if let initialMedia, !mediaItems.contains(where: { $0.fileName == initialMedia.fileName }) {
+        mediaItems.append(initialMedia)
+      }
+      if let initialVoiceDraft, voiceDraft == nil {
+        voiceDraft = initialVoiceDraft
+      }
+    }
     await loadBroadLocationDefaultIfNeeded()
   }
 
@@ -4262,6 +4276,7 @@ private struct PostHashtagSheet: View {
 public struct CreateStoryNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
+  private let initialMedia: MIRAPickedMedia?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var showCamera = true
@@ -4286,9 +4301,12 @@ public struct CreateStoryNativeView: View {
   @State private var selectedClub: StoryClubChoice?
   @State private var showClubPicker = false
 
-  public init(api: MIRAAPIClient, onClose: (() -> Void)? = nil) {
+  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, onClose: (() -> Void)? = nil) {
     self.api = api
     self.onClose = onClose
+    self.initialMedia = initialMedia
+    _showCamera = State(initialValue: initialMedia == nil)
+    _pendingStoryMedia = State(initialValue: initialMedia)
   }
 
   public var body: some View {

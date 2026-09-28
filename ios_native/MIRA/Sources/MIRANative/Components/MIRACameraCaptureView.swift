@@ -28,6 +28,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   var showsGridOverlay = true
   var dismissesOnCapture = true
   var dismissesOnCancel = true
+  var simpleCaptureUI = false
   let onCapture: (MIRAPickedMedia) -> Void
   let onCancel: () -> Void
   let onMusic: () -> Void
@@ -44,6 +45,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     showsGridOverlay: Bool = true,
     dismissesOnCapture: Bool = true,
     dismissesOnCancel: Bool = true,
+    simpleCaptureUI: Bool = false,
     onCapture: @escaping (MIRAPickedMedia) -> Void,
     onCancel: @escaping () -> Void = {},
     onMusic: @escaping () -> Void = {},
@@ -57,6 +59,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     self.showsGridOverlay = showsGridOverlay
     self.dismissesOnCapture = dismissesOnCapture
     self.dismissesOnCancel = dismissesOnCancel
+    self.simpleCaptureUI = simpleCaptureUI
     self.onCapture = onCapture
     self.onCancel = onCancel
     self.onMusic = onMusic
@@ -70,6 +73,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     controller.captureMode = captureMode
     controller.showsMusicButton = showsMusicButton
     controller.showsGridOverlay = showsGridOverlay
+    controller.simpleCaptureUI = simpleCaptureUI
     controller.delegate = context.coordinator
     return controller
   }
@@ -181,6 +185,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   var showsGridOverlay = true {
     didSet { updateGridOverlayVisibility() }
   }
+  var simpleCaptureUI = false
 
   private enum CameraMode: String, CaseIterable {
     case photo = "Photo"
@@ -364,10 +369,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     previewContainer.translatesAutoresizingMaskIntoConstraints = false
     previewContainer.backgroundColor = .black
     previewContainer.clipsToBounds = true
-    previewContainer.layer.cornerRadius = 34
+    previewContainer.layer.cornerRadius = simpleCaptureUI ? 0 : 34
     previewContainer.layer.cornerCurve = .continuous
     previewContainer.layer.shadowColor = UIColor.black.cgColor
-    previewContainer.layer.shadowOpacity = 0.26
+    previewContainer.layer.shadowOpacity = simpleCaptureUI ? 0 : 0.26
     previewContainer.layer.shadowRadius = 34
     previewContainer.layer.shadowOffset = CGSize(width: 0, height: 16)
 
@@ -561,9 +566,9 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     inlineEditPanelHeightConstraint?.isActive = true
 
     NSLayoutConstraint.activate([
-      previewContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
-      previewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 6),
-      previewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -6),
+      previewContainer.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: simpleCaptureUI ? 0 : 6),
+      previewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: simpleCaptureUI ? 0 : 6),
+      previewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: simpleCaptureUI ? 0 : -6),
       previewContainer.bottomAnchor.constraint(equalTo: modeStack.topAnchor, constant: -18),
 
       closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 22),
@@ -933,7 +938,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     flashButton.isHidden = false
     rawButton.isHidden = isReviewing || !rawCaptureSupported || selectedMode != .photo || captureMode == .videoOnly
     updateMusicButtonVisibility()
-    editRailButton.isHidden = false
+    editRailButton.isHidden = simpleCaptureUI
     editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
     shutterButton.isHidden = false
     shutterFill.isHidden = false
@@ -1564,6 +1569,10 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
   }
 
   private func showCapturedMedia(_ media: MIRAPickedMedia, thumbnail: UIImage? = nil) {
+    if simpleCaptureUI {
+      delegate?.storyCameraDidCapture(media)
+      return
+    }
     cleanupReviewVideoPlayer()
     capturedMedia = media
     lastAppliedEditedMediaSignature = editedMediaSignature(media)

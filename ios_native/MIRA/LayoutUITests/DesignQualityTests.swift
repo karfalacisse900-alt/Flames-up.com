@@ -36,6 +36,17 @@ final class DesignQualityTests: XCTestCase {
     app.buttons["Cancel"].tap()
   }
 
+  func testCaptureHubHasThreeClearModes() {
+    let app = launch(["--captro-quality-capture"])
+    XCTAssertTrue(app.staticTexts["Capture"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["Scan, Receipts and documents"].exists)
+    XCTAssertTrue(app.buttons["Record, Video and media"].exists)
+    XCTAssertTrue(app.buttons["Voice, Record your voice"].exists)
+    XCTAssertFalse(app.buttons["Upload"].exists)
+    XCTAssertFalse(app.buttons["AI"].exists)
+    capture(app, "capture-hub")
+  }
+
   func testWelcomeAndFormsAtLargeText() {
     let app = launch(["--captro-quality-auth", "--captro-quality-large-text"])
     XCTAssertTrue(app.buttons["Continue as Guest"].waitForExistence(timeout: 10))
