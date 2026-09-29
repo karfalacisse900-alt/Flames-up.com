@@ -1282,7 +1282,7 @@ public struct CreatePostNativeView: View {
         )
       case .response:
         CaptroPostResponsePicker(selected: $postResponse,
-          allowsGoing: !commerceDraft.enabled,
+          allowsGoing: !commerceDraft.enabled && (!isEventStamp || !eventDraft.attendanceEnabled),
           onClose: closeSheet)
       case nil:
         Color.clear
@@ -2303,8 +2303,8 @@ public struct CreatePostNativeView: View {
       errorMessage = "Responses are available on text-only posts. Remove the media or response to continue."
       return
     }
-    if postResponse?.type == "going" && commerceDraft.enabled {
-      errorMessage = "Use the official join or ticket action for this Stamp. Turn off access details to use an informal Going response."
+    if postResponse?.type == "going" && (commerceDraft.enabled || (isEventStamp && eventDraft.attendanceEnabled)) {
+      errorMessage = "Use the official join or ticket action for this Stamp. Turn off access and attendance details to use an informal Going response."
       return
     }
     if isEventStamp, let error = eventDraft.validationError {

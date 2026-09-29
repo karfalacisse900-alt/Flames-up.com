@@ -16675,7 +16675,7 @@ api.post('/posts', authMiddleware, async (c) => {
   const commerceCreatorId = commerceConfig ? isUuidText(supabaseAuthorRow?.supabase_user_id || '') : null;
   const commerceGroupId = commerceConfig && ['club', 'group'].includes(String(commerceConfig.purchasable.content_type || ''))
     ? uuid() : null;
-  if (postResponse?.type === 'going' && commerceConfig) {
+  if (postResponse?.type === 'going' && (commerceConfig || creatorEvent?.attendanceEnabled === true)) {
     return c.json({ detail: 'Use the official join or ticket action for this post instead of an informal Going response.', code: 'POST_RESPONSE_GOING_CONFLICT' }, 400);
   }
   if (commerceConfig && !commerceCreatorId) {

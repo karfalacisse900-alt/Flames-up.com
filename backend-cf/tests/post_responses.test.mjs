@@ -40,6 +40,7 @@ test('creator chooses zero or one mode; votes require visible posts and the sele
   assert.match(feed, /CaptroPostResponseView\(post: post/);
   assert.match(worker, /const postResponse = normalizePostResponseConfig\(rawPostResponse\)/);
   assert.match(worker, /post_response: input\.postResponse \|\| null/);
+  assert.match(worker, /postResponse\?\.type === 'going' && \(commerceConfig \|\| creatorEvent\?\.attendanceEnabled === true\)/);
   assert.match(worker, /supabaseHydratePostResponses\(c, ordered, viewerId\)/);
   const route = worker.slice(worker.indexOf("api.post('/posts/:postId/responses'"), worker.indexOf("api.get('/posts/:postId/responses/people'"));
   assert.match(route, /supabaseReadVisiblePosts\(c, userId, \{ postId, limit: 1 \}\)/);
