@@ -22,6 +22,7 @@ import {
   stripeV2RecipientTransfersEnabled,
 } from './stripe-connect-v2';
 import { bindVoiceAttachment, classifyOpenAIServiceFailure, createVoiceRoutes, inspectVoiceAudio, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
+import { rankVisibleFeedWindow } from './feed-relevance';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -5544,6 +5545,8 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   delete payload.live_likes_count;
   delete payload.live_comments_count;
   delete payload.live_saves_count;
+  // Topic hints are private ranking metadata, not part of a creator's post.
+  delete payload.feed_ai_topics;
   delete payload.place_lat;
   delete payload.place_lng;
   if (audioHidden) {
@@ -7029,6 +7032,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     user_profile_image: author?.avatar_url,
     title: cleanText(row?.title, 180),
     content: cleanMultilineText(row?.content, 4000),
+    feed_ai_topics: sanitizeAutoCategoryTags((parseJsonObject((metadata as any).feed_ai) as any).topics).slice(0, 8),
     image: mediaUrls[0] || '',
     images: mediaUrls,
     media_types: mediaTypes,
@@ -16981,6 +16985,29 @@ api.post('/posts', authMiddleware, async (c) => {
     moderation_media_ids: JSON.stringify(approvedMediaAssetIds),
   };
   if (createdCommerce) createdPost.detail = { ...(createdPost.detail || {}), commerce: createdCommerce };
+  if (visibility === 'public' && !imageUrls.length && !voiceAudioId && (postTitle || postContent)
+      && insertedPostRow?.id && c.env.OPENAI_API_KEY) {
+    const postUuid = insertedPostRow.id;
+    runBackgroundTask(c, 'feed_ai_classification_failed', async () => {
+      const classified = await generatePostAssistWithOpenAI(c.env, {
+        caption: postContent, postType, mediaType: 'text', location, placeName,
+        hashtags: explicitTags, ...({ title: postTitle } as any),
+      }, autoCategory);
+      const topics = sanitizeAutoCategoryTags([classified.primary_category, ...classified.tags]).slice(0, 8);
+      if (!topics.length) return;
+      const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+        select: 'id,metadata,updated_at,status,visibility',
+        filters: { id: postgrestEqFilter(postUuid) }, limit: 1,
+      });
+      const current = rows[0];
+      if (!current || current.status !== 'active' || current.visibility !== 'public' || !current.updated_at) return;
+      const metadata = parseJsonObject(current.metadata);
+      if ((metadata as any).feed_ai) return;
+      await supabaseAdminPatchRows(c, 'app_posts', {
+        id: postgrestEqFilter(postUuid), updated_at: postgrestEqFilter(current.updated_at),
+      }, { metadata: { ...metadata, feed_ai: { source: 'openai', topics, classified_at: now() } } });
+    });
+  }
   return c.json(postPayload(createdPost, [], c.env));
 });
 
@@ -16993,8 +17020,16 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   try {
-    const feedRows = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
-    const response = c.json(feedRows.map((p) => feedPostPayload(p, [], c.env)));
+    const [feedRows, viewer] = await Promise.all([
+      supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' }),
+      skip === 0 ? getSupabaseAppUserRowByAnyId(c, userId) : Promise.resolve(null),
+    ]);
+    // Visibility, blocking and moderation are resolved before this bounded
+    // ordering pass. Later pages stay chronological, so pagination cannot
+    // duplicate or skip posts promoted out of a different page.
+    const viewerInterests = parseJsonObject(viewer?.profile).interests;
+    const ordered = skip === 0 ? rankVisibleFeedWindow(feedRows, viewerInterests) : feedRows;
+    const response = c.json(ordered.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;
   } catch (error: any) {
