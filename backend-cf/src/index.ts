@@ -6285,13 +6285,16 @@ async function supabaseCreatePostComment(c: any, input: {
     updated_at: nowIso,
   };
   await supabaseAdminUpsert(c, 'post_comments', [row], 'legacy_comment_id');
-  const engagement = await getSupabasePostEngagementState(c, input.postId, input.userId);
+  // Comment creation must not depend on unrelated like/save reconciliation.
+  // In particular, a successfully inserted private voice reply must be
+  // returned to its caller so its recording can be bound for moderation.
+  const commentsCount = await supabasePostCommentCount(c, input.postId);
   return {
     status: 200 as const,
     body: {
       ...supabaseCommentPayload(row, user, input.postId),
       post_user_id: visiblePost.user_id,
-      post_comments_count: engagement.comments_count,
+      post_comments_count: commentsCount,
     },
   };
 }

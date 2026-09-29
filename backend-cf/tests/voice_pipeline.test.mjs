@@ -140,3 +140,11 @@ test('Capture Voice sends microphone audio through the authenticated backend Ope
   assert.match(backend, /client\.audio\.transcriptions\.create/);
   assert.match(backend, /captureAssistantReply\(client, \{ utterance, history, hasRecording \}\)/);
 });
+
+test('voice reply creation binds after a focused comment count, not a full engagement refresh', () => {
+  const backend = fs.readFileSync('../backend-cf/src/index.ts', 'utf8');
+  const create = backend.split('async function supabaseCreatePostComment(')[1].split('async function supabaseReadPostComments(')[0];
+  assert.match(create, /await supabaseAdminUpsert\(c, 'post_comments'/);
+  assert.match(create, /await supabasePostCommentCount\(c, input\.postId\)/);
+  assert.doesNotMatch(create, /getSupabasePostEngagementState/);
+});
