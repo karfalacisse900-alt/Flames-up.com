@@ -34,6 +34,10 @@ on:
         type: boolean
         default: false
         description: 'Test the Cloudflare safety model using synthetic text only'
+      voice_diagnostic:
+        type: boolean
+        default: false
+        description: 'Exercise temporary private Voice AI, voice post, and voice reply flows'
   push:
     branches: [fix/oauth-guest-access]
     paths: ['.github/workflows/verify-scan-provider.yml', 'backend-cf/scripts/verify-scan-provider.mjs']
@@ -50,13 +54,13 @@ jobs:
       - run: npm ci
         working-directory: backend-cf
       - name: Inspect API edge challenge configuration
-        if: ${{ inputs.inspect_edge == true && inputs.workers_ai_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true }}
+        if: ${{ inputs.inspect_edge == true && inputs.workers_ai_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.voice_diagnostic != true }}
         working-directory: backend-cf
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: node scripts/inspect-scan-edge.mjs
       - name: Check private storage and real Veryfi processing
-        if: ${{ inputs.production != true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true }}
+        if: ${{ inputs.production != true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true && inputs.voice_diagnostic != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -67,7 +71,7 @@ jobs:
           VERYFI_API_KEY: ${{ secrets.VERYFI_API_KEY }}
         run: node --experimental-strip-types scripts/verify-scan-provider.mjs
       - name: Verify deployed scan pipeline
-        if: ${{ inputs.production == true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true }}
+        if: ${{ inputs.production == true && inputs.inspect_edge != true && inputs.status_diagnostic != true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true && inputs.voice_diagnostic != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -76,7 +80,7 @@ jobs:
           CAPTRO_SCAN_SMOKE_BASE_URL: ${{ inputs.direct_worker && 'https://flames-up-api.karfalacisse900.workers.dev/api' || 'https://api.flames-up.com/api' }}
         run: node scripts/verify-scan-production.mjs
       - name: Diagnose private Status publication
-        if: ${{ inputs.status_diagnostic == true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true }}
+        if: ${{ inputs.status_diagnostic == true && inputs.status_photo_diagnostic != true && inputs.status_video_diagnostic != true && inputs.chat_realtime_diagnostic != true && inputs.workers_ai_diagnostic != true && inputs.voice_diagnostic != true }}
         working-directory: backend-cf
         env:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -127,3 +131,11 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: node scripts/diagnose-chat-realtime-production.mjs
+      - name: Verify private Voice AI and publication handoff
+        if: ${{ inputs.voice_diagnostic == true }}
+        working-directory: backend-cf
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node scripts/diagnose-voice-production.mjs
