@@ -130,15 +130,18 @@ test('migration permits private voice posts and voice-only replies without openi
   await db.close();
 });
 
-test('Capture Voice sends microphone audio through the authenticated backend OpenAI path', () => {
+test('Capture Voice streams a single Realtime conversation without a manual send control', () => {
   const native = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCaptureAssistantView.swift', 'utf8');
+  const realtime = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Services/CaptroRealtimeVoiceSession.swift', 'utf8');
   const backend = fs.readFileSync('../backend-cf/src/index.ts', 'utf8');
-  assert.match(native, /AVAudioRecorder\(url: url/);
-  assert.match(native, /uploadMultipart\(\s*"\/ai\/capture-assistant\/audio"/);
+  assert.doesNotMatch(native, /Send to Captro|Record again|AVAudioRecorder/);
   assert.doesNotMatch(native, /supportsOnDeviceRecognition|SFSpeechRecognizer/);
-  assert.match(backend, /api\.post\('\/ai\/capture-assistant\/audio', authMiddleware/);
-  assert.match(backend, /client\.audio\.transcriptions\.create/);
-  assert.match(backend, /captureAssistantReply\(client, \{ utterance, history, hasRecording \}\)/);
+  assert.match(realtime, /URLSessionWebSocketTask/);
+  assert.match(realtime, /input_audio_buffer\.append/);
+  assert.match(realtime, /conversation\.item\.truncate/);
+  assert.match(backend, /api\.post\('\/ai\/realtime\/session', authMiddleware/);
+  assert.match(backend, /'OpenAI-Safety-Identifier'/);
+  assert.match(backend, /interrupt_response: true/);
 });
 
 test('voice reply creation binds after a focused comment count, not a full engagement refresh', () => {

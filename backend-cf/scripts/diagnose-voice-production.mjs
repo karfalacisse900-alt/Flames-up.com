@@ -72,6 +72,35 @@ try {
   assert.equal(textAssistant.response.status, 200, 'Existing OpenAI assistant did not respond');
   assert.ok(textAssistant.result.reply);
 
+  const liveSession = await call(`${api}/ai/realtime/session`, {
+    method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ has_current_recording: false }),
+  });
+  console.log(JSON.stringify({ stage: 'realtime_credential', status: liveSession.response.status, code: liveSession.result.code || null }));
+  assert.equal(liveSession.response.status, 200, 'Realtime session credential could not be created');
+  assert.ok(liveSession.result.client_secret && liveSession.result.model === 'gpt-realtime-2.1');
+  const connected = await new Promise((resolve, reject) => {
+    const socket = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1',
+      ['realtime', `openai-insecure-api-key.${liveSession.result.client_secret}`]);
+    const timer = setTimeout(() => { socket.close(); reject(new Error('Realtime handshake timed out')); }, 15_000);
+    socket.onmessage = event => {
+      let message;
+      try { message = JSON.parse(event.data); } catch { return; }
+      if (message.type === 'session.created') {
+        clearTimeout(timer);
+        socket.close();
+        resolve(true);
+      } else if (message.type === 'error') {
+        clearTimeout(timer);
+        socket.close();
+        reject(new Error(`Realtime handshake rejected: ${message.error?.code || 'unknown'}`));
+      }
+    };
+    socket.onerror = () => { clearTimeout(timer); reject(new Error('Realtime WebSocket failed')); };
+    socket.onclose = () => { clearTimeout(timer); reject(new Error('Realtime WebSocket closed before session ready')); };
+  });
+  console.log(JSON.stringify({ stage: 'realtime_handshake', connected }));
+
   const audioForm = new FormData();
   audioForm.append('file', new File([spokenWav], 'synthetic-speech.wav', { type: 'audio/wav' }));
   audioForm.append('history', '[]');
