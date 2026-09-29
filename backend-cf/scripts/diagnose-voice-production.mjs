@@ -90,16 +90,14 @@ try {
     let createResponse;
     let interruptResponse;
     let started = false;
-    let manualFallbackUsed = false;
-    let fallbackTimer;
+    let clientResponseRequested = false;
     const finish = (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      clearTimeout(fallbackTimer);
       socket.close();
       if (error) reject(error);
-      else resolve({ vad, events: [...seen], manualFallbackUsed });
+      else resolve({ vad, events: [...seen], clientResponseRequested });
     };
     const timer = setTimeout(() => finish(new Error(`Realtime audio timed out; events=${[...seen].join(',')}`)), 45_000);
     socket.onmessage = event => {
@@ -108,7 +106,7 @@ try {
       if (typeof message.type === 'string') seen.add(message.type);
       if (message.type === 'session.created') {
         socket.send(JSON.stringify({ type: 'session.update', session: { type: 'realtime', audio: { input: { turn_detection: {
-          type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true,
+          type: 'semantic_vad', eagerness: 'medium', create_response: false, interrupt_response: true,
         } } } } }));
       } else if (message.type === 'session.updated' && !started) {
         started = true;
@@ -116,7 +114,7 @@ try {
         createResponse = message.session?.audio?.input?.turn_detection?.create_response;
         interruptResponse = message.session?.audio?.input?.turn_detection?.interrupt_response;
         if (vad !== 'semantic_vad') { finish(new Error(`Realtime session VAD is ${vad}, not semantic_vad`)); return; }
-        if (createResponse !== true || interruptResponse !== true) {
+        if (createResponse !== false || interruptResponse !== true) {
           finish(new Error(`Realtime session flags invalid: create_response=${createResponse}, interrupt_response=${interruptResponse}`));
           return;
         }
@@ -129,11 +127,10 @@ try {
           }
         })().catch(finish);
       } else if (message.type === 'input_audio_buffer.committed') {
-        fallbackTimer = setTimeout(() => {
-          if (settled || seen.has('response.created')) return;
-          manualFallbackUsed = true;
+        if (!clientResponseRequested) {
+          clientResponseRequested = true;
           socket.send(JSON.stringify({ type: 'response.create' }));
-        }, 5_000);
+        }
       } else if (message.type === 'error') {
         finish(new Error(`Realtime audio rejected: ${message.error?.code || 'unknown'}`));
       } else if (['input_audio_buffer.speech_started', 'input_audio_buffer.speech_stopped', 'response.created', 'response.output_audio.delta', 'response.done'].includes(message.type)) {
@@ -144,7 +141,7 @@ try {
     socket.onerror = () => finish(new Error('Realtime WebSocket failed'));
     socket.onclose = () => { if (!settled) finish(new Error(`Realtime WebSocket closed; events=${[...seen].join(',')}`)); };
   });
-  console.log(JSON.stringify({ stage: 'realtime_synthetic_conversation', vad: realtime.vad, manual_fallback_used: realtime.manualFallbackUsed, events: realtime.events }));
+  console.log(JSON.stringify({ stage: 'realtime_synthetic_conversation', vad: realtime.vad, client_response_requested: realtime.clientResponseRequested, events: realtime.events }));
 
   const audioForm = new FormData();
   audioForm.append('file', new File([spokenWav], 'synthetic-speech.wav', { type: 'audio/wav' }));

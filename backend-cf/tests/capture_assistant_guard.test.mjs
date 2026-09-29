@@ -22,12 +22,17 @@ test('Capture Voice opens the AI assistant, not a voice-post recorder', () => {
   assert.match(realtime, /"\/ai\/realtime\/session"/);
   assert.match(realtime, /input_audio_buffer\.append/);
   assert.match(realtime, /input_audio_buffer\.speech_started/);
+  assert.match(realtime, /input_audio_buffer\.committed/);
+  assert.match(realtime, /"type": "response\.create"/);
+  assert.match(realtime, /"create_response": false/);
+  assert.match(realtime, /recoverTransport\(\)/);
   assert.match(realtime, /response\.output_audio\.delta/);
   assert.doesNotMatch(assistant, /Send to Captro|Record again|uploadMultipart/);
   assert.doesNotMatch(assistant, /supportsOnDeviceRecognition|SFSpeechRecognizer/);
   assert.match(backend, /api\.post\('\/ai\/realtime\/session', authMiddleware/);
   assert.match(backend, /https:\/\/api\.openai\.com\/v1\/realtime\/client_secrets/);
   assert.match(backend, /semantic_vad/);
+  assert.match(backend, /create_response: false, interrupt_response: true/);
   assert.match(backend, /store: false/);
   assert.match(backend, /c\.env\.OPENAI_API_KEY/);
   assert.match(backend, /trim_duration_seconds/);
@@ -40,6 +45,17 @@ test('Post Assist uses the same server-side OpenAI key and does not return fake 
   assert.match(backend, /generatePostAssistWithOpenAI\(c\.env, input, deterministicCategory\)/);
   assert.match(backend, /source: 'openai'/);
   assert.match(backend, /Your draft is safe; try again later/);
+});
+
+test('new post text, captions, and comment replies are screened before publication', () => {
+  const create = backend.split("api.post('/posts', authMiddleware")[1].split("api.get('/posts/feed'")[0];
+  const comments = backend.split("api.post('/posts/:postId/comments', authMiddleware")[1].split("api.get('/posts/:postId/comments'")[0];
+  assert.match(create, /screenCaptroText\(c\.env, \[postTitle, postContent\]/);
+  assert.match(create, /TEXT_NEEDS_REVISION/);
+  assert.match(create, /TEXT_SCREENING_UNAVAILABLE/);
+  assert.match(comments, /surface: parentId \? 'comment_reply' : 'comment'/);
+  assert.match(backend, /event: 'text_moderation_decision'/);
+  assert.doesNotMatch(backend.split("event: 'text_moderation_decision'")[1].split('return decision')[0], /content: text|input: text/);
 });
 
 test('Story viewer and default editor preserve the entire original frame', () => {

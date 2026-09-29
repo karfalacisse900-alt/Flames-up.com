@@ -114,7 +114,7 @@ struct CaptroCaptureAssistantView: View {
               .frame(width: 44, height: 44)
           }
           .accessibilityLabel(session.muted ? "Unmute microphone" : "Mute microphone")
-          .disabled(session.phase == .connecting || session.phase == .error)
+          .disabled(session.phase == .connecting || session.phase == .reconnecting || session.phase == .error)
 
           Button { showsTranscript.toggle() } label: {
             Image(systemName: showsTranscript ? "text.bubble.fill" : "text.bubble")
@@ -155,7 +155,7 @@ struct CaptroCaptureAssistantView: View {
     switch session.phase {
     case .userSpeaking, .captroSpeaking: return 108 + session.level * 42
     case .processing: return 114
-    case .connecting, .listening, .error: return 108
+    case .connecting, .reconnecting, .listening, .error: return 108
     }
   }
 }

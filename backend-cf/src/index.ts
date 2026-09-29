@@ -16587,7 +16587,11 @@ api.post('/ai/realtime/session', authMiddleware, async (c) => {
           input: {
             format: { type: 'audio/pcm', rate: 24000 },
             transcription: { model: 'gpt-transcribe' },
-            turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: true, interrupt_response: true },
+            // In a production WebSocket smoke, semantic VAD committed and
+            // transcribed the turn but did not emit response.created even with
+            // create_response=true. The client requests one response for each
+            // committed item; VAD still owns the turn boundary and barge-in.
+            turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: false, interrupt_response: true },
           },
           output: { format: { type: 'audio/pcm', rate: 24000 }, voice: 'marin' },
         },
@@ -16610,15 +16614,29 @@ api.post('/ai/realtime/session', authMiddleware, async (c) => {
   }
 });
 
-async function screenCaptroText(env: Env, text: string): Promise<'allow' | 'review' | 'unavailable'> {
+async function screenCaptroText(
+  env: Env,
+  text: string,
+  context: { surface?: string; subjectId?: string; requestId?: string } = {},
+): Promise<'allow' | 'review' | 'unavailable'> {
   if (!text.trim() || !env.OPENAI_API_KEY) return text.trim() ? 'unavailable' : 'allow';
   try {
     const result = await new OpenAI({ apiKey: env.OPENAI_API_KEY, timeout: 12_000, maxRetries: 0 })
       .moderations.create({ model: env.OPENAI_MODERATION_MODEL || 'omni-moderation-latest', input: text });
-    if (typeof result.results?.[0]?.flagged !== 'boolean') return 'unavailable';
-    return result.results[0].flagged ? 'review' : 'allow';
+    const verdict = result.results?.[0];
+    if (typeof verdict?.flagged !== 'boolean') return 'unavailable';
+    // Provider labels are signals for Captro's publish/review decision, not
+    // an account ban. Keep the content itself out of operational logs.
+    const decision = verdict.flagged ? 'review' : 'allow';
+    const categories = Object.entries(verdict.categories || {})
+      .filter(([, value]) => value === true)
+      .map(([name]) => name.slice(0, 60));
+    console.info(JSON.stringify({ event: 'text_moderation_decision', surface: context.surface || 'unspecified',
+      subject_id: context.subjectId || '', request_id: context.requestId || '', decision, categories }));
+    return decision;
   } catch (error) {
-    console.warn(JSON.stringify({ event: 'text_moderation_failed', code: classifyOpenAIServiceFailure(error).code }));
+    console.warn(JSON.stringify({ event: 'text_moderation_failed', surface: context.surface || 'unspecified',
+      subject_id: context.subjectId || '', request_id: context.requestId || '', code: classifyOpenAIServiceFailure(error).code }));
     return 'unavailable';
   }
 }
@@ -16685,6 +16703,19 @@ api.post('/posts', authMiddleware, async (c) => {
   const visibility = normalizeVisibility(b.visibility);
   let postTitle = cleanText(b.title || b.headline, 180);
   let postContent = cleanMultilineText(b.content || b.text, 5000);
+  if (postTitle || postContent) {
+    const safety = await screenCaptroText(c.env, [postTitle, postContent].filter(Boolean).join('\n'), {
+      surface: 'post_text', subjectId: id, requestId: c.get?.('requestId') || '',
+    });
+    if (safety === 'review') return c.json({
+      detail: 'This post text may violate Captro’s Community Guidelines. Please revise it before posting.',
+      code: 'TEXT_NEEDS_REVISION',
+    }, 409);
+    if (safety === 'unavailable') return c.json({
+      detail: 'Post safety screening is unavailable. Your draft was not published; try again.',
+      code: 'TEXT_SCREENING_UNAVAILABLE',
+    }, 503);
+  }
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
   const rawPostResponse = b.post_response ?? b.postResponse;
   const postResponse = normalizePostResponseConfig(rawPostResponse);
@@ -17384,7 +17415,9 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     if (!content && !voiceAudioId) return c.json({ detail: 'Comment cannot be empty.' }, 400);
     if (content.length > 1200) return c.json({ detail: 'Comment is too long.' }, 400);
     if (content) {
-      const safety = await screenCaptroText(c.env, content);
+      const safety = await screenCaptroText(c.env, content, {
+        surface: parentId ? 'comment_reply' : 'comment', subjectId: postId, requestId: c.get?.('requestId') || '',
+      });
       if (safety === 'review') return c.json({ detail: 'This comment could not be posted under Captro’s safety rules. Please revise it and try again.', code: 'TEXT_NEEDS_REVISION' }, 409);
       if (safety === 'unavailable') return c.json({ detail: 'Comment safety screening is unavailable. Your text was not posted; try again.', code: 'TEXT_SCREENING_UNAVAILABLE' }, 503);
     }
