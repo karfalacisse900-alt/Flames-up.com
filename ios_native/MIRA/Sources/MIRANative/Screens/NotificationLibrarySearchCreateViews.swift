@@ -1187,7 +1187,7 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private var composerDraftObservedPage: some View {
+  private var composerPrimaryDraftObservedPage: some View {
     composerLifecyclePage
     .onChange(of: title) { _, _ in cacheComposerDraft() }
     .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
@@ -1206,6 +1206,10 @@ public struct CreatePostNativeView: View {
       cacheComposerDraft()
     }
     .onChange(of: hasSelectedStamp) { _, _ in cacheComposerDraft() }
+  }
+
+  private var composerDraftObservedPage: some View {
+    composerPrimaryDraftObservedPage
     .onChange(of: momentType) { _, _ in cacheComposerDraft() }
     .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: commerceDraft) { _, _ in cacheComposerDraft() }
