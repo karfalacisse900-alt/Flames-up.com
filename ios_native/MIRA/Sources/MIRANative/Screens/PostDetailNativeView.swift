@@ -665,7 +665,8 @@ public struct PostDetailNativeView: View {
                 )
               }
 
-              CaptroPostDetailSections(model: model, onOpenOptions: { isPostOptionsPresented = true }, onEditEvent: { isEditingEvent = true })
+              CaptroPostDetailSections(model: model, onOpenOptions: { isPostOptionsPresented = true },
+                onEditEvent: { isEditingEvent = true }, onReply: { isCommentFocused = true })
               if model.isLoadingObject {
                 ProgressView().frame(maxWidth: .infinity).padding(16)
               } else if let error = model.objectError {

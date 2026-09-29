@@ -11,6 +11,7 @@ struct CaptroPostDetailSections: View {
   @ObservedObject var model: PostDetailModel
   let onOpenOptions: () -> Void
   let onEditEvent: () -> Void
+  let onReply: () -> Void
 
   private var post: MIRAPost { model.post }
   @State private var transcriptVoiceId: String?
@@ -39,6 +40,11 @@ struct CaptroPostDetailSections: View {
             }
           }
         }
+      }
+      if post.response != nil {
+        CaptroPostResponseView(post: post, api: model.api, onReply: onReply)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 12)
       }
       voicePlayer
         .padding(.horizontal, 16)

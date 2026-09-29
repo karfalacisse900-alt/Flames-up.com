@@ -24,7 +24,8 @@ struct CaptroFeedPostView: View {
     Group {
       if let pageSize {
         postContent
-          .frame(width: pageSize.width, height: pageSize.height, alignment: .topLeading)
+          .frame(width: pageSize.width, height: pageSize.height,
+            alignment: post.feedMediaURLs.isEmpty ? .center : .topLeading)
           .clipped()
       } else {
         postContent
@@ -40,6 +41,30 @@ struct CaptroFeedPostView: View {
     VStack(alignment: .leading, spacing: 0) {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
+      } else if post.response != nil {
+        VStack(alignment: .leading, spacing: 0) {
+          CaptroEditorialOverlayCard(content: post.captroTextOnlyCardContent,
+            feedCaptionMaxLines: 5, showsProfileRow: false, showsBorder: false,
+            onOpen: onOpenPost)
+          CaptroPostResponseView(post: post, api: api, canRespond: showsFeedControls, onReply: onOpenPost)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
+          HStack(spacing: 9) {
+            RemoteAvatar(url: post.userProfileImage, size: 30)
+            Text(post.userUsername.map { "@" + $0.trimmingCharacters(in: CharacterSet(charactersIn: "@")) }
+                 ?? post.authorDisplayName)
+              .font(.system(size: 15, weight: .medium))
+              .lineLimit(1)
+            Spacer(minLength: 0)
+          }
+          .padding(.horizontal, 14)
+          .padding(.vertical, 12)
+          .overlay(alignment: .top) { MIRATheme.Color.hairline.frame(height: 1).padding(.horizontal, 14) }
+        }
+        .background(Color.white)
+        .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
+        .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
+        .padding(.horizontal, CaptroEditorialCardLayout.inset)
       } else {
         CaptroEditorialOverlayCard(content: post.captroTextOnlyCardContent, feedCaptionMaxLines: 5, onOpen: onOpenPost)
           .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
@@ -68,11 +93,13 @@ struct CaptroFeedPostView: View {
         .padding(.horizontal, 16)
       }
 
-      Rectangle()
-        .fill(MIRATheme.Color.hairline)
-        .frame(height: 1 / max(displayScale, 1))
-        .padding(.horizontal, 16)
-        .padding(.top, 24)
+      if !post.feedMediaURLs.isEmpty {
+        Rectangle()
+          .fill(MIRATheme.Color.hairline)
+          .frame(height: 1 / max(displayScale, 1))
+          .padding(.horizontal, 16)
+          .padding(.top, 24)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
     .sheet(isPresented: Binding(get: { transcriptVoiceId != nil }, set: { if !$0 { transcriptVoiceId = nil } })) {

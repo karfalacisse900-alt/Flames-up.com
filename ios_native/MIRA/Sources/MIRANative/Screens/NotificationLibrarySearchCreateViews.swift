@@ -696,6 +696,7 @@ private enum PostDetailSheet: Identifiable, Equatable {
   case tags
   case music
   case aiAssist
+  case response
 
   var id: String {
     switch self {
@@ -705,7 +706,104 @@ private enum PostDetailSheet: Identifiable, Equatable {
     case .tags: return "tags"
     case .music: return "music"
     case .aiAssist: return "aiAssist"
+    case .response: return "response"
     }
+  }
+}
+
+private struct CaptroPostResponsePicker: View {
+  @Binding var selected: CaptroPostResponseDraft?
+  let allowsGoing: Bool
+  let onClose: () -> Void
+  @State private var pollOptions = ["", "", "", ""]
+  @State private var showsPollEditor = false
+
+  static func title(for type: String) -> String {
+    switch type {
+    case "yes_no": return "Yes / No"
+    case "interested": return "Interested"
+    case "going": return "Going"
+    case "poll": return "Poll"
+    case "question": return "Question / replies"
+    default: return "Add response"
+    }
+  }
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 12) {
+        HStack {
+          Text("Add response").font(.system(size: 22, weight: .semibold))
+          Spacer()
+          Button("Done", action: onClose).font(.system(size: 15, weight: .semibold))
+        }
+        .padding(.bottom, 8)
+        responseRow("None", type: nil)
+        responseRow("Yes / No", type: "yes_no")
+        responseRow("Interested", type: "interested")
+        if allowsGoing { responseRow("Going", type: "going") }
+        responseRow("Poll", type: "poll")
+        responseRow("Question / replies", type: "question")
+        if showsPollEditor {
+          VStack(alignment: .leading, spacing: 10) {
+            Text("Poll options").font(.subheadline.weight(.semibold))
+            ForEach(0..<4, id: \.self) { index in
+              TextField("Option \(index + 1)\(index >= 2 ? " (optional)" : "")", text: $pollOptions[index])
+                .textInputAutocapitalization(.sentences)
+                .padding(12)
+                .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 8))
+            }
+            Button("Use poll") {
+              let options = pollOptions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+              selected = CaptroPostResponseDraft(type: "poll", options: options)
+              onClose()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(MIRATheme.Color.forest)
+            .disabled(!validPoll)
+          }
+          .padding(.top, 8)
+        }
+      }
+      .padding(20)
+    }
+    .onAppear {
+      if selected?.type == "poll" {
+        showsPollEditor = true
+        let existing = selected?.options ?? []
+        for index in 0..<min(4, existing.count) { pollOptions[index] = existing[index] }
+      }
+    }
+  }
+
+  private var validPoll: Bool {
+    let options = pollOptions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    return options.count >= 2 && options.count <= 4
+      && options.allSatisfy { $0.count <= 60 }
+      && Set(options.map { $0.lowercased() }).count == options.count
+  }
+
+  private func responseRow(_ title: String, type: String?) -> some View {
+    Button {
+      if type == "poll" {
+        showsPollEditor = true
+      } else {
+        selected = type.map { CaptroPostResponseDraft(type: $0) }
+        onClose()
+      }
+    } label: {
+      HStack {
+        Text(title).foregroundStyle(MIRATheme.Color.textPrimary)
+        Spacer()
+        if selected?.type == type || (type == nil && selected == nil) {
+          Image(systemName: "checkmark").foregroundStyle(MIRATheme.Color.forest)
+        }
+      }
+      .frame(minHeight: 48)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .overlay(alignment: .bottom) { MIRATheme.Color.hairline.frame(height: 1) }
   }
 }
 
@@ -990,6 +1088,7 @@ public struct CreatePostNativeView: View {
   @State private var selectedStampKind: CaptroStampKind = .social
   @State private var eventDraft = CaptroEventDraft()
   @State private var commerceDraft = CaptroCommerceDraft()
+  @State private var postResponse: CaptroPostResponseDraft?
   @State private var selectedPlace: MIRAExactPostPlace?
   @State private var broadLocation = MIRABroadDisplayLocation()
   @State private var showBroadLocation = false
@@ -1110,6 +1209,7 @@ public struct CreatePostNativeView: View {
     .onChange(of: momentType) { _, _ in cacheComposerDraft() }
     .onChange(of: eventDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: commerceDraft) { _, _ in cacheComposerDraft() }
+    .onChange(of: postResponse) { _, _ in cacheComposerDraft() }
     .onChange(of: broadLocation) { _, _ in cacheComposerDraft() }
     .onChange(of: hashtags) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedDiscoverCategory) { _, _ in cacheComposerDraft() }
@@ -1176,6 +1276,10 @@ public struct CreatePostNativeView: View {
           },
           onClose: closeSheet
         )
+      case .response:
+        CaptroPostResponsePicker(selected: $postResponse,
+          allowsGoing: !commerceDraft.enabled,
+          onClose: closeSheet)
       case nil:
         Color.clear
       }
@@ -1203,6 +1307,7 @@ public struct CreatePostNativeView: View {
     case .city: return 0.62
     case .music: return 0.78
     case .aiAssist: return 0.70
+    case .response: return 0.72
     default: return 0.76
     }
   }
@@ -1303,7 +1408,7 @@ public struct CreatePostNativeView: View {
   private var hasUnsavedPost: Bool {
     !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
     !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-    !mediaItems.isEmpty || voiceDraft != nil || selectedPlace != nil || !taggedUsers.isEmpty || !hashtags.isEmpty || hasSelectedStamp
+    !mediaItems.isEmpty || voiceDraft != nil || selectedPlace != nil || !taggedUsers.isEmpty || !hashtags.isEmpty || hasSelectedStamp || postResponse != nil
   }
 
   private func composerPrompt(minimumHeight: CGFloat) -> some View {
@@ -1536,6 +1641,14 @@ public struct CreatePostNativeView: View {
         subtitle: hasSelectedStamp ? stampSummary : "Optional",
         action: { openStampPicker() }
       )
+      if mediaItems.isEmpty || postResponse != nil {
+        postComposerActionRow(
+          icon: "checkmark.circle",
+          title: postResponse.map { CaptroPostResponsePicker.title(for: $0.type) } ?? "Add response",
+          subtitle: postResponse == nil ? "Optional" : "One response type",
+          action: { focusedPostDetailsField = nil; activePostDetailSheet = .response }
+        )
+      }
     }
   }
 
@@ -2106,10 +2219,10 @@ public struct CreatePostNativeView: View {
   }
 
   private var canPost: Bool {
-    !mediaItems.isEmpty ||
-      voiceDraft != nil ||
-      !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-      !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    if mediaItems.isEmpty && voiceDraft == nil {
+      return hasSelectedStamp && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    return true
   }
 
   @MainActor
@@ -2182,6 +2295,14 @@ public struct CreatePostNativeView: View {
 
   private func submit() async {
     guard !isPosting, !isLoadingMedia, canPost else { return }
+    if postResponse != nil && (!mediaItems.isEmpty || voiceDraft != nil) {
+      errorMessage = "Responses are available on text-only posts. Remove the media or response to continue."
+      return
+    }
+    if postResponse?.type == "going" && commerceDraft.enabled {
+      errorMessage = "Use the official join or ticket action for this Stamp. Turn off access details to use an informal Going response."
+      return
+    }
     if isEventStamp, let error = eventDraft.validationError {
       errorMessage = error
       isEditingPostDetails = true
@@ -2306,6 +2427,7 @@ public struct CreatePostNativeView: View {
         postType: selectedStampKind.backendPostType,
         event: isEventStamp ? eventDraft.input : nil,
         commerce: commerceInput,
+        postResponse: postResponse,
         placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
         placeProvider: selectedPlace?.provider,
@@ -2467,6 +2589,7 @@ public struct CreatePostNativeView: View {
     momentType = draft.momentType ?? "Thought"
     eventDraft = draft.eventDraft ?? CaptroEventDraft()
     commerceDraft = draft.commerceDraft ?? CaptroCommerceDraft()
+    postResponse = draft.postResponse
     hashtags = draft.hashtags
     selectedAudioTrack = draft.selectedAudioTrack
     selectedPlace = draft.place.map(MIRAExactPostPlace.init(snapshot:))
@@ -2526,6 +2649,7 @@ public struct CreatePostNativeView: View {
       momentType: momentType,
       eventDraft: eventDraft,
       commerceDraft: commerceDraft,
+      postResponse: postResponse,
       hashtags: hashtags,
       selectedDiscoverCategory: selectedDiscoverCategory,
       selectedAudioTrack: selectedAudioTrack,
@@ -2552,6 +2676,7 @@ public struct CreatePostNativeView: View {
     momentType = "Thought"
     eventDraft = CaptroEventDraft()
     commerceDraft = CaptroCommerceDraft()
+    postResponse = nil
     mediaItems = []
     pickerItems = []
     composerUser = nil
@@ -2584,7 +2709,8 @@ public struct CreatePostNativeView: View {
       !hashtags.isEmpty ||
       selectedPlace != nil ||
       hasSelectedStamp ||
-      commerceDraft.enabled
+      commerceDraft.enabled ||
+      postResponse != nil
   }
 
   @MainActor

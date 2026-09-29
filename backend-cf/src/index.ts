@@ -6941,6 +6941,58 @@ function supabaseAppPostVisibleToViewer(row: any, author: any, viewerIds: Set<st
   return true;
 }
 
+type CaptroPostResponseConfig = { type: 'yes_no' | 'interested' | 'going' | 'poll' | 'question'; options: string[] };
+
+function normalizePostResponseConfig(value: any): CaptroPostResponseConfig | null {
+  if (value == null) return null;
+  const raw = parseJsonObject(value);
+  const type = cleanText((raw as any).type, 24).toLowerCase();
+  if (type === 'yes_no') return { type, options: ['Yes', 'No'] };
+  if (type === 'interested') return { type, options: ['Interested'] };
+  if (type === 'going') return { type, options: ['Going'] };
+  if (type === 'question') return { type, options: [] };
+  if (type === 'poll') {
+    const options = Array.isArray((raw as any).options)
+      ? (raw as any).options.map((item: any) => cleanText(item, 60)).filter(Boolean)
+      : [];
+    if (options.length >= 2 && options.length <= 4 && new Set(options.map((item: string) => item.toLowerCase())).size === options.length) {
+      return { type, options };
+    }
+  }
+  return null;
+}
+
+async function supabaseHydratePostResponses(c: any, posts: any[], viewerId: string): Promise<void> {
+  const responsive = posts.filter((post) => post.response && isUuidText(post.supabase_post_id));
+  if (!responsive.length) return;
+  const ids = responsive.map((post) => post.supabase_post_id);
+  const actor = await supabaseInteractionActorKeys(c, [viewerId]);
+  const [counts, mine] = await Promise.all([
+    supabaseAdminSelectRows(c, 'app_post_response_counts', { post_id: postgrestInFilter(ids) }, 'post_id,selected_option,response_count', ids.length * 4),
+    actor.actorKeys.length
+      ? supabaseAdminSelectRows(c, 'app_post_responses', {
+          post_id: postgrestInFilter(ids), actor_key: postgrestInFilter(actor.actorKeys),
+        }, 'post_id,selected_option', ids.length)
+      : Promise.resolve([]),
+  ]);
+  for (const post of responsive) {
+    const config = post.response as CaptroPostResponseConfig;
+    const optionCounts: Record<string, number> = {};
+    for (const option of config.options) optionCounts[option] = 0;
+    for (const row of counts) {
+      if (row.post_id === post.supabase_post_id && Object.hasOwn(optionCounts, row.selected_option)) {
+        optionCounts[row.selected_option] = Math.max(0, Number(row.response_count || 0));
+      }
+    }
+    post.response = {
+      ...config,
+      counts: optionCounts,
+      total_count: Object.values(optionCounts).reduce((sum, value) => sum + value, 0),
+      viewer_option: mine.find((row) => row.post_id === post.supabase_post_id)?.selected_option || null,
+    };
+  }
+}
+
 function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, commentCount: number): any {
   const metadata = parseJsonObject(row?.metadata);
   const discover = parseJsonObject((metadata as any).discover_category);
@@ -6948,6 +7000,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   const place = parseJsonObject((metadata as any).place);
   const audio = parseJsonObject((metadata as any).audio);
   const voice = parseJsonObject((metadata as any).voice);
+  const postResponse = normalizePostResponseConfig((metadata as any).post_response);
   const pinnedAt = cleanText((metadata as any).pinned_at, 80) || null;
   const { mediaUrls, mediaTypes, mediaDimensions } = supabaseAppPostMedia(row);
   const primaryCategory = (normalizeDiscoverCategory(row?.category || (discover as any).primary_category || row?.post_type, false) || DEFAULT_DISCOVER_CATEGORY) as DiscoverCategory;
@@ -6955,6 +7008,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
   return {
     id: publicId(row?.legacy_post_id || row?.id, 120),
     supabase_post_id: isUuidText(row?.id),
+    response: postResponse ? { ...postResponse, counts: {}, total_count: 0, viewer_option: null } : null,
     detail: {
       ...(creatorEventDetails(metadata, row?.post_type) || {}),
       voice: cleanText((voice as any).id, 160) ? {
@@ -7120,6 +7174,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     ? mapped.sort((a, b) => postIds.indexOf(publicId(a?.id, 120)) - postIds.indexOf(publicId(b?.id, 120)))
     : mapped;
   if (options.hydration === 'access') return ordered;
+  await supabaseHydratePostResponses(c, ordered, viewerId);
   await attachPublicPostObjects(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   await attachPublicCommerce(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   return overlaySupabaseViewerEngagement(c, photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
@@ -13100,6 +13155,7 @@ function supabasePrimaryPostCreatePayload(input: any) {
     metadata: {
       source: 'cloudflare_worker_supabase_primary',
       creator_event: input.creatorEvent,
+      post_response: input.postResponse || null,
       stamp_variant: validatedStampVariant(input.stampVariant, input.postType),
       image: mediaUrls[0] || '',
       client_request_id: cleanText(input.clientRequestId, 120),
@@ -16522,6 +16578,17 @@ api.post('/posts', authMiddleware, async (c) => {
   let postTitle = cleanText(b.title || b.headline, 180);
   let postContent = cleanMultilineText(b.content || b.text, 5000);
   let imageUrls = sanitizeMediaReferences(b.images, b.image);
+  const rawPostResponse = b.post_response ?? b.postResponse;
+  const postResponse = normalizePostResponseConfig(rawPostResponse);
+  if (rawPostResponse != null && !postResponse) {
+    return c.json({ detail: 'Choose one valid response type. Polls need two to four distinct options.', code: 'POST_RESPONSE_INVALID' }, 400);
+  }
+  if (postResponse && (imageUrls.length || cleanText(b.voice_audio_id || b.voiceAudioId, 160))) {
+    return c.json({ detail: 'Responses are available on text-only posts.', code: 'POST_RESPONSE_REQUIRES_TEXT_ONLY' }, 400);
+  }
+  if (!imageUrls.length && !cleanText(b.voice_audio_id || b.voiceAudioId, 160) && !postTitle) {
+    return c.json({ detail: 'A title is required for a text-only post.', code: 'TEXT_POST_TITLE_REQUIRED' }, 400);
+  }
   let primaryImage = safeMediaReference(b.image) || imageUrls[0] || null;
   let mediaTypes = sanitizeMediaTypes(b.media_types, imageUrls.length || (primaryImage ? 1 : 0));
   const mediaAssetIds = parseMediaAssetIds(b);
@@ -16608,6 +16675,9 @@ api.post('/posts', authMiddleware, async (c) => {
   const commerceCreatorId = commerceConfig ? isUuidText(supabaseAuthorRow?.supabase_user_id || '') : null;
   const commerceGroupId = commerceConfig && ['club', 'group'].includes(String(commerceConfig.purchasable.content_type || ''))
     ? uuid() : null;
+  if (postResponse?.type === 'going' && commerceConfig) {
+    return c.json({ detail: 'Use the official join or ticket action for this post instead of an informal Going response.', code: 'POST_RESPONSE_GOING_CONFLICT' }, 400);
+  }
   if (commerceConfig && !commerceCreatorId) {
     return c.json({ detail: 'Reconnect your account before creating a paid or joinable post.', code: 'COMMERCE_ACCOUNT_REQUIRED' }, 409);
   }
@@ -16624,6 +16694,7 @@ api.post('/posts', authMiddleware, async (c) => {
     id,
     userId,
     creatorEvent,
+    postResponse,
     stampVariant: validatedStampVariant(b.stamp_variant ?? b.stampVariant, postType),
     authUserId: supabaseAuthorRow?.supabase_user_id || userId,
     postTitle,
@@ -16858,6 +16929,76 @@ api.get('/posts/:postId', authMiddleware, async (c) => {
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_post_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load post.' }, 500);
+  }
+});
+
+api.post('/posts/:postId/responses', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const required = requireSupabasePrimaryDatabase(c, 'post_response_write');
+  if (required) return required;
+  const limited = await enforceRateLimit(c, 'post_response_write', userId, 30, 60);
+  if (limited) return limited;
+  const postId = c.req.param('postId');
+  const body = await c.req.json().catch(() => ({}));
+  const selectedOption = cleanText(body.selected_option ?? body.selectedOption, 80);
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!post) return c.json({ detail: 'Post not found.' }, 404);
+    const config = post.response as CaptroPostResponseConfig | null;
+    if (!config || config.type === 'question') return c.json({ detail: 'This post uses replies, not voting.' }, 409);
+    if (selectedOption && !config.options.includes(selectedOption)) {
+      return c.json({ detail: 'Choose an available response.' }, 400);
+    }
+    const appUserId = publicId(userId, 120);
+    const authUserId = await supabaseAuthUserIdForAppUserId(c, appUserId);
+    const actorKey = authUserId ? `auth:${authUserId}` : `app:${appUserId}`;
+    if (!actorKey || !post.supabase_post_id) return c.json({ detail: 'Could not verify this response.' }, 409);
+    if (selectedOption) {
+      await supabaseAdminUpsert(c, 'app_post_responses', [{
+        post_id: post.supabase_post_id, app_user_id: appUserId, actor_key: actorKey,
+        selected_option: selectedOption, updated_at: now(),
+      }], 'post_id,actor_key');
+    } else {
+      await supabaseAdminDeleteRows(c, 'app_post_responses', {
+        post_id: postgrestEqFilter(post.supabase_post_id), actor_key: postgrestEqFilter(actorKey),
+      });
+    }
+    const [updated] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!updated) return c.json({ detail: 'Post is no longer available.' }, 404);
+    return c.json(updated.response);
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'post_response_write_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not save your response. Try again.' }, 503);
+  }
+});
+
+api.get('/posts/:postId/responses/people', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const required = requireSupabasePrimaryDatabase(c, 'post_response_people');
+  if (required) return required;
+  const postId = c.req.param('postId');
+  try {
+    const [post] = await supabaseReadVisiblePosts(c, userId, { postId, limit: 1 });
+    if (!post?.response || !post.supabase_post_id) return c.json({ detail: 'Post not found.' }, 404);
+    const option = cleanText(c.req.query('option'), 80);
+    if (!['interested', 'going'].includes(post.response.type) || !post.response.options.includes(option)) {
+      return c.json({ detail: 'Respondent list is unavailable for this option.' }, 400);
+    }
+    const rows = await supabaseAdminQueryRows(c, 'app_post_responses', {
+      select: 'app_user_id',
+      filters: { post_id: postgrestEqFilter(post.supabase_post_id), selected_option: postgrestEqFilter(option) },
+      order: 'updated_at.desc', limit: 50,
+    });
+    const blocked = await supabaseBlockedUserIds(c, userId);
+    const users = await supabaseUsersByAnyIds(c, rows.map((row) => row.app_user_id));
+    return c.json(rows.flatMap((row) => {
+      if (blocked.has(row.app_user_id)) return [];
+      const user = users.get(row.app_user_id);
+      return user ? [{ id: user.id, username: publicUsernameFor(user), profile_image: safeMediaReference(user.avatar_url) }] : [];
+    }));
+  } catch (error: any) {
+    console.warn(JSON.stringify({ event: 'post_response_people_failed', code: getErrorCode(error).slice(0, 180) }));
+    return c.json({ detail: 'Could not load responses.' }, 503);
   }
 });
 

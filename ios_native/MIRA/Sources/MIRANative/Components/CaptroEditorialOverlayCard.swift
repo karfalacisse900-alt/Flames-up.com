@@ -62,6 +62,7 @@ struct CaptroEditorialOverlayCard: View {
   var expanded = false
   var feedCaptionMaxLines: Int? = nil
   var showsProfileRow = true
+  var showsBorder = true
   var onOpen: (() -> Void)? = nil
 
   private let ink = Color(red: 0.07, green: 0.07, blue: 0.07)
@@ -148,7 +149,7 @@ struct CaptroEditorialOverlayCard: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(condensed ? 10 : 13)
     .background(Color.white)
-    .overlay(Rectangle().strokeBorder(ink, lineWidth: 1))
+    .overlay(Rectangle().strokeBorder(ink, lineWidth: showsBorder ? 1 : 0))
     .contentShape(Rectangle())
   }
 
@@ -216,7 +217,7 @@ struct CaptroEditorialOverlayCard: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(condensed ? 11 : 14)
     .background(Color.white)
-    .overlay(Rectangle().strokeBorder(ink, lineWidth: 1))
+    .overlay(Rectangle().strokeBorder(ink, lineWidth: showsBorder ? 1 : 0))
     .contentShape(Rectangle())
   }
 

@@ -167,6 +167,31 @@ final class CaptroPostDetailsTests: XCTestCase {
     XCTAssertEqual(updated.id, post.id)
   }
 
+  func testTextOnlyResponseDecodesAndSurvivesSharedPostUpdates() throws {
+    let post = try decode([
+      "id": "text-1", "post_type": "general", "title": "Which day works?",
+      "response": ["type": "poll", "options": ["Saturday", "Sunday"],
+        "counts": ["Saturday": 3, "Sunday": 2], "total_count": 5,
+        "viewer_option": "Saturday"],
+    ])
+    XCTAssertTrue(post.feedMediaURLs.isEmpty)
+    XCTAssertEqual(post.response?.type, "poll")
+    XCTAssertEqual(post.response?.viewerOption, "Saturday")
+    XCTAssertEqual(post.updating(liked: true).updatingPinned(at: "2026-09-28T00:00:00Z").response, post.response)
+  }
+
+  func testLegacyComposerDraftWithoutResponseStillRestores() throws {
+    let legacy: [String: Any] = [
+      "title": "Earlier draft", "bodyText": "Body", "stampType": "general",
+      "hashtags": [], "showBroadLocation": false, "media": [],
+      "uploadStatus": "draft", "savedAt": "2026-09-28T12:00:00Z",
+    ]
+    let draft = try JSONDecoder().decode(MIRAPostDraftSnapshot.self,
+      from: JSONSerialization.data(withJSONObject: legacy))
+    XCTAssertNil(draft.postResponse)
+    XCTAssertEqual(draft.title, "Earlier draft")
+  }
+
   private func decode(_ json: [String: Any]) throws -> MIRAPost {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase

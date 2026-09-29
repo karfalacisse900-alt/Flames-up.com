@@ -183,6 +183,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   public let saved: FlexibleBool?
   public let following: FlexibleBool?
   public let followed: FlexibleBool?
+  public var response: CaptroPostResponse? = nil
   public var detail: CaptroPostDetails? = nil
 
   public var titleText: String {
@@ -410,6 +411,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       saved: saved.map(FlexibleBool.init) ?? self.saved,
       following: self.following,
       followed: self.followed,
+      response: response,
       detail: detail
     )
   }
@@ -490,6 +492,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
       saved: saved,
       following: following,
       followed: followed,
+      response: response,
       detail: detail
     )
   }
@@ -1476,10 +1479,29 @@ public struct MIRALibraryCollection: Decodable, Identifiable, Hashable {
   public let count: Int?
 }
 
+public struct CaptroPostResponseDraft: Codable, Hashable {
+  public let type: String
+  public let options: [String]
+
+  public init(type: String, options: [String] = []) {
+    self.type = type
+    self.options = options
+  }
+}
+
+public struct CaptroPostResponse: Codable, Hashable {
+  public let type: String
+  public let options: [String]
+  public let counts: [String: Int]
+  public let totalCount: Int
+  public let viewerOption: String?
+}
+
 public struct CreatePostBody: Encodable {
   public var stampVariant: String? = nil
   public let event: CaptroEventInput?
   public let commerce: CaptroCommerceInput?
+  public let postResponse: CaptroPostResponseDraft?
   public let title: String
   public let content: String
   public let image: String?
@@ -1546,6 +1568,7 @@ public struct CreatePostBody: Encodable {
     postType: String? = nil,
     event: CaptroEventInput? = nil,
     commerce: CaptroCommerceInput? = nil,
+    postResponse: CaptroPostResponseDraft? = nil,
     placeId: String? = nil,
     placeName: String? = nil,
     placeProvider: String? = nil,
@@ -1595,6 +1618,7 @@ public struct CreatePostBody: Encodable {
     self.postType = postType
     self.event = event
     self.commerce = commerce
+    self.postResponse = postResponse
     self.placeId = placeId
     self.placeName = placeName
     self.placeProvider = placeProvider

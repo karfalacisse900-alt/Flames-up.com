@@ -52,7 +52,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else if post\.response != nil \{[\s\S]*?CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -130,7 +130,7 @@ test('Home post is a full-width feed section without an outer card', () => {
 
   assert.ok(postBodyStart >= 0 && postBodyEnd > postBodyStart);
   assert.match(postBody, /\.frame\(maxWidth: \.infinity, alignment: \.topLeading\)/);
-  assert.match(postBody, /\.frame\(width: pageSize\.width, height: pageSize\.height, alignment: \.topLeading\)/);
+  assert.match(postBody, /alignment: post\.feedMediaURLs\.isEmpty \? \.center : \.topLeading/);
   assert.doesNotMatch(postBody, /\.background\(MIRATheme\.Color\.surface\)/);
   assert.doesNotMatch(postBody, /\.clipShape\(RoundedRectangle|\.cornerRadius\(|\.shadow\(/);
   assert.match(mainFeed, /\.scrollTargetBehavior\(\.paging\)/);
@@ -148,7 +148,7 @@ test('Home media is a full-width rectangular frame using exactly five supported 
   assert.match(mediaPager, /MIRAMediaSizing\.supportedPostHeightToWidthRatio\(ratio\)/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
-  const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
+  const mediaBranchEnd = postView.indexOf('} else if post.response != nil {', mediaBranchStart);
   const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
   assert.ok(mediaBranchStart >= 0 && mediaBranchEnd > mediaBranchStart);
   assert.match(mediaBranch, /mediaPager/);
