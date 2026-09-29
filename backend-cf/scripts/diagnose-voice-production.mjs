@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Disposable, private, synthetic voice smoke against the deployed Worker.
 // No real user recordings, tokens, transcripts, or provider secrets are logged.
@@ -13,7 +16,14 @@ const admin = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
 let authUserId = '';
 let bearer;
 const voiceIds = [];
-const spokenWav = execFileSync('espeak-ng', ['--stdout', '-s', '140', 'This is a private Captro voice test. Help me prepare a post.'], { maxBuffer: 2_000_000 });
+const speechPath = join(tmpdir(), `captro-voice-${crypto.randomUUID()}.wav`);
+let spokenWav;
+try {
+  execFileSync('espeak-ng', ['-w', speechPath, '-s', '140', 'This is a private Captro voice test. Help me prepare a post.']);
+  spokenWav = readFileSync(speechPath);
+} finally {
+  rmSync(speechPath, { force: true });
+}
 
 async function call(url, init = {}) {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(75_000) });
