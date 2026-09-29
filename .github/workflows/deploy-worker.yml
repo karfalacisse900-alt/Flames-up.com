@@ -23,7 +23,7 @@ on:
         type: boolean
         default: false
       reliability_only:
-        description: Deploy only the additive chat migration and Worker, without payment secret or webhook changes
+        description: Deploy reviewed additive migrations and Worker, without payment secret or webhook changes
         type: boolean
         default: false
       reliability_dry_run:
@@ -104,7 +104,7 @@ jobs:
           import os, pathlib, re
           output = pathlib.Path(os.environ['RUNNER_TEMP'], 'pending-migrations.txt').read_text()
           pending = set(re.findall(r'\b\d{14}_[\w-]+\.sql\b', output))
-          expected = {'20260924131730_captro_chat_realtime.sql', '20260925120000_seller_identity_verification.sql', '20260926204501_story_14_day_lifetime.sql', '20260926214527_deferred_marketplace_settlement.sql', '20260926222000_marketplace_release_controls.sql', '20260926235356_finance_category_reports.sql', '20260927012001_commerce_ended_event_guard.sql'}
+          expected = {'20260924131730_captro_chat_realtime.sql', '20260925120000_seller_identity_verification.sql', '20260926204501_story_14_day_lifetime.sql', '20260926214527_deferred_marketplace_settlement.sql', '20260926222000_marketplace_release_controls.sql', '20260926235356_finance_category_reports.sql', '20260927012001_commerce_ended_event_guard.sql', '20260929001010_captro_post_responses.sql'}
           if pending - expected:
               raise SystemExit(f'Unexpected pending migrations: {sorted(pending - expected)}')
           if not pending and not any(message in output for message in ('No migrations to apply', 'Remote database is up to date')):
@@ -156,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           base='https://flames-up-api.karfalacisse900.workers.dev/api'
-          for path in chat/realtime-config voice/not-a-real-recording/status; do
+          for path in chat/realtime-config voice/not-a-real-recording/status posts/not-a-real-post/responses; do
             status='000'
             for attempt in {1..12}; do
               status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$base/$path")"
