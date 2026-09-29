@@ -18,9 +18,11 @@ let bearer;
 const voiceIds = [];
 const speechPath = join(tmpdir(), `captro-voice-${crypto.randomUUID()}.wav`);
 let spokenWav;
+let realtimePcm;
 try {
   execFileSync('espeak-ng', ['-w', speechPath, '-s', '140', 'This is a private Captro voice test. Help me prepare a post.']);
   spokenWav = readFileSync(speechPath);
+  realtimePcm = execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', speechPath, '-f', 's16le', '-ac', '1', '-ar', '24000', 'pipe:1'], { maxBuffer: 2_000_000 });
 } finally {
   rmSync(speechPath, { force: true });
 }
@@ -79,27 +81,47 @@ try {
   console.log(JSON.stringify({ stage: 'realtime_credential', status: liveSession.response.status, code: liveSession.result.code || null }));
   assert.equal(liveSession.response.status, 200, 'Realtime session credential could not be created');
   assert.ok(liveSession.result.client_secret && liveSession.result.model === 'gpt-realtime-2.1');
-  const connected = await new Promise((resolve, reject) => {
+  const realtime = await new Promise((resolve, reject) => {
     const socket = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1',
       ['realtime', `openai-insecure-api-key.${liveSession.result.client_secret}`]);
-    const timer = setTimeout(() => { socket.close(); reject(new Error('Realtime handshake timed out')); }, 15_000);
+    const seen = new Set();
+    let settled = false;
+    let vad = '';
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.close();
+      if (error) reject(error);
+      else resolve({ vad, events: [...seen] });
+    };
+    const timer = setTimeout(() => finish(new Error(`Realtime audio timed out; events=${[...seen].join(',')}`)), 45_000);
     socket.onmessage = event => {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
       if (message.type === 'session.created') {
-        clearTimeout(timer);
-        socket.close();
-        resolve(true);
+        vad = message.session?.audio?.input?.turn_detection?.type || 'missing';
+        seen.add('session.created');
+        if (vad !== 'semantic_vad') { finish(new Error(`Realtime session VAD is ${vad}, not semantic_vad`)); return; }
+        void (async () => {
+          const silence = Buffer.alloc(24_000 / 2 * 2);
+          const stream = Buffer.concat([silence, realtimePcm, Buffer.alloc(24_000 * 2 * 3)]);
+          for (let offset = 0; offset < stream.length && socket.readyState === WebSocket.OPEN; offset += 4_800) {
+            socket.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: stream.subarray(offset, offset + 4_800).toString('base64') }));
+            await new Promise(r => setTimeout(r, 100));
+          }
+        })().catch(finish);
       } else if (message.type === 'error') {
-        clearTimeout(timer);
-        socket.close();
-        reject(new Error(`Realtime handshake rejected: ${message.error?.code || 'unknown'}`));
+        finish(new Error(`Realtime audio rejected: ${message.error?.code || 'unknown'}`));
+      } else if (['input_audio_buffer.speech_started', 'input_audio_buffer.speech_stopped', 'response.created', 'response.output_audio.delta', 'response.done'].includes(message.type)) {
+        seen.add(message.type);
+        if (['input_audio_buffer.speech_started', 'input_audio_buffer.speech_stopped', 'response.created', 'response.output_audio.delta', 'response.done'].every(type => seen.has(type))) finish();
       }
     };
-    socket.onerror = () => { clearTimeout(timer); reject(new Error('Realtime WebSocket failed')); };
-    socket.onclose = () => { clearTimeout(timer); reject(new Error('Realtime WebSocket closed before session ready')); };
+    socket.onerror = () => finish(new Error('Realtime WebSocket failed'));
+    socket.onclose = () => { if (!settled) finish(new Error(`Realtime WebSocket closed; events=${[...seen].join(',')}`)); };
   });
-  console.log(JSON.stringify({ stage: 'realtime_handshake', connected }));
+  console.log(JSON.stringify({ stage: 'realtime_synthetic_conversation', vad: realtime.vad, events: realtime.events }));
 
   const audioForm = new FormData();
   audioForm.append('file', new File([spokenWav], 'synthetic-speech.wav', { type: 'audio/wav' }));
