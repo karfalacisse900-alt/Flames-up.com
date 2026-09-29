@@ -267,7 +267,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       connectionTimeout = nil
       do { try startAudio(); phase = .listening }
       catch {
-        logger.error("microphone engine failed: \(String(describing: type(of: error)), privacy: .public)")
+        logger.error("microphone engine failed: \(String(describing: Swift.type(of: error)), privacy: .public)")
         fail()
       }
     case "input_audio_buffer.speech_started":
