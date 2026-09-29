@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 
 // Disposable, private, synthetic voice smoke against the deployed Worker.
 // No real user recordings, tokens, transcripts, or provider secrets are logged.
@@ -12,6 +13,7 @@ const admin = { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` };
 let authUserId = '';
 let bearer;
 const voiceIds = [];
+const spokenWav = execFileSync('espeak-ng', ['--stdout', '-s', '140', 'This is a private Captro voice test. Help me prepare a post.'], { maxBuffer: 2_000_000 });
 
 async function call(url, init = {}) {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(75_000) });
@@ -19,22 +21,9 @@ async function call(url, init = {}) {
   return { response, result };
 }
 
-function wavSilence() {
-  const sampleRate = 8_000;
-  const dataBytes = sampleRate * 2;
-  const bytes = new Uint8Array(44 + dataBytes);
-  const view = new DataView(bytes.buffer);
-  const text = (at, value) => [...value].forEach((char, index) => { bytes[at + index] = char.charCodeAt(0); });
-  text(0, 'RIFF'); view.setUint32(4, 36 + dataBytes, true); text(8, 'WAVE'); text(12, 'fmt ');
-  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, 'data'); view.setUint32(40, dataBytes, true);
-  return bytes;
-}
-
 async function uploadVoice(targetType, parentPostId) {
   const form = new FormData();
-  form.append('file', new File([wavSilence()], 'synthetic-silence.wav', { type: 'audio/wav' }));
+  form.append('file', new File([spokenWav], 'synthetic-speech.wav', { type: 'audio/wav' }));
   form.append('target_type', targetType);
   form.append('disclosure_accepted', 'true');
   form.append('disclosure_version', 'voice-ai-processing-v1');
@@ -74,13 +63,13 @@ try {
   assert.ok(textAssistant.result.reply);
 
   const audioForm = new FormData();
-  audioForm.append('file', new File([wavSilence()], 'synthetic-silence.wav', { type: 'audio/wav' }));
+  audioForm.append('file', new File([spokenWav], 'synthetic-speech.wav', { type: 'audio/wav' }));
   audioForm.append('history', '[]');
   audioForm.append('has_current_recording', 'false');
   const audioAssistant = await call(`${api}/ai/capture-assistant/audio`, { method: 'POST', headers: bearer, body: audioForm });
   console.log(JSON.stringify({ stage: 'openai_assistant_audio', status: audioAssistant.response.status, code: audioAssistant.result.code || null }));
-  assert.ok(audioAssistant.response.status === 200 || (audioAssistant.response.status === 422 && audioAssistant.result.code === 'VOICE_NOT_HEARD'),
-    'The audio request did not reach a successful transcription outcome');
+  assert.equal(audioAssistant.response.status, 200, 'Spoken audio did not receive a Captro AI answer');
+  assert.ok(audioAssistant.result.transcript && audioAssistant.result.reply, 'Spoken audio did not transcribe and receive an answer');
 
   const post = await call(`${api}/posts`, {
     method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' },
@@ -106,11 +95,17 @@ try {
   console.log(JSON.stringify({ stage: 'voice_post', status: voicePost.response.status, code: voicePost.result.code || null }));
   assert.ok(voicePost.response.ok && voicePost.result.id, 'Voice post could not enter pending moderation');
 
-  const voiceRows = await call(`${supabase}/rest/v1/app_voice_recordings?owner_app_user_id=eq.${authUserId}&select=target_type,target_id`, { headers: admin });
-  assert.ok(voiceRows.response.ok);
+  let voiceRows;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    voiceRows = await call(`${supabase}/rest/v1/app_voice_recordings?owner_app_user_id=eq.${authUserId}&select=target_type,target_id,processing_state,moderation_state,publication_state`, { headers: admin });
+    assert.ok(voiceRows.response.ok);
+    if (voiceRows.result.length === 2 && voiceRows.result.every(row => row.publication_state === 'published')) break;
+    await new Promise(resolve => setTimeout(resolve, 5_000));
+  }
   assert.equal(voiceRows.result.length, 2);
   assert.ok(voiceRows.result.every(row => !!row.target_id), 'A successful voice submission remained an unbound draft');
-  console.log(JSON.stringify({ stage: 'voice_binding', bound: voiceRows.result.length }));
+  console.log(JSON.stringify({ stage: 'voice_publication', states: voiceRows.result.map(row => ({ target: row.target_type, processing: row.processing_state, moderation: row.moderation_state, publication: row.publication_state })) }));
+  assert.ok(voiceRows.result.every(row => row.publication_state === 'published'), 'Spoken voice content was not published after moderation');
 } finally {
   const cleanupErrors = [];
   for (const id of voiceIds) {
