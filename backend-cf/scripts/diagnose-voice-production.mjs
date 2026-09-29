@@ -87,6 +87,8 @@ try {
     const seen = new Set();
     let settled = false;
     let vad = '';
+    let createResponse;
+    let interruptResponse;
     const finish = (error) => {
       if (settled) return;
       settled = true;
@@ -99,10 +101,16 @@ try {
     socket.onmessage = event => {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
+      if (typeof message.type === 'string') seen.add(message.type);
       if (message.type === 'session.created') {
         vad = message.session?.audio?.input?.turn_detection?.type || 'missing';
-        seen.add('session.created');
+        createResponse = message.session?.audio?.input?.turn_detection?.create_response;
+        interruptResponse = message.session?.audio?.input?.turn_detection?.interrupt_response;
         if (vad !== 'semantic_vad') { finish(new Error(`Realtime session VAD is ${vad}, not semantic_vad`)); return; }
+        if (createResponse !== true || interruptResponse !== true) {
+          finish(new Error(`Realtime session flags invalid: create_response=${createResponse}, interrupt_response=${interruptResponse}`));
+          return;
+        }
         void (async () => {
           const silence = Buffer.alloc(24_000 / 2 * 2);
           const stream = Buffer.concat([silence, realtimePcm, Buffer.alloc(24_000 * 2 * 3)]);
