@@ -16526,14 +16526,15 @@ api.post('/ai/capture-assistant/audio', authMiddleware, async (c) => {
     return c.json({ detail: 'Record a voice request up to 30 seconds.', code: 'VOICE_REQUEST_INVALID' }, 422);
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
-  try { inspectVoiceAudio(file, bytes, 'reply', { ...c.env, VOICE_MAX_REPLY_SECONDS: '30' }); }
+  let inspectedAudio: ReturnType<typeof inspectVoiceAudio>;
+  try { inspectedAudio = inspectVoiceAudio(file, bytes, 'reply', { ...c.env, VOICE_MAX_REPLY_SECONDS: '30' }); }
   catch { return c.json({ detail: 'This recording could not be read. Please record it again.', code: 'VOICE_AUDIO_UNREADABLE' }, 422); }
   let history: unknown = [];
   try { history = JSON.parse(String(form?.get('history') || '[]').slice(0, 5000)); } catch {}
   const hasRecording = form?.get('has_current_recording') === 'true';
   try {
     const client = new OpenAI({ apiKey: c.env.OPENAI_API_KEY, timeout: 30_000, maxRetries: 0 });
-    const audio = new File([bytes], file.name, { type: 'audio/mp4' });
+    const audio = new File([bytes], file.name, { type: inspectedAudio.mime });
     const transcription = await client.audio.transcriptions.create({ file: audio, model: c.env.OPENAI_TRANSCRIPTION_MODEL || 'gpt-transcribe' });
     const utterance = cleanMultilineText(transcription.text, 1000);
     if (!utterance) return c.json({ detail: 'I could not hear a request. Please try speaking again.', code: 'VOICE_NOT_HEARD' }, 422);
