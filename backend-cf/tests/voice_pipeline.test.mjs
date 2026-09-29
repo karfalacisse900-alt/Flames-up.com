@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { PGlite } from '@electric-sql/pglite';
 import { classifyOpenAIServiceFailure, decideVoiceModeration, inspectVoiceAudio, validatedContextEvidence } from '../src/voice.ts';
 
 function syntheticWav(seconds = 1, sampleRate = 8000) {
@@ -108,4 +109,34 @@ test('a stamped voice post keeps its selected type and stays pending until moder
   assert.match(backend, /await validateVoiceAttachment\(c\.env, voiceAudioId, userId, 'post'\)/);
   assert.match(backend, /await bindVoiceAttachment\(c\.env, \{[\s\S]*?targetType: 'post', targetId: id/);
   assert.match(backend, /status: input\.voiceAudioId \? 'pending_voice' : 'active'/);
+});
+
+test('migration permits private voice posts and voice-only replies without opening ordinary empty comments', async () => {
+  const db = new PGlite();
+  await db.exec(`create schema if not exists public;
+    create table public.app_posts (status text constraint app_posts_status_check check (status in ('active','archived','removed')));
+    create table public.post_comments (
+      body text not null constraint post_comments_body_check check (char_length(body) between 1 and 1200),
+      status text constraint post_comments_status_check check (status in ('active','removed','hidden')),
+      metadata jsonb not null default '{}'::jsonb
+    );`);
+  const migration = fs.readFileSync('../supabase/migrations/20260929141014_enable_pending_voice_publication.sql', 'utf8');
+  await db.exec(migration);
+  await db.exec(`insert into public.app_posts(status) values ('pending_voice');
+    insert into public.post_comments(body,status,metadata) values
+      ('','pending_voice','{"voice":{"id":"private-recording"}}'),
+      ('','active','{"voice":{"id":"approved-recording"}}');`);
+  await assert.rejects(db.exec("insert into public.post_comments(body,status) values ('','active')"));
+  await db.close();
+});
+
+test('Capture Voice sends microphone audio through the authenticated backend OpenAI path', () => {
+  const native = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCaptureAssistantView.swift', 'utf8');
+  const backend = fs.readFileSync('../backend-cf/src/index.ts', 'utf8');
+  assert.match(native, /AVAudioRecorder\(url: url/);
+  assert.match(native, /uploadMultipart\(\s*"\/ai\/capture-assistant\/audio"/);
+  assert.doesNotMatch(native, /supportsOnDeviceRecognition|SFSpeechRecognizer/);
+  assert.match(backend, /api\.post\('\/ai\/capture-assistant\/audio', authMiddleware/);
+  assert.match(backend, /client\.audio\.transcriptions\.create/);
+  assert.match(backend, /captureAssistantReply\(client, \{ utterance, history, hasRecording \}\)/);
 });

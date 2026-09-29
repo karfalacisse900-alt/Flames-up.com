@@ -1,5 +1,4 @@
 import AVFoundation
-import Speech
 import SwiftUI
 
 enum CaptroAssistantEditorDestination: Equatable {
@@ -22,13 +21,8 @@ private struct CaptroAssistantTurn: Codable {
   let text: String
 }
 
-private struct CaptroAssistantRequest: Encodable {
-  let utterance: String
-  let history: [CaptroAssistantTurn]
-  let hasCurrentRecording: Bool
-}
-
 private struct CaptroAssistantReply: Decodable {
+  let transcript: String?
   let reply: String
   let action: String
   let trimStartSeconds: Double?
@@ -94,22 +88,27 @@ struct CaptroCaptureAssistantView: View {
             .buttonStyle(.bordered)
             .frame(minHeight: 44)
         }
+        if session.errorMessage != nil && session.hasPendingTurn {
+          Button("Record again") { Task { await session.startListening() } }
+            .buttonStyle(.bordered)
+            .frame(minHeight: 44)
+        }
         Button {
-          if session.isListening {
+          if session.isListening || session.hasPendingTurn {
             Task { await session.sendTurn(api: api, hasCurrentRecording: hasCurrentRecording) }
           } else {
             Task { await session.startListening() }
           }
         } label: {
-          Label(session.isListening ? "Send what I said" : "Speak to Captro",
-                systemImage: session.isListening ? "arrow.up.circle.fill" : "mic.fill")
+          Label(session.hasPendingTurn ? "Send to Captro" : "Speak to Captro",
+                systemImage: session.hasPendingTurn ? "arrow.up.circle.fill" : "mic.fill")
             .frame(maxWidth: .infinity, minHeight: 50)
         }
         .buttonStyle(.borderedProminent)
         .tint(MIRATheme.Color.forest)
         .disabled(session.isWaiting)
 
-        Text("Captro uses on-device speech recognition when available. Your words are sent to Captro's AI to answer. The voice you hear is computer-generated. Nothing is posted automatically.")
+        Text("Your voice request is sent through Captro's backend to OpenAI for transcription and a response. The voice you hear is computer-generated. Nothing is posted automatically.")
           .font(.footnote)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .multilineTextAlignment(.center)
@@ -121,6 +120,7 @@ struct CaptroCaptureAssistantView: View {
       .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { session.stop(); onClose() } } }
       .task { await session.startListening() }
       .onDisappear { session.stop() }
+      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in session.stop() }
     }
   }
 }
@@ -136,11 +136,13 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
   @Published var suggestedAction: CaptroAssistantEditorDestination?
   @Published var suggestedEditPlan = CaptroAssistantEditPlan(trimStartSeconds: nil, trimDurationSeconds: nil)
 
-  private let engine = AVAudioEngine()
   private let speaker = AVSpeechSynthesizer()
-  private var request: SFSpeechAudioBufferRecognitionRequest?
-  private var recognitionTask: SFSpeechRecognitionTask?
+  private var recorder: AVAudioRecorder?
+  private var recordingURL: URL?
+  private var recordingTimer: Timer?
   private var turns: [CaptroAssistantTurn] = []
+
+  var hasPendingTurn: Bool { recordingURL != nil }
 
   override init() {
     super.init()
@@ -150,19 +152,12 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
   func startListening() async {
     guard !isListening && !isWaiting else { return }
     speaker.stopSpeaking(at: .immediate)
+    discardPendingTurn()
     errorMessage = nil
     suggestedAction = nil
     suggestedEditPlan = CaptroAssistantEditPlan(trimStartSeconds: nil, trimDurationSeconds: nil)
     transcript = nil
 
-    let speechPermission = await withCheckedContinuation { continuation in
-      SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
-    }
-    guard speechPermission == .authorized else {
-      status = "Speech recognition is off"
-      errorMessage = "Enable Speech Recognition in iPhone Settings to talk to Captro."
-      return
-    }
     let micPermission = await withCheckedContinuation { continuation in
       AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
     }
@@ -171,51 +166,46 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
       errorMessage = "Enable Microphone access in iPhone Settings to talk to Captro."
       return
     }
-    guard let recognizer = SFSpeechRecognizer(locale: Locale.current),
-          recognizer.supportsOnDeviceRecognition, recognizer.isAvailable else {
-      status = "Voice unavailable"
-      errorMessage = "On-device speech recognition is unavailable for this language or device."
-      return
-    }
-
     do {
       MIRAPlaybackCoordinator.pauseAll(reason: "capture_assistant_listening")
       let audio = AVAudioSession.sharedInstance()
-      try audio.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothHFP])
+      try audio.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
       try audio.setActive(true, options: .notifyOthersOnDeactivation)
-      let request = SFSpeechAudioBufferRecognitionRequest()
-      request.requiresOnDeviceRecognition = true
-      request.shouldReportPartialResults = true
-      self.request = request
-      recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("captro-ai-\(UUID().uuidString).m4a")
+      let next = try AVAudioRecorder(url: url, settings: [
+        AVFormatIDKey: kAudioFormatMPEG4AAC,
+        AVSampleRateKey: 24_000,
+        AVNumberOfChannelsKey: 1,
+        AVEncoderBitRateKey: 64_000,
+        AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+      ])
+      guard next.prepareToRecord(), next.record() else { throw MIRAAPIError.emptyResponse }
+      recorder = next
+      recordingURL = url
+      isListening = true
+      status = "Listening…"
+      recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
         Task { @MainActor in
           guard let self, self.isListening else { return }
-          if let result { self.transcript = result.bestTranscription.formattedString }
-          if error != nil {
-            self.errorMessage = "Could not understand that. Try speaking again."
+          if (self.recorder?.currentTime ?? 0) >= 30 {
             self.stopRecording()
+            self.status = "Ready to send"
           }
         }
       }
-      let input = engine.inputNode
-      let format = input.outputFormat(forBus: 0)
-      input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
-      engine.prepare()
-      try engine.start()
-      isListening = true
-      status = "Listening…"
     } catch {
       stopRecording()
+      discardPendingTurn()
       status = "Voice unavailable"
       errorMessage = "Captro could not start the microphone. Try again."
     }
   }
 
   func sendTurn(api: MIRAAPIClient, hasCurrentRecording: Bool) async {
-    guard isListening else { return }
-    let utterance = transcript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard let url = recordingURL, !isWaiting else { return }
+    let duration = recorder?.currentTime ?? 1
     stopRecording()
-    guard !utterance.isEmpty else {
+    guard duration >= 0.25, let data = try? Data(contentsOf: url, options: .mappedIfSafe), !data.isEmpty else {
       status = "I didn't hear anything"
       errorMessage = "Try speaking again."
       return
@@ -225,11 +215,19 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
     answer = nil
     errorMessage = nil
     do {
-      let reply: CaptroAssistantReply = try await api.post("/ai/capture-assistant",
-        body: CaptroAssistantRequest(utterance: utterance, history: Array(turns.suffix(6)), hasCurrentRecording: hasCurrentRecording))
+      let history = try JSONEncoder().encode(Array(turns.suffix(6)))
+      let reply: CaptroAssistantReply = try await api.uploadMultipart(
+        "/ai/capture-assistant/audio", fileName: url.lastPathComponent,
+        mimeType: "audio/mp4", data: data,
+        fields: ["history": String(decoding: history, as: UTF8.self),
+                 "has_current_recording": hasCurrentRecording ? "true" : "false"])
+      let utterance = reply.transcript?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      guard !utterance.isEmpty else { throw MIRAAPIError.emptyResponse }
       turns.append(CaptroAssistantTurn(role: "user", text: utterance))
       turns.append(CaptroAssistantTurn(role: "assistant", text: reply.reply))
+      transcript = utterance
       answer = reply.reply
+      discardPendingTurn()
       suggestedEditPlan = CaptroAssistantEditPlan(trimStartSeconds: reply.trimStartSeconds, trimDurationSeconds: reply.trimDurationSeconds)
       if hasCurrentRecording {
         switch reply.action {
@@ -245,23 +243,27 @@ private final class CaptroCaptureAssistantSession: NSObject, ObservableObject, A
     } catch {
       isWaiting = false
       status = "Couldn't connect"
-      errorMessage = "Captro AI is temporarily unavailable. Your recording is safe. Try again or use the original."
+      errorMessage = "Captro AI is temporarily unavailable. Try sending this request again. Your video is safe."
     }
   }
 
   private func stopRecording() {
-    if engine.isRunning { engine.stop() }
-    engine.inputNode.removeTap(onBus: 0)
-    request?.endAudio()
-    request = nil
-    recognitionTask?.cancel()
-    recognitionTask = nil
+    recordingTimer?.invalidate()
+    recordingTimer = nil
+    recorder?.stop()
+    recorder = nil
     isListening = false
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
   }
 
+  private func discardPendingTurn() {
+    if let recordingURL { try? FileManager.default.removeItem(at: recordingURL) }
+    recordingURL = nil
+  }
+
   func stop() {
     stopRecording()
+    discardPendingTurn()
     speaker.stopSpeaking(at: .immediate)
   }
 

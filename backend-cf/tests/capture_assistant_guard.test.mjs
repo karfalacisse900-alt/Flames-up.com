@@ -18,9 +18,10 @@ test('Capture Voice opens the AI assistant, not a voice-post recorder', () => {
   assert.match(capture, /hubMode\("Voice", detail: "Talk to Captro"/);
   assert.match(capture, /CaptroCaptureAssistantView\(api: api/);
   assert.doesNotMatch(capture, /CaptroVoiceRecorderSheet|Create voice post|Use text as post caption/);
-  assert.match(assistant, /api\.post\("\/ai\/capture-assistant"/);
-  assert.match(assistant, /On-device speech recognition|on-device speech recognition/);
-  assert.match(backend, /api\.post\('\/ai\/capture-assistant', authMiddleware/);
+  assert.match(assistant, /uploadMultipart\(\s*"\/ai\/capture-assistant\/audio"/);
+  assert.doesNotMatch(assistant, /supportsOnDeviceRecognition|SFSpeechRecognizer/);
+  assert.match(backend, /api\.post\('\/ai\/capture-assistant\/audio', authMiddleware/);
+  assert.match(backend, /client\.audio\.transcriptions\.create/);
   assert.match(backend, /store: false/);
   assert.match(backend, /c\.env\.OPENAI_API_KEY/);
   assert.match(backend, /trim_duration_seconds/);
