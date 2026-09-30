@@ -93,6 +93,9 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   private var intentRevision = 0
   private var isClosed = true
   private var responseRequestedForItems = Set<String>()
+  private var pendingReplyItems: [String] = []
+  private var replyRequestPending = false
+  private var requestedItemInFlight: String?
   private var firstAudioSent = false
   private var micWatchdog: Task<Void, Never>?
   private var reconnectAttempts = 0
@@ -121,6 +124,9 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     hasRecordingContext = hasCurrentRecording
     self.currentRecordingID = currentRecordingID
     responseRequestedForItems.removeAll()
+    pendingReplyItems.removeAll()
+    replyRequestPending = false
+    requestedItemInFlight = nil
     firstAudioSent = false
     phase = reconnectAttempts > 0 ? .reconnecting : .connecting
     level = 0.08
@@ -421,13 +427,16 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       guard let itemID = event["item_id"] as? String,
             responseRequestedForItems.insert(itemID).inserted else { return }
       if responseRequestedForItems.count > 80 { responseRequestedForItems = [itemID] }
-      do { try await send(["type": "response.create"]); diagnostic("response_requested") }
-      catch { logger.error("response.create send failed"); recoverTransport() }
+      pendingReplyItems.append(itemID)
+      await requestNextReply()
     case "conversation.item.input_audio_transcription.completed":
       let text = (event["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       if !text.isEmpty { await handleTranscript(text) }
     case "response.created":
       diagnostic("response_created")
+      let userAlreadySpeaking = phase == .userSpeaking
+      replyRequestPending = false
+      requestedItemInFlight = nil
       activeResponseID = (event["response"] as? [String: Any])?["id"] as? String
       responseDone = false
       outputText = ""
@@ -436,7 +445,13 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       outputItemID = nil
       outputSamplesScheduled = 0
       player?.stop()
-      phase = .processing
+      if userAlreadySpeaking {
+        if let id = activeResponseID { interruptedResponses.insert(id) }
+        diagnostic("barge_in")
+        try? await send(["type": "response.cancel"])
+      } else {
+        phase = .processing
+      }
     case "response.output_item.added":
       guard !isInterruptedEvent(event) else { return }
       outputItemID = (event["item"] as? [String: Any])?["id"] as? String
@@ -454,7 +469,12 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     case "response.done", "response.cancelled":
       let response = event["response"] as? [String: Any]
       let id = response?["id"] as? String ?? event["response_id"] as? String
-      if let id, interruptedResponses.contains(id) || (activeResponseID != nil && activeResponseID != id) { return }
+      if let id, interruptedResponses.contains(id) {
+        if activeResponseID == id { activeResponseID = nil }
+        await requestNextReply()
+        return
+      }
+      if let id, activeResponseID != nil && activeResponseID != id { return }
       if response?["status"] as? String == "failed" {
         let detail = response?["status_details"] as? [String: Any]
         let error = detail?["error"] as? [String: Any]
@@ -468,13 +488,21 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       // Retry budget resets only after a successful turn, not every handshake.
       if response?["status"] as? String == "completed" { reconnectAttempts = 0 }
       if queuedOutputBuffers == 0 && phase != .userSpeaking { phase = .listening; level = 0.08 }
+      await requestNextReply()
     case "conversation.item.input_audio_transcription.failed":
       diagnostic("transcription_failed", code: (event["error"] as? [String: Any])?["code"] as? String)
     case "error":
       let code = ((event["error"] as? [String: Any])?["code"] as? String ?? "unknown")
       diagnostic("api_error", code: code)
       // Cancellation/truncation races are not transport failures.
-      if ["response_cancel_not_active", "conversation_already_has_active_response", "audio_end_ms_out_of_range"].contains(code) { return }
+      if code == "conversation_already_has_active_response" {
+        if let item = requestedItemInFlight { pendingReplyItems.insert(item, at: 0) }
+        requestedItemInFlight = nil
+        replyRequestPending = false
+        // Retry when the active response's real response.done arrives.
+        return
+      }
+      if ["response_cancel_not_active", "audio_end_ms_out_of_range"].contains(code) { return }
       recoverTransport()
     default:
       break
@@ -505,6 +533,19 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
 
   private var intentAPI: MIRAAPIClient?
   private var hasRecordingContext = false
+
+  private func requestNextReply() async {
+    guard !isClosed, activeResponseID == nil, !replyRequestPending, !pendingReplyItems.isEmpty else { return }
+    requestedItemInFlight = pendingReplyItems.removeFirst()
+    replyRequestPending = true
+    do {
+      try await send(["type": "response.create"])
+      diagnostic("response_requested")
+    } catch {
+      diagnosticError("response_failed", error)
+      recoverTransport()
+    }
+  }
 
   private func appendTurn(role: String, text: String) {
     turns.append(CaptroRealtimeTurn(role: role, text: text))
@@ -649,7 +690,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
             self.diagnostic("first_pcm_sent")
             self.connectionTimeout?.cancel()
             self.connectionTimeout = nil
-            self.phase = .listening
+            if self.phase == .connecting || self.phase == .reconnecting { self.phase = .listening }
             self.startHeartbeat(epoch: epoch)
           }
           if !self.muted && chunk.level > 0.02 && !self.observedMicrophoneSignal {
