@@ -43,6 +43,7 @@ export async function verifyRealtimeConversation(credentials) {
       const audioResponses = new Set();
       let cancellations = 0;
       let pausePassed = false;
+      let prematurePauseCommit = false;
       let pauseEndFrame = 0;
       const requestReply = () => {
         if (activeResponse || replyPending || !pendingItems.length) return;
@@ -125,7 +126,10 @@ export async function verifyRealtimeConversation(credentials) {
           } else if (message.type === 'input_audio_buffer.speech_started' && current) {
             current.speech_started = true;
           } else if (message.type === 'input_audio_buffer.committed' && current) {
-            if (turns.length === 2) pausePassed = framesSent >= pauseEndFrame;
+            if (turns.length === 2) {
+              if (framesSent < pauseEndFrame) prematurePauseCommit = true;
+              pausePassed = !prematurePauseCommit && framesSent >= pauseEndFrame;
+            }
             current.completed_turn = true;
             if (!requestedItems.has(message.item_id)) {
               requestedItems.add(message.item_id);
