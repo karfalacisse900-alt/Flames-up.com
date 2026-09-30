@@ -12,17 +12,21 @@ export async function verifyRealtimeConversation(credentials) {
   const phrases = [
     'Hello Captro can you help me prepare a post?',
     'I would like to use my last video.',
-    'Please make it a story.',
+    'Can you take my video and make it a fifteen second story?',
     'Do not add captions.',
     'Thanks. What should I do next?',
   ];
   try {
-    const clips = phrases.map((phrase, index) => {
+    const synthesize = (phrase, index) => {
       const file = join(directory, `${index}.wav`);
       execFileSync('espeak-ng', ['-w', file, '-s', '145', phrase]);
       return execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', file,
         '-f', 's16le', '-ac', '1', '-ar', '24000', 'pipe:1'], { maxBuffer: 2_000_000 });
-    });
+    };
+    const clips = phrases.map(synthesize);
+    const incompleteThought = synthesize('Can you take my video and', 'pause-start');
+    const thoughtCompletion = synthesize('make it a fifteen second story?', 'pause-finish');
+    clips[2] = Buffer.concat([incompleteThought, Buffer.alloc(48_000), thoughtCompletion]);
     return await new Promise((resolve, reject) => {
       const socket = new WebSocket(`wss://api.openai.com/v1/realtime?model=${credentials.model}`, {
         headers: { Authorization: `Bearer ${credentials.client_secret}` }, handshakeTimeout: 15_000,
@@ -38,6 +42,8 @@ export async function verifyRealtimeConversation(credentials) {
       const pendingItems = [];
       const audioResponses = new Set();
       let cancellations = 0;
+      let pausePassed = false;
+      let pauseEndFrame = 0;
       const requestReply = () => {
         if (activeResponse || replyPending || !pendingItems.length) return;
         pendingItems.shift();
@@ -52,7 +58,7 @@ export async function verifyRealtimeConversation(credentials) {
         if (error) reject(error);
         else resolve({ transport: 'native_bearer_websocket', vad: 'semantic_vad', eagerness: 'medium',
           create_response: false, automatic_client_response: true, frames_sent: framesSent,
-          turns, cancellations, events: [...seen] });
+          turns, cancellations, natural_pause_preserved: pausePassed, history_rehydration: true, events: [...seen] });
       };
       const timeout = setTimeout(() => finish(new Error(`Realtime timed out: completed_turns=${turns.length}, events=${[...seen].join(',')}`)), 180_000);
       const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -65,6 +71,7 @@ export async function verifyRealtimeConversation(credentials) {
           if (settled) return;
           current = { speech_started: false, completed_turn: false, response_created: false,
             audio_received: false, transcript: false, response_completed: false };
+          if (turns.length === 2) pauseEndFrame = framesSent + 2400 + incompleteThought.length / 2 + 24000;
           sendPcm(Buffer.alloc(4_800));
           for (let offset = 0; offset < clip.length && !settled; offset += 4_800) {
             sendPcm(clip.subarray(offset, offset + 4_800));
@@ -80,6 +87,7 @@ export async function verifyRealtimeConversation(credentials) {
           if (settled) return;
           assert.ok(current.speech_started && current.completed_turn && current.response_created
             && current.audio_received, 'Incomplete automatic conversational turn');
+          if (turns.length === 2) assert.ok(pausePassed, 'Incomplete thought was committed before its continuation');
           turns.push(current);
         }
         finish();
@@ -105,10 +113,19 @@ export async function verifyRealtimeConversation(credentials) {
             assert.equal(vad?.type, 'semantic_vad');
             assert.equal(vad?.create_response, false);
             assert.equal(vad?.interrupt_response, true);
+            // Match native reconnection history restoration. These are bounded
+            // synthetic messages, not anyone's private conversation.
+            socket.send(JSON.stringify({ type: 'conversation.item.create', item: {
+              type: 'message', role: 'user', content: [{ type: 'input_text', text: 'We are preparing a Captro post.' }],
+            } }));
+            socket.send(JSON.stringify({ type: 'conversation.item.create', item: {
+              type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Sure. What would you like to prepare?' }],
+            } }));
             void run().catch(finish);
           } else if (message.type === 'input_audio_buffer.speech_started' && current) {
             current.speech_started = true;
           } else if (message.type === 'input_audio_buffer.committed' && current) {
+            if (turns.length === 2) pausePassed = framesSent >= pauseEndFrame;
             current.completed_turn = true;
             if (!requestedItems.has(message.item_id)) {
               requestedItems.add(message.item_id);
