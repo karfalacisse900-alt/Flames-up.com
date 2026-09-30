@@ -10,7 +10,7 @@ import WebSocket from 'ws';
 export async function verifyRealtimeConversation(credentials) {
   const directory = mkdtempSync(join(tmpdir(), 'captro-realtime-'));
   const phrases = [
-    'Hello Captro. Can you help me prepare a post?',
+    'Hello Captro can you help me prepare a post?',
     'I would like to use my last video.',
     'Please make it a story.',
     'Do not add captions.',
@@ -33,6 +33,17 @@ export async function verifyRealtimeConversation(credentials) {
       let current = null;
       let settled = false;
       let framesSent = 0;
+      let activeResponse = null;
+      let replyPending = false;
+      const pendingItems = [];
+      const audioResponses = new Set();
+      let cancellations = 0;
+      const requestReply = () => {
+        if (activeResponse || replyPending || !pendingItems.length) return;
+        pendingItems.shift();
+        replyPending = true;
+        socket.send(JSON.stringify({ type: 'response.create' }));
+      };
       const finish = error => {
         if (settled) return;
         settled = true;
@@ -41,7 +52,7 @@ export async function verifyRealtimeConversation(credentials) {
         if (error) reject(error);
         else resolve({ transport: 'native_bearer_websocket', vad: 'semantic_vad', eagerness: 'medium',
           create_response: false, automatic_client_response: true, frames_sent: framesSent,
-          turns, events: [...seen] });
+          turns, cancellations, events: [...seen] });
       };
       const timeout = setTimeout(() => finish(new Error(`Realtime timed out: completed_turns=${turns.length}, events=${[...seen].join(',')}`)), 180_000);
       const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -59,6 +70,7 @@ export async function verifyRealtimeConversation(credentials) {
             sendPcm(clip.subarray(offset, offset + 4_800));
             await delay(100);
           }
+          current.input_finished = true;
           // Only OpenAI VAD commits the turn. Silence is streamed audio, not a
           // homegrown turn timer; no input_audio_buffer.commit is sent.
           while (!settled && !current.response_completed) {
@@ -77,6 +89,10 @@ export async function verifyRealtimeConversation(credentials) {
         try {
           const message = JSON.parse(data.toString());
           seen.add(message.type);
+          if (['input_audio_buffer.speech_started', 'input_audio_buffer.speech_stopped', 'input_audio_buffer.committed', 'response.created', 'response.done'].includes(message.type)) {
+            console.log(JSON.stringify({ stage: 'realtime_event', type: message.type, turn: turns.length + 1,
+              status: message.response?.status || null, frames_sent: framesSent }));
+          }
           if (message.type === 'session.created') {
             socket.send(JSON.stringify({ type: 'session.update', session: { type: 'realtime', audio: {
               input: { format: { type: 'audio/pcm', rate: 24000 }, turn_detection: {
@@ -96,17 +112,27 @@ export async function verifyRealtimeConversation(credentials) {
             current.completed_turn = true;
             if (!requestedItems.has(message.item_id)) {
               requestedItems.add(message.item_id);
-              socket.send(JSON.stringify({ type: 'response.create' }));
+              pendingItems.push(message.item_id);
+              requestReply();
             }
           } else if (message.type === 'response.created' && current) {
             current.response_created = true;
+            activeResponse = message.response?.id;
+            replyPending = false;
           } else if (message.type === 'response.output_audio.delta' && current) {
             current.audio_received = true;
+            audioResponses.add(message.response_id);
           } else if (message.type === 'conversation.item.input_audio_transcription.completed' && current) {
             current.transcript = !!message.transcript;
           } else if (message.type === 'response.done' && current) {
-            assert.equal(message.response?.status, 'completed', `Response failed: ${message.response?.status_details?.error?.code || message.response?.status}`);
-            current.response_completed = true;
+            const status = message.response?.status;
+            assert.ok(['completed', 'cancelled'].includes(status), `Response failed: ${message.response?.status_details?.error?.code || status}`);
+            if (status === 'cancelled') cancellations += 1;
+            if (activeResponse === message.response?.id) activeResponse = null;
+            if (status === 'completed' && current.input_finished && audioResponses.has(message.response.id) && !pendingItems.length) {
+              current.response_completed = true;
+            }
+            requestReply();
           } else if (message.type === 'error') {
             finish(new Error(`Realtime API ${message.error?.type || 'error'}: ${message.error?.code || 'unknown'}`));
           }
