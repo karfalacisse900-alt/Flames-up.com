@@ -36,7 +36,7 @@ test('one response per account, changing choice reverses the old count, and dele
 test('creator chooses zero or one mode; votes require visible posts and the selected option', () => {
   assert.match(composer, /postResponse: postResponse/);
   assert.match(composer, /hasSelectedStamp && !title\.trimmingCharacters/);
-  assert.match(feed, /else if post\.response != nil/);
+  assert.match(feed, /if post\.response != nil/);
   assert.match(feed, /CaptroPostResponseView\(post: post/);
   assert.match(worker, /const postResponse = normalizePostResponseConfig\(rawPostResponse\)/);
   assert.match(worker, /post_response: input\.postResponse \|\| null/);

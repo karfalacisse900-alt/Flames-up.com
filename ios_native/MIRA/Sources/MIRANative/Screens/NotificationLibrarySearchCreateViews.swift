@@ -742,11 +742,12 @@ private struct CaptroPostResponsePicker: View {
         responseRow("Yes / No", type: "yes_no")
         responseRow("Interested", type: "interested")
         if allowsGoing { responseRow("Going", type: "going") }
+        responseRow("Custom choices", type: "poll")
         responseRow("Poll", type: "poll")
         responseRow("Question / replies", type: "question")
         if showsPollEditor {
           VStack(alignment: .leading, spacing: 10) {
-            Text("Poll options").font(.subheadline.weight(.semibold))
+            Text("Response choices · 2–4 options").font(.subheadline.weight(.semibold))
             ForEach(0..<4, id: \.self) { index in
               TextField("Option \(index + 1)\(index >= 2 ? " (optional)" : "")", text: $pollOptions[index])
                 .textInputAutocapitalization(.sentences)

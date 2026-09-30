@@ -387,5 +387,6 @@ test('stamp has one detail target while saving remains available in the detail h
   assert.match(details, /detailHeader/);
   assert.match(details, /Image\(systemName: model\.post\.viewerSaved \? "bookmark\.fill" : "bookmark"\)/);
   assert.doesNotMatch(overlayCard, /Button\(action: onSave\)/);
-  assert.match(homePost, /CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent, feedCaptionMaxLines: 5, onOpen: onOpenPost\)/);
+  assert.match(homePost, /CaptroTextOnlyStampCard\(post: post,[\s\S]*?onOpen: onOpenPost\)/);
+  assert.match(homePost, /let content = post\.captroTextOnlyCardContent/);
 });

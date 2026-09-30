@@ -6,6 +6,7 @@ import { allowedCloudflareDirectUploadUrl, cloudflareTusCreationHeaders } from '
 import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import OpenAI from 'openai';
+import { validateRealtimeDiagnostic } from './realtime-diagnostics';
 import { screenStoryWithWorkersAI } from './story-safety';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
@@ -16562,10 +16563,15 @@ api.post('/ai/realtime/session', authMiddleware, async (c) => {
   const tooLarge = rejectLargeRequest(c, 2_000);
   if (tooLarge) return tooLarge;
   const body = await c.req.json().catch(() => ({}));
-  const unknown = rejectUnknownFields(c, body, ['has_current_recording']);
+  const unknown = rejectUnknownFields(c, body, ['has_current_recording', 'current_recording_id']);
   if (unknown) return unknown;
   if (!c.env.OPENAI_API_KEY) return c.json({ detail: 'Captro Voice is unavailable right now.', code: 'AI_NOT_CONFIGURED' }, 503);
   const hasRecording = body.has_current_recording === true;
+  if (body.current_recording_id != null && (typeof body.current_recording_id !== 'string'
+    || !/^[0-9a-f-]{36}$/i.test(body.current_recording_id) || !hasRecording)) {
+    return c.json({ detail: 'Invalid recording context.', code: 'INVALID_CONTEXT' }, 400);
+  }
+  const diagnosticId = uuid();
   const instructions = [
     'You are Captro Voice, a warm, concise spoken assistant. Keep ordinary replies under 35 words and ask one question at a time.',
     hasRecording ? 'The user has a current Captro video recording available in the app. You have not seen or analyzed its contents.' : 'There is no current Captro video recording in this session.',
@@ -16603,7 +16609,10 @@ api.post('/ai/realtime/session', authMiddleware, async (c) => {
       signal: AbortSignal.timeout(12_000),
     });
     if (!upstream.ok) {
-      console.warn(JSON.stringify({ event: 'capture_realtime_session_failed', status: upstream.status, request_id: upstream.headers.get('x-request-id') || '', captro_request_id: c.get?.('requestId') || '' }));
+      const failure: any = await upstream.json().catch(() => ({}));
+      console.warn(JSON.stringify({ event: 'capture_realtime_session_failed', diagnostic_id: diagnosticId,
+        status: upstream.status, error_type: cleanText(failure.error?.type, 80), error_code: cleanText(failure.error?.code, 80),
+        request_id: upstream.headers.get('x-request-id') || '', captro_request_id: c.get?.('requestId') || '' }));
       return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_UNAVAILABLE' }, 503);
     }
     const secret: any = await upstream.json();
@@ -16611,11 +16620,31 @@ api.post('/ai/realtime/session', authMiddleware, async (c) => {
       console.warn(JSON.stringify({ event: 'capture_realtime_session_invalid', request_id: upstream.headers.get('x-request-id') || '' }));
       return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_UNAVAILABLE' }, 503);
     }
-    return c.json({ client_secret: secret.value, expires_at: secret.expires_at || null, model: 'gpt-realtime-2.1' }, 200, { 'Cache-Control': 'no-store' });
+    console.info(JSON.stringify({ event: 'capture_realtime_session_created', diagnostic_id: diagnosticId,
+      status: upstream.status, request_id: upstream.headers.get('x-request-id') || '',
+      openai_organization: upstream.headers.get('openai-organization'), openai_project: upstream.headers.get('openai-project'),
+      key_source: 'existing_worker_secret', model: 'gpt-realtime-2.1', vad: 'semantic_vad',
+      has_recording_context: hasRecording, captro_request_id: c.get?.('requestId') || '' }));
+    return c.json({ client_secret: secret.value, expires_at: secret.expires_at || null, model: 'gpt-realtime-2.1',
+      diagnostic_id: diagnosticId }, 200, { 'Cache-Control': 'no-store' });
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'capture_realtime_session_exception', code: classifyOpenAIServiceFailure(error).code, captro_request_id: c.get?.('requestId') || '' }));
     return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_UNAVAILABLE' }, 503);
   }
+});
+
+// Authenticated client-stage breadcrumbs let TestFlight failures be correlated
+// with the mint request. They are untrusted diagnostics, never authorization.
+api.post('/ai/realtime/diagnostics', authMiddleware, async (c) => {
+  const limited = await enforceRateLimit(c, 'capture_realtime_diagnostics', getUserId(c), 120, 60);
+  if (limited) return limited;
+  const tooLarge = rejectLargeRequest(c, 1_000);
+  if (tooLarge) return tooLarge;
+  const value = validateRealtimeDiagnostic(await c.req.json().catch(() => null));
+  if (!value) return c.json({ detail: 'Invalid diagnostics.', code: 'INVALID_DIAGNOSTIC' }, 400);
+  console.info(JSON.stringify({ event: 'capture_realtime_client_stage', source: 'untrusted_client',
+    ...value, captro_user_id: getUserId(c), captro_request_id: c.get?.('requestId') || '' }));
+  return c.json({ accepted: true }, 200, { 'Cache-Control': 'no-store' });
 });
 
 async function screenCaptroText(

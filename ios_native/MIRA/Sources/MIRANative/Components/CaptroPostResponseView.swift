@@ -20,6 +20,8 @@ struct CaptroPostResponseView: View {
   let api: MIRAAPIClient
   let onReply: () -> Void
   var canRespond = true
+  var outlinedStamp = false
+  @ScaledMetric(relativeTo: .body) private var outlinedFontSize = 16.0
 
   @State private var current: CaptroPostResponse?
   @State private var pendingOperation: String?
@@ -27,10 +29,11 @@ struct CaptroPostResponseView: View {
   @State private var peopleOption = ""
   @State private var showsPeople = false
 
-  init(post: MIRAPost, api: MIRAAPIClient, canRespond: Bool = true, onReply: @escaping () -> Void) {
+  init(post: MIRAPost, api: MIRAAPIClient, canRespond: Bool = true, outlinedStamp: Bool = false, onReply: @escaping () -> Void) {
     self.post = post
     self.api = api
     self.canRespond = canRespond
+    self.outlinedStamp = outlinedStamp
     self.onReply = onReply
     _current = State(initialValue: post.response)
   }
@@ -38,19 +41,26 @@ struct CaptroPostResponseView: View {
   var body: some View {
     Group {
       if let response = current {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: outlinedStamp ? 14 : 8) {
           switch response.type {
           case "yes_no":
-            HStack(spacing: 8) {
-              choice("Yes", response: response)
-              choice("No", response: response)
+            if outlinedStamp {
+              VStack(spacing: 9) {
+                choice("Yes", response: response)
+                choice("No", response: response)
+              }
+            } else {
+              HStack(spacing: 8) {
+                choice("Yes", response: response)
+                choice("No", response: response)
+              }
             }
           case "interested":
             choice("Interested", label: "I'm interested", response: response)
           case "going":
             choice("Going", response: response)
           case "poll":
-            VStack(spacing: 7) {
+            VStack(spacing: outlinedStamp ? 9 : 7) {
               ForEach(response.options, id: \.self) { option in
                 choice(option, response: response)
               }
@@ -131,14 +141,26 @@ struct CaptroPostResponseView: View {
         }
         if selected { Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)) }
       }
-      .font(.system(size: 14, weight: selected ? .semibold : .medium))
-      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .font(.system(size: outlinedStamp ? outlinedFontSize : 14, weight: selected ? .semibold : .regular))
+      .foregroundStyle(outlinedStamp ? Color.black : MIRATheme.Color.textPrimary)
       .padding(.horizontal, 12)
-      .frame(maxWidth: .infinity, minHeight: 44)
-      .background(selected ? MIRATheme.Color.forest.opacity(0.12) : MIRATheme.Color.surfaceSoft,
-                  in: RoundedRectangle(cornerRadius: 9))
-      .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(
-        selected ? MIRATheme.Color.forest : MIRATheme.Color.hairline, lineWidth: 1))
+      .padding(.vertical, 8)
+      .frame(maxWidth: .infinity, minHeight: outlinedStamp ? 48 : 44)
+      .background {
+        RoundedRectangle(cornerRadius: outlinedStamp ? 6 : 9)
+          .fill(selected ? MIRATheme.Color.forest.opacity(0.08) : (outlinedStamp ? Color.white : MIRATheme.Color.surfaceSoft))
+          .overlay(alignment: .leading) {
+            if response.viewerOption != nil && (response.type == "yes_no" || response.type == "poll") {
+              GeometryReader { geometry in
+                Rectangle().fill(MIRATheme.Color.forest.opacity(0.08))
+                  .frame(width: geometry.size.width * CGFloat(count) / CGFloat(max(1, response.totalCount)))
+              }
+              .clipShape(RoundedRectangle(cornerRadius: outlinedStamp ? 6 : 9))
+            }
+          }
+      }
+      .overlay(RoundedRectangle(cornerRadius: outlinedStamp ? 6 : 9).strokeBorder(
+        selected ? MIRATheme.Color.forest : (outlinedStamp ? Color.black.opacity(0.35) : MIRATheme.Color.hairline), lineWidth: 0.8))
     }
     .buttonStyle(.plain)
     .disabled(pendingOperation != nil || !canRespond)

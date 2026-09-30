@@ -41,34 +41,17 @@ struct CaptroFeedPostView: View {
     VStack(alignment: .leading, spacing: 0) {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
-      } else if post.response != nil {
-        VStack(alignment: .leading, spacing: 0) {
-          CaptroEditorialOverlayCard(content: post.captroTextOnlyCardContent,
-            feedCaptionMaxLines: 5, showsProfileRow: false, showsBorder: false,
-            onOpen: onOpenPost)
-          CaptroPostResponseView(post: post, api: api, canRespond: showsFeedControls, onReply: onOpenPost)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
-          HStack(spacing: 9) {
-            RemoteAvatar(url: post.userProfileImage, size: 30)
-            Text(post.userUsername.map { "@" + $0.trimmingCharacters(in: CharacterSet(charactersIn: "@")) }
-                 ?? post.authorDisplayName)
-              .font(.system(size: 15, weight: .medium))
-              .lineLimit(1)
-            Spacer(minLength: 0)
-          }
-          .padding(.horizontal, 14)
-          .padding(.vertical, 12)
-          .overlay(alignment: .top) { MIRATheme.Color.hairline.frame(height: 1).padding(.horizontal, 14) }
-        }
-        .background(Color.white)
-        .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
-        .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
-        .padding(.horizontal, CaptroEditorialCardLayout.inset)
       } else {
-        CaptroEditorialOverlayCard(content: post.captroTextOnlyCardContent, feedCaptionMaxLines: 5, onOpen: onOpenPost)
-          .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
-          .padding(.horizontal, CaptroEditorialCardLayout.inset)
+        ViewThatFits(in: .vertical) {
+          textOnlyStamp(maxBodyLines: 5).fixedSize(horizontal: false, vertical: true)
+          textOnlyStamp(maxBodyLines: 3).fixedSize(horizontal: false, vertical: true)
+          textOnlyStamp(maxBodyLines: 1).fixedSize(horizontal: false, vertical: true)
+          // Accessibility text / four long choices must remain reachable, not clipped.
+          ScrollView(.vertical) { textOnlyStamp(maxBodyLines: 3) }
+        }
+        .frame(maxHeight: pageSize.map { max(0, $0.height - (post.detail?.voice == nil ? 24 : 100)) })
+        .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
+        .padding(.horizontal, 16)
       }
 
       if let voice = post.detail?.voice {
@@ -105,6 +88,11 @@ struct CaptroFeedPostView: View {
     .sheet(isPresented: Binding(get: { transcriptVoiceId != nil }, set: { if !$0 { transcriptVoiceId = nil } })) {
       if let transcriptVoiceId { CaptroVoiceTranscriptSheet(voiceId: transcriptVoiceId) }
     }
+  }
+
+  private func textOnlyStamp(maxBodyLines: Int) -> some View {
+    CaptroTextOnlyStampCard(post: post, api: api, canRespond: showsFeedControls,
+      maxBodyLines: maxBodyLines, onOpen: onOpenPost)
   }
 
   @ViewBuilder
@@ -145,6 +133,77 @@ struct CaptroFeedPostView: View {
   private var showsMoreButton: Bool {
     // Caption overflow is measured by the card's native text layout.
     return post.containsVideoMedia
+  }
+}
+
+/// A first-class image-free Stamp. No fake media, fixed caption box or shared
+/// tap gesture around the response controls. Header/creator open real details.
+private struct CaptroTextOnlyStampCard: View {
+  let post: MIRAPost
+  let api: MIRAAPIClient
+  let canRespond: Bool
+  let maxBodyLines: Int
+  let onOpen: () -> Void
+  @ScaledMetric(relativeTo: .title) private var titleSize = 28.0
+  @ScaledMetric(relativeTo: .body) private var bodySize = 16.0
+
+  var body: some View {
+    let content = post.captroTextOnlyCardContent
+    VStack(alignment: .leading, spacing: 0) {
+      Button(action: onOpen) {
+        VStack(alignment: .leading, spacing: 0) {
+          Text(content.type.rawValue.uppercased())
+            .font(.system(size: 12, weight: .medium))
+            .tracking(2)
+            .foregroundStyle(Color.black.opacity(0.55))
+            .padding(.bottom, 16)
+          Text(content.title)
+            .font(.system(size: titleSize, weight: .bold))
+            .tracking(-0.5)
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
+          if let location = content.subtitle, !location.isEmpty {
+            Text(location).font(.subheadline).foregroundStyle(Color.black.opacity(0.6))
+              .padding(.top, 6)
+          }
+          if let caption = content.description ?? content.summaryText, !caption.isEmpty {
+            CaptroMeasuredCaption(text: caption, size: bodySize, maxLines: maxBodyLines)
+              .padding(.top, 12)
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityHint("Opens full post")
+
+      if post.response != nil {
+        CaptroPostResponseView(post: post, api: api, canRespond: canRespond,
+          outlinedStamp: true, onReply: onOpen)
+          .padding(.top, 20)
+      }
+
+      Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5)
+        .padding(.top, 20)
+        .padding(.bottom, 14)
+      Button(action: onOpen) {
+        HStack(spacing: 10) {
+          RemoteAvatar(url: post.userProfileImage, size: 32)
+          Text(content.username ?? post.authorDisplayName)
+            .font(.system(size: 15, weight: .semibold))
+            .lineLimit(1)
+          Spacer(minLength: 0)
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+    }
+    .foregroundStyle(Color.black)
+    .padding(20)
+    .background(Color.white)
+    .overlay(Rectangle().strokeBorder(Color.black, lineWidth: 0.8))
+    .accessibilityIdentifier("captro.textOnlyStamp")
   }
 }
 

@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { verifyRealtimeConversation } from './realtime-smoke.mjs';
 
 // Disposable, private, synthetic voice smoke against the deployed Worker.
 // No real user recordings, tokens, transcripts, or provider secrets are logged.
@@ -81,9 +82,22 @@ try {
   console.log(JSON.stringify({ stage: 'realtime_credential', status: liveSession.response.status, code: liveSession.result.code || null }));
   assert.equal(liveSession.response.status, 200, 'Realtime session credential could not be created');
   assert.ok(liveSession.result.client_secret && liveSession.result.model === 'gpt-realtime-2.1');
+  const multiTurn = await verifyRealtimeConversation(liveSession.result);
+  console.log(JSON.stringify({ stage: 'native_auth_five_turn_conversation', ...multiTurn }));
+  const diagnostic = await call(`${api}/ai/realtime/diagnostics`, {
+    method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ diagnostic_id: liveSession.result.diagnostic_id, stage: 'first_pcm_sent', epoch: 1, frames: 2400, bytes: 4800 }),
+  });
+  assert.equal(diagnostic.response.status, 200, 'TestFlight diagnostic endpoint unavailable');
+  // Separate credential: a successfully consumed ephemeral credential isn't reused.
+  const browserSession = await call(`${api}/ai/realtime/session`, {
+    method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ has_current_recording: false }),
+  });
+  assert.equal(browserSession.response.status, 200);
   const realtime = await new Promise((resolve, reject) => {
     const socket = new WebSocket('wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1',
-      ['realtime', `openai-insecure-api-key.${liveSession.result.client_secret}`]);
+      ['realtime', `openai-insecure-api-key.${browserSession.result.client_secret}`]);
     const seen = new Set();
     let settled = false;
     let vad = '';

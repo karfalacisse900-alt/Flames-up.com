@@ -20,6 +20,7 @@ public struct CaptroScanView: View {
   @State private var completedAssistantDestination: CaptroCaptureDestination?
   @State private var pendingRetake = false
   @State private var recordedMedia: MIRAPickedMedia?
+  @State private var currentRecordingID: String?
   @State private var handoffMedia: MIRAPickedMedia?
   @State private var recordedMediaURL: URL?
   @State private var showingRecordPreview = false
@@ -72,6 +73,7 @@ public struct CaptroScanView: View {
         simpleCaptureUI: true,
         onCapture: { media in
           recordedMedia = media
+          currentRecordingID = UUID().uuidString
           recordedMediaURL = nil
           pendingRecordPreview = true
           showingRecordCamera = false
@@ -105,6 +107,7 @@ public struct CaptroScanView: View {
           if let recordedMediaURL { try? FileManager.default.removeItem(at: recordedMediaURL) }
           recordedMediaURL = nil
           self.recordedMedia = nil
+          currentRecordingID = nil
           handoffMedia = nil
           showingRecordPreview = false
         }) { destination, chosenMedia in
@@ -139,7 +142,7 @@ public struct CaptroScanView: View {
         showingRecordPreview = true
       }
     }) {
-      CaptroCaptureAssistantView(api: api, hasCurrentRecording: recordedMedia != nil, onClose: {
+      CaptroCaptureAssistantView(api: api, hasCurrentRecording: recordedMedia != nil, currentRecordingID: currentRecordingID, onClose: {
         showingVoiceAssistant = false
       }, onOpenEditor: { destination, plan in
         pendingAssistantEdit = CaptroAssistantEditorRequest(

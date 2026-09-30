@@ -19,6 +19,7 @@
     "@cloudflare/workers-types": "^4.20260524.1",
     "@electric-sql/pglite": "0.5.8",
     "typescript": "^5.9.3",
-    "wrangler": "^4.94.0"
+    "wrangler": "^4.94.0",
+    "ws": "8.21.0"
   }
 }

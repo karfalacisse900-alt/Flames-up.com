@@ -229,7 +229,7 @@ struct CaptroEditorialOverlayCard: View {
 
 /// Measures the actual laid-out text, so short captions use only their own height.
 /// The entire parent card opens details when the full caption exceeds the feed cap.
-private struct CaptroMeasuredCaption: View {
+struct CaptroMeasuredCaption: View {
   let text: String
   let size: CGFloat
   let maxLines: Int?

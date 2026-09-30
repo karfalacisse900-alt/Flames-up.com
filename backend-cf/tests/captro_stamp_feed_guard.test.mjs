@@ -32,7 +32,7 @@ test('guest Home reads only the public feed and keeps an isolated cache', () => 
 
 test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.match(postView, /CaptroMediaPager\(/);
-  assert.match(postView, /CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/);
+  assert.match(postView, /CaptroTextOnlyStampCard\(post: post/);
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
@@ -52,7 +52,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else if post\.response != nil \{[\s\S]*?CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 5\)/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -102,7 +102,8 @@ test('Moment detail keeps writing on one editorial card without a separate capti
   assert.doesNotMatch(momentDetail, /fullDescription/);
   assert.doesNotMatch(commerce, /CaptroEditorialOverlayCard\(/);
   const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('if let voice = post.detail?.voice'));
-  assert.match(textOnly, /CaptroEditorialOverlayCard\(content: post\.captroTextOnlyCardContent/);
+  assert.match(textOnly, /textOnlyStamp\(maxBodyLines: 5\)/);
+  assert.match(postView, /let content = post\.captroTextOnlyCardContent/);
   assert.doesNotMatch(textOnly, /Text\(caption\)/);
   assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
 });
@@ -148,7 +149,7 @@ test('Home media is a full-width rectangular frame using exactly five supported 
   assert.match(mediaPager, /MIRAMediaSizing\.supportedPostHeightToWidthRatio\(ratio\)/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
-  const mediaBranchEnd = postView.indexOf('} else if post.response != nil {', mediaBranchStart);
+  const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
   const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
   assert.ok(mediaBranchStart >= 0 && mediaBranchEnd > mediaBranchStart);
   assert.match(mediaBranch, /mediaPager/);

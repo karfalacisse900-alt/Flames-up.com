@@ -20,6 +20,7 @@ public struct CaptroAssistantEditPlan: Decodable {
 struct CaptroCaptureAssistantView: View {
   let api: MIRAAPIClient
   let hasCurrentRecording: Bool
+  var currentRecordingID: String? = nil
   let onClose: () -> Void
   let onOpenEditor: (CaptroAssistantEditorDestination, CaptroAssistantEditPlan) -> Void
   @StateObject private var session = CaptroRealtimeVoiceSession()
@@ -53,12 +54,12 @@ struct CaptroCaptureAssistantView: View {
           .padding(.top, 20)
 
         if session.phase == .error {
-          Text("Captro AI is unavailable right now.")
+          Text(session.failureMessage)
             .font(.subheadline)
             .foregroundStyle(MIRATheme.Color.textSecondary)
             .padding(.top, 9)
           Button("Try Again") {
-            Task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording) }
+            Task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording, currentRecordingID: currentRecordingID) }
           }
           .buttonStyle(.borderedProminent)
           .tint(MIRATheme.Color.forest)
@@ -66,10 +67,15 @@ struct CaptroCaptureAssistantView: View {
           .padding(.top, 22)
         }
 
-        if showsTranscript && !session.turns.isEmpty {
+        if showsTranscript {
           ScrollViewReader { proxy in
             ScrollView {
               LazyVStack(alignment: .leading, spacing: 12) {
+                if session.turns.isEmpty {
+                  Text("Your conversation transcript will appear here.")
+                    .font(.subheadline)
+                    .foregroundStyle(MIRATheme.Color.textSecondary)
+                }
                 ForEach(session.turns.suffix(8)) { turn in
                   VStack(alignment: .leading, spacing: 3) {
                     Text(turn.role == "user" ? "You" : "Captro")
@@ -122,9 +128,19 @@ struct CaptroCaptureAssistantView: View {
           }
           .accessibilityLabel(showsTranscript ? "Hide transcript" : "Show transcript")
 
-          CaptroVoiceRoutePicker()
-            .frame(width: 44, height: 44)
-            .accessibilityLabel("Audio output")
+          Menu {
+            Text("Output: \(session.outputName)")
+            Button("iPhone") { session.selectOutput(speaker: false) }
+            Button("Speaker") { session.selectOutput(speaker: true) }
+            ForEach(session.availableInputs.filter { $0.portType != .builtInMic }, id: \.uid) { input in
+              Button(input.portName) { session.selectOutput(speaker: false, input: input) }
+            }
+          } label: {
+            Image(systemName: "speaker.wave.2")
+              .frame(width: 44, height: 44)
+          }
+          .disabled(session.phase == .connecting || session.phase == .reconnecting || session.phase == .error)
+          .accessibilityLabel("Audio output, \(session.outputName)")
         }
         .foregroundStyle(MIRATheme.Color.forest)
         .padding(.bottom, 24)
@@ -140,13 +156,13 @@ struct CaptroCaptureAssistantView: View {
             .foregroundStyle(MIRATheme.Color.forest)
         }
       }
-      .task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording) }
+      .task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording, currentRecordingID: currentRecordingID) }
       .onDisappear { session.stop() }
       .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { session.handleInterruption($0) }
       .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { session.handleRouteChange($0) }
-      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in session.stop() }
+      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in session.suspendForBackground() }
       .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-        if session.phase != .connecting { Task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording) } }
+        session.resumeFromBackground()
       }
     }
   }
@@ -158,16 +174,4 @@ struct CaptroCaptureAssistantView: View {
     case .connecting, .reconnecting, .listening, .error: return 108
     }
   }
-}
-
-private struct CaptroVoiceRoutePicker: UIViewRepresentable {
-  func makeUIView(context: Context) -> AVRoutePickerView {
-    let view = AVRoutePickerView()
-    view.prioritizesVideoDevices = false
-    view.tintColor = UIColor(MIRATheme.Color.forest)
-    view.activeTintColor = UIColor(MIRATheme.Color.forest)
-    return view
-  }
-
-  func updateUIView(_ view: AVRoutePickerView, context: Context) {}
 }
