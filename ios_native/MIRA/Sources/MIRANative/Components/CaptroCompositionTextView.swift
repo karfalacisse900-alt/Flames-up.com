@@ -8,7 +8,7 @@ struct CaptroCompositionTextView: UIViewRepresentable {
   var fontSize: CGFloat
   var placeholder: String
 
-  static func permitsChange(from current: String, to next: String, composing: Bool = false) -> Bool {
+  nonisolated static func permitsChange(from current: String, to next: String, composing: Bool = false) -> Bool {
     composing || next.count <= 500 || (current.count > 500 && next.count <= current.count)
   }
 
