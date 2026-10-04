@@ -44,6 +44,7 @@ struct CaptroCompositionDraft {
   var title = "" // Structured object name; ordinary writing has no separate title field.
   var bodyText = ""
   var mediaItems: [MIRAPickedMedia] = []
+  var originalMediaItems: [MIRAPickedMedia] = []
   var selectedStampKind: CaptroStampKind = .social
   var hasSelectedStamp = false
   var momentType = "Thought"

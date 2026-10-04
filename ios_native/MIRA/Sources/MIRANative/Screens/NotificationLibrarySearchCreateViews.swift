@@ -1091,9 +1091,7 @@ public struct CreatePostNativeView: View {
   @State private var pickerItems: [PhotosPickerItem] = []
   @State private var coverMediaRatio = MIRAMediaSizing.feedPreviewRatio
   @State private var composerUser: MIRAUser?
-  @State private var showPreview = false
   @State private var isEditingPostDetails = false
-  @State private var showStampPicker = false
   private var hasSelectedStamp: Bool {
     get { draft.hasSelectedStamp }
     nonmutating set { draft.hasSelectedStamp = newValue }
@@ -1159,6 +1157,7 @@ public struct CreatePostNativeView: View {
   @State private var didApplyInitialCapture = false
   @State private var isRestoringPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
+  @State private var draftOriginalMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
   @State private var isCameraReviewingMedia = false
   @StateObject private var payoutOnboarding = CaptroPayoutOnboardingCoordinator()
   @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
@@ -1213,6 +1212,8 @@ public struct CreatePostNativeView: View {
         if item.returnsToCamera {
           editedCameraMedia = edited
         } else if let index = item.replacementIndex, mediaItems.indices.contains(index) {
+          let source = mediaItems[index]
+          if !draft.originalMediaItems.contains(source) { draft.originalMediaItems.append(source) }
           mediaItems[index] = edited
         } else {
           mediaItems.append(edited)
@@ -1220,9 +1221,6 @@ public struct CreatePostNativeView: View {
         }
       }
       .ignoresSafeArea()
-    }
-    .fullScreenCover(isPresented: $showStampPicker) {
-      stampPickerPage
     }
     .fullScreenCover(isPresented: $showVoiceRecorder) {
       CaptroVoiceRecorderSheet(limit: 60) { draft in
@@ -1649,8 +1647,6 @@ public struct CreatePostNativeView: View {
   private var hasUnsavedPost: Bool {
     hasDraftContent || draft.intent != .wantTo || draft.time != nil || draft.audience != initialAudience
   }
-  private func openStampPicker() { /* Replaced by the compact intent menu. */ }
-  private var stampPickerPage: some View { EmptyView() }
   private var stampPickerKinds: [CaptroStampKind] {
     [.club, .event, .meetup, .deal].filter { creationCapabilities?.structuredTypes.contains($0.backendPostType) == true }
   }
@@ -1841,66 +1837,8 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private func stampOptionsSheet(onClose: @escaping () -> Void) -> some View {
-    VStack(spacing: 0) {
-      HStack {
-        Text("Stamp")
-          .font(.system(size: 18, weight: .semibold))
-        Spacer()
-        Button { showPreview = true } label: {
-          Image(systemName: "eye")
-            .frame(width: 44, height: 44)
-        }
-        .accessibilityLabel("Preview post")
-        .help("Preview post")
-        Button("Done", action: onClose)
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.forest)
-          .frame(minHeight: 44)
-      }
-      ScrollView {
-        VStack(alignment: .leading, spacing: 12) {
-          TextField("Stamp title", text: $draft.title, axis: .vertical)
-            .font(.system(size: 21, weight: .semibold))
-            .lineLimit(1...3)
-          stampTypeMenu
-          postOptionRow(
-            icon: "mappin.circle",
-            title: selectedPlace?.displayName ?? "Add place",
-            subtitle: selectedPlace?.addressText,
-            action: { activePostDetailSheet = .location }
-          )
-          broadLocationOptionRow
-          if isEventStamp {
-            if selectedStampKind.commerceContentType == nil {
-              CaptroEventEditorFields(draft: $draft.eventDraft)
-                .padding(.vertical, 12)
-            } else {
-              CaptroEventEditorFields(draft: $draft.eventDraft, showsLegacyPriceAndAttendance: false)
-                .padding(.vertical, 12)
-            }
-          }
-          if selectedStampKind.commerceContentType != nil {
-            CaptroCommerceEditorFields(kind: selectedStampKind, draft: $draft.commerceDraft)
-              .padding(.bottom, 20)
-          }
-        }
-      }
-      .scrollDismissesKeyboard(.interactively)
-    }
-    .padding(.horizontal, 16)
-    .foregroundStyle(MIRATheme.Color.textPrimary)
-    .background(MIRATheme.Color.surface)
-  }
-
   private var isEventStamp: Bool {
     [.event, .meetup, .party, .ticket, .booking].contains(selectedStampKind)
-  }
-
-  private func openStampEditor() {
-    focusedPostDetailsField = nil
-    if hasSelectedStamp { isEditingPostDetails = true }
-    else { showStampPicker = true }
   }
 
   private var composerStampContent: CaptroStampContent {
@@ -1938,96 +1876,6 @@ public struct CreatePostNativeView: View {
         isEditingPostDetails = false
       }
     }
-  }
-
-  private var stampTypeMenu: some View {
-    Menu {
-      ForEach(CaptroStampKind.creationCases) { kind in
-        Button {
-          selectedStampKind = kind
-        } label: {
-          Label(kind.displayName, systemImage: selectedStampKind == kind ? "checkmark" : "seal")
-        }
-      }
-    } label: {
-      HStack(spacing: 12) {
-        Image(systemName: "seal")
-          .font(.system(size: 22, weight: .regular))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 28)
-
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Post stamp")
-            .font(.system(size: 16, weight: .regular))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-          Text(selectedStampKind.displayName)
-            .font(.system(size: 12, weight: .regular))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-        }
-
-        Spacer()
-
-        Image(systemName: "chevron.up.chevron.down")
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.82))
-      }
-      .frame(minHeight: 58)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .overlay(alignment: .bottom) {
-      Rectangle()
-        .fill(MIRATheme.Color.hairline.opacity(0.72))
-        .frame(height: 0.7)
-    }
-  }
-
-  private func handleSelectedPlaceChange(_ place: MIRAExactPostPlace?) {
-    cacheComposerDraft()
-  }
-
-  private var discoverCategoryMenu: some View {
-    Menu {
-      Button {
-        selectedDiscoverCategory = nil
-      } label: {
-        Label("Auto", systemImage: selectedDiscoverCategory == nil ? "checkmark" : "wand.and.stars")
-      }
-
-      ForEach(postComposerDiscoverCategories, id: \.self) { category in
-        Button {
-          selectedDiscoverCategory = category
-        } label: {
-          Label(categoryDisplayName(category), systemImage: selectedDiscoverCategory == category ? "checkmark" : "tag")
-        }
-      }
-    } label: {
-      HStack(spacing: 8) {
-        Image(systemName: "square.grid.2x2")
-          .font(.system(size: 13, weight: .bold))
-        Text("Discover")
-          .font(.system(size: 13, weight: .bold))
-        Text(selectedDiscoverCategory.map(categoryDisplayName) ?? "Auto")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.forest)
-        Image(systemName: "chevron.down")
-          .font(.system(size: 11, weight: .bold))
-      }
-      .foregroundStyle(MIRATheme.Color.textPrimary)
-      .padding(.horizontal, 12)
-      .frame(height: 36)
-      .background(MIRATheme.Color.surfaceSoft.opacity(0.78))
-      .clipShape(Capsule())
-      .contentShape(Capsule())
-    }
-    .buttonStyle(.plain)
-  }
-
-  private func categoryDisplayName(_ category: String) -> String {
-    category
-      .split(separator: "_")
-      .map { $0.prefix(1).uppercased() + String($0.dropFirst()) }
-      .joined(separator: " ")
   }
 
   private func postOptionRow(icon: String, title: String, subtitle: String? = nil, action: @escaping () -> Void) -> some View {
@@ -2291,7 +2139,7 @@ public struct CreatePostNativeView: View {
         mediaDimensions.append(await item.postMediaDimension())
       }
       let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
-      let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), tagLine]
+      let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), draft.structured ? tagLine : ""]
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")
       if voiceSubmissionId == nil, let voiceDraft {
@@ -2543,6 +2391,8 @@ public struct CreatePostNativeView: View {
     showBroadLocation = draft.showBroadLocation
     selectedDiscoverCategory = draft.selectedDiscoverCategory
     mediaItems = restoredMedia
+    self.draft.originalMediaItems = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft, snapshots: draft.originalMedia ?? [])
+    draftOriginalMediaSnapshots = draft.originalMedia ?? []
     voiceDraft = draft.voiceDraft?.restore()
     draftMediaSnapshots = draft.media
     isEditingPostDetails = false
@@ -2576,6 +2426,7 @@ public struct CreatePostNativeView: View {
     if includeMedia {
       do {
         mediaSnapshots = try await MIRAAppCacheStore.shared.storePostDraftMedia(mediaItems)
+        draftOriginalMediaSnapshots = try await MIRAAppCacheStore.shared.storePostDraftMedia(draft.originalMediaItems)
         draftMediaSnapshots = mediaSnapshots
       } catch {
         self.errorMessage = "Could not save this media draft. Keep Captro open and try again."
@@ -2605,6 +2456,7 @@ public struct CreatePostNativeView: View {
       showBroadLocation: showBroadLocation,
       isEditingPostDetails: isEditingPostDetails,
       media: mediaSnapshots,
+      originalMedia: draftOriginalMediaSnapshots,
       voiceDraft: voiceDraft.map(MIRAVoiceDraftSnapshot.init),
       uploadStatus: uploadStatus,
       errorMessage: errorMessage,
@@ -2628,7 +2480,6 @@ public struct CreatePostNativeView: View {
     mediaItems = []
     pickerItems = []
     composerUser = nil
-    showPreview = false
     isEditingPostDetails = false
     isLoadingMedia = false
     errorMessage = nil
@@ -5072,70 +4923,4 @@ private extension MIRAPickedMedia {
     }
     return MIRAMediaSizing.boundedFeedHeightToWidthRatio(image.size.height / image.size.width)
   }
-}
-
-private struct ComposerPreviewSheet: View {
-  let title: String
-  let bodyText: String
-  let mediaItems: [MIRAPickedMedia]
-  let voiceDraft: CaptroVoiceDraft?
-  let stampKind: CaptroStampKind
-  let stampContent: CaptroStampContent
-  let location: String?
-  let onEditStamp: () -> Void
-  let onClose: () -> Void
-  @State private var coverRatio = MIRAMediaSizing.feedPreviewRatio
-
-  var body: some View {
-    NavigationStack {
-      ScrollView {
-        VStack(alignment: .leading, spacing: MIRATheme.Space.md) {
-          if let first = mediaItems.first {
-            let width = UIScreen.main.bounds.width - 32
-            let height = width * coverRatio
-            ZStack(alignment: .bottomLeading) {
-              LocalMediaThumb(media: first, width: width, height: height, cornerRadius: 0)
-
-              CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: previewStampContent),
-                condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: width, mediaHeight: height),
-                onOpen: onEditStamp)
-                .frame(width: CaptroEditorialCardLayout.width(for: width), alignment: .leading)
-                .padding(CaptroEditorialCardLayout.inset)
-            }
-            .frame(width: width, height: height)
-          } else {
-            CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: previewStampContent),
-              onOpen: onEditStamp)
-              .frame(width: CaptroEditorialCardLayout.width(for: UIScreen.main.bounds.width - 32), alignment: .leading)
-          }
-          if let voiceDraft {
-            Label("Voice recording · \(String(format: "%d:%02d", Int(voiceDraft.duration) / 60, Int(voiceDraft.duration) % 60))", systemImage: "waveform")
-              .font(.subheadline)
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .padding(12)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .background(MIRATheme.Color.surfaceSoft)
-          }
-        }
-        .padding(MIRATheme.Space.md)
-      }
-      .background(MIRATheme.Color.appBackground)
-      .navigationTitle("Preview")
-      .task(id: mediaItems.first) {
-        guard let first = mediaItems.first else { return }
-        let dimensions = await first.postMediaDimension()
-        coverRatio = dimensions.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio
-      }
-      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done", action: onClose) } }
-    }
-  }
-
-  private var previewStampContent: CaptroStampContent { stampContent }
-
-  private static let previewDateFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.locale = Locale(identifier: "en_US_POSIX")
-    formatter.dateFormat = "MMM d"
-    return formatter
-  }()
 }

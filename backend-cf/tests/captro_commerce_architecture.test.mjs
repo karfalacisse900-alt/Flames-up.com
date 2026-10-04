@@ -178,7 +178,8 @@ test('booking inventory and QR passes are serialized and cannot be consumed twic
 });
 
 test('creator, Details and Me surfaces use the shared commerce API without changing Home paging', () => {
-  assert.match(composer, /CaptroCommerceEditorFields\(kind: selectedStampKind, draft: \$draft\.commerceDraft\)/);
+  assert.match(composer, /Picker\("Access", selection: \$draft\.commerceDraft\.isPaid\)/);
+  assert.match(composer, /commerceDraft\.validationError/);
   assert.match(composer, /commerce: commerceInput/);
   assert.match(details, /model\.performCommerceAction/);
   assert.match(details, /ConversationNativeView\([\s\S]*?groupId: destinationId/);

@@ -86,6 +86,7 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let showBroadLocation: Bool
   let isEditingPostDetails: Bool?
   let media: [MIRAPostDraftMediaSnapshot]
+  var originalMedia: [MIRAPostDraftMediaSnapshot]? = nil
   var voiceDraft: MIRAVoiceDraftSnapshot? = nil
   let uploadStatus: String
   let errorMessage: String?
@@ -326,7 +327,8 @@ actor MIRAAppCacheStore {
     // Never delete the prior media until the new snapshot can be read back.
     guard let verified = await loadPostDraft(), verified == draft,
           let directory = postDraftMediaDirectory() else { return }
-    let retained = Set(draft.media.map(\.localFilePath) + [draft.voiceDraft?.localFilePath].compactMap { $0 })
+    let retained = Set((draft.media + (draft.originalMedia ?? [])).map(\.localFilePath)
+      + [draft.voiceDraft?.localFilePath].compactMap { $0 })
     pruneStoredPostDraftMedia(in: directory, keeping: retained)
   }
 
@@ -366,8 +368,8 @@ actor MIRAAppCacheStore {
     }
   }
 
-  func loadPostDraftMedia(_ draft: MIRAPostDraftSnapshot) async -> [MIRAPickedMedia] {
-    draft.media.compactMap { item in
+  func loadPostDraftMedia(_ draft: MIRAPostDraftSnapshot, snapshots: [MIRAPostDraftMediaSnapshot]? = nil) async -> [MIRAPickedMedia] {
+    (snapshots ?? draft.media).compactMap { item in
       guard let data = try? Data(contentsOf: URL(fileURLWithPath: item.localFilePath)),
             let kind = MIRAPickedMediaKind(rawValue: item.kind)
       else { return nil }
