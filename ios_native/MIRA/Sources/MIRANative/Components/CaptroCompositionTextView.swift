@@ -22,7 +22,8 @@ struct CaptroCompositionTextView: UIViewRepresentable {
     context.coordinator.view = view
     // UIKit owns this editor's first responder, so its keyboard accessory belongs
     // here (a SwiftUI keyboard toolbar is not attached to this native text view).
-    let accessory = UIToolbar(frame: CGRect(x: 0, y: 0, width: 0, height: 44))
+    let accessory = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+    accessory.autoresizingMask = [.flexibleWidth]
     accessory.tintColor = UIColor(MIRATheme.Color.forest)
     let done = UIBarButtonItem(title: "Done", style: .done,
       target: context.coordinator, action: #selector(Coordinator.dismissKeyboard))
