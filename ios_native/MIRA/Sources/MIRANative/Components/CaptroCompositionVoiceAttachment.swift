@@ -51,7 +51,11 @@ struct CaptroCompositionVoiceAttachment: View {
       let next = try AVAudioPlayer(contentsOf: recording.fileURL)
       guard next.play() else { throw MIRAAPIError.emptyResponse }
       player = next; playing = true; error = nil
-    } catch { self.error = "Could not play this recording. You can replace it." }
+    } catch {
+      player = nil; playing = false
+      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      self.error = "Could not play this recording. You can replace it."
+    }
   }
   private func stop() {
     guard player != nil else { return }
