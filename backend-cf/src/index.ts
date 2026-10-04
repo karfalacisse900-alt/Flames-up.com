@@ -7033,7 +7033,8 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     user_full_name: author?.full_name,
     user_profile_image: author?.avatar_url,
     title: cleanText(row?.title, 180),
-    content: cleanMultilineText(row?.content, 4000),
+    content: cleanMultilineText(row?.content, normalizeCreationIntent((metadata as any).creation_intent)
+      ? String(row?.content || '').length : 4000),
     feed_ai_topics: sanitizeAutoCategoryTags((parseJsonObject((metadata as any).feed_ai) as any).topics).slice(0, 8),
     image: mediaUrls[0] || '',
     images: mediaUrls,
