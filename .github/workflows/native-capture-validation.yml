@@ -1,6 +1,11 @@
 name: Validate Native Capture
 on:
   workflow_dispatch:
+    inputs:
+      contract_only:
+        description: Verify deployed composer using disposable accounts and private posts only
+        type: boolean
+        default: false
   push:
     branches: [feature/recorded-voice-moderation]
     paths:
@@ -10,6 +15,7 @@ permissions:
   contents: read
 jobs:
   capture:
+    if: ${{ inputs.contract_only != true }}
     runs-on: macos-26
     timeout-minutes: 35
     steps:
@@ -55,3 +61,19 @@ jobs:
             ${{ runner.temp }}/small-composer-test.log
             ${{ runner.temp }}/capture-screenshots/
             ${{ runner.temp }}/small-composer-screenshots/
+  composer-contract:
+    if: ${{ inputs.contract_only == true }}
+    runs-on: ubuntu-latest
+    environment: captro-payments-live
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Verify real private creation, intent, audience, responses and retry
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node backend-cf/scripts/verify-composition.mjs
