@@ -737,6 +737,7 @@ private struct CaptroPostResponsePicker: View {
           Text("Add response").font(.system(size: 22, weight: .semibold))
           Spacer()
           Button("Done", action: onClose).font(.system(size: 15, weight: .semibold))
+            .frame(minWidth: 44, minHeight: 44)
         }
         .padding(.bottom, 8)
         if !showsPollEditor {
@@ -1262,7 +1263,7 @@ public struct CreatePostNativeView: View {
         .frame(minWidth: 60, minHeight: 44).contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .foregroundStyle(canPost && !isPosting ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+    .foregroundStyle(canPost && !isPosting && !isLoadingMedia ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
     .disabled(isPosting || isLoadingMedia || !canPost)
     .accessibilityIdentifier("composer.create")
   }
@@ -1350,7 +1351,9 @@ public struct CreatePostNativeView: View {
         onGallerySelection: { media in addGalleryMedia(media); showCamera = false })
         .ignoresSafeArea()
     }
-    .miraBottomSheet(isPresented: postDetailSheetPresentedBinding, preferredHeightFraction: postDetailSheetHeightFraction) { closeSheet in
+    .sheet(isPresented: postDetailSheetPresentedBinding) {
+      let closeSheet: () -> Void = { activePostDetailSheet = nil }
+      Group {
       switch activePostDetailSheet {
       case .location:
         PostLocationPickerSheet(api: api, selectedPlace: $draft.selectedPlace, onClose: closeSheet)
@@ -1387,6 +1390,9 @@ public struct CreatePostNativeView: View {
       case nil:
         Color.clear
       }
+      }
+      .presentationDetents([.fraction(postDetailSheetHeightFraction), .large])
+      .presentationDragIndicator(.visible)
     }
   }
 
@@ -1503,7 +1509,7 @@ public struct CreatePostNativeView: View {
         }.buttonStyle(.plain).accessibilityIdentifier("composer.object")
       }
       if let response = postResponse {
-        Button { activePostDetailSheet = .response } label: {
+        Button { writingFocused = false; activePostDetailSheet = .response } label: {
           VStack(alignment: .leading, spacing: 4) {
             Text(CaptroPostResponsePicker.title(for: response.type)).font(.subheadline.weight(.medium))
             if !response.options.isEmpty {
@@ -1605,6 +1611,7 @@ public struct CreatePostNativeView: View {
         Button("Camera", systemImage: "camera") { writingFocused = false; showCamera = true }
           .disabled(mediaItems.count >= 10 || isLoadingMedia)
         Button(postResponse == nil ? "Add response" : "Edit response", systemImage: "checkmark.circle") {
+          writingFocused = false
           activePostDetailSheet = .response
         }.disabled(!mediaItems.isEmpty || voiceDraft != nil)
       } label: {

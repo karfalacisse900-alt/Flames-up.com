@@ -43,12 +43,18 @@ struct CaptroCompositionVoiceAttachment: View {
     }
   }
   private func toggle() {
-    if playing { stop(); return }
+    if playing {
+      player?.pause(); playing = false
+      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      return
+    }
     do {
       MIRAPlaybackCoordinator.pauseAll(reason: "composition_voice_preview")
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
       try AVAudioSession.sharedInstance().setActive(true)
-      let next = try AVAudioPlayer(contentsOf: recording.fileURL)
+      let next: AVAudioPlayer
+      if let current = player { next = current }
+      else { next = try AVAudioPlayer(contentsOf: recording.fileURL) }
       guard next.play() else { throw MIRAAPIError.emptyResponse }
       player = next; playing = true; error = nil
     } catch {
