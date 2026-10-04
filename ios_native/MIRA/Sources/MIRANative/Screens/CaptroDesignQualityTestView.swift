@@ -22,7 +22,7 @@ public struct CaptroDesignQualityTestView: View {
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-search") {
         NavigationStack { SearchUsersNativeView(api: api) }
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-composer") {
-        NavigationStack { CreatePostNativeView(api: api) }
+        CreatePostNativeView(api: CaptroComposerTestAPI.make())
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-capture") {
         CaptroScanView(api: api)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-legal") {

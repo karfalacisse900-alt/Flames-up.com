@@ -1548,6 +1548,8 @@ public struct CreatePostBody: Encodable {
   public let voiceAudioId: String?
   public let visibility: String
   public let clientRequestId: String
+  public let creationIntent: String?
+  public let creationTime: String?
 
   public init(
     title: String,
@@ -1598,7 +1600,9 @@ public struct CreatePostBody: Encodable {
     audioDuration: Int? = nil,
     voiceAudioId: String? = nil,
     visibility: String,
-    clientRequestId: String
+    clientRequestId: String,
+    creationIntent: String? = nil,
+    creationTime: String? = nil
   ) {
     self.title = title
     self.content = content
@@ -1649,6 +1653,8 @@ public struct CreatePostBody: Encodable {
     self.voiceAudioId = voiceAudioId
     self.visibility = visibility
     self.clientRequestId = clientRequestId
+    self.creationIntent = creationIntent
+    self.creationTime = creationTime
   }
 }
 

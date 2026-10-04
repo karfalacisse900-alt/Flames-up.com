@@ -71,6 +71,10 @@ struct MIRAPostDraftSnapshot: Codable, Hashable {
   let stampType: String?
   var stampVariant: String? = nil
   var momentType: String? = nil
+  var creationIntent: String? = nil
+  var audience: String? = nil
+  var compositionTime: Date? = nil
+  var clientRequestID: String? = nil
   var eventDraft: CaptroEventDraft? = nil
   var commerceDraft: CaptroCommerceDraft? = nil
   var postResponse: CaptroPostResponseDraft? = nil
@@ -322,7 +326,7 @@ actor MIRAAppCacheStore {
     // Never delete the prior media until the new snapshot can be read back.
     guard let verified = await loadPostDraft(), verified == draft,
           let directory = postDraftMediaDirectory() else { return }
-    let retained = Set(draft.media.map(\.localFilePath))
+    let retained = Set(draft.media.map(\.localFilePath) + [draft.voiceDraft?.localFilePath].compactMap { $0 })
     pruneStoredPostDraftMedia(in: directory, keeping: retained)
   }
 
