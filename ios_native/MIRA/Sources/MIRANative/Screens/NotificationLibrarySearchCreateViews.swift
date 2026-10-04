@@ -1243,7 +1243,6 @@ public struct CreatePostNativeView: View {
     }
     .task {
       await preparePostComposerForDisplay()
-      if !draft.hasWriting { writingFocused = true }
     }
     .onChange(of: pickerItems) { _, newItems in
       guard !newItems.isEmpty else { return }

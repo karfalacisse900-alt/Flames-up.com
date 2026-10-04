@@ -8,12 +8,18 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertEqual(CaptroWritingIntent.allCases.count, 3)
     XCTAssertEqual(draft.intent.byline, "wants to")
     draft.bodyText = "A designer and developer."
+    let attachment = MIRAPickedMedia(data: Data([1, 2, 3]), kind: .image,
+      fileName: "draft-test.jpg", mimeType: "image/jpeg")
+    draft.mediaItems = [attachment]
+    draft.originalMediaItems = [attachment]
     draft.time = Date(timeIntervalSince1970: 1_800_000_000)
     let id = draft.requestID
     draft.intent = .concern
     XCTAssertNil(draft.submittedTime)
     XCTAssertNotNil(draft.time)
     XCTAssertEqual(draft.bodyText, "A designer and developer.")
+    XCTAssertEqual(draft.mediaItems, [attachment])
+    XCTAssertEqual(draft.originalMediaItems, [attachment])
     XCTAssertEqual(draft.requestID, id)
     draft.intent = .lookingFor
     XCTAssertNotNil(draft.submittedTime)
