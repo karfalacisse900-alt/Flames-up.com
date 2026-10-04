@@ -1261,9 +1261,7 @@ public struct CreatePostNativeView: View {
     .onChange(of: bodyText) { _, _ in voiceSubmissionId = nil; cacheComposerDraft() }
     .onChange(of: mediaItems) { _, _ in cacheComposerDraft(includeMedia: true) }
     .onChange(of: voiceDraft) { _, _ in cacheComposerDraft() }
-    .onChange(of: selectedPlace) { _, place in
-      handleSelectedPlaceChange(place)
-    }
+    .onChange(of: selectedPlace) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedStampKind) { _, kind in
       if kind.commerceContentType != nil {
         commerceDraft.enabled = true
