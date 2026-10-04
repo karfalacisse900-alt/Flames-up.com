@@ -274,6 +274,7 @@ final class LibraryNativeModel: ObservableObject {
 
 public struct LibraryNativeView: View {
   @StateObject private var model: LibraryNativeModel
+  @State private var queuedCommentReport: MIRAComment?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var singlePhotoPreviewPost: MIRAPost?
   @State private var isSinglePhotoPreviewPresented = false
@@ -326,17 +327,21 @@ public struct LibraryNativeView: View {
       isPresented: $isSinglePhotoPreviewPresented,
       preferredHeightFraction: 0.78,
       maxHeight: 720,
-      onDismissed: { singlePhotoPreviewPost = nil }
+      onDismissed: {
+        singlePhotoPreviewPost = nil
+        if let comment = queuedCommentReport {
+          queuedCommentReport = nil
+          presentReport(for: comment)
+        }
+      }
     ) { dismissPreview in
       if let post = singlePhotoPreviewPost {
         DiscoverSinglePhotoPreviewSheet(
           post: post,
           api: model.api,
           onReportComment: { comment in
+            queuedCommentReport = comment
             dismissPreview()
-            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-              presentReport(for: comment)
-            }
           }
         )
       } else {

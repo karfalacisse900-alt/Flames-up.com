@@ -3,7 +3,7 @@ import SwiftUI
 enum CaptroDetailStyle {
   static let ink = MIRATheme.Color.textPrimary
   static let secondary = MIRATheme.Color.textSecondary
-  static let accent = MIRATheme.Color.like
+  static let accent = MIRATheme.Color.forest
   static let divider = MIRATheme.Color.hairline
 }
 
@@ -145,7 +145,7 @@ struct CaptroPostDetailSections: View {
       } label: {
         HStack(spacing: 8) {
           if model.isUpdatingAttendance {
-            ProgressView().tint(.white)
+            ProgressView().tint(MIRATheme.Color.onPrimary)
           } else if post.detail?.event?.viewerGoing == true {
             Image(systemName: "checkmark")
           }
@@ -153,8 +153,8 @@ struct CaptroPostDetailSections: View {
             .font(.system(size: 14, weight: .semibold))
         }
         .frame(maxWidth: .infinity, minHeight: 48)
-        .foregroundStyle(attendanceEnabled ? Color.white : CaptroDetailStyle.secondary)
-        .background(attendanceEnabled ? CaptroDetailStyle.accent : Color.black.opacity(0.06))
+        .foregroundStyle(attendanceEnabled ? MIRATheme.Color.onPrimary : CaptroDetailStyle.secondary)
+        .background(attendanceEnabled ? CaptroDetailStyle.accent : MIRATheme.Color.surfaceSoft)
         .clipShape(RoundedRectangle(cornerRadius: 6))
       }
       .buttonStyle(.plain)
@@ -192,7 +192,7 @@ struct CaptroPostDetailSections: View {
           Label(post.viewerSaved ? "Saved Collection" : "Save Collection", systemImage: post.viewerSaved ? "bookmark.fill" : "bookmark")
             .font(.system(size: 12, weight: .semibold))
             .frame(maxWidth: .infinity, minHeight: 44)
-            .foregroundStyle(.white)
+            .foregroundStyle(MIRATheme.Color.onPrimary)
             .background(CaptroDetailStyle.accent)
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -228,7 +228,7 @@ struct CaptroPostDetailSections: View {
   private var fullDescription: some View {
     if !post.detailCaption.isEmpty {
       Text(post.detailCaption)
-        .font(.system(size: 15))
+        .font(.callout)
         .lineSpacing(4)
         .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)

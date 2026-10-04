@@ -204,6 +204,7 @@ private struct CaptroTextOnlyStampCard: View {
     .padding(20)
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 0.8))
+    .accessibilityElement(children: .contain)
     .accessibilityIdentifier("captro.textOnlyStamp")
   }
 }

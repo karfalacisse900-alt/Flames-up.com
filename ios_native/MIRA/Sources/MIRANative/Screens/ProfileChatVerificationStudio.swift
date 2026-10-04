@@ -1127,6 +1127,8 @@ final class UserProfileNativeModel: ObservableObject {
 }
 
 public struct UserProfileNativeView: View {
+  @State private var queuedCommentReport: MIRAComment?
+  @State private var queuedProfileReport = false
   @StateObject private var model: UserProfileNativeModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var reportTarget: MIRAReportTarget?
@@ -1205,17 +1207,21 @@ public struct UserProfileNativeView: View {
       isPresented: $isSinglePhotoPreviewPresented,
       preferredHeightFraction: 0.78,
       maxHeight: 720,
-      onDismissed: { singlePhotoPreviewPost = nil }
+      onDismissed: {
+        singlePhotoPreviewPost = nil
+        if let comment = queuedCommentReport {
+          queuedCommentReport = nil
+          presentReport(for: comment)
+        }
+      }
     ) { dismissPreview in
       if let post = singlePhotoPreviewPost {
         DiscoverSinglePhotoPreviewSheet(
           post: post,
           api: model.api,
           onReportComment: { comment in
+            queuedCommentReport = comment
             dismissPreview()
-            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-              presentReport(for: comment)
-            }
           }
         )
       } else {
@@ -1245,7 +1251,12 @@ public struct UserProfileNativeView: View {
         Color.clear
       }
     }
-    .miraActionModal(isPresented: $isProfileOptionsPresented) { dismissOptions in
+    .miraActionModal(isPresented: $isProfileOptionsPresented, onDismissed: {
+      if queuedProfileReport {
+        queuedProfileReport = false
+        presentProfileReport()
+      }
+    }) { dismissOptions in
       MIRAActionModalCard {
         MIRAActionModalButton(
           title: model.isBlocked ? "Unblock" : "Block",
@@ -1268,10 +1279,8 @@ public struct UserProfileNativeView: View {
           systemImage: "exclamationmark.triangle",
           staggerIndex: 1
         ) {
+          queuedProfileReport = true
           dismissOptions()
-          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
-            presentProfileReport()
-          }
         }
 
         if model.isFollowing {

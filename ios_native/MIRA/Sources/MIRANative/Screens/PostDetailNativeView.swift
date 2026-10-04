@@ -649,7 +649,6 @@ public struct PostDetailNativeView: View {
   public var body: some View {
     GeometryReader { layout in
       VStack(spacing: 0) {
-        detailHeader
         ScrollViewReader { scroll in
           ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -694,9 +693,12 @@ public struct PostDetailNativeView: View {
     .background(MIRATheme.Color.surface)
     .foregroundStyle(CaptroDetailStyle.ink)
     .tint(CaptroDetailStyle.accent)
-    .environment(\.colorScheme, .light)
     .miraScreenEnter(.push)
-    .toolbar(.hidden, for: .navigationBar)
+    .navigationTitle("Post")
+    .navigationBarTitleDisplayMode(.inline)
+    .navigationBarBackButtonHidden(false)
+    .toolbar(.visible, for: .navigationBar)
+    .toolbar { detailHeader }
     .miraHideTabBarOnAppear()
     .confirmationDialog("Post", isPresented: $isPostOptionsPresented, titleVisibility: .hidden) {
       if model.canEditEvent { Button("Edit event") { isEditingEvent = true } }
@@ -767,44 +769,21 @@ public struct PostDetailNativeView: View {
     }
   }
 
-  private var detailHeader: some View {
-    ZStack {
-      Text("Post")
-        .font(.system(size: 17, weight: .semibold))
-        .accessibilityAddTraits(.isHeader)
-      HStack(spacing: 0) {
-        Button { dismiss() } label: {
-          Image(systemName: "chevron.left")
-            .font(.system(size: 19, weight: .medium))
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .accessibilityLabel("Back")
-        Spacer(minLength: 0)
-        ShareLink(item: captroDetailShareURL(model.post)) {
-          Image(systemName: "square.and.arrow.up")
-            .font(.system(size: 19))
-            .frame(width: 44, height: 44)
-        }
-        .accessibilityLabel("Share post")
-        Button {
-          Task { await model.toggleSave() }
-        } label: {
-          Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
-            .font(.system(size: 19))
-            .foregroundStyle(model.post.viewerSaved ? CaptroDetailStyle.accent : CaptroDetailStyle.ink)
-            .frame(width: 44, height: 44)
-        }
-        .disabled(model.isSaving)
-        .accessibilityLabel(model.post.viewerSaved ? "Unsave post" : "Save post")
+  @ToolbarContentBuilder
+  private var detailHeader: some ToolbarContent {
+    ToolbarItemGroup(placement: .topBarTrailing) {
+      ShareLink(item: captroDetailShareURL(model.post)) {
+        Image(systemName: "square.and.arrow.up")
+          .frame(minWidth: 44, minHeight: 44)
       }
-      .buttonStyle(.plain)
-      .padding(.horizontal, 8)
-    }
-    .frame(height: 52)
-    .background(MIRATheme.Color.surface)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
+      .accessibilityLabel("Share post")
+      Button { Task { await model.toggleSave() } } label: {
+        Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
+          .foregroundStyle(model.post.viewerSaved ? CaptroDetailStyle.accent : CaptroDetailStyle.ink)
+          .frame(minWidth: 44, minHeight: 44)
+      }
+      .disabled(model.isSaving)
+      .accessibilityLabel(model.post.viewerSaved ? "Unsave post" : "Save post")
     }
   }
 

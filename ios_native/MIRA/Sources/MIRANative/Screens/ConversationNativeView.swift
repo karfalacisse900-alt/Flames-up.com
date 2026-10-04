@@ -481,6 +481,7 @@ public struct ConversationNativeView: View {
   @State private var showPinnedMessage = false
   @State private var showActivityDetails = false
   @State private var showProfileOptions = false
+  @State private var queuedProfileReport = false
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportMessage: MIRAMessage?
   @State private var isReportSheetPresented = false
@@ -584,14 +585,17 @@ public struct ConversationNativeView: View {
       guard scenePhase == .active else { return }
       await model.pollPresence()
     }
-    .miraActionModal(isPresented: $showProfileOptions) { dismissOptions in
+    .miraActionModal(isPresented: $showProfileOptions, onDismissed: {
+      if queuedProfileReport {
+        queuedProfileReport = false
+        presentProfileReport()
+      }
+    }) { dismissOptions in
       ChatProfileOptionsSheet(
         isGroup: model.isGroup,
         onReport: {
+          queuedProfileReport = true
           dismissOptions()
-          DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
-            presentProfileReport()
-          }
         },
         onBlock: {
           dismissOptions()

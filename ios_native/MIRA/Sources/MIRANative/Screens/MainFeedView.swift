@@ -889,6 +889,7 @@ public struct MainFeedView: View {
   @State private var postOptionsTarget: MIRAPost?
   @State private var isPostOptionsPresented = false
   @State private var queuedPostReport: MIRAPost?
+  @State private var queuedStoryReport: MIRAReportTarget?
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
@@ -976,7 +977,13 @@ public struct MainFeedView: View {
       .fullScreenCover(isPresented: $isShowingCreatePost) {
         CreatePostNativeView(api: model.api, onClose: { isShowingCreatePost = false })
       }
-      .fullScreenCover(item: $selectedStoryGroup) { group in
+      .fullScreenCover(item: $selectedStoryGroup, onDismiss: {
+        if let target = queuedStoryReport {
+          queuedStoryReport = nil
+          reportTarget = target
+          isReportSheetPresented = true
+        }
+      }) { group in
         let dismissStory = { selectedStoryGroup = nil }
         StoryViewerNativeView(
           group: group,
@@ -984,9 +991,8 @@ public struct MainFeedView: View {
           api: model.api,
           onClose: dismissStory,
           onReportStory: { target in
+            queuedStoryReport = target
             dismissStory()
-            reportTarget = target
-            isReportSheetPresented = true
           },
           onOpenLinkedPost: { postId in
             dismissStory()

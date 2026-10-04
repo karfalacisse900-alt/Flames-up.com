@@ -463,6 +463,9 @@ private struct DiscoverGalleryFilter: Identifiable {
 
 public struct DiscoverNativeView: View {
   @StateObject private var model: DiscoverNativeModel
+  @State private var queuedCommentReport: MIRAComment?
+  @State private var queuedPostReport: MIRAPost?
+  @State private var queuedStoryReport: MIRAReportTarget?
   @State private var selectedStoryGroup: MIRAStoryGroup?
   @State private var selectedGalleryFilter = "all"
   @State private var linkedStoryPost: MIRAPost?
@@ -536,7 +539,14 @@ public struct DiscoverNativeView: View {
         guard phase == .active, !model.posts.isEmpty else { return }
         Task { await model.refreshVisiblePosts() }
       }
-      .fullScreenCover(item: $selectedStoryGroup) { group in
+      .fullScreenCover(item: $selectedStoryGroup, onDismiss: {
+        if let target = queuedStoryReport {
+          queuedStoryReport = nil
+          reportSourcePost = nil
+          reportTarget = target
+          isReportSheetPresented = true
+        }
+      }) { group in
         let dismissStory = { selectedStoryGroup = nil }
         StoryViewerNativeView(
           group: group,
@@ -544,16 +554,8 @@ public struct DiscoverNativeView: View {
           api: model.api,
           onClose: dismissStory,
           onReportStory: { target in
+            queuedStoryReport = target
             dismissStory()
-            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.fullScreenClose) {
-              reportSourcePost = nil
-              reportTarget = target
-              DispatchQueue.main.async {
-                withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-                  isReportSheetPresented = true
-                }
-              }
-            }
           },
           onOpenLinkedPost: { postId in
             dismissStory()
@@ -569,17 +571,21 @@ public struct DiscoverNativeView: View {
         isPresented: $isSinglePhotoPreviewPresented,
         preferredHeightFraction: 0.78,
         maxHeight: 720,
-        onDismissed: { singlePhotoPreviewPost = nil }
+        onDismissed: {
+          singlePhotoPreviewPost = nil
+          if let comment = queuedCommentReport {
+            queuedCommentReport = nil
+            presentReport(for: comment)
+          }
+        }
       ) { dismissPreview in
         if let post = singlePhotoPreviewPost {
           DiscoverSinglePhotoPreviewSheet(
             post: post,
             api: model.api,
             onReportComment: { comment in
+              queuedCommentReport = comment
               dismissPreview()
-              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-                presentReport(for: comment)
-              }
             }
           )
         } else {
@@ -608,15 +614,19 @@ public struct DiscoverNativeView: View {
       }
       .miraActionModal(
         isPresented: $isDiscoverActionModalPresented,
-        onDismissed: { discoverActionPost = nil }
+        onDismissed: {
+          discoverActionPost = nil
+          if let post = queuedPostReport {
+            queuedPostReport = nil
+            presentReport(for: post)
+          }
+        }
       ) { dismissMenu in
         if let post = discoverActionPost {
           DiscoverPostActionModal(
             onReport: {
+              queuedPostReport = post
               dismissMenu()
-              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
-                presentReport(for: post)
-              }
             },
             onBlock: {
               dismissMenu()
@@ -918,6 +928,7 @@ private struct DiscoverPostActionModal: View {
 struct DiscoverSinglePhotoPreviewSheet: View {
   @StateObject private var model: PostDetailModel
   @State private var isCommentsPresented = false
+  @State private var queuedReport: MIRAComment?
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   let onReportComment: (MIRAComment) -> Void
 
@@ -976,16 +987,20 @@ struct DiscoverSinglePhotoPreviewSheet: View {
       .miraBottomSheet(
         isPresented: $isCommentsPresented,
         preferredHeightFraction: 0.72,
-        maxHeight: 640
+        maxHeight: 640,
+        onDismissed: {
+          if let comment = queuedReport {
+            queuedReport = nil
+            onReportComment(comment)
+          }
+        }
       ) { dismissComments in
         DiscoverDetailCommentsSheet(
           model: model,
           onClose: dismissComments,
           onReportComment: { comment in
+            queuedReport = comment
             dismissComments()
-            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-              onReportComment(comment)
-            }
           },
           onBlockCommentUser: { comment in
             dismissComments()
@@ -1159,6 +1174,8 @@ struct StoryViewerNativeView: View {
   @State private var activeGroupOverride: MIRAStoryGroup?
   @State private var currentUserId: String?
   @State private var showStoryMenu = false
+  private enum MenuDestination { case reply, viewers, report }
+  @State private var queuedMenuDestination: MenuDestination?
   @State private var showViewers = false
   @State private var showCaptureDetails = false
   @State private var showPrivateReply = false
@@ -1234,7 +1251,16 @@ struct StoryViewerNativeView: View {
         currentUserId = me?.id
       }
     }
-    .miraActionModal(isPresented: $showStoryMenu) { dismissMenu in
+    .miraActionModal(isPresented: $showStoryMenu, onDismissed: {
+      let destination = queuedMenuDestination
+      queuedMenuDestination = nil
+      switch destination {
+      case .reply: showPrivateReply = true
+      case .viewers: showViewers = true
+      case .report: reportCurrentStory()
+      case nil: break
+      }
+    }) { dismissMenu in
       MIRAActionModalCard {
         MIRAActionModalButton(title: "Capture details", systemImage: "info.circle", staggerIndex: 0) {
           dismissMenu()
@@ -1248,14 +1274,14 @@ struct StoryViewerNativeView: View {
         }
         if currentUserId != currentStory?.userId {
           MIRAActionModalButton(title: "Reply privately", systemImage: "bubble.left", staggerIndex: 0) {
+            queuedMenuDestination = .reply
             dismissMenu()
-            showPrivateReply = true
           }
         }
         if currentUserId == currentStory?.userId {
           MIRAActionModalButton(title: "View viewers", systemImage: "eye", staggerIndex: 0) {
+            queuedMenuDestination = .viewers
             dismissMenu()
-            showViewers = true
           }
           MIRAActionModalButton(title: "Delete story", systemImage: "trash", isDestructive: true, staggerIndex: 1) {
             dismissMenu()
@@ -1263,8 +1289,8 @@ struct StoryViewerNativeView: View {
           }
         } else {
           MIRAActionModalButton(title: "Report", systemImage: "exclamationmark.triangle", staggerIndex: 0) {
+            queuedMenuDestination = .report
             dismissMenu()
-            DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) { reportCurrentStory() }
           }
           MIRAActionModalButton(title: "Block", systemImage: "nosign", isDestructive: true, staggerIndex: 1) {
             dismissMenu()
