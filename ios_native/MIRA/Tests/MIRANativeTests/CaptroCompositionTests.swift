@@ -49,5 +49,15 @@ final class CaptroCompositionTests: XCTestCase {
     let restored = try JSONDecoder().decode(MIRAPostDraftSnapshot.self, from: JSONEncoder().encode(snapshot))
     XCTAssertEqual(restored, snapshot)
   }
+  func testTypingLimitNeverTruncatesRestoredTextOrComposition() {
+    XCTAssertFalse(CaptroCompositionTextView.permitsChange(from: String(repeating: "a", count: 500),
+      to: String(repeating: "a", count: 501)))
+    let restored = String(repeating: "a", count: 550)
+    XCTAssertFalse(CaptroCompositionTextView.permitsChange(from: restored, to: restored + "b"))
+    XCTAssertTrue(CaptroCompositionTextView.permitsChange(from: restored, to: String(restored.dropLast())))
+    XCTAssertTrue(CaptroCompositionTextView.permitsChange(from: String(repeating: "a", count: 499),
+      to: String(repeating: "a", count: 499) + "👨‍👩‍👧‍👦"))
+    XCTAssertTrue(CaptroCompositionTextView.permitsChange(from: "hello", to: restored, composing: true))
+  }
 }
 

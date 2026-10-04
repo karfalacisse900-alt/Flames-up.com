@@ -1439,7 +1439,8 @@ public struct CreatePostNativeView: View {
         compositionCard
         composerToolBar
         Text("\(bodyText.count)/500")
-          .font(.caption).monospacedDigit().foregroundStyle(MIRATheme.Color.textMuted)
+          .font(.caption).monospacedDigit()
+          .foregroundStyle(bodyText.count > 500 ? Color.red : MIRATheme.Color.textMuted)
           .frame(maxWidth: .infinity, alignment: .trailing)
           .accessibilityIdentifier("composer.count")
         if isPosting {

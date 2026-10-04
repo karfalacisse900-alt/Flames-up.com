@@ -8,6 +8,10 @@ struct CaptroCompositionTextView: UIViewRepresentable {
   var fontSize: CGFloat
   var placeholder: String
 
+  static func permitsChange(from current: String, to next: String, composing: Bool = false) -> Bool {
+    composing || next.count <= 500 || (current.count > 500 && next.count < current.count)
+  }
+
   func makeUIView(context: Context) -> UITextView {
     let view = UITextView()
     view.delegate = context.coordinator
@@ -84,11 +88,17 @@ struct CaptroCompositionTextView: UIViewRepresentable {
       view?.resignFirstResponder()
       parent.focused = false
     }
+    func textView(_ view: UITextView, shouldChangeTextIn range: NSRange, replacementText replacement: String) -> Bool {
+      let current = view.text ?? ""
+      guard NSMaxRange(range) <= (current as NSString).length else { return false }
+      let next = (current as NSString).replacingCharacters(in: range, with: replacement)
+      return CaptroCompositionTextView.permitsChange(from: current, to: next, composing: view.markedTextRange != nil)
+    }
     func textViewDidChange(_ view: UITextView) {
       guard view.markedTextRange == nil else { return }
-      let value = String(view.text.prefix(500))
-      if view.text != value { view.text = value }
-      parent.text = value
+      // Do not truncate restored text or an IME commit: preserve every word and
+      // let submission validation require shortening an over-limit composition.
+      parent.text = view.text
       view.invalidateIntrinsicContentSize()
       // Let the outer scroll view keep the native insertion point above the keyboard.
       DispatchQueue.main.async {
