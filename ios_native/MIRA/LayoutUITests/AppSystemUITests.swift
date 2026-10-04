@@ -50,7 +50,9 @@ final class AppSystemUITests: XCTestCase {
   }
   func testTextOnlyFeedKeepsNaturalCardHeightAndFullBodyInDetails() {
     let app = launch(["--captro-home-feed-visual-test", "--captro-visual-text", "--captro-quality-dark"])
-    let card = app.otherElements["captro.textOnlyStamp"].firstMatch
+    // SwiftUI exposes the independently tappable content and creator rows,
+    // rather than inventing an additional accessible container around them.
+    let card = app.buttons.matching(NSPredicate(format: "label CONTAINS 'A walk around the neighborhood'")).firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 15))
     XCTAssertTrue(app.staticTexts["Anyone up for a walk?"].exists)
     // The pager keeps the neighboring page in the accessibility tree.
@@ -62,9 +64,9 @@ final class AppSystemUITests: XCTestCase {
     let longTitle = app.staticTexts["Looking for people to build with"]
     XCTAssertTrue(longTitle.waitForExistence(timeout: 5))
     XCTAssertTrue(longTitle.isHittable)
-    let longCard = app.otherElements["captro.textOnlyStamp"].allElementsBoundByIndex.first { $0.frame.contains(longTitle.frame) }
-    XCTAssertNotNil(longCard)
-    XCTAssertGreaterThan(longCard?.frame.height ?? 0, shortHeight)
+    let longCard = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Looking for people to build with'")).firstMatch
+    XCTAssertTrue(longCard.isHittable)
+    XCTAssertGreaterThan(longCard.frame.height, shortHeight)
     capture(app, "home-text-long-dark")
     XCTAssertTrue(app.staticTexts["More. Open full post"].isHittable)
     longTitle.tap()
