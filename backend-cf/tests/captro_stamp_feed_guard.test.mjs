@@ -84,7 +84,9 @@ test('Event, Meetup and Deal use one restrained listing hierarchy without changi
   }
   assert.match(editorialCard, /if \[\.event, \.meetup, \.deal\]\.contains\(content\.type\)/);
   assert.match(editorialCard, /else \{\s*legacyCard/);
-  assert.match(listing, /MIRATheme\.Color\.like/);
+  assert.match(listing, /MIRATheme\.Color\.forest/);
+  assert.match(listing, /MIRATheme\.Color\.surface/);
+  assert.doesNotMatch(listing, /Color\.white|Color\.black/);
   assert.doesNotMatch(listing, /chipPink|LinearGradient|\.shadow\(/);
   const adapter = readIOS('Models/CaptroEditorialCardAdapter.swift');
   assert.match(adapter, /commerce\?\.scheduleLabel/);

@@ -65,8 +65,9 @@ struct CaptroEditorialOverlayCard: View {
   var showsBorder = true
   var onOpen: (() -> Void)? = nil
 
-  private let ink = Color(red: 0.07, green: 0.07, blue: 0.07)
-  private let chipPink = Color(red: 0.98, green: 0.80, blue: 0.88)
+  private var ink: Color { MIRATheme.Color.textPrimary }
+  @ScaledMetric(relativeTo: .callout) private var listingCaptionSize: CGFloat = 14
+  @ScaledMetric(relativeTo: .body) private var captionSize: CGFloat = 15
 
   @ViewBuilder var body: some View {
     if let onOpen {
@@ -119,14 +120,14 @@ struct CaptroEditorialOverlayCard: View {
       if let schedule = nonempty(content.scheduleText) {
         Text(schedule.uppercased())
           .font(.system(size: condensed ? 11 : 12, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.like)
+          .foregroundStyle(MIRATheme.Color.forest)
           .lineLimit(expanded ? nil : 2)
           .fixedSize(horizontal: false, vertical: true)
       }
       if let price = nonempty(content.priceText) {
         Text(price.uppercased())
           .font(.system(size: condensed ? 11 : 12, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.like)
+          .foregroundStyle(MIRATheme.Color.forest)
           .lineLimit(expanded ? nil : 2)
       }
       if let availability = nonempty(content.availabilityText) {
@@ -141,14 +142,15 @@ struct CaptroEditorialOverlayCard: View {
           .lineLimit(expanded ? nil : 2)
       }
       if let summary = nonempty(content.summaryText) {
-        CaptroMeasuredCaption(text: summary, size: condensed ? 11 : 12,
+        CaptroMeasuredCaption(text: summary, size: listingCaptionSize,
           maxLines: expanded ? nil : (feedCaptionMaxLines ?? (condensed ? 1 : 2)))
           .foregroundStyle(ink.opacity(0.72))
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(condensed ? 10 : 13)
-    .background(Color.white)
+    .foregroundStyle(ink)
+    .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(ink, lineWidth: showsBorder ? 1 : 0))
     .contentShape(Rectangle())
   }
@@ -183,7 +185,7 @@ struct CaptroEditorialOverlayCard: View {
           .lineLimit(1)
           .padding(.horizontal, 9)
           .padding(.vertical, condensed ? 4 : 5)
-          .background(chipPink)
+          .background(MIRATheme.Color.forestSoft)
           .overlay(Rectangle().strokeBorder(ink, lineWidth: 0.8))
           .padding(.top, condensed ? 0 : 2)
       }
@@ -196,7 +198,7 @@ struct CaptroEditorialOverlayCard: View {
       }
 
       if let description = nonempty(content.description), !condensed || content.type == .moment || expanded {
-        CaptroMeasuredCaption(text: description, size: 15,
+        CaptroMeasuredCaption(text: description, size: captionSize,
           maxLines: expanded ? nil : (feedCaptionMaxLines ?? (condensed ? 2 : 3)))
           .padding(.top, 2)
       }
@@ -216,7 +218,7 @@ struct CaptroEditorialOverlayCard: View {
     .foregroundStyle(ink)
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(condensed ? 11 : 14)
-    .background(Color.white)
+    .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(ink, lineWidth: showsBorder ? 1 : 0))
     .contentShape(Rectangle())
   }
