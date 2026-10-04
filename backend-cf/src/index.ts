@@ -1,5 +1,5 @@
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
-import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline } from './creation-intent';
+import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody } from './creation-intent';
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
@@ -7033,8 +7033,8 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     user_full_name: author?.full_name,
     user_profile_image: author?.avatar_url,
     title: cleanText(row?.title, 180),
-    content: cleanMultilineText(row?.content, normalizeCreationIntent((metadata as any).creation_intent)
-      ? String(row?.content || '').length : 4000),
+    content: normalizeCreationIntent((metadata as any).creation_intent)
+      ? compositionBody(row?.content) : cleanMultilineText(row?.content, 4000),
     feed_ai_topics: sanitizeAutoCategoryTags((parseJsonObject((metadata as any).feed_ai) as any).topics).slice(0, 8),
     image: mediaUrls[0] || '',
     images: mediaUrls,
@@ -13134,8 +13134,8 @@ function supabasePrimaryPostCreatePayload(input: any) {
     user_id: isUuidText(input.authUserId || input.userId),
     app_user_id: cleanText(input.userId, 120) || null,
     title: cleanText(input.postTitle, 180) || null,
-    content: cleanMultilineText(input.postContent, normalizeCreationIntent(input.creationIntent)
-      ? String(input.postContent || '').length : 4000),
+    content: normalizeCreationIntent(input.creationIntent)
+      ? compositionBody(input.postContent) : cleanMultilineText(input.postContent, 4000),
     visibility: normalizeVisibility(input.visibility),
     status: input.voiceAudioId ? 'pending_voice' : 'active',
     post_type: cleanText(input.postType || 'general', 80),
@@ -16769,7 +16769,7 @@ api.post('/posts', authMiddleware, async (c) => {
   }
   // Validated Swift-compatible character count already bounds this composition.
   // Do not cut a valid 500-character message at a legacy UTF-16 length limit.
-  let postContent = cleanMultilineText(b.content || b.text, creationIntent ? rawContent.length : 5000);
+  let postContent = creationIntent ? compositionBody(rawContent) : cleanMultilineText(b.content || b.text, 5000);
   let postTitle = creationIntent ? compositionHeadline(postContent) : cleanText(b.title || b.headline, 180);
   if (postTitle || postContent) {
     const safety = await screenCaptroText(c.env, [postTitle, postContent].filter(Boolean).join('\n'), {

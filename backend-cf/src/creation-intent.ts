@@ -9,6 +9,13 @@ export function compositionCharacterCount(value: string): number {
   return Array.from(new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(value)).length;
 }
 
+/** Plain native/React text, not HTML. Preserve punctuation; normalize only controls/newlines. */
+export function compositionBody(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
+    .replace(/\r\n?/g, '\n').trim();
+}
+
 export function normalizeCreationTime(value: unknown, intent: CreationIntent | null): string | null {
   if (!intent || intent === 'concern' || value == null || value === '') return null;
   if (typeof value !== 'string' || value.length > 40 || !/^\d{4}-\d{2}-\d{2}T/.test(value)) {

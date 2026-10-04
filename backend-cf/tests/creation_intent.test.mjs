@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline } from '../src/creation-intent.ts';
+import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody } from '../src/creation-intent.ts';
 import { readFileSync } from 'node:fs';
 
 test('only three writing intents; no Post category or phrase injection', () => {
@@ -23,6 +23,11 @@ test('Concern cannot submit a hidden schedule', () => {
   assert.equal(normalizeCreationTime('2026-10-05T12:00:00Z','looking_for'), '2026-10-05T12:00:00.000Z');
   assert.throws(() => normalizeCreationTime('tomorrow','want_to'));
 });
+test('ordinary messages retain punctuation and Unicode as plain text', () => {
+  const body = `I'm looking for a designer. "Let's build" <3\n${'👨‍👩‍👧‍👦'.repeat(10)}`;
+  assert.equal(compositionBody(body), body);
+  assert.equal(compositionBody(' hello\r\nworld\u0000 '), 'hello\nworld');
+});
 test('new metadata reuses existing columns, moderation, and idempotent publishing', () => {
   const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
   const create = source.slice(source.indexOf("api.post('/posts',"),source.indexOf("api.get('/posts/:postId'"));
@@ -31,8 +36,8 @@ test('new metadata reuses existing columns, moderation, and idempotent publishin
   assert.match(create, /compositionCharacterCount\(rawContent\) > 500/);
   assert.match(create, /visibility = normalizeVisibility\(b\.visibility\)/);
   assert.match(source, /creation_intent: normalizeCreationIntent\(input.creationIntent\)/);
-  assert.match(create, /creationIntent \? rawContent\.length : 5000/);
-  assert.match(source, /normalizeCreationIntent\(input.creationIntent\)\s*\? String\(input.postContent \|\| ''\)\.length : 4000/);
-  assert.match(source, /normalizeCreationIntent\(\(metadata as any\)\.creation_intent\)\s*\? String\(row\?\.content \|\| ''\)\.length : 4000/);
+  assert.match(create, /creationIntent \? compositionBody\(rawContent\)/);
+  assert.match(source, /normalizeCreationIntent\(input.creationIntent\)\s*\? compositionBody\(input.postContent\)/);
+  assert.match(source, /normalizeCreationIntent\(\(metadata as any\)\.creation_intent\)\s*\? compositionBody\(row\?\.content\)/);
 });
 

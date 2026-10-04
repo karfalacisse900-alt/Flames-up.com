@@ -38,7 +38,7 @@ try {
   const other = await session();
   const capabilities = await request(`${api}/posts/creation-capabilities`, { headers: owner });
   assert.deepEqual(new Set(capabilities.structured_types), new Set(['club', 'event', 'meetup', 'deal']));
-  const body = { title: '', content: 'Looking for people who enjoy photography.\nLet us explore the city together.',
+  const body = { title: '', content: 'Looking for people who enjoy photography.\nI\'m building Captro. "Let\'s create" <3',
     post_type: 'general', visibility: 'private', images: [], media_types: [],
     creation_intent: 'looking_for', creation_time: '2026-10-10T19:00:00Z',
     post_response: { type: 'poll', options: ['Saturday', 'Sunday'] },
