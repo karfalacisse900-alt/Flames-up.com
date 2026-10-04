@@ -888,6 +888,7 @@ public struct MainFeedView: View {
   @State private var detailPost: MIRAPost?
   @State private var postOptionsTarget: MIRAPost?
   @State private var isPostOptionsPresented = false
+  @State private var queuedPostReport: MIRAPost?
   @State private var reportTarget: MIRAReportTarget?
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
@@ -929,7 +930,13 @@ public struct MainFeedView: View {
       }
       .miraActionModal(
         isPresented: $isPostOptionsPresented,
-        onDismissed: { postOptionsTarget = nil }
+        onDismissed: {
+          postOptionsTarget = nil
+          if let post = queuedPostReport {
+            queuedPostReport = nil
+            presentReport(for: post)
+          }
+        }
       ) { dismiss in
         if let post = postOptionsTarget {
           MainFeedPostOptionsSheet(
@@ -1083,15 +1090,10 @@ public struct MainFeedView: View {
           Divider()
           Button("For you") { selectedFeedSection = .forYou }
           Button("Friends") { selectedFeedSection = .friends }
-          if let currentPost {
-            ShareLink(item: mainFeedShareURL(for: currentPost)) {
-              Label("Share current post", systemImage: "square.and.arrow.up")
-            }
-          }
         } label: {
           HStack(spacing: 4) {
             Text(selectedCity)
-              .font(.system(size: 18, weight: .bold))
+              .font(.headline)
               .lineLimit(1)
             Image(systemName: "chevron.down")
               .font(.system(size: 10, weight: .bold))
@@ -1108,7 +1110,7 @@ public struct MainFeedView: View {
           isShowingCreatePost = true
         } label: {
           Image(systemName: "square.and.pencil")
-            .font(.system(size: 22, weight: .medium))
+            .font(.title3.weight(.medium))
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .frame(width: 48, height: 52)
             .contentShape(Rectangle())
@@ -1316,7 +1318,8 @@ public struct MainFeedView: View {
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       pageSize: size,
       selectedMediaIndex: .constant(0),
-      showsCoverMediaOnly: true
+      showsCoverMediaOnly: true,
+      canRespond: !isGuest
     )
   }
 
@@ -1430,10 +1433,8 @@ public struct MainFeedView: View {
 
   private func reportPostFromOptions(_ post: MIRAPost, dismiss: @escaping () -> Void) {
     CaptroHaptics.medium()
+    queuedPostReport = post
     dismiss()
-    DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-      presentReport(for: post)
-    }
   }
 
   private func presentReport(for post: MIRAPost) {

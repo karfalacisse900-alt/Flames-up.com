@@ -1717,10 +1717,6 @@ public struct CreatePostNativeView: View {
   private var stampDetailsPage: some View {
     NavigationStack {
       Form {
-        Section {
-          CaptroEditorialOverlayCard(content: CaptroEditorialCardContent(draftStamp: composerStampContent))
-            .listRowBackground(Color.clear)
-        }
         switch selectedStampKind {
         case .social:
           Section {
@@ -1787,13 +1783,18 @@ public struct CreatePostNativeView: View {
         }
       }
       .scrollContentBackground(.hidden)
-      .background(MIRATheme.Color.surface)
+      .scrollDismissesKeyboard(.interactively)
+      .listSectionSpacing(16)
+      .environment(\.defaultMinListRowHeight, 52)
+      .background(MIRATheme.Color.appBackground)
+      .tint(MIRATheme.Color.forest)
       .navigationTitle(stampPickerDetails(for: selectedStampKind).title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
           Button { isEditingPostDetails = false } label: { Image(systemName: "chevron.left") }
-            .accessibilityLabel("Back to create post")
+            .frame(minWidth: 44, minHeight: 44)
+            .accessibilityLabel("Back to composition")
         }
         ToolbarItem(placement: .topBarTrailing) {
           Button("Done") { cacheComposerDraft(); isEditingPostDetails = false }

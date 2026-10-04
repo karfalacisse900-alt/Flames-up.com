@@ -43,7 +43,9 @@ test('text-only Stamp is outlined, measured, creator-configured and separate fro
   assert.match(feed, /outlinedStamp: true/);
   const card = feed.split('private struct CaptroTextOnlyStampCard')[1].split('private struct CaptroAuthorHeader')[0];
   assert.match(card, /CaptroMeasuredCaption/);
-  assert.match(card, /Rectangle\(\)\.strokeBorder\(Color.black/);
+  assert.match(card, /Rectangle\(\)\.strokeBorder\(MIRATheme.Color.textPrimary/);
+  assert.match(feed, /canRespond: canRespond/);
+  assert.doesNotMatch(feed, /canRespond: showsFeedControls/);
   assert.match(card, /if post\.response != nil/);
   assert.doesNotMatch(card, /Developers|Designers|Co-founders|gradient|shadow|minimumScaleFactor/);
 });

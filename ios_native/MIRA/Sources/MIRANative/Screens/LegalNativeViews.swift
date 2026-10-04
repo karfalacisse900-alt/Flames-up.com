@@ -116,7 +116,7 @@ struct ChatSafetyNativeView: View {
       .frame(maxWidth: .infinity)
       .textSelection(.enabled)
     }
-    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .background(MIRATheme.Color.surface.ignoresSafeArea())
     .navigationTitle("Chat safety")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
@@ -238,9 +238,9 @@ private struct PolicySection: View {
 
       ForEach(Array(section.paragraphs.enumerated()), id: \.offset) { _, paragraph in
         Text(paragraph)
-          .font(.body)
+          .font(.callout)
           .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineSpacing(2)
+          .lineSpacing(3)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.bottom, 3)
       }
@@ -253,9 +253,9 @@ private struct PolicySection: View {
                 .font(.body)
                 .foregroundStyle(MIRATheme.Color.textPrimary)
               Text(bullet)
-                .font(.body)
+                .font(.callout)
                 .foregroundStyle(MIRATheme.Color.textSecondary)
-                .lineSpacing(2)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
             }
           }

@@ -295,7 +295,9 @@ test('Profile payment cards use Stripe CustomerSheet and never store raw card da
   assert.match(payments, /billingDetailsCollectionConfiguration\.address = \.full/);
   assert.match(payments, /CustomerSessionClientSecret/);
   assert.doesNotMatch(payments, /TextField\([^\n]*(card number|cvc|expiration)/i);
-  assert.match(profile, /systemImage: "creditcard"[\s\S]{0,120}accessibilityLabel: "Payments"/);
+  assert.match(profile, /destination: SettingsNativeView/);
+  const settings = readFileSync(new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/SettingsNativeView.swift', import.meta.url), 'utf8');
+  assert.match(settings, /title: "Payments & payouts"[\s\S]{0,100}destination: paymentsDestination/);
 });
 
 test('native checkout displays saved buyer cards while payout remains debit-only', () => {

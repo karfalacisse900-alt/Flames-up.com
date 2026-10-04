@@ -371,7 +371,7 @@ public struct SettingsNativeView: View {
 
   private var settingsHero: some View {
     HStack(spacing: 12) {
-      RemoteAvatar(url: model.user?.profileImage, size: 48)
+      RemoteAvatar(url: model.user?.profileImage, size: 40)
       VStack(alignment: .leading, spacing: 2) {
         Text(model.user?.username.map { "@\(MIRAUsernameRules.normalized($0))" } ?? "Your profile")
           .font(.body.weight(.semibold))
@@ -1267,7 +1267,7 @@ struct SettingsDetailScaffold<Content: View>: View {
   var body: some View {
     List {
       content
-        .listRowBackground(MIRATheme.Color.surfaceSoft)
+        .listRowBackground(MIRATheme.Color.surface)
         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
     }
     .listStyle(.insetGrouped)
@@ -1296,7 +1296,14 @@ struct SettingsCard<Content: View>: View {
   }
 
   var body: some View {
-    Section { content } header: { Text(title).textCase(nil) }
+    Section { content } header: {
+      Text(title.uppercased())
+        .font(.caption.weight(.medium))
+        .tracking(0.8)
+        .foregroundStyle(MIRATheme.Color.textMuted)
+        .textCase(nil)
+        .accessibilityAddTraits(.isHeader)
+    }
   }
 }
 
@@ -1404,14 +1411,14 @@ private struct SettingsRowContent<Trailing: View>: View {
   var body: some View {
     HStack(spacing: MIRATheme.Space.sm) {
       Image(systemName: systemImage)
-        .font(.body.weight(.regular))
+        .font(.subheadline.weight(.regular))
         .foregroundStyle(tint)
         .frame(width: 24, height: 24)
         .accessibilityHidden(true)
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.body)
+          .font(.subheadline)
           .foregroundStyle(tint)
           .fixedSize(horizontal: false, vertical: true)
         if !subtitle.isEmpty {
@@ -1426,7 +1433,7 @@ private struct SettingsRowContent<Trailing: View>: View {
       trailing
     }
     .padding(.vertical, 4)
-    .frame(minHeight: 44)
+    .frame(minHeight: 52)
     .contentShape(Rectangle())
   }
 }

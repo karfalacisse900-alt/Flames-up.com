@@ -36,6 +36,7 @@ test('purchase recovery identifies ownership, inventory and seller setup without
   assert.doesNotMatch(purchaseFailureMessage('sk_live_private'), /sk_live_private/);
 });
 test('Profile restores payment access and invalid checkout has an explicit error', () => {
-  assert.match(native('Screens/ProfileChatVerificationStudio.swift'), /accessibilityLabel: "Payments"/);
+  assert.match(native('Screens/ProfileChatVerificationStudio.swift'), /destination: SettingsNativeView/);
+  assert.match(native('Screens/SettingsNativeView.swift'), /title: "Payments & payouts"[\s\S]{0,100}destination: paymentsDestination/);
   assert.match(native('Screens/CaptroPaymentSheetView.swift'), /Secure checkout could not be verified/);
 });

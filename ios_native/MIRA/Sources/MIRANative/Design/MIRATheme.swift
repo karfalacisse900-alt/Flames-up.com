@@ -4,7 +4,7 @@ import UIKit
 public enum MIRATheme {
   public enum Color {
     public static let appBackground = adaptive(
-      light: UIColor.white,
+      light: UIColor(red: 0.978, green: 0.974, blue: 0.959, alpha: 1),
       dark: UIColor(red: 0.000, green: 0.000, blue: 0.000, alpha: 1)
     )
     public static let launchBackground = adaptive(
@@ -53,7 +53,7 @@ public enum MIRATheme {
     )
     /// Foreground for controls filled with the adaptive primary accent.
     public static let onPrimary = adaptive(light: .white, dark: UIColor(white: 0.06, alpha: 1))
-    public static let accent = SwiftUI.Color(red: 0.365, green: 0.785, blue: 0.500)
+    public static let accent = forest
     public static let like = SwiftUI.Color(red: 0.875, green: 0.305, blue: 0.440)
     public static let divider = adaptive(
       light: UIColor.black.withAlphaComponent(0.055),
@@ -112,6 +112,10 @@ public extension View {
     self
       .background(MIRATheme.Color.surface)
       .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-      .modifier(MIRATheme.softShadow())
+      .overlay {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+          .strokeBorder(MIRATheme.Color.hairline, lineWidth: 0.5)
+          .allowsHitTesting(false)
+      }
   }
 }

@@ -358,6 +358,8 @@ private struct ProfileGridSkeleton: View {
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
   @State private var showEditProfile = false
+  @State private var queuedProfileReport: MIRAComment?
+  @State private var queuedPostDeletion = false
   @State private var singlePhotoPreviewPost: MIRAPost?
   @State private var isSinglePhotoPreviewPresented = false
   @State private var profilePostActionTarget: MIRAPost?
@@ -425,11 +427,6 @@ public struct ProfileNativeView: View {
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
           ProfileToolbarDestinationButton(
-            systemImage: "creditcard",
-            accessibilityLabel: "Payments",
-            destination: paymentsDestination.miraHideTabBarOnAppear()
-          )
-          ProfileToolbarDestinationButton(
             systemImage: "bubble.left.and.bubble.right",
             accessibilityLabel: "Chats",
             destination: chatDestination.miraHideTabBarOnAppear()
@@ -467,7 +464,8 @@ public struct ProfileNativeView: View {
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         Task { await model.applyEngagementUpdate(update) }
       }
-      .miraBottomSheet(isPresented: $showEditProfile, preferredHeightFraction: 0.86) { dismissEditProfile in
+      .fullScreenCover(isPresented: $showEditProfile) {
+        let dismissEditProfile = { showEditProfile = false }
         EditProfileNativeView(user: model.user, api: model.api, onCancel: dismissEditProfile) { updated in
           Task { @MainActor in
             authSession?.replaceUser(updated)
@@ -480,17 +478,21 @@ public struct ProfileNativeView: View {
         isPresented: $isSinglePhotoPreviewPresented,
         preferredHeightFraction: 0.78,
         maxHeight: 720,
-        onDismissed: { singlePhotoPreviewPost = nil }
+        onDismissed: {
+          singlePhotoPreviewPost = nil
+          if let comment = queuedProfileReport {
+            queuedProfileReport = nil
+            presentReport(for: comment)
+          }
+        }
       ) { dismissPreview in
         if let post = singlePhotoPreviewPost {
           DiscoverSinglePhotoPreviewSheet(
             post: post,
             api: model.api,
             onReportComment: { comment in
+              queuedProfileReport = comment
               dismissPreview()
-              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.sheetClose) {
-                presentReport(for: comment)
-              }
             }
           )
         } else {
@@ -516,7 +518,13 @@ public struct ProfileNativeView: View {
       }
       .miraActionModal(
         isPresented: $isProfilePostActionModalPresented,
-        onDismissed: { profilePostActionTarget = nil }
+        onDismissed: {
+          profilePostActionTarget = nil
+          if queuedPostDeletion {
+            queuedPostDeletion = false
+            isDeletePostConfirmationPresented = true
+          }
+        }
       ) { dismissMenu in
         if let post = profilePostActionTarget {
           ProfilePostOwnerActionModal(
@@ -534,11 +542,9 @@ public struct ProfileNativeView: View {
               Task { await model.updatePostVisibility(post, visibility: "private") }
             },
             onDelete: {
-              dismissMenu()
               deletePostTarget = post
-              DispatchQueue.main.asyncAfter(deadline: .now() + MIRATransitionTiming.actionModalClose) {
-                isDeletePostConfirmationPresented = true
-              }
+              queuedPostDeletion = true
+              dismissMenu()
             }
           )
         } else {
@@ -628,37 +634,72 @@ public struct ProfileNativeView: View {
   }
 
   private var profileHeader: some View {
-    VStack(spacing: MIRATheme.Space.md) {
-      RemoteAvatar(url: model.user?.profileImage, size: 92)
-      VStack(spacing: 4) {
-        Text(profileTitle)
-          .font(.title2.weight(.semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .multilineTextAlignment(.center)
-          .fixedSize(horizontal: false, vertical: true)
-        if let username = model.user?.username, !username.isEmpty {
-          Text("@\(username)")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
+    VStack(alignment: .leading, spacing: 20) {
+      HStack(alignment: .center, spacing: 16) {
+        RemoteAvatar(url: model.user?.profileImage, size: 64)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(profileTitle)
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .fixedSize(horizontal: false, vertical: true)
+          if let username = model.user?.username, !username.isEmpty {
+            Text("@\(MIRAUsernameRules.normalized(username))")
+              .font(.subheadline)
+              .foregroundStyle(MIRATheme.Color.textSecondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
+        Spacer(minLength: 0)
       }
-      HStack(spacing: MIRATheme.Space.xl) {
+      if let bio = model.user?.bio?.trimmingCharacters(in: .whitespacesAndNewlines), !bio.isEmpty {
+        Text(bio).font(.body).foregroundStyle(MIRATheme.Color.textSecondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      HStack(spacing: 12) {
         profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
         profileMetric("Followers", model.user?.followersCount ?? 0)
         profileMetric("Following", model.user?.followingCount ?? 0)
       }
-      MIRAPrimaryButton("Edit profile", systemImage: "pencil") {
-        CaptroHaptics.light()
-        withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-          showEditProfile = true
+      Button { showEditProfile = true } label: {
+        Text("Edit profile")
+          .font(.subheadline.weight(.medium))
+          .frame(maxWidth: .infinity, minHeight: 44)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 10))
+          .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(MIRATheme.Color.hairline, lineWidth: 0.5))
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("profile.edit")
+      VStack(spacing: 0) {
+        NavigationLink(destination: ProfileActivityNativeView(model: model).miraHideTabBarOnAppear()) {
+          profileUtility("Your activity", symbol: "list.bullet.rectangle")
+        }
+        Divider().overlay(MIRATheme.Color.hairline)
+        NavigationLink(destination: LibraryNativeView(api: model.api)) {
+          profileUtility("Saved items", symbol: "bookmark")
         }
       }
+      .buttonStyle(.plain)
+      Text("Creations")
+        .font(.headline).foregroundStyle(MIRATheme.Color.textPrimary)
+        .accessibilityAddTraits(.isHeader)
     }
-    .padding(MIRATheme.Space.xl)
-    .frame(maxWidth: .infinity)
-    .miraCardSurface()
-    .padding(.horizontal, MIRATheme.Space.md)
+    .padding(.horizontal, 20)
+    .padding(.top, 12)
+    .padding(.bottom, 4)
+    .frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  private func profileUtility(_ title: String, symbol: String) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: symbol).font(.subheadline).frame(width: 20).accessibilityHidden(true)
+      Text(title).font(.subheadline)
+      Spacer(minLength: 8)
+      Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+        .foregroundStyle(MIRATheme.Color.textMuted).accessibilityHidden(true)
+    }
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .frame(minHeight: 48).contentShape(Rectangle())
   }
 
   private var paymentsDestination: CaptroPaymentsView {
@@ -676,9 +717,12 @@ public struct ProfileNativeView: View {
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {
     VStack(spacing: 4) {
-      Text("\(value)").font(.system(size: 18, weight: .semibold))
-      Text(label).font(.system(size: 12, weight: .medium)).foregroundStyle(MIRATheme.Color.textMuted)
+      Text("\(value)").font(.headline).monospacedDigit()
+      Text(label).font(.caption).foregroundStyle(MIRATheme.Color.textMuted)
     }
+    .frame(maxWidth: .infinity)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("\(value) \(label.lowercased())")
   }
 
   private var profileTitle: String {
@@ -1672,6 +1716,7 @@ struct EditProfileNativeView: View {
 
   @Environment(\.dismiss) private var dismiss
   @State private var fullName: String
+  @State private var originalFullName: String
   @State private var username: String
   @State private var profileImage: String?
   @State private var originalUsername: String
@@ -1679,6 +1724,7 @@ struct EditProfileNativeView: View {
   @State private var pickedImageData: Data?
   @State private var pickedUIImage: UIImage?
   @State private var isSaving = false
+  @State private var confirmsDiscard = false
   @State private var didHydrateMissingUser = false
   @State private var errorMessage: String?
 
@@ -1688,6 +1734,7 @@ struct EditProfileNativeView: View {
     self.onCancel = onCancel
     self.onSaved = onSaved
     _fullName = State(initialValue: user?.fullName ?? "")
+    _originalFullName = State(initialValue: user?.fullName ?? "")
     _username = State(initialValue: user?.username ?? "")
     _profileImage = State(initialValue: user?.profileImage)
     _originalUsername = State(initialValue: MIRAUsernameRules.normalized(user?.username))
@@ -1697,8 +1744,6 @@ struct EditProfileNativeView: View {
     NavigationStack {
       ScrollView {
         VStack(spacing: MIRATheme.Space.xl) {
-          editSheetHandle
-
           VStack(spacing: MIRATheme.Space.md) {
             profilePhoto
             PhotosPicker(selection: $pickerItem, matching: .images) {
@@ -1740,7 +1785,7 @@ struct EditProfileNativeView: View {
         ToolbarItem(placement: .topBarLeading) {
           Button("Cancel") {
             CaptroHaptics.light()
-            close()
+            if hasChanges { confirmsDiscard = true } else { close() }
           }
             .disabled(isSaving)
         }
@@ -1755,7 +1800,7 @@ struct EditProfileNativeView: View {
               Text("Save").fontWeight(.semibold)
             }
           }
-          .disabled(isSaving)
+          .disabled(isSaving || !hasChanges)
         }
       }
       .onChange(of: pickerItem) { item in
@@ -1774,14 +1819,17 @@ struct EditProfileNativeView: View {
       }
       .task { await hydrateMissingUserIfNeeded() }
     }
+    .interactiveDismissDisabled(isSaving || hasChanges)
+    .alert("Discard profile changes?", isPresented: $confirmsDiscard) {
+      Button("Discard changes", role: .destructive) { close() }
+      Button("Keep editing", role: .cancel) {}
+    }
   }
 
-  private var editSheetHandle: some View {
-    Capsule()
-      .fill(MIRATheme.Color.textMuted.opacity(0.22))
-      .frame(width: 42, height: 5)
-      .padding(.top, 2)
-      .accessibilityHidden(true)
+  private var hasChanges: Bool {
+    fullName != originalFullName
+      || MIRAUsernameRules.normalized(username) != originalUsername
+      || pickedImageData != nil
   }
 
   @ViewBuilder
@@ -1803,14 +1851,15 @@ struct EditProfileNativeView: View {
         .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textMuted)
       TextField(placeholder, text: text)
-        .font(.system(size: 17, weight: .semibold))
+        .font(.body)
         .textInputAutocapitalization(title == "Username" ? .never : .words)
         .autocorrectionDisabled(title == "Username")
         .padding(.horizontal, MIRATheme.Space.md)
-        .frame(height: 52)
+        .padding(.vertical, 12)
+        .frame(minHeight: 48)
         .background(MIRATheme.Color.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(MIRATheme.Color.hairline, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(MIRATheme.Color.hairline, lineWidth: 0.5))
     }
   }
 
@@ -1922,6 +1971,7 @@ struct EditProfileNativeView: View {
     guard user == nil, !didHydrateMissingUser else { return }
     didHydrateMissingUser = true
     guard let me: MIRAUser = try? await api.get("/auth/me") else { return }
+    originalFullName = me.fullName ?? ""
     if fullName.isEmpty {
       fullName = me.fullName ?? ""
     }

@@ -67,6 +67,8 @@ test('composer respects the keyboard and exposes editable stamps, not just hidde
   assert.match(composer, /DatePicker\("Starts", selection: \$draft\.eventDraft\.startsAt/);
   assert.match(composer, /eventDraft\.validationError/);
   assert.match(composer, /event: isEventStamp \? eventDraft.input : nil/);
-  assert.match(composer, /CaptroEditorialOverlayCard\(content: CaptroEditorialCardContent\(draftStamp: composerStampContent\)/);
+  assert.match(composer, /CaptroCompositionTextView/);
+  assert.match(composer, /accessibilityIdentifier\("composer.object"\)/);
+  assert.doesNotMatch(composer, /CaptroEditorialOverlayCard\(content: CaptroEditorialCardContent\(draftStamp: composerStampContent\)/);
   assert.match(source('Screens/PostDetailNativeView.swift'), /isMuted = false/);
 });

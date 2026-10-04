@@ -24,6 +24,9 @@ private final class CaptroComposerTestProtocol: URLProtocol {
     } else if path.hasSuffix("/posts/creation-capabilities") {
       body = authorized ? #"{"structured_types":["club","event","meetup","deal"]}"# : #"{"structured_types":[]}"#
       status = 200
+    } else if path.hasSuffix("/users/composer-ui-test/posts") || path.hasSuffix("/statuses") {
+      body = "[]"
+      status = 200
     } else {
       // Fail submissions honestly to exercise draft retention and retries, never fake success.
       body = #"{"detail":"Test publishing failure. Your draft is still here.","code":"TEST_PUBLISH_FAILURE"}"#

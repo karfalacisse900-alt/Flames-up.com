@@ -32,6 +32,8 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/CaptureBuild" -resultBundlePath "$RUNNER_TEMP/Capture.xcresult" \
             -only-testing:CaptroLayoutUITests/DesignQualityTests/testCaptureHubHasThreeClearModes \
             -only-testing:CaptroLayoutUITests/ComposerCreationTests \
+            -only-testing:CaptroLayoutUITests/AppSystemUITests \
+            -only-testing:CaptroLayoutUITests/DesignQualityTests/testControlsAndSheetScrolling \
             -only-testing:CaptroStampTests/CaptroCompositionTests \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/capture-build.log"
       - name: Test creation on a smaller iPhone
@@ -44,6 +46,8 @@ jobs:
             -destination "platform=iOS Simulator,id=$device" \
             -derivedDataPath "$RUNNER_TEMP/CaptureBuild" -resultBundlePath "$RUNNER_TEMP/SmallComposer.xcresult" \
             -only-testing:CaptroLayoutUITests/ComposerCreationTests \
+            -only-testing:CaptroLayoutUITests/AppSystemUITests \
+            -only-testing:CaptroLayoutUITests/DesignQualityTests/testControlsAndSheetScrolling \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/small-composer-test.log"
       - name: Export screenshots
         if: always()

@@ -68,18 +68,23 @@ public enum CaptroMotion {
 
 public enum CaptroHaptics {
   public static func light() {
+    DispatchQueue.main.async { UISelectionFeedbackGenerator().selectionChanged() }
   }
 
   public static func medium() {
+    DispatchQueue.main.async { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
   }
 
   public static func success() {
+    DispatchQueue.main.async { UINotificationFeedbackGenerator().notificationOccurred(.success) }
   }
 
   public static func warning() {
+    DispatchQueue.main.async { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
   }
 
   public static func error() {
+    DispatchQueue.main.async { UINotificationFeedbackGenerator().notificationOccurred(.error) }
   }
 }
 
@@ -93,14 +98,6 @@ public enum MIRATransitionTiming {
   public static let fullScreenClose: Double = CaptroMotion.Duration.fullScreenClose
   public static let actionModalOpen: Double = CaptroMotion.Duration.actionModalOpen
   public static let actionModalClose: Double = CaptroMotion.Duration.actionModalClose
-}
-
-private enum MIRAPresentationGeometry {
-  static func sheetHeight(for proxy: GeometryProxy, preferredFraction: CGFloat, maxHeight: CGFloat) -> CGFloat {
-    let available = max(0, proxy.size.height - 10)
-    let preferred = proxy.size.height * preferredFraction
-    return min(max(340, preferred), min(maxHeight, available))
-  }
 }
 
 public extension View {
@@ -203,16 +200,10 @@ public struct MIRAActionModalCard<Content: View>: View {
   }
 
   public var body: some View {
-    VStack(spacing: 7) {
+    VStack(spacing: 0) {
       content
     }
-    .padding(10)
-    .frame(maxWidth: 400)
-    .background {
-      RoundedRectangle(cornerRadius: 24, style: .continuous)
-        .fill(MIRATheme.Color.surface)
-    }
-    .shadow(color: .black.opacity(0.09), radius: 14, x: 0, y: 7)
+    .frame(maxWidth: .infinity)
     .accessibilityElement(children: .contain)
   }
 }
@@ -297,7 +288,7 @@ public struct MIRAActionModalPillLabel: View {
     .padding(.horizontal, 14)
     .padding(.vertical, 12)
     .frame(maxWidth: .infinity, minHeight: 48)
-    .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+    .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5) }
     .contentShape(Rectangle())
   }
 }
@@ -329,134 +320,47 @@ private struct MIRAHideTabBarModifier: ViewModifier {
   }
 }
 
+/// Small actions use one native sheet. Content is measured, not a floating
+/// panel with a competing drag recognizer over the scroll view.
 private struct MIRAPremiumActionModalModifier<ModalContent: View>: ViewModifier {
   @Binding var isPresented: Bool
   let onDismissed: (() -> Void)?
   let modalContent: (_ dismiss: @escaping () -> Void) -> ModalContent
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var isMounted = false
-  @State private var isVisible = false
-  @GestureState private var dragOffset: CGFloat = 0
+  @State private var contentHeight: CGFloat = 280
 
   func body(content: Content) -> some View {
-    content
-      .accessibilityHidden(isMounted)
-      .overlay {
-        if isMounted {
-          GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-              Rectangle()
-                .fill(.ultraThinMaterial)
-                .opacity(isVisible ? 0.88 : 0)
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-
-              Color.black
-                .opacity(isVisible ? 0.24 : 0)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture(perform: dismiss)
-
-              modalContent(dismiss)
-                .frame(maxWidth: 400)
-                .padding(.horizontal, 20)
-                .padding(.bottom, max(18, proxy.safeAreaInsets.bottom + 12))
-                .opacity(isVisible ? 1 : 0)
-                .scaleEffect(reduceMotion || isVisible ? 1 : CaptroMotion.Scale.actionModalInitial)
-                .offset(y: modalOffset(proxy: proxy))
-                .compositingGroup()
-                .simultaneousGesture(actionModalDragGesture(threshold: 78))
+    content.sheet(isPresented: $isPresented, onDismiss: onDismissed) {
+      ScrollView {
+        modalContent { isPresented = false }
+          .frame(maxWidth: 560)
+          .frame(maxWidth: .infinity)
+          .background {
+            GeometryReader { proxy in
+              Color.clear.preference(key: CaptroActionSheetHeight.self, value: proxy.size.height)
             }
-            .frame(width: proxy.size.width, height: proxy.size.height)
           }
-          .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
-          .zIndex(920)
-          .allowsHitTesting(isMounted)
-          .accessibilityAddTraits(.isModal)
-          .accessibilityAction(.escape) { dismiss() }
-        }
+          .padding(.horizontal, 16)
+          .padding(.top, 20)
+          .padding(.bottom, 16)
       }
-      .onAppear {
-        if isPresented {
-          present()
-        }
+      .onPreferenceChange(CaptroActionSheetHeight.self) { height in
+        guard height.isFinite, height > 0 else { return }
+        contentHeight = height + 36
       }
-      .onChange(of: isPresented) { _, newValue in
-        newValue ? present() : dismissFromExternalState()
-      }
-      .animation(animation, value: isVisible)
-      .animation(animation, value: dragOffset)
-  }
-
-  private var animation: Animation {
-    CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)
-  }
-
-  private var dismissDelay: Double {
-    reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.actionModalClose
-  }
-
-  private func modalOffset(proxy: GeometryProxy) -> CGFloat {
-    guard isVisible else { return 28 }
-    return max(0, dragOffset)
-  }
-
-  private func actionModalDragGesture(threshold: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 14, coordinateSpace: .global)
-      .updating($dragOffset) { value, state, _ in
-        guard value.translation.height > 0, abs(value.translation.height) > abs(value.translation.width) else { return }
-        state = value.translation.height
-      }
-      .onEnded { value in
-        let shouldDismiss = value.translation.height > threshold || value.predictedEndTranslation.height > threshold * 1.45
-        if shouldDismiss {
-          dismiss()
-        }
-      }
-  }
-
-  private func present() {
-    guard !isMounted else {
-      if !isVisible {
-        withAnimation(animation) { isVisible = true }
-      }
-      return
-    }
-    isMounted = true
-    MIRAApplePerformanceLogger.event("modal_open", detail: "premium_action")
-    DispatchQueue.main.async {
-      withAnimation(animation) {
-        isVisible = true
-      }
+      .presentationDetents([.height(min(560, max(160, contentHeight))), .large])
+      .presentationDragIndicator(.visible)
+      .presentationBackground(MIRATheme.Color.surface)
+      .tint(MIRATheme.Color.forest)
+      .scrollDismissesKeyboard(.interactively)
+      .onAppear { MIRAApplePerformanceLogger.event("modal_open", detail: "native_actions") }
+      .onDisappear { MIRAApplePerformanceLogger.event("modal_close", detail: "native_actions") }
     }
   }
+}
 
-  private func dismiss() {
-    guard isMounted, isVisible else { return }
-    MIRAApplePerformanceLogger.event("modal_close", detail: "premium_action")
-    withAnimation(animation) {
-      isVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard isMounted, !isVisible else { return }
-      isPresented = false
-      isMounted = false
-      onDismissed?()
-    }
-  }
-
-  private func dismissFromExternalState() {
-    guard isMounted else { return }
-    MIRAApplePerformanceLogger.event("modal_close", detail: "premium_action_external")
-    withAnimation(animation) {
-      isVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard isMounted, !isPresented, !isVisible else { return }
-      isMounted = false
-      onDismissed?()
-    }
-  }
+private struct CaptroActionSheetHeight: PreferenceKey {
+  static var defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 @MainActor
@@ -510,6 +414,9 @@ private extension UIViewController {
   }
 }
 
+/// Compatibility entry point for existing search/edit flows. UIKit owns
+/// safe areas, keyboard avoidance, VoiceOver modality and interactive dismissal.
+/// Existing callers retain their dismiss closure and exactly-once cleanup.
 private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
   @Binding var isPresented: Bool
   let preferredHeightFraction: CGFloat
@@ -517,173 +424,16 @@ private struct MIRABottomSheetModifier<Sheet: View>: ViewModifier {
   let scrimOpacity: Double
   let onDismissed: (() -> Void)?
   let sheet: (_ dismiss: @escaping () -> Void) -> Sheet
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var isMounted = false
-  @State private var isVisible = false
-  @State private var isContentVisible = false
-  @GestureState private var dragOffset: CGFloat = 0
 
   func body(content: Content) -> some View {
-    content
-      .accessibilityHidden(isMounted)
-      .overlay {
-        if isMounted {
-          GeometryReader { proxy in
-            let height = MIRAPresentationGeometry.sheetHeight(
-              for: proxy,
-              preferredFraction: preferredHeightFraction,
-              maxHeight: maxHeight
-            )
-            ZStack(alignment: .bottom) {
-              Color.black
-                .opacity(isVisible ? scrimOpacity : 0)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture(perform: dismiss)
-
-              ZStack(alignment: .top) {
-                MIRATheme.Color.surface
-
-                sheet(dismiss)
-                  .opacity(isContentVisible ? 1 : 0)
-                  .offset(y: isContentVisible || reduceMotion ? 0 : 10)
-              }
-                .frame(maxWidth: .infinity)
-                .frame(height: height)
-                .background(MIRATheme.Color.surface)
-                .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous))
-                .overlay(alignment: .top) {
-                  RoundedRectangle(cornerRadius: MIRATheme.Radius.sheet, style: .continuous)
-                    .strokeBorder(Color.white.opacity(isVisible ? 0.12 : 0), lineWidth: 0.6)
-                    .allowsHitTesting(false)
-                }
-                .shadow(color: .black.opacity(isVisible ? 0.18 : 0), radius: 26, x: 0, y: -8)
-                .padding(.horizontal, proxy.size.width > 700 ? 76 : 0)
-                // Scrolling the sheet must not dismiss it. Only its handle owns the drag.
-                .overlay(alignment: .top) {
-                  Capsule()
-                    .fill(MIRATheme.Color.textMuted.opacity(0.5))
-                    .frame(width: 36, height: 4)
-                    .frame(width: 80, height: 24)
-                    .contentShape(Rectangle())
-                    .gesture(sheetDragGesture(threshold: min(180, height * 0.24)))
-                    .accessibilityLabel("Dismiss sheet")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction { dismiss() }
-                }
-                .offset(y: sheetOffset(height: height, safeAreaBottom: proxy.safeAreaInsets.bottom))
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-          }
-          .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
-          .zIndex(900)
-          .allowsHitTesting(isMounted)
-          .accessibilityAddTraits(.isModal)
-          .accessibilityAction(.escape) { dismiss() }
-        }
-      }
-      .onAppear {
-        if isPresented {
-          present()
-        }
-      }
-      .onChange(of: isPresented) { _, newValue in
-        newValue ? present() : dismissFromExternalState()
-      }
-      .animation(sheetAnimation, value: isVisible)
-      .animation(sheetContentAnimation, value: isContentVisible)
-      .animation(sheetAnimation, value: dragOffset)
-  }
-
-  private var sheetAnimation: Animation {
-    CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)
-  }
-
-  private var sheetContentAnimation: Animation {
-    reduceMotion
-      ? .easeOut(duration: CaptroMotion.Duration.reduced)
-      : .easeOut(duration: 0.18)
-  }
-
-  private var dismissDelay: Double {
-    reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.bottomSheetClose
-  }
-
-  private func sheetOffset(height: CGFloat, safeAreaBottom: CGFloat) -> CGFloat {
-    guard isVisible else { return height + safeAreaBottom + 56 }
-    return max(0, dragOffset)
-  }
-
-  private func sheetDragGesture(threshold: CGFloat) -> some Gesture {
-    DragGesture(minimumDistance: 18, coordinateSpace: .global)
-      .updating($dragOffset) { value, state, _ in
-        guard value.translation.height > 0, abs(value.translation.height) > abs(value.translation.width) else { return }
-        state = value.translation.height
-      }
-      .onEnded { value in
-        let downward = value.translation.height > threshold || value.predictedEndTranslation.height > threshold * 1.35
-        if downward {
-          dismiss()
-        }
-      }
-  }
-
-  private func present() {
-    guard !isMounted else {
-      if !isVisible {
-        isContentVisible = false
-        withAnimation(sheetAnimation) { isVisible = true }
-        revealSheetContent()
-      }
-      return
-    }
-    isMounted = true
-    isContentVisible = false
-    MIRAApplePerformanceLogger.event("modal_open", detail: "bottom_sheet")
-    DispatchQueue.main.async {
-      withAnimation(sheetAnimation) {
-        isVisible = true
-      }
-      revealSheetContent()
-    }
-  }
-
-  private func dismiss() {
-    guard isMounted, isVisible else { return }
-    MIRAApplePerformanceLogger.event("modal_close", detail: "bottom_sheet")
-    withAnimation(sheetAnimation) {
-      isContentVisible = false
-      isVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard isMounted, !isVisible else { return }
-      isPresented = false
-      isMounted = false
-      onDismissed?()
-    }
-  }
-
-  private func dismissFromExternalState() {
-    guard isMounted else { return }
-    MIRAApplePerformanceLogger.event("modal_close", detail: "bottom_sheet_external")
-    withAnimation(sheetAnimation) {
-      isContentVisible = false
-      isVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + dismissDelay) {
-      guard isMounted, !isPresented, !isVisible else { return }
-      isMounted = false
-      onDismissed?()
-    }
-  }
-
-  private func revealSheetContent() {
-    let delay = reduceMotion ? 0 : 0.055
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-      guard isMounted, isVisible else { return }
-      withAnimation(sheetContentAnimation) {
-        isContentVisible = true
-      }
+    content.sheet(isPresented: $isPresented, onDismiss: onDismissed) {
+      sheet { isPresented = false }
+        .presentationDetents([.fraction(min(0.95, max(0.35, preferredHeightFraction))), .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(MIRATheme.Color.surface)
+        .tint(MIRATheme.Color.forest)
+        .onAppear { MIRAApplePerformanceLogger.event("modal_open", detail: "native_sheet") }
+        .onDisappear { MIRAApplePerformanceLogger.event("modal_close", detail: "native_sheet") }
     }
   }
 }

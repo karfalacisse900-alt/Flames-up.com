@@ -142,13 +142,13 @@ struct CaptroPostResponseView: View {
         if selected { Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)) }
       }
       .font(.system(size: outlinedStamp ? outlinedFontSize : 14, weight: selected ? .semibold : .regular))
-      .foregroundStyle(outlinedStamp ? Color.black : MIRATheme.Color.textPrimary)
+      .foregroundStyle(MIRATheme.Color.textPrimary)
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
       .frame(maxWidth: .infinity, minHeight: outlinedStamp ? 48 : 44)
       .background {
         RoundedRectangle(cornerRadius: outlinedStamp ? 6 : 9)
-          .fill(selected ? MIRATheme.Color.forest.opacity(0.08) : (outlinedStamp ? Color.white : MIRATheme.Color.surfaceSoft))
+          .fill(selected ? MIRATheme.Color.forest.opacity(0.08) : (outlinedStamp ? MIRATheme.Color.surface : MIRATheme.Color.surfaceSoft))
           .overlay(alignment: .leading) {
             if response.viewerOption != nil && (response.type == "yes_no" || response.type == "poll") {
               GeometryReader { geometry in
@@ -160,7 +160,7 @@ struct CaptroPostResponseView: View {
           }
       }
       .overlay(RoundedRectangle(cornerRadius: outlinedStamp ? 6 : 9).strokeBorder(
-        selected ? MIRATheme.Color.forest : (outlinedStamp ? Color.black.opacity(0.35) : MIRATheme.Color.hairline), lineWidth: 0.8))
+        selected ? MIRATheme.Color.forest : (outlinedStamp ? MIRATheme.Color.textMuted.opacity(0.55) : MIRATheme.Color.hairline), lineWidth: 0.8))
     }
     .buttonStyle(.plain)
     .disabled(pendingOperation != nil || !canRespond)

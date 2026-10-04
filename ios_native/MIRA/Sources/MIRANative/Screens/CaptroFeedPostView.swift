@@ -16,6 +16,7 @@ struct CaptroFeedPostView: View {
   let pageSize: CGSize?
   @Binding var selectedMediaIndex: Int
   let showsCoverMediaOnly: Bool
+  var canRespond = true
 
   @Environment(\.displayScale) private var displayScale
   @State private var transcriptVoiceId: String?
@@ -91,7 +92,7 @@ struct CaptroFeedPostView: View {
   }
 
   private func textOnlyStamp(maxBodyLines: Int) -> some View {
-    CaptroTextOnlyStampCard(post: post, api: api, canRespond: showsFeedControls,
+    CaptroTextOnlyStampCard(post: post, api: api, canRespond: canRespond,
       maxBodyLines: maxBodyLines, onOpen: onOpenPost)
   }
 
@@ -155,7 +156,7 @@ private struct CaptroTextOnlyStampCard: View {
           Text(content.type.rawValue.uppercased())
             .font(.system(size: 12, weight: .medium))
             .tracking(2)
-            .foregroundStyle(Color.black.opacity(0.55))
+            .foregroundStyle(MIRATheme.Color.textMuted)
             .padding(.bottom, 16)
           Text(content.title)
             .font(.system(size: titleSize, weight: .bold))
@@ -163,7 +164,7 @@ private struct CaptroTextOnlyStampCard: View {
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
           if let location = content.subtitle, !location.isEmpty {
-            Text(location).font(.subheadline).foregroundStyle(Color.black.opacity(0.6))
+            Text(location).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
               .padding(.top, 6)
           }
           if let caption = content.description ?? content.summaryText, !caption.isEmpty {
@@ -183,7 +184,7 @@ private struct CaptroTextOnlyStampCard: View {
           .padding(.top, 20)
       }
 
-      Rectangle().fill(Color.black.opacity(0.08)).frame(height: 0.5)
+      Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
         .padding(.top, 20)
         .padding(.bottom, 14)
       Button(action: onOpen) {
@@ -199,10 +200,10 @@ private struct CaptroTextOnlyStampCard: View {
       }
       .buttonStyle(.plain)
     }
-    .foregroundStyle(Color.black)
+    .foregroundStyle(MIRATheme.Color.textPrimary)
     .padding(20)
-    .background(Color.white)
-    .overlay(Rectangle().strokeBorder(Color.black, lineWidth: 0.8))
+    .background(MIRATheme.Color.surface)
+    .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 0.8))
     .accessibilityIdentifier("captro.textOnlyStamp")
   }
 }
