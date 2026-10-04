@@ -16752,6 +16752,10 @@ api.post('/posts', authMiddleware, async (c) => {
   if (rawIntent != null && (!creationIntent || !['general', 'social', 'moment'].includes(postType))) {
     return c.json({ detail: 'Choose a valid writing intent.', code: 'CREATION_INTENT_INVALID' }, 400);
   }
+  if (creationIntent && ((b.content != null && typeof b.content !== 'string')
+      || (b.visibility != null && !['public', 'followers', 'friends', 'private'].includes(b.visibility)))) {
+    return c.json({ detail: 'Choose a valid message and audience.', code: 'COMPOSITION_INVALID' }, 400);
+  }
   const rawContent = typeof (b.content ?? b.text) === 'string' ? (b.content ?? b.text) : '';
   if (creationIntent && compositionCharacterCount(rawContent) > 500) {
     return c.json({ detail: 'Keep your message within 500 characters.', code: 'COMPOSITION_TOO_LONG' }, 400);
