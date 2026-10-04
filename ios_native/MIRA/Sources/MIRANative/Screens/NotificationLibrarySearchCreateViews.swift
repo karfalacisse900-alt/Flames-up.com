@@ -1229,12 +1229,6 @@ public struct CreatePostNativeView: View {
       ToolbarItem(placement: .cancellationAction) { cancelCompositionButton }
       ToolbarItem(placement: .confirmationAction) { createCompositionButton }
     }
-    ToolbarItemGroup(placement: .keyboard) {
-      Spacer()
-      Button("Done") { writingFocused = false }
-        .accessibilityLabel("Dismiss keyboard")
-        .accessibilityIdentifier("composer.keyboardDone")
-    }
   }
 
   private var cancelCompositionButton: some View {
@@ -1508,12 +1502,18 @@ public struct CreatePostNativeView: View {
       }
       Divider().overlay(MIRATheme.Color.hairline)
       CaptroCompositionChipLayout {
-        if selectedPlace == nil {
+        if selectedPlace == nil && shouldPublishBroadLocation {
+          Menu {
+            Button("Edit location") { activePostDetailSheet = .city }
+            Button("Remove location", role: .destructive) { showBroadLocation = false; broadLocation = MIRABroadDisplayLocation() }
+          } label: { chipLabel(broadLocation.label ?? "Location", icon: "mappin") }
+            .accessibilityLabel("Location, \(broadLocation.label ?? "")")
+        } else if selectedPlace == nil {
           compositionChip("Add location", icon: "mappin") { activePostDetailSheet = .location }
         } else {
           Menu {
             Button("Edit location") { activePostDetailSheet = .location }
-            Button("Remove location", role: .destructive) { selectedPlace = nil }
+            Button("Remove location", role: .destructive) { selectedPlace = nil; showBroadLocation = false }
           } label: { chipLabel(selectedPlace!.displayName, icon: "mappin") }
             .accessibilityLabel("Location, \(selectedPlace!.displayName)")
         }
@@ -1652,7 +1652,7 @@ public struct CreatePostNativeView: View {
             }
             Spacer()
             if draft.audience == audience { Image(systemName: "checkmark").foregroundStyle(MIRATheme.Color.forest) }
-          }.frame(minHeight: 44)
+          }.frame(minHeight: 44).contentShape(Rectangle())
         }.buttonStyle(.plain)
       }
       .navigationTitle("Audience").navigationBarTitleDisplayMode(.inline)
@@ -1989,7 +1989,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var shouldPublishBroadLocation: Bool {
-    showBroadLocation && broadLocation.hasVisibleLabel
+    selectedPlace == nil && showBroadLocation && broadLocation.hasVisibleLabel
   }
 
   @ViewBuilder
@@ -2544,6 +2544,7 @@ public struct CreatePostNativeView: View {
       voiceDraft != nil ||
       !hashtags.isEmpty ||
       selectedPlace != nil ||
+      shouldPublishBroadLocation ||
       hasSelectedStamp ||
       commerceDraft.enabled ||
       postResponse != nil

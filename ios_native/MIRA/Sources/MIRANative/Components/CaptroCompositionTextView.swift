@@ -19,6 +19,17 @@ struct CaptroCompositionTextView: UIViewRepresentable {
     view.keyboardDismissMode = .interactive
     view.accessibilityLabel = "Writing"
     view.accessibilityIdentifier = "composer.writing"
+    context.coordinator.view = view
+    // UIKit owns this editor's first responder, so its keyboard accessory belongs
+    // here (a SwiftUI keyboard toolbar is not attached to this native text view).
+    let accessory = UIToolbar(frame: CGRect(x: 0, y: 0, width: 0, height: 44))
+    accessory.tintColor = UIColor(MIRATheme.Color.forest)
+    let done = UIBarButtonItem(title: "Done", style: .done,
+      target: context.coordinator, action: #selector(Coordinator.dismissKeyboard))
+    done.accessibilityIdentifier = "composer.keyboardDone"
+    done.accessibilityLabel = "Dismiss keyboard"
+    accessory.items = [UIBarButtonItem(systemItem: .flexibleSpace), done]
+    view.inputAccessoryView = accessory
     #if DEBUG
     if ProcessInfo.processInfo.arguments.contains("--captro-quality-composer") {
       // Make synthesized keyboard input deterministic; production keeps iOS correction.
@@ -60,8 +71,14 @@ struct CaptroCompositionTextView: UIViewRepresentable {
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   final class Coordinator: NSObject, UITextViewDelegate {
     var parent: CaptroCompositionTextView
+    weak var view: UITextView?
     var lastRequestedFocus = false
     init(_ parent: CaptroCompositionTextView) { self.parent = parent }
+    @objc func dismissKeyboard() {
+      lastRequestedFocus = false
+      view?.resignFirstResponder()
+      parent.focused = false
+    }
     func textViewDidChange(_ view: UITextView) {
       guard view.markedTextRange == nil else { return }
       let value = String(view.text.prefix(500))
