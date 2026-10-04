@@ -717,6 +717,7 @@ private struct CaptroPostResponsePicker: View {
   let onClose: () -> Void
   @State private var pollOptions = ["", "", "", ""]
   @State private var showsPollEditor = false
+  @FocusState private var focusedPollField: Int?
 
   static func title(for type: String) -> String {
     switch type {
@@ -738,25 +739,34 @@ private struct CaptroPostResponsePicker: View {
           Button("Done", action: onClose).font(.system(size: 15, weight: .semibold))
         }
         .padding(.bottom, 8)
-        responseRow("None", type: nil)
-        responseRow("Yes / No", type: "yes_no")
-        responseRow("Interested", type: "interested")
-        if allowsGoing { responseRow("Going", type: "going") }
-        responseRow("Custom choices", type: "poll")
-        responseRow("Poll", type: "poll")
-        responseRow("Question / replies", type: "question")
+        if !showsPollEditor {
+          responseRow("None", type: nil)
+          responseRow("Yes / No", type: "yes_no")
+          responseRow("Interested", type: "interested")
+          if allowsGoing { responseRow("Going", type: "going") }
+          responseRow("Custom choices", type: "poll")
+          responseRow("Poll", type: "poll")
+          responseRow("Question / replies", type: "question")
+        } else {
+          Button("Change response type") { focusedPollField = nil; showsPollEditor = false }
+            .font(.subheadline).frame(minHeight: 44)
+        }
         if showsPollEditor {
           VStack(alignment: .leading, spacing: 10) {
             Text("Response choices · 2–4 options").font(.subheadline.weight(.semibold))
             ForEach(0..<4, id: \.self) { index in
               TextField("Option \(index + 1)\(index >= 2 ? " (optional)" : "")", text: $pollOptions[index])
                 .textInputAutocapitalization(.sentences)
+                .focused($focusedPollField, equals: index)
+                .submitLabel(.done)
+                .onSubmit { focusedPollField = nil }
                 .padding(12)
                 .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 8))
             }
             Button("Use poll") {
               let options = pollOptions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
               selected = CaptroPostResponseDraft(type: "poll", options: options)
+              focusedPollField = nil
               onClose()
             }
             .buttonStyle(.borderedProminent)
@@ -768,6 +778,7 @@ private struct CaptroPostResponsePicker: View {
       }
       .padding(20)
     }
+    .scrollDismissesKeyboard(.interactively)
     .onAppear {
       if selected?.type == "poll" {
         showsPollEditor = true
@@ -2309,6 +2320,7 @@ public struct CreatePostNativeView: View {
     #if DEBUG
     if ProcessInfo.processInfo.arguments.contains("--captro-quality-composer"), !hasRestoredPostDraft {
       await MIRAAppCacheStore.shared.clearPostDraft()
+      UserDefaults.standard.removeObject(forKey: "captro.composer.audience.composer-ui-test")
     }
     #endif
     await restorePostDraftIfNeeded()

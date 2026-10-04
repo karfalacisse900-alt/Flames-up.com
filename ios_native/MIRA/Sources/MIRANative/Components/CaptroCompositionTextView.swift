@@ -25,11 +25,15 @@ struct CaptroCompositionTextView: UIViewRepresentable {
     let accessory = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
     accessory.autoresizingMask = [.flexibleWidth]
     accessory.tintColor = UIColor(MIRATheme.Color.forest)
-    let done = UIBarButtonItem(title: "Done", style: .done,
-      target: context.coordinator, action: #selector(Coordinator.dismissKeyboard))
+    let done = UIButton(type: .system)
+    done.setTitle("Done", for: .normal)
+    done.titleLabel?.font = .preferredFont(forTextStyle: .body)
+    done.titleLabel?.adjustsFontForContentSizeCategory = true
+    done.frame = CGRect(x: 0, y: 0, width: 64, height: 44)
+    done.addTarget(context.coordinator, action: #selector(Coordinator.dismissKeyboard), for: .touchUpInside)
     done.accessibilityIdentifier = "composer.keyboardDone"
     done.accessibilityLabel = "Dismiss keyboard"
-    accessory.items = [UIBarButtonItem(systemItem: .flexibleSpace), done]
+    accessory.items = [UIBarButtonItem(systemItem: .flexibleSpace), UIBarButtonItem(customView: done)]
     view.inputAccessoryView = accessory
     #if DEBUG
     if ProcessInfo.processInfo.arguments.contains("--captro-quality-composer") {

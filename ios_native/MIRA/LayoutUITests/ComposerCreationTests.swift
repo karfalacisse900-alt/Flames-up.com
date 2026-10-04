@@ -72,9 +72,12 @@ final class ComposerCreationTests: XCTestCase {
     let fields = app.textFields
     XCTAssertGreaterThanOrEqual(fields.count, 2)
     fields.element(boundBy: 0).tap(); fields.element(boundBy: 0).typeText("Design")
-    fields.element(boundBy: 1).tap(); fields.element(boundBy: 1).typeText("Engineering")
+    fields.element(boundBy: 1).tap(); fields.element(boundBy: 1).typeText("Engineering\n")
     let use = app.buttons["Use poll"]
-    for _ in 0..<4 where !use.isHittable { app.swipeUp() }
+    for _ in 0..<4 where !use.isHittable {
+      let scroll = app.scrollViews.allElementsBoundByIndex.first { $0.isHittable && $0.frame.height > 100 }
+      scroll?.swipeUp()
+    }
     use.tap()
     XCTAssertTrue(app.buttons["Edit response options"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["Design · Engineering"].exists)
