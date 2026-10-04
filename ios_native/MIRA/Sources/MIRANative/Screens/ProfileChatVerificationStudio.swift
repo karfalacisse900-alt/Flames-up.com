@@ -369,6 +369,7 @@ public struct ProfileNativeView: View {
   @State private var reportTarget: MIRAReportTarget?
   @State private var isReportSheetPresented = false
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.dynamicTypeSize) private var profileTextSize
   private let authSession: MIRAAuthSession?
   private let chatModel: ChatNativeModel?
   private let paymentsModel: CaptroPaymentsModel?
@@ -655,7 +656,10 @@ public struct ProfileNativeView: View {
         Text(bio).font(.body).foregroundStyle(MIRATheme.Color.textSecondary)
           .fixedSize(horizontal: false, vertical: true)
       }
-      HStack(spacing: 12) {
+      let metricsLayout = profileTextSize.isAccessibilitySize
+        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+        : AnyLayout(HStackLayout(spacing: 12))
+      metricsLayout {
         profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
         profileMetric("Followers", model.user?.followersCount ?? 0)
         profileMetric("Following", model.user?.followingCount ?? 0)
@@ -716,9 +720,20 @@ public struct ProfileNativeView: View {
   }
 
   private func profileMetric(_ label: String, _ value: Int) -> some View {
-    VStack(spacing: 4) {
-      Text("\(value)").font(.headline).monospacedDigit()
-      Text(label).font(.caption).foregroundStyle(MIRATheme.Color.textMuted)
+    Group {
+      if profileTextSize.isAccessibilitySize {
+        HStack(spacing: 12) {
+          Text(label).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+          Spacer(minLength: 12)
+          Text("\(value)").font(.headline).monospacedDigit()
+        }.frame(minHeight: 44)
+      } else {
+        VStack(spacing: 4) {
+          Text("\(value)").font(.headline).monospacedDigit()
+          Text(label).font(.caption).foregroundStyle(MIRATheme.Color.textMuted)
+        }
+      }
     }
     .frame(maxWidth: .infinity)
     .accessibilityElement(children: .ignore)
