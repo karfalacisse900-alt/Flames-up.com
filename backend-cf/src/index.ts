@@ -1,4 +1,5 @@
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
+import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline } from './creation-intent';
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
@@ -13166,6 +13167,8 @@ function supabasePrimaryPostCreatePayload(input: any) {
     metadata: {
       source: 'cloudflare_worker_supabase_primary',
       creator_event: input.creatorEvent,
+      creation_intent: normalizeCreationIntent(input.creationIntent),
+      creation_time: input.creationTime || null,
       post_response: input.postResponse || null,
       stamp_variant: validatedStampVariant(input.stampVariant, input.postType),
       image: mediaUrls[0] || '',
@@ -16674,6 +16677,16 @@ async function screenCaptroText(
   }
 }
 
+// Reuse the existing posting restriction; Captro currently has no account-type tier.
+api.get('/posts/creation-capabilities', authMiddleware, async (c) => {
+  const restricted = await enforceUserRestriction(c, getUserId(c), 'posting');
+  if (restricted) return restricted;
+  const user = await getSupabaseAppUserRowByAnyId(c, getUserId(c));
+  if (!user) return c.json({ detail: 'User not found.' }, 404);
+  return c.json({ structured_types: ['club', 'event', 'meetup', 'deal'] }, 200,
+    { 'Cache-Control': 'no-store' });
+});
+
 api.post('/posts', authMiddleware, async (c) => {
   const phoneGate = await requirePhoneVerified(c, 'create posts');
   if (phoneGate) return phoneGate;
@@ -16734,8 +16747,22 @@ api.post('/posts', authMiddleware, async (c) => {
   }
   if (!displayLocationLabel) displayLocationVisibility = 'hidden';
   const visibility = normalizeVisibility(b.visibility);
-  let postTitle = cleanText(b.title || b.headline, 180);
+  const rawIntent = b.creation_intent ?? b.creationIntent;
+  const creationIntent = normalizeCreationIntent(rawIntent);
+  if (rawIntent != null && (!creationIntent || !['general', 'social', 'moment'].includes(postType))) {
+    return c.json({ detail: 'Choose a valid writing intent.', code: 'CREATION_INTENT_INVALID' }, 400);
+  }
+  const rawContent = typeof (b.content ?? b.text) === 'string' ? (b.content ?? b.text) : '';
+  if (creationIntent && compositionCharacterCount(rawContent) > 500) {
+    return c.json({ detail: 'Keep your message within 500 characters.', code: 'COMPOSITION_TOO_LONG' }, 400);
+  }
+  let creationTime: string | null;
+  try { creationTime = normalizeCreationTime(b.creation_time ?? b.creationTime, creationIntent); }
+  catch {
+    return c.json({ detail: 'Choose a valid time.', code: 'CREATION_TIME_INVALID' }, 400);
+  }
   let postContent = cleanMultilineText(b.content || b.text, 5000);
+  let postTitle = creationIntent ? compositionHeadline(postContent) : cleanText(b.title || b.headline, 180);
   if (postTitle || postContent) {
     const safety = await screenCaptroText(c.env, [postTitle, postContent].filter(Boolean).join('\n'), {
       surface: 'post_text', subjectId: id, requestId: c.get?.('requestId') || '',
@@ -16909,6 +16936,8 @@ api.post('/posts', authMiddleware, async (c) => {
     audioStartTime,
     audioDuration,
     voiceAudioId,
+    creationIntent,
+    creationTime,
     clientRequestId,
     createdAt,
   };

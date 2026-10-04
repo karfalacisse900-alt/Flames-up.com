@@ -63,8 +63,8 @@ test('composer respects the keyboard and exposes editable stamps, not just hidde
   const composer = source('Screens/NotificationLibrarySearchCreateViews.swift');
   assert.match(home, /\.fullScreenCover\(isPresented: \$isShowingCreatePost\)/);
   assert.doesNotMatch(home, /\.miraFullScreenOverlay\(isPresented: \$isShowingCreatePost/);
-  assert.match(composer, /safeAreaInset\(edge: \.bottom, spacing: 0\) \{ composerToolBar/);
-  assert.match(composer, /CaptroEventEditorFields\(draft: \$eventDraft\)/);
+  assert.match(composer, /ToolbarItem\(placement: \.confirmationAction\)/);
+  assert.match(composer, /CaptroEventEditorFields\(draft: \$draft\.eventDraft\)/);
   assert.match(composer, /event: isEventStamp \? eventDraft.input : nil/);
   assert.match(composer, /CaptroEditorialOverlayCard\(content: CaptroEditorialCardContent\(draftStamp: composerStampContent\)/);
   assert.match(source('Screens/PostDetailNativeView.swift'), /isMuted = false/);

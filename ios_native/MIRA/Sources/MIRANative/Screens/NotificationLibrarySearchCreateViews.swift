@@ -627,7 +627,7 @@ public struct SearchUsersNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationBarBackButtonHidden(true)
-    .toolbar(.visible, for: .navigationBar)
+    .toolbar(.hidden, for: .navigationBar)
     .miraHideTabBarOnAppear()
     .task(id: model.query) {
       do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
@@ -1072,6 +1072,7 @@ public struct CreatePostNativeView: View {
   @State private var showCamera = false
   @State private var creationCapabilities: CaptroCreationCapabilities?
   @State private var initialAudience = CaptroCompositionAudience.everyone
+  @State private var restoredComposition = false
   @State private var draftSaveTask: Task<Void, Never>?
   @State private var isClosing = false
   @StateObject private var broadLocationResolver = MIRABroadLocationResolver()
@@ -1198,7 +1199,7 @@ public struct CreatePostNativeView: View {
     .interactiveDismissDisabled(isPosting || hasUnsavedPost)
     .alert("Discard this post?", isPresented: $showDiscardConfirmation) {
       Button("Discard post", role: .destructive) { close() }
-      Button("Keep editing", role: .cancel) { focusedPostDetailsField = .caption }
+      Button("Keep editing", role: .cancel) { writingFocused = true }
     } message: {
       Text("Your text and selected media will be removed from this draft.")
     }
@@ -1236,7 +1237,7 @@ public struct CreatePostNativeView: View {
 
   private var composerLifecyclePage: some View {
     composerPage
-    .toolbar(.hidden, for: .navigationBar)
+    .toolbar(.visible, for: .navigationBar)
     .miraHideTabBarOnAppear()
     .navigationBarBackButtonHidden(true)
     .onAppear {
@@ -1695,7 +1696,6 @@ public struct CreatePostNativeView: View {
         case .club:
           Section {
             TextField("Club name", text: $draft.title)
-            TextField("About (optional)", text: $draft.bodyText, axis: .vertical).lineLimit(3...6)
           }
           accessSection
           optionalScheduleSection(label: "Add date (optional)")
@@ -1720,7 +1720,6 @@ public struct CreatePostNativeView: View {
         case .deal:
           Section {
             TextField("Title", text: $draft.title)
-            TextField("Details (optional)", text: $draft.bodyText, axis: .vertical).lineLimit(3...6)
             TextField("Conditions and redemption instructions", text: $draft.commerceDraft.redemptionRules, axis: .vertical).lineLimit(2...5)
           }
           Section {
@@ -1755,7 +1754,9 @@ public struct CreatePostNativeView: View {
         ToolbarItem(placement: .topBarTrailing) {
           Button("Done") { cacheComposerDraft(); isEditingPostDetails = false }
             .fontWeight(.semibold)
-            .disabled(stampDetailsRequireTitle && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(stampDetailsRequireTitle && (title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              || (isEventStamp && eventDraft.validationError != nil)
+              || (commerceDraft.enabled && commerceDraft.validationError != nil)))
         }
       }
     }
@@ -2131,6 +2132,13 @@ public struct CreatePostNativeView: View {
     return draft.hasWriting || !mediaItems.isEmpty || voiceDraft != nil || draft.structured
   }
 
+  private var resolvedPublishTitle: String {
+    if draft.structured { return title }
+    let first = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+      .components(separatedBy: "\n").first ?? ""
+    return String(String.UnicodeScalarView(first.unicodeScalars.prefix(180)))
+  }
+
   @MainActor
   private func generatePostAssist() async {
     guard !isGeneratingPostAssist else { return }
@@ -2289,7 +2297,7 @@ public struct CreatePostNativeView: View {
       if voiceSubmissionId == nil, let voiceDraft {
         postStage = "Uploading voice"
         let submission = try await CaptroVoiceUploadService(api: api).submit(
-          voiceDraft, targetType: "post", caption: [title, postContent].filter { !$0.isEmpty }.joined(separator: "\n\n"),
+          voiceDraft, targetType: "post", caption: [resolvedPublishTitle, postContent].filter { !$0.isEmpty }.joined(separator: "\n\n"),
           onUploadProgress: { fraction in
             Task { @MainActor in
               guard isPosting, postStage == "Uploading voice" else { return }
@@ -2497,6 +2505,7 @@ public struct CreatePostNativeView: View {
     guard !hasRestoredPostDraft else { return }
     hasRestoredPostDraft = true
     guard let draft = await MIRAAppCacheStore.shared.loadPostDraft() else { return }
+    restoredComposition = true
     let restoredMedia = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft)
     isRestoringPostDraft = true
     defer { isRestoringPostDraft = false }
@@ -2761,7 +2770,7 @@ public struct CreatePostNativeView: View {
     do {
       let user: MIRAUser = try await api.get("/auth/me")
       composerUser = user
-      if draft.audience == .everyone,
+      if !restoredComposition,
          let saved = UserDefaults.standard.string(forKey: "captro.composer.audience.\(user.id)"),
          let audience = CaptroCompositionAudience(rawValue: saved) {
         draft.audience = audience

@@ -267,62 +267,38 @@ test('Home carousel locks each touch to horizontal or vertical intent', () => {
   assert.doesNotMatch(mediaPager, /highPriorityGesture/);
 });
 
-test('composer persists the selected stamp and previews the production component', () => {
-  assert.match(composer, /@State private var selectedStampKind: CaptroStampKind = \.social/);
-  assert.match(composer, /private var stampPickerKinds:[\s\S]*?\[\.social, \.club, \.event, \.meetup, \.deal\]/);
+test('composer persists one draft and hides structured setup behind the intent selector', () => {
+  assert.match(composer, /@State private var draft = CaptroCompositionDraft/);
+  assert.match(composer, /creationIntent: draft\.intent\.rawValue/);
   assert.match(composer, /stampType: hasSelectedStamp \? selectedStampKind\.rawValue : nil/);
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
-  assert.match(composer, /ComposerPreviewSheet\([\s\S]*?stampKind: selectedStampKind/);
-  assert.match(composer, /CaptroEditorialOverlayCard\(content: CaptroEditorialCardContent\(draftStamp: previewStampContent\)/);
+  assert.match(composer, /private var stampPickerKinds:[\s\S]*?\[\.club, \.event, \.meetup, \.deal\]\.filter/);
+  assert.match(composer, /creationCapabilities\?\.structuredTypes\.contains/);
+  assert.match(composer, /fullScreenCover\(isPresented: \$isEditingPostDetails/);
 });
 
-test('post creation matches the simple Photo, Video, Voice composer and keeps media proportions', () => {
-  const firstPageStart = composer.indexOf('private var mediaFirstPage');
-  const firstPageEnd = composer.indexOf('private func removeMedia(');
-  const firstPage = composer.slice(firstPageStart, firstPageEnd);
-
-  assert.ok(firstPageStart >= 0 && firstPageEnd > firstPageStart);
-  assert.match(firstPage, /Text\("What's on your mind\?"\)/);
-  assert.match(firstPage, /PhotosPicker\([\s\S]*?matching: \.any\(of: \[\.images, \.videos\]\)/);
-  assert.match(firstPage, /composerToolLabel\(icon: "photo", title: "Photo"\)/);
-  assert.match(firstPage, /composerToolLabel\(icon: "video", title: "Video"\)/);
-  assert.match(firstPage, /composerToolLabel\(icon: voiceDraft == nil \? "mic" : "mic\.fill", title: "Voice"\)/);
-  assert.match(firstPage, /title: hasSelectedStamp \? stampPickerDetails\(for: selectedStampKind\)\.title : "Add stamp"/);
-  assert.match(firstPage, /composerMediaPreview\(first\)[\s\S]*?composerPrompt/);
-  assert.match(firstPage, /width \* coverMediaRatio/);
-  assert.doesNotMatch(firstPage, /MIRAStoryLiveCameraView/);
-  assert.doesNotMatch(firstPage, /Color\.black\.ignoresSafeArea/);
+test('single-card creation preserves native mixed-media picking and original proportions', () => {
+  const card = composer.slice(composer.indexOf('private var compositionCard'), composer.indexOf('private var intentSelector'));
+  assert.match(card, /CaptroCompositionTextView\(text: \$draft\.bodyText/);
+  assert.match(card, /compositionAttachments/);
+  assert.doesNotMatch(card, /TextField\(|TextEditor\(|CaptroEditorialOverlayCard/);
+  assert.match(composer, /photosPicker\([\s\S]*?matching: \.any\(of: \[\.images, \.videos\]\)/);
+  assert.match(composer, /fitsOriginal: true/);
   assert.match(composer, /let remainingSlots = max\(0, 10 - mediaItems\.count\)/);
   assert.match(composer, /mediaDimensions\.append\(await item\.postMediaDimension\(\)\)/);
   assert.match(mediaUpload, /if target == \.feedPost \{[\s\S]*?dimensions = await media\.postMediaDimension\(\)/);
   assert.match(mediaEditorView, /case \.post:[\s\S]*?return \[\.landscape16x9, \.landscape4x3, \.portraitPointSixFive, \.portrait4x5, \.portrait3x4, \.square1x1\]/);
-  assert.match(mediaEditor, /case landscape16x9 = "16:9"/);
-  assert.match(mediaEditor, /case landscape4x3 = "4:3"/);
-  assert.match(mediaEditor, /case portraitPointSixFive = "0\.65:1"/);
-  assert.match(mediaEditor, /case square1x1 = "1:1"/);
-  assert.match(mediaEditorView, /postAspectRatio: \.nearest\(width: Double\(image\.size\.width\), height: Double\(image\.size\.height\)\)/);
 });
 
-test('composer stays on a single writing page with compact tools and an explicit stamp picker', () => {
-  const root = composer.slice(composer.indexOf('private var composerPage:'), composer.indexOf('private var postDetailSheetPresentedBinding:'));
-  assert.match(root, /mediaFirstPage/);
-  assert.doesNotMatch(root, /if isEditingPostDetails|finalPostPage|AnyView/);
-  const tool = composer.slice(composer.indexOf('private func composerToolLabel'), composer.indexOf('private func composerVoiceAttachment'));
-  assert.match(tool, /Image\(systemName: icon\)/);
-  assert.match(tool, /Text\(title\)/);
-  assert.match(tool, /accessibilityLabel\(title\)/);
-  assert.doesNotMatch(tool, /background\(|clipShape\(/);
-  assert.match(composer, /fullScreenCover\(isPresented: \$isEditingPostDetails/);
-  assert.match(composer, /fullScreenCover\(isPresented: \$showStampPicker\)/);
-  assert.match(composer, /navigationTitle\("Add Stamp"\)/);
-  for (const title of ['Moment', 'Club', 'Event', 'Meetup', 'Deal']) {
-    assert.match(composer, new RegExp(`case \\.${title === 'Moment' ? 'social' : title.toLowerCase()}: return \\("${title}"`));
-  }
-  assert.match(composer, /private var stampDetailsPage:[\s\S]*?case \.social:[\s\S]*?case \.club:[\s\S]*?case \.event:[\s\S]*?case \.meetup:[\s\S]*?case \.deal:/);
-  assert.match(composer, /accessibilityIdentifier\("post\.option\.\\\(title\)"\)/);
-  assert.match(composer, /matching: \.videos/);
-  assert.match(composer, /scrollDismissesKeyboard\(\.interactively\)/);
-  assert.doesNotMatch(composer, /private var finalPostPage/);
+test('composer exposes quiet tools, native actions, and no Post category', () => {
+  const canvas = composer.slice(composer.indexOf('private var mediaFirstPage:'), composer.indexOf('private var stampDetailsPage:'));
+  assert.match(canvas, /Label\("Add media", systemImage: "plus.circle"\)/);
+  assert.match(canvas, /accessibilityLabel\("Record voice attachment"\)/);
+  assert.match(composer, /ToolbarItem\(placement: \.confirmationAction\)/);
+  assert.match(composer, /Text\("Create"\)/);
+  assert.match(canvas, /ForEach\(CaptroWritingIntent\.allCases\)/);
+  assert.doesNotMatch(canvas, /Text\("Post"\)|Text\("Create Post"\)|composerToolLabel|shadow\(|LinearGradient/);
+  assert.match(canvas, /scrollDismissesKeyboard\(\.interactively\)/);
 });
 
 test('feed image upload preserves composition and stays within the hosted-image limit', () => {

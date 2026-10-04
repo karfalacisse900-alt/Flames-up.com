@@ -53,6 +53,16 @@ struct CaptroCompositionTextView: UIViewRepresentable {
       if view.text != value { view.text = value }
       parent.text = value
       view.invalidateIntrinsicContentSize()
+      // Let the outer scroll view keep the native insertion point above the keyboard.
+      DispatchQueue.main.async {
+        guard let selection = view.selectedTextRange else { return }
+        var ancestor = view.superview
+        while let candidate = ancestor, !(candidate is UIScrollView) { ancestor = candidate.superview }
+        if let scroll = ancestor as? UIScrollView {
+          let caret = view.convert(view.caretRect(for: selection.end).insetBy(dx: 0, dy: -12), to: scroll)
+          scroll.scrollRectToVisible(caret, animated: false)
+        }
+      }
     }
     func textViewDidBeginEditing(_ view: UITextView) { parent.focused = true }
     func textViewDidEndEditing(_ view: UITextView) { parent.focused = false }
