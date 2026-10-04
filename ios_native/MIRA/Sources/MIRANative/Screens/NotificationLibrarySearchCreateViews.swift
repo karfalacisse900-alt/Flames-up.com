@@ -1229,13 +1229,20 @@ public struct CreatePostNativeView: View {
       ToolbarItem(placement: .cancellationAction) { cancelCompositionButton }
       ToolbarItem(placement: .confirmationAction) { createCompositionButton }
     }
+    ToolbarItemGroup(placement: .keyboard) {
+      Spacer()
+      Button("Done") { writingFocused = false }
+        .accessibilityLabel("Dismiss keyboard")
+        .accessibilityIdentifier("composer.keyboardDone")
+    }
   }
 
   private var cancelCompositionButton: some View {
     Button {
       if hasUnsavedPost { showDiscardConfirmation = true } else { close() }
     } label: {
-      Text("Cancel").font(.body).frame(minHeight: 44).contentShape(Rectangle())
+      Text("Cancel").font(.body).fixedSize(horizontal: true, vertical: false)
+        .frame(minWidth: 60, minHeight: 44).contentShape(Rectangle())
     }
     .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.textSecondary)
     .disabled(isPosting)
@@ -1246,7 +1253,8 @@ public struct CreatePostNativeView: View {
       Group {
         if isPosting { ProgressView().controlSize(.small) }
         else { Text("Create").font(.body.weight(.semibold)) }
-      }.frame(minHeight: 44).contentShape(Rectangle())
+      }.fixedSize(horizontal: true, vertical: false)
+        .frame(minWidth: 60, minHeight: 44).contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .foregroundStyle(canPost && !isPosting ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
@@ -1406,7 +1414,7 @@ public struct CreatePostNativeView: View {
   private var mediaFirstPage: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        Button { showAudience = true } label: {
+        Button { writingFocused = false; showAudience = true } label: {
           Label {
             HStack(spacing: 6) {
               Text(draft.audience.title)
@@ -2005,7 +2013,14 @@ public struct CreatePostNativeView: View {
     if draft.structured { return title }
     let first = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
       .components(separatedBy: "\n").first ?? ""
-    return String(String.UnicodeScalarView(first.unicodeScalars.prefix(180)))
+    // The existing headline column/API has a UTF-16 budget. Never split an emoji.
+    var headline = ""
+    for character in first {
+      let next = String(character)
+      guard headline.utf16.count + next.utf16.count <= 180 else { break }
+      headline += next
+    }
+    return headline
   }
 
   @MainActor

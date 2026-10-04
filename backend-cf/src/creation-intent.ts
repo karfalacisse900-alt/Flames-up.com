@@ -22,6 +22,13 @@ export function normalizeCreationTime(value: unknown, intent: CreationIntent | n
 /** Legacy feed cards require a headline. This is an index/display label, never inserted into body. */
 export function compositionHeadline(body: string): string {
   const first = body.trim().split('\n').find(line => line.trim()) || '';
-  return Array.from(first.trim()).slice(0, 180).join('');
+  // Legacy headline cleaners limit UTF-16 units. Stay within that budget without
+  // splitting surrogate pairs or grapheme clusters (Postgres rejects lone surrogates).
+  let headline = '';
+  for (const { segment } of new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(first.trim())) {
+    if (headline.length + segment.length > 180) break;
+    headline += segment;
+  }
+  return headline;
 }
 

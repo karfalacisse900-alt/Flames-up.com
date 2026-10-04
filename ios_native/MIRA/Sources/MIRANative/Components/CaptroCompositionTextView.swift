@@ -19,6 +19,13 @@ struct CaptroCompositionTextView: UIViewRepresentable {
     view.keyboardDismissMode = .interactive
     view.accessibilityLabel = "Writing"
     view.accessibilityIdentifier = "composer.writing"
+    #if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--captro-quality-composer") {
+      // Make synthesized keyboard input deterministic; production keeps iOS correction.
+      view.autocorrectionType = .no
+      view.spellCheckingType = .no
+    }
+    #endif
     return view
   }
 

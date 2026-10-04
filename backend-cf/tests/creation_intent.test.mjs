@@ -7,6 +7,9 @@ test('only three writing intents; no Post category or phrase injection', () => {
   for (const value of ['want_to','looking_for','concern']) assert.equal(normalizeCreationIntent(value), value);
   for (const value of ['post','business','announcement',null,{},'Want to']) assert.equal(normalizeCreationIntent(value), null);
   assert.equal(compositionHeadline('A designer and developer.\nTo build something.'), 'A designer and developer.');
+  const emojiHeadline = compositionHeadline('👨‍👩‍👧‍👦'.repeat(500));
+  assert.equal(emojiHeadline, '👨‍👩‍👧‍👦'.repeat(16));
+  assert.ok(emojiHeadline.length <= 180);
 });
 test('500-character counting matches native extended grapheme clusters', () => {
   assert.equal(compositionCharacterCount('👨‍👩‍👧‍👦'), 1);

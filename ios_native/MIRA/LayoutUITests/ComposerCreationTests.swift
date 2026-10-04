@@ -14,9 +14,9 @@ final class ComposerCreationTests: XCTestCase {
     shot.name = name; shot.lifetime = .keepAlways; add(shot)
   }
   private func dismissKeyboard(_ app: XCUIApplication) {
-    let scroll = app.scrollViews.firstMatch
-    scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.25)).press(forDuration: 0.05,
-      thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.48)))
+    let done = app.buttons["composer.keyboardDone"]
+    if done.waitForExistence(timeout: 5) { done.tap() }
+    XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
   }
   private func select(_ app: XCUIApplication, _ title: String) {
     app.buttons["composer.intent"].tap()
@@ -60,6 +60,7 @@ final class ComposerCreationTests: XCTestCase {
     dismissKeyboard(app)
     app.buttons["composer.audience"].tap()
     app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Only me")).firstMatch.tap()
+    XCTAssertTrue(app.buttons["composer.audience"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["composer.audience"].label.contains("Only me"))
     app.textViews["composer.writing"].tap()
     app.textViews["composer.writing"].typeText("Who wants to build something together?")

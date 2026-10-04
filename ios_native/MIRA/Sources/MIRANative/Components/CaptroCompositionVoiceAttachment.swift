@@ -32,7 +32,12 @@ struct CaptroCompositionVoiceAttachment: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in stop() }
     .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { _ in stop() }
-    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { _ in stop() }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { note in
+      // Changing to our own playback category is not a headphone disconnect.
+      // Stop only when output disappears, so private audio never jumps to the speaker.
+      if let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+         AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable { stop() }
+    }
     .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
       if playing && player?.isPlaying == false { stop() }
     }
