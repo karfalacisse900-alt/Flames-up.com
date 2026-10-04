@@ -53,15 +53,21 @@ final class AppSystemUITests: XCTestCase {
     let card = app.otherElements["captro.textOnlyStamp"].firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 15))
     XCTAssertTrue(app.staticTexts["Anyone up for a walk?"].exists)
-    XCTAssertFalse(app.staticTexts["More. Open full post"].exists)
+    // The pager keeps the neighboring page in the accessibility tree.
+    // Verify the visible page, not existence anywhere in the scroll view.
+    XCTAssertFalse(app.staticTexts["More. Open full post"].isHittable)
     capture(app, "home-text-short-dark")
     let shortHeight = card.frame.height
     app.scrollViews["home.post.pager"].swipeLeft()
-    XCTAssertTrue(app.staticTexts["Looking for people to build with"].waitForExistence(timeout: 5))
-    XCTAssertGreaterThan(card.frame.height, shortHeight)
+    let longTitle = app.staticTexts["Looking for people to build with"]
+    XCTAssertTrue(longTitle.waitForExistence(timeout: 5))
+    XCTAssertTrue(longTitle.isHittable)
+    let longCard = app.otherElements["captro.textOnlyStamp"].allElementsBoundByIndex.first { $0.frame.contains(longTitle.frame) }
+    XCTAssertNotNil(longCard)
+    XCTAssertGreaterThan(longCard?.frame.height ?? 0, shortHeight)
     capture(app, "home-text-long-dark")
-    XCTAssertTrue(app.staticTexts["More. Open full post"].exists)
-    app.staticTexts["Looking for people to build with"].tap()
+    XCTAssertTrue(app.staticTexts["More. Open full post"].isHittable)
+    longTitle.tap()
     XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
     capture(app, "text-post-details")
   }

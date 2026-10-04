@@ -127,7 +127,7 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertNotNil(meetup.scheduleText)
 
     let dealJSON = #"""
-    {"id":"deal-post","post_type":"deal","detail":{"commerce":{"id":"deal-1","content_type":"deal","fulfillment_type":"redemption","payment_model":"free","commerce_class":"commerce","title":"Café Luna","description":"A neighborhood café offer.","city":"SoHo","expires_at":"2026-09-30T23:00:00Z","joined_count":0,"refund_policy":"none","approval_required":false,"pass_required":false,"status":"active","audience":"public","public_data":{"benefits":["20% off"],"redemption_rules":"Spend $20+"},"prices":[]}}}
+    {"id":"deal-post","post_type":"deal","detail":{"commerce":{"id":"deal-1","content_type":"deal","fulfillment_type":"redemption","payment_model":"free","commerce_class":"commerce","title":"Café Luna","description":"A neighborhood café offer.","city":"SoHo","expires_at":"2099-09-30T23:00:00Z","joined_count":0,"refund_policy":"none","approval_required":false,"pass_required":false,"status":"active","audience":"public","public_data":{"benefits":["20% off"],"redemption_rules":"Spend $20+"},"prices":[]}}}
     """#
     let deal = try decoder.decode(MIRAPost.self, from: Data(dealJSON.utf8)).captroEditorialCardContent
     XCTAssertEqual(deal.type, .deal)
