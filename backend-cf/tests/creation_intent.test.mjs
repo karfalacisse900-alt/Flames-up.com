@@ -28,5 +28,7 @@ test('new metadata reuses existing columns, moderation, and idempotent publishin
   assert.match(create, /compositionCharacterCount\(rawContent\) > 500/);
   assert.match(create, /visibility = normalizeVisibility\(b\.visibility\)/);
   assert.match(source, /creation_intent: normalizeCreationIntent\(input.creationIntent\)/);
+  assert.match(create, /creationIntent \? rawContent\.length : 5000/);
+  assert.match(source, /normalizeCreationIntent\(input.creationIntent\)\s*\? String\(input.postContent \|\| ''\)\.length : 4000/);
 });
 

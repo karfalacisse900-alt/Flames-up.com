@@ -13133,7 +13133,8 @@ function supabasePrimaryPostCreatePayload(input: any) {
     user_id: isUuidText(input.authUserId || input.userId),
     app_user_id: cleanText(input.userId, 120) || null,
     title: cleanText(input.postTitle, 180) || null,
-    content: cleanMultilineText(input.postContent, 4000),
+    content: cleanMultilineText(input.postContent, normalizeCreationIntent(input.creationIntent)
+      ? String(input.postContent || '').length : 4000),
     visibility: normalizeVisibility(input.visibility),
     status: input.voiceAudioId ? 'pending_voice' : 'active',
     post_type: cleanText(input.postType || 'general', 80),
@@ -16765,7 +16766,9 @@ api.post('/posts', authMiddleware, async (c) => {
   catch {
     return c.json({ detail: 'Choose a valid time.', code: 'CREATION_TIME_INVALID' }, 400);
   }
-  let postContent = cleanMultilineText(b.content || b.text, 5000);
+  // Validated Swift-compatible character count already bounds this composition.
+  // Do not cut a valid 500-character message at a legacy UTF-16 length limit.
+  let postContent = cleanMultilineText(b.content || b.text, creationIntent ? rawContent.length : 5000);
   let postTitle = creationIntent ? compositionHeadline(postContent) : cleanText(b.title || b.headline, 180);
   if (postTitle || postContent) {
     const safety = await screenCaptroText(c.env, [postTitle, postContent].filter(Boolean).join('\n'), {

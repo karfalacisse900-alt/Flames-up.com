@@ -65,6 +65,11 @@ try {
   const concern = await create({ ...body, content: 'Please keep our public spaces clean.',
     creation_intent: 'concern', post_response: null, client_request_id: `composer-smoke:${crypto.randomUUID()}` });
   assert.equal((await metadata(concern.id)).creation_time, null, 'Hidden Concern schedule was submitted');
+  const emojiMessage = '👨‍👩‍👧‍👦'.repeat(500);
+  const emoji = await create({ ...body, content: emojiMessage, creation_intent: 'want_to',
+    creation_time: null, post_response: null, client_request_id: `composer-smoke:${crypto.randomUUID()}` });
+  const emojiRead = await request(`${api}/posts/${emoji.id}`, { headers: owner });
+  assert.equal(emojiRead.content, emojiMessage, 'Valid extended emoji message was truncated');
   await create({ ...body, content: 'a'.repeat(501), client_request_id: crypto.randomUUID() }, 400);
   await create({ ...body, creation_intent: 'post', client_request_id: crypto.randomUUID() }, 400);
   await create({ ...body, visibility: 'invalid', client_request_id: crypto.randomUUID() }, 400);
@@ -72,7 +77,7 @@ try {
   console.log(JSON.stringify({ deployedComposerContract: 'PASS', actualServerPublishing: true,
     retryIdempotent: true, originalMessagePreserved: true, privateVisibilityEnforced: true,
     intentAndTimePersisted: true, concernTimeExcluded: true, customChoicesPersisted: true,
-    invalidInputRejected: true, productionCredentialsExposed: false }));
+    invalidInputRejected: true, extendedEmojiPreserved: true, productionCredentialsExposed: false }));
 } finally {
   const failures = [];
   for (const user of users) {
