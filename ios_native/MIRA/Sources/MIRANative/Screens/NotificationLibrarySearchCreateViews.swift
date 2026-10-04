@@ -1176,22 +1176,7 @@ public struct CreatePostNativeView: View {
       composerSheetPage
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button("Cancel") {
-              if hasUnsavedPost { showDiscardConfirmation = true } else { close() }
-            }.disabled(isPosting)
-          }
-          ToolbarItem(placement: .confirmationAction) {
-            Button { Task { await submit() } } label: {
-              if isPosting { ProgressView().controlSize(.small) }
-              else { Text("Create").fontWeight(.semibold) }
-            }
-            .foregroundStyle(canPost && !isPosting ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
-            .disabled(isPosting || isLoadingMedia || !canPost)
-            .accessibilityIdentifier("composer.create")
-          }
-        }
+        .toolbar { compositionNavigation }
         .toolbarBackground(MIRATheme.Color.launchBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
     }
@@ -1231,6 +1216,42 @@ public struct CreatePostNativeView: View {
         voiceSubmissionId = nil
       }
     }
+  }
+
+  @ToolbarContentBuilder
+  private var compositionNavigation: some ToolbarContent {
+    if #available(iOS 26.0, *) {
+      ToolbarItem(placement: .cancellationAction) { cancelCompositionButton }
+        .sharedBackgroundVisibility(.hidden)
+      ToolbarItem(placement: .confirmationAction) { createCompositionButton }
+        .sharedBackgroundVisibility(.hidden)
+    } else {
+      ToolbarItem(placement: .cancellationAction) { cancelCompositionButton }
+      ToolbarItem(placement: .confirmationAction) { createCompositionButton }
+    }
+  }
+
+  private var cancelCompositionButton: some View {
+    Button {
+      if hasUnsavedPost { showDiscardConfirmation = true } else { close() }
+    } label: {
+      Text("Cancel").font(.body).frame(minHeight: 44).contentShape(Rectangle())
+    }
+    .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.textSecondary)
+    .disabled(isPosting)
+  }
+
+  private var createCompositionButton: some View {
+    Button { Task { await submit() } } label: {
+      Group {
+        if isPosting { ProgressView().controlSize(.small) }
+        else { Text("Create").font(.body.weight(.semibold)) }
+      }.frame(minHeight: 44).contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(canPost && !isPosting ? MIRATheme.Color.forest : MIRATheme.Color.textMuted)
+    .disabled(isPosting || isLoadingMedia || !canPost)
+    .accessibilityIdentifier("composer.create")
   }
 
   private var composerLifecyclePage: some View {
@@ -1395,6 +1416,7 @@ public struct CreatePostNativeView: View {
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(MIRATheme.Color.forestSoft, in: Capsule())
+            .frame(minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.forest)
         .frame(minHeight: 44, alignment: .leading)
@@ -1421,7 +1443,7 @@ public struct CreatePostNativeView: View {
       .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 24)
       .disabled(isPosting)
     }
-    .scrollDismissesKeyboard(.interactively)
+    .scrollDismissesKeyboard(.immediately)
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
   }
 
@@ -1447,6 +1469,7 @@ public struct CreatePostNativeView: View {
         CaptroCompositionTextView(text: $draft.bodyText, focused: $writingFocused,
           fontSize: writingSize, placeholder: draft.intent.placeholder)
           .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("composer.writing")
       }
       if isLoadingMedia { ProgressView("Preparing media…").font(.footnote) }
       if !mediaItems.isEmpty { compositionAttachments }
@@ -1502,7 +1525,6 @@ public struct CreatePostNativeView: View {
     .padding(16)
     .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 17))
     .overlay(RoundedRectangle(cornerRadius: 17).stroke(MIRATheme.Color.divider, lineWidth: 1))
-    .accessibilityIdentifier("composer.card")
   }
 
   private var intentSelector: some View {
@@ -1552,6 +1574,7 @@ public struct CreatePostNativeView: View {
       .padding(.horizontal, 12).padding(.vertical, 8)
       .background(MIRATheme.Color.surfaceSoft, in: Capsule())
       .frame(minHeight: 44)
+      .contentShape(Rectangle())
   }
 
   private var composerToolBar: some View {
@@ -1567,13 +1590,14 @@ public struct CreatePostNativeView: View {
       } label: {
         Label("Add media", systemImage: "plus.circle").font(.subheadline)
           .frame(minHeight: 44)
+          .contentShape(Rectangle())
       }.accessibilityIdentifier("composer.add")
       Spacer()
       Button {
         writingFocused = false
         showVoiceRecorder = true
       } label: {
-        Image(systemName: "mic").font(.title3).frame(width: 44, height: 44)
+        Image(systemName: "mic").font(.title3).frame(width: 44, height: 44).contentShape(Rectangle())
       }.accessibilityLabel("Record voice attachment")
     }
     .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.textSecondary)
@@ -2074,6 +2098,7 @@ public struct CreatePostNativeView: View {
       return
     }
     isPosting = true
+    errorMessage = nil
     postStage = "Preparing post"
     postUploadFraction = nil
     MIRAPerformanceTimeline.mark("post_upload_start", detail: "post")

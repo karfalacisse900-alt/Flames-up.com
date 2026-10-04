@@ -6,12 +6,12 @@ enum CaptroComposerTestAPI {
   static func make() -> MIRAAPIClient {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [CaptroComposerTestProtocol.self]
-    return MIRAAPIClient(baseURL: URL(string: "https://composer-test.invalid/api")!,
+    return MIRAAPIClient(baseURL: URL(string: "https://localhost/api")!,
       session: URLSession(configuration: config))
   }
 }
 private final class CaptroComposerTestProtocol: URLProtocol {
-  override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "composer-test.invalid" }
+  override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "localhost" }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
     let path = request.url?.path ?? ""

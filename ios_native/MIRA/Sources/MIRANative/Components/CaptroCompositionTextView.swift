@@ -33,8 +33,15 @@ struct CaptroCompositionTextView: UIViewRepresentable {
     view.textColor = .label
     view.tintColor = UIColor(MIRATheme.Color.forest)
     view.accessibilityHint = placeholder
-    if focused && !view.isFirstResponder && view.window != nil { view.becomeFirstResponder() }
-    if !focused && view.isFirstResponder { view.resignFirstResponder() }
+    if focused != context.coordinator.lastRequestedFocus {
+      if focused && view.window != nil {
+        view.becomeFirstResponder()
+        context.coordinator.lastRequestedFocus = true
+      } else if !focused {
+        view.resignFirstResponder()
+        context.coordinator.lastRequestedFocus = false
+      }
+    }
   }
 
   func sizeThatFits(_ proposal: ProposedViewSize, uiView: UITextView, context: Context) -> CGSize? {
@@ -46,6 +53,7 @@ struct CaptroCompositionTextView: UIViewRepresentable {
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   final class Coordinator: NSObject, UITextViewDelegate {
     var parent: CaptroCompositionTextView
+    var lastRequestedFocus = false
     init(_ parent: CaptroCompositionTextView) { self.parent = parent }
     func textViewDidChange(_ view: UITextView) {
       guard view.markedTextRange == nil else { return }

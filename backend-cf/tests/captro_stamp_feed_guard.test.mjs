@@ -298,7 +298,7 @@ test('composer exposes quiet tools, native actions, and no Post category', () =>
   assert.match(composer, /Text\("Create"\)/);
   assert.match(canvas, /ForEach\(CaptroWritingIntent\.allCases\)/);
   assert.doesNotMatch(canvas, /Text\("Post"\)|Text\("Create Post"\)|composerToolLabel|shadow\(|LinearGradient/);
-  assert.match(canvas, /scrollDismissesKeyboard\(\.interactively\)/);
+  assert.match(canvas, /scrollDismissesKeyboard\(\.(interactively|immediately)\)/);
 });
 
 test('feed image upload preserves composition and stays within the hosted-image limit', () => {

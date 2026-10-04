@@ -6,6 +6,7 @@ final class ComposerCreationTests: XCTestCase {
     app.launchArguments = ["--captro-design-quality-test", "--captro-quality-composer"] + extra
     app.launch()
     XCTAssertTrue(app.textViews["composer.writing"].waitForExistence(timeout: 15))
+    if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
     return app
   }
   private func snapshot(_ app: XCUIApplication, _ name: String) {
@@ -13,7 +14,9 @@ final class ComposerCreationTests: XCTestCase {
     shot.name = name; shot.lifetime = .keepAlways; add(shot)
   }
   private func dismissKeyboard(_ app: XCUIApplication) {
-    app.swipeDown()
+    let scroll = app.scrollViews.firstMatch
+    scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.25)).press(forDuration: 0.05,
+      thenDragTo: scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.48)))
   }
   private func select(_ app: XCUIApplication, _ title: String) {
     app.buttons["composer.intent"].tap()
