@@ -9,7 +9,7 @@ struct CaptroCompositionTextView: UIViewRepresentable {
   var placeholder: String
 
   static func permitsChange(from current: String, to next: String, composing: Bool = false) -> Bool {
-    composing || next.count <= 500 || (current.count > 500 && next.count < current.count)
+    composing || next.count <= 500 || (current.count > 500 && next.count <= current.count)
   }
 
   func makeUIView(context: Context) -> UITextView {
@@ -33,7 +33,9 @@ struct CaptroCompositionTextView: UIViewRepresentable {
     done.setTitle("Done", for: .normal)
     done.titleLabel?.font = .preferredFont(forTextStyle: .body)
     done.titleLabel?.adjustsFontForContentSizeCategory = true
-    done.frame = CGRect(x: 0, y: 0, width: 64, height: 44)
+    let buttonSize = done.sizeThatFits(CGSize(width: 500, height: 200))
+    done.frame = CGRect(x: 0, y: 0, width: max(64, buttonSize.width + 16), height: max(44, buttonSize.height + 8))
+    accessory.frame.size.height = done.frame.height
     done.addTarget(context.coordinator, action: #selector(Coordinator.dismissKeyboard), for: .touchUpInside)
     done.accessibilityIdentifier = "composer.keyboardDone"
     done.accessibilityLabel = "Dismiss keyboard"
