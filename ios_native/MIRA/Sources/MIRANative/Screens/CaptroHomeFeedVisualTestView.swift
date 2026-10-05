@@ -45,7 +45,7 @@ private enum CaptroHomeFeedVisualFixtures {
           "caption": index == 0 ? "Anyone up for a walk?" : String(repeating: "A designer and developer to help build something together. ", count: 12),
           "images": [], "feedMediaUrls": [], "postType": "general", "createdAt": "2026-10-04T09:41:00Z"
         ]
-        if ProcessInfo.processInfo.arguments.contains("--captro-visual-audio") {
+        if index == 0 && ProcessInfo.processInfo.arguments.contains("--captro-visual-audio") {
           value["detail"] = ["voice": ["id": "voice-layout-test", "durationMs": 8000]]
           value["audioProvider"] = "audius"
           value["audioTrackId"] = "audio-layout-test"
