@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 /// Real attachments, inside the Stamp surface; never inside its navigation Button.
 struct CaptroStampAudio: View {

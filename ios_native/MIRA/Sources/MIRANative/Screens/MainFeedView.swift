@@ -1304,6 +1304,7 @@ public struct MainFeedView: View {
       post: post,
       api: model.api,
       isVideoActive: isCurrent && post.id == activeVideoPostID && !isMediaPlaybackSuppressed,
+      isPostActive: isCurrent && !isMediaPlaybackSuppressed,
       showsFeedControls: false,
       onFollow: { await model.followAuthor(post) },
       onOpenOptions: { presentPostOptions(for: post) },

@@ -6,6 +6,7 @@ struct CaptroFeedPostView: View {
   let post: MIRAPost
   let api: MIRAAPIClient
   let isVideoActive: Bool
+  var isPostActive = true
   let showsFeedControls: Bool
   let onFollow: () async -> Bool
   let onOpenOptions: () -> Void
@@ -86,7 +87,7 @@ struct CaptroFeedPostView: View {
 
   private func textOnlyStamp(maxBodyLines: Int) -> some View {
     CaptroTextOnlyStampCard(post: post, api: api, canRespond: canRespond,
-      maxBodyLines: maxBodyLines, isActive: isVideoActive, onOpen: onOpenPost)
+      maxBodyLines: maxBodyLines, isActive: isPostActive, onOpen: onOpenPost)
   }
 
   @ViewBuilder
@@ -95,6 +96,7 @@ struct CaptroFeedPostView: View {
       post: post,
       api: api,
       isVideoActive: isVideoActive,
+      isAudioActive: isPostActive,
       selectedMediaIndex: $selectedMediaIndex,
       onOpenPost: onOpenPost,
       onSave: onSave,

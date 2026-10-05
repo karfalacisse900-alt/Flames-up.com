@@ -6,6 +6,7 @@ struct CaptroMediaPager: View {
   let post: MIRAPost
   let api: MIRAAPIClient
   let isVideoActive: Bool
+  var isAudioActive = true
   @Binding var selectedMediaIndex: Int
   let onOpenPost: () -> Void
   let onSave: () -> Void
@@ -182,7 +183,7 @@ struct CaptroMediaPager: View {
         feedCaptionMaxLines: mediaHeight < 300 ? 2 : (mediaHeight < 420 ? 4 : 5),
         showsBorder: false, onOpen: openPostUnlessPeeking)
         if post.detail?.voice != nil || post.hasAudio {
-          CaptroStampAudio(post: post, api: api, isActive: isVideoActive)
+          CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
             .padding(.horizontal, 14).padding(.bottom, 12)
         }
       }
