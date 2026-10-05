@@ -113,8 +113,8 @@ test('Moment detail keeps writing on one editorial card without a separate capti
 test('Moment writing and real audio controls stay inside the Stamp surface', () => {
   assert.match(editorialCard, /content\.type == \.moment/);
   assert.match(editorialCard, /!condensed \|\| content\.type == \.moment \|\| expanded/);
-  assert.match(postView, /CaptroStampAudio\(post: post, api: api\)/);
-  assert.match(mediaPager, /CaptroStampAudio\(post: post, api: api\)/);
+  assert.match(postView, /CaptroStampAudio\(post: post, api: api, isActive:/);
+  assert.match(mediaPager, /CaptroStampAudio\(post: post, api: api, isActive:/);
   const audio = readIOS('Components/CaptroStampAudio.swift');
   assert.match(audio, /CaptroCompactVoicePlayer/);
   assert.match(audio, /music\/audius\/stream/);
