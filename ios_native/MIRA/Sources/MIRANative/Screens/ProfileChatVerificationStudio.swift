@@ -2183,8 +2183,6 @@ public struct ChatNativeView: View {
   public var body: some View {
     ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
-          chatHeader
-
           if model.conversations.isEmpty && model.isLoading {
             chatListSkeleton
           } else if let error = model.loadError, model.conversations.isEmpty {
@@ -2194,9 +2192,10 @@ public struct ChatNativeView: View {
           } else if model.conversations.isEmpty {
             MIRAEmptyState(title: "No chats yet", message: "Friends and replies will appear here.", systemImage: "bubble.left.and.bubble.right")
           } else {
-            LazyVStack(spacing: MIRATheme.Space.sm) {
+            LazyVStack(spacing: 0) {
               ForEach(model.conversations) { conversation in
                 conversationCard(conversation)
+                Divider().padding(.leading, 62)
               }
             }
             .padding(.horizontal, MIRATheme.Space.md)
@@ -2244,32 +2243,17 @@ public struct ChatNativeView: View {
         }
       }
       .navigationBarTitleDisplayMode(.inline)
+      .navigationTitle("Messages")
+      .toolbar {
+        ToolbarItem(placement: .topBarTrailing) {
+          Button { showCreateGroup = true } label: {
+            Image(systemName: "square.and.pencil").frame(width: 44, height: 44)
+          }
+          .accessibilityLabel("New conversation")
+          .buttonStyle(.plain)
+        }
+      }
       .toolbar(.hidden, for: .tabBar)
-  }
-
-  private var chatHeader: some View {
-    HStack(alignment: .center, spacing: MIRATheme.Space.md) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Messages")
-          .font(.system(size: 32, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text("\(model.conversations.count) chats")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textMuted)
-      }
-      Spacer()
-      Button { showCreateGroup = true } label: {
-        Image(systemName: "square.and.pencil")
-          .font(.system(size: 17, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 44, height: 44)
-          .background(MIRATheme.Color.surface)
-          .clipShape(Circle())
-          .shadow(color: .black.opacity(0.04), radius: 12, y: 4)
-      }
-      .buttonStyle(.plain)
-    }
-    .padding(.horizontal, MIRATheme.Space.md)
   }
 
   @ViewBuilder
@@ -2289,14 +2273,7 @@ public struct ChatNativeView: View {
     }
     .buttonStyle(.plain)
     .disabled(openingConversationId != nil)
-    .padding(.horizontal, MIRATheme.Space.sm)
     .padding(.vertical, 8)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
-    }
   }
 
   @MainActor
@@ -2348,20 +2325,21 @@ private struct ChatOpenRoute: Identifiable {
 
 private struct ChatConversationRow: View {
   let conversation: MIRAConversation
+  @Environment(\.dynamicTypeSize) private var textSize
 
   var body: some View {
     HStack(spacing: 14) {
       avatar
       VStack(alignment: .leading, spacing: 6) {
         Text(conversation.displayName)
-          .font(.system(size: 18, weight: .semibold))
+          .font(.body.weight(.semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
+          .lineLimit(textSize.isAccessibilitySize ? 2 : 1)
           .truncationMode(.tail)
         Text(rowPreview)
-          .font(.system(size: 14, weight: .medium))
+          .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textMuted)
-          .lineLimit(1)
+          .lineLimit(textSize.isAccessibilitySize ? 2 : 1)
           .truncationMode(.tail)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -2369,19 +2347,19 @@ private struct ChatConversationRow: View {
 
       VStack(alignment: .trailing, spacing: 8) {
         Text(chatTime(conversation.lastMessageTime ?? conversation.updatedAt))
-          .font(.system(size: 12, weight: .semibold))
+          .font(.caption)
           .foregroundStyle(MIRATheme.Color.textMuted)
           .lineLimit(1)
         if let unread = conversation.unreadCount, unread > 0 {
           Text("\(min(unread, 99))")
-            .font(.system(size: 11, weight: .bold))
+            .font(.caption2.weight(.semibold))
             .foregroundStyle(.white)
             .frame(minWidth: 22, minHeight: 22)
             .background(MIRATheme.Color.forest)
             .clipShape(Capsule())
         } else if conversation.otherIsOnline == true {
           Text("online")
-            .font(.system(size: 11, weight: .semibold))
+            .font(.caption2)
             .foregroundStyle(MIRATheme.Color.forest)
         }
       }
@@ -2399,9 +2377,9 @@ private struct ChatConversationRow: View {
             .font(.system(size: 22, weight: .semibold))
             .foregroundStyle(MIRATheme.Color.forest)
         }
-        .frame(width: 58, height: 58)
+        .frame(width: 48, height: 48)
       } else {
-        RemoteAvatar(url: conversation.otherProfileImage, size: 58)
+        RemoteAvatar(url: conversation.otherProfileImage, size: 48)
       }
       if conversation.otherIsOnline == true && !conversation.isGroup {
         Circle()

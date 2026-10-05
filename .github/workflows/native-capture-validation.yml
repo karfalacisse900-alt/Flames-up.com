@@ -17,7 +17,7 @@ jobs:
   capture:
     if: ${{ inputs.contract_only != true }}
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6
       - run: brew install xcodegen

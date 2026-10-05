@@ -98,6 +98,10 @@ final class AppSystemUITests: XCTestCase {
     app.launchArguments = ["--captro-design-quality-test", "--captro-quality-chat"]
     app.launch()
     XCTAssertTrue(app.staticTexts["No chats yet"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.navigationBars["Messages"].exists)
+    let compose = app.buttons["New conversation"]
+    let visible = expectation(for: NSPredicate(format: "isHittable == true"), evaluatedWith: compose)
+    wait(for: [visible], timeout: 15)
     capture(app, "chat-empty-native")
   }
 }

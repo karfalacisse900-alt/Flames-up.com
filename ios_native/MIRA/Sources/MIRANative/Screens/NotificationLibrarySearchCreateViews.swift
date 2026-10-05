@@ -1731,6 +1731,7 @@ public struct CreatePostNativeView: View {
       }
     }.tint(MIRATheme.Color.forest)
       .presentationDetents([.height(draft.time == nil ? 340 : 390), .large])
+      .presentationBackground(MIRATheme.Color.surface)
   }
 
   private var hasUnsavedPost: Bool {

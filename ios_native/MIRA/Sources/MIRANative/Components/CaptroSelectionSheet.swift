@@ -5,7 +5,8 @@ struct CaptroSelectionSheet<Content: View>: View {
   let title: String
   var onBack: (() -> Void)? = nil
   @ViewBuilder var content: () -> Content
-  @State private var contentHeight: CGFloat = 240
+  @State private var contentHeight: CGFloat = 360
+  @State private var selectedDetent: PresentationDetent = .height(360)
   var body: some View {
     NavigationStack {
       ScrollView {
@@ -14,6 +15,13 @@ struct CaptroSelectionSheet<Content: View>: View {
           .background(GeometryReader { geometry in
             Color.clear.preference(key: CaptroSelectionHeight.self, value: geometry.size.height)
           })
+          .onPreferenceChange(CaptroSelectionHeight.self) { height in
+            guard height > 0 else { return }
+            let resolved = max(180, min(height + 64, 600))
+            guard abs(resolved - contentHeight) > 1 else { return }
+            contentHeight = resolved
+            if selectedDetent != .large { selectedDetent = .height(resolved) }
+          }
       }
       .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -22,12 +30,11 @@ struct CaptroSelectionSheet<Content: View>: View {
         }
       }
       .background(MIRATheme.Color.surface)
-      .onPreferenceChange(CaptroSelectionHeight.self) { contentHeight = $0 + 64 }
     }
     .tint(MIRATheme.Color.forest)
     .presentationBackground(MIRATheme.Color.surface)
     .presentationDragIndicator(.visible)
-    .presentationDetents([.height(max(180, min(contentHeight, 600))), .large])
+    .presentationDetents([.height(contentHeight), .large], selection: $selectedDetent)
   }
 }
 private struct CaptroSelectionHeight: PreferenceKey {
