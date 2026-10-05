@@ -101,7 +101,10 @@ struct CaptroStampAudio: View {
           self?.loading = state == .waitingToPlayAtSpecifiedRate
         }
       }
-      if let start = post.audioStartTime, start > 0 { next.seek(to: CMTime(seconds: Double(start), preferredTimescale: 600)) }
+      if let start = post.audioStartTime, start > 0 {
+        await next.seek(to: CMTime(seconds: Double(start), preferredTimescale: 600))
+        guard current == generation, !Task.isCancelled else { return }
+      }
       if let duration = post.audioDuration, duration > 0 {
         next.currentItem?.forwardPlaybackEndTime = CMTime(seconds: Double((post.audioStartTime ?? 0) + duration), preferredTimescale: 600)
       }
