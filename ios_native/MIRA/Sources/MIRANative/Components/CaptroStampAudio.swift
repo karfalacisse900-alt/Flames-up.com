@@ -40,7 +40,7 @@ struct CaptroStampAudio: View {
     .onDisappear { stopOwnedPlayback() }
     .onChange(of: isActive) { _, active in if !active { stopOwnedPlayback() } }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { note in
-      if (note.object as? String) != "stamp_music_started" { music.stop() }
+      if (note.object as? String) != "stamp_music_started:\(post.id)" { music.stop() }
     }
     .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in music.stop() }
     .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { _ in music.stop() }
@@ -68,7 +68,7 @@ struct CaptroStampAudio: View {
   func toggle(post: MIRAPost, api: MIRAAPIClient) async {
     if let player {
       if playing { player.pause(); playing = false }
-      else { MIRAPlaybackCoordinator.pauseAll(reason: "stamp_music_started"); player.play() }
+      else { MIRAPlaybackCoordinator.pauseAll(reason: "stamp_music_started:\(post.id)"); player.play() }
       return
     }
     loading = true; error = nil
@@ -81,7 +81,7 @@ struct CaptroStampAudio: View {
       }
       guard current == generation, !Task.isCancelled else { return }
       guard let stream, let url = URL(string: stream), url.scheme == "https" else { throw MIRAAPIError.emptyResponse }
-      MIRAPlaybackCoordinator.pauseAll(reason: "stamp_music_started")
+      MIRAPlaybackCoordinator.pauseAll(reason: "stamp_music_started:\(post.id)")
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
       try AVAudioSession.sharedInstance().setActive(true)
       let next = AVPlayer(url: url)

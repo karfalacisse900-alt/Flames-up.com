@@ -314,3 +314,46 @@ test('feed image upload preserves composition and stays within the hosted-image 
   assert.match(mediaUpload, /width: actualWidth,[\s\S]*?height: actualHeight/);
   assert.doesNotMatch(mediaUpload, /let drawOrigin = CGPoint/);
 });
+
+test('composer selectors use one lifecycle owner and flat content-sized sheets', () => {
+  const intent = composer.slice(composer.indexOf('private var intentSelector'), composer.indexOf('private func compositionChip'));
+  const audience = composer.slice(composer.indexOf('private var audiencePicker'), composer.indexOf('private var timePicker'));
+  assert.doesNotMatch(intent, /Menu\s*\{/);
+  assert.match(intent, /CaptroSelectionSheet\(title:/);
+  assert.match(intent, /More ways to create/);
+  assert.match(audience, /CaptroSelectionSheet\(title: "Audience"/);
+  assert.doesNotMatch(audience, /List\s*\{|listStyle|UserDefaults/);
+  assert.match(composer, /sheet\(item: selectionPresentationBinding, onDismiss:/);
+  assert.match(composer, /queuedPresentation = nil; openPresentation\(next\)/);
+});
+
+test('time directly edits its optional value and Maps search never requests device location on entry', () => {
+  const time = composer.slice(composer.indexOf('private var timePicker'), composer.indexOf('private var hasUnsavedPost'));
+  const location = composer.slice(composer.indexOf('private struct PostLocationPickerSheet'), composer.indexOf('private struct PostPeopleTagSheet'));
+  assert.match(time, /datePickerStyle\(\.wheel\)/);
+  assert.match(time, /Button\("Save"\)/);
+  assert.match(time, /Button\("Cancel"\)/);
+  assert.match(location, /MKLocalSearch\(request:/);
+  assert.match(location, /clean == cleanQuery/);
+  assert.match(location, /withTaskCancellationHandler/);
+  assert.doesNotMatch(location, /requestWhenInUseAuthorization|requestLocation|decorative|MIRAEmptyState|Map\(/);
+});
+
+test('native Story presentation has no extra canvas fade or delayed dismissal', () => {
+  const stories = readIOS('Screens/DiscoverNativeView.swift');
+  assert.doesNotMatch(stories, /isCanvasVisible/);
+  const start = stories.indexOf('private func closeStoryViewer');
+  const close = stories.slice(start, stories.indexOf('private func goToPreviousStory', start));
+  assert.match(close, /onClose\(\)/);
+  assert.doesNotMatch(close, /asyncAfter|withAnimation|opacity/);
+});
+
+test('Stamp audio belongs to the visible post, not only to video activation', () => {
+  assert.match(mainFeed, /isPostActive: isCurrent && !isMediaPlaybackSuppressed/);
+  assert.match(postView, /isActive: isPostActive/);
+  assert.match(postView, /isAudioActive: isPostActive/);
+  assert.match(mediaPager, /CaptroStampAudio\(post: post, api: api, isActive: isAudioActive\)/);
+  const audio = readIOS('Components/CaptroStampAudio.swift');
+  assert.match(audio, /onChange\(of: isActive\)/);
+  assert.match(audio, /activeId == voice.id/);
+});

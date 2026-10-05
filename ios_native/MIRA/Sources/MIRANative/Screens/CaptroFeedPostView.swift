@@ -20,7 +20,6 @@ struct CaptroFeedPostView: View {
   var canRespond = true
 
   @Environment(\.displayScale) private var displayScale
-  @State private var transcriptVoiceId: String?
 
   var body: some View {
     Group {
@@ -80,9 +79,6 @@ struct CaptroFeedPostView: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .sheet(isPresented: Binding(get: { transcriptVoiceId != nil }, set: { if !$0 { transcriptVoiceId = nil } })) {
-      if let transcriptVoiceId { CaptroVoiceTranscriptSheet(voiceId: transcriptVoiceId) }
-    }
   }
 
   private func textOnlyStamp(maxBodyLines: Int) -> some View {

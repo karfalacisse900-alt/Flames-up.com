@@ -42,6 +42,7 @@ jobs:
           set -o pipefail
           runtime="$(xcrun simctl list runtimes --json | python3 -c 'import sys,json; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r.get("name", "").startswith("iOS")))')"
           device="$(xcrun simctl create 'Captro Small iPhone' com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation "$runtime")"
+          echo "CAPTRO_SMALL_SIMULATOR=$device" >> "$GITHUB_ENV"
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" \
             -derivedDataPath "$RUNNER_TEMP/CaptureBuild" -resultBundlePath "$RUNNER_TEMP/SmallComposer.xcresult" \
@@ -49,6 +50,21 @@ jobs:
             -only-testing:CaptroLayoutUITests/AppSystemUITests \
             -only-testing:CaptroLayoutUITests/DesignQualityTests/testControlsAndSheetScrolling \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/small-composer-test.log"
+      - name: Record native composer interactions
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcrun simctl bootstatus "$CAPTRO_SMALL_SIMULATOR" -b
+          xcrun simctl io "$CAPTRO_SMALL_SIMULATOR" recordVideo --codec=h264 "$RUNNER_TEMP/composer-interactions.mp4" > "$RUNNER_TEMP/composer-recording.log" 2>&1 &
+          capture_pid=$!
+          trap 'kill -INT "$capture_pid" 2>/dev/null || true; wait "$capture_pid" || true' EXIT
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SMALL_SIMULATOR" \
+            -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/CaptureBuild" -resultBundlePath "$RUNNER_TEMP/ComposerRecording.xcresult" \
+            -only-testing:CaptroLayoutUITests/ComposerCreationTests/testCompactSelectorsAndDirectTimeEditorPreserveDraft \
+            -only-testing:CaptroLayoutUITests/ComposerCreationTests/testLocationUsesLiveMapsSearchAndKeyboard \
+            CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/composer-recording-test.log"
       - name: Export screenshots
         if: always()
         run: |
@@ -65,6 +81,9 @@ jobs:
             ${{ runner.temp }}/small-composer-test.log
             ${{ runner.temp }}/capture-screenshots/
             ${{ runner.temp }}/small-composer-screenshots/
+            ${{ runner.temp }}/composer-interactions.mp4
+            ${{ runner.temp }}/composer-recording.log
+            ${{ runner.temp }}/composer-recording-test.log
   composer-contract:
     if: ${{ inputs.contract_only == true }}
     runs-on: ubuntu-latest
