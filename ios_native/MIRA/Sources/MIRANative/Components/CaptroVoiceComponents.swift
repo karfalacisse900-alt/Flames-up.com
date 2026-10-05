@@ -440,12 +440,14 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
             await session.accessToken() == token else { return }
       guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MIRAAPIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0) }
       let next = try AVAudioPlayer(data: data)
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+      try AVAudioSession.sharedInstance().setActive(true)
       next.delegate = self
       next.prepareToPlay()
       player = next
       activeId = id
       duration = next.duration
-      next.play()
+      guard next.play() else { throw MIRAAPIError.emptyResponse }
       isPlaying = true
       timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
         Task { @MainActor in self?.updateProgress() }

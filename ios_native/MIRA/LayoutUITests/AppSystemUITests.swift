@@ -72,4 +72,32 @@ final class AppSystemUITests: XCTestCase {
     XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
     capture(app, "text-post-details")
   }
+
+  func testAudioControlsAppearInsideTextStamp() {
+    let app = launch(["--captro-home-feed-visual-test", "--captro-visual-text", "--captro-visual-audio"])
+    let play = app.buttons["Play recording"]
+    XCTAssertTrue(play.waitForExistence(timeout: 15))
+    XCTAssertTrue(app.buttons["Play attached music"].exists)
+    let creator = app.buttons.matching(NSPredicate(format: "label CONTAINS '@test_creator'")).firstMatch
+    XCTAssertTrue(creator.exists)
+    XCTAssertLessThan(play.frame.maxY, creator.frame.minY)
+    capture(app, "home-stamp-voice-and-music")
+  }
+
+  func testStoryNativeOpenCloseAndChatRoute() {
+    let app = launch(["--captro-design-quality-test", "--captro-quality-story"])
+    for index in 0..<3 {
+      app.buttons["Open test Story"].tap()
+      let close = app.buttons["Close capture"]
+      XCTAssertTrue(close.waitForExistence(timeout: 5))
+      if index == 0 { capture(app, "story-native-presentation") }
+      close.tap()
+      XCTAssertTrue(app.buttons["Open test Story"].waitForExistence(timeout: 5))
+    }
+    app.terminate()
+    app.launchArguments = ["--captro-design-quality-test", "--captro-quality-chat"]
+    app.launch()
+    XCTAssertTrue(app.staticTexts["No chats yet"].waitForExistence(timeout: 15))
+    capture(app, "chat-empty-native")
+  }
 }

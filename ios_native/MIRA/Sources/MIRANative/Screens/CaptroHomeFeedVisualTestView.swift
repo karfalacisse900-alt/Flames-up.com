@@ -39,12 +39,19 @@ private enum CaptroHomeFeedVisualFixtures {
   static func posts() -> [MIRAPost] {
     if ProcessInfo.processInfo.arguments.contains("--captro-visual-text") {
       return (0..<2).compactMap { index in
-        let value: [String: Any] = [
+        var value: [String: Any] = [
           "id": "text-system-\(index)", "userFullName": "Test Creator", "userUsername": "test_creator",
           "title": index == 0 ? "A walk around the neighborhood" : "Looking for people to build with",
           "caption": index == 0 ? "Anyone up for a walk?" : String(repeating: "A designer and developer to help build something together. ", count: 12),
           "images": [], "feedMediaUrls": [], "postType": "general", "createdAt": "2026-10-04T09:41:00Z"
         ]
+        if ProcessInfo.processInfo.arguments.contains("--captro-visual-audio") {
+          value["detail"] = ["voice": ["id": "voice-layout-test", "durationMs": 8000]]
+          value["audioProvider"] = "audius"
+          value["audioTrackId"] = "audio-layout-test"
+          value["audioTitle"] = "Attached music"
+          value["audioArtist"] = "Test artist"
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
         return try? JSONDecoder().decode(MIRAPost.self, from: data)
       }

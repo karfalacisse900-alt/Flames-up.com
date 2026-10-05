@@ -24,7 +24,7 @@ private final class CaptroComposerTestProtocol: URLProtocol {
     } else if path.hasSuffix("/posts/creation-capabilities") {
       body = authorized ? #"{"structured_types":["club","event","meetup","deal"]}"# : #"{"structured_types":[]}"#
       status = 200
-    } else if path.hasSuffix("/users/composer-ui-test/posts") || path.hasSuffix("/statuses") {
+    } else if path.hasSuffix("/users/composer-ui-test/posts") || path.hasSuffix("/statuses") || path.hasSuffix("/conversations") {
       body = "[]"
       status = 200
     } else {

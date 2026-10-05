@@ -110,10 +110,14 @@ test('Moment detail keeps writing on one editorial card without a separate capti
   assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
 });
 
-test('Moment writing stays inside its compact feed card and voice has reserved space', () => {
+test('Moment writing and real audio controls stay inside the Stamp surface', () => {
   assert.match(editorialCard, /content\.type == \.moment/);
   assert.match(editorialCard, /!condensed \|\| content\.type == \.moment \|\| expanded/);
-  assert.match(postView, /post\.detail\?\.voice == nil \? 0 : 86/);
+  assert.match(postView, /CaptroStampAudio\(post: post, api: api\)/);
+  assert.match(mediaPager, /CaptroStampAudio\(post: post, api: api\)/);
+  const audio = readIOS('Components/CaptroStampAudio.swift');
+  assert.match(audio, /CaptroCompactVoicePlayer/);
+  assert.match(audio, /music\/audius\/stream/);
   const profile = readIOS('Screens/ProfileChatVerificationStudio.swift');
   assert.doesNotMatch(profile, /ProfileToolbarDestinationButton\(destination: \.bookmarks/);
 });
@@ -276,7 +280,7 @@ test('composer persists one draft and hides structured setup behind the intent s
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
   assert.match(composer, /private var stampPickerKinds:[\s\S]*?\[\.club, \.event, \.meetup, \.deal\]\.filter/);
   assert.match(composer, /creationCapabilities\?\.structuredTypes\.contains/);
-  assert.match(composer, /fullScreenCover\(isPresented: \$isEditingPostDetails/);
+  assert.match(composer, /fullScreenCover\(isPresented: presentationBinding\(\.structured\)/);
 });
 
 test('single-card creation preserves native mixed-media picking and original proportions', () => {
@@ -294,7 +298,7 @@ test('single-card creation preserves native mixed-media picking and original pro
 
 test('composer exposes quiet tools, native actions, and no Post category', () => {
   const canvas = composer.slice(composer.indexOf('private var mediaFirstPage:'), composer.indexOf('private var stampDetailsPage:'));
-  assert.match(canvas, /Label\("Add media", systemImage: "plus.circle"\)/);
+  assert.match(canvas, /Label\("Add", systemImage: "plus.circle"\)/);
   assert.match(canvas, /accessibilityLabel\("Record voice attachment"\)/);
   assert.match(composer, /ToolbarItem\(placement: \.confirmationAction\)/);
   assert.match(composer, /Text\("Create"\)/);

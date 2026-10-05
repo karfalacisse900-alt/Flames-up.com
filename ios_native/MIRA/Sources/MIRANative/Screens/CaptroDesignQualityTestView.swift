@@ -25,6 +25,10 @@ public struct CaptroDesignQualityTestView: View {
         CreatePostNativeView(api: CaptroComposerTestAPI.make())
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-profile") {
         ProfileNativeView(api: CaptroComposerTestAPI.make())
+      } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-chat") {
+        NavigationStack { ChatNativeView(api: CaptroComposerTestAPI.make(), currentUserId: "composer-ui-test") }
+      } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-story") {
+        CaptroStoryPresentationTestHost()
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-capture") {
         CaptroScanView(api: api)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-legal") {
@@ -73,6 +77,19 @@ public struct CaptroDesignQualityTestView: View {
     .environmentObject(MIRALocalization.shared)
     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
+  }
+}
+
+private struct CaptroStoryPresentationTestHost: View {
+  @State private var open = false
+  private let api = CaptroComposerTestAPI.make()
+  private let group = try! JSONDecoder().decode(MIRAStoryGroup.self, from: Data(#"{"userId":"composer-ui-test","userFullName":"Test Creator","statuses":[{"id":"story-ui-test","userId":"composer-ui-test"}]}"#.utf8))
+  var body: some View {
+    Button("Open test Story") { open = true }
+      .fullScreenCover(isPresented: $open) {
+        StoryViewerNativeView(group: group, allGroups: [group], api: api,
+          onClose: { open = false }, onReportStory: { _ in }, onOpenLinkedPost: { _ in })
+      }
   }
 }
 

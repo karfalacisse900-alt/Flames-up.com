@@ -182,7 +182,7 @@ struct CaptroMediaPager: View {
         feedCaptionMaxLines: mediaHeight < 300 ? 2 : (mediaHeight < 420 ? 4 : 5),
         showsBorder: false, onOpen: openPostUnlessPeeking)
         if post.detail?.voice != nil || post.hasAudio {
-          CaptroStampAudio(post: post, api: api)
+          CaptroStampAudio(post: post, api: api, isActive: isVideoActive)
             .padding(.horizontal, 14).padding(.bottom, 12)
         }
       }

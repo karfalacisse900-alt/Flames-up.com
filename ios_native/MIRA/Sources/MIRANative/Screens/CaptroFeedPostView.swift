@@ -86,7 +86,7 @@ struct CaptroFeedPostView: View {
 
   private func textOnlyStamp(maxBodyLines: Int) -> some View {
     CaptroTextOnlyStampCard(post: post, api: api, canRespond: canRespond,
-      maxBodyLines: maxBodyLines, onOpen: onOpenPost)
+      maxBodyLines: maxBodyLines, isActive: isVideoActive, onOpen: onOpenPost)
   }
 
   @ViewBuilder
@@ -138,6 +138,7 @@ private struct CaptroTextOnlyStampCard: View {
   let api: MIRAAPIClient
   let canRespond: Bool
   let maxBodyLines: Int
+  let isActive: Bool
   let onOpen: () -> Void
   @ScaledMetric(relativeTo: .title) private var titleSize = 28.0
   @ScaledMetric(relativeTo: .body) private var bodySize = 16.0
@@ -179,7 +180,7 @@ private struct CaptroTextOnlyStampCard: View {
       }
 
       if post.detail?.voice != nil || post.hasAudio {
-        CaptroStampAudio(post: post, api: api).padding(.top, 14)
+        CaptroStampAudio(post: post, api: api, isActive: isActive).padding(.top, 14)
       }
 
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)

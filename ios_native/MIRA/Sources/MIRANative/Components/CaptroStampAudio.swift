@@ -5,6 +5,7 @@ import SwiftUI
 struct CaptroStampAudio: View {
   let post: MIRAPost
   let api: MIRAAPIClient
+  var isActive = true
   @State private var transcript = false
   @StateObject private var music = CaptroStampMusicPlayback()
   var body: some View {
@@ -35,7 +36,8 @@ struct CaptroStampAudio: View {
     .sheet(isPresented: $transcript) {
       if let voice = post.detail?.voice { CaptroVoiceTranscriptSheet(voiceId: voice.id) }
     }
-    .onDisappear { music.stop() }
+    .onDisappear { stopOwnedPlayback() }
+    .onChange(of: isActive) { _, active in if !active { stopOwnedPlayback() } }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { note in
       if (note.object as? String) != "stamp_music_started" { music.stop() }
     }
@@ -46,6 +48,12 @@ struct CaptroStampAudio: View {
          AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable { music.stop() }
     }
   }
+  private func stopOwnedPlayback() {
+    music.stop()
+    if let voice = post.detail?.voice, CaptroVoicePlaybackCenter.shared.activeId == voice.id {
+      CaptroVoicePlaybackCenter.shared.stop()
+    }
+  }
 }
 
 @MainActor private final class CaptroStampMusicPlayback: ObservableObject {
@@ -54,6 +62,7 @@ struct CaptroStampAudio: View {
   @Published var error: String?
   private var player: AVPlayer?
   private var observation: NSKeyValueObservation?
+  private var statusObservation: NSKeyValueObservation?
   private var generation = 0
   func toggle(post: MIRAPost, api: MIRAAPIClient) async {
     if let player {
@@ -76,6 +85,13 @@ struct CaptroStampAudio: View {
       try AVAudioSession.sharedInstance().setActive(true)
       let next = AVPlayer(url: url)
       player = next
+      statusObservation = next.currentItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
+        guard item.status == .failed else { return }
+        Task { @MainActor in
+          guard self?.generation == current else { return }
+          self?.stop(); self?.error = "Music couldn’t play. Try again."
+        }
+      }
       observation = next.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] player, _ in
         let state = player.timeControlStatus
         Task { @MainActor in
@@ -85,6 +101,9 @@ struct CaptroStampAudio: View {
         }
       }
       if let start = post.audioStartTime, start > 0 { next.seek(to: CMTime(seconds: Double(start), preferredTimescale: 600)) }
+      if let duration = post.audioDuration, duration > 0 {
+        next.currentItem?.forwardPlaybackEndTime = CMTime(seconds: Double((post.audioStartTime ?? 0) + duration), preferredTimescale: 600)
+      }
       next.play(); loading = false
     } catch {
       guard current == generation else { return }
@@ -94,6 +113,7 @@ struct CaptroStampAudio: View {
   func stop() {
     generation += 1
     observation?.invalidate(); observation = nil
+    statusObservation?.invalidate(); statusObservation = nil
     player?.pause(); player = nil; playing = false; loading = false
   }
 }
