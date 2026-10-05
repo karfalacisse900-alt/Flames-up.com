@@ -674,16 +674,6 @@ public struct ProfileNativeView: View {
       }
       .buttonStyle(.plain)
       .accessibilityIdentifier("profile.edit")
-      VStack(spacing: 0) {
-        NavigationLink(destination: ProfileActivityNativeView(model: model).miraHideTabBarOnAppear()) {
-          profileUtility("Your activity", symbol: "list.bullet.rectangle")
-        }
-        Divider().overlay(MIRATheme.Color.hairline)
-        NavigationLink(destination: LibraryNativeView(api: model.api)) {
-          profileUtility("Saved items", symbol: "bookmark")
-        }
-      }
-      .buttonStyle(.plain)
       Text("Creations")
         .font(.headline).foregroundStyle(MIRATheme.Color.textPrimary)
         .accessibilityAddTraits(.isHeader)

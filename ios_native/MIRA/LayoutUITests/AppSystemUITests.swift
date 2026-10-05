@@ -36,17 +36,16 @@ final class AppSystemUITests: XCTestCase {
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
     capture(app, "profile-to-settings")
   }
-  func testProfileLargeTextDarkAndActivityEntry() {
+  func testProfileLargeTextDarkAndSettingsEntry() {
     let app = launch(["--captro-design-quality-test", "--captro-quality-profile", "--captro-quality-dark", "--captro-quality-large-text"])
     XCTAssertTrue(app.staticTexts["Test Creator"].waitForExistence(timeout: 15))
     capture(app, "profile-system-dark-accessibility")
-    let activity = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Your activity'")).firstMatch
-    for _ in 0..<5 where !activity.isHittable { app.swipeUp() }
-    XCTAssertTrue(activity.isHittable)
-    activity.tap()
-    XCTAssertTrue(app.navigationBars["Your activity"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Your activity'")).firstMatch.exists)
+    XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Saved items'")).firstMatch.exists)
+    app.buttons["Settings"].tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.tabBars.firstMatch.isHittable)
-    capture(app, "profile-activity-dark-accessibility")
+    capture(app, "profile-settings-dark-accessibility")
   }
   func testTextOnlyFeedKeepsNaturalCardHeightAndFullBodyInDetails() {
     let app = launch(["--captro-home-feed-visual-test", "--captro-visual-text", "--captro-quality-dark"])

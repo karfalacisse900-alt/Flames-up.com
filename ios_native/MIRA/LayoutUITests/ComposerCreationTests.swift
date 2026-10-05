@@ -20,6 +20,9 @@ final class ComposerCreationTests: XCTestCase {
   }
   private func select(_ app: XCUIApplication, _ title: String) {
     app.buttons["composer.intent"].tap()
+    if ["Club", "Event", "Meetup", "Deal"].contains(title) {
+      app.buttons["More ways to create"].tap()
+    }
     XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5))
     app.buttons[title].tap()
   }
@@ -66,7 +69,7 @@ final class ComposerCreationTests: XCTestCase {
     app.textViews["composer.writing"].typeText("Who wants to build something together?")
     dismissKeyboard(app)
     app.buttons["composer.add"].tap()
-    app.buttons["Add response"].tap()
+    app.buttons["Responses"].tap()
     XCTAssertTrue(app.buttons["Custom choices"].waitForExistence(timeout: 5))
     app.buttons["Custom choices"].tap()
     let fields = app.textFields
@@ -110,6 +113,55 @@ final class ComposerCreationTests: XCTestCase {
     snapshot(app, "composer-large-text-dark-limit")
     XCTAssertTrue(app.buttons["composer.create"].isHittable)
     XCTAssertGreaterThanOrEqual(app.buttons["composer.intent"].frame.height, 44)
+  }
+
+  func testCompactSelectorsAndDirectTimeEditorPreserveDraft() {
+    let app = launch(["--captro-composer-authorized"])
+    app.textViews["composer.writing"].typeText("Let’s meet this week.")
+    app.buttons["composer.intent"].tap()
+    XCTAssertTrue(app.navigationBars["Start with"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["composer.keyboardDone"].exists)
+    XCTAssertFalse(app.buttons["Event"].exists)
+    snapshot(app, "composer-start-with")
+    app.buttons["More ways to create"].tap()
+    XCTAssertTrue(app.buttons["Club"].waitForExistence(timeout: 5))
+    snapshot(app, "composer-more-ways")
+    app.buttons["Back"].tap()
+    app.buttons["Looking for"].tap()
+    XCTAssertEqual(app.textViews["composer.writing"].value as? String, "Let’s meet this week.")
+    app.buttons["composer.audience"].tap()
+    XCTAssertTrue(app.navigationBars["Audience"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Done"].exists)
+    snapshot(app, "composer-audience")
+    app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Friends'")).firstMatch.tap()
+    app.buttons["Add time"].tap()
+    XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 5))
+    XCTAssertGreaterThanOrEqual(app.pickerWheels.count, 2)
+    snapshot(app, "composer-time-direct")
+    app.buttons["Cancel"].tap()
+    XCTAssertTrue(app.buttons["Add time"].exists)
+    app.buttons["composer.add"].tap()
+    XCTAssertTrue(app.buttons["Photos & videos"].waitForExistence(timeout: 5))
+    snapshot(app, "composer-add")
+  }
+
+  func testLocationUsesLiveMapsSearchAndKeyboard() {
+    let app = launch()
+    dismissKeyboard(app)
+    app.buttons["Add location"].tap()
+    XCTAssertTrue(app.navigationBars["Location"].waitForExistence(timeout: 5))
+    let search = app.textFields["composer.location.search"]
+    XCTAssertTrue(search.waitForExistence(timeout: 5))
+    search.tap(); search.typeText("Central Park New York")
+    // Actual MapKit search, not fixture rows or a fake production API response.
+    let result = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Central Park'")).firstMatch
+    XCTAssertTrue(result.waitForExistence(timeout: 25), app.debugDescription)
+    XCTAssertTrue(app.keyboards.firstMatch.exists)
+    snapshot(app, "composer-location-results-keyboard")
+    result.tap()
+    XCTAssertTrue(app.buttons["composer.create"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Central Park'")).firstMatch.exists)
+    XCTAssertTrue(app.buttons["composer.audience"].label.contains("Public"))
   }
 }
 

@@ -1180,7 +1180,6 @@ struct StoryViewerNativeView: View {
   @State private var showCaptureDetails = false
   @State private var showPrivateReply = false
   @State private var isStoryPaused = false
-  @State private var isCanvasVisible = false
   @State private var isStoryPlaybackArmed = false
   @State private var isClosing = false
   @State private var replyText = ""
@@ -1231,12 +1230,9 @@ struct StoryViewerNativeView: View {
       media: storyMediaLayer,
       identity: storyTopBar
     )
-    .opacity(isCanvasVisible ? 1 : 0.001)
-    .animation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion), value: isCanvasVisible)
     .miraStatusBarHidden(true)
     .onAppear {
       armStoryPlaybackForCurrentStory(reason: "story_view_open")
-      withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) { isCanvasVisible = true }
     }
     .task(id: currentStory?.id) {
       guard let id = currentStory?.id else { return }
@@ -1421,7 +1417,7 @@ struct StoryViewerNativeView: View {
   }
 
   private var shouldPlayCurrentStory: Bool {
-    isStoryPlaybackArmed && isCanvasVisible && !isClosing && !isStoryPaused && scenePhase == .active
+    isStoryPlaybackArmed && !isClosing && !isStoryPaused && scenePhase == .active
   }
 
   private func storyPlaybackIdentity(for mediaURL: String) -> String {
@@ -1943,14 +1939,10 @@ struct StoryViewerNativeView: View {
     guard !isClosing else { return }
     isClosing = true
     MIRAApplePerformanceLogger.event("story_viewer_close")
-    let duration = reduceMotion ? CaptroMotion.Duration.reduced : CaptroMotion.Duration.fullScreenClose
-    withAnimation(CaptroMotion.fullScreenAnimation(reduceMotion: reduceMotion)) {
-      isCanvasVisible = false
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-      NotificationCenter.default.post(name: Notification.Name("captroStoryDidChange"), object: nil)
-      onClose()
-    }
+    isStoryPlaybackArmed = false
+    stopStoryAudio()
+    NotificationCenter.default.post(name: Notification.Name("captroStoryDidChange"), object: nil)
+    onClose()
   }
 
   private func goToPreviousStory() {

@@ -1082,11 +1082,20 @@ public struct CreatePostNativeView: View {
   @State private var draft = CaptroCompositionDraft()
   @ScaledMetric(relativeTo: .body) private var writingSize: CGFloat = 18
   @State private var writingFocused = false
-  @State private var showAudience = false
-  @State private var showTime = false
+  private enum Presentation: Equatable, Identifiable {
+    case startWith, audience, time, add, media, camera, voice, structured
+    case detail(PostDetailSheet)
+    var id: String {
+      switch self {
+      case .detail(let detail): return "detail-\(detail.id)"
+      default: return String(describing: self)
+      }
+    }
+  }
+  @State private var presentation: Presentation?
+  @State private var queuedPresentation: Presentation?
+  @State private var showsMoreCreationWays = false
   @State private var pendingTime = Date()
-  @State private var showMediaPicker = false
-  @State private var showCamera = false
   @State private var creationCapabilities: CaptroCreationCapabilities?
   @State private var initialAudience = CaptroCompositionAudience.everyone
   @State private var restoredComposition = false
@@ -1108,7 +1117,10 @@ public struct CreatePostNativeView: View {
   @State private var pickerItems: [PhotosPickerItem] = []
   @State private var coverMediaRatio = MIRAMediaSizing.feedPreviewRatio
   @State private var composerUser: MIRAUser?
-  @State private var isEditingPostDetails = false
+  private var isEditingPostDetails: Bool {
+    get { presentation == .structured }
+    nonmutating set { if newValue { openPresentation(.structured) } else if presentation == .structured { presentation = nil } }
+  }
   private var hasSelectedStamp: Bool {
     get { draft.hasSelectedStamp }
     nonmutating set { draft.hasSelectedStamp = newValue }
@@ -1131,7 +1143,10 @@ public struct CreatePostNativeView: View {
   @State private var errorMessage: String?
   @State private var editingMedia: MIRAEditorPresentation?
   @State private var editedCameraMedia: MIRAPickedMedia?
-  @State private var activePostDetailSheet: PostDetailSheet?
+  private var activePostDetailSheet: PostDetailSheet? {
+    get { if case .detail(let detail) = presentation { return detail }; return nil }
+    nonmutating set { if let newValue { openPresentation(.detail(newValue)) } else if activePostDetailSheet != nil { presentation = nil } }
+  }
   private var selectedStampKind: CaptroStampKind {
     get { draft.selectedStampKind }
     nonmutating set { draft.selectedStampKind = newValue }
@@ -1164,7 +1179,6 @@ public struct CreatePostNativeView: View {
     nonmutating set { draft.voiceDraft = newValue }
   }
   @State private var voiceSubmissionId: String?
-  @State private var showVoiceRecorder = false
   @State private var showVoicePendingConfirmation = false
   @State private var selectedDiscoverCategory: String?
   @State private var postAssistResponse: MIRAPostAssistResponse?
@@ -1224,7 +1238,7 @@ public struct CreatePostNativeView: View {
       }
       .ignoresSafeArea()
     }
-    .fullScreenCover(isPresented: $showVoiceRecorder) {
+    .fullScreenCover(isPresented: presentationBinding(.voice)) {
       CaptroVoiceRecorderSheet(limit: 60) { draft in
         if let previous = voiceDraft, previous.fileURL != draft.fileURL {
           try? FileManager.default.removeItem(at: previous.fileURL)
@@ -1340,37 +1354,41 @@ public struct CreatePostNativeView: View {
 
   private var composerSheetPage: some View {
     composerDraftObservedPage
-    .fullScreenCover(isPresented: $isEditingPostDetails) {
+    .fullScreenCover(isPresented: presentationBinding(.structured)) {
       stampDetailsPage
     }
-    .sheet(isPresented: $showAudience) { audiencePicker }
-    .sheet(isPresented: $showTime) { timePicker }
-    .photosPicker(isPresented: $showMediaPicker, selection: $pickerItems,
+    .photosPicker(isPresented: presentationBinding(.media), selection: $pickerItems,
       maxSelectionCount: max(1, 10 - mediaItems.count),
       matching: .any(of: [.images, .videos]), preferredItemEncoding: .current)
-    .fullScreenCover(isPresented: $showCamera) {
+    .fullScreenCover(isPresented: presentationBinding(.camera)) {
       MIRAStoryLiveCameraView(captureMode: .photoAndVideo, showsMusicButton: false,
         showsGridOverlay: false, simpleCaptureUI: true,
-        onCapture: { media in addCapturedMediaAndContinue(media); showCamera = false },
-        onCancel: { showCamera = false },
-        onGallerySelection: { media in addGalleryMedia(media); showCamera = false })
+        onCapture: { media in addCapturedMediaAndContinue(media); presentation = nil },
+        onCancel: { presentation = nil },
+        onGallerySelection: { media in addGalleryMedia(media); presentation = nil })
         .ignoresSafeArea()
     }
-    .sheet(isPresented: postDetailSheetPresentedBinding) {
+    .sheet(item: selectionPresentationBinding, onDismiss: {
+      if let next = queuedPresentation { queuedPresentation = nil; openPresentation(next) }
+    }) { selection in
       let closeSheet: () -> Void = { activePostDetailSheet = nil }
       Group {
-      switch activePostDetailSheet {
-      case .location:
+      switch selection {
+      case .startWith: startWithPicker
+      case .audience: audiencePicker
+      case .time: timePicker
+      case .add: addPicker
+      case .detail(.location):
         PostLocationPickerSheet(api: api, selectedPlace: $draft.selectedPlace, onClose: closeSheet)
-      case .city:
+      case .detail(.city):
         PostBroadLocationPickerSheet(api: api, broadLocation: $broadLocation, showBroadLocation: $showBroadLocation, onClose: closeSheet)
-      case .people:
+      case .detail(.people):
         PostPeopleTagSheet(api: api, selectedUsers: $taggedUsers, onClose: closeSheet)
-      case .tags:
+      case .detail(.tags):
         PostHashtagSheet(hashtags: $hashtags, onClose: closeSheet)
-      case .music:
+      case .detail(.music):
         MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
-      case .aiAssist:
+      case .detail(.aiAssist):
         PostAIAssistSheet(
           response: postAssistResponse,
           isLoading: isGeneratingPostAssist,
@@ -1388,15 +1406,15 @@ public struct CreatePostNativeView: View {
           },
           onClose: closeSheet
         )
-      case .response:
+      case .detail(.response):
         CaptroPostResponsePicker(selected: $draft.postResponse,
           allowsGoing: !commerceDraft.enabled && (!isEventStamp || !eventDraft.attendanceEnabled),
           onClose: closeSheet)
-      case nil:
+          .presentationDetents([.fraction(0.72), .large])
+      default:
         Color.clear
       }
       }
-      .presentationDetents([.fraction(postDetailSheetHeightFraction), .large])
       .presentationDragIndicator(.visible)
     }
   }
@@ -1405,15 +1423,30 @@ public struct CreatePostNativeView: View {
     mediaFirstPage
   }
 
-  private var postDetailSheetPresentedBinding: Binding<Bool> {
+  private var selectionPresentationBinding: Binding<Presentation?> {
     Binding(
-      get: { activePostDetailSheet != nil },
-      set: { isPresented in
-        if !isPresented {
-          activePostDetailSheet = nil
-        }
-      }
+      get: {
+        switch presentation { case .startWith, .audience, .time, .add, .detail: return presentation; default: return nil }
+      },
+      set: { presentation = $0 }
     )
+  }
+
+  private func presentationBinding(_ target: Presentation) -> Binding<Bool> {
+    Binding(get: { presentation == target }, set: { shown in
+      if shown { openPresentation(target) } else if presentation == target { presentation = nil }
+    })
+  }
+  private func openPresentation(_ target: Presentation) {
+    writingFocused = false
+    focusedPostDetailsField = nil
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    if target == .startWith { showsMoreCreationWays = false }
+    presentation = target
+  }
+  private func transitionFromSelection(to target: Presentation) {
+    queuedPresentation = target
+    presentation = nil
   }
 
   private var postDetailSheetHeightFraction: CGFloat {
@@ -1430,7 +1463,7 @@ public struct CreatePostNativeView: View {
   private var mediaFirstPage: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        Button { writingFocused = false; showAudience = true } label: {
+        Button { openPresentation(.audience) } label: {
           Label {
             HStack(spacing: 6) {
               Text(draft.audience.title)
@@ -1543,11 +1576,11 @@ public struct CreatePostNativeView: View {
         if !draft.structured && draft.intent != .concern {
           if let time = draft.time {
             Menu {
-              Button("Edit time") { pendingTime = time; showTime = true }
+              Button("Edit time") { pendingTime = time; openPresentation(.time) }
               Button("Remove time", role: .destructive) { draft.time = nil }
             } label: { chipLabel(time.formatted(date: .abbreviated, time: .shortened), icon: "clock") }
           } else {
-            compositionChip("Add time", icon: "clock") { pendingTime = Date(); showTime = true }
+            compositionChip("Add time", icon: "clock") { pendingTime = Date(); openPresentation(.time) }
           }
         }
       }
@@ -1559,33 +1592,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var intentSelector: some View {
-    Menu {
-      Section {
-        ForEach(CaptroWritingIntent.allCases) { intent in
-          Button {
-            draft.intent = intent
-            selectedStampKind = .social
-            hasSelectedStamp = false
-          } label: {
-            if draft.intent == intent && !draft.structured { Label(intent.title, systemImage: "checkmark") }
-            else { Text(intent.title) }
-          }
-        }
-      }
-      if let capabilities = creationCapabilities, !capabilities.structuredTypes.isEmpty {
-        Section {
-          ForEach(stampPickerKinds) { kind in
-            Button(kind.displayName) {
-              writingFocused = false
-              selectedStampKind = kind
-              hasSelectedStamp = true
-              if [.event, .meetup].contains(kind) { eventDraft.hasSchedule = true }
-              isEditingPostDetails = true
-            }
-          }
-        }
-      }
-    } label: {
+    Button { openPresentation(.startWith) } label: {
       HStack(spacing: 5) {
         Text(draft.structured ? selectedStampKind.displayName : draft.intent.byline)
         Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
@@ -1595,6 +1602,35 @@ public struct CreatePostNativeView: View {
     }
     .accessibilityLabel("Creation intent, \(draft.structured ? selectedStampKind.displayName : draft.intent.byline)")
     .accessibilityIdentifier("composer.intent")
+  }
+
+  private var startWithPicker: some View {
+    CaptroSelectionSheet(title: showsMoreCreationWays ? "More ways to create" : "Start with",
+      onBack: showsMoreCreationWays ? { showsMoreCreationWays = false } : nil) {
+      if showsMoreCreationWays {
+        ForEach(stampPickerKinds) { kind in
+          CaptroSelectionRow(title: kind.displayName, disclosure: true) {
+            selectedStampKind = kind
+            hasSelectedStamp = true
+            if [.event, .meetup].contains(kind) { eventDraft.hasSchedule = true }
+            transitionFromSelection(to: .structured)
+          }
+        }
+      } else {
+        ForEach(CaptroWritingIntent.allCases) { intent in
+          CaptroSelectionRow(title: intent.title, selected: draft.intent == intent && !draft.structured) {
+            draft.intent = intent
+            selectedStampKind = .social
+            hasSelectedStamp = false
+            presentation = nil
+          }
+        }
+        if creationCapabilities?.structuredTypes.isEmpty == false {
+          Divider().padding(.vertical, 8)
+          CaptroSelectionRow(title: "More ways to create", disclosure: true) { showsMoreCreationWays = true }
+        }
+      }
+    }
   }
 
   private func compositionChip(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -1610,29 +1646,30 @@ public struct CreatePostNativeView: View {
 
   private var composerToolBar: some View {
     HStack {
-      Menu {
-        Button("Photo or video", systemImage: "photo.on.rectangle") { showMediaPicker = true }
-          .disabled(mediaItems.count >= 10 || isLoadingMedia)
-        Button("Camera", systemImage: "camera") { writingFocused = false; showCamera = true }
-          .disabled(mediaItems.count >= 10 || isLoadingMedia)
-        Button(postResponse == nil ? "Add response" : "Edit response", systemImage: "checkmark.circle") {
-          writingFocused = false
-          activePostDetailSheet = .response
-        }.disabled(!mediaItems.isEmpty || voiceDraft != nil)
-      } label: {
-        Label("Add media", systemImage: "plus.circle").font(.subheadline)
+      Button { openPresentation(.add) } label: {
+        Label("Add", systemImage: "plus.circle").font(.subheadline)
           .frame(minHeight: 44)
           .contentShape(Rectangle())
       }.accessibilityIdentifier("composer.add")
       Spacer()
       Button {
-        writingFocused = false
-        showVoiceRecorder = true
+        openPresentation(.voice)
       } label: {
         Image(systemName: "mic").font(.title3).frame(width: 44, height: 44).contentShape(Rectangle())
       }.accessibilityLabel("Record voice attachment")
     }
     .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.textSecondary)
+  }
+
+  private var addPicker: some View {
+    CaptroSelectionSheet(title: "Add") {
+      CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { transitionFromSelection(to: .media) }
+        .disabled(mediaItems.count >= 10 || isLoadingMedia)
+      CaptroSelectionRow(title: "Camera", symbol: "camera") { transitionFromSelection(to: .camera) }
+        .disabled(mediaItems.count >= 10 || isLoadingMedia)
+      CaptroSelectionRow(title: "Responses", symbol: "checkmark.circle") { transitionFromSelection(to: .detail(.response)) }
+        .disabled(!mediaItems.isEmpty || voiceDraft != nil)
+    }
   }
 
   private var compositionAttachments: some View {
@@ -1654,7 +1691,7 @@ public struct CreatePostNativeView: View {
 
   private func composerVoiceAttachment(_ recording: CaptroVoiceDraft) -> some View {
     CaptroCompositionVoiceAttachment(recording: recording,
-      onReplace: { writingFocused = false; showVoiceRecorder = true },
+      onReplace: { openPresentation(.voice) },
       onRemove: {
         try? FileManager.default.removeItem(at: recording.fileURL)
         voiceDraft = nil; voiceSubmissionId = nil
@@ -1662,39 +1699,38 @@ public struct CreatePostNativeView: View {
   }
 
   private var audiencePicker: some View {
-    NavigationStack {
-      List(CaptroCompositionAudience.allCases) { audience in
-        Button {
+    CaptroSelectionSheet(title: "Audience") {
+      ForEach(CaptroCompositionAudience.allCases) { audience in
+        CaptroSelectionRow(title: audience.title, subtitle: audience.explanation,
+          symbol: audience.icon, selected: draft.audience == audience) {
           draft.audience = audience
-          if let id = composerUser?.id { UserDefaults.standard.set(audience.rawValue, forKey: "captro.composer.audience.\(id)") }
-          showAudience = false
-        } label: {
-          HStack {
-            VStack(alignment: .leading, spacing: 4) {
-              Text(audience.title).foregroundStyle(MIRATheme.Color.textPrimary)
-              Text(audience.explanation).font(.footnote).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if draft.audience == audience { Image(systemName: "checkmark").foregroundStyle(MIRATheme.Color.forest) }
-          }.frame(minHeight: 44).contentShape(Rectangle())
-        }.buttonStyle(.plain)
+          // Selection affects this draft only; opening/cancelling never widens visibility.
+          presentation = nil
+        }
       }
-      .navigationTitle("Audience").navigationBarTitleDisplayMode(.inline)
-      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showAudience = false } } }
-    }.presentationDetents([.medium, .large])
+    }
   }
 
   private var timePicker: some View {
     NavigationStack {
-      Form {
+      VStack(spacing: 12) {
         DatePicker("Time", selection: $pendingTime, displayedComponents: [.date, .hourAndMinute])
+          .datePickerStyle(.wheel).labelsHidden()
+          .accessibilityLabel("Date and time")
+        Text("Time zone: \(TimeZone.current.identifier)").font(.footnote).foregroundStyle(.secondary)
+        if draft.time != nil {
+          Button("Remove time", role: .destructive) { draft.time = nil; presentation = nil }
+            .frame(minHeight: 44)
+        }
       }
-      .navigationTitle("Add time").navigationBarTitleDisplayMode(.inline)
+      .padding(.horizontal, 20).padding(.bottom, 16)
+      .navigationTitle("Time").navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showTime = false } }
-        ToolbarItem(placement: .confirmationAction) { Button("Done") { draft.time = pendingTime; showTime = false } }
+        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { presentation = nil } }
+        ToolbarItem(placement: .confirmationAction) { Button("Save") { draft.time = pendingTime; presentation = nil } }
       }
-    }.presentationDetents([.medium])
+    }.tint(MIRATheme.Color.forest)
+      .presentationDetents([.height(draft.time == nil ? 340 : 390), .large])
   }
 
   private var hasUnsavedPost: Bool {
@@ -3770,271 +3806,106 @@ private struct PostLocationPickerSheet: View {
   @Binding var selectedPlace: MIRAExactPostPlace?
   let onClose: (() -> Void)?
   @Environment(\.dismiss) private var dismiss
-  @StateObject private var placeLocationResolver = MIRABroadLocationResolver()
   @State private var query = ""
   @State private var places: [MIRAExactPostPlace] = []
   @State private var isLoading = false
   @State private var errorMessage: String?
-  @State private var searchRegion: MKCoordinateRegion?
-  @State private var hasLoadedSearchRegion = false
+  @State private var activeSearch: MKLocalSearch?
   @FocusState private var isSearchFocused: Bool
 
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
-        VStack(spacing: MIRATheme.Space.md) {
-          HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-              .foregroundStyle(MIRATheme.Color.textMuted)
-            TextField("Search Apple Maps places", text: $query)
-              .textInputAutocapitalization(.words)
-              .autocorrectionDisabled()
-              .submitLabel(.search)
-              .focused($isSearchFocused)
-              .onSubmit {
-                Task { await searchPlaces(for: cleanQuery) }
-              }
-            if !cleanQuery.isEmpty {
-              Button {
-                query = ""
-                places = []
-                isLoading = false
-                errorMessage = nil
-              } label: {
-                Image(systemName: "xmark.circle.fill")
-                  .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.75))
-              }
-              .buttonStyle(.plain)
-            }
-          }
-          .padding(.horizontal, MIRATheme.Space.md)
-          .frame(height: 48)
-          .background(MIRATheme.Color.surfaceSoft)
-          .clipShape(Capsule())
-
-          if let selectedPlace {
-            selectedPlacePill(selectedPlace)
+        HStack(spacing: 10) {
+          Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+          TextField("Search places or addresses", text: $query)
+            .textInputAutocapitalization(.words).autocorrectionDisabled()
+            .submitLabel(.search).focused($isSearchFocused)
+            .accessibilityIdentifier("composer.location.search")
+          if !query.isEmpty {
+            Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
+              .accessibilityLabel("Clear search").frame(minWidth: 44, minHeight: 44)
           }
         }
-        .padding(MIRATheme.Space.md)
-
+        .font(.body).padding(.leading, 12)
+        .frame(minHeight: 44)
+        .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
         ScrollView {
-          LazyVStack(spacing: 10) {
-            searchStatusView
-
-            if !places.isEmpty {
-              HStack {
-                Text("Apple Maps results")
-                  .font(.system(size: 13, weight: .semibold))
-                  .foregroundStyle(MIRATheme.Color.textMuted)
-                Spacer()
-              }
-              .padding(.horizontal, 4)
-              .padding(.top, 2)
+          LazyVStack(alignment: .leading, spacing: 0) {
+            if isLoading {
+              HStack(spacing: 8) { ProgressView(); Text("Searching…").font(.footnote).foregroundStyle(.secondary) }
+                .frame(minHeight: 44)
+            } else if let errorMessage {
+              Text(errorMessage).font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
+              Button("Try again") { Task { await searchPlaces(for: cleanQuery) } }.frame(minHeight: 44)
+            } else if cleanQuery.isEmpty {
+              Text("Search for a place or address.").font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
+            } else if cleanQuery.count < 2 {
+              Text("Keep typing to search.").font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
+            } else if places.isEmpty {
+              Text("No places found. Try adding a city.").font(.footnote).foregroundStyle(.secondary).padding(.vertical, 12)
             }
-
             ForEach(places) { place in
-              Button {
+              CaptroSelectionRow(title: place.displayName, subtitle: place.addressText) {
                 selectedPlace = place
                 close()
-              } label: {
-                placeRowTitle(systemImage: "mappin.circle.fill", name: place.displayName, subtitle: place.addressText)
               }
-              .buttonStyle(.miraPress)
+              Divider()
             }
-          }
-          .padding(.horizontal, MIRATheme.Space.md)
-          .padding(.bottom, 28)
-        }
+            Text("Apple Maps").font(.caption).foregroundStyle(.secondary).padding(.top, 16)
+          }.padding(.horizontal, 20).padding(.bottom, 20)
+        }.scrollDismissesKeyboard(.interactively)
       }
-      .background(MIRATheme.Color.surface.ignoresSafeArea())
-      .navigationTitle("Add place")
-      .navigationBarTitleDisplayMode(.inline)
+      .background(MIRATheme.Color.surface)
+      .navigationTitle("Location").navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
-          Button("Cancel") { close() }
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-          if selectedPlace != nil {
-            Button("Remove") {
-              selectedPlace = nil
-              close()
-            }
-            .foregroundStyle(.red)
-          }
+        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { close() } }
+        if selectedPlace != nil {
+          ToolbarItem(placement: .confirmationAction) { Button("Remove", role: .destructive) { selectedPlace = nil; close() } }
         }
       }
-      .onAppear {
-        isSearchFocused = true
-      }
-      .task {
-        await loadLocalSearchRegion()
+      .task { isSearchFocused = true }
+      .onChange(of: query) { _, _ in
+        activeSearch?.cancel()
+        places = []; errorMessage = nil; isLoading = cleanQuery.count >= 2
       }
       .task(id: cleanQuery) {
         let snapshot = cleanQuery
-        try? await Task.sleep(nanoseconds: 260_000_000)
+        do { try await Task.sleep(for: .milliseconds(260)) } catch { return }
         guard !Task.isCancelled else { return }
         await searchPlaces(for: snapshot)
       }
+      .onDisappear { activeSearch?.cancel() }
     }
-    .presentationDetents([.medium, .large])
-    .presentationDragIndicator(.visible)
+    .tint(MIRATheme.Color.forest)
+    .presentationDetents([.large]).presentationDragIndicator(.visible)
   }
+  private var cleanQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+  private func close() { if let onClose { onClose() } else { dismiss() } }
 
-  private func selectedPlacePill(_ place: MIRAExactPostPlace) -> some View {
-    HStack(spacing: 10) {
-      Image(systemName: "mappin.circle.fill")
-        .foregroundStyle(MIRATheme.Color.forest)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(place.displayName)
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-        if let address = place.addressText {
-          Text(address)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
-      }
-      Spacer()
-    }
-    .padding(MIRATheme.Space.md)
-    .background(MIRATheme.Color.forestSoft)
-    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-  }
-
-  @ViewBuilder
-  private var searchStatusView: some View {
-    if isLoading {
-      HStack(spacing: MIRATheme.Space.sm) {
-        ProgressView()
-          .tint(MIRATheme.Color.forest)
-        Text("Finding places...")
-          .font(.system(size: 14, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-      .frame(maxWidth: .infinity, minHeight: 62)
-      .background(MIRATheme.Color.surfaceSoft.opacity(0.72))
-      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    } else if let errorMessage {
-      placePickerMessage(errorMessage, systemImage: "exclamationmark.triangle")
-    } else if cleanQuery.isEmpty {
-      placePickerMessage("Search for a restaurant, gym, cafe, park, venue, or address.", systemImage: "magnifyingglass.circle")
-    } else if cleanQuery.count < 2 {
-      placePickerMessage("Keep typing to search places.", systemImage: "text.cursor")
-    } else if places.isEmpty {
-      placePickerMessage("No Apple Maps places found yet. Try a place name plus city.", systemImage: "mappin.circle")
-    }
-  }
-
-  private func placePickerMessage(_ text: String, systemImage: String) -> some View {
-    HStack(spacing: MIRATheme.Space.sm) {
-      Image(systemName: systemImage)
-        .font(.system(size: 17, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textMuted)
-        .frame(width: 34, height: 34)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Circle())
-      Text(text)
-        .font(.system(size: 14, weight: .medium))
-        .foregroundStyle(MIRATheme.Color.textSecondary)
-        .fixedSize(horizontal: false, vertical: true)
-      Spacer()
-    }
-    .padding(MIRATheme.Space.md)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
-    }
-  }
-
-  private func placeRowTitle(systemImage: String, name: String, subtitle: String?) -> some View {
-    HStack(spacing: MIRATheme.Space.md) {
-      Image(systemName: systemImage)
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.forest)
-        .frame(width: 42, height: 42)
-        .background(MIRATheme.Color.forestSoft)
-        .clipShape(Circle())
-      VStack(alignment: .leading, spacing: 3) {
-        Text(name)
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        if let subtitle, !subtitle.isEmpty {
-          Text(subtitle)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
-      }
-      Spacer(minLength: MIRATheme.Space.sm)
-      Image(systemName: "chevron.right")
-        .font(.system(size: 12, weight: .bold))
-        .foregroundStyle(MIRATheme.Color.textMuted.opacity(0.65))
-    }
-    .padding(MIRATheme.Space.md)
-    .background(MIRATheme.Color.surface)
-    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: 18, style: .continuous)
-        .stroke(MIRATheme.Color.hairline, lineWidth: 1)
-    }
-  }
-
-  private var cleanQuery: String {
-    query.trimmingCharacters(in: .whitespacesAndNewlines)
-  }
-
-  private func close() {
-    if let onClose {
-      onClose()
-    } else {
-      dismiss()
-    }
-  }
-
-  @MainActor
-  private func loadLocalSearchRegion() async {
-    guard !hasLoadedSearchRegion else { return }
-    hasLoadedSearchRegion = true
-    guard let location = await placeLocationResolver.resolveCurrentLocation() else { return }
-    searchRegion = MKCoordinateRegion(
-      center: location.coordinate,
-      latitudinalMeters: 35_000,
-      longitudinalMeters: 35_000
-    )
-  }
-
-  @MainActor
-  private func searchPlaces(for clean: String) async {
-    guard clean.count >= 2 else {
-      places = []
-      errorMessage = nil
-      isLoading = false
-      return
-    }
+  @MainActor private func searchPlaces(for clean: String) async {
+    guard clean.count >= 2 else { isLoading = false; return }
+    activeSearch?.cancel()
+    let request = MKLocalSearch.Request()
+    request.naturalLanguageQuery = clean
+    request.resultTypes = [.pointOfInterest, .address]
+    let operation = MKLocalSearch(request: request)
+    activeSearch = operation
     isLoading = true
     do {
-      let request = MKLocalSearch.Request()
-      request.naturalLanguageQuery = clean
-      request.resultTypes = [.pointOfInterest, .address]
-      if let searchRegion {
-        request.region = searchRegion
+      let response = try await withTaskCancellationHandler {
+        try await operation.start()
+      } onCancel: {
+        Task { @MainActor in operation.cancel() }
       }
-      let response = try await MKLocalSearch(request: request).start()
-      let loaded = response.mapItems.map(MIRAExactPostPlace.init(mapItem:))
       guard !Task.isCancelled, clean == cleanQuery else { return }
-      places = loaded
-      errorMessage = nil
-      isLoading = false
+      places = response.mapItems.map(MIRAExactPostPlace.init(mapItem:))
+      errorMessage = nil; isLoading = false
     } catch {
       guard !Task.isCancelled, clean == cleanQuery else { return }
-      places = []
-      errorMessage = "Apple Maps places could not load. Check your connection and try again."
-      isLoading = false
+      places = []; isLoading = false
+      errorMessage = "Places couldn’t load. Check your connection and try again."
     }
   }
 }

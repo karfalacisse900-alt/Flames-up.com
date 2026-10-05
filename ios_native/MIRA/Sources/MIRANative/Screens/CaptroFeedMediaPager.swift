@@ -4,6 +4,7 @@ import UIKit
 
 struct CaptroMediaPager: View {
   let post: MIRAPost
+  let api: MIRAAPIClient
   let isVideoActive: Bool
   @Binding var selectedMediaIndex: Int
   let onOpenPost: () -> Void
@@ -175,10 +176,18 @@ struct CaptroMediaPager: View {
 
       Spacer(minLength: 12)
 
-      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
+      VStack(spacing: 0) {
+        CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
         condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: mediaWidth, mediaHeight: mediaHeight),
         feedCaptionMaxLines: mediaHeight < 300 ? 2 : (mediaHeight < 420 ? 4 : 5),
-        onOpen: openPostUnlessPeeking)
+        showsBorder: false, onOpen: openPostUnlessPeeking)
+        if post.detail?.voice != nil || post.hasAudio {
+          CaptroStampAudio(post: post, api: api)
+            .padding(.horizontal, 14).padding(.bottom, 12)
+        }
+      }
+        .background(MIRATheme.Color.surface)
+        .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
         .frame(width: max(0, mediaWidth - 32), alignment: .leading)
       .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)

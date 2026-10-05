@@ -50,18 +50,11 @@ struct CaptroFeedPostView: View {
           // Accessibility text / four long choices must remain reachable, not clipped.
           ScrollView(.vertical) { textOnlyStamp(maxBodyLines: 3) }
         }
-        .frame(maxHeight: pageSize.map { max(0, $0.height - (post.detail?.voice == nil ? 24 : 100)) })
+        .frame(maxHeight: pageSize.map { max(0, $0.height - 24) })
         .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
         .padding(.horizontal, 16)
       }
 
-      if let voice = post.detail?.voice {
-        CaptroCompactVoicePlayer(voiceId: voice.id, durationMs: voice.durationMs, waveform: voice.waveform) {
-          transcriptVoiceId = voice.id
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, post.feedMediaURLs.isEmpty ? 14 : 12)
-      }
 
       if showsMoreButton {
         HStack {
@@ -100,6 +93,7 @@ struct CaptroFeedPostView: View {
   private var mediaPager: some View {
     let pager = CaptroMediaPager(
       post: post,
+      api: api,
       isVideoActive: isVideoActive,
       selectedMediaIndex: $selectedMediaIndex,
       onOpenPost: onOpenPost,
@@ -125,7 +119,7 @@ struct CaptroFeedPostView: View {
         ?? MIRAMediaSizing.mainFeedDisplayRatio(for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
     )
     // Reserve the compact player and transcript action before sizing media.
-    let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0) + (post.detail?.voice == nil ? 0 : 86)
+    let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0)
     let availableMediaHeight = max(0, pageSize.height - fixedVerticalContent)
     // A short page may crop the photo vertically, but must never narrow the post.
     return CGSize(width: pageSize.width, height: min(availableMediaHeight, pageSize.width * ratio))
@@ -182,6 +176,10 @@ private struct CaptroTextOnlyStampCard: View {
         CaptroPostResponseView(post: post, api: api, canRespond: canRespond,
           outlinedStamp: true, onReply: onOpen)
           .padding(.top, 20)
+      }
+
+      if post.detail?.voice != nil || post.hasAudio {
+        CaptroStampAudio(post: post, api: api).padding(.top, 14)
       }
 
       Rectangle().fill(MIRATheme.Color.hairline).frame(height: 0.5)
