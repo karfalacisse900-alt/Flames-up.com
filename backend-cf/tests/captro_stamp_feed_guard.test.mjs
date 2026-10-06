@@ -245,8 +245,13 @@ test('holding the Home stamp temporarily reveals the unobstructed photo', () => 
   assert.match(mediaPager, /hypot\(drag\.translation\.width, drag\.translation\.height\) <= 22/);
   assert.match(
     mediaPager,
-    /ViewThatFits\(in: \.vertical\)[\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
+    /ViewThatFits\(in: \.vertical\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)/,
   );
+  const visibleStamp = mediaPager.slice(mediaPager.indexOf('private func feedStamp('), mediaPager.indexOf('private var stampPeekGesture'));
+  assert.match(visibleStamp, /\.contentShape\(Rectangle\(\)\)\s*\.simultaneousGesture\(stampPeekGesture\)/);
+  const overlay = mediaPager.slice(mediaPager.indexOf('private func overlayContent('), mediaPager.indexOf('private func feedStamp('));
+  assert.doesNotMatch(overlay, /\.contentShape\(Rectangle\(\)\)|\.simultaneousGesture\(stampPeekGesture\)/,
+    'The transparent stamp height budget must not capture media taps or paging');
   assert.doesNotMatch(
     mediaPager,
     /\.frame\(width: proxy\.size\.width, height: proxy\.size\.height\)\s*\.simultaneousGesture\(stampPeekGesture\)/,
