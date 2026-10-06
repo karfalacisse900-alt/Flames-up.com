@@ -14,7 +14,7 @@ struct CaptroMediaPager: View {
   var frameSize: CGSize? = nil
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @GestureState private var isHoldingStamp = false
+  @State private var isHoldingStamp = false
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
   @State private var isVideoPaused = false
@@ -67,6 +67,8 @@ struct CaptroMediaPager: View {
       }
       .onDisappear {
         stampTapResetTask?.cancel()
+        isHoldingStamp = false
+        suppressTapAfterStampPeek = false
       }
   }
 
@@ -224,16 +226,9 @@ struct CaptroMediaPager: View {
     // Only the visible stamp handles peek. The unused height in ViewThatFits
     // must remain available to media taps and the vertical feed.
     .contentShape(Rectangle())
-    .simultaneousGesture(stampPeekGesture)
-  }
-
-  private var stampPeekGesture: some Gesture {
-    LongPressGesture(minimumDuration: 0.25, maximumDistance: 10)
-      .updating($isHoldingStamp) { pressed, state, _ in
-        // No zero-distance DragGesture here: it captures the vertical scroll
-        // recognizer when a drag starts on a stamp in the continuous stream.
-        state = pressed
-      }
+    .background {
+      if showsStampOnCurrentSlide { CaptroStampPeekGesture(isHolding: $isHoldingStamp) }
+    }
   }
 
   private var stampPeekAnimation: Animation? {
@@ -381,6 +376,70 @@ struct CaptroMediaPager: View {
       let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
       return !trimmed.isEmpty && seen.insert(trimmed).inserted ? trimmed : nil
     }
+  }
+}
+
+/// Native long-press recognizes only inside the visible stamp and never owns a
+/// drag. Parent scrolling and child buttons keep their normal gesture handling.
+private struct CaptroStampPeekGesture: UIViewRepresentable {
+  @Binding var isHolding: Bool
+
+  func makeCoordinator() -> Coordinator { Coordinator(isHolding: $isHolding) }
+  func makeUIView(context: Context) -> Marker {
+    let marker = Marker()
+    marker.isUserInteractionEnabled = false
+    marker.onWindowChange = { [weak coordinator = context.coordinator] marker in
+      coordinator?.attach(to: marker)
+    }
+    return marker
+  }
+  func updateUIView(_ view: Marker, context: Context) {
+    context.coordinator.isHolding = $isHolding
+    context.coordinator.attach(to: view)
+  }
+  static func dismantleUIView(_ view: Marker, coordinator: Coordinator) { coordinator.detach() }
+
+  final class Marker: UIView {
+    var onWindowChange: ((Marker) -> Void)?
+    override func didMoveToWindow() { super.didMoveToWindow(); onWindowChange?(self) }
+  }
+  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    var isHolding: Binding<Bool>
+    weak var marker: Marker?
+    private var recognizer: UILongPressGestureRecognizer?
+    init(isHolding: Binding<Bool>) { self.isHolding = isHolding }
+    func attach(to marker: Marker) {
+      guard recognizer?.view !== marker.window || self.marker !== marker else { return }
+      detach()
+      self.marker = marker
+      guard let window = marker.window else { return }
+      let gesture = UILongPressGestureRecognizer(target: self, action: #selector(changed(_:)))
+      gesture.minimumPressDuration = 0.25
+      gesture.allowableMovement = 10
+      gesture.cancelsTouchesInView = false
+      gesture.delaysTouchesBegan = false
+      gesture.delaysTouchesEnded = false
+      gesture.delegate = self
+      window.addGestureRecognizer(gesture)
+      recognizer = gesture
+    }
+    func detach() {
+      if let recognizer { recognizer.view?.removeGestureRecognizer(recognizer) }
+      recognizer = nil
+    }
+    @objc private func changed(_ gesture: UILongPressGestureRecognizer) {
+      isHolding.wrappedValue = gesture.state == .began || gesture.state == .changed
+    }
+    func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+      guard let marker, marker.window != nil, marker.bounds.contains(touch.location(in: marker)) else { return false }
+      var ancestor: UIView? = marker
+      while let view = ancestor {
+        if view.isHidden || (view.clipsToBounds && !view.bounds.contains(touch.location(in: view))) { return false }
+        ancestor = view.superview
+      }
+      return true
+    }
+    func gestureRecognizer(_ gesture: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
   }
 }
 

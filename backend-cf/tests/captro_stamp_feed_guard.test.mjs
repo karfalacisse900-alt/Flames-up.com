@@ -241,16 +241,18 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
 });
 
 test('holding the Home stamp temporarily reveals the unobstructed photo', () => {
-  assert.match(mediaPager, /@GestureState private var isHoldingStamp = false/);
-  assert.match(mediaPager, /LongPressGesture\(minimumDuration: 0\.25, maximumDistance: 10\)/);
+  assert.match(mediaPager, /@State private var isHoldingStamp = false/);
+  assert.match(mediaPager, /gesture\.minimumPressDuration = 0\.25/);
+  assert.match(mediaPager, /gesture\.allowableMovement = 10/);
+  assert.match(mediaPager, /gesture\.cancelsTouchesInView = false/);
   assert.doesNotMatch(mediaPager, /\.sequenced\(before: DragGesture/);
-  assert.match(mediaPager, /state = pressed/);
+  assert.match(mediaPager, /gesture\.state == \.began \|\| gesture\.state == \.changed/);
   assert.match(
     mediaPager,
     /ViewThatFits\(in: \.vertical\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)/,
   );
-  const visibleStamp = mediaPager.slice(mediaPager.indexOf('private func feedStamp('), mediaPager.indexOf('private var stampPeekGesture'));
-  assert.match(visibleStamp, /\.contentShape\(Rectangle\(\)\)\s*\.simultaneousGesture\(stampPeekGesture\)/);
+  const visibleStamp = mediaPager.slice(mediaPager.indexOf('private func feedStamp('), mediaPager.indexOf('private var stampPeekAnimation'));
+  assert.match(visibleStamp, /CaptroStampPeekGesture\(isHolding: \$isHoldingStamp\)/);
   const overlay = mediaPager.slice(mediaPager.indexOf('private func overlayContent('), mediaPager.indexOf('private func feedStamp('));
   assert.doesNotMatch(overlay, /\.contentShape\(Rectangle\(\)\)|\.simultaneousGesture\(stampPeekGesture\)/,
     'The transparent stamp height budget must not capture media taps or paging');
