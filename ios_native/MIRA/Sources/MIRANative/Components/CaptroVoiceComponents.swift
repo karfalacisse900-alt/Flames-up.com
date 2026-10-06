@@ -418,6 +418,7 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
   }
 
   public func toggle(id: String) async {
+    guard !MIRAPlaybackCoordinator.isLiveVoiceActive else { return }
     if activeId == id, let player {
       if player.isPlaying {
         player.pause()
@@ -437,8 +438,9 @@ public final class CaptroVoicePlaybackCenter: NSObject, ObservableObject, @preco
       guard let token = await session.accessToken(), !token.isEmpty else { throw MIRAAPIError.badStatus(401) }
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
       let (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
-      guard generation == requestGeneration,
-            await session.accessToken() == token else { return }
+      let currentToken = await session.accessToken()
+      guard generation == requestGeneration, currentToken == token,
+            !MIRAPlaybackCoordinator.isLiveVoiceActive else { return }
       guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw MIRAAPIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0) }
       let next = try AVAudioPlayer(data: data)
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
