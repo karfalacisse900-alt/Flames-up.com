@@ -147,6 +147,7 @@ struct CaptroMediaPager: View {
       videoMuted: isVideoMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: .black,
+      plainBackground: true,
       onMeasuredRatio: { ratio in
         guard index == 0 else { return }
         let boundedRatio = boundedHomeMediaRatio(ratio)
@@ -195,12 +196,10 @@ struct CaptroMediaPager: View {
       }
         .frame(maxHeight: max(68, mediaHeight * 0.52), alignment: .bottom)
         .frame(width: max(0, mediaWidth - 32), alignment: .leading)
-      .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
       .allowsHitTesting(showsStampOnCurrentSlide)
       .accessibilityHidden(!showsStampOnCurrentSlide)
       .animation(stampPeekAnimation, value: isHoldingStamp)
-      .simultaneousGesture(stampPeekGesture)
       .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 48 : 4)
     }
     .padding(CaptroEditorialCardLayout.inset)
@@ -218,6 +217,10 @@ struct CaptroMediaPager: View {
     }
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
+    // Only the visible stamp handles peek. The unused height in ViewThatFits
+    // must remain available to media taps and the parent horizontal pager.
+    .contentShape(Rectangle())
+    .simultaneousGesture(stampPeekGesture)
   }
 
   private var stampPeekGesture: some Gesture {

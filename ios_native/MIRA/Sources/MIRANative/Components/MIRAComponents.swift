@@ -801,6 +801,7 @@ public struct RemoteMediaView: View {
   let showsVideoPlaceholderIcon: Bool
   let placeholderColor: Color
   let placeholderTint: Color
+  let plainBackground: Bool
   let onMeasuredRatio: (CGFloat) -> Void
 
   public init(
@@ -815,6 +816,7 @@ public struct RemoteMediaView: View {
     showsVideoPlaceholderIcon: Bool = true,
     placeholderColor: Color = MIRATheme.Color.mediaPlaceholder,
     placeholderTint: Color = MIRATheme.Color.textSecondary.opacity(0.72),
+    plainBackground: Bool = false,
     onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
   ) {
     self.url = url
@@ -828,6 +830,7 @@ public struct RemoteMediaView: View {
     self.showsVideoPlaceholderIcon = showsVideoPlaceholderIcon
     self.placeholderColor = placeholderColor
     self.placeholderTint = placeholderTint
+    self.plainBackground = plainBackground
     self.onMeasuredRatio = onMeasuredRatio
   }
 
@@ -843,6 +846,7 @@ public struct RemoteMediaView: View {
           showsPlaceholderIcon: showsVideoPlaceholderIcon,
           placeholderColor: placeholderColor,
           placeholderTint: placeholderTint,
+          plainBackground: plainBackground,
           onMeasuredRatio: onMeasuredRatio
         )
           .background(Color.clear)
@@ -876,6 +880,7 @@ public struct RemoteMediaView: View {
   private var placeholder: some View {
     ZStack {
       placeholderColor
+      if !plainBackground {
       LinearGradient(
         colors: [
           MIRATheme.Color.mediaPlaceholderRaised.opacity(0.76),
@@ -888,6 +893,7 @@ public struct RemoteMediaView: View {
       Image(systemName: "photo")
         .font(.system(size: 22, weight: .light))
         .foregroundStyle(placeholderTint.opacity(0.36))
+      }
     }
   }
 
@@ -918,6 +924,7 @@ private struct MIRAResolvedVideoPlayer: View {
   let showsPlaceholderIcon: Bool
   let placeholderColor: Color
   let placeholderTint: Color
+  let plainBackground: Bool
   let onMeasuredRatio: (CGFloat) -> Void
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var player: AVPlayer?
@@ -1008,6 +1015,7 @@ private struct MIRAResolvedVideoPlayer: View {
   private var placeholder: some View {
     ZStack {
       placeholderColor
+      if !plainBackground {
       LinearGradient(
         colors: [
           MIRATheme.Color.mediaPlaceholderRaised.opacity(0.72),
@@ -1021,6 +1029,7 @@ private struct MIRAResolvedVideoPlayer: View {
         Image(systemName: "play.fill")
           .font(.system(size: 24, weight: .semibold))
           .foregroundStyle(placeholderTint.opacity(0.42))
+      }
       }
     }
   }

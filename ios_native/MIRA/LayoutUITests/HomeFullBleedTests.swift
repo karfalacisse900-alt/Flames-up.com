@@ -80,11 +80,25 @@ final class HomeFullBleedTests: XCTestCase {
     }
   }
 
+  func testLongCaptionStaysInsideBoundedStamp() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--captro-home-feed-visual-test", "--captro-visual-size=portrait", "--captro-visual-long-text"]
+    app.launch()
+    let media = app.otherElements["home.post.media"].firstMatch
+    XCTAssertTrue(media.waitForExistence(timeout: 15))
+    assertViewportAndStamp(app, media: media)
+    let attachment = XCTAttachment(screenshot: app.screenshot())
+    attachment.name = "long-caption-bounded-overlay"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+  }
+
   private func assertViewportAndStamp(_ app: XCUIApplication, media: XCUIElement) {
     let pager = app.scrollViews["home.post.pager"]
     XCTAssertTrue(pager.exists)
     XCTAssertEqual(media.frame.minY, pager.frame.minY, accuracy: 1)
-    XCTAssertEqual(media.frame.maxY, pager.frame.maxY, accuracy: 1,
+    let bottom = min(pager.frame.maxY, app.tabBars.firstMatch.frame.minY)
+    XCTAssertEqual(media.frame.maxY, bottom, accuracy: 1,
       "Media canvas must fill the actual post viewport, not leave a white section below")
     let stamp = app.buttons["captro.editorialCard"].firstMatch
     XCTAssertTrue(stamp.exists)

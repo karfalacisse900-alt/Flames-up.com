@@ -34,6 +34,7 @@ jobs:
           fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/StampBuild" -resultBundlePath "$RUNNER_TEMP/Stamps.xcresult" \
             "${tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/stamp-build.log"

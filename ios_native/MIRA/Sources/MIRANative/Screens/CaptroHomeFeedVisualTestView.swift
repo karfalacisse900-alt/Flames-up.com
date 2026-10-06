@@ -101,7 +101,8 @@ private enum CaptroHomeFeedVisualFixtures {
         let json: [String: Any] = [
           "id": "full-bleed-\(name)-\(index)", "userFullName": "Captro", "userUsername": "captro",
           "title": pagerFixture ? "Pager post \(index + 1)" : "Full-width media",
-          "caption": String(repeating: "Layout fixture. ", count: 10),
+          "caption": String(repeating: "Layout fixture. ", count:
+            ProcessInfo.processInfo.arguments.contains("--captro-visual-long-text") ? 30 : 10),
           "images": [mediaURL.absoluteString], "feedMediaUrls": [mediaURL.absoluteString],
           "mediaDimensions": [["width": size.width, "height": size.height]],
           "postType": "place", "createdAt": "2026-09-04T09:41:00Z",
