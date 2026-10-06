@@ -1,6 +1,11 @@
 name: Validate Captro Stamps
 on:
   workflow_dispatch:
+    inputs:
+      baseline:
+        description: Capture photo viewport screenshots from released TestFlight 552.1
+        type: boolean
+        default: false
   push:
     branches: [feature/recorded-voice-moderation]
     paths:
@@ -14,6 +19,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.baseline == true && '4446e069880deb0031927ab4d11934e8b9e69d54' || github.sha }}
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
@@ -21,11 +28,14 @@ jobs:
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
+          tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests -only-testing:CaptroLayoutUITests/HomeFullBleedTests)
+          if [ '${{ inputs.baseline }}' = 'true' ]; then
+            tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth)
+          fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
             -derivedDataPath "$RUNNER_TEMP/StampBuild" -resultBundlePath "$RUNNER_TEMP/Stamps.xcresult" \
-            -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests \
-            -only-testing:CaptroLayoutUITests/HomeFullBleedTests \
+            "${tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/stamp-build.log"
       - name: Export screenshots
         if: always()
