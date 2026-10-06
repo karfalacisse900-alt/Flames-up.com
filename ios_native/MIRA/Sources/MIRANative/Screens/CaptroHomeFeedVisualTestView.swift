@@ -162,8 +162,11 @@ private enum CaptroHomeFeedVisualFixtures {
         ]
         if index == 0 { value["savesCount"] = 26; value["locationText"] = "New York — test location" }
         if index == 4 {
-          value["detail"] = ["commerce": ["title": item.0, "kind": "club", "joinedCount": 23,
-            "paymentModel": "free", "description": value["caption"]!]]
+          value["detail"] = ["commerce": ["id": "test-club", "title": item.0,
+            "contentType": "club", "fulfillmentType": "membership", "commerceClass": "community",
+            "joinedCount": 23, "paymentModel": "free", "description": value["caption"]!,
+            "refundPolicy": "none", "approvalRequired": false, "passRequired": false,
+            "status": "active", "audience": "public", "prices": []]]
         }
         return try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: value))
       } catch { assertionFailure("Stream fixture failed: \(error)"); return nil }

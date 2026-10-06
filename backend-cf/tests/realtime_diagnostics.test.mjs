@@ -41,7 +41,8 @@ test('native voice readiness follows confirmed config plus PCM send, never permi
 
 test('text-only Stamp is outlined, measured, creator-configured and separate from media/header UI', () => {
   assert.match(feed, /CaptroTextOnlyStampCard/);
-  assert.match(feed, /ViewThatFits\(in: \.vertical\)/);
+  assert.match(feed, /textOnlyStamp\(maxBodyLines: 3\)\s*\.fixedSize\(horizontal: false, vertical: true\)/);
+  assert.doesNotMatch(feed, /pageSize|ScrollView\(\.vertical\)/);
   assert.match(feed, /outlinedStamp: true/);
   const card = feed.split('private struct CaptroTextOnlyStampCard')[1].split('private struct CaptroAuthorHeader')[0];
   assert.match(card, /CaptroMeasuredCaption/);

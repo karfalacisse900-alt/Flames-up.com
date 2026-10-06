@@ -4,6 +4,22 @@ import UniformTypeIdentifiers
 @testable import MIRANative
 
 final class CaptroPostMediaTests: XCTestCase {
+  func testHomeHeightUsesResolvedMetadataNotDeviceHeight() throws {
+    for width: CGFloat in [320, 390, 440] {
+      for format in MIRASupportedPostAspectRatio.allCases {
+        let json: [String: Any] = ["format": format.rawValue,
+          "original_width": 100, "original_height": 100]
+        let dimensions = try JSONDecoder().decode(MIRAMediaDimension.self,
+          from: JSONSerialization.data(withJSONObject: json))
+        let ratio = try XCTUnwrap(dimensions.heightToWidthRatio)
+        XCTAssertEqual(ratio, format.heightToWidthRatio, accuracy: 0.001)
+        for screenHeight: CGFloat in [568, 852, 956] {
+          XCTAssertEqual(MIRAMediaSizing.mainFeedHeight(for: [], aspectRatios: [ratio],
+            width: width, screenHeight: screenHeight), width * ratio, accuracy: 0.001)
+        }
+      }
+    }
+  }
   func testVoiceWatchdogStartsAtAudioActivationNotAuthorization() {
     let health = CaptroVoicePipelineHealth(now: 100)
     XCTAssertNil(health.stall(now: 103))

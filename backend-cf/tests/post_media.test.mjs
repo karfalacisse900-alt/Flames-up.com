@@ -116,7 +116,7 @@ test('real completion route waits for Stream before starting moderation', async 
   assert.deepEqual(repeated.events, []);
 });
 
-test('post creation accepts both kinds; Home remains post-only paging', () => {
+test('post creation accepts both kinds; Home scrolls vertically with in-media carousels', () => {
   const composer = ios('Screens/NotificationLibrarySearchCreateViews.swift');
   assert.match(composer, /matching: \.any\(of: \[\.images, \.videos\]\)/);
   assert.doesNotMatch(composer, /Feed posts are photo-only/);
@@ -125,7 +125,8 @@ test('post creation accepts both kinds; Home remains post-only paging', () => {
   const topBar = home.slice(home.indexOf('private var homeTopBar'), home.indexOf('private func homeSectionButton'));
   assert.match(topBar, /square\.and\.pencil/);
   assert.doesNotMatch(topBar, /bell|NotificationNativeView/);
-  assert.match(home, /selectedMediaIndex: \.constant\(0\),\s*showsCoverMediaOnly: true/);
+  assert.match(home, /private func verticalPostStream[\s\S]*?ScrollView\(\.vertical\)/);
+  assert.match(ios('Screens/CaptroFeedPostView.swift'), /showsCoverMediaOnly: false/);
   assert.match(home, /scenePhase != \.active \|\| detailPost != nil/);
   const pager = ios('Screens/CaptroFeedMediaPager.swift');
   assert.match(pager, /isVideoMuted = false/);
