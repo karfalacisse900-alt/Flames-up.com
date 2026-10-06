@@ -1386,7 +1386,7 @@ function MessagesPage({ token, openAction }: { token: string; openAction: (state
         {detail.loading ? <LoadingRows compact /> : detail.data ? (
           <div className="detail-stack">
             <div className="privacy-warning">{detail.data.privacy_warning}</div>
-            <h2>Conversation context</h2>
+            <h2>Reported message</h2>
             <div className="message-context">
               {detail.data.context.map((message) => (
                 <div className={message.is_reported ? 'message-line reported' : 'message-line'} key={message.id}>
@@ -1398,7 +1398,7 @@ function MessagesPage({ token, openAction }: { token: string; openAction: (state
             </div>
             <button className="danger-button" onClick={removeMessage}>Remove reported message</button>
           </div>
-        ) : <EmptyState title="Select a reported message" body="Nearby context will load only after selection." />}
+        ) : <EmptyState title="Select a reported message" body="Only the selected reported message will load. Other private messages are not included." />}
       </aside>
     </section>
   );

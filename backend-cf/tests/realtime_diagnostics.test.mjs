@@ -10,7 +10,7 @@ test('voice breadcrumbs accept only bounded stages and counters, never media or 
     assert.equal(validateRealtimeDiagnostic({ ...valid, [field]: 'private' }), null);
   }
   for (const change of [ { stage: 'arbitrary' }, { frames: -1 }, { bytes: Infinity },
-    { epoch: '1' }, { code: 'sk_secret' }, { code: 'contains private speech' },
+    { epoch: '1' }, { code: 'sk_secret' }, { code: 'sk-secret' }, { code: 'ek-secret' }, { code: 'contains private speech' },
     { diagnostic_id: 'not-a-session-id' }, { http_status: 999 } ]) {
     assert.equal(validateRealtimeDiagnostic({ ...valid, ...change }), null);
   }
@@ -31,10 +31,12 @@ test('native voice readiness follows confirmed config plus PCM send, never permi
   assert.match(session, /isInterruptedEvent\(event\)/);
   assert.match(session, /queuedOutputBuffers == 0 && phase != \.userSpeaking/);
   assert.match(session, /input_audio_buffer\.clear/);
-  assert.match(session, /self\.muted \? Data\(count:/);
+  assert.match(session, /suppressed \? Data\(count:/);
+  assert.match(session, /chunk\.muteVersion != gate\.version/);
   assert.doesNotMatch(ui, /Send to Captro|Record again|Done speaking/);
   assert.match(ui, /selectOutput\(speaker: false, input: input\)/);
-  assert.match(ui, /resumeFromBackground\(\)/);
+  assert.match(ui, /suspendForBackground\(\)/);
+  assert.match(session, /func suspendForBackground\(\)[\s\S]*?stop\(\)/);
 });
 
 test('text-only Stamp is outlined, measured, creator-configured and separate from media/header UI', () => {

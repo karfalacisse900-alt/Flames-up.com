@@ -16,7 +16,7 @@
     "openai": "7.19.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260524.1",
+    "@cloudflare/workers-types": "^5.20261001.1",
     "@electric-sql/pglite": "0.5.8",
     "typescript": "^5.9.3",
     "wrangler": "^4.94.0",

@@ -26,7 +26,7 @@ export function validateRealtimeDiagnostic(body: unknown): Record<string, string
     epoch: value.epoch as number, frames: value.frames as number, bytes: value.bytes as number,
   };
   if (value.code != null) {
-    if (typeof value.code !== 'string' || !/^[a-z0-9._-]{1,100}$/i.test(value.code) || /^(sk_|ek_|sess_|bearer)/i.test(value.code)) return null;
+    if (typeof value.code !== 'string' || !/^[a-z0-9._-]{1,100}$/i.test(value.code) || /^(sk_|sk-|ek_|ek-|sess_|bearer)/i.test(value.code)) return null;
     result.code = value.code;
   }
   if (value.http_status != null) {

@@ -16,7 +16,11 @@ test('club member context remains behind group membership authorization', () => 
 });
 
 test('club room keeps live message transport and only shows supplied activity', () => {
-  assert.match(native, /ClubChatHeader\(title: title, info: model\.groupInfo/);
+  const header = native.split('private var clubContextHeader: some View')[1].split('private var chatHeader')[0];
+  assert.match(header, /chatHeader/);
+  assert.doesNotMatch(header, /ClubChatHeader|ClubChatActivityCard|ClubChatMemberStrip/);
+  assert.match(header, /pinnedMessage/);
+  assert.match(native, /Button\("Members"/);
   assert.match(native, /if let activity = model\.groupInfo\?\.activity/);
   assert.match(native, /\/group-chats\/\\\(groupId\)\/messages/);
   assert.match(native, /ClubChatLinkMessage\(url: link, api: model\.api\)/);

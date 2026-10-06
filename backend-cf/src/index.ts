@@ -8,6 +8,7 @@ import { cors } from 'hono/cors';
 import bcrypt from 'bcryptjs';
 import OpenAI from 'openai';
 import { validateRealtimeDiagnostic } from './realtime-diagnostics';
+import { realtimeModel, realtimeSessionConfig, realtimeCredential, realtimeFailure, safeRealtimeCode } from './realtime-session';
 import { screenStoryWithWorkersAI } from './story-safety';
 import { createCaptroScanRoutes, receiptReviewPayload, signedPrivateObjectUrl } from './scan';
 import { attachPublicPostObjects, privateTicketPayload, creatorEventDetails, validateCreatorEvent, isEventPostType } from './post-objects';
@@ -453,6 +454,10 @@ async function getOptionalUserId(c: any): Promise<string> {
     const resolved = await resolveSupabaseSessionUser(c, token);
     const userId = resolved.userId;
     const user = resolved.user;
+
+    const revokedAt = Date.parse(String(user?.session_revoked_at || ''));
+    const issuedAt = Number(resolved.payload?.iat || 0) * 1000;
+    if (Number.isFinite(revokedAt) && revokedAt > 0 && (!issuedAt || issuedAt + 1000 < revokedAt)) return '';
 
     const optionalStatus = String(user?.status || 'active');
     if (!user || optionalStatus === 'banned' || optionalStatus === 'deleted' || optionalStatus === 'deletion_pending') return '';
@@ -4945,9 +4950,21 @@ async function hasValidMediaAccessToken(c: any, backupId: string): Promise<boole
   return constantTimeEqualHex(signature, expected);
 }
 
-async function signedMessageMediaReference(c: any, value: unknown): Promise<string> {
+async function messageMediaOwnedBy(c: any, value: unknown, senderId: string): Promise<boolean> {
+  const backupId = mediaBackupIdFromReference(value);
+  if (!backupId) return true; // Non-backup media retains its existing provider rules.
+  if (!senderId) return false;
+  const backup: any = await c.env.DB.prepare('SELECT user_id FROM media_backups WHERE id = ?')
+    .bind(backupId).first();
+  return !!backup && backup.user_id === senderId;
+}
+
+async function signedMessageMediaReference(c: any, value: unknown, senderId: string): Promise<string> {
   const raw = String(value || '').trim();
   const backupId = mediaBackupIdFromReference(raw);
+  // A forged message reference must never turn an arbitrary private backup ID
+  // into a server-signed download URL, including historical forged messages.
+  if (backupId && !await messageMediaOwnedBy(c, raw, senderId)) return '';
   return backupId ? signedMediaDeliveryUrl(c, backupId) : raw;
 }
 
@@ -5179,7 +5196,7 @@ async function attachMediaBackupToMessage(
 
 async function messagePayload(c: any, row: any): Promise<any> {
   const rawMediaUrl = cleanText(row.media_url || '', 2500);
-  let mediaUrl = rawMediaUrl ? await signedMessageMediaReference(c, rawMediaUrl) : rawMediaUrl;
+  let mediaUrl = rawMediaUrl ? await signedMessageMediaReference(c, rawMediaUrl, publicId(row.sender_id, 120)) : rawMediaUrl;
   const rawMediaType = cleanText(row.media_type || '', 40).toLowerCase();
   const isVideoMessage = rawMediaType.includes('video') || isVideoMediaUrl(rawMediaUrl) || isVideoMediaUrl(mediaUrl);
   const streamPosterUrl = isVideoMessage ? streamThumbnailUrl(rawMediaUrl) : '';
@@ -7250,6 +7267,20 @@ function rejectLegacyUploadWhenSupabasePrimary(c: any, route: string) {
   }, 410);
 }
 
+function supabaseStorageFailure(operation: string, table: string, status: number, responseBody: string): Error {
+  if (table === 'app_messages' || table === 'app_group_messages') {
+    // Postgres errors can echo a failing row, including private message text.
+    // Retain only a machine code; never log provider messages/details/hints.
+    let code = 'UNKNOWN';
+    try {
+      const candidate = JSON.parse(responseBody)?.code;
+      if (typeof candidate === 'string' && /^(?:[0-9A-Z]{5}|PGRST[0-9]{3})$/.test(candidate)) code = candidate;
+    } catch {}
+    return new Error(`SUPABASE_${operation}_FAILED:${table}:${status}:${code}`);
+  }
+  return new Error(`SUPABASE_${operation}_FAILED:${table}:${status}:${responseBody.slice(0, 300)}`);
+}
+
 async function supabaseAdminSelectRows(c: any, table: string, filters: Record<string, string>, select = '*', limit = 1000): Promise<any[]> {
   const url = new URL(`${getSupabaseUrl(c)}/rest/v1/${table}`);
   url.searchParams.set('select', select);
@@ -7262,7 +7293,7 @@ async function supabaseAdminSelectRows(c: any, table: string, filters: Record<st
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_SELECT_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+    throw supabaseStorageFailure('SELECT', table, response.status, text);
   }
   const data = await response.json().catch(() => []);
   return Array.isArray(data) ? data : [];
@@ -7288,7 +7319,7 @@ async function supabaseAdminQueryRows(c: any, table: string, input: {
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_QUERY_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+    throw supabaseStorageFailure('QUERY', table, response.status, text);
   }
   const data = await response.json().catch(() => []);
   return Array.isArray(data) ? data : [];
@@ -7311,7 +7342,7 @@ async function supabaseAdminCountRows(c: any, table: string, filters: Record<str
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_COUNT_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+    throw supabaseStorageFailure('COUNT', table, response.status, text);
   }
   const contentRange = response.headers.get('content-range') || response.headers.get('Content-Range') || '';
   const total = Number(contentRange.split('/').pop() || NaN);
@@ -7336,7 +7367,7 @@ async function supabaseAdminDeleteRows(c: any, table: string, filters: Record<st
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_DELETE_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+    throw supabaseStorageFailure('DELETE', table, response.status, text);
   }
 }
 
@@ -7366,7 +7397,7 @@ async function supabaseAdminPatchRows(c: any, table: string, filters: Record<str
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_PATCH_FAILED:${table}:${response.status}:${text.slice(0, 300)}`);
+    throw supabaseStorageFailure('PATCH', table, response.status, text);
   }
 }
 
@@ -11787,14 +11818,11 @@ function isOwnerEmail(c: any, email: unknown): boolean {
 }
 
 async function requireOwnerOrAdmin(c: any): Promise<any> {
-  const userId = getUserId(c);
-  const user: any = await c.env.DB.prepare('SELECT id, email, username, full_name, is_admin FROM users WHERE id = ?')
-    .bind(userId)
-    .first();
-  if (!user?.is_admin && !isOwnerUsername(c, user?.username) && !isOwnerEmail(c, user?.email)) {
+  const admin = await getAdminContext(c);
+  if (!admin || !['owner', 'admin'].includes(admin.role)) {
     throw new Error('FORBIDDEN');
   }
-  return user;
+  return admin.user;
 }
 
 async function verifyGoogleIdToken(c: any, idToken: string) {
@@ -13316,7 +13344,7 @@ async function supabaseAdminUpsert(c: any, table: string, rows: any[], onConflic
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_UPSERT_FAILED:${table}:${response.status}:${text.slice(0, 500)}`);
+    throw supabaseStorageFailure('UPSERT', table, response.status, text);
   }
   return { table, count: rows.length };
 }
@@ -13338,7 +13366,7 @@ async function supabaseAdminInsertRows(c: any, table: string, rows: any[], selec
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_INSERT_FAILED:${table}:${response.status}:${text.slice(0, 500)}`);
+    throw supabaseStorageFailure('INSERT', table, response.status, text);
   }
   const data = await response.json().catch(() => []);
   return Array.isArray(data) ? data : [];
@@ -16577,8 +16605,9 @@ api.post('/ai/realtime/session', authMiddleware, async (c) => {
     return c.json({ detail: 'Invalid recording context.', code: 'INVALID_CONTEXT' }, 400);
   }
   const diagnosticId = uuid();
+  const startedAt = Date.now();
   const instructions = [
-    'You are Captro Voice, a warm, concise spoken assistant. Keep ordinary replies under 35 words and ask one question at a time.',
+    'You are Captro AI, an AI voice assistant, not a human caller. Speak naturally. Keep ordinary replies under 35 words and ask one question at a time. Do not read markdown or links aloud.',
     hasRecording ? 'The user has a current Captro video recording available in the app. You have not seen or analyzed its contents.' : 'There is no current Captro video recording in this session.',
     'Help the user plan a Story or Post. You cannot edit, caption, inspect, upload, delete, or publish media yourself. Never claim such work is finished.',
     'For specific edits, say that the user can review the proposed Story or Post edit in Captro. Publishing always requires an explicit app confirmation.',
@@ -16593,48 +16622,40 @@ api.post('/ai/realtime/session', authMiddleware, async (c) => {
         'Content-Type': 'application/json',
         'OpenAI-Safety-Identifier': safetyIdentifier,
       },
-      body: JSON.stringify({ session: {
-        type: 'realtime',
-        model: 'gpt-realtime-2.1',
-        instructions,
-        output_modalities: ['audio'],
-        audio: {
-          input: {
-            format: { type: 'audio/pcm', rate: 24000 },
-            transcription: { model: 'gpt-transcribe' },
-            // In a production WebSocket smoke, semantic VAD committed and
-            // transcribed the turn but did not emit response.created even with
-            // create_response=true. The client requests one response for each
-            // committed item; VAD still owns the turn boundary and barge-in.
-            turn_detection: { type: 'semantic_vad', eagerness: 'medium', create_response: false, interrupt_response: true },
-          },
-          output: { format: { type: 'audio/pcm', rate: 24000 }, voice: 'marin' },
-        },
-      } }),
+      body: JSON.stringify(realtimeSessionConfig(instructions)),
       signal: AbortSignal.timeout(12_000),
     });
     if (!upstream.ok) {
       const failure: any = await upstream.json().catch(() => ({}));
+      const classified = realtimeFailure(upstream.status, failure.error?.code);
       console.warn(JSON.stringify({ event: 'capture_realtime_session_failed', diagnostic_id: diagnosticId,
-        status: upstream.status, error_type: cleanText(failure.error?.type, 80), error_code: cleanText(failure.error?.code, 80),
+        status: upstream.status, error_type: safeRealtimeCode(failure.error?.type), error_code: safeRealtimeCode(failure.error?.code),
+        duration_ms: Date.now() - startedAt,
         request_id: upstream.headers.get('x-request-id') || '', captro_request_id: c.get?.('requestId') || '' }));
-      return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_UNAVAILABLE' }, 503);
+      const retryAfter = Number(upstream.headers.get('retry-after'));
+      if (classified.retryable && Number.isFinite(retryAfter) && retryAfter > 0) c.header('Retry-After', String(Math.min(60, retryAfter)));
+      return c.json({ detail: 'Captro AI is unavailable right now.', code: classified.code,
+        retryable: classified.retryable, diagnostic_id: diagnosticId }, classified.status, { 'Cache-Control': 'no-store' });
     }
     const secret: any = await upstream.json();
-    if (typeof secret?.value !== 'string' || secret.value.length < 20) {
+    const credential = realtimeCredential(secret);
+    if (!credential) {
       console.warn(JSON.stringify({ event: 'capture_realtime_session_invalid', request_id: upstream.headers.get('x-request-id') || '' }));
-      return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_UNAVAILABLE' }, 503);
+      return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_CONFIGURATION_INVALID', retryable: false,
+        diagnostic_id: diagnosticId }, 503, { 'Cache-Control': 'no-store' });
     }
     console.info(JSON.stringify({ event: 'capture_realtime_session_created', diagnostic_id: diagnosticId,
       status: upstream.status, request_id: upstream.headers.get('x-request-id') || '',
       openai_organization: upstream.headers.get('openai-organization'), openai_project: upstream.headers.get('openai-project'),
-      key_source: 'existing_worker_secret', model: 'gpt-realtime-2.1', vad: 'semantic_vad',
+      key_source: 'existing_worker_secret', model: realtimeModel, vad: 'semantic_vad', create_response: true,
+      duration_ms: Date.now() - startedAt,
       has_recording_context: hasRecording, captro_request_id: c.get?.('requestId') || '' }));
-    return c.json({ client_secret: secret.value, expires_at: secret.expires_at || null, model: 'gpt-realtime-2.1',
+    return c.json({ client_secret: credential.value, expires_at: credential.expiresAt, model: realtimeModel,
       diagnostic_id: diagnosticId }, 200, { 'Cache-Control': 'no-store' });
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'capture_realtime_session_exception', code: classifyOpenAIServiceFailure(error).code, captro_request_id: c.get?.('requestId') || '' }));
-    return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_UNAVAILABLE' }, 503);
+    return c.json({ detail: 'Captro AI is unavailable right now.', code: 'AI_SERVICE_TEMPORARY_FAILURE', retryable: true,
+      diagnostic_id: diagnosticId }, 503, { 'Cache-Control': 'no-store' });
   }
 });
 
@@ -18152,9 +18173,8 @@ api.post('/statuses/:statusId/reply', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const reply = cleanMultilineText(body.body || '', 500);
   if (!reply) return c.json({ detail: 'Write a reply.' }, 400);
-  const replySafety = await screenCaptroText(c.env, reply);
-  if (replySafety === 'review') return c.json({ detail: 'This reply could not be sent under Captro’s safety rules. Please revise it and try again.', code: 'TEXT_NEEDS_REVISION' }, 409);
-  if (replySafety === 'unavailable') return c.json({ detail: 'Reply safety screening is unavailable. Try again.', code: 'TEXT_SCREENING_UNAVAILABLE' }, 503);
+  // This is a private DM, not a public Story comment. Keep blocking/rate
+  // limits and user-selected reporting, without sending the conversation to AI.
   const id = uuid(); const ts = now();
   const content = `Replied to your status\n${reply}`;
   const media = { story_reply_id: storyId };
@@ -18526,6 +18546,7 @@ api.post('/messages', authMiddleware, async (c) => {
   const receiverId = publicId(b.receiver_id || b.receiverId, 120);
   const content = cleanMultilineText(b.content, 2000);
   const mediaUrl = normalizedMediaReferenceForStorage(c, safeMediaReference(b.media_url || b.mediaUrl));
+  if (!await messageMediaOwnedBy(c, mediaUrl, userId)) return c.json({ detail: 'Attachment is unavailable. Please upload it again.' }, 403);
   const requestedMediaType = String(b.media_type || b.mediaType || '').toLowerCase();
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
@@ -18539,16 +18560,16 @@ api.post('/messages', authMiddleware, async (c) => {
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
   if (content && !mediaUrl) {
     const recentDuplicate = await supabaseAdminQueryRows(c, 'app_messages', {
-      select: 'id',
+      select: 'id,body',
       filters: {
         sender_id: postgrestEqFilter(userId),
         receiver_id: postgrestEqFilter(receiverId),
-        body: postgrestEqFilter(content),
         created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
       },
-      limit: 1,
+      order: 'created_at.desc',
+      limit: 60,
     });
-    if (recentDuplicate[0]) {
+    if (recentDuplicate.some((row: any) => row.body === content)) {
       await logSecurityEvent(c, 'duplicate_message_blocked', userId, { receiver_id: receiverId });
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
@@ -18806,6 +18827,7 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   if (unknown) return unknown;
   const content = cleanMultilineText(body.content, 2000);
   const mediaUrl = normalizedMediaReferenceForStorage(c, safeMediaReference(body.media_url || body.mediaUrl));
+  if (!await messageMediaOwnedBy(c, mediaUrl, userId)) return c.json({ detail: 'Attachment is unavailable. Please upload it again.' }, 403);
   const requestedMediaType = String(body.media_type || body.mediaType || '').toLowerCase();
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
@@ -18817,16 +18839,16 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
   if (content && !mediaUrl) {
     const recentDuplicate = await supabaseAdminQueryRows(c, 'app_group_messages', {
-      select: 'id',
+      select: 'id,body',
       filters: {
         group_id: postgrestEqFilter(groupId),
         sender_id: postgrestEqFilter(userId),
-        body: postgrestEqFilter(content),
         created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
       },
-      limit: 1,
+      order: 'created_at.desc',
+      limit: 60,
     });
-    if (recentDuplicate[0]) {
+    if (recentDuplicate.some((row: any) => row.body === content)) {
       await logSecurityEvent(c, 'duplicate_group_message_blocked', userId, { group_id: groupId });
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
@@ -21180,10 +21202,11 @@ async function getAdminContext(c: any): Promise<AdminContext | null> {
   const row = await getSupabaseAppUserRowByAnyId(c, userId);
   if (!row) return null;
   const legacy = supabaseAppUserToLegacyUser(row);
-  if (['banned', 'deleted', 'deletion_pending'].includes(String(legacy.status || 'active'))) return null;
+  if (String(legacy.status || 'active') !== 'active') return null;
 
-  const metadata = parseJsonObject(row?.metadata);
-  let role = normalizeAdminRole((metadata as any).admin_role || (metadata as any).role);
+  // Profile metadata, names and emails are user-controlled, never authorization.
+  // Only the server-managed role table can grant administrative privileges.
+  let role: AdminRole | '' = '';
   const candidateIds = Array.from(new Set([
     publicId(row?.id, 120),
     isUuidText(row?.supabase_user_id) || '',
@@ -21198,10 +21221,12 @@ async function getAdminContext(c: any): Promise<AdminContext | null> {
       console.warn(JSON.stringify({ event: 'supabase_admin_role_lookup_failed', code: getErrorCode(error).slice(0, 180) }));
       return [];
     });
-    role = normalizeAdminRole(roleRows.find((roleRow: any) => normalizeAdminRole(roleRow?.role))?.role) || role;
+    const assignedRoles = new Set(roleRows
+      .filter((roleRow: any) => candidateIds.includes(String(roleRow?.user_id || '')))
+      .map((roleRow: any) => normalizeAdminRole(roleRow?.role)));
+    // Conflicting legacy/auth-ID assignments require operator reconciliation.
+    if (assignedRoles.size === 1) role = Array.from(assignedRoles)[0];
   }
-  if (isOwnerUsername(c, legacy.username) || isOwnerEmail(c, legacy.email)) role = 'owner';
-  if (!role && ((metadata as any).is_admin === true || Number((metadata as any).is_admin || 0) === 1)) role = 'admin';
   if (!role) return null;
   return { userId: publicId(row.id, 120), role, user: { ...legacy, admin_role: role } };
 }
@@ -24099,61 +24124,21 @@ api.get('/admin/messages/reported/:reportId', authMiddleware, async (c) => {
       const message = messageRows[0];
       if (!message) return c.json({ detail: 'Message not found.' }, 404);
       const senderId = publicId(message.sender_id, 120);
-      const receiverId = publicId(message.receiver_id, 120);
-      const conversationId = publicId(message.conversation_id, 160);
-      const contextFilters: Record<string, string> = {};
-      if (conversationId) {
-        contextFilters.conversation_id = postgrestEqFilter(conversationId);
-      } else if (senderId && receiverId) {
-        contextFilters.or = `(and(sender_id.eq.${senderId},receiver_id.eq.${receiverId}),and(sender_id.eq.${receiverId},receiver_id.eq.${senderId}))`;
-      }
-      let rawContext: any[] = [message];
-      if (conversationId || (senderId && receiverId)) {
-        rawContext = await supabaseAdminQueryRows(c, 'app_messages', {
-          select: 'id,sender_id,receiver_id,conversation_id,body,media_url,media_type,media,status,created_at,legacy_created_at',
-          filters: contextFilters,
-          order: 'created_at.desc',
-          limit: 50,
-        }).catch((error: any) => {
-          console.warn(JSON.stringify({ event: 'supabase_reported_message_context_failed', code: getErrorCode(error).slice(0, 180) }));
-          return [message];
-        });
-      }
-      const centerMs = Date.parse(cleanText(message.legacy_created_at || message.created_at, 80));
-      const boundedContext = rawContext
-        .filter((row) => {
-          if (!Number.isFinite(centerMs)) return true;
-          const rowMs = Date.parse(cleanText(row?.legacy_created_at || row?.created_at, 80));
-          return Number.isFinite(rowMs) && Math.abs(rowMs - centerMs) <= 10 * 60 * 1000;
-        })
-        .sort((a, b) => Date.parse(cleanText(a?.legacy_created_at || a?.created_at, 80)) - Date.parse(cleanText(b?.legacy_created_at || b?.created_at, 80)))
-        .slice(0, 12);
-      const contextRows = boundedContext.some((row) => publicId(row?.id, 160) === messageId)
-        ? boundedContext
-        : [message, ...boundedContext.filter((row) => publicId(row?.id, 160) !== messageId)].slice(0, 12);
       await writeAdminAuditLog(c, admin, { actionType: 'reported_message_viewed', targetType: 'message', targetId: messageId, targetUserId: senderId, reason: 'Safety review', note: `Report ${reportId}` });
       return c.json({
         report: await adminReportDetail(c, report),
-        privacy_warning: 'Reported message access is audit logged and limited to nearby context needed for safety review.',
-        context: contextRows.map((row) => adminReportedMessageContextPayload(row, messageId)),
+        privacy_warning: 'Only the reported message is included. Access is audit logged.',
+        context: [adminReportedMessageContextPayload(message, messageId)],
       });
     }
     await ensureAdminModerationSchema(c.env.DB);
     const message: any = await c.env.DB.prepare('SELECT * FROM messages WHERE id = ?').bind(messageId).first();
     if (!message) return c.json({ detail: 'Message not found.' }, 404);
-    const context = await c.env.DB.prepare(`
-      SELECT id, sender_id, receiver_id, content, media_type, status, created_at
-      FROM messages
-      WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-        AND datetime(created_at) BETWEEN datetime(?, '-10 minutes') AND datetime(?, '+10 minutes')
-      ORDER BY created_at ASC
-      LIMIT 12
-    `).bind(message.sender_id, message.receiver_id, message.receiver_id, message.sender_id, message.created_at, message.created_at).all();
     await writeAdminAuditLog(c, admin, { actionType: 'reported_message_viewed', targetType: 'message', targetId: messageId, targetUserId: message.sender_id, reason: 'Safety review', note: `Report ${reportId}` });
     return c.json({
       report: await adminReportDetail(c, report),
-      privacy_warning: 'Reported message access is audit logged and limited to nearby context needed for safety review.',
-      context: (context.results as any[]).map((row) => ({
+      privacy_warning: 'Only the reported message is included. Access is audit logged.',
+      context: [message].map((row) => ({
         id: row.id,
         sender_id: row.sender_id,
         receiver_id: row.receiver_id,
@@ -24340,6 +24325,7 @@ api.get('/admin/reported-accounts', authMiddleware, adminGuard, async (c) => {
 });
 
 api.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => {
+  await requireAdminRole(c, 'content:write');
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin_remove_post_legacy');
   if (supabaseRequired) return supabaseRequired;
   const postId = c.req.param('postId');
@@ -24364,6 +24350,9 @@ api.post('/admin/remove-post/:postId', authMiddleware, adminGuard, async (c) => 
 });
 
 api.post('/admin/make-admin/:userId', authMiddleware, adminGuard, async (c) => {
+  const admin = await requireAdminRole(c, 'roles:write');
+  const limited = await requireAdminWriteRateLimit(c, admin, 'admin_role_assignment');
+  if (limited) return limited;
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin_make_admin');
   if (supabaseRequired) return supabaseRequired;
   const targetUserId = publicId(c.req.param('userId'), 120);
@@ -24444,11 +24433,8 @@ async function serveMediaBackup(c: any) {
       ).bind(cleanText(backup.group_message_id, 120), viewerId).first();
       if (!visibleGroupMessage) return c.json({ detail: 'Media not found' }, 404);
     } else if (backup.user_id !== viewerId) {
-      const viewer: any = await c.env.DB.prepare('SELECT username, email, is_admin FROM users WHERE id = ?').bind(viewerId).first();
-      if (!viewer?.is_admin && !isOwnerUsername(c, viewer?.username) && !isOwnerEmail(c, viewer?.email)) {
-        await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
-        return c.json({ detail: 'Media not found' }, 404);
-      }
+      await logSecurityEvent(c, 'unattached_media_access_denied', viewerId, { backup_id: backup.id });
+      return c.json({ detail: 'Media not found' }, 404);
     }
 
     const head = await c.env.MEDIA_BACKUP.head(backup.r2_key);
@@ -24474,9 +24460,12 @@ async function serveMediaBackup(c: any) {
     object.writeHttpMetadata(headers);
     headers.set('etag', head.httpEtag || object.httpEtag);
     headers.set('accept-ranges', 'bytes');
-    headers.set('cache-control', 'public, max-age=31536000, immutable');
-    headers.set('cdn-cache-control', 'public, max-age=31536000, immutable');
-    headers.set('cloudflare-cdn-cache-control', 'public, max-age=31536000, immutable');
+    // R2 backups include private conversations. Never persist authorized bytes
+    // in shared caches, including range responses used by AVPlayer.
+    headers.set('cache-control', 'private, no-store, max-age=0');
+    headers.set('cdn-cache-control', 'no-store');
+    headers.set('cloudflare-cdn-cache-control', 'no-store');
+    headers.set('vary', 'Authorization, Cookie');
     headers.set('x-content-type-options', 'nosniff');
     headers.set('content-length', String(range ? range.length : head.size || object.size || 0));
     if (range) headers.set('content-range', `bytes ${range.offset}-${range.end}/${head.size}`);
@@ -24484,7 +24473,7 @@ async function serveMediaBackup(c: any) {
     const body = c.req.method === 'HEAD' ? null : object.body;
     return new Response(body, { status: range ? 206 : 200, headers });
   } catch (error: any) {
-    console.error('Media fetch failed:', getErrorCode(error), error?.message || error);
+    console.error(JSON.stringify({ event: 'media_fetch_failed', code: 'MEDIA_READ_FAILED' }));
     return c.json({ detail: 'Could not load media' }, 500);
   }
 }

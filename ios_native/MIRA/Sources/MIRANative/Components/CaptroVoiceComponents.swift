@@ -62,6 +62,7 @@ public final class CaptroVoiceRecorder: NSObject, ObservableObject, AVAudioRecor
     let allowed = await withCheckedContinuation { continuation in
       AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
     }
+    guard !Task.isCancelled else { return }
     guard allowed else {
       errorMessage = "Microphone access is off. Enable it in Settings to record voice."
       return

@@ -8,20 +8,20 @@ enum ConversationNativeKind: Hashable {
 }
 
 private enum ChatRoomPalette {
-  static let background = MIRATheme.Color.surfaceSoft
+  static let background = MIRATheme.Color.appBackground
   static let backgroundWash = MIRATheme.Color.surfaceSoft
   static let composer = MIRATheme.Color.surface
   static let input = MIRATheme.Color.surfaceRaised
   static let incomingBubble = MIRATheme.Color.surface
-  static let outgoingBubble = MIRATheme.Color.forest
+  static let outgoingBubble = MIRATheme.Color.forest.opacity(0.12)
   static let outgoingSoft = MIRATheme.Color.forest.opacity(0.82)
   static let accent = MIRATheme.Color.forest
   static let hairline = MIRATheme.Color.hairline
   static let incomingStroke = Color.clear
   static let outgoingStroke = Color.clear
   static let incomingTimestamp = MIRATheme.Color.textSecondary
-  static let outgoingTimestamp = MIRATheme.Color.onPrimary.opacity(0.8)
-  static let messageShadow = Color.black.opacity(0.030)
+  static let outgoingTimestamp = MIRATheme.Color.textSecondary
+  static let messageShadow = Color.clear
 }
 
 @MainActor
@@ -193,14 +193,20 @@ final class ConversationNativeModel: ObservableObject {
     case MIRAAPIError.badStatus(let code): status = code
     default: return false
     }
-    guard status == 403 || status == 404 else { return false }
+    guard status == 401 || status == 403 || status == 404 else { return false }
     messages = []
     groupInfo = nil
     lastSyncedAt = nil
     lastServerSequence = nil
     hasOlderMessages = false
-    await localStore.removeThread(kind: kind, currentUserId: currentUserId)
-    errorMessage = "This conversation is no longer available."
+    // An expired login must hide this screen, not discard unsent drafts or the
+    // account-scoped snapshot needed after the user signs back in.
+    if status != 401 {
+      await localStore.removeThread(kind: kind, currentUserId: currentUserId)
+    }
+    errorMessage = status == 401
+      ? "Please sign in again to open this conversation."
+      : "This conversation is no longer available."
     return true
   }
 
@@ -272,6 +278,26 @@ final class ConversationNativeModel: ObservableObject {
     } catch {
       updateLocalMessage(localId, status: "failed", uploadStatus: "failed")
       errorMessage = "Could not send this media."
+    }
+  }
+
+  func sendVoiceRecording(_ file: URL) async {
+    guard !isUploading, !isSending else { return }
+    isUploading = true
+    defer { isUploading = false }
+    guard let data = await loadLocalRetryData(from: file) else {
+      errorMessage = "Couldn't read this recording. Your recording has not been sent."; return
+    }
+    let local = await localStore.storeOutgoingMedia(data: data, fileName: "voice.m4a")
+    let id = appendLocalOutgoingMessage(content: "", mediaUrl: (local ?? file).absoluteString,
+      mediaType: "voice", uploadStatus: "uploading")
+    do {
+      // Human voice messages use the existing attachment route, never AI.
+      let url = try await uploadService.uploadAudio(data: data, fileName: "voice.m4a")
+      await send(content: "", mediaUrl: url, mediaType: "voice", replacingLocalId: id)
+    } catch {
+      updateLocalMessage(id, status: "failed", uploadStatus: "failed")
+      errorMessage = "Couldn't send this recording. Long press it to retry."
     }
   }
 
@@ -348,7 +374,7 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   func retry(_ message: MIRAMessage) async {
-    guard message.status?.lowercased() == "failed" else { return }
+    guard !isSending, !isUploading, message.status?.lowercased() == "failed" else { return }
     messages.removeAll { $0.id == message.id }
     await persistThread()
     let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -356,6 +382,10 @@ final class ConversationNativeModel: ObservableObject {
        let url = URL(string: mediaUrl),
        url.isFileURL,
        let data = await loadLocalRetryData(from: url) {
+      if ["voice", "audio"].contains(message.mediaType?.lowercased() ?? "") {
+        await sendVoiceRecording(url)
+        return
+      }
       let type = message.mediaType?.lowercased() == "video" ? UTType.movie : UTType.image
       await sendPickedMedia(data: data, contentTypes: [type])
       return
@@ -486,6 +516,8 @@ public struct ConversationNativeView: View {
   @State private var reportMessage: MIRAMessage?
   @State private var isReportSheetPresented = false
   @State private var isViewingLatestMessage = true
+  @State private var hasNewMessages = false
+  @State private var showVoiceRecorder = false
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -519,7 +551,7 @@ public struct ConversationNativeView: View {
       }
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(spacing: 12) {
+          LazyVStack(spacing: 5) {
             if model.isLoading && model.messages.isEmpty {
               chatSkeleton
             } else if model.messages.isEmpty {
@@ -530,12 +562,13 @@ public struct ConversationNativeView: View {
               }
               ForEach(model.messages) { message in
                 messageBubble(message)
+                  .padding(.top, startsMessageRun(message) ? 8 : 0)
                   .id(message.id)
               }
               Color.clear
                 .frame(height: 1)
                 .id("chat-bottom")
-                .onAppear { isViewingLatestMessage = true }
+                .onAppear { isViewingLatestMessage = true; hasNewMessages = false }
                 .onDisappear { isViewingLatestMessage = false }
             }
           }
@@ -560,6 +593,7 @@ public struct ConversationNativeView: View {
           }
           let isOwnNewMessage = model.messages.last?.senderId == model.currentUserId
           let shouldStayPinnedToBottom = oldIDs.last != last && (isViewingLatestMessage || isOwnNewMessage)
+          if oldIDs.last != last && !shouldStayPinnedToBottom { hasNewMessages = true }
           guard shouldStayPinnedToBottom else { return }
           DispatchQueue.main.async {
             withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
@@ -567,12 +601,23 @@ public struct ConversationNativeView: View {
             }
           }
         }
+        .overlay(alignment: .bottom) {
+          if hasNewMessages && !isViewingLatestMessage {
+            Button {
+              withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+              hasNewMessages = false
+            } label: {
+              Label("New messages", systemImage: "arrow.down").font(.footnote.weight(.medium))
+                .padding(.horizontal, 14).frame(minHeight: 44).background(MIRATheme.Color.surface, in: Capsule())
+            }.tint(MIRATheme.Color.forest).padding(.bottom, 8)
+          }
+        }
       }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       composerContainer
     }
-    .background(model.isGroup ? MIRATheme.Color.surface : ChatRoomPalette.background)
+    .background(ChatRoomPalette.background)
     .miraScreenEnter(.push)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
@@ -629,6 +674,12 @@ public struct ConversationNativeView: View {
         Task { await model.sendSharedPost(post) }
       }
     }
+    .sheet(isPresented: $showVoiceRecorder) {
+      CaptroChatVoiceRecorderSheet { file in
+        showVoiceRecorder = false
+        Task { await model.sendVoiceRecording(file) }
+      }
+    }
     .sheet(isPresented: $showGroupMembers) {
       ClubMembersSheet(members: model.groupInfo?.members ?? [], api: model.api)
     }
@@ -666,20 +717,7 @@ public struct ConversationNativeView: View {
 
   private var clubContextHeader: some View {
     VStack(spacing: 0) {
-      ClubChatHeader(title: title, info: model.groupInfo, onBack: {
-        CaptroHaptics.light()
-        dismiss()
-      }, onMore: {
-        CaptroHaptics.light()
-        showProfileOptions = true
-      })
-      if let info = model.groupInfo, !(info.members ?? []).isEmpty {
-        ClubMemberAvatarRow(info: info) { showGroupMembers = true }
-      }
-      if let activity = model.groupInfo?.activity {
-        ActiveClubActivityCard(activity: activity) { showActivityDetails = true }
-          .padding(.vertical, 8)
-      }
+      chatHeader
       if let pinned = model.groupInfo?.pinnedMessage, !pinned.isEmpty {
         ClubPinnedMessageRow(message: pinned) { showPinnedMessage = true }
       }
@@ -720,21 +758,19 @@ public struct ConversationNativeView: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      Button {
-        CaptroHaptics.light()
-        DispatchQueue.main.async {
-          withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
-            showProfileOptions = true
+      Menu {
+        if model.isGroup {
+          Button("Members", systemImage: "person.2") { showGroupMembers = true }
+          if model.groupInfo?.activity != nil {
+            Button("Club activity", systemImage: "calendar") { showActivityDetails = true }
           }
         }
+        Button("Conversation options", systemImage: "ellipsis") { showProfileOptions = true }
       } label: {
         Image(systemName: "ellipsis")
           .font(.system(size: 19, weight: .heavy))
-          .foregroundStyle(.white)
-          .frame(width: 46, height: 46)
-          .background(Color.black, in: Circle())
-          .overlay(Circle().stroke(Color.white.opacity(0.30), lineWidth: 1))
-          .shadow(color: .black.opacity(0.14), radius: 10, x: 0, y: 4)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
+          .frame(width: 44, height: 44)
           .contentShape(Rectangle())
       }
       .buttonStyle(.miraPress)
@@ -839,16 +875,16 @@ public struct ConversationNativeView: View {
   private func clubMessageBubble(_ message: MIRAMessage) -> some View {
     let outgoing = isOutgoing(message)
     let sender = model.groupInfo?.members?.first { $0.id == message.senderId }
-    return HStack(alignment: .bottom, spacing: 10) {
-      if outgoing { Spacer(minLength: 46) }
-      if !outgoing {
+    return HStack(alignment: .top, spacing: 10) {
+      if startsMessageRun(message) {
         NavigationLink(destination: UserProfileNativeView(userId: message.senderId ?? "", api: model.api)) {
           RemoteAvatar(url: message.profileImage ?? sender?.profileImage, size: 32)
         }
         .buttonStyle(.plain)
         .disabled(message.senderId == nil)
-      }
-      VStack(alignment: outgoing ? .trailing : .leading, spacing: 5) {
+      } else { Color.clear.frame(width: 32, height: 1).accessibilityHidden(true) }
+      VStack(alignment: .leading, spacing: 5) {
+        if startsMessageRun(message) {
         HStack(spacing: 6) {
           Text(outgoing ? "You" : (message.fullName ?? message.username ?? sender?.displayName ?? "Member"))
             .font(.system(size: 12, weight: .semibold))
@@ -862,13 +898,14 @@ public struct ConversationNativeView: View {
             .font(.system(size: 11))
             .foregroundStyle(MIRATheme.Color.textMuted)
         }
+        }
         if let link = clubMessageLinkURL(message.content) {
           ClubChatLinkMessage(url: link, api: model.api)
         } else {
           MessageBubbleContent(
             message: message,
             outgoing: outgoing,
-            maxWidth: bubbleMaxWidth,
+            maxWidth: min(UIScreen.main.bounds.width - 80, 420),
             timestamp: nil,
             editorial: true
           )
@@ -879,8 +916,7 @@ public struct ConversationNativeView: View {
             .foregroundStyle(.red)
         }
       }
-      .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
-      if !outgoing { Spacer(minLength: 46) }
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .contextMenu {
       if let content = message.content, !content.isEmpty {
@@ -901,6 +937,13 @@ public struct ConversationNativeView: View {
       }
       Button("Hide for me", systemImage: "eye.slash") { model.deleteForMe(message) }
     }
+  }
+
+  private func startsMessageRun(_ message: MIRAMessage) -> Bool {
+    guard let index = model.messages.firstIndex(where: { $0.id == message.id }), index > 0 else { return true }
+    let previous = model.messages[index - 1]
+    return previous.senderId != message.senderId
+      || conversationSortDate(message).timeIntervalSince(conversationSortDate(previous)) > 300
   }
 
   private func clubMessageLinkURL(_ content: String?) -> URL? {
@@ -934,7 +977,6 @@ public struct ConversationNativeView: View {
       .frame(maxWidth: bubbleMaxWidth, alignment: outgoing ? .trailing : .leading)
       if !outgoing { Spacer(minLength: 68) }
     }
-    .transition(.move(edge: .bottom).combined(with: .opacity))
     .contextMenu {
       if outgoing, message.status?.lowercased() == "failed" {
         Button { Task { await model.retry(message) } } label: {
@@ -1016,6 +1058,8 @@ public struct ConversationNativeView: View {
       return "delivered"
     case "read":
       return "read"
+    case "sent":
+      return "sent"
     default:
       return nil
     }
@@ -1084,7 +1128,6 @@ public struct ConversationNativeView: View {
       .padding(.vertical, 9)
     }
     .background(ChatRoomPalette.composer)
-    .shadow(color: model.isGroup ? .clear : .black.opacity(0.035), radius: model.isGroup ? 0 : 12, x: 0, y: model.isGroup ? 0 : -3)
     .overlay(alignment: .top) {
       Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
     }
@@ -1119,10 +1162,12 @@ public struct ConversationNativeView: View {
       Task {
         if hasDraft {
           await model.sendText()
+        } else {
+          showVoiceRecorder = true
         }
       }
     } label: {
-      Image(systemName: "arrow.up")
+      Image(systemName: hasDraft ? "arrow.up" : "mic")
         .font(.system(size: 15, weight: .bold))
         .foregroundStyle(MIRATheme.Color.onPrimary)
         .frame(width: 44, height: 44)
@@ -1130,8 +1175,8 @@ public struct ConversationNativeView: View {
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
-    .disabled(!hasDraft || model.isSending)
-    .accessibilityLabel(model.isSending ? "Sending message" : "Send message")
+    .disabled(model.isSending || model.isUploading)
+    .accessibilityLabel(model.isSending ? "Sending message" : (hasDraft ? "Send message" : "Record voice message"))
   }
 
   private func trayButton(_ systemImage: String, _ title: String, tint: Color = MIRATheme.Color.textMuted) -> some View {
@@ -1232,7 +1277,7 @@ private struct MessageBubbleContent: View {
   @State private var isVideoPlaying = false
 
   var body: some View {
-    VStack(alignment: outgoing ? .trailing : .leading, spacing: hasLargeMedia ? 6 : 5) {
+    VStack(alignment: outgoing && !editorial ? .trailing : .leading, spacing: hasLargeMedia ? 6 : 5) {
       if let mediaUrl = message.mediaUrl, !mediaUrl.isEmpty {
         mediaContent(url: mediaUrl)
       }
@@ -1251,7 +1296,7 @@ private struct MessageBubbleContent: View {
     .padding(.trailing, bubbleTrailingPadding)
     .padding(.vertical, bubbleVerticalPadding)
     .fixedSize(horizontal: false, vertical: true)
-    .frame(maxWidth: bubbleFrameMaxWidth, alignment: outgoing ? .trailing : .leading)
+    .frame(maxWidth: bubbleFrameMaxWidth, alignment: outgoing && !editorial ? .trailing : .leading)
     .background {
       RoundedRectangle(cornerRadius: bubbleRadius, style: .continuous)
         .fill(bubbleFill)
@@ -1260,7 +1305,6 @@ private struct MessageBubbleContent: View {
       RoundedRectangle(cornerRadius: bubbleRadius, style: .continuous)
         .stroke(outgoing ? ChatRoomPalette.outgoingStroke : ChatRoomPalette.incomingStroke, lineWidth: 1)
     }
-    .shadow(color: editorial ? .clear : ChatRoomPalette.messageShadow, radius: editorial ? 0 : 8, x: 0, y: editorial ? 0 : 4)
   }
 
   private var hasLargeMedia: Bool {
@@ -1285,11 +1329,11 @@ private struct MessageBubbleContent: View {
   }
 
   private var bubbleTextColor: Color {
-    editorial ? MIRATheme.Color.textPrimary : (outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary)
+    MIRATheme.Color.textPrimary
   }
 
   private var bubbleRadius: CGFloat {
-    editorial ? 12 : (hasLargeMedia ? 18 : 22)
+    editorial ? 10 : (hasLargeMedia ? 14 : 16)
   }
 
   private var bubbleVerticalPadding: CGFloat {
@@ -1336,15 +1380,15 @@ private struct MessageBubbleContent: View {
         .font(.body)
         .foregroundStyle(bubbleTextColor)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
-        .multilineTextAlignment(outgoing ? .trailing : .leading)
+        .frame(maxWidth: textMaxWidth, alignment: .leading)
+        .multilineTextAlignment(.leading)
     } else {
       Text(content)
         .font(.body)
         .foregroundStyle(bubbleTextColor)
         .fixedSize(horizontal: false, vertical: true)
-        .multilineTextAlignment(outgoing ? .trailing : .leading)
-        .frame(maxWidth: textMaxWidth, alignment: outgoing ? .trailing : .leading)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: textMaxWidth, alignment: .leading)
     }
   }
 
@@ -1356,7 +1400,7 @@ private struct MessageBubbleContent: View {
     if type == "file" {
       fileCard
     } else if type == "voice" || type == "audio" {
-      EmptyView()
+      CaptroChatAudioMessage(url: url, identifier: message.id)
     } else {
       ZStack {
         RemoteMediaView(
@@ -1411,14 +1455,14 @@ private struct MessageBubbleContent: View {
     HStack(spacing: 10) {
       Image(systemName: "doc.fill")
         .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(outgoing ? .white : .black)
+        .foregroundStyle(MIRATheme.Color.textPrimary)
         .frame(width: 34, height: 34)
         .background((outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary).opacity(0.12))
         .clipShape(Circle())
       VStack(alignment: .leading, spacing: 3) {
         Text(message.fileName?.isEmpty == false ? message.fileName! : "File")
           .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(outgoing ? .white : .black)
+          .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(1)
         if let fileSize = message.fileSize, fileSize > 0 {
           Text(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))

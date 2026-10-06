@@ -2166,6 +2166,7 @@ public struct ChatNativeView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
   @State private var showCreateGroup = false
+  @State private var showsCaptroAI = false
   @State private var openingConversationId: String?
   @State private var activeConversationRoute: ChatOpenRoute?
   private let currentUserId: String
@@ -2183,6 +2184,15 @@ public struct ChatNativeView: View {
   public var body: some View {
     ScrollView {
         VStack(alignment: .leading, spacing: MIRATheme.Space.lg) {
+          Button { showsCaptroAI = true } label: {
+            HStack(spacing: 12) {
+              Image(systemName: "mic").frame(width: 36, height: 44)
+              Text("Captro AI").font(.body.weight(.medium))
+              Spacer()
+              Image(systemName: "chevron.right").font(.caption)
+            }.foregroundStyle(MIRATheme.Color.textPrimary)
+              .padding(.horizontal, MIRATheme.Space.md).frame(minHeight: 52)
+          }.buttonStyle(.plain).accessibilityLabel("Start a voice conversation with Captro AI")
           if model.conversations.isEmpty && model.isLoading {
             chatListSkeleton
           } else if let error = model.loadError, model.conversations.isEmpty {
@@ -2244,6 +2254,11 @@ public struct ChatNativeView: View {
       }
       .navigationBarTitleDisplayMode(.inline)
       .navigationTitle("Messages")
+      .fullScreenCover(isPresented: $showsCaptroAI) {
+        CaptroCaptureAssistantView(api: model.api, hasCurrentRecording: false,
+          onClose: { showsCaptroAI = false },
+          onOpenEditor: { _, _ in showsCaptroAI = false })
+      }
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button { showCreateGroup = true } label: {

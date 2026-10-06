@@ -11,6 +11,7 @@ const camera = read('ios_native/MIRA/Sources/MIRANative/Components/MIRACameraCap
 const assistant = read('ios_native/MIRA/Sources/MIRANative/Screens/CaptroCaptureAssistantView.swift');
 const realtime = read('ios_native/MIRA/Sources/MIRANative/Services/CaptroRealtimeVoiceSession.swift');
 const backend = read('backend-cf/src/index.ts');
+const realtimeConfig = read('backend-cf/src/realtime-session.ts');
 const editorial = read('ios_native/MIRA/Sources/MIRANative/Components/CaptroEditorialOverlayCard.swift');
 const viewer = read('ios_native/MIRA/Sources/MIRANative/Screens/DiscoverNativeView.swift');
 const editor = read('ios_native/MIRA/Sources/MIRANative/Screens/MIRANativeMediaEditorView.swift');
@@ -23,8 +24,8 @@ test('Capture Voice opens the AI assistant, not a voice-post recorder', () => {
   assert.match(realtime, /input_audio_buffer\.append/);
   assert.match(realtime, /input_audio_buffer\.speech_started/);
   assert.match(realtime, /input_audio_buffer\.committed/);
-  assert.match(realtime, /"type": "response\.create"/);
-  assert.match(realtime, /"create_response": false/);
+  assert.doesNotMatch(realtime, /"type": "response\.create"/);
+  assert.match(realtime, /"create_response": true/);
   assert.match(realtime, /recoverTransport\(\)/);
   assert.match(realtime, /response\.output_audio\.delta/);
   assert.doesNotMatch(assistant, /Send to Captro|Record again|uploadMultipart/);
@@ -32,7 +33,7 @@ test('Capture Voice opens the AI assistant, not a voice-post recorder', () => {
   assert.match(backend, /api\.post\('\/ai\/realtime\/session', authMiddleware/);
   assert.match(backend, /https:\/\/api\.openai\.com\/v1\/realtime\/client_secrets/);
   assert.match(backend, /semantic_vad/);
-  assert.match(backend, /create_response: false, interrupt_response: true/);
+  assert.match(realtimeConfig, /create_response: true, interrupt_response: true/);
   assert.match(backend, /store: false/);
   assert.match(backend, /c\.env\.OPENAI_API_KEY/);
   assert.match(backend, /trim_duration_seconds/);

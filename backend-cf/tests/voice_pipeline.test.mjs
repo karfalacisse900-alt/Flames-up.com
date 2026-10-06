@@ -141,7 +141,7 @@ test('Capture Voice streams a single Realtime conversation without a manual send
   assert.match(realtime, /conversation\.item\.truncate/);
   assert.match(backend, /api\.post\('\/ai\/realtime\/session', authMiddleware/);
   assert.match(backend, /'OpenAI-Safety-Identifier'/);
-  assert.match(backend, /interrupt_response: true/);
+  assert.match(fs.readFileSync('../backend-cf/src/realtime-session.ts', 'utf8'), /interrupt_response: true/);
 });
 
 test('voice reply creation binds after a focused comment count, not a full engagement refresh', () => {

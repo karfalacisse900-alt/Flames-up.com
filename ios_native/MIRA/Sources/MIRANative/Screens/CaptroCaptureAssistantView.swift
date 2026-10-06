@@ -1,19 +1,12 @@
 import AVFoundation
-import AVKit
 import SwiftUI
 
-enum CaptroAssistantEditorDestination: Equatable {
-  case story
-  case post
-}
-
+enum CaptroAssistantEditorDestination: Equatable { case story, post }
 public struct CaptroAssistantEditPlan: Decodable {
   public let trimStartSeconds: Double?
   public let trimDurationSeconds: Double?
-
   public init(trimStartSeconds: Double?, trimDurationSeconds: Double?) {
-    self.trimStartSeconds = trimStartSeconds
-    self.trimDurationSeconds = trimDurationSeconds
+    self.trimStartSeconds = trimStartSeconds; self.trimDurationSeconds = trimDurationSeconds
   }
 }
 
@@ -25,153 +18,137 @@ struct CaptroCaptureAssistantView: View {
   let onOpenEditor: (CaptroAssistantEditorDestination, CaptroAssistantEditPlan) -> Void
   @StateObject private var session = CaptroRealtimeVoiceSession()
   @State private var showsTranscript = false
+  @State private var showsDisclosure = false
+  @AppStorage("captro.ai.liveVoice.disclosure.v1") private var acceptedDisclosure = false
+  @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    NavigationStack {
-      VStack(spacing: 0) {
-        Spacer(minLength: 40)
-
-        ZStack {
-          Circle()
-            .stroke(MIRATheme.Color.forest.opacity(0.14), lineWidth: 1)
-            .frame(width: 168, height: 168)
-          Circle()
-            .fill(MIRATheme.Color.forest.opacity(session.phase == .error ? 0.07 : 0.12))
-            .frame(width: orbSize, height: orbSize)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: orbSize)
-          Image(systemName: session.phase == .error ? "waveform.slash" : "waveform")
-            .font(.system(size: 36, weight: .light))
-            .foregroundStyle(MIRATheme.Color.forest)
-            .accessibilityHidden(true)
-        }
-        .frame(height: 180)
-        .accessibilityLabel(session.status)
-
-        Text(session.status)
-          .font(.system(size: 19, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .padding(.top, 20)
-
-        if session.phase == .error {
-          Text(session.failureMessage)
-            .font(.subheadline)
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-            .padding(.top, 9)
-          Button("Try Again") {
-            Task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording, currentRecordingID: currentRecordingID) }
-          }
-          .buttonStyle(.borderedProminent)
-          .tint(MIRATheme.Color.forest)
-          .frame(minHeight: 44)
-          .padding(.top, 22)
-        }
-
-        if showsTranscript {
-          ScrollViewReader { proxy in
-            ScrollView {
-              LazyVStack(alignment: .leading, spacing: 12) {
-                if session.turns.isEmpty {
-                  Text("Your conversation transcript will appear here.")
-                    .font(.subheadline)
-                    .foregroundStyle(MIRATheme.Color.textSecondary)
+    GeometryReader { geometry in
+      ScrollView {
+        VStack(spacing: 0) {
+          HStack {
+            Spacer()
+            Menu {
+              Button("Transcript", systemImage: "text.bubble") { showsTranscript = true }
+              Menu("Audio output") {
+                Text("Current: \(session.outputName)")
+                Button("iPhone") { session.selectOutput(speaker: false) }
+                Button("Speaker") { session.selectOutput(speaker: true) }
+                ForEach(session.availableInputs.filter { $0.portType != .builtInMic }, id: \.uid) { input in
+                  Button(input.portName) { session.selectOutput(speaker: false, input: input) }
                 }
-                ForEach(session.turns.suffix(8)) { turn in
-                  VStack(alignment: .leading, spacing: 3) {
-                    Text(turn.role == "user" ? "You" : "Captro")
-                      .font(.caption.weight(.semibold))
-                      .foregroundStyle(MIRATheme.Color.textSecondary)
-                    Text(turn.text)
-                      .font(.subheadline)
-                      .foregroundStyle(MIRATheme.Color.textPrimary)
-                      .textSelection(.enabled)
-                  }
-                  .id(turn.id)
-                }
-              }
-              .padding(.vertical, 12)
+              }.disabled(session.connection != .ready)
+            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+            .accessibilityLabel("Conversation options")
+          }.foregroundStyle(MIRATheme.Color.textSecondary)
+          Text(connectionLabel).font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+          Text("Captro AI").font(.title2.weight(.semibold)).foregroundStyle(MIRATheme.Color.textPrimary).padding(.top, 6)
+          CaptroVoiceVisualStage(state: CaptroVoiceVisualState(session: session,
+            active: scenePhase == .active, reduceMotion: reduceMotion))
+            .frame(width: min(280, geometry.size.width - 72), height: min(280, geometry.size.width - 72))
+            .padding(.top, 48).padding(.bottom, 38)
+          TimelineView(.periodic(from: .now, by: 1)) { context in
+            Text(elapsed(at: context.date)).font(.subheadline.monospacedDigit())
+              .foregroundStyle(MIRATheme.Color.textSecondary).accessibilityLabel("Conversation duration")
+          }
+          Text(session.status).font(.body.weight(.medium)).foregroundStyle(MIRATheme.Color.textPrimary)
+            .padding(.top, 10).accessibilityAddTraits(.updatesFrequently)
+          if session.muted && session.phase == .captroSpeaking {
+            Text("Microphone muted").font(.caption).foregroundStyle(.secondary).padding(.top, 5)
+          }
+          if session.connection == .failed {
+            Text(session.failureMessage).font(.footnote).foregroundStyle(.secondary)
+              .multilineTextAlignment(.center).padding(.top, 10)
+            Button("Try Again") { start() }.tint(MIRATheme.Color.forest).frame(minHeight: 44).padding(.top, 8)
+          } else if session.connection == .ended {
+            Button("Start conversation") { start() }.tint(MIRATheme.Color.forest).frame(minHeight: 44)
+          }
+          if let notice = session.recoveryNotice, session.connection == .ready {
+            Text(notice).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.top, 8)
+          }
+          if let action = session.suggestedAction, hasCurrentRecording {
+            Button(action == .story ? "Review Story" : "Review Post") {
+              let plan = session.suggestedEditPlan; session.stop(); onOpenEditor(action, plan)
+            }.tint(MIRATheme.Color.forest).frame(minHeight: 44).padding(.top, 10)
+          }
+          Spacer(minLength: 36)
+          HStack(spacing: 46) {
+            Button { session.toggleMute() } label: {
+              Image(systemName: session.muted ? "mic.slash.fill" : "mic.fill").font(.title3)
+                .frame(width: 64, height: 64).foregroundStyle(MIRATheme.Color.textPrimary)
+                .background(session.muted ? MIRATheme.Color.forest.opacity(0.16) : MIRATheme.Color.surface, in: Circle())
             }
-            .onChange(of: session.turns.count) { _, _ in
-              if let last = session.turns.last { proxy.scrollTo(last.id, anchor: .bottom) }
-            }
-          }
-          .frame(maxHeight: 170)
-          .padding(.top, 20)
-          .accessibilityLabel("Conversation transcript")
-        }
-
-        Spacer(minLength: 32)
-
-        if let action = session.suggestedAction, hasCurrentRecording {
-          Button(action == .story ? "Review Story" : "Review Post") {
-            let plan = session.suggestedEditPlan
-            session.stop()
-            onOpenEditor(action, plan)
-          }
-          .buttonStyle(.bordered)
-          .tint(MIRATheme.Color.forest)
-          .frame(minHeight: 44)
-          .padding(.bottom, 20)
-        }
-
-        HStack(spacing: 28) {
-          Button { session.toggleMute() } label: {
-            Image(systemName: session.muted ? "mic.slash" : "mic")
-              .frame(width: 44, height: 44)
-          }
-          .accessibilityLabel(session.muted ? "Unmute microphone" : "Mute microphone")
-          .disabled(session.phase == .connecting || session.phase == .reconnecting || session.phase == .error)
-
-          Button { showsTranscript.toggle() } label: {
-            Image(systemName: showsTranscript ? "text.bubble.fill" : "text.bubble")
-              .frame(width: 44, height: 44)
-          }
-          .accessibilityLabel(showsTranscript ? "Hide transcript" : "Show transcript")
-
-          Menu {
-            Text("Output: \(session.outputName)")
-            Button("iPhone") { session.selectOutput(speaker: false) }
-            Button("Speaker") { session.selectOutput(speaker: true) }
-            ForEach(session.availableInputs.filter { $0.portType != .builtInMic }, id: \.uid) { input in
-              Button(input.portName) { session.selectOutput(speaker: false, input: input) }
-            }
-          } label: {
-            Image(systemName: "speaker.wave.2")
-              .frame(width: 44, height: 44)
-          }
-          .disabled(session.phase == .connecting || session.phase == .reconnecting || session.phase == .error)
-          .accessibilityLabel("Audio output, \(session.outputName)")
-        }
-        .foregroundStyle(MIRATheme.Color.forest)
-        .padding(.bottom, 24)
+            .disabled(session.connection != .ready)
+            .accessibilityLabel(session.muted ? "Unmute microphone" : "Mute microphone")
+            .accessibilityValue(session.muted ? "Muted" : "On")
+            Button { session.stop(); onClose() } label: {
+              Image(systemName: "phone.down.fill").font(.title3).foregroundStyle(.white)
+                .frame(width: 64, height: 64).background(Color(red: 0.7, green: 0.25, blue: 0.23), in: Circle())
+            }.accessibilityLabel("End conversation")
+          }.buttonStyle(.plain).padding(.bottom, 30)
+        }.padding(.horizontal, 24).frame(maxWidth: .infinity, minHeight: geometry.size.height)
       }
-      .frame(maxWidth: .infinity)
-      .padding(.horizontal, 20)
-      .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-      .navigationTitle("Voice")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { session.stop(); onClose() }
-            .foregroundStyle(MIRATheme.Color.forest)
-        }
-      }
-      .task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording, currentRecordingID: currentRecordingID) }
-      .onDisappear { session.stop() }
-      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { session.handleInterruption($0) }
-      .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { session.handleRouteChange($0) }
-      .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in session.suspendForBackground() }
-      .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
-        session.resumeFromBackground()
-      }
+    }
+    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
+    .toolbar(.hidden, for: .navigationBar, .tabBar)
+    .sheet(isPresented: $showsTranscript) { transcript }
+    .sheet(isPresented: $showsDisclosure) {
+      NavigationStack {
+        VStack(alignment: .leading, spacing: 18) {
+          Text("Talk with Captro AI").font(.title3.weight(.semibold))
+          Text("This is an AI voice. OpenAI processes your audio to respond. It is separate from private conversations with other people.")
+          Text("The transcript is temporary in this screen. Provider retention follows the configured service terms; this is not end-to-end encryption against the AI provider.")
+            .font(.footnote).foregroundStyle(.secondary)
+          Button("Continue") { acceptedDisclosure = true; showsDisclosure = false; start() }
+            .buttonStyle(.borderedProminent).tint(MIRATheme.Color.forest)
+        }.padding(24)
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showsDisclosure = false; onClose() } } }
+      }.presentationDetents([.medium, .large]).interactiveDismissDisabled()
+    }
+    .task { if acceptedDisclosure { start() } else { showsDisclosure = true } }
+    .onDisappear { session.stop() }
+    .onChange(of: scenePhase) { _, next in if next == .background { session.suspendForBackground() } }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { session.handleInterruption($0) }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)) { session.handleRouteChange($0) }
+    .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { note in
+      if let reason = note.object as? String, reason.hasPrefix("account_") { session.stop(); onClose() }
     }
   }
-
-  private var orbSize: CGFloat {
-    switch session.phase {
-    case .userSpeaking, .captroSpeaking: return 108 + session.level * 42
-    case .processing: return 114
-    case .connecting, .reconnecting, .listening, .error: return 108
+  private func start() {
+    Task { await session.connect(api: api, hasCurrentRecording: hasCurrentRecording, currentRecordingID: currentRecordingID) }
+  }
+  private var connectionLabel: String {
+    switch session.connection {
+    case .idle: return "AI voice conversation"
+    case .requestingPermission: return "Microphone access"
+    case .authorizing: return "Authorizing"
+    case .connecting: return "Connecting"
+    case .ready: return "Connected"
+    case .reconnecting: return "Reconnecting"
+    case .failed: return "Not connected"
+    case .ending, .ended: return "Ended"
     }
+  }
+  private func elapsed(at date: Date) -> String {
+    guard let start = session.startedAt else { return "00:00" }
+    let seconds = max(0, Int((session.endedAt ?? date).timeIntervalSince(start)))
+    return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+  }
+  private var transcript: some View {
+    NavigationStack {
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 18) {
+          if session.turns.isEmpty { Text("No transcript yet.").foregroundStyle(.secondary) }
+          ForEach(session.turns) { turn in
+            VStack(alignment: .leading, spacing: 4) {
+              Text(turn.role == "user" ? "You" : "Captro AI").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+              Text(turn.text).textSelection(.enabled)
+            }
+          }
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+      }.navigationTitle("Transcript").navigationBarTitleDisplayMode(.inline)
+      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsTranscript = false } } }
+    }.presentationDetents([.medium, .large])
   }
 }

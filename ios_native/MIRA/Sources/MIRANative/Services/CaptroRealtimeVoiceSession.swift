@@ -6,6 +6,7 @@ private struct CaptroRealtimeCredentials: Decodable {
   let clientSecret: String
   let model: String
   let diagnosticId: String?
+  let expiresAt: Double
 }
 
 private struct CaptroRealtimeStart: Encodable {
@@ -23,7 +24,17 @@ private struct CaptroVoiceDiagnostic: Encodable {
   let httpStatus: Int?
 }
 private struct CaptroVoiceDiagnosticAck: Decodable { let accepted: Bool }
-private struct CaptroMicrophoneChunk { let pcm: Data; let level: CGFloat }
+private struct CaptroMicrophoneChunk { let pcm: Data; let level: CGFloat; let muteVersion: Int }
+
+private final class CaptroMicrophoneGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var muted = false
+  private var version = 0
+  func update(_ muted: Bool) { lock.lock(); self.muted = muted; version += 1; lock.unlock() }
+  func snapshot() -> (muted: Bool, version: Int) {
+    lock.lock(); defer { lock.unlock() }; return (muted, version)
+  }
+}
 
 struct CaptroRealtimeTurn: Encodable, Identifiable {
   let id = UUID()
@@ -48,7 +59,25 @@ private struct CaptroRealtimeIntentReply: Decodable {
 @MainActor
 final class CaptroRealtimeVoiceSession: ObservableObject {
   enum Phase: Equatable {
-    case connecting, reconnecting, listening, userSpeaking, processing, captroSpeaking, error
+    case connecting, reconnecting, listening, userSpeaking, processing, captroSpeaking, error, ended
+  }
+
+  enum Connection: Equatable { case idle, requestingPermission, authorizing, connecting, ready, reconnecting, failed, ending, ended }
+  enum Activity: Equatable { case listening, userSpeaking, waitingForResponse, assistantSpeaking }
+  @Published private(set) var connection: Connection = .idle
+  @Published private(set) var microphoneLevel: CGFloat = 0
+  @Published private(set) var playbackLevel: CGFloat = 0
+  @Published private(set) var startedAt: Date?
+  @Published private(set) var endedAt: Date?
+  @Published private(set) var recoveryNotice: String?
+  var activity: Activity? {
+    guard connection == .ready else { return nil }
+    switch phase {
+    case .userSpeaking: return .userSpeaking
+    case .processing: return .waitingForResponse
+    case .captroSpeaking: return .assistantSpeaking
+    default: return .listening
+    }
   }
 
   @Published private(set) var phase: Phase = .connecting
@@ -63,6 +92,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   @Published private(set) var suggestedEditPlan = CaptroAssistantEditPlan(trimStartSeconds: nil, trimDurationSeconds: nil)
 
   var status: String {
+    if connection == .idle { return "Ready to start" }
     switch phase {
     case .connecting: return "Connecting…"
     case .reconnecting: return "Reconnecting…"
@@ -71,6 +101,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     case .processing: return "Thinking…"
     case .captroSpeaking: return "Captro is speaking…"
     case .error: return failureTitle
+    case .ended: return "Conversation ended"
     }
   }
 
@@ -90,12 +121,9 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   private var interruptedResponses = Set<String>()
   private var outputSamplesScheduled = 0
   private var outputText = ""
+  private var pendingAssistantTranscript = ""
   private var intentRevision = 0
   private var isClosed = true
-  private var responseRequestedForItems = Set<String>()
-  private var pendingReplyItems: [String] = []
-  private var replyRequestPending = false
-  private var requestedItemInFlight: String?
   private var firstAudioSent = false
   private var micWatchdog: Task<Void, Never>?
   private var reconnectAttempts = 0
@@ -112,10 +140,18 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   private var backgroundSuspended = false
   private var currentRecordingID: String?
   private var prefersSpeaker = true
+  private var audioEpoch = 0
+  private var attemptStarted = ProcessInfo.processInfo.systemUptime
+  private let microphoneGate = CaptroMicrophoneGate()
   private let logger = Logger(subsystem: "com.captro.app", category: "RealtimeVoice")
 
   func connect(api: MIRAAPIClient, hasCurrentRecording: Bool, currentRecordingID: String? = nil) async {
-    if isClosed { reconnectAttempts = 0 }
+    guard connection != .requestingPermission, connection != .authorizing,
+          connection != .connecting, connection != .ready else { return }
+    if isClosed {
+      reconnectAttempts = 0; startedAt = nil; endedAt = nil
+      turns.removeAll(); recoveryNotice = nil; suggestedAction = nil
+    }
     sessionEpoch += 1
     let epoch = sessionEpoch
     stopTransport()
@@ -123,12 +159,10 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     intentAPI = api
     hasRecordingContext = hasCurrentRecording
     self.currentRecordingID = currentRecordingID
-    responseRequestedForItems.removeAll()
-    pendingReplyItems.removeAll()
-    replyRequestPending = false
-    requestedItemInFlight = nil
     firstAudioSent = false
     phase = reconnectAttempts > 0 ? .reconnecting : .connecting
+    connection = .requestingPermission
+    attemptStarted = ProcessInfo.processInfo.systemUptime
     level = 0.08
     sentFrames = 0
     sentBytes = 0
@@ -140,11 +174,14 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     failureMessage = "Captro AI is unavailable right now."
     failureTitle = "Couldn't connect"
     if reconnectAttempts == 0 { muted = false }
+    microphoneGate.update(muted)
 
     let permission = await withCheckedContinuation { continuation in
       AVAudioApplication.requestRecordPermission { continuation.resume(returning: $0) }
     }
-    guard permission, !isClosed, sessionEpoch == epoch else {
+    guard !isClosed, sessionEpoch == epoch else { return }
+    guard !Task.isCancelled else { stop(); return }
+    guard permission else {
       if !permission { diagnostic("microphone_permission_denied") }
       if !isClosed && sessionEpoch == epoch {
         failureMessage = "Allow microphone access in iPhone Settings to talk to Captro."
@@ -154,15 +191,28 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       return
     }
     diagnostic("microphone_permission_granted")
+    connection = .authorizing
+    connectionTimeout = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 20_000_000_000)
+      guard let self, !Task.isCancelled, self.sessionEpoch == epoch,
+            self.connection != .ready else { return }
+      self.diagnostic("connection_timeout")
+      self.recoverTransport()
+    }
 
     do {
       let credentials: CaptroRealtimeCredentials = try await api.post(
         "/ai/realtime/session", body: CaptroRealtimeStart(hasCurrentRecording: hasCurrentRecording, currentRecordingId: currentRecordingID))
-      guard !isClosed, sessionEpoch == epoch else { return }
+      guard !isClosed, sessionEpoch == epoch, !Task.isCancelled else { return }
       if let id = credentials.diagnosticId { diagnosticID = id }
       diagnostic("credential_created")
-      guard credentials.model == "gpt-realtime-2.1",
-            let url = URL(string: "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1") else { fail(); return }
+      guard credentials.expiresAt > Date().timeIntervalSince1970 + 5,
+            credentials.model.hasPrefix("gpt-realtime") else {
+        diagnostic("configuration_failed", code: "credential_contract_invalid"); fail(); return
+      }
+      var endpoint = URLComponents(string: "wss://api.openai.com/v1/realtime")!
+      endpoint.queryItems = [URLQueryItem(name: "model", value: credentials.model)]
+      guard let url = endpoint.url else { fail(); return }
       let configuration = URLSessionConfiguration.ephemeral
       configuration.timeoutIntervalForRequest = 15
       configuration.waitsForConnectivity = true
@@ -172,29 +222,26 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       let socket = transport.webSocketTask(with: request)
       self.transport = transport
       self.socket = socket
+      connection = .connecting
       socket.resume()
       diagnostic("transport_connecting")
       receiveTask = Task { [weak self] in
         guard let self else { return }
         await self.receiveEvents(epoch: epoch)
       }
-      connectionTimeout = Task { [weak self] in
-        try? await Task.sleep(nanoseconds: 15_000_000_000)
-        guard let self, !Task.isCancelled, self.sessionEpoch == epoch,
-              self.phase == .connecting || self.phase == .reconnecting else { return }
-        self.diagnostic("connection_timeout")
-        self.recoverTransport()
-      }
     } catch {
+      guard !isClosed, sessionEpoch == epoch, !Task.isCancelled else { return }
       diagnosticError("credential_failed", error)
-      if !isClosed && sessionEpoch == epoch { recoverTransport() }
+      handleFailure(error)
     }
   }
 
   func toggleMute() {
     guard firstAudioSent, !isClosed else { return }
     muted.toggle()
+    microphoneGate.update(muted)
     level = 0
+    microphoneLevel = 0
     diagnostic(muted ? "microphone_muted" : "microphone_unmuted")
     if muted {
       // Discard an unfinished utterance, never submit it as a turn.
@@ -214,12 +261,17 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     if type == .began {
       diagnostic("audio_interrupted")
       audioInterrupted = true
-      sessionEpoch += 1
-      stopTransport()
+      interruptOutput()
+      stopAudio()
+      connection = .reconnecting
       phase = .reconnecting
     } else if audioInterrupted {
       audioInterrupted = false
-      recoverTransport()
+      let options = AVAudioSession.InterruptionOptions(rawValue:
+        notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
+      guard options.contains(.shouldResume) else { stop(); return }
+      do { try startAudio() }
+      catch { diagnosticError("audio_engine_failed", error); fail() }
     }
   }
 
@@ -231,22 +283,21 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     guard engine != nil, reason == .oldDeviceUnavailable || reason == .newDeviceAvailable else { return }
     if reason == .oldDeviceUnavailable { prefersSpeaker = false }
     diagnostic("audio_route_changed")
-    recoverTransport()
+    // A route change is not a new AI conversation. Rebuild only capture/playback.
+    interruptOutput()
+    stopAudio()
+    do { try startAudio() }
+    catch { diagnosticError("audio_engine_failed", error); fail() }
   }
 
   func suspendForBackground() {
     guard !isClosed else { return }
-    backgroundSuspended = true
     diagnostic("background_suspended")
-    sessionEpoch += 1
-    stopTransport()
-    phase = .reconnecting
+    stop()
   }
 
   func resumeFromBackground() {
-    guard backgroundSuspended, !isClosed else { return }
-    backgroundSuspended = false
-    recoverTransport()
+    // Foreground return requires an explicit new start; no hidden microphone.
   }
 
   func refreshAudioRoutes() {
@@ -270,10 +321,37 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   }
 
   func stop() {
+    guard !isClosed else { return }
+    connection = .ending
     diagnostic("session_stopped")
     sessionEpoch += 1
     stopTransport()
     isClosed = true
+    endedAt = Date()
+    connection = .ended
+    phase = .ended
+    level = 0
+    microphoneLevel = 0
+    playbackLevel = 0
+  }
+
+  private func stopAudio() {
+    microphoneGate.update(muted)
+    firstAudioSent = false
+    audioEpoch += 1
+    micWatchdog?.cancel(); micWatchdog = nil
+    sendTask?.cancel(); sendTask = nil
+    inputContinuation?.finish(); inputContinuation = nil
+    if let engine {
+      engine.inputNode.removeTap(onBus: 0)
+      player?.removeTap(onBus: 0)
+      player?.stop()
+      engine.stop()
+    }
+    engine = nil; player = nil
+    queuedOutputBuffers = 0
+    playbackGeneration += 1
+    microphoneLevel = 0; playbackLevel = 0
   }
 
   private func stopTransport() {
@@ -284,22 +362,9 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     heartbeatTask = nil
     reconnectTask?.cancel()
     reconnectTask = nil
-    micWatchdog?.cancel()
-    micWatchdog = nil
     receiveTask?.cancel()
     receiveTask = nil
-    sendTask?.cancel()
-    sendTask = nil
-    inputContinuation?.finish()
-    inputContinuation = nil
-    if let engine {
-      engine.inputNode.removeTap(onBus: 0)
-      player?.removeTap(onBus: 0)
-      player?.stop()
-      engine.stop()
-    }
-    engine = nil
-    player = nil
+    stopAudio()
     socket?.cancel(with: .normalClosure, reason: nil)
     socket = nil
     transport?.invalidateAndCancel()
@@ -309,6 +374,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     playbackGeneration += 1
     outputItemID = nil
     activeResponseID = nil
+    pendingAssistantTranscript = ""
   }
 
   private func fail() {
@@ -316,6 +382,8 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     stopTransport()
     isClosed = true
     phase = .error
+    connection = .failed
+    endedAt = Date()
     level = 0
   }
 
@@ -330,6 +398,8 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     let epoch = sessionEpoch
     stopTransport()
     phase = .reconnecting
+    connection = .reconnecting
+    recoveryNotice = "Connection interrupted. Please repeat the last part after reconnecting."
     diagnostic("reconnect_scheduled", code: "attempt_\(reconnectAttempts)")
     reconnectTask = Task { [weak self] in
       try? await Task.sleep(nanoseconds: delay)
@@ -356,8 +426,16 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
         await handleEvent(event)
       }
     } catch {
+      guard !isClosed, !Task.isCancelled, sessionEpoch == epoch else { return }
+      if let response = socket.response as? HTTPURLResponse, response.statusCode >= 400 {
+        diagnostic("transport_closed", code: "handshake_http_\(response.statusCode)", httpStatus: response.statusCode)
+        if response.statusCode < 500 {
+          failureMessage = response.statusCode == 429 ? "Captro AI is busy. Please try again shortly." : "Captro AI could not connect. Please try again later."
+          fail(); return
+        }
+      }
       diagnosticError("transport_closed", error)
-      if !isClosed && !Task.isCancelled && sessionEpoch == epoch { recoverTransport() }
+      handleFailure(error)
     }
   }
 
@@ -371,7 +449,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
           "type": "realtime",
           "audio": ["input": ["format": ["type": "audio/pcm", "rate": 24_000], "turn_detection": [
             "type": "semantic_vad", "eagerness": "medium",
-            "create_response": false, "interrupt_response": true,
+            "create_response": true, "interrupt_response": true,
           ]], "output": ["format": ["type": "audio/pcm", "rate": 24_000]]],
         ]])
       } catch { logger.error("session update send failed"); recoverTransport() }
@@ -380,9 +458,10 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       let vad = ((event["session"] as? [String: Any])?["audio"] as? [String: Any])?["input"] as? [String: Any]
       let turnDetection = vad?["turn_detection"] as? [String: Any]
       guard turnDetection?["type"] as? String == "semantic_vad",
-            turnDetection?["create_response"] as? Bool == false,
+            turnDetection?["create_response"] as? Bool == true,
             turnDetection?["interrupt_response"] as? Bool == true else {
         logger.error("realtime VAD configuration mismatch")
+        diagnostic("configuration_failed", code: "vad_configuration_mismatch")
         fail()
         return
       }
@@ -410,7 +489,8 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       }
       catch {
         diagnosticError("audio_engine_failed", error)
-        recoverTransport()
+        failureMessage = "Audio could not start. Check your microphone and audio output."
+        fail()
       }
     case "input_audio_buffer.speech_started":
       diagnostic("speech_started")
@@ -422,24 +502,18 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       phase = .processing
     case "input_audio_buffer.committed":
       diagnostic("turn_committed")
-      // This is OpenAI's completed Semantic VAD turn, not a local silence
-      // timeout or a manual Send action. Request exactly one reply per item.
-      guard let itemID = event["item_id"] as? String,
-            responseRequestedForItems.insert(itemID).inserted else { return }
-      if responseRequestedForItems.count > 80 { responseRequestedForItems = [itemID] }
-      pendingReplyItems.append(itemID)
-      await requestNextReply()
+      // OpenAI semantic VAD owns completion AND automatic response creation.
+      // Never issue a second response.create for the same conversational turn.
     case "conversation.item.input_audio_transcription.completed":
       let text = (event["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
       if !text.isEmpty { await handleTranscript(text) }
     case "response.created":
       diagnostic("response_created")
       let userAlreadySpeaking = phase == .userSpeaking
-      replyRequestPending = false
-      requestedItemInFlight = nil
       activeResponseID = (event["response"] as? [String: Any])?["id"] as? String
       responseDone = false
       outputText = ""
+      pendingAssistantTranscript = ""
       queuedOutputBuffers = 0
       playbackGeneration += 1
       outputItemID = nil
@@ -448,7 +522,6 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       if userAlreadySpeaking {
         if let id = activeResponseID { interruptedResponses.insert(id) }
         diagnostic("barge_in")
-        try? await send(["type": "response.cancel"])
       } else {
         phase = .processing
       }
@@ -464,14 +537,13 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     case "response.output_audio_transcript.done":
       guard !isInterruptedEvent(event) else { return }
       let final = (event["transcript"] as? String ?? outputText).trimmingCharacters(in: .whitespacesAndNewlines)
-      if !final.isEmpty { appendTurn(role: "assistant", text: final) }
+      pendingAssistantTranscript = final
       outputText = ""
     case "response.done", "response.cancelled":
       let response = event["response"] as? [String: Any]
       let id = response?["id"] as? String ?? event["response_id"] as? String
       if let id, interruptedResponses.contains(id) {
         if activeResponseID == id { activeResponseID = nil }
-        await requestNextReply()
         return
       }
       if let id, activeResponseID != nil && activeResponseID != id { return }
@@ -479,7 +551,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
         let detail = response?["status_details"] as? [String: Any]
         let error = detail?["error"] as? [String: Any]
         diagnostic("response_failed", code: error?["code"] as? String ?? "unknown")
-        recoverTransport()
+        handleProviderFailure(error?["code"] as? String ?? "unknown")
         return
       }
       diagnostic("response_finished")
@@ -487,23 +559,17 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       activeResponseID = nil
       // Retry budget resets only after a successful turn, not every handshake.
       if response?["status"] as? String == "completed" { reconnectAttempts = 0 }
-      if queuedOutputBuffers == 0 && phase != .userSpeaking { phase = .listening; level = 0.08 }
-      await requestNextReply()
+      if queuedOutputBuffers == 0 && phase != .userSpeaking {
+        finishPlayedTurn(); phase = .listening; level = 0; playbackLevel = 0
+      }
     case "conversation.item.input_audio_transcription.failed":
       diagnostic("transcription_failed", code: (event["error"] as? [String: Any])?["code"] as? String)
     case "error":
       let code = ((event["error"] as? [String: Any])?["code"] as? String ?? "unknown")
       diagnostic("api_error", code: code)
       // Cancellation/truncation races are not transport failures.
-      if code == "conversation_already_has_active_response" {
-        if let item = requestedItemInFlight { pendingReplyItems.insert(item, at: 0) }
-        requestedItemInFlight = nil
-        replyRequestPending = false
-        // Retry when the active response's real response.done arrives.
-        return
-      }
       if ["response_cancel_not_active", "audio_end_ms_out_of_range"].contains(code) { return }
-      recoverTransport()
+      handleProviderFailure(code)
     default:
       break
     }
@@ -534,17 +600,33 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   private var intentAPI: MIRAAPIClient?
   private var hasRecordingContext = false
 
-  private func requestNextReply() async {
-    guard !isClosed, activeResponseID == nil, !replyRequestPending, !pendingReplyItems.isEmpty else { return }
-    requestedItemInFlight = pendingReplyItems.removeFirst()
-    replyRequestPending = true
-    do {
-      try await send(["type": "response.create"])
-      diagnostic("response_requested")
-    } catch {
-      diagnosticError("response_failed", error)
-      recoverTransport()
+  private func finishPlayedTurn() {
+    if !pendingAssistantTranscript.isEmpty {
+      appendTurn(role: "assistant", text: pendingAssistantTranscript)
+      pendingAssistantTranscript = ""
     }
+  }
+
+  private func handleProviderFailure(_ code: String) {
+    // Invalid session configuration/credentials cannot be repaired by looping.
+    if ["server_error", "service_unavailable"].contains(code) { recoverTransport(); return }
+    failureMessage = code == "insufficient_quota" ? "Captro AI is unavailable right now. Please try later." : "Captro AI could not continue. Please try again later."
+    fail()
+  }
+
+  private func handleFailure(_ error: Error) {
+    if case MIRAAPIError.server(let status, let code, _) = error {
+      if status == 401 { failureMessage = "Sign in again to use Captro AI."; fail(); return }
+      if status == 429 || ["AI_NOT_CONFIGURED", "AI_CREDENTIALS_INVALID", "AI_CONFIGURATION_INVALID", "AI_MODEL_ACCESS_DENIED", "AI_QUOTA_UNAVAILABLE"].contains(code ?? "") {
+        failureMessage = status == 429 ? "Captro AI is busy. Please try again shortly." : "Captro AI is unavailable right now. Please try later."
+        fail(); return
+      }
+      if status >= 400 && status < 500 { fail(); return }
+    }
+    if (error as NSError).code == NSURLErrorNotConnectedToInternet {
+      failureMessage = "You're offline. Check your connection, then try again."; fail(); return
+    }
+    recoverTransport()
   }
 
   private func appendTurn(role: String, text: String) {
@@ -558,18 +640,20 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   }
 
   private func diagnostic(_ stage: String, code: String? = nil, httpStatus: Int? = nil) {
+    let safeCode = code.flatMap { value in
+      value.count <= 100 && value.range(of: "^[a-zA-Z0-9._-]+$", options: .regularExpression) != nil
+        && value.range(of: "^(sk_|sk-|ek_|ek-|sess_|bearer)", options: [.regularExpression, .caseInsensitive]) == nil ? value : nil
+    }
     // Only stages, counts and bounded error identifiers. No audio or transcripts.
-    logger.info("stage=\(stage, privacy: .public) epoch=\(self.sessionEpoch, privacy: .public) frames=\(self.sentFrames, privacy: .public) bytes=\(self.sentBytes, privacy: .public) code=\(code ?? "none", privacy: .public) http=\(httpStatus ?? 0, privacy: .public)")
+    logger.info("trace=\(self.diagnosticID, privacy: .public) stage=\(stage, privacy: .public) epoch=\(self.sessionEpoch, privacy: .public) frames=\(self.sentFrames, privacy: .public) bytes=\(self.sentBytes, privacy: .public) code=\(safeCode ?? "none", privacy: .public) http=\(httpStatus ?? 0, privacy: .public) elapsed_ms=\(Int((ProcessInfo.processInfo.systemUptime - self.attemptStarted) * 1000), privacy: .public)")
     guard let intentAPI else { return }
     let body = CaptroVoiceDiagnostic(diagnosticId: diagnosticID, stage: stage, epoch: sessionEpoch,
-      frames: sentFrames, bytes: sentBytes, code: code, httpStatus: httpStatus)
+      frames: sentFrames, bytes: sentBytes, code: safeCode, httpStatus: httpStatus)
     Task { let _: CaptroVoiceDiagnosticAck? = try? await intentAPI.post("/ai/realtime/diagnostics", body: body) }
   }
 
   private func diagnosticError(_ stage: String, _ error: Error) {
     let value = error as NSError
-    let underlying = value.userInfo[NSUnderlyingErrorKey] as? NSError
-    logger.error("stage=\(stage, privacy: .public) error_domain=\(value.domain, privacy: .public) error_code=\(value.code, privacy: .public) underlying_domain=\(underlying?.domain ?? "none", privacy: .public) underlying_code=\(underlying?.code ?? 0, privacy: .public)")
     if case MIRAAPIError.server(let status, let code, _) = error {
       diagnostic(stage, code: code, httpStatus: status)
     } else if case MIRAAPIError.badStatus(let status) = error {
@@ -581,6 +665,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
 
   private func startAudio() throws {
     MIRAPlaybackCoordinator.pauseAll(reason: "capture_realtime_voice")
+    CaptroVoicePlaybackCenter.shared.stop()
     let session = AVAudioSession.sharedInstance()
     try session.setCategory(.playAndRecord, mode: .voiceChat,
       options: prefersSpeaker ? [.defaultToSpeaker, .allowBluetoothHFP] : [.allowBluetoothHFP])
@@ -602,13 +687,17 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     engine.connect(player, to: engine.mainMixerNode, format: playFormat)
     converter.primeMethod = .none
     let epoch = sessionEpoch
+    audioEpoch += 1
+    let captureEpoch = audioEpoch
     var continuation: AsyncStream<CaptroMicrophoneChunk>.Continuation!
     // Bound latency; never deliver seconds-old microphone audio after congestion.
     let stream = AsyncStream<CaptroMicrophoneChunk>(bufferingPolicy: .bufferingNewest(6)) { continuation = $0 }
     inputContinuation = continuation
     let audioContinuation = continuation!
+    let microphoneGate = microphoneGate
     var conversionFailureLogged = false
     input.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
+      let gate = microphoneGate.snapshot()
       guard let source = buffer.floatChannelData,
             let copy = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: buffer.frameLength),
             let destination = copy.floatChannelData else { return }
@@ -631,7 +720,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
         conversionFailureLogged = true
         let failure = error ?? NSError(domain: "CaptroPCMConversion", code: -1)
         Task { @MainActor [weak self] in
-          guard let self, self.sessionEpoch == epoch else { return }
+          guard let self, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
           self.diagnosticError("microphone_conversion_failed", failure)
         }
       }
@@ -640,7 +729,8 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       var power: Float = 0
       for index in stride(from: 0, to: frameCount, by: 32) { power += source[0][index] * source[0][index] }
       let rms = sqrt(power / Float(max(1, (frameCount + 31) / 32)))
-      audioContinuation.yield(CaptroMicrophoneChunk(pcm: data, level: CGFloat(min(1, rms * 5))))
+      audioContinuation.yield(CaptroMicrophoneChunk(pcm: data,
+        level: gate.muted ? 0 : CGFloat(min(1, rms * 5)), muteVersion: gate.version))
     }
     player.installTap(onBus: 0, bufferSize: 1_024, format: playFormat) { [weak self] buffer, _ in
       guard let source = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
@@ -649,11 +739,12 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       for index in stride(from: 0, to: count, by: 16) { power += source[index] * source[index] }
       let rms = sqrt(power / Float(max(1, (count + 15) / 16)))
       Task { @MainActor [weak self] in
-        guard let self, self.sessionEpoch == epoch, self.queuedOutputBuffers > 0,
-              self.phase != .userSpeaking, rms > 0.0001 else { return }
+        guard let self, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch,
+              self.queuedOutputBuffers > 0, self.phase != .userSpeaking, !self.audioInterrupted else { return }
         if self.phase != .captroSpeaking { self.diagnostic("audio_playback_started") }
         self.phase = .captroSpeaking
         self.level = CGFloat(min(1, rms * 4))
+        self.playbackLevel = self.playbackLevel * 0.65 + self.level * 0.35
       }
     }
     self.engine = engine
@@ -665,23 +756,26 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     micWatchdog = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 3_000_000_000)
-        guard let self, !Task.isCancelled, !self.isClosed, self.sessionEpoch == epoch else { return }
+        guard let self, !Task.isCancelled, !self.isClosed, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
         if Date().timeIntervalSince(self.lastAudioSent) > 5 {
           self.diagnostic("microphone_stream_stalled")
-          self.recoverTransport()
+          self.failureMessage = "The microphone stopped. Check your audio connection and try again."
+          self.fail()
           return
         }
       }
     }
     sendTask = Task { [weak self] in
       for await chunk in stream {
-        guard let self, !Task.isCancelled, !self.isClosed, self.sessionEpoch == epoch else { return }
+        guard let self, !Task.isCancelled, !self.isClosed, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
         // Continue transport/VAD timing with zero PCM when muted; no mic audio
         // is sent and unmuting does not release a buffered private utterance.
-        let audio = self.muted ? Data(count: chunk.pcm.count) : chunk.pcm
+        let gate = self.microphoneGate.snapshot()
+        let suppressed = gate.muted || chunk.muteVersion != gate.version
+        let audio = suppressed ? Data(count: chunk.pcm.count) : chunk.pcm
         do {
           try await self.send(["type": "input_audio_buffer.append", "audio": audio.base64EncodedString()])
-          guard self.sessionEpoch == epoch else { return }
+          guard !Task.isCancelled, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
           self.lastAudioSent = Date()
           self.sentFrames += audio.count / 2
           self.sentBytes += audio.count
@@ -691,9 +785,12 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
             self.connectionTimeout?.cancel()
             self.connectionTimeout = nil
             if self.phase == .connecting || self.phase == .reconnecting { self.phase = .listening }
+            self.connection = .ready
+            if self.startedAt == nil { self.startedAt = Date() }
+            self.endedAt = nil
             self.startHeartbeat(epoch: epoch)
           }
-          if !self.muted && chunk.level > 0.02 && !self.observedMicrophoneSignal {
+          if !suppressed && chunk.level > 0.02 && !self.observedMicrophoneSignal {
             self.observedMicrophoneSignal = true
             self.diagnostic("microphone_signal_detected")
           }
@@ -702,9 +799,11 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
             self.diagnostic("pcm_streaming")
           }
           if self.phase == .listening || self.phase == .userSpeaking {
-            self.level = self.muted ? 0 : chunk.level
+            self.level = suppressed ? 0 : chunk.level
           }
+          self.microphoneLevel = suppressed ? 0 : (self.microphoneLevel * 0.65 + chunk.level * 0.35)
         } catch {
+          guard !Task.isCancelled, !self.isClosed, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
           self.diagnosticError("pcm_send_failed", error)
           self.recoverTransport()
           return
@@ -714,6 +813,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   }
 
   private func startHeartbeat(epoch: Int) {
+    heartbeatTask?.cancel()
     heartbeatTask = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -753,10 +853,16 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
       Task { @MainActor [weak self] in
         guard let self, self.playbackGeneration == generation else { return }
         self.queuedOutputBuffers = max(0, self.queuedOutputBuffers - 1)
+        if self.queuedOutputBuffers == 0 {
+          self.playbackLevel = 0
+          if !self.responseDone && self.phase == .captroSpeaking { self.phase = .processing }
+        }
         if self.queuedOutputBuffers == 0 && self.responseDone && self.phase != .userSpeaking {
           self.diagnostic("audio_playback_finished")
           self.phase = .listening
-          self.level = 0.08
+          self.finishPlayedTurn()
+          self.level = 0
+          self.playbackLevel = 0
         }
       }
     }
@@ -766,6 +872,9 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   private func interruptOutput() {
     guard let player else { return }
     diagnostic("barge_in")
+    pendingAssistantTranscript = ""
+    outputText = ""
+    playbackLevel = 0
     if let id = activeResponseID { interruptedResponses.insert(id) }
     if interruptedResponses.count > 80 { interruptedResponses = Set(interruptedResponses.suffix(40)) }
     let playedMs: Int
@@ -778,7 +887,11 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     responseDone = true
     level = 0.08
     if let item = outputItemID {
-      Task { try? await send(["type": "conversation.item.truncate", "item_id": item, "content_index": 0, "audio_end_ms": playedMs]) }
+      let epoch = sessionEpoch
+      Task { [weak self] in
+        guard let self, !self.isClosed, self.sessionEpoch == epoch else { return }
+        try? await self.send(["type": "conversation.item.truncate", "item_id": item, "content_index": 0, "audio_end_ms": playedMs])
+      }
     }
   }
 
