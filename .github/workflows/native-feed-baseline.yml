@@ -1,0 +1,36 @@
+name: Capture released feed baseline
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Exact source of TestFlight 552.1, for before/after evidence only.
+          ref: 4446e069880deb0031927ab4d11934e8b9e69d54
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Run released native feed and capture screenshots
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath "$RUNNER_TEMP/BaselineBuild" -resultBundlePath "$RUNNER_TEMP/Baseline.xcresult" \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/baseline.log"
+      - name: Export runtime screenshots
+        if: always()
+        run: xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Baseline.xcresult" --output-path "$RUNNER_TEMP/before"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captro-feed-before-552-1
+          path: |
+            ${{ runner.temp }}/before/
+            ${{ runner.temp }}/baseline.log

@@ -145,12 +145,13 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(mainFeed, /showsCoverMediaOnly: true/);
 });
 
-test('Home media is a full-width rectangular frame using exactly five supported ratios', () => {
+test('Home media preserves every supported source ratio inside the rectangular viewport', () => {
   assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?measuredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
-  assert.match(mediaPager, /contentMode: \.fill/);
+  assert.match(mediaPager, /contentMode: \.fit/);
+  assert.doesNotMatch(mediaPager, /contentMode: \.fill/);
   assert.match(mediaPager, /guard index == 0 else \{ return \}/);
   assert.match(mediaPager, /MIRAMediaSizing\.supportedPostHeightToWidthRatio\(ratio\)/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
@@ -205,9 +206,10 @@ test('Home media is a full-width rectangular frame using exactly five supported 
   assert.match(worker, /const explicit = SUPPORTED_FEED_MEDIA_RATIOS\.find[\s\S]*?if \(explicit\) return explicit;/);
 });
 
-test('viewport height can crop Home media but never reduce its width', () => {
-  const sizing = postView.slice(postView.indexOf('private var pageMediaSize:'), postView.indexOf('private var showsMoreButton:'));
-  assert.match(sizing, /CGSize\(width: pageSize\.width, height: min\(availableMediaHeight, pageSize\.width \* ratio\)\)/);
+test('media canvas uses the actual viewport without a separate More row or source-ratio height cap', () => {
+  const sizing = postView.slice(postView.indexOf('private var pageMediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
+  assert.match(sizing, /return pageSize/);
+  assert.doesNotMatch(postView, /showsMoreButton|Button\("More"|fixedVerticalContent/);
   assert.doesNotMatch(sizing, /availableMediaHeight\s*\/|min\(pageSize\.width/);
   assert.match(postView, /frameSize: pageMediaSize/);
   const fixedFrame = mediaPager.slice(mediaPager.indexOf('if let frameSize {'), mediaPager.indexOf('} else {', mediaPager.indexOf('if let frameSize {')));
@@ -227,7 +229,10 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(editorialCard, /Button\(action: onOpen\)/);
   assert.doesNotMatch(editorialCard, /Button\(action: onAction\)|Button\(action: onSave\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /feedCaptionMaxLines: mediaHeight < 300 \? 2 : \(mediaHeight < 420 \? 4 : 5\)/);
+  assert.match(mediaPager, /feedStamp\(lines: 4, condensed: false\)/);
+  assert.match(mediaPager, /feedStamp\(lines: 3, condensed: true\)/);
+  assert.match(mediaPager, /mediaHeight \* 0\.52/);
+  assert.match(mediaPager, /feedCaptionMaxLines: lines, feedSummary: true/);
   assert.match(editorialCard, /mediaWidth \* 0\.73/);
   assert.doesNotMatch(composer, /Picker\("Paper style"/);
 });
@@ -240,7 +245,7 @@ test('holding the Home stamp temporarily reveals the unobstructed photo', () => 
   assert.match(mediaPager, /hypot\(drag\.translation\.width, drag\.translation\.height\) <= 22/);
   assert.match(
     mediaPager,
-    /CaptroEditorialOverlayCard\([\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
+    /ViewThatFits\(in: \.vertical\)[\s\S]*?\.contentShape\(Rectangle\(\)\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)[\s\S]*?\.simultaneousGesture\(stampPeekGesture\)/,
   );
   assert.doesNotMatch(
     mediaPager,
