@@ -64,7 +64,9 @@ final class HomeFullBleedTests: XCTestCase {
           "No per-post bottom filler or separate caption region")
         let next = app.otherElements["home.post.page.stream-\(index + 1)"]
         if next.exists {
-          XCTAssertEqual(next.frame.minY - page.frame.maxY, 12, accuracy: 2,
+          // Text-only cards have 12 pt of their own inner top padding. Their
+          // accessibility frame excludes that padding; media rows do not.
+          XCTAssertEqual(next.frame.minY - page.frame.maxY, index == 5 ? 24 : 12, accuracy: 2,
             "Next post follows with normal spacing, not a viewport spacer")
         }
       }
@@ -115,10 +117,15 @@ final class HomeFullBleedTests: XCTestCase {
     for (index, id) in ids.enumerated() {
       let page = app.otherElements["home.post.page.\(id)"]
       reveal(page, in: stream, app: app)
-      XCTAssertTrue(page.isHittable)
+      XCTAssertGreaterThanOrEqual(page.frame.minY, stream.frame.minY - 12)
+      XCTAssertLessThan(page.frame.minY, app.tabBars.firstMatch.frame.minY)
       let media = page.otherElements["home.post.media"].firstMatch
       XCTAssertTrue(media.exists)
       XCTAssertEqual(page.frame.height, media.frame.height, accuracy: 1)
+      let regularStamp = page.buttons["captro.editorialCard"].firstMatch
+      let compactStamp = page.buttons["captro.editorialCard.compact"].firstMatch
+      XCTAssertTrue((regularStamp.exists ? regularStamp : compactStamp).isHittable,
+        "The real stamp action must be reachable, not just its non-interactive parent container")
       capture(app, "public-feed-\(index)")
       if index == 1 {
         XCTAssertEqual(media.frame.height, media.frame.width * 0.75, accuracy: 1)
@@ -134,6 +141,7 @@ final class HomeFullBleedTests: XCTestCase {
         let height = page.frame.height
         media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.18))
           .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.18)))
+        XCTAssertTrue(page.staticTexts["Photo 2 of 10"].waitForExistence(timeout: 5))
         XCTAssertEqual(page.frame.height, height, accuracy: 1)
         capture(app, "public-carousel-second-slide")
       }
@@ -157,7 +165,11 @@ final class HomeFullBleedTests: XCTestCase {
       let startY = stream.frame.minY + min(400, stream.frame.height * 0.65)
       origin.withOffset(CGVector(dx: app.frame.midX, dy: startY))
         .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: startY - delta)))
-      if page.exists && page.isHittable && page.frame.maxY < app.tabBars.firstMatch.frame.minY { return }
+      // A short final item cannot necessarily align with the top. Accept it
+      // only when fully visible. Never start a carousel drag above the header
+      // simply because some lower portion of the item is still hittable.
+      if page.exists && page.frame.minY >= stream.frame.minY &&
+          page.frame.maxY < app.tabBars.firstMatch.frame.minY { return }
     }
   }
 
