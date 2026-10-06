@@ -13,7 +13,7 @@ public struct CaptroHomeFeedVisualTestView: View {
   public init() {
     let api = MIRAAPIClient()
     _model = StateObject(wrappedValue: MainFeedModel(api: api, visualPosts:
-      ProcessInfo.processInfo.arguments.contains("--captro-visual-video") ? [] : CaptroHomeFeedVisualFixtures.posts()))
+      ProcessInfo.processInfo.arguments.contains("--captro-visual-video") || ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") ? [] : CaptroHomeFeedVisualFixtures.posts()))
   }
 
   public var body: some View {
@@ -36,6 +36,16 @@ public struct CaptroHomeFeedVisualTestView: View {
     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
     .task {
+      if ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") {
+        do {
+          let posts: [MIRAPost] = try await model.api.get("/posts/world-board?limit=50&skip=0")
+          let order = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--captro-public-posts=") }?
+            .dropFirst("--captro-public-posts=".count).split(separator: ",").map(String.init) ?? []
+          model.posts = order.compactMap { id in posts.first { $0.id == id } }
+          assert(model.posts.count == order.count, "Requested public post no longer available")
+        } catch { assertionFailure("Public feed verification request failed") }
+        return
+      }
       guard !videoPrepared else { return }
       do {
         let url = try await CaptroHomeFeedVisualFixtures.video()

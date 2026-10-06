@@ -51,7 +51,7 @@ jobs:
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/StampBuild" -resultBundlePath "$RUNNER_TEMP/StreamRecording.xcresult" \
-            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testPublicContentStreamRecording \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/home-recording-test.log"
       - name: Export screenshots
         if: always()

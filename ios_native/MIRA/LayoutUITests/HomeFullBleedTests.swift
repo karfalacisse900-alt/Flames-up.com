@@ -103,6 +103,43 @@ final class HomeFullBleedTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Looking for people to build with"].isHittable)
   }
 
+  func testPublicContentStreamRecording() {
+    // Public read-only content, selected for this regression. Nothing is copied
+    // into the app bundle or published. Missing/deleted posts fail honestly.
+    let ids = ["7ff613af-f80a-474a-85cc-b159bbcf6a79", "ecbb00c1-f3f3-4d51-9fd8-dca889f9352a",
+      "edb704f7-5ae7-486b-bd86-f58266aff746", "9c35e9fe-3537-45b9-844d-9399abe47445",
+      "224b562d-34cd-40d9-8d6a-ed05e73b68bd"]
+    let app = launch(["--captro-public-feed-test", "--captro-public-posts=\(ids.joined(separator: ","))"])
+    let stream = app.scrollViews["home.post.stream"]
+    XCTAssertTrue(stream.waitForExistence(timeout: 30))
+    for (index, id) in ids.enumerated() {
+      let page = app.otherElements["home.post.page.\(id)"]
+      reveal(page, in: stream, app: app)
+      XCTAssertTrue(page.isHittable)
+      let media = page.otherElements["home.post.media"].firstMatch
+      XCTAssertTrue(media.exists)
+      XCTAssertEqual(page.frame.height, media.frame.height, accuracy: 1)
+      capture(app, "public-feed-\(index)")
+      if index == 1 {
+        XCTAssertEqual(media.frame.height, media.frame.width * 0.75, accuracy: 1)
+        let originalY = page.frame.minY
+        let stamp = page.buttons["captro.editorialCard"].firstMatch
+        let compact = page.buttons["captro.editorialCard.compact"].firstMatch
+        (stamp.exists ? stamp : compact).tap()
+        XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
+        app.buttons["Back"].tap()
+        XCTAssertEqual(page.frame.minY, originalY, accuracy: 2, "Returning from details preserves scroll offset")
+      }
+      if index == 4 {
+        let height = page.frame.height
+        media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.18))
+          .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.18)))
+        XCTAssertEqual(page.frame.height, height, accuracy: 1)
+        capture(app, "public-carousel-second-slide")
+      }
+    }
+  }
+
   private func launch(_ arguments: [String]) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-home-feed-visual-test"] + arguments
