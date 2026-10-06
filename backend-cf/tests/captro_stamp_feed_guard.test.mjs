@@ -243,9 +243,8 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
 test('holding the Home stamp temporarily reveals the unobstructed photo', () => {
   assert.match(mediaPager, /@GestureState private var isHoldingStamp = false/);
   assert.match(mediaPager, /LongPressGesture\(minimumDuration: 0\.25, maximumDistance: 10\)/);
-  assert.match(mediaPager, /\.sequenced\(before: DragGesture\(minimumDistance: 0\)\)/);
-  assert.match(mediaPager, /case let \.second\(true, drag\):/);
-  assert.match(mediaPager, /hypot\(drag\.translation\.width, drag\.translation\.height\) <= 22/);
+  assert.doesNotMatch(mediaPager, /\.sequenced\(before: DragGesture/);
+  assert.match(mediaPager, /state = pressed/);
   assert.match(
     mediaPager,
     /ViewThatFits\(in: \.vertical\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)/,

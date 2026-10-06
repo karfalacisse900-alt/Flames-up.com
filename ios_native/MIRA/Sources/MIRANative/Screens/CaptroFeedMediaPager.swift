@@ -222,25 +222,17 @@ struct CaptroMediaPager: View {
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
     // Only the visible stamp handles peek. The unused height in ViewThatFits
-    // must remain available to media taps and the parent horizontal pager.
+    // must remain available to media taps and the vertical feed.
     .contentShape(Rectangle())
     .simultaneousGesture(stampPeekGesture)
   }
 
   private var stampPeekGesture: some Gesture {
     LongPressGesture(minimumDuration: 0.25, maximumDistance: 10)
-      .sequenced(before: DragGesture(minimumDistance: 0))
-      .updating($isHoldingStamp) { phase, state, _ in
-        switch phase {
-        case let .second(true, drag):
-          guard let drag else {
-            state = true
-            return
-          }
-          state = hypot(drag.translation.width, drag.translation.height) <= 22
-        default:
-          state = false
-        }
+      .updating($isHoldingStamp) { pressed, state, _ in
+        // No zero-distance DragGesture here: it captures the vertical scroll
+        // recognizer when a drag starts on a stamp in the continuous stream.
+        state = pressed
       }
   }
 
