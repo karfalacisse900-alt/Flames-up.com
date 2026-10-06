@@ -80,8 +80,8 @@ struct CaptroStampAudio: View {
         let track: MIRAAudiusTrack = try await api.get("/music/audius/stream/\(trackID)")
         stream = track.streamUrl
       }
-      guard current == generation, !Task.isCancelled,
-            !MIRAPlaybackCoordinator.isLiveVoiceActive else { stop(); return }
+      guard current == generation, !Task.isCancelled else { return }
+      guard !MIRAPlaybackCoordinator.isLiveVoiceActive else { stop(); return }
       guard let stream, let url = URL(string: stream), url.scheme == "https" else { throw MIRAAPIError.emptyResponse }
       MIRAPlaybackCoordinator.pauseAll(reason: "stamp_music_started:\(post.id)")
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
