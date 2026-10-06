@@ -61,6 +61,7 @@ struct CaptroEditorialOverlayCard: View {
   var condensed = false
   var expanded = false
   var feedCaptionMaxLines: Int? = nil
+  var feedSummary = false
   var showsProfileRow = true
   var showsBorder = true
   var onOpen: (() -> Void)? = nil
@@ -68,6 +69,7 @@ struct CaptroEditorialOverlayCard: View {
   private var ink: Color { MIRATheme.Color.textPrimary }
   @ScaledMetric(relativeTo: .callout) private var listingCaptionSize: CGFloat = 14
   @ScaledMetric(relativeTo: .body) private var captionSize: CGFloat = 15
+  @ScaledMetric(relativeTo: .title3) private var feedTitleSize: CGFloat = 22
 
   @ViewBuilder var body: some View {
     if let onOpen {
@@ -85,11 +87,44 @@ struct CaptroEditorialOverlayCard: View {
   }
 
   @ViewBuilder private var card: some View {
-    if [.event, .meetup, .deal].contains(content.type) {
+    if feedSummary {
+      feedCard
+    } else if [.event, .meetup, .deal].contains(content.type) {
       listingCard
     } else {
       legacyCard
     }
+  }
+
+  private var feedCard: some View {
+    VStack(alignment: .leading, spacing: condensed ? 4 : 7) {
+      Text(nonempty(content.headline) ?? content.title)
+        .font(.system(size: feedTitleSize, weight: .bold))
+        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+      if let context = nonempty(content.locationText) ?? nonempty(content.subtitle) {
+        Text(context).font(.caption).foregroundStyle(ink.opacity(0.72)).lineLimit(1)
+      }
+      let metadata = [nonempty(content.chipText), nonempty(content.scheduleText), nonempty(content.priceText)]
+        .compactMap { $0 }.joined(separator: " · ")
+      Text(metadata.isEmpty ? content.type.rawValue.capitalized : metadata)
+        .font(.caption.weight(.semibold)).foregroundStyle(MIRATheme.Color.forest).lineLimit(1)
+      if let caption = nonempty(content.description) ?? nonempty(content.summaryText) {
+        CaptroMeasuredCaption(text: caption, size: captionSize, maxLines: feedCaptionMaxLines ?? 4)
+          .padding(.top, 3)
+      }
+      if let username = nonempty(content.username) {
+        HStack(spacing: 8) {
+          RemoteAvatar(url: content.avatarURL, size: 30)
+          Text(username).font(.subheadline.weight(.semibold)).lineLimit(1)
+          Spacer(minLength: 0)
+        }.padding(.top, condensed ? 3 : 7)
+      }
+    }
+    .padding(condensed ? 12 : 16)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .foregroundStyle(ink).background(MIRATheme.Color.surface)
+    .overlay(Rectangle().strokeBorder(ink, lineWidth: showsBorder ? 1 : 0))
+    .contentShape(Rectangle())
   }
 
   /// A compact editorial listing, not a second stamp or an action surface.

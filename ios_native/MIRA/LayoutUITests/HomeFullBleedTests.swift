@@ -49,6 +49,7 @@ final class HomeFullBleedTests: XCTestCase {
     XCTAssertTrue(media.waitForExistence(timeout: 15))
     XCTAssertEqual(media.frame.minX, 0, accuracy: 0.5)
     XCTAssertEqual(media.frame.maxX, app.frame.width, accuracy: 0.5)
+    assertViewportAndStamp(app, media: media)
     XCTAssertTrue(app.buttons["Pause video"].firstMatch.waitForExistence(timeout: 10))
     app.buttons["Pause video"].firstMatch.tap()
     XCTAssertTrue(app.buttons["Play video"].firstMatch.waitForExistence(timeout: 3))
@@ -70,11 +71,26 @@ final class HomeFullBleedTests: XCTestCase {
       XCTAssertEqual(media.frame.maxX, app.frame.width, accuracy: 0.5, "Right gutter for \(ratio)")
       XCTAssertGreaterThan(media.frame.height, 100)
       XCTAssertLessThanOrEqual(media.frame.maxY, app.frame.maxY)
+      assertViewportAndStamp(app, media: media)
       let attachment = XCTAttachment(screenshot: app.screenshot())
       attachment.name = "full-bleed-\(ratio)"
       attachment.lifetime = .keepAlways
       add(attachment)
       app.terminate()
     }
+  }
+
+  private func assertViewportAndStamp(_ app: XCUIApplication, media: XCUIElement) {
+    let pager = app.scrollViews["home.post.pager"]
+    XCTAssertTrue(pager.exists)
+    XCTAssertEqual(media.frame.minY, pager.frame.minY, accuracy: 1)
+    XCTAssertEqual(media.frame.maxY, pager.frame.maxY, accuracy: 1,
+      "Media canvas must fill the actual post viewport, not leave a white section below")
+    let stamp = app.buttons["captro.editorialCard"].firstMatch
+    XCTAssertTrue(stamp.exists)
+    XCTAssertLessThanOrEqual(stamp.frame.height, media.frame.height * 0.52 + 1)
+    XCTAssertGreaterThanOrEqual(stamp.frame.minY, media.frame.minY)
+    XCTAssertLessThanOrEqual(stamp.frame.maxY, media.frame.maxY)
+    XCTAssertFalse(app.buttons["More"].exists, "More belongs inside the measured caption")
   }
 }

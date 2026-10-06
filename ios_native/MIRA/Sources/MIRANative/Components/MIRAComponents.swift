@@ -1304,7 +1304,7 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func syncPlayback(_ player: AVPlayer) {
-    if shouldPlay && !globallyPaused {
+    if shouldPlay && !globallyPaused && !MIRAPlaybackCoordinator.isLiveVoiceActive {
       configureAudioSession()
       player.isMuted = isMuted
       player.volume = isMuted ? 0 : 1
@@ -1341,6 +1341,7 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func configureAudioSession() {
+    guard !MIRAPlaybackCoordinator.isLiveVoiceActive else { return }
     do {
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playback, mode: .moviePlayback)

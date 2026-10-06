@@ -46,8 +46,9 @@ struct CaptroCaptureAssistantView: View {
           Text("Captro AI").font(.title2.weight(.semibold)).foregroundStyle(MIRATheme.Color.textPrimary).padding(.top, 6)
           CaptroVoiceVisualStage(state: CaptroVoiceVisualState(session: session,
             active: scenePhase == .active, reduceMotion: reduceMotion))
-            .frame(width: min(280, geometry.size.width - 72), height: min(280, geometry.size.width - 72))
-            .padding(.top, 48).padding(.bottom, 38)
+            .frame(width: min(320, max(180, geometry.size.width - 48)),
+              height: min(340, max(220, geometry.size.height * 0.46)))
+            .padding(.top, 28).padding(.bottom, 24)
           TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(elapsed(at: context.date)).font(.subheadline.monospacedDigit())
               .foregroundStyle(MIRATheme.Color.textSecondary).accessibilityLabel("Conversation duration")

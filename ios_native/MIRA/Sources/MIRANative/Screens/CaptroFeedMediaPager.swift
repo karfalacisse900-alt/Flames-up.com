@@ -85,6 +85,7 @@ struct CaptroMediaPager: View {
   private var mediaLayers: some View {
     GeometryReader { proxy in
       ZStack {
+        Color.black
         mediaContent
           .frame(width: proxy.size.width, height: proxy.size.height)
           .contentShape(Rectangle())
@@ -141,11 +142,11 @@ struct CaptroMediaPager: View {
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: .fill,
+      contentMode: .fit,
       shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
       videoMuted: isVideoMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
-      placeholderColor: MIRATheme.Color.mediaPlaceholder,
+      placeholderColor: .black,
       onMeasuredRatio: { ratio in
         guard index == 0 else { return }
         let boundedRatio = boundedHomeMediaRatio(ratio)
@@ -177,18 +178,22 @@ struct CaptroMediaPager: View {
 
       Spacer(minLength: 12)
 
-      VStack(spacing: 0) {
-        CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
-        condensed: CaptroEditorialCardLayout.isCondensed(mediaWidth: mediaWidth, mediaHeight: mediaHeight),
-        feedCaptionMaxLines: mediaHeight < 300 ? 2 : (mediaHeight < 420 ? 4 : 5),
-        showsBorder: false, onOpen: openPostUnlessPeeking)
-        if post.detail?.voice != nil || post.hasAudio {
-          CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
-            .padding(.horizontal, 14).padding(.bottom, 12)
-        }
+      ViewThatFits(in: .vertical) {
+        feedStamp(lines: 4, condensed: false)
+          .fixedSize(horizontal: false, vertical: true)
+        feedStamp(lines: 3, condensed: true)
+          .fixedSize(horizontal: false, vertical: true)
+        // Accessibility / unusually short windows: keep the complete content in
+        // details rather than clipping controls or shrinking the user's font.
+        Button(action: openPostUnlessPeeking) {
+          Label("View post details", systemImage: "text.alignleft")
+            .font(.body).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(12).foregroundStyle(MIRATheme.Color.textPrimary)
+            .background(MIRATheme.Color.surface)
+            .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
+        }.buttonStyle(.plain)
       }
-        .background(MIRATheme.Color.surface)
-        .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
+        .frame(maxHeight: max(68, mediaHeight * 0.52), alignment: .bottom)
         .frame(width: max(0, mediaWidth - 32), alignment: .leading)
       .contentShape(Rectangle())
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
@@ -199,6 +204,20 @@ struct CaptroMediaPager: View {
       .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 48 : 4)
     }
     .padding(CaptroEditorialCardLayout.inset)
+  }
+
+  private func feedStamp(lines: Int, condensed: Bool) -> some View {
+    VStack(spacing: 0) {
+      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
+        condensed: condensed, feedCaptionMaxLines: lines, feedSummary: true,
+        showsBorder: false, onOpen: openPostUnlessPeeking)
+      if post.detail?.voice != nil || post.hasAudio {
+        CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
+          .padding(.horizontal, 14).padding(.bottom, 10)
+      }
+    }
+    .background(MIRATheme.Color.surface)
+    .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
   }
 
   private var stampPeekGesture: some Gesture {

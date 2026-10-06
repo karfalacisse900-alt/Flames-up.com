@@ -4,6 +4,38 @@ import UniformTypeIdentifiers
 @testable import MIRANative
 
 final class CaptroPostMediaTests: XCTestCase {
+  func testVoiceWatchdogStartsAtAudioActivationNotAuthorization() {
+    let health = CaptroVoicePipelineHealth(now: 100)
+    XCTAssertNil(health.stall(now: 103))
+    XCTAssertEqual(health.stall(now: 106), .capture)
+    health.captured(now: 106)
+    XCTAssertEqual(health.stall(now: 106), .conversion)
+    health.converted(now: 106)
+    XCTAssertEqual(health.stall(now: 106), .transport)
+    health.sent(now: 106)
+    XCTAssertNil(health.stall(now: 106))
+  }
+
+  func testVoiceWatchdogDoesNotTreatQuietOrMutedPCMAsMissingCapture() {
+    let health = CaptroVoicePipelineHealth(now: 0)
+    for second in 1...30 {
+      health.captured(now: Double(second))
+      health.converted(now: Double(second))
+      health.sent(now: Double(second))
+      XCTAssertNil(health.stall(now: Double(second)))
+    }
+  }
+
+  @MainActor func testAudioOwnershipCannotBeReleasedByStaleVoiceSession() {
+    let owner = UUID(), stale = UUID()
+    XCTAssertTrue(MIRAPlaybackCoordinator.acquireLiveVoice(owner))
+    defer { MIRAPlaybackCoordinator.releaseLiveVoice(owner) }
+    XCTAssertFalse(MIRAPlaybackCoordinator.acquireLiveVoice(stale))
+    MIRAPlaybackCoordinator.releaseLiveVoice(stale)
+    XCTAssertTrue(MIRAPlaybackCoordinator.isLiveVoiceActive)
+    MIRAPlaybackCoordinator.releaseLiveVoice(owner)
+    XCTAssertFalse(MIRAPlaybackCoordinator.isLiveVoiceActive)
+  }
   func testSupportedRatiosIncludeWideLandscapeAndPreserveLegacyFormats() {
     XCTAssertEqual(MIRASupportedPostAspectRatio.allCases.map(\.rawValue), ["16:9", "4:3", "0.65:1", "4:5", "3:4", "1:1"])
     for ratio in MIRASupportedPostAspectRatio.allCases {

@@ -141,6 +141,10 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   private var currentRecordingID: String?
   private var prefersSpeaker = true
   private var audioEpoch = 0
+  private let audioOwner = UUID()
+  private var ownsAudioSession = false
+  private var engineConfigurationObserver: NSObjectProtocol?
+  private var audioRecoveryCount = 0
   private var attemptStarted = ProcessInfo.processInfo.systemUptime
   private let microphoneGate = CaptroMicrophoneGate()
   private let logger = Logger(subsystem: "com.captro.app", category: "RealtimeVoice")
@@ -169,6 +173,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     lastAudioLog = .distantPast
     lastAudioSent = Date()
     observedMicrophoneSignal = false
+    audioRecoveryCount = 0
     audioInterrupted = false
     backgroundSuspended = false
     failureMessage = "Captro AI is unavailable right now."
@@ -336,6 +341,8 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   }
 
   private func stopAudio() {
+    if let engineConfigurationObserver { NotificationCenter.default.removeObserver(engineConfigurationObserver) }
+    engineConfigurationObserver = nil
     microphoneGate.update(muted)
     firstAudioSent = false
     audioEpoch += 1
@@ -369,7 +376,11 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     socket = nil
     transport?.invalidateAndCancel()
     transport = nil
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    if ownsAudioSession {
+      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+      MIRAPlaybackCoordinator.releaseLiveVoice(audioOwner)
+      ownsAudioSession = false
+    }
     queuedOutputBuffers = 0
     playbackGeneration += 1
     outputItemID = nil
@@ -664,12 +675,16 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
   }
 
   private func startAudio() throws {
-    MIRAPlaybackCoordinator.pauseAll(reason: "capture_realtime_voice")
+    guard MIRAPlaybackCoordinator.acquireLiveVoice(audioOwner) else {
+      throw NSError(domain: "CaptroVoiceAudioOwnership", code: 1)
+    }
+    ownsAudioSession = true
     CaptroVoicePlaybackCenter.shared.stop()
     let session = AVAudioSession.sharedInstance()
     try session.setCategory(.playAndRecord, mode: .voiceChat,
       options: prefersSpeaker ? [.defaultToSpeaker, .allowBluetoothHFP] : [.allowBluetoothHFP])
     try session.setActive(true, options: .notifyOthersOnDeactivation)
+    diagnostic("audio_session_activated", code: session.currentRoute.inputs.first?.portType.rawValue ?? "no_input")
     let engine = AVAudioEngine()
     let input = engine.inputNode
     // Echo cancellation is required for speaker-mode barge-in. Don't silently
@@ -689,6 +704,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     let epoch = sessionEpoch
     audioEpoch += 1
     let captureEpoch = audioEpoch
+    let health = CaptroVoicePipelineHealth()
     var continuation: AsyncStream<CaptroMicrophoneChunk>.Continuation!
     // Bound latency; never deliver seconds-old microphone audio after congestion.
     let stream = AsyncStream<CaptroMicrophoneChunk>(bufferingPolicy: .bufferingNewest(6)) { continuation = $0 }
@@ -697,6 +713,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     let microphoneGate = microphoneGate
     var conversionFailureLogged = false
     input.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
+      health.captured()
       let gate = microphoneGate.snapshot()
       guard let source = buffer.floatChannelData,
             let copy = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: buffer.frameLength),
@@ -725,6 +742,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
         }
       }
       guard error == nil, conversionStatus != .error, converted.frameLength > 0, let samples = converted.int16ChannelData else { return }
+      health.converted()
       let data = Data(bytes: samples[0], count: Int(converted.frameLength) * 2)
       var power: Float = 0
       for index in stride(from: 0, to: frameCount, by: 32) { power += source[0][index] * source[0][index] }
@@ -753,14 +771,27 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
     player.play()
     refreshAudioRoutes()
     diagnostic("audio_engine_started")
+    engineConfigurationObserver = NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+      Task { @MainActor [weak self] in
+        guard let self, !self.isClosed, !self.audioInterrupted,
+              self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
+        self.diagnostic("audio_configuration_changed", code: self.engine?.isRunning == true ? "running" : "stopped")
+        if self.engine?.isRunning != true { self.recoverAudio() }
+      }
+    }
     micWatchdog = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         guard let self, !Task.isCancelled, !self.isClosed, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
-        if Date().timeIntervalSince(self.lastAudioSent) > 5 {
-          self.diagnostic("microphone_stream_stalled")
-          self.failureMessage = "The microphone stopped. Check your audio connection and try again."
-          self.fail()
+        if let stalled = health.stall() {
+          self.diagnostic("microphone_stream_stalled", code: stalled.rawValue)
+          if stalled == .transport { self.recoverTransport() }
+          else if stalled == .capture { self.recoverAudio() }
+          else {
+            self.failureMessage = "Audio could not be processed. Please try again."
+            self.fail()
+          }
           return
         }
       }
@@ -777,6 +808,7 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
           try await self.send(["type": "input_audio_buffer.append", "audio": audio.base64EncodedString()])
           guard !Task.isCancelled, self.sessionEpoch == epoch, self.audioEpoch == captureEpoch else { return }
           self.lastAudioSent = Date()
+          health.sent()
           self.sentFrames += audio.count / 2
           self.sentBytes += audio.count
           if !self.firstAudioSent {
@@ -810,6 +842,22 @@ final class CaptroRealtimeVoiceSession: ObservableObject {
         }
       }
     }
+  }
+
+  private func recoverAudio() {
+    guard !isClosed, !audioInterrupted else { return }
+    // One local graph recovery, never a session-mint loop for missing input.
+    guard audioRecoveryCount < 1 else {
+      failureMessage = "The microphone stopped. Check your audio connection and try again."
+      fail(); return
+    }
+    audioRecoveryCount += 1
+    diagnostic("audio_graph_restarting")
+    interruptOutput()
+    stopAudio()
+    connection = .reconnecting; phase = .reconnecting
+    do { try startAudio() }
+    catch { diagnosticError("audio_engine_failed", error); fail() }
   }
 
   private func startHeartbeat(epoch: Int) {

@@ -9,6 +9,7 @@ const stages = new Set([
   'audio_interrupted', 'audio_route_changed', 'audio_output_selected', 'audio_route_failed',
   'background_suspended', 'heartbeat_failed', 'session_stopped', 'connection_timeout',
   'reconnect_scheduled', 'recovery_exhausted', 'microphone_conversion_failed',
+  'audio_session_activated', 'audio_configuration_changed', 'audio_graph_restarting',
 ]);
 
 /** Strict telemetry schema. Never accept arbitrary event payloads, audio, text or credentials. */

@@ -2,6 +2,21 @@ import AVFoundation
 import Foundation
 
 public enum MIRAPlaybackCoordinator {
+  // A live voice session owns duplex audio until its matching generation ends.
+  // Late video loads may prepare assets, but must not replace the microphone's
+  // playAndRecord category with playback/moviePlayback.
+  @MainActor private static var liveVoiceOwner: UUID?
+  @MainActor public static var isLiveVoiceActive: Bool { liveVoiceOwner != nil }
+  @MainActor static func acquireLiveVoice(_ owner: UUID) -> Bool {
+    guard liveVoiceOwner == nil || liveVoiceOwner == owner else { return false }
+    liveVoiceOwner = owner
+    pauseAll(reason: "capture_realtime_voice")
+    return true
+  }
+  @MainActor static func releaseLiveVoice(_ owner: UUID) {
+    guard liveVoiceOwner == owner else { return }
+    liveVoiceOwner = nil
+  }
   public static func pauseAll(reason: String) {
     NotificationCenter.default.post(name: .miraPlaybackShouldPause, object: reason)
   }

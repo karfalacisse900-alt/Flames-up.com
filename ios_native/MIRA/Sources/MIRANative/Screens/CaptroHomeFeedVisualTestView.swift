@@ -2,15 +2,18 @@
 import Foundation
 import SwiftUI
 import UIKit
+import AVFoundation
 
 @MainActor
 public struct CaptroHomeFeedVisualTestView: View {
   @State private var selectedTab = 0
   @StateObject private var model: MainFeedModel
+  @State private var videoPrepared = !ProcessInfo.processInfo.arguments.contains("--captro-visual-video")
 
   public init() {
     let api = MIRAAPIClient()
-    _model = StateObject(wrappedValue: MainFeedModel(api: api, visualPosts: CaptroHomeFeedVisualFixtures.posts()))
+    _model = StateObject(wrappedValue: MainFeedModel(api: api, visualPosts:
+      ProcessInfo.processInfo.arguments.contains("--captro-visual-video") ? [] : CaptroHomeFeedVisualFixtures.posts()))
   }
 
   public var body: some View {
@@ -32,11 +35,19 @@ public struct CaptroHomeFeedVisualTestView: View {
     .background(MIRATheme.Color.appBackground)
     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
+    .task {
+      guard !videoPrepared else { return }
+      do {
+        let url = try await CaptroHomeFeedVisualFixtures.video()
+        model.posts = CaptroHomeFeedVisualFixtures.posts(videoURL: url)
+        videoPrepared = true
+      } catch { assertionFailure("Video fixture failed: \(error)") }
+    }
   }
 }
 
 private enum CaptroHomeFeedVisualFixtures {
-  static func posts() -> [MIRAPost] {
+  static func posts(videoURL: URL? = nil) -> [MIRAPost] {
     if ProcessInfo.processInfo.arguments.contains("--captro-visual-text") {
       return (0..<2).compactMap { index in
         var value: [String: Any] = [
@@ -70,8 +81,8 @@ private enum CaptroHomeFeedVisualFixtures {
     do {
       let mediaURL: URL
       if isVideo {
-        mediaURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-          .appendingPathComponent("full-bleed-fixture.mp4")
+        guard let videoURL else { return [] }
+        mediaURL = videoURL
       } else {
         mediaURL = FileManager.default.temporaryDirectory.appendingPathComponent("full-bleed-\(name).png")
         let format = UIGraphicsImageRendererFormat()
@@ -101,6 +112,49 @@ private enum CaptroHomeFeedVisualFixtures {
       assertionFailure("Full-bleed visual fixture failed: \(error)")
       return []
     }
+  }
+
+  // Real decodable local video used only by DEBUG layout tests; no network,
+  // production account, or fabricated playback success is involved.
+  static func video() async throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-\(UUID().uuidString).mp4")
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+      AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 480, AVVideoHeightKey: 640])
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
+      sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+        kCVPixelBufferWidthKey as String: 480, kCVPixelBufferHeightKey as String: 640])
+    writer.add(input)
+    guard writer.startWriting() else { throw writer.error ?? MIRAAPIError.emptyResponse }
+    writer.startSession(atSourceTime: .zero)
+    for frame in 0..<30 {
+      while !input.isReadyForMoreMediaData {
+        guard writer.status == .writing else { throw writer.error ?? MIRAAPIError.emptyResponse }
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      var optionalBuffer: CVPixelBuffer?
+      guard let pool = adaptor.pixelBufferPool,
+            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &optionalBuffer) == kCVReturnSuccess,
+            let buffer = optionalBuffer else { throw MIRAAPIError.emptyResponse }
+      CVPixelBufferLockBaseAddress(buffer, [])
+      if let address = CVPixelBufferGetBaseAddress(buffer) {
+        let stride = CVPixelBufferGetBytesPerRow(buffer)
+        let pixels = address.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<640 { for x in 0..<480 {
+          let offset = y * stride + x * 4
+          pixels[offset] = 255; pixels[offset + 1] = UInt8(30 + frame * 3)
+          pixels[offset + 2] = x < 240 ? 160 : 80; pixels[offset + 3] = 170
+        } }
+      }
+      CVPixelBufferUnlockBaseAddress(buffer, [])
+      guard adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)) else {
+        throw writer.error ?? MIRAAPIError.emptyResponse
+      }
+    }
+    input.markAsFinished()
+    await writer.finishWriting()
+    guard writer.status == .completed else { throw writer.error ?? MIRAAPIError.emptyResponse }
+    return url
   }
 }
 #endif

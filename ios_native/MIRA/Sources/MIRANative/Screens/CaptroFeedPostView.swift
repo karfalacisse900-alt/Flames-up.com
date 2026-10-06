@@ -56,27 +56,6 @@ struct CaptroFeedPostView: View {
       }
 
 
-      if showsMoreButton {
-        HStack {
-          Spacer(minLength: 0)
-          Button("More", action: onOpenPost)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-            .frame(minWidth: 52, minHeight: 44)
-            .contentShape(Rectangle())
-            .accessibilityHint("Opens the full post")
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-      }
-
-      if !post.feedMediaURLs.isEmpty {
-        Rectangle()
-          .fill(MIRATheme.Color.hairline)
-          .frame(height: 1 / max(displayScale, 1))
-          .padding(.horizontal, 16)
-          .padding(.top, 24)
-      }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
   }
@@ -112,20 +91,9 @@ struct CaptroFeedPostView: View {
 
   private var pageMediaSize: CGSize? {
     guard let pageSize, !post.feedMediaURLs.isEmpty else { return nil }
-    let ratio = MIRAMediaSizing.supportedPostHeightToWidthRatio(
-      post.mediaDimensions?.values.first?.heightToWidthRatio
-        ?? MIRAMediaSizing.mainFeedDisplayRatio(for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
-    )
-    // Reserve the compact player and transcript action before sizing media.
-    let fixedVerticalContent: CGFloat = 25 + (showsMoreButton ? 44 : 0)
-    let availableMediaHeight = max(0, pageSize.height - fixedVerticalContent)
-    // A short page may crop the photo vertically, but must never narrow the post.
-    return CGSize(width: pageSize.width, height: min(availableMediaHeight, pageSize.width * ratio))
-  }
-
-  private var showsMoreButton: Bool {
-    // Caption overflow is measured by the card's native text layout.
-    return post.containsVideoMedia
+    // MainFeed's GeometryReader already excludes the header and native tab safe
+    // area. Source ratio controls the contained image, never the page's extent.
+    return pageSize
   }
 }
 
