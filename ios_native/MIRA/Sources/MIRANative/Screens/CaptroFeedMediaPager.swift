@@ -15,7 +15,6 @@ struct CaptroMediaPager: View {
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @GestureState private var isHoldingStamp = false
-  @State private var measuredCoverHeightToWidthRatio: CGFloat?
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
   @State private var isVideoPaused = false
@@ -25,7 +24,6 @@ struct CaptroMediaPager: View {
   private var naturalMediaHeightToWidthRatio: CGFloat {
     boundedHomeMediaRatio(
       declaredCoverHeightToWidthRatio
-        ?? measuredCoverHeightToWidthRatio
         ?? MIRAMediaSizing.mainFeedDisplayRatio(
           for: mediaURLs,
           aspectRatios: post.mediaHeightToWidthRatios
@@ -46,7 +44,6 @@ struct CaptroMediaPager: View {
       .accessibilityElement(children: .contain)
       .onAppear(perform: prefetchCarouselNeighbors)
       .onChange(of: mediaURLs) { _, urls in
-        measuredCoverHeightToWidthRatio = nil
         if selectedMediaIndex >= urls.count {
           selectedMediaIndex = max(0, urls.count - 1)
         }
@@ -147,13 +144,7 @@ struct CaptroMediaPager: View {
       videoMuted: isVideoMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: .black,
-      plainBackground: true,
-      onMeasuredRatio: { ratio in
-        guard index == 0 else { return }
-        let boundedRatio = boundedHomeMediaRatio(ratio)
-        guard abs((measuredCoverHeightToWidthRatio ?? 0) - boundedRatio) > 0.001 else { return }
-        measuredCoverHeightToWidthRatio = boundedRatio
-      }
+      plainBackground: true
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
@@ -180,21 +171,34 @@ struct CaptroMediaPager: View {
       Spacer(minLength: 12)
 
       ViewThatFits(in: .vertical) {
-        feedStamp(lines: 4, condensed: false)
-          .fixedSize(horizontal: false, vertical: true)
         feedStamp(lines: 3, condensed: true)
+          .fixedSize(horizontal: false, vertical: true)
+        feedStamp(lines: 2, condensed: true)
           .fixedSize(horizontal: false, vertical: true)
         // Accessibility / unusually short windows: keep the complete content in
         // details rather than clipping controls or shrinking the user's font.
         Button(action: openPostUnlessPeeking) {
-          Label("View post details", systemImage: "text.alignleft")
-            .font(.body).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          VStack(alignment: .leading, spacing: 4) {
+            Text(post.captroEditorialCardContent.title)
+              .font(.headline).lineLimit(1)
+            if let metadata = post.captroEditorialCardContent.chipText {
+              Text(metadata).font(.caption).lineLimit(1)
+            }
+            HStack {
+              Text(post.captroEditorialCardContent.username ?? post.authorDisplayName)
+                .lineLimit(1)
+              Spacer(minLength: 4)
+              Text("More")
+            }.font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .padding(12).foregroundStyle(MIRATheme.Color.textPrimary)
             .background(MIRATheme.Color.surface)
             .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
         }.buttonStyle(.plain)
+          .accessibilityIdentifier("captro.editorialCard.compact")
       }
-        .frame(maxHeight: max(68, mediaHeight * 0.52), alignment: .bottom)
+        .frame(maxHeight: min(280, max(68, mediaHeight * 0.60)), alignment: .bottom)
         .frame(width: max(0, mediaWidth - 32), alignment: .leading)
       .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
       .allowsHitTesting(showsStampOnCurrentSlide)
@@ -202,7 +206,7 @@ struct CaptroMediaPager: View {
       .animation(stampPeekAnimation, value: isHoldingStamp)
       .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 48 : 4)
     }
-    .padding(CaptroEditorialCardLayout.inset)
+    .padding(16)
   }
 
   private func feedStamp(lines: Int, condensed: Bool) -> some View {

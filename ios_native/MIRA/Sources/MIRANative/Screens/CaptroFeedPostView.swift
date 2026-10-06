@@ -14,24 +14,14 @@ struct CaptroFeedPostView: View {
   let onOpenPost: () -> Void
   let onSave: () -> Void
   let canFollowAuthor: Bool
-  let pageSize: CGSize?
-  @Binding var selectedMediaIndex: Int
-  let showsCoverMediaOnly: Bool
+  let feedWidth: CGFloat
+  @State private var selectedMediaIndex = 0
   var canRespond = true
 
   @Environment(\.displayScale) private var displayScale
 
   var body: some View {
-    Group {
-      if let pageSize {
-        postContent
-          .frame(width: pageSize.width, height: pageSize.height,
-            alignment: post.feedMediaURLs.isEmpty ? .center : .topLeading)
-          .clipped()
-      } else {
-        postContent
-      }
-    }
+    postContent
     .frame(maxWidth: .infinity, alignment: .topLeading)
     .onChange(of: post.id) { _, _ in
       selectedMediaIndex = 0
@@ -43,16 +33,11 @@ struct CaptroFeedPostView: View {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
       } else {
-        ViewThatFits(in: .vertical) {
-          textOnlyStamp(maxBodyLines: 5).fixedSize(horizontal: false, vertical: true)
-          textOnlyStamp(maxBodyLines: 3).fixedSize(horizontal: false, vertical: true)
-          textOnlyStamp(maxBodyLines: 1).fixedSize(horizontal: false, vertical: true)
-          // Accessibility text / four long choices must remain reachable, not clipped.
-          ScrollView(.vertical) { textOnlyStamp(maxBodyLines: 3) }
-        }
-        .frame(maxHeight: pageSize.map { max(0, $0.height - 24) })
-        .frame(width: max(0, (pageSize?.width ?? UIScreen.main.bounds.width) - 32), alignment: .leading)
+        textOnlyStamp(maxBodyLines: 3)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: max(0, feedWidth - 32), alignment: .leading)
         .padding(.horizontal, 16)
+        .padding(.vertical, 12)
       }
 
 
@@ -75,25 +60,19 @@ struct CaptroFeedPostView: View {
       selectedMediaIndex: $selectedMediaIndex,
       onOpenPost: onOpenPost,
       onSave: onSave,
-      showsCoverMediaOnly: showsCoverMediaOnly,
-      frameSize: pageMediaSize
+      showsCoverMediaOnly: false,
+      frameSize: mediaSize
     )
 
-    if let mediaSize = pageMediaSize {
-      pager
-        .frame(width: mediaSize.width, height: mediaSize.height)
-        .frame(maxWidth: .infinity, alignment: .center)
-    } else {
-      pager
-        .frame(maxWidth: .infinity)
-    }
+    pager.frame(width: mediaSize.width, height: mediaSize.height)
   }
 
-  private var pageMediaSize: CGSize? {
-    guard let pageSize, !post.feedMediaURLs.isEmpty else { return nil }
-    // MainFeed's GeometryReader already excludes the header and native tab safe
-    // area. Source ratio controls the contained image, never the page's extent.
-    return pageSize
+  private var mediaSize: CGSize {
+    // The model resolves orientation and the existing supported media policy.
+    // One cover ratio sizes every carousel slide before any image downloads.
+    let ratio = MIRAMediaSizing.mainFeedDisplayRatio(
+      for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
+    return CGSize(width: feedWidth, height: feedWidth * ratio)
   }
 }
 

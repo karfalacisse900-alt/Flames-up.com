@@ -915,7 +915,7 @@ public struct MainFeedView: View {
           homeTopBar
 
           GeometryReader { feedProxy in
-            feedContent(size: feedProxy.size)
+            feedContent(size: feedProxy.size, bottomInset: feedProxy.safeAreaInsets.bottom)
           }
           .ignoresSafeArea(.container, edges: .horizontal)
         }
@@ -1247,7 +1247,7 @@ public struct MainFeedView: View {
   }
 
   @ViewBuilder
-  private func feedContent(size: CGSize) -> some View {
+  private func feedContent(size: CGSize, bottomInset: CGFloat) -> some View {
     if model.isLoading && model.posts.isEmpty {
       MainPostSkeleton()
         .frame(width: size.width, height: size.height, alignment: .top)
@@ -1271,35 +1271,35 @@ public struct MainFeedView: View {
       )
       .frame(width: size.width, height: size.height)
     } else {
-      horizontalPostPager(size: size)
+      verticalPostStream(width: size.width, bottomInset: bottomInset)
     }
   }
 
-  private func horizontalPostPager(size: CGSize) -> some View {
-    ScrollView(.horizontal) {
-      LazyHStack(spacing: 0) {
+  private func verticalPostStream(width: CGFloat, bottomInset: CGFloat) -> some View {
+    ScrollView(.vertical) {
+      LazyVStack(spacing: 12) {
         ForEach(displayedPosts, id: \.id) { post in
-          feedPage(post: post, size: size, isCurrent: post.id == currentPost?.id)
-            .frame(width: size.width, height: size.height, alignment: .topLeading)
+          feedPage(post: post, width: width, isCurrent: post.id == currentPost?.id)
             .id(post.id)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.post.page.\(post.id)")
-            .accessibilityHidden(post.id != currentPost?.id)
         }
       }
       .scrollTargetLayout()
     }
-    .frame(width: size.width, height: size.height, alignment: .topLeading)
+    // Extend beneath Captro's existing tab bar, but reserve its measured safe
+    // region ONCE, on the scroll content. Never add this space to each post.
+    .safeAreaPadding(.bottom, bottomInset + 12)
+    .ignoresSafeArea(.container, edges: .bottom)
     .background(MIRATheme.Color.appBackground)
     .scrollIndicators(.hidden)
-    .scrollTargetBehavior(.paging)
-    .scrollPosition(id: $selectedPostID, anchor: .leading)
+    .scrollPosition(id: $selectedPostID, anchor: .top)
     .accessibilityLabel("Home posts")
     .accessibilityValue("Post \(currentPostIndex + 1) of \(displayedPosts.count)")
-    .accessibilityIdentifier("home.post.pager")
+    .accessibilityIdentifier("home.post.stream")
   }
 
-  private func feedPage(post: MIRAPost, size: CGSize, isCurrent: Bool) -> some View {
+  private func feedPage(post: MIRAPost, width: CGFloat, isCurrent: Bool) -> some View {
     CaptroFeedPostView(
       post: post,
       api: model.api,
@@ -1323,9 +1323,7 @@ public struct MainFeedView: View {
         }
       },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
-      pageSize: size,
-      selectedMediaIndex: .constant(0),
-      showsCoverMediaOnly: true,
+      feedWidth: width,
       canRespond: !isGuest
     )
   }
@@ -1376,7 +1374,7 @@ public struct MainFeedView: View {
       return
     }
 
-    let shouldPlayVideo = !isMediaPlaybackSuppressed && post.feedMediaURLs.first?.isVideoURL == true
+    let shouldPlayVideo = !isMediaPlaybackSuppressed && post.feedMediaURLs.contains(where: \.isVideoURL)
     if activeVideoPostID != (shouldPlayVideo ? post.id : nil) {
       var transaction = Transaction()
       transaction.disablesAnimations = true

@@ -104,12 +104,13 @@ struct CaptroEditorialOverlayCard: View {
       if let context = nonempty(content.locationText) ?? nonempty(content.subtitle) {
         Text(context).font(.caption).foregroundStyle(ink.opacity(0.72)).lineLimit(1)
       }
-      let metadata = [nonempty(content.chipText), nonempty(content.scheduleText), nonempty(content.priceText)]
+      let metadata = [nonempty(content.chipText), nonempty(content.scheduleText),
+        nonempty(content.priceText) ?? (content.type == .club ? nonempty(content.supportingText) : nil)]
         .compactMap { $0 }.joined(separator: " · ")
       Text(metadata.isEmpty ? content.type.rawValue.capitalized : metadata)
         .font(.caption.weight(.semibold)).foregroundStyle(MIRATheme.Color.forest).lineLimit(1)
       if let caption = nonempty(content.description) ?? nonempty(content.summaryText) {
-        CaptroMeasuredCaption(text: caption, size: captionSize, maxLines: feedCaptionMaxLines ?? 4)
+        CaptroMeasuredCaption(text: caption, size: captionSize, maxLines: feedCaptionMaxLines ?? 3)
           .padding(.top, 3)
       }
       if let username = nonempty(content.username) {

@@ -52,7 +52,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 5\)/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 3\)/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -104,7 +104,7 @@ test('Moment detail keeps writing on one editorial card without a separate capti
   assert.doesNotMatch(momentDetail, /fullDescription/);
   assert.doesNotMatch(commerce, /CaptroEditorialOverlayCard\(/);
   const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('if let voice = post.detail?.voice'));
-  assert.match(textOnly, /textOnlyStamp\(maxBodyLines: 5\)/);
+  assert.match(textOnly, /textOnlyStamp\(maxBodyLines: 3\)/);
   assert.match(postView, /let content = post\.captroTextOnlyCardContent/);
   assert.doesNotMatch(textOnly, /Text\(caption\)/);
   assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
@@ -132,27 +132,29 @@ test('Home preview omits the separate creator and location header', () => {
 
 test('Home post is a full-width feed section without an outer card', () => {
   const postBodyStart = postView.indexOf('var body: some View');
-  const postBodyEnd = postView.indexOf('private var pageMediaSize');
+  const postBodyEnd = postView.indexOf('private var mediaSize');
   const postBody = postView.slice(postBodyStart, postBodyEnd);
 
   assert.ok(postBodyStart >= 0 && postBodyEnd > postBodyStart);
   assert.match(postBody, /\.frame\(maxWidth: \.infinity, alignment: \.topLeading\)/);
-  assert.match(postBody, /alignment: post\.feedMediaURLs\.isEmpty \? \.center : \.topLeading/);
+  assert.doesNotMatch(postBody, /pageSize|UIScreen\.main\.bounds|frame\(.*height:.*viewport/);
   assert.doesNotMatch(postBody, /\.background\(MIRATheme\.Color\.surface\)/);
   assert.doesNotMatch(postBody, /\.clipShape\(RoundedRectangle|\.cornerRadius\(|\.shadow\(/);
-  assert.match(mainFeed, /\.scrollTargetBehavior\(\.paging\)/);
-  assert.match(mainFeed, /\.scrollPosition\(id: \$selectedPostID, anchor: \.leading\)/);
-  assert.match(mainFeed, /showsCoverMediaOnly: true/);
+  assert.doesNotMatch(mainFeed, /\.scrollTargetBehavior\(\.paging\)|horizontalPostPager/);
+  assert.match(mainFeed, /\.scrollPosition\(id: \$selectedPostID, anchor: \.top\)/);
+  assert.match(postView, /showsCoverMediaOnly: false/);
+  assert.match(mainFeed, /LazyVStack\(spacing: 12\)/);
+  assert.match(mainFeed, /safeAreaPadding\(\.bottom, bottomInset \+ 12\)/);
 });
 
 test('Home media preserves every supported source ratio inside the rectangular viewport', () => {
-  assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?measuredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
+  assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
+  assert.doesNotMatch(mediaPager, /measuredCoverHeightToWidthRatio|onMeasuredRatio:/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
   assert.match(mediaPager, /contentMode: \.fit/);
   assert.doesNotMatch(mediaPager, /contentMode: \.fill/);
-  assert.match(mediaPager, /guard index == 0 else \{ return \}/);
   assert.match(mediaPager, /MIRAMediaSizing\.supportedPostHeightToWidthRatio\(ratio\)/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
@@ -206,16 +208,17 @@ test('Home media preserves every supported source ratio inside the rectangular v
   assert.match(worker, /const explicit = SUPPORTED_FEED_MEDIA_RATIOS\.find[\s\S]*?if \(explicit\) return explicit;/);
 });
 
-test('media canvas uses the actual viewport without a separate More row or source-ratio height cap', () => {
-  const sizing = postView.slice(postView.indexOf('private var pageMediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
-  assert.match(sizing, /return pageSize/);
+test('media canvas is metadata-sized without a separate More row or viewport height', () => {
+  const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
+  assert.match(sizing, /MIRAMediaSizing\.mainFeedDisplayRatio/);
+  assert.match(sizing, /height: feedWidth \* ratio/);
   assert.doesNotMatch(postView, /showsMoreButton|Button\("More"|fixedVerticalContent/);
   assert.doesNotMatch(sizing, /availableMediaHeight\s*\/|min\(pageSize\.width/);
-  assert.match(postView, /frameSize: pageMediaSize/);
+  assert.match(postView, /frameSize: mediaSize/);
   const fixedFrame = mediaPager.slice(mediaPager.indexOf('if let frameSize {'), mediaPager.indexOf('} else {', mediaPager.indexOf('if let frameSize {')));
   assert.match(fixedFrame, /mediaLayers\.frame\(width: frameSize\.width, height: frameSize\.height\)/);
   assert.doesNotMatch(fixedFrame, /aspectRatio|padding|cornerRadius/);
-  assert.match(mainFeed, /feedContent\(size: feedProxy\.size\)\s*\}\s*\.ignoresSafeArea\(\.container, edges: \.horizontal\)/);
+  assert.match(mainFeed, /feedContent\(size: feedProxy\.size, bottomInset: feedProxy\.safeAreaInsets\.bottom\)/);
 });
 
 test('Captro uses a purpose-built family of stamp types and actions', () => {
@@ -229,9 +232,9 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(editorialCard, /Button\(action: onOpen\)/);
   assert.doesNotMatch(editorialCard, /Button\(action: onAction\)|Button\(action: onSave\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /feedStamp\(lines: 4, condensed: false\)/);
+  assert.match(mediaPager, /feedStamp\(lines: 2, condensed: true\)/);
   assert.match(mediaPager, /feedStamp\(lines: 3, condensed: true\)/);
-  assert.match(mediaPager, /mediaHeight \* 0\.52/);
+  assert.match(mediaPager, /min\(280, max\(68, mediaHeight \* 0\.60\)\)/);
   assert.match(mediaPager, /feedCaptionMaxLines: lines, feedSummary: true/);
   assert.match(editorialCard, /mediaWidth \* 0\.73/);
   assert.doesNotMatch(composer, /Picker\("Paper style"/);

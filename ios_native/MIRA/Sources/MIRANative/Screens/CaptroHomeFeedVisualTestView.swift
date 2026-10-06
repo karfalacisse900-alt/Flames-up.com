@@ -23,7 +23,7 @@ public struct CaptroHomeFeedVisualTestView: View {
         .tabItem { Label("Home", systemImage: "house.fill") }
       Color.white
         .tag(1)
-        .tabItem { Label("Scan", systemImage: "doc.viewfinder.fill") }
+        .tabItem { Label("Capture", systemImage: "doc.viewfinder.fill") }
       Color.white
         .tag(2)
         .tabItem { Label("Me", systemImage: "person.fill") }
@@ -48,6 +48,9 @@ public struct CaptroHomeFeedVisualTestView: View {
 
 private enum CaptroHomeFeedVisualFixtures {
   static func posts(videoURL: URL? = nil) -> [MIRAPost] {
+    if ProcessInfo.processInfo.arguments.contains("--captro-visual-stream") {
+      return streamPosts(videoURL: videoURL)
+    }
     if ProcessInfo.processInfo.arguments.contains("--captro-visual-text") {
       return (0..<2).compactMap { index in
         var value: [String: Any] = [
@@ -71,6 +74,7 @@ private enum CaptroHomeFeedVisualFixtures {
     let name = argument?.components(separatedBy: "=").last ?? "portrait"
     let sizes: [String: CGSize] = [
       "landscape": CGSize(width: 1440, height: 1080),
+      "wide": CGSize(width: 1920, height: 1080),
       "portrait": CGSize(width: 999, height: 1536),
       "fourfive": CGSize(width: 1080, height: 1350),
       "threefour": CGSize(width: 1080, height: 1440),
@@ -112,6 +116,57 @@ private enum CaptroHomeFeedVisualFixtures {
     } catch {
       assertionFailure("Full-bleed visual fixture failed: \(error)")
       return []
+    }
+  }
+
+  // Explicit DEBUG fixtures exercising the requested content types. These are
+  // labeled test posts, not copies of private production posts or fake feed data.
+  static func streamPosts(videoURL: URL?) -> [MIRAPost] {
+    guard let videoURL else { return [] }
+    let items: [(String, CGFloat, String)] = [
+      ("NYPL — layout test", 1.25, "place"),
+      ("Smart monkey — layout test", 1, "general"),
+      ("16:9 photo — layout test", 9.0 / 16, "general"),
+      ("Video — layout test", 4.0 / 3, "general"),
+      ("Sunday Run Club — layout test", 1.25, "club"),
+      ("Carousel — layout test", 4.0 / 3, "general"),
+      ("Text only — layout test", 0, "general")
+    ]
+    return items.enumerated().compactMap { index, item in
+      do {
+        let size = CGSize(width: 480, height: 480 * item.1)
+        var urls: [String] = []
+        if item.1 > 0 {
+          for slide in 0..<(index == 5 ? 3 : 1) {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("stream-\(index)-\(slide).png")
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+              UIColor(red: 0.18 + CGFloat(slide) * 0.14, green: 0.52, blue: 0.56, alpha: 1).setFill()
+              context.fill(CGRect(origin: .zero, size: size))
+              UIColor.white.setStroke()
+              context.cgContext.setLineWidth(8)
+              context.cgContext.stroke(CGRect(origin: .zero, size: size).insetBy(dx: 4, dy: 4))
+              let label = "TEST MEDIA · \(index + 1) / \(slide + 1)"
+              label.draw(at: CGPoint(x: 20, y: 24), withAttributes: [.font: UIFont.systemFont(ofSize: 24), .foregroundColor: UIColor.white])
+            }
+            try image.pngData()!.write(to: url)
+            urls.append(index == 3 ? videoURL.absoluteString : url.absoluteString)
+          }
+        }
+        var value: [String: Any] = [
+          "id": "stream-\(index)", "userFullName": "Test Creator", "userUsername": "test_creator",
+          "title": item.0, "caption": index == 1 ? "A short Moment." : String(repeating: "Layout test: complete content remains available in details. ", count: 14),
+          "images": urls, "feedMediaUrls": urls,
+          "mediaDimensions": urls.map { _ in ["width": size.width, "height": size.height] },
+          "postType": item.2, "createdAt": "2026-10-06T09:41:00Z"
+        ]
+        if index == 0 { value["savesCount"] = 26; value["locationText"] = "New York — test location" }
+        if index == 4 {
+          value["detail"] = ["commerce": ["title": item.0, "kind": "club", "joinedCount": 23,
+            "paymentModel": "free", "description": value["caption"]!]]
+        }
+        return try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: value))
+      } catch { assertionFailure("Stream fixture failed: \(error)"); return nil }
     }
   }
 

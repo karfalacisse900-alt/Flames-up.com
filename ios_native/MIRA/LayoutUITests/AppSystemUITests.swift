@@ -56,10 +56,10 @@ final class AppSystemUITests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Anyone up for a walk?"].exists)
     // The pager keeps the neighboring page in the accessibility tree.
     // Verify the visible page, not existence anywhere in the scroll view.
-    XCTAssertFalse(app.staticTexts["More. Open full post"].isHittable)
+    XCTAssertFalse(card.staticTexts["More. Open full post"].isHittable)
     capture(app, "home-text-short-dark")
     let shortHeight = card.frame.height
-    app.scrollViews["home.post.pager"].swipeLeft()
+    app.scrollViews["home.post.stream"].swipeUp()
     let longTitle = app.staticTexts["Looking for people to build with"]
     XCTAssertTrue(longTitle.waitForExistence(timeout: 5))
     XCTAssertTrue(longTitle.isHittable)
