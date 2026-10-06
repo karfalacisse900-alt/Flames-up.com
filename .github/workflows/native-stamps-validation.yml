@@ -28,7 +28,7 @@ jobs:
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
-          tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests -only-testing:CaptroLayoutUITests/HomeFullBleedTests)
+          tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests -only-testing:CaptroLayoutUITests/HomeFullBleedTests -only-testing:CaptroLayoutUITests/VoiceEntryTests)
           if [ '${{ inputs.baseline }}' = 'true' ]; then
             tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth)
           fi
