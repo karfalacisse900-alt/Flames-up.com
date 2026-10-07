@@ -15,6 +15,10 @@ on:
         description: Retry an existing signed IPA from this workflow and branch without rebuilding
         type: string
         default: ''
+      validation_run:
+        description: Native stamps validation run that must pass for the identical iOS source before upload
+        type: string
+        default: ''
   push:
     branches: [main]
     paths:
@@ -90,6 +94,9 @@ jobs:
     name: Build native SwiftUI iOS app and upload to TestFlight
     runs-on: macos-26
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
 
     steps:
       - name: Checkout
@@ -326,6 +333,31 @@ jobs:
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
 
+      - name: Require matching native runtime verification before upload
+        if: ${{ !inputs.configure_only && inputs.validation_run != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_RUN: ${{ inputs.validation_run }}
+        run: |
+          set -euo pipefail
+          [[ "$VALIDATION_RUN" =~ ^[0-9]+$ ]]
+          run_path="repos/$GITHUB_REPOSITORY/actions/runs/$VALIDATION_RUN"
+          test "$(gh api "$run_path" --jq '.path')" = '.github/workflows/native-stamps-validation.yml'
+          test "$(gh api "$run_path" --jq '.head_branch')" = "$GITHUB_REF_NAME"
+          validated_sha="$(gh api "$run_path" --jq '.head_sha')"
+          git fetch --depth=1 origin "$validated_sha"
+          test "$(git rev-parse "$validated_sha:ios_native/MIRA")" = "$(git rev-parse HEAD:ios_native/MIRA)"
+          for attempt in {1..80}; do
+            state="$(gh api "$run_path" --jq '.status')"
+            if [ "$state" = completed ]; then
+              test "$(gh api "$run_path" --jq '.conclusion')" = success
+              echo 'Matching native source passed runtime verification.'
+              exit 0
+            fi
+            sleep 15
+          done
+          echo 'Native verification did not complete; preserving the IPA without uploading.'
+          exit 1
       - name: Upload to TestFlight
         if: ${{ !inputs.configure_only }}
         env:
