@@ -1,6 +1,6 @@
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
 import { validateMediaWritingOverlays } from './media-writing';
-import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody } from './creation-intent';
+import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody, newMediaStampWritingError } from './creation-intent';
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
 import { Hono } from 'hono';
@@ -7051,6 +7051,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     user_full_name: author?.full_name,
     user_profile_image: author?.avatar_url,
     title: cleanText(row?.title, 180),
+    creation_intent: normalizeCreationIntent((metadata as any).creation_intent),
     content: normalizeCreationIntent((metadata as any).creation_intent)
       ? compositionBody(row?.content) : cleanMultilineText(row?.content, 4000),
     feed_ai_topics: sanitizeAutoCategoryTags((parseJsonObject((metadata as any).feed_ai) as any).topics).slice(0, 8),
@@ -16781,6 +16782,11 @@ api.post('/posts', authMiddleware, async (c) => {
     return c.json({ detail: 'Choose a valid message and audience.', code: 'COMPOSITION_INVALID' }, 400);
   }
   const rawContent = typeof (b.content ?? b.text) === 'string' ? (b.content ?? b.text) : '';
+  const stampWritingError = newMediaStampWritingError({
+    mediaCount: sanitizeMediaReferences(b.images, b.image).length, postType,
+    title: typeof (b.title ?? b.headline) === 'string' ? (b.title ?? b.headline) : '', caption: rawContent,
+  });
+  if (stampWritingError) return c.json(stampWritingError, 400);
   if (creationIntent && compositionCharacterCount(rawContent) > 500) {
     return c.json({ detail: 'Keep your message within 500 characters.', code: 'COMPOSITION_TOO_LONG' }, 400);
   }

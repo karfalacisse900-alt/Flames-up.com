@@ -16,7 +16,7 @@ struct CaptroMediaPager: View {
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @ScaledMetric(relativeTo: .body) private var normalReadingBudget: CGFloat = 330
+  @ScaledMetric(relativeTo: .body) private var normalReadingBudget: CGFloat = 250
   @State private var isHoldingStamp = false
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
@@ -37,13 +37,11 @@ struct CaptroMediaPager: View {
     naturalMediaHeightToWidthRatio
   }
   private var showsStampOnCurrentSlide: Bool {
-    // Once the reader expands, keep the actual continuation present when they
-    // swipe media. Collapsed stamps retain the existing first-slide behavior.
-    stampReading.expanded || showsCoverMediaOnly || selectedMediaIndex == 0
+    showsCoverMediaOnly || selectedMediaIndex == 0
   }
   private var needsTopVideoControls: Bool {
     guard currentMediaIsVideo, let frameSize else { return false }
-    return stampReading.expanded || dynamicTypeSize.isAccessibilitySize
+    return dynamicTypeSize.isAccessibilitySize
       || stampReading.collapsedHeight > frameSize.height * 0.75 - 64
   }
 
@@ -98,7 +96,10 @@ struct CaptroMediaPager: View {
         clearance: currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 64 : 20,
         reading: stampReading, minimumStampTop: writingClearance(in: frameSize)) {
         mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
-        feedStamp(readingBudget: max(normalReadingBudget, frameSize.height * 0.70))
+        feedStamp(readingBudget: dynamicTypeSize.isAccessibilitySize ? normalReadingBudget
+          : min(normalReadingBudget, max(150, frameSize.height * 0.55)),
+          stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: frameSize.width,
+            accessibility: dynamicTypeSize.isAccessibilitySize))
       }
     } else {
       mediaLayers.aspectRatio(CGSize(width: 1, height: mediaHeightToWidthRatio), contentMode: .fit)
@@ -211,10 +212,11 @@ struct CaptroMediaPager: View {
     MIRAMediaSizing.supportedPostHeightToWidthRatio(ratio)
   }
 
-  private func feedStamp(readingBudget: CGFloat) -> some View {
+  private func feedStamp(readingBudget: CGFloat, stampWidth: CGFloat) -> some View {
     VStack(spacing: 0) {
       CaptroFeedMediaStamp(content: post.captroMediaFeedCardContent,
-        readingBudget: readingBudget, reading: $stampReading, onOpen: openPostUnlessPeeking)
+        readingBudget: max(90, readingBudget - stampAudioHeight), stampWidth: stampWidth,
+        onOpen: openPostUnlessPeeking)
       if post.detail?.voice != nil || post.hasAudio {
         CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
           .padding(.horizontal, 14).padding(.bottom, 10)
@@ -223,7 +225,7 @@ struct CaptroMediaPager: View {
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-      if !stampReading.expanded && abs(stampReading.collapsedHeight - height) > 0.5 {
+      if abs(stampReading.collapsedHeight - height) > 0.5 {
         stampReading.collapsedHeight = height
       }
     }
@@ -237,6 +239,10 @@ struct CaptroMediaPager: View {
     .background {
       if showsStampOnCurrentSlide { CaptroStampPeekGesture(isHolding: $isHoldingStamp) }
     }
+  }
+
+  private var stampAudioHeight: CGFloat {
+    (post.detail?.voice == nil ? 0 : 54) + (post.hasAudio ? 54 : 0)
   }
 
   private var stampPeekAnimation: Animation? {

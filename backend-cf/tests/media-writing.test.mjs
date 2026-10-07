@@ -19,7 +19,7 @@ test('one independent overlay per media item; missing and duplicate indices reje
   assert.throws(() => validateMediaWritingOverlays([second], 1));
 });
 test('invalid versions, typography, coordinates, paragraphs fail instead of silent rewriting', () => {
-  for (const change of [{ schema_version: 2 }, { text: 'a'.repeat(81) }, { text: '1\n2\n3\n4\n5' },
+  for (const change of [{ schema_version: 2 }, { text: 'a'.repeat(61) }, { text: '1\n2\n3\n4\n5' },
     { text: ' ' }, { x: NaN }, { y: 1.1 }, { width: 0 }, { style: 'url(font)' }, { source_aspect_ratio: 0 }]) {
     const item = overlay(); Object.assign(item.writing, change);
     assert.throws(() => validateMediaWritingOverlays([item], 1));

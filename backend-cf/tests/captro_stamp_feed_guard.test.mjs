@@ -37,7 +37,7 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroFeedMediaStamp\(content: post\.captroMediaFeedCardContent/);
-  assert.match(mediaStamp, /mediaWidth \* \(accessibility \? 0\.90 : 0\.73\)/);
+  assert.match(mediaStamp, /mediaWidth \* \(accessibility \? 0\.90 : 0\.70\)/);
   assert.doesNotMatch(mediaPager, /CaptroPostStamp\(/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
@@ -235,11 +235,8 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.doesNotMatch(editorialCard, /Button\(action: onAction\)|Button\(action: onSave\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
   assert.doesNotMatch(mediaPager, /feedStamp\(lines:|min\(280, max\(68/);
-  assert.match(mediaStamp, /ViewThatFits\(in: \.vertical\)/);
-  assert.match(mediaStamp, /card\(captionLines: nil, readingAction: nil\)/);
-  assert.match(mediaStamp, /card\(captionLines: 4, readingAction: "Read more"\)/);
-  assert.match(mediaStamp, /card\(captionLines: nil, readingAction: "Show less"\)/);
-  assert.match(mediaStamp, /reading\.expanded\.toggle\(\)/);
+  assert.match(mediaStamp, /CaptroHomeStampTextBudget.captionLines/);
+  assert.doesNotMatch(mediaStamp, /"Read more"|"Show less"|"More"|reading\.expanded\.toggle/);
   assert.match(mediaStamp, /stamp\.y \+ stamp\.size\.height \+ 12/);
   assert.match(mainFeed, /stampReadingStates\[post.id\]/);
   assert.match(editorialCard, /mediaWidth \* 0\.73/);

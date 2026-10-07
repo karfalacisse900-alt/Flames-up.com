@@ -61,6 +61,16 @@ struct CaptroCompositionDraft {
     return ISO8601DateFormatter().string(from: time)
   }
   var hasWriting: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  var bodyCharacterLimit: Int { !structured && !mediaItems.isEmpty ? 220 : 500 }
+  var titleValidationMessage: String? {
+    !mediaItems.isEmpty && title.count > 60 ? "Keep the title within 60 characters. Your writing has not been removed." : nil
+  }
+  var writingValidationMessage: String? {
+    if bodyText.count > bodyCharacterLimit {
+      return "Keep \(bodyCharacterLimit == 220 ? "media captions" : "your message") within \(bodyCharacterLimit) characters. Your writing has not been removed."
+    }
+    return titleValidationMessage
+  }
 }
 
 struct CaptroCreationCapabilities: Decodable {

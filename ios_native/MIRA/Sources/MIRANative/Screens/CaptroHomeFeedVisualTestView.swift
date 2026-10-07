@@ -125,6 +125,9 @@ private enum CaptroHomeFeedVisualFixtures {
         try image.pngData()!.write(to: mediaURL)
       }
       let pagerFixture = ProcessInfo.processInfo.arguments.contains("--captro-visual-pager")
+      if ProcessInfo.processInfo.arguments.contains("--captro-stamp-budget-test") {
+        return budgetPosts(mediaURL: mediaURL, size: size)
+      }
       return try (0..<(pagerFixture ? 3 : 1)).map { index in
         let json: [String: Any] = [
           "id": "full-bleed-\(name)-\(index)", "userFullName": "Captro", "userUsername": "captro",
@@ -140,6 +143,49 @@ private enum CaptroHomeFeedVisualFixtures {
     } catch {
       assertionFailure("Full-bleed visual fixture failed: \(error)")
       return []
+    }
+  }
+
+  // Test-only data rendered by the actual Home cells, never published or bundled
+  // in Release. Boundary cases supplement the unchanged real public examples.
+  static func budgetPosts(mediaURL: URL, size: CGSize) -> [MIRAPost] {
+    let ordinary = String(String(repeating: "Good food and company. ", count: 11).prefix(220))
+    let captions = ["A quiet evening.", String(repeating: "A neighborhood walk. ", count: 5), ordinary,
+      String(repeating: "Complete original writing remains available in Details. ", count: 20),
+      "A two-line title without shrinking the type.", "An intimate neighborhood restaurant.",
+      "Meet for a relaxed Sunday run, then coffee together.", "An evening outdoors with friends.",
+      "Writing and a separate compact stamp.", "Only a caption and its creator."]
+    return captions.enumerated().compactMap { index, caption in
+      var value: [String: Any] = ["id": "stamp-budget-\(index)", "userUsername": "test_creator",
+        "userFullName": "Test Creator", "title": index == 4 ? "A thoughtful evening around NYC" : "Stamp test \(index + 1)",
+        "caption": caption, "images": [mediaURL.absoluteString], "feedMediaUrls": [mediaURL.absoluteString],
+        "mediaDimensions": [["width": size.width, "height": size.height]],
+        "postType": "general", "displayLocationLabel": "New York, United States", "displayLocationVisibility": "public"]
+      if index == 5 {
+        value["postType"] = "place"; value["placeName"] = "Neighborhood place — test"
+        value["displayLocationLabel"] = "West Village"; value["savesCount"] = 721
+      }
+      if index == 6 || index == 7 {
+        let kind = index == 6 ? "club" : "event"
+        value["postType"] = kind
+        value["detail"] = ["commerce": ["id": "budget-\(kind)", "title": index == 6 ? "Sunday Run Club — test" : "Outdoor evening — test",
+          "contentType": kind, "fulfillmentType": index == 6 ? "membership" : "ticket", "commerceClass": "community",
+          "joinedCount": 0, "paymentModel": "paid", "description": caption,
+          "refundPolicy": "none", "approvalRequired": false, "passRequired": false,
+          "locationName": "Washington Square Park", "city": "New York", "startsAt": "2026-10-10T20:00:00Z",
+          "timeZone": "America/New_York", "status": "active", "audience": "public",
+          "prices": [["id": "test-price", "label": "Access", "unitAmount": 200,
+            "currency": "USD", "billingPeriod": "one_time", "active": true]]]]
+      }
+      if index == 9 { value.removeValue(forKey: "title") }
+      guard let data = try? JSONSerialization.data(withJSONObject: value),
+        var post = try? JSONDecoder().decode(MIRAPost.self, from: data) else { return nil }
+      if index == 8 {
+        var writing = CaptroMediaWriting(); writing.text = "FRIDAY NIGHT\nNYC"
+        writing.sourceAspectRatio = size.width / size.height
+        post.editorOverlays = [CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: 0, writing: writing)]
+      }
+      return post
     }
   }
 

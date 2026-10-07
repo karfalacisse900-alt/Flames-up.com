@@ -11,7 +11,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
     const finite = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
     const count = typeof w?.text === 'string' ? [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(w.text)].length : 0;
     if (!Number.isInteger(index) || index < 0 || index >= mediaCount || seen.has(index)
-      || version !== 1 || typeof w?.text !== 'string' || !w.text.trim() || count > 80
+      || version !== 1 || typeof w?.text !== 'string' || !w.text.trim() || count > 60
       || w.text.split(/\r\n|\r|\n/).length > 4 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(w.text)
       || !['bold', 'clean', 'editorial'].includes(w.style)
       || !['left', 'center', 'right'].includes(w.alignment)

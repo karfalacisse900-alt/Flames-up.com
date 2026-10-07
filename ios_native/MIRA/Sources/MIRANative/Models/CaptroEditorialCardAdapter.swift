@@ -1,14 +1,54 @@
 import Foundation
 
 extension MIRAPost {
-  /// Media-feed reading keeps original descriptions and deal conditions. The
-  /// older detail/preview adapter intentionally abbreviates offers; do not use
-  /// that abbreviated summary as the source for inline reading in Home.
+  /// Home selects useful facts without changing the underlying post or the
+  /// separate Details/text-only adapters. Rendering, not this adapter, bounds copy.
   var captroMediaFeedCardContent: CaptroEditorialCardContent {
-    var card = captroEditorialCardContent
-    if card.type == .deal {
-      let description = cleanEditorialText(detail?.commerce?.description) ?? cleanEditorialText(captroFeedCaptionText)
-      let rules = cleanEditorialText(detail?.commerce?.publicData?.redemptionRules)
+    let source = captroEditorialCardContent
+    let commerce = detail?.commerce
+    let event = detail?.event
+    // New writing intents store a generated headline for indexing, not an
+    // authored title. Legacy supplied titles (even "Club") are left intact.
+    let authoredTitle = source.type == .moment && CaptroWritingIntent(rawValue: creationIntent ?? "") != nil ? nil
+      : cleanEditorialText(source.type == .place ? placeDisplayName : commerce?.title) ?? captroCleanTitle
+    let caption = cleanEditorialText(self.caption) ?? cleanEditorialText(content)
+    var card = CaptroEditorialCardContent(type: source.type, title: authoredTitle ?? "",
+      username: source.username ?? cleanEditorialText(userFullName), avatarURL: source.avatarURL)
+    let context = CaptroHomeStampContext.specific(displayLocationText)
+      ?? CaptroHomeStampContext.specific(placeCity)
+    switch source.type {
+    case .moment:
+      card.description = caption == authoredTitle ? nil : caption
+    case .place:
+      card.subtitle = context
+      card.chipText = source.chipText
+      card.description = caption == authoredTitle ? nil : caption
+    case .club:
+      card.chipText = commerce.map { "\(max(0, $0.joinedCount)) MEMBERS" }
+      card.priceText = source.supportingText
+      card.availabilityText = CaptroStampAdapter.availability(commerce)
+      card.description = cleanEditorialText(commerce?.description) ?? caption
+    case .event, .meetup:
+      card.scheduleText = source.scheduleText
+      card.locationText = joinedEditorialText([
+        CaptroHomeStampContext.specific(commerce?.locationName ?? event?.venueName),
+        CaptroHomeStampContext.specific(commerce?.city ?? event?.city) ?? context])
+      card.priceText = source.priceText
+      card.availabilityText = source.availabilityText
+      if source.type == .meetup {
+        card.chipText = commerce.map { "\(max(0, $0.joinedCount)) GOING" }
+          ?? event?.attendeesCount.map { "\(max(0, $0)) GOING" }
+      }
+      card.description = cleanEditorialText(commerce?.description) ?? caption
+    case .deal:
+      card.chipText = commerce?.publicData?.benefits?.compactMap(cleanEditorialText).first
+      card.priceText = commerce?.resolvedLowestPrice?.stampPrice
+      card.scheduleText = source.scheduleText
+      card.locationText = (commerce?.locationName == authoredTitle ? nil : CaptroHomeStampContext.specific(commerce?.locationName))
+        ?? CaptroHomeStampContext.specific(commerce?.city) ?? context
+      card.availabilityText = source.availabilityText
+      let description = cleanEditorialText(commerce?.description) ?? caption
+      let rules = cleanEditorialText(commerce?.publicData?.redemptionRules)
       card.description = [description, rules == description ? nil : rules].compactMap { $0 }.joined(separator: "\n\n")
     }
     return card
@@ -124,6 +164,20 @@ extension MIRAPost {
 
   private func joinedEditorialText(_ values: [String?]) -> String? {
     let parts = values.compactMap(cleanEditorialText)
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+}
+
+/// Only removes broad geographic components already supplied by the data.
+/// Never infers a neighborhood from coordinates, a city, or a category.
+enum CaptroHomeStampContext {
+  static func specific(_ value: String?) -> String? {
+    let generic: Set<String> = ["new york", "new york city", "new york ny", "nyc", "ny", "ny usa",
+      "united states", "united states of america", "usa", "us", "u s", "u s a"]
+    let parts = (value ?? "").components(separatedBy: CharacterSet(charactersIn: ",·"))
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && !generic.contains($0.lowercased().replacingOccurrences(of: ".", with: " ")
+        .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")) }
     return parts.isEmpty ? nil : parts.joined(separator: " · ")
   }
 }

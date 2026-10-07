@@ -94,6 +94,9 @@ struct CaptroCompositionTextView: UIViewRepresentable {
       let current = view.text ?? ""
       guard NSMaxRange(range) <= (current as NSString).length else { return false }
       let next = (current as NSString).replacingCharacters(in: range, with: replacement)
+      // Preserve an entire paste for correction; never discard it silently.
+      // The visible draft validation disables publishing until it fits.
+      if replacement.count > 1 { return true }
       return CaptroCompositionTextView.permitsChange(from: current, to: next, composing: view.markedTextRange != nil)
     }
     func textViewDidChange(_ view: UITextView) {
@@ -143,4 +146,3 @@ struct CaptroCompositionChipLayout: Layout {
     return (CGSize(width: width, height: y + rowHeight), origins)
   }
 }
-

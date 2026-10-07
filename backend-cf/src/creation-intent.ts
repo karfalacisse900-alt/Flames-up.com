@@ -9,6 +9,21 @@ export function compositionCharacterCount(value: string): number {
   return Array.from(new Intl.Segmenter('und', { granularity: 'grapheme' }).segment(value)).length;
 }
 
+// Creation-only validation. Never applied to stored records, reads or updates.
+export function newMediaStampWritingError(input: {
+  mediaCount: number; postType: string; title: string; caption: string;
+}): { code: string; detail: string } | null {
+  if (input.mediaCount <= 0) return null;
+  if (compositionCharacterCount(input.title) > 60) {
+    return { code: 'MEDIA_TITLE_TOO_LONG', detail: 'Keep media titles within 60 characters. Your draft was not published.' };
+  }
+  if (['general', 'social', 'moment', 'place', 'check_in'].includes(input.postType)
+      && compositionCharacterCount(input.caption) > 220) {
+    return { code: 'MEDIA_CAPTION_TOO_LONG', detail: 'Keep media captions within 220 characters. Your draft was not published.' };
+  }
+  return null;
+}
+
 /** Plain native/React text, not HTML. Preserve punctuation; normalize only controls/newlines. */
 export function compositionBody(value: unknown): string {
   return String(value ?? '')
@@ -38,4 +53,3 @@ export function compositionHeadline(body: string): string {
   }
   return headline;
 }
-

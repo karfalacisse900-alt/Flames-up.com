@@ -40,7 +40,7 @@ public struct CaptroMediaWriting: Codable, Hashable {
   }
   public var validationMessage: String? {
     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
-    if text.count > 80 { return "Keep visual writing to 80 characters or fewer." }
+    if text.count > 60 { return "Keep visual writing to 60 characters or fewer." }
     // Use a canonical source width, not device pixels or Dynamic Type, to keep
     // published creative geometry reproducible. Accessible text remains separate.
     let font = font(mediaWidth: 1000)

@@ -1497,11 +1497,15 @@ public struct CreatePostNativeView: View {
 
         compositionCard
         composerToolBar
-        Text("\(bodyText.count)/500")
+        Text("\(bodyText.count)/\(draft.bodyCharacterLimit)")
           .font(.caption).monospacedDigit()
-          .foregroundStyle(bodyText.count > 500 ? Color.red : MIRATheme.Color.textMuted)
+          .foregroundStyle(bodyText.count > draft.bodyCharacterLimit ? Color.red : MIRATheme.Color.textMuted)
           .frame(maxWidth: .infinity, alignment: .trailing)
           .accessibilityIdentifier("composer.count")
+        if let validation = draft.writingValidationMessage {
+          Text(validation).font(.footnote).foregroundStyle(.red)
+            .accessibilityIdentifier("composer.writingLimit")
+        }
         if isPosting {
           HStack {
             if let postUploadFraction { ProgressView(value: postUploadFraction) }
@@ -1852,6 +1856,9 @@ public struct CreatePostNativeView: View {
             TextField("Details (optional)", text: $draft.bodyText, axis: .vertical).lineLimit(3...6)
           }
         }
+        if let validation = draft.titleValidationMessage {
+          Text(validation).font(.footnote).foregroundStyle(.red)
+        }
       }
       .scrollContentBackground(.hidden)
       .scrollDismissesKeyboard(.interactively)
@@ -1870,9 +1877,9 @@ public struct CreatePostNativeView: View {
         ToolbarItem(placement: .topBarTrailing) {
           Button("Done") { cacheComposerDraft(); isEditingPostDetails = false }
             .fontWeight(.semibold)
-            .disabled(stampDetailsRequireTitle && (title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            .disabled(draft.titleValidationMessage != nil || (stampDetailsRequireTitle && (title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
               || (isEventStamp && eventDraft.validationError != nil)
-              || (commerceDraft.enabled && commerceDraft.validationError != nil)))
+              || (commerceDraft.enabled && commerceDraft.validationError != nil))))
         }
       }
     }
@@ -2089,7 +2096,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var canPost: Bool {
-    guard bodyText.count <= 500 else { return false }
+    guard draft.writingValidationMessage == nil else { return false }
     if draft.structured {
       guard creationCapabilities?.structuredTypes.contains(selectedStampKind.backendPostType) == true,
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }

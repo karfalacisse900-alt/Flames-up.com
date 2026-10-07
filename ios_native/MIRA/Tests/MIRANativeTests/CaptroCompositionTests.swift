@@ -2,6 +2,24 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCompositionTests: XCTestCase {
+  func testNewMediaLimitsDoNotTruncateDraftOrReduceTextOnlyAndStructuredDescriptions() {
+    var draft = CaptroCompositionDraft()
+    draft.bodyText = String(repeating: "a", count: 500)
+    XCTAssertNil(draft.writingValidationMessage)
+    draft.mediaItems = [MIRAPickedMedia(data: Data([1]), kind: .image, fileName: "test.jpg", mimeType: "image/jpeg")]
+    XCTAssertEqual(draft.bodyCharacterLimit, 220)
+    XCTAssertNotNil(draft.writingValidationMessage)
+    XCTAssertEqual(draft.bodyText.count, 500, "Preserve pasted/restored writing for correction")
+    draft.bodyText = String(repeating: "👨‍👩‍👧‍👦", count: 220)
+    XCTAssertNil(draft.writingValidationMessage)
+    draft.title = String(repeating: "a", count: 61)
+    XCTAssertNotNil(draft.titleValidationMessage)
+    draft.title = "An actual title"
+    draft.selectedStampKind = .club
+    draft.bodyText = String(repeating: "a", count: 500)
+    XCTAssertEqual(draft.bodyCharacterLimit, 500)
+    XCTAssertNil(draft.writingValidationMessage)
+  }
   func testDefaultAndIntentChangesKeepWritingAttachmentsAndSchedule() {
     var draft = CaptroCompositionDraft()
     XCTAssertEqual(draft.intent, .wantTo)
@@ -60,4 +78,3 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertTrue(CaptroCompositionTextView.permitsChange(from: "hello", to: restored, composing: true))
   }
 }
-

@@ -1,8 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Owned by Home, keyed by post ID. Reading state survives lazy-cell recycling
-/// without modifying the post, media selection, playback, or detail navigation.
+/// Owned by Home, keyed by post ID; measurements do not change post data.
 struct CaptroFeedStampReadingState: Equatable {
   var expanded = false
   var collapsedHeight: CGFloat = 0
@@ -11,68 +10,45 @@ struct CaptroFeedStampReadingState: Equatable {
 enum CaptroFeedStampGeometry {
   static func leadingInset(width: CGFloat) -> CGFloat { min(22, max(16, width * 0.054)) }
   static func stampWidth(mediaWidth: CGFloat, accessibility: Bool) -> CGFloat {
-    min(mediaWidth - leadingInset(width: mediaWidth) * 2, mediaWidth * (accessibility ? 0.90 : 0.73))
+    min(mediaWidth - leadingInset(width: mediaWidth) * 2, mediaWidth * (accessibility ? 0.90 : 0.70))
   }
   static func originY(mediaHeight: CGFloat, stampHeight: CGFloat, clearance: CGFloat) -> CGFloat {
     max(mediaHeight * 0.25, mediaHeight - clearance - stampHeight)
   }
 }
 
-/// Measures the actual SwiftUI text at the current font size and width. The
-/// first candidate is unabridged. Only an overflowing full stamp selects the
-/// four-line reading preview; there is no character-count heuristic.
+/// Home has a finished, content-sized annotation. Full copy remains in Details.
 struct CaptroFeedMediaStamp: View {
   let content: CaptroEditorialCardContent
   let readingBudget: CGFloat
-  @Binding var reading: CaptroFeedStampReadingState
+  let stampWidth: CGFloat
   let onOpen: () -> Void
   @ScaledMetric(relativeTo: .title3) private var titleSize: CGFloat = 21
   @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
   @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 11.5
   @ScaledMetric(relativeTo: .caption) private var creatorSize: CGFloat = 12.5
-  @State private var measuredWidth: CGFloat = 0
 
   var body: some View {
-    Group {
-      if reading.expanded {
-        card(captionLines: nil, readingAction: "Show less")
-      } else if textOverflows {
-        card(captionLines: 4, readingAction: "Read more")
-      } else {
-        CaptroStampReadingBudget(height: readingBudget) {
-          ViewThatFits(in: .vertical) {
-            card(captionLines: nil, readingAction: nil).fixedSize(horizontal: false, vertical: true)
-            card(captionLines: 4, readingAction: "Read more").fixedSize(horizontal: false, vertical: true)
-          }
-        }
-      }
-    }
+    card
     .foregroundStyle(MIRATheme.Color.textPrimary)
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("home.post.stamp.text")
-    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
   }
 
-  private var textOverflows: Bool {
-    guard measuredWidth > 22 else { return false }
-    func exceeds(_ text: String, font: UIFont, lines: CGFloat, spacing: CGFloat = 0) -> Bool {
-      let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = spacing
-      let height = (text as NSString).boundingRect(with: CGSize(width: measuredWidth - 22, height: .greatestFiniteMagnitude),
-        options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font, .paragraphStyle: paragraph], context: nil).height
-      return height > ceil(font.lineHeight * lines + spacing * (lines - 1)) + 1
-    }
-    return exceeds(content.title, font: .systemFont(ofSize: titleSize, weight: .bold), lines: 2)
-      || exceeds(clean(content.description) ?? clean(content.summaryText) ?? "", font: .systemFont(ofSize: bodySize), lines: 4, spacing: 2)
+  private var captionLines: Int? {
+    CaptroHomeStampTextBudget.captionLines(title: clean(content.title), metadata: metadata,
+      caption: caption, creator: clean(content.username) != nil, width: stampWidth - 22,
+      height: readingBudget, titleSize: titleSize, bodySize: bodySize,
+      metadataSize: metadataSize, creatorSize: creatorSize)
   }
 
-  private func card(captionLines: Int?, readingAction: String?) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-      // Title and creator remain independent detail actions. Caption reading
-      // never sits inside a navigation button or the media's tap recognizer.
+  private var card: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      if let title = clean(content.title) {
       Button(action: onOpen) {
-        Text(content.title)
+        Text(title)
           .font(.system(size: titleSize, weight: .bold))
-          .lineLimit(reading.expanded ? nil : 2)
+          .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           .contentShape(Rectangle())
@@ -80,35 +56,21 @@ struct CaptroFeedMediaStamp: View {
       .buttonStyle(.plain)
       .accessibilityHint("Opens post details")
       .accessibilityIdentifier("captro.editorialCard")
-
-      if let location = clean(content.locationText) ?? clean(content.subtitle) {
-        Text(location).font(.system(size: metadataSize))
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
       }
       if !metadata.isEmpty {
         Text(metadata).font(.system(size: metadataSize, weight: .medium))
           .foregroundStyle(MIRATheme.Color.forest)
+          .lineLimit(2)
           .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, clean(content.title) == nil ? 0 : 5)
       }
-      if let caption = clean(content.description) ?? clean(content.summaryText) {
+      if let caption {
         Text(caption).font(.system(size: bodySize)).lineSpacing(2)
           .lineLimit(captionLines)
+          .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
-          .padding(.top, 2)
+          .padding(.top, metadata.isEmpty ? (clean(content.title) == nil ? 0 : 9) : 9)
           .accessibilityIdentifier("home.post.stamp.caption")
-      }
-      if let readingAction {
-        Button(readingAction) {
-          // A layout change, not navigation. Avoid a spring/scroll animation
-          // that would move the reader or animate a playing video.
-          var transaction = Transaction(); transaction.disablesAnimations = true
-          withTransaction(transaction) { reading.expanded.toggle() }
-        }
-        .font(.system(size: bodySize, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.forest)
-        .frame(minHeight: 44, alignment: .leading)
-        .accessibilityIdentifier(reading.expanded ? "home.post.stamp.collapse" : "home.post.stamp.expand")
       }
       if let username = clean(content.username) {
         Button(action: onOpen) {
@@ -118,12 +80,11 @@ struct CaptroFeedMediaStamp: View {
               .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
           }
-          .frame(minHeight: 44, alignment: .leading)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityHint("Opens post details")
-        .padding(.top, 2)
+        .padding(.top, caption != nil || !metadata.isEmpty || clean(content.title) != nil ? 11 : 0)
       }
     }
     .padding(11)
@@ -132,35 +93,54 @@ struct CaptroFeedMediaStamp: View {
 
   private var metadata: String {
     var parts: [String] = []
-    for value in [content.chipText, content.scheduleText, content.priceText,
-      content.type == .club ? content.supportingText : nil, content.availabilityText] {
+    let values: [String?] = [.event, .meetup].contains(content.type)
+      ? [content.scheduleText, content.locationText, content.chipText, content.priceText, content.availabilityText]
+      : [content.subtitle ?? content.locationText, content.chipText, content.priceText, content.scheduleText, content.availabilityText]
+    for value in values {
       if let value = clean(value), !parts.contains(value) { parts.append(value) }
     }
     // No invented type label when all metadata is absent.
     return parts.joined(separator: " · ")
   }
+  private var caption: String? { clean(content.description) ?? clean(content.summaryText) }
   private func clean(_ value: String?) -> String? {
     let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return value.isEmpty ? nil : value
   }
 }
 
-/// A proposal, not a fixed-height frame. ViewThatFits returns the chosen
-/// candidate's intrinsic height, so short stamps never reserve empty space.
-private struct CaptroStampReadingBudget: Layout {
-  let height: CGFloat
-  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-    subviews[0].sizeThatFits(ProposedViewSize(width: proposal.width, height: height))
+/// Measurement uses the actual width and scaled fonts. No caption is cut by
+/// character count, and a short caption receives no reserved empty lines.
+enum CaptroHomeStampTextBudget {
+  static func textHeight(_ text: String, width: CGFloat, font: UIFont, spacing: CGFloat = 0) -> CGFloat {
+    let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = spacing
+    return ceil((text as NSString).boundingRect(with: CGSize(width: max(1, width), height: .greatestFiniteMagnitude),
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: [.font: font, .paragraphStyle: paragraph], context: nil).height)
   }
-  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-    subviews[0].place(at: bounds.origin, anchor: .topLeading,
-      proposal: ProposedViewSize(width: bounds.width, height: height))
+  static func captionLines(title: String?, metadata: String, caption: String?, creator: Bool,
+    width: CGFloat, height: CGFloat, titleSize: CGFloat, bodySize: CGFloat,
+    metadataSize: CGFloat, creatorSize: CGFloat) -> Int? {
+    guard let caption else { return nil }
+    let titleFont = UIFont.systemFont(ofSize: titleSize, weight: .bold)
+    let metadataFont = UIFont.systemFont(ofSize: metadataSize, weight: .medium)
+    let bodyFont = UIFont.systemFont(ofSize: bodySize)
+    var used: CGFloat = 22
+    if let title { used += min(textHeight(title, width: width, font: titleFont), ceil(titleFont.lineHeight * 2)) }
+    if !metadata.isEmpty {
+      used += (title == nil ? 0 : 5) + min(textHeight(metadata, width: width, font: metadataFont), ceil(metadataFont.lineHeight * 2))
+    }
+    if title != nil || !metadata.isEmpty { used += 9 }
+    if creator { used += 11 + max(24, UIFont.systemFont(ofSize: creatorSize, weight: .semibold).lineHeight) }
+    let available = max(bodyFont.lineHeight, height - used)
+    if textHeight(caption, width: width, font: bodyFont, spacing: 2) <= available { return nil }
+    return max(1, Int(floor((available + 2) / (bodyFont.lineHeight + 2))))
   }
 }
 
 /// Media keeps its existing dimensions. Only real stamp overflow adds content
 /// height below it. No per-post spacer, image stretching, nested scroll view,
-/// or async image-size measurement. Expanded text keeps its collapsed top edge.
+/// or async image-size measurement. Accessibility/audio may need real overflow.
 struct CaptroMediaStampLayout: Layout {
   let mediaSize: CGSize
   let stampWidth: CGFloat
@@ -170,9 +150,8 @@ struct CaptroMediaStampLayout: Layout {
 
   private func placement(_ subviews: Subviews) -> (size: CGSize, y: CGFloat) {
     let size = subviews[1].sizeThatFits(ProposedViewSize(width: stampWidth, height: nil))
-    let anchorHeight = reading.expanded && reading.collapsedHeight > 0 ? reading.collapsedHeight : size.height
     return (size, max(minimumStampTop, CaptroFeedStampGeometry.originY(mediaHeight: mediaSize.height,
-      stampHeight: anchorHeight, clearance: clearance)))
+      stampHeight: size.height, clearance: clearance)))
   }
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     let stamp = placement(subviews)

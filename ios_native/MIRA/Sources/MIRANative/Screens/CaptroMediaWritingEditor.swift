@@ -207,7 +207,7 @@ struct CaptroMediaWritingEditor: View {
       TextField("Your short phrase", text: writingBinding.text, axis: .vertical)
         .lineLimit(1...4).focused($textFocused).font(.body)
         .accessibilityIdentifier("mediaWriting.text")
-      Text("\(writing.text.count)/80 · Up to 4 lines").font(.caption).foregroundStyle(.secondary)
+      Text("\(writing.text.count)/60 · Up to 4 lines").font(.caption).foregroundStyle(.secondary)
     }
   }
   private func place(x: CGFloat, y: CGFloat, canvas: CGSize) {

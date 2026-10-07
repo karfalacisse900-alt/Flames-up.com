@@ -1,11 +1,12 @@
 import XCTest
+import UIKit
 @testable import MIRANative
 
 final class CaptroStampTests: XCTestCase {
   func testNarrowMediaStampLeavesPhotoVisibleAndScalesForAccessibility() {
     for width in [CGFloat(320), 390, 402, 430] {
       let stamp = CaptroFeedStampGeometry.stampWidth(mediaWidth: width, accessibility: false)
-      XCTAssertEqual(stamp / width, 0.73, accuracy: 0.001)
+      XCTAssertEqual(stamp / width, 0.70, accuracy: 0.001)
       XCTAssertGreaterThan(width - CaptroFeedStampGeometry.leadingInset(width: width) - stamp, width * 0.20)
       XCTAssertGreaterThan(CaptroFeedStampGeometry.stampWidth(mediaWidth: width, accessibility: true), stamp)
     }
@@ -19,7 +20,42 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertEqual(post.captroMediaFeedCardContent.title, json["title"] as? String)
     let y = CaptroFeedStampGeometry.originY(mediaHeight: 490, stampHeight: 250, clearance: 20)
     XCTAssertEqual(y, 220)
-    XCTAssertGreaterThan(y + 650, 490, "Long expanded text needs real continuation height, never a larger image")
+    XCTAssertGreaterThan(y + 650, 490, "Accessibility overflow never changes the image ratio")
+  }
+  func testHomeContextHidesBroadGeographyWithoutInventingNeighborhoods() {
+    for generic in ["New York, United States", "NYC, United States", "New York, NY, United States", "United States"] {
+      XCTAssertNil(CaptroHomeStampContext.specific(generic))
+    }
+    XCTAssertEqual(CaptroHomeStampContext.specific("West Village, New York, United States"), "West Village")
+    XCTAssertEqual(CaptroHomeStampContext.specific("Williamsburg"), "Williamsburg")
+    XCTAssertEqual(CaptroHomeStampContext.specific("The Bronx"), "The Bronx")
+  }
+  func testHomeOmitsGeneratedTitlesAndTaxonomyButKeepsAuthoredTitlesAndFullCopy() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let titleless = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"empty","post_type":"general","caption":"My words","display_location_label":"New York, United States","display_location_visibility":"public"}"#.utf8))
+    XCTAssertEqual(titleless.captroMediaFeedCardContent.title, "")
+    XCTAssertNil(titleless.captroMediaFeedCardContent.subtitle)
+    XCTAssertEqual(titleless.captroMediaFeedCardContent.description, "My words")
+    let authored = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"authored","post_type":"general","title":"Moment","caption":"Not a generated label"}"#.utf8))
+    XCTAssertEqual(authored.captroMediaFeedCardContent.title, "Moment", "Never delete a user's actual title")
+    let intent = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"intent","post_type":"general","title":"A generated headline","content":"A generated headline","creation_intent":"want_to"}"#.utf8))
+    XCTAssertEqual(intent.captroMediaFeedCardContent.title, "")
+    XCTAssertEqual(intent.captroMediaFeedCardContent.description, "A generated headline")
+    XCTAssertEqual(intent.updating(liked: true).creationIntent, "want_to")
+  }
+  func testMeasuredBudgetShowsNormalCopyAndBoundsExceptionalCopyAtRealWidths() {
+    func lines(_ text: String, title: String? = nil, metadata: String = "", width: CGFloat = 251) -> Int? {
+      CaptroHomeStampTextBudget.captionLines(title: title, metadata: metadata, caption: text, creator: true,
+        width: width, height: 250, titleSize: 21, bodySize: 14, metadataSize: 11.5, creatorSize: 12.5)
+    }
+    XCTAssertNil(lines("A short caption."))
+    XCTAssertNil(lines(String(repeating: "A quiet neighborhood walk. ", count: 4)))
+    XCTAssertNil(lines(String(String(repeating: "Good food and company. ", count: 11).prefix(220))))
+    let legacy = String(repeating: "Complete original writing remains in Details. ", count: 20)
+    XCTAssertNotNil(lines(legacy))
+    let narrow = lines(legacy, title: "Two line title around NYC", metadata: "West Village · 721 SAVES", width: 200)!
+    XCTAssertGreaterThan(narrow, 2, "Do not reintroduce a blanket two-line caption limit")
+    XCTAssertLessThan(narrow, lines(legacy)!)
   }
   func testNativeCatalogAndFontMeasurements() throws {
     XCTAssertEqual(CaptroStampTemplate.catalog.count, 15)

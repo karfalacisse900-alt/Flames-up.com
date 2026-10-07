@@ -20,67 +20,86 @@ final class StampRefinementTests: XCTestCase {
         let stamp = page.otherElements["home.post.stamp"].firstMatch
         let media = page.otherElements["home.post.media"].firstMatch
         XCTAssertTrue(stamp.exists)
-        XCTAssertEqual(stamp.frame.width / media.frame.width, 0.73, accuracy: 0.01)
+        XCTAssertEqual(stamp.frame.width / media.frame.width, 0.70, accuracy: 0.01)
         XCTAssertEqual(stamp.frame.minX, min(22, media.frame.width * 0.054), accuracy: 1)
         XCTAssertGreaterThan(media.frame.maxX - stamp.frame.maxX, media.frame.width * 0.20)
-        if index < 2 {
-          XCTAssertFalse(page.buttons["home.post.stamp.expand"].exists, "Ordinary club captions are complete by default")
-        }
+        XCTAssertFalse(page.buttons["home.post.stamp.expand"].exists)
+        XCTAssertFalse(page.staticTexts["New York, United States"].exists)
+        XCTAssertLessThanOrEqual(stamp.frame.height, 252, "Home summaries have a compact measured budget")
       }
       capture(app, "\(baseline ? "before" : "after")-stamp-\(index)")
       if !baseline && index == 2 {
         let media = page.otherElements["home.post.media"].firstMatch
-        let more = page.buttons["home.post.stamp.expand"]
-        if more.exists && more.isHittable { more.tap() }
         let height = page.frame.height
         media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.12))
           .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.12)))
         XCTAssertTrue(page.staticTexts["Photo 2 of 10"].waitForExistence(timeout: 5))
         XCTAssertEqual(page.frame.height, height, accuracy: 1)
-        capture(app, "after-expanded-carousel")
+        capture(app, "after-compact-carousel")
       }
     }
   }
 
-  func testInlineExpansionAndCollapse() {
+  func testLegacyCaptionIsBoundedWithoutMoreAndVideoControlsRemainUsable() {
     let app = launch(["--captro-visual-size=threefour", "--captro-visual-long-text", "--captro-visual-pager", "--captro-visual-video"])
     let stream = app.scrollViews["home.post.stream"]
-    XCTAssertTrue(stream.waitForExistence(timeout: 15))
+    XCTAssertTrue(stream.waitForExistence(timeout: 60))
     let page = app.otherElements["home.post.page.full-bleed-threefour-0"]
     let media = page.otherElements["home.post.media"].firstMatch
     let stamp = page.otherElements["home.post.stamp"].firstMatch
-    let more = page.buttons["home.post.stamp.expand"]
-    XCTAssertTrue(more.waitForExistence(timeout: 5))
+    XCTAssertTrue(stamp.waitForExistence(timeout: 10))
     let beforeMedia = media.frame
-    let beforeStamp = stamp.frame
     let beforeHeight = page.frame.height
-    capture(app, "inline-collapsed")
-    more.tap()
-    let less = page.buttons["home.post.stamp.collapse"]
-    XCTAssertTrue(less.waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["Back"].exists, "Reading must stay in Home")
+    XCTAssertLessThanOrEqual(stamp.frame.height, 252)
+    XCTAssertFalse(page.buttons["home.post.stamp.expand"].exists)
+    XCTAssertFalse(page.buttons["home.post.stamp.collapse"].exists)
+    for label in ["More", "Read more", "See more", "Moment", "Place"] {
+      XCTAssertFalse(page.staticTexts[label].exists)
+    }
+    capture(app, "legacy-caption-bounded-no-more")
     XCTAssertEqual(media.frame.height, beforeMedia.height, accuracy: 1)
     XCTAssertEqual(media.frame.minY, beforeMedia.minY, accuracy: 2)
-    XCTAssertEqual(stamp.frame.minY, beforeStamp.minY, accuracy: 2)
-    XCTAssertGreaterThan(page.frame.height, beforeHeight)
-    XCTAssertGreaterThan(stamp.frame.maxY, media.frame.maxY)
+    XCTAssertEqual(page.frame.height, beforeMedia.height, accuracy: 1)
+    XCTAssertLessThan(stamp.frame.maxY, media.frame.maxY)
     let pause = page.buttons["Pause video"].firstMatch
-    XCTAssertTrue(pause.isHittable, "Expanded reading must not cover playback controls")
+    XCTAssertTrue(pause.isHittable, "Stamp must not cover playback controls")
     pause.tap()
     XCTAssertTrue(page.buttons["Play video"].firstMatch.waitForExistence(timeout: 3))
     let next = app.otherElements["home.post.page.full-bleed-threefour-1"]
     if next.exists { XCTAssertGreaterThanOrEqual(next.frame.minY, stamp.frame.maxY + 11) }
-    capture(app, "inline-expanded")
-    for _ in 0..<5 where !less.isHittable { stream.swipeUp(velocity: .slow) }
-    XCTAssertTrue(less.isHittable)
-    less.tap()
-    XCTAssertTrue(more.waitForExistence(timeout: 5))
+    stream.swipeUp(velocity: .slow)
+    stream.swipeDown(velocity: .slow)
+    reveal(page, stream: stream, app: app)
     XCTAssertEqual(page.frame.height, beforeHeight, accuracy: 2)
-    capture(app, "inline-collapsed-again")
     // A separate title action still opens Details.
     reveal(page, stream: stream, app: app)
     page.buttons["captro.editorialCard"].firstMatch.tap()
     XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
+  }
+
+  func testContentBudgetsAndUsefulMetadata() {
+    let app = launch(["--captro-visual-size=fourfive", "--captro-stamp-budget-test"])
+    let stream = app.scrollViews["home.post.stream"]
+    XCTAssertTrue(stream.waitForExistence(timeout: 30))
+    var shortHeight: CGFloat = 0
+    for index in 0..<10 {
+      let page = app.otherElements["home.post.page.stamp-budget-\(index)"]
+      reveal(page, stream: stream, app: app)
+      let stamp = page.otherElements["home.post.stamp"].firstMatch
+      let media = page.otherElements["home.post.media"].firstMatch
+      XCTAssertTrue(stamp.exists)
+      XCTAssertEqual(stamp.frame.width / media.frame.width, 0.70, accuracy: 0.01)
+      XCTAssertLessThanOrEqual(stamp.frame.height, 252)
+      XCTAssertTrue(page.staticTexts["@test_creator"].exists)
+      XCTAssertFalse(page.staticTexts["New York, United States"].exists)
+      XCTAssertFalse(page.buttons["home.post.stamp.expand"].exists)
+      if index == 0 { shortHeight = stamp.frame.height }
+      if index == 2 { XCTAssertGreaterThan(stamp.frame.height, shortHeight + 30) }
+      if index == 5 { XCTAssertTrue(page.staticTexts.containing(NSPredicate(format: "label CONTAINS 'West Village' AND label CONTAINS '721 SAVES'")).firstMatch.exists) }
+      if index == 6 { XCTAssertTrue(page.staticTexts.containing(NSPredicate(format: "label CONTAINS '0 MEMBERS' AND label CONTAINS 'one time'")).firstMatch.exists) }
+      if index == 9 { XCTAssertFalse(page.buttons["captro.editorialCard"].exists) }
+      capture(app, "stamp-budget-\(index)")
+    }
   }
 
   func testLargeTextStampAndShortCaption() {

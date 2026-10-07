@@ -109,6 +109,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
 
 public struct MIRAPost: Codable, Identifiable, Hashable {
   public var editorOverlays: [CaptroMediaWritingEnvelope]? = nil
+  public var creationIntent: String? = nil
   public let id: String
   public let userId: String?
   public let userUsername: String?
@@ -337,6 +338,8 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     author: MIRAUser? = nil
   ) -> MIRAPost {
     MIRAPost(
+      editorOverlays: editorOverlays,
+      creationIntent: creationIntent,
       id: id,
       userId: userId,
       userUsername: author == nil ? userUsername : author?.username,
@@ -419,6 +422,8 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
 
   public func updatingPinned(at value: String?) -> MIRAPost {
     MIRAPost(
+      editorOverlays: editorOverlays,
+      creationIntent: creationIntent,
       id: id,
       userId: userId,
       userUsername: userUsername,
