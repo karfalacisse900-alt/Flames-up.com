@@ -41,11 +41,12 @@ test('native voice readiness follows confirmed config plus PCM send, never permi
 
 test('text-only Stamp is outlined, measured, creator-configured and separate from media/header UI', () => {
   assert.match(feed, /CaptroTextOnlyStampCard/);
-  assert.match(feed, /textOnlyStamp\(maxBodyLines: 3\)\s*\.fixedSize\(horizontal: false, vertical: true\)/);
+  assert.match(feed, /textOnlyStamp\(maxBodyLines: 16\)\s*\.fixedSize\(horizontal: false, vertical: true\)/);
   assert.doesNotMatch(feed, /pageSize|ScrollView\(\.vertical\)/);
   assert.match(feed, /outlinedStamp: true/);
   const card = feed.split('private struct CaptroTextOnlyStampCard')[1].split('private struct CaptroAuthorHeader')[0];
-  assert.match(card, /CaptroMeasuredCaption/);
+  assert.match(card, /\.lineLimit\(maxBodyLines\)\.truncationMode\(\.tail\)/);
+  assert.doesNotMatch(card, /CaptroMeasuredCaption|Text\(content\.type\.rawValue/);
   assert.match(card, /Rectangle\(\)\.strokeBorder\(MIRATheme.Color.textPrimary/);
   assert.match(feed, /canRespond: canRespond/);
   assert.doesNotMatch(feed, /canRespond: showsFeedControls/);
