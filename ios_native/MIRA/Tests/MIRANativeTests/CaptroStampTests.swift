@@ -2,6 +2,25 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroStampTests: XCTestCase {
+  func testNarrowMediaStampLeavesPhotoVisibleAndScalesForAccessibility() {
+    for width in [CGFloat(320), 390, 402, 430] {
+      let stamp = CaptroFeedStampGeometry.stampWidth(mediaWidth: width, accessibility: false)
+      XCTAssertEqual(stamp / width, 0.73, accuracy: 0.001)
+      XCTAssertGreaterThan(width - CaptroFeedStampGeometry.leadingInset(width: width) - stamp, width * 0.20)
+      XCTAssertGreaterThan(CaptroFeedStampGeometry.stampWidth(mediaWidth: width, accessibility: true), stamp)
+    }
+  }
+  func testMediaFeedPreservesCompleteOriginalWritingAndOfferConditions() throws {
+    let text = String(repeating: "Original complete sentence. ", count: 40)
+    let json: [String: Any] = ["id": "long", "title": "An original title that wraps across multiple lines",
+      "content": text, "images": [], "postType": "general"]
+    let post = try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: json))
+    XCTAssertEqual(post.captroMediaFeedCardContent.description, text.trimmingCharacters(in: .whitespacesAndNewlines))
+    XCTAssertEqual(post.captroMediaFeedCardContent.title, json["title"] as? String)
+    let y = CaptroFeedStampGeometry.originY(mediaHeight: 490, stampHeight: 250, clearance: 20)
+    XCTAssertEqual(y, 220)
+    XCTAssertGreaterThan(y + 650, 490, "Long expanded text needs real continuation height, never a larger image")
+  }
   func testNativeCatalogAndFontMeasurements() throws {
     XCTAssertEqual(CaptroStampTemplate.catalog.count, 15)
     for template in CaptroStampTemplate.catalog.values {

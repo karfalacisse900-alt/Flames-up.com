@@ -12,8 +12,11 @@ struct CaptroMediaPager: View {
   let onSave: () -> Void
   let showsCoverMediaOnly: Bool
   var frameSize: CGSize? = nil
+  @Binding var stampReading: CaptroFeedStampReadingState
 
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @ScaledMetric(relativeTo: .body) private var normalReadingBudget: CGFloat = 330
   @State private var isHoldingStamp = false
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
@@ -39,7 +42,6 @@ struct CaptroMediaPager: View {
 
   var body: some View {
     sizedMedia
-      .clipped()
       .contentShape(Rectangle())
       .accessibilityElement(children: .contain)
       .onAppear(perform: prefetchCarouselNeighbors)
@@ -75,7 +77,14 @@ struct CaptroMediaPager: View {
   @ViewBuilder
   private var sizedMedia: some View {
     if let frameSize {
-      mediaLayers.frame(width: frameSize.width, height: frameSize.height)
+      CaptroMediaStampLayout(mediaSize: frameSize,
+        stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: frameSize.width,
+          accessibility: dynamicTypeSize.isAccessibilitySize),
+        clearance: currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 64 : 20,
+        reading: stampReading) {
+        mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
+        feedStamp(readingBudget: max(normalReadingBudget, frameSize.height * 0.70))
+      }
     } else {
       mediaLayers.aspectRatio(CGSize(width: 1, height: mediaHeightToWidthRatio), contentMode: .fit)
     }
@@ -95,7 +104,11 @@ struct CaptroMediaPager: View {
           .accessibilityHint(currentMediaIsVideo ? "Tap to pause or play video" : "Opens the post detail screen")
           .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
 
-        overlayContent(mediaWidth: proxy.size.width, mediaHeight: proxy.size.height)
+        if mediaURLs.count > 1 && !showsCoverMediaOnly {
+          CaptroCarouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
 
         if currentMediaIsVideo {
           videoControls
@@ -160,62 +173,10 @@ struct CaptroMediaPager: View {
     MIRAMediaSizing.supportedPostHeightToWidthRatio(ratio)
   }
 
-  private func overlayContent(mediaWidth: CGFloat, mediaHeight: CGFloat) -> some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack {
-        Spacer(minLength: 0)
-
-        if mediaURLs.count > 1 && !showsCoverMediaOnly {
-          CaptroCarouselCounter(current: selectedMediaIndex + 1, total: mediaURLs.count)
-        }
-      }
-
-      Spacer(minLength: 12)
-
-      ViewThatFits(in: .vertical) {
-        feedStamp(lines: 3, condensed: true)
-          .fixedSize(horizontal: false, vertical: true)
-        feedStamp(lines: 2, condensed: true)
-          .fixedSize(horizontal: false, vertical: true)
-        // Accessibility / unusually short windows: keep the complete content in
-        // details rather than clipping controls or shrinking the user's font.
-        Button(action: openPostUnlessPeeking) {
-          VStack(alignment: .leading, spacing: 4) {
-            Text(post.captroEditorialCardContent.title)
-              .font(.headline).lineLimit(1)
-            if let metadata = post.captroEditorialCardContent.chipText {
-              Text(metadata).font(.caption).lineLimit(1)
-            }
-            HStack {
-              Text(post.captroEditorialCardContent.username ?? post.authorDisplayName)
-                .lineLimit(1)
-              Spacer(minLength: 4)
-              Text("More")
-            }.font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
-          }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(12).foregroundStyle(MIRATheme.Color.textPrimary)
-            .background(MIRATheme.Color.surface)
-            .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
-        }.buttonStyle(.plain)
-          .accessibilityIdentifier("captro.editorialCard.compact")
-      }
-        .frame(maxHeight: min(280, max(68, mediaHeight * 0.60)), alignment: .bottom)
-        .frame(width: max(0, mediaWidth - 32), alignment: .leading)
-      .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
-      .allowsHitTesting(showsStampOnCurrentSlide)
-      .accessibilityHidden(!showsStampOnCurrentSlide)
-      .animation(stampPeekAnimation, value: isHoldingStamp)
-      .padding(.bottom, currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 48 : 4)
-    }
-    .padding(16)
-  }
-
-  private func feedStamp(lines: Int, condensed: Bool) -> some View {
+  private func feedStamp(readingBudget: CGFloat) -> some View {
     VStack(spacing: 0) {
-      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
-        condensed: condensed, feedCaptionMaxLines: lines, feedSummary: true,
-        showsBorder: false, onOpen: openPostUnlessPeeking)
+      CaptroFeedMediaStamp(content: post.captroMediaFeedCardContent,
+        readingBudget: readingBudget, reading: $stampReading, onOpen: openPostUnlessPeeking)
       if post.detail?.voice != nil || post.hasAudio {
         CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
           .padding(.horizontal, 14).padding(.bottom, 10)
@@ -223,8 +184,17 @@ struct CaptroMediaPager: View {
     }
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
-    // Only the visible stamp handles peek. The unused height in ViewThatFits
-    // must remain available to media taps and the vertical feed.
+    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+      if !stampReading.expanded && abs(stampReading.collapsedHeight - height) > 0.5 {
+        stampReading.collapsedHeight = height
+      }
+    }
+    .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
+    .allowsHitTesting(showsStampOnCurrentSlide)
+    .accessibilityHidden(!showsStampOnCurrentSlide)
+    .animation(stampPeekAnimation, value: isHoldingStamp)
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("home.post.stamp")
     .contentShape(Rectangle())
     .background {
       if showsStampOnCurrentSlide { CaptroStampPeekGesture(isHolding: $isHoldingStamp) }

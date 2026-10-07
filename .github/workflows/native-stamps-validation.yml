@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       baseline:
-        description: Capture photo viewport screenshots from released TestFlight 552.1
+        description: Capture identical public stamp examples from TestFlight 559.1
         type: boolean
         default: false
       stream_only:
@@ -24,7 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.baseline == true && '4446e069880deb0031927ab4d11934e8b9e69d54' || github.sha }}
+          ref: ${{ inputs.baseline == true && 'fb1373d83e9815e7dba406e2d34496eb17852b4d' || github.sha }}
+      - name: Use the same screenshot driver for the baseline
+        if: ${{ inputs.baseline }}
+        run: |
+          git fetch origin "$GITHUB_SHA"
+          git checkout "$GITHUB_SHA" -- ios_native/MIRA/LayoutUITests/StampRefinementTests.swift
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
@@ -32,9 +37,9 @@ jobs:
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
-          tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests -only-testing:CaptroLayoutUITests/HomeFullBleedTests -only-testing:CaptroLayoutUITests/VoiceEntryTests)
+          tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampRefinementTests/testLargeTextStampAndShortCaption -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testTextOnlyAndAccessibilityDoNotReserveMediaHeight)
           if [ '${{ inputs.baseline }}' = 'true' ]; then
-            tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth)
+            tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testBeforePublicStampExamples)
           elif [ '${{ inputs.stream_only }}' = 'true' ]; then
             tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
           fi
@@ -57,7 +62,8 @@ jobs:
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/StampBuild" -resultBundlePath "$RUNNER_TEMP/StreamRecording.xcresult" \
-            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testPublicContentStreamRecording \
+            -only-testing:CaptroLayoutUITests/StampRefinementTests/testPublicStampExamples \
+            -only-testing:CaptroLayoutUITests/StampRefinementTests/testInlineExpansionAndCollapse \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/home-recording-test.log"
       - name: Export screenshots
         if: always()

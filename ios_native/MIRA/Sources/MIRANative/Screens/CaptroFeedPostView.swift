@@ -15,6 +15,7 @@ struct CaptroFeedPostView: View {
   let onSave: () -> Void
   let canFollowAuthor: Bool
   let feedWidth: CGFloat
+  @Binding var stampReading: CaptroFeedStampReadingState
   @State private var selectedMediaIndex = 0
   var canRespond = true
 
@@ -61,10 +62,11 @@ struct CaptroFeedPostView: View {
       onOpenPost: onOpenPost,
       onSave: onSave,
       showsCoverMediaOnly: false,
-      frameSize: mediaSize
+      frameSize: mediaSize,
+      stampReading: $stampReading
     )
 
-    pager.frame(width: mediaSize.width, height: mediaSize.height)
+    pager.frame(width: mediaSize.width)
   }
 
   private var mediaSize: CGSize {

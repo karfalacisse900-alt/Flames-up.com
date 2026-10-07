@@ -880,6 +880,7 @@ public struct MainFeedView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var activeVideoPostID: String?
   @State private var selectedPostID: String?
+  @State private var stampReadingStates: [String: CaptroFeedStampReadingState] = [:]
   @State private var postActivationTask: Task<Void, Never>?
   @State private var selectedPostFallbackIndex = 0
   @State private var selectedFeedSection: MainFeedSection = .forYou
@@ -1324,6 +1325,9 @@ public struct MainFeedView: View {
       },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       feedWidth: width,
+      stampReading: Binding(
+        get: { stampReadingStates[post.id] ?? CaptroFeedStampReadingState() },
+        set: { stampReadingStates[post.id] = $0 }),
       canRespond: !isGuest
     )
   }

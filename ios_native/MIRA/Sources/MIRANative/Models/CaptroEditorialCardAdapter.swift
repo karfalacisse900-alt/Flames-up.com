@@ -1,6 +1,19 @@
 import Foundation
 
 extension MIRAPost {
+  /// Media-feed reading keeps original descriptions and deal conditions. The
+  /// older detail/preview adapter intentionally abbreviates offers; do not use
+  /// that abbreviated summary as the source for inline reading in Home.
+  var captroMediaFeedCardContent: CaptroEditorialCardContent {
+    var card = captroEditorialCardContent
+    if card.type == .deal {
+      let description = cleanEditorialText(detail?.commerce?.description) ?? cleanEditorialText(captroFeedCaptionText)
+      let rules = cleanEditorialText(detail?.commerce?.publicData?.redemptionRules)
+      card.description = [description, rules == description ? nil : rules].compactMap { $0 }.joined(separator: "\n\n")
+    }
+    return card
+  }
+
   /// Image-free posts have no separate caption below the card. Keep their
   /// caption in the same surface, without repeating a title or offer terms.
   var captroTextOnlyCardContent: CaptroEditorialCardContent {

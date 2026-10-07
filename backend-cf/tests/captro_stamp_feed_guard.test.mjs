@@ -13,6 +13,7 @@ const postView = readIOS('Screens/CaptroFeedPostView.swift');
 const mediaPager = readIOS('Screens/CaptroFeedMediaPager.swift');
 const stamps = readIOS('Screens/CaptroFeedPostOverlays.swift');
 const editorialCard = readIOS('Components/CaptroEditorialOverlayCard.swift');
+const mediaStamp = readIOS('Components/CaptroFeedMediaStamp.swift');
 const composer = readIOS('Screens/NotificationLibrarySearchCreateViews.swift');
 const mediaSizing = readIOS('Components/MIRAComponents.swift');
 const mediaModels = readIOS('Models/MIRAModels.swift');
@@ -35,8 +36,8 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.match(postView, /CaptroTextOnlyStampCard\(post: post/);
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
-  assert.match(mediaPager, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
-  assert.match(mediaPager, /\.frame\(width: max\(0, mediaWidth - 32\), alignment: \.leading\)/);
+  assert.match(mediaPager, /CaptroFeedMediaStamp\(content: post\.captroMediaFeedCardContent/);
+  assert.match(mediaStamp, /mediaWidth \* \(accessibility \? 0\.90 : 0\.73\)/);
   assert.doesNotMatch(mediaPager, /CaptroPostStamp\(/);
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
@@ -162,14 +163,16 @@ test('Home media preserves every supported source ratio inside the rectangular v
   const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
   assert.ok(mediaBranchStart >= 0 && mediaBranchEnd > mediaBranchStart);
   assert.match(mediaBranch, /mediaPager/);
-  assert.match(postView, /pager\s*\.frame\(width: mediaSize\.width, height: mediaSize\.height\)/);
+  assert.match(postView, /pager\s*\.frame\(width: mediaSize\.width\)/);
+  assert.match(mediaPager, /mediaLayers\.frame\(width: frameSize\.width, height: frameSize\.height\)/);
   assert.doesNotMatch(mediaBranch, /\.padding\(\.horizontal|mediaHorizontalMargin|RoundedRectangle|cornerRadius/);
 
   const pagerBodyStart = mediaPager.indexOf('var body: some View');
   const pagerBodyEnd = mediaPager.indexOf('@ViewBuilder');
   const pagerBody = mediaPager.slice(pagerBodyStart, pagerBodyEnd);
   assert.ok(pagerBodyStart >= 0 && pagerBodyEnd > pagerBodyStart);
-  assert.match(pagerBody, /\.clipped\(\)[\s\S]*?\.contentShape\(Rectangle\(\)\)/);
+  assert.doesNotMatch(pagerBody, /\.clipped\(\)/, 'Real stamp continuation must not be clipped to media');
+  assert.match(mediaPager, /mediaLayers\.frame\(width: frameSize\.width, height: frameSize\.height\)\.clipped\(\)/);
   assert.doesNotMatch(pagerBody, /RoundedRectangle|mediaPlaceholder|cornerRadius/);
 
   const screenWidth = 390;
@@ -232,10 +235,14 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(editorialCard, /Button\(action: onOpen\)/);
   assert.doesNotMatch(editorialCard, /Button\(action: onAction\)|Button\(action: onSave\)/);
   assert.doesNotMatch(stamps, /LinearGradient|Material|ultraThinMaterial/);
-  assert.match(mediaPager, /feedStamp\(lines: 2, condensed: true\)/);
-  assert.match(mediaPager, /feedStamp\(lines: 3, condensed: true\)/);
-  assert.match(mediaPager, /min\(280, max\(68, mediaHeight \* 0\.60\)\)/);
-  assert.match(mediaPager, /feedCaptionMaxLines: lines, feedSummary: true/);
+  assert.doesNotMatch(mediaPager, /feedStamp\(lines:|min\(280, max\(68/);
+  assert.match(mediaStamp, /ViewThatFits\(in: \.vertical\)/);
+  assert.match(mediaStamp, /card\(captionLines: nil, readingAction: nil\)/);
+  assert.match(mediaStamp, /card\(captionLines: 6, readingAction: "Read more"\)/);
+  assert.match(mediaStamp, /card\(captionLines: nil, readingAction: "Show less"\)/);
+  assert.match(mediaStamp, /reading\.expanded\.toggle\(\)/);
+  assert.match(mediaStamp, /stamp\.y \+ stamp\.size\.height \+ 12/);
+  assert.match(mainFeed, /stampReadingStates\[post.id\]/);
   assert.match(editorialCard, /mediaWidth \* 0\.73/);
   assert.doesNotMatch(composer, /Picker\("Paper style"/);
 });
@@ -249,7 +256,7 @@ test('holding the Home stamp temporarily reveals the unobstructed photo', () => 
   assert.match(mediaPager, /gesture\.state == \.began \|\| gesture\.state == \.changed/);
   assert.match(
     mediaPager,
-    /ViewThatFits\(in: \.vertical\)[\s\S]*?\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)/,
+    /\.opacity\(showsStampOnCurrentSlide && !isHoldingStamp \? 1 : 0\)[\s\S]*?\.allowsHitTesting\(showsStampOnCurrentSlide\)[\s\S]*?\.animation\(stampPeekAnimation, value: isHoldingStamp\)/,
   );
   const visibleStamp = mediaPager.slice(mediaPager.indexOf('private func feedStamp('), mediaPager.indexOf('private var stampPeekAnimation'));
   assert.match(visibleStamp, /CaptroStampPeekGesture\(isHolding: \$isHoldingStamp\)/);
