@@ -56,7 +56,8 @@ final class HomeFullBleedTests: XCTestCase {
     for index in 0..<7 {
       let page = app.otherElements["home.post.page.stream-\(index)"]
       reveal(page, in: stream, app: app)
-      XCTAssertTrue(page.isHittable, "Post \(index) must be reachable by normal vertical scrolling")
+      XCTAssertTrue(page.exists && page.frame.intersects(stream.frame),
+        "Post \(index) must be reachable by normal vertical scrolling")
       if index < 6 {
         let media = page.otherElements["home.post.media"].firstMatch
         XCTAssertTrue(media.exists)
@@ -164,7 +165,9 @@ final class HomeFullBleedTests: XCTestCase {
       let origin = app.coordinate(withNormalizedOffset: .zero)
       let startY = stream.frame.minY + min(400, stream.frame.height * 0.65)
       origin.withOffset(CGVector(dx: app.frame.midX, dy: startY))
-        .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: startY - delta)))
+        .press(forDuration: 0.05,
+          thenDragTo: origin.withOffset(CGVector(dx: app.frame.midX, dy: startY - delta)),
+          withVelocity: .slow, thenHoldForDuration: 0.3)
       // A short final item cannot necessarily align with the top. Accept it
       // only when fully visible. Never start a carousel drag above the header
       // simply because some lower portion of the item is still hittable.

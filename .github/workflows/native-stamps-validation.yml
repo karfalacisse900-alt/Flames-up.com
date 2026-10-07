@@ -6,6 +6,10 @@ on:
         description: Capture photo viewport screenshots from released TestFlight 552.1
         type: boolean
         default: false
+      stream_only:
+        description: Verify continuous gestures and record public posts without repeating the passed ratio suite
+        type: boolean
+        default: false
   push:
     branches: [feature/recorded-voice-moderation]
     paths:
@@ -31,6 +35,8 @@ jobs:
           tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampVisualTests -only-testing:CaptroLayoutUITests/HomeFullBleedTests -only-testing:CaptroLayoutUITests/VoiceEntryTests)
           if [ '${{ inputs.baseline }}' = 'true' ]; then
             tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth)
+          elif [ '${{ inputs.stream_only }}' = 'true' ]; then
+            tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
           fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
@@ -55,7 +61,11 @@ jobs:
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/home-recording-test.log"
       - name: Export screenshots
         if: always()
-        run: xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Stamps.xcresult" --output-path "$RUNNER_TEMP/stamp-screenshots"
+        run: |
+          xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Stamps.xcresult" --output-path "$RUNNER_TEMP/stamp-screenshots"
+          if [ -d "$RUNNER_TEMP/StreamRecording.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/StreamRecording.xcresult" --output-path "$RUNNER_TEMP/recording-screenshots"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -63,5 +73,6 @@ jobs:
           path: |
             ${{ runner.temp }}/stamp-build.log
             ${{ runner.temp }}/stamp-screenshots/
+            ${{ runner.temp }}/recording-screenshots/
             ${{ runner.temp }}/home-continuous-stream.mp4
             ${{ runner.temp }}/home-recording-test.log
