@@ -14,8 +14,10 @@ export function newMediaStampWritingError(input: {
   mediaCount: number; postType: string; title: string; caption: string;
 }): { code: string; detail: string } | null {
   if (input.mediaCount <= 0) return null;
-  if (compositionCharacterCount(input.title) > 60) {
-    return { code: 'MEDIA_TITLE_TOO_LONG', detail: 'Keep media titles within 60 characters. Your draft was not published.' };
+  // Existing title readers have a 180 UTF-16-unit contract. Reject unusually
+  // long combined symbols instead of silently cutting a valid pasted grapheme.
+  if (compositionCharacterCount(input.title) > 60 || input.title.length > 180) {
+    return { code: 'MEDIA_TITLE_TOO_LONG', detail: 'Use 60 characters or fewer for the title. Combined emoji may need a shorter title. Your draft was not published.' };
   }
   if (['general', 'social', 'moment', 'check_in'].includes(input.postType)
       && compositionCharacterCount(input.caption) > 220) {

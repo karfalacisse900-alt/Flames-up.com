@@ -8,6 +8,8 @@ test('new media captions and supplied titles have independent grapheme limits', 
   assert.equal(newMediaStampWritingError({ ...input, caption: 'a'.repeat(221) }).code, 'MEDIA_CAPTION_TOO_LONG');
   assert.equal(newMediaStampWritingError({ ...input, title: 'a'.repeat(61) }).code, 'MEDIA_TITLE_TOO_LONG');
   assert.equal(newMediaStampWritingError({ ...input, caption: '👨‍👩‍👧‍👦'.repeat(220) }), null);
+  assert.equal(newMediaStampWritingError({ ...input, title: '👨‍👩‍👧‍👦'.repeat(60) }).code, 'MEDIA_TITLE_TOO_LONG',
+    'Reject the legacy title storage budget instead of cutting a pasted emoji');
 });
 test('text-only and full structured descriptions retain their separate limits', () => {
   for (const postType of ['club', 'event', 'meetup', 'deal', 'place']) {
