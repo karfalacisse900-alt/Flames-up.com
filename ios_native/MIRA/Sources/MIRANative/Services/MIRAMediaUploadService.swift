@@ -14,19 +14,22 @@ public struct MIRAPickedMedia: Hashable {
   public let fileName: String
   public let mimeType: String
   public let editorMetadata: MIRANativeEditedMediaMetadata?
+  public var mediaWriting: CaptroMediaWriting?
 
   public init(
     data: Data,
     kind: MIRAPickedMediaKind,
     fileName: String,
     mimeType: String,
-    editorMetadata: MIRANativeEditedMediaMetadata? = nil
+    editorMetadata: MIRANativeEditedMediaMetadata? = nil,
+    mediaWriting: CaptroMediaWriting? = nil
   ) {
     self.data = data
     self.kind = kind
     self.fileName = fileName
     self.mimeType = mimeType
     self.editorMetadata = editorMetadata
+    self.mediaWriting = mediaWriting
   }
 
   public func mediaDimension() async -> MIRAMediaDimension {

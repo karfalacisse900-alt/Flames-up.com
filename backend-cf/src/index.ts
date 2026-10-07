@@ -1,4 +1,5 @@
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
+import { validateMediaWritingOverlays } from './media-writing';
 import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody } from './creation-intent';
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
@@ -16792,8 +16793,11 @@ api.post('/posts', authMiddleware, async (c) => {
   // Do not cut a valid 500-character message at a legacy UTF-16 length limit.
   let postContent = creationIntent ? compositionBody(rawContent) : cleanMultilineText(b.content || b.text, 5000);
   let postTitle = creationIntent ? compositionHeadline(postContent) : cleanText(b.title || b.headline, 180);
-  if (postTitle || postContent) {
-    const safety = await screenCaptroText(c.env, [postTitle, postContent].filter(Boolean).join('\n'), {
+  let mediaWriting: any[];
+  try { mediaWriting = validateMediaWritingOverlays(parseJsonArray(b.editor_overlays), sanitizeMediaReferences(b.images, b.image).length); }
+  catch (error: any) { return c.json({ detail: error.message, code: 'MEDIA_WRITING_INVALID' }, 400); }
+  if (postTitle || postContent || mediaWriting.length) {
+    const safety = await screenCaptroText(c.env, [postTitle, postContent, ...mediaWriting.map(item => item.writing.text)].filter(Boolean).join('\n'), {
       surface: 'post_text', subjectId: id, requestId: c.get?.('requestId') || '',
     });
     if (safety === 'review') return c.json({
@@ -16862,7 +16866,7 @@ api.post('/posts', authMiddleware, async (c) => {
     ...mediaBackupIdsFromReferences([primaryImage, ...imageUrls]),
   ]));
   const mediaDimensions = sanitizeMediaDimensions(b.media_dimensions);
-  const editorOverlays = sanitizePostEditorOverlays(b.editor_overlays);
+  const editorOverlays = [...sanitizePostEditorOverlays(b.editor_overlays), ...mediaWriting];
   const taggedUsers = sanitizeTaggedUsers(b.tagged_users);
   const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';
   const audioTrackId = audioProvider ? cleanText(b.audio_track_id, 80) : '';

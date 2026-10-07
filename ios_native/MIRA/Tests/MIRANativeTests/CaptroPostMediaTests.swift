@@ -4,6 +4,46 @@ import UniformTypeIdentifiers
 @testable import MIRANative
 
 final class CaptroPostMediaTests: XCTestCase {
+  func testMediaWritingRoundTripPreservesOriginalBytesAndMetadata() throws {
+    var writing = CaptroMediaWriting()
+    writing.text = "FRIDAY NIGHT\nNYC"
+    writing.sourceAspectRatio = 0.75
+    let bytes = Data([1, 2, 3])
+    var media = MIRAPickedMedia(data: bytes, kind: .image, fileName: "original.jpg", mimeType: "image/jpeg")
+    media.mediaWriting = writing
+    XCTAssertEqual(media.data, bytes)
+    let saved = try JSONEncoder().encode(writing)
+    XCTAssertEqual(try JSONDecoder().decode(CaptroMediaWriting.self, from: saved), writing)
+    media.mediaWriting = nil
+    XCTAssertEqual(media.data, bytes)
+  }
+  func testMediaWritingCropAndFitUseSameSourceCoordinateTransform() {
+    var writing = CaptroMediaWriting()
+    writing.sourceAspectRatio = 0.5
+    writing.text = "NYC"
+    for width: CGFloat in [320, 390, 440] {
+      let canvas = CGSize(width: width, height: width * 1.25)
+      let crop = writing.sourceRect(in: canvas, fill: true)
+      XCTAssertEqual(crop.width, width, accuracy: 0.01)
+      XCTAssertEqual(crop.height, width * 2, accuracy: 0.01)
+      let text = writing.textRect(in: canvas, fill: true)
+      XCTAssertEqual(text.midY, crop.minY + crop.height * writing.y, accuracy: 0.01)
+      let fit = writing.sourceRect(in: canvas, fill: false)
+      XCTAssertEqual(fit.height, canvas.height, accuracy: 0.01)
+      XCTAssertLessThan(fit.width, canvas.width)
+    }
+  }
+  func testMediaWritingValidatesMeasuredLinesWithoutRewriting() {
+    var writing = CaptroMediaWriting()
+    writing.text = "FRIDAY NIGHT\nNYC"
+    XCTAssertNil(writing.validationMessage)
+    writing.text = String(repeating: "WORDS ", count: 13)
+    writing.size = "large"
+    XCTAssertNotNil(writing.validationMessage)
+    XCTAssertEqual(writing.text.count, 78)
+    writing.text = String(repeating: "a", count: 81)
+    XCTAssertNotNil(writing.validationMessage)
+  }
   func testHomeHeightUsesResolvedMetadataNotDeviceHeight() throws {
     for width: CGFloat in [320, 390, 440] {
       for format in MIRASupportedPostAspectRatio.allCases {

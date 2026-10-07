@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Owned by Home, keyed by post ID. Reading state survives lazy-cell recycling
 /// without modifying the post, media selection, playback, or detail navigation.
@@ -19,7 +20,7 @@ enum CaptroFeedStampGeometry {
 
 /// Measures the actual SwiftUI text at the current font size and width. The
 /// first candidate is unabridged. Only an overflowing full stamp selects the
-/// six-line reading preview; there is no character-count heuristic.
+/// four-line reading preview; there is no character-count heuristic.
 struct CaptroFeedMediaStamp: View {
   let content: CaptroEditorialCardContent
   let readingBudget: CGFloat
@@ -29,16 +30,19 @@ struct CaptroFeedMediaStamp: View {
   @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
   @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 11.5
   @ScaledMetric(relativeTo: .caption) private var creatorSize: CGFloat = 12.5
+  @State private var measuredWidth: CGFloat = 0
 
   var body: some View {
     Group {
       if reading.expanded {
         card(captionLines: nil, readingAction: "Show less")
+      } else if textOverflows {
+        card(captionLines: 4, readingAction: "Read more")
       } else {
         CaptroStampReadingBudget(height: readingBudget) {
           ViewThatFits(in: .vertical) {
             card(captionLines: nil, readingAction: nil).fixedSize(horizontal: false, vertical: true)
-            card(captionLines: 6, readingAction: "Read more").fixedSize(horizontal: false, vertical: true)
+            card(captionLines: 4, readingAction: "Read more").fixedSize(horizontal: false, vertical: true)
           }
         }
       }
@@ -46,6 +50,19 @@ struct CaptroFeedMediaStamp: View {
     .foregroundStyle(MIRATheme.Color.textPrimary)
     .accessibilityElement(children: .contain)
     .accessibilityIdentifier("home.post.stamp.text")
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
+  }
+
+  private var textOverflows: Bool {
+    guard measuredWidth > 22 else { return false }
+    func exceeds(_ text: String, font: UIFont, lines: CGFloat, spacing: CGFloat = 0) -> Bool {
+      let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = spacing
+      let height = (text as NSString).boundingRect(with: CGSize(width: measuredWidth - 22, height: .greatestFiniteMagnitude),
+        options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font, .paragraphStyle: paragraph], context: nil).height
+      return height > ceil(font.lineHeight * lines + spacing * (lines - 1)) + 1
+    }
+    return exceeds(content.title, font: .systemFont(ofSize: titleSize, weight: .bold), lines: 2)
+      || exceeds(clean(content.description) ?? clean(content.summaryText) ?? "", font: .systemFont(ofSize: bodySize), lines: 4, spacing: 2)
   }
 
   private func card(captionLines: Int?, readingAction: String?) -> some View {
@@ -55,6 +72,7 @@ struct CaptroFeedMediaStamp: View {
       Button(action: onOpen) {
         Text(content.title)
           .font(.system(size: titleSize, weight: .bold))
+          .lineLimit(reading.expanded ? nil : 2)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           .contentShape(Rectangle())
@@ -80,7 +98,7 @@ struct CaptroFeedMediaStamp: View {
           .padding(.top, 2)
           .accessibilityIdentifier("home.post.stamp.caption")
       }
-      if let readingAction, (clean(content.description) ?? clean(content.summaryText)) != nil {
+      if let readingAction {
         Button(readingAction) {
           // A layout change, not navigation. Avoid a spring/scroll animation
           // that would move the reader or animate a playing video.

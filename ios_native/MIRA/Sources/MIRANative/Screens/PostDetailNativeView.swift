@@ -1114,13 +1114,20 @@ private struct PostDetailOptimizedMediaCarousel: View {
       isVideo: isVideo(at: index, url: url),
       placeholderURL: placeholderURL(at: index, mediaURL: url),
       fallbackURL: fallbackURL(at: index, mediaURL: url),
-      contentMode: .fill,
+      contentMode: .fit,
       shouldPlay: isVisible && scenePhase == .active && selectedIndex == index && !isVideoPaused,
       videoMuted: isMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: Color.black.opacity(0.03)
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .overlay {
+      if let writing = post.mediaWriting(at: index) {
+        GeometryReader { geometry in
+          CaptroMediaWritingLayer(writing: writing, container: geometry.size, fill: false, caption: post.caption ?? post.content)
+        }
+      }
+    }
     .clipped()
   }
 

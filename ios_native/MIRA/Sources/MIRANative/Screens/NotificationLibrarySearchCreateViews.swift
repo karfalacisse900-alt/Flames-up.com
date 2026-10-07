@@ -1083,7 +1083,7 @@ public struct CreatePostNativeView: View {
   @ScaledMetric(relativeTo: .body) private var writingSize: CGFloat = 18
   @State private var writingFocused = false
   private enum Presentation: Equatable, Identifiable {
-    case startWith, audience, time, add, media, camera, voice, structured
+    case startWith, audience, time, add, media, camera, voice, structured, mediaWriting
     case detail(PostDetailSheet)
     var id: String {
       switch self {
@@ -1094,6 +1094,7 @@ public struct CreatePostNativeView: View {
   }
   @State private var presentation: Presentation?
   @State private var queuedPresentation: Presentation?
+  @State private var writingAfterMediaSelection = false
   @State private var showsMoreCreationWays = false
   @State private var pendingTime = Date()
   @State private var creationCapabilities: CaptroCreationCapabilities?
@@ -1356,6 +1357,9 @@ public struct CreatePostNativeView: View {
     composerDraftObservedPage
     .fullScreenCover(isPresented: presentationBinding(.structured)) {
       stampDetailsPage
+    }
+    .fullScreenCover(isPresented: presentationBinding(.mediaWriting)) {
+      CaptroMediaWritingEditor(items: mediaItems) { updated in mediaItems = updated }
     }
     .photosPicker(isPresented: presentationBinding(.media), selection: $pickerItems,
       maxSelectionCount: max(1, 10 - mediaItems.count),
@@ -1667,6 +1671,10 @@ public struct CreatePostNativeView: View {
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       CaptroSelectionRow(title: "Camera", symbol: "camera") { transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
+      CaptroSelectionRow(title: "Text on media", symbol: "textformat") {
+        writingAfterMediaSelection = mediaItems.isEmpty
+        transitionFromSelection(to: mediaItems.isEmpty ? .media : .mediaWriting)
+      }.disabled(isLoadingMedia)
       CaptroSelectionRow(title: "Responses", symbol: "checkmark.circle") { transitionFromSelection(to: .detail(.response)) }
         .disabled(!mediaItems.isEmpty || voiceDraft != nil)
     }
@@ -1678,6 +1686,11 @@ public struct CreatePostNativeView: View {
         ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
           VStack(spacing: 4) {
             LocalMediaThumb(media: item, width: 150, height: 120, cornerRadius: 8, fitsOriginal: true)
+              .overlay {
+                if let writing = item.mediaWriting {
+                  CaptroMediaWritingLayer(writing: writing, container: CGSize(width: 150, height: 120), fill: false)
+                }
+              }
             HStack {
               Button("Edit") { writingFocused = false; editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index) }
               Spacer()
@@ -2416,6 +2429,10 @@ public struct CreatePostNativeView: View {
     }
     let remainingSlots = max(0, 10 - mediaItems.count)
     mediaItems.append(contentsOf: loaded.prefix(remainingSlots))
+    if writingAfterMediaSelection {
+      writingAfterMediaSelection = false
+      if !loaded.isEmpty { openPresentation(.mediaWriting) }
+    }
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
@@ -2441,9 +2458,13 @@ public struct CreatePostNativeView: View {
   }
 
   private func editorUploadMetadata() -> [MIRAEditorUploadMetadata]? {
-    let metadata = mediaItems.enumerated().compactMap { index, item -> MIRAEditorUploadMetadata? in
-      guard let editorMetadata = item.editorMetadata else { return nil }
-      return MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)
+    let metadata = mediaItems.enumerated().flatMap { index, item -> [MIRAEditorUploadMetadata] in
+      var values: [MIRAEditorUploadMetadata] = []
+      if let editorMetadata = item.editorMetadata { values.append(MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)) }
+      if let writing = item.mediaWriting, !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        values.append(MIRAEditorUploadMetadata(mediaIndex: index, writing: writing))
+      }
+      return values
     }
     return metadata.isEmpty ? nil : metadata
   }

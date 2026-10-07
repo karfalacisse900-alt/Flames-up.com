@@ -37,7 +37,7 @@ jobs:
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
-          tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/StampRefinementTests/testLargeTextStampAndShortCaption -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testTextOnlyAndAccessibilityDoNotReserveMediaHeight)
+          tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/MediaWritingTests -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testTextOnlyAndAccessibilityDoNotReserveMediaHeight)
           if [ '${{ inputs.baseline }}' = 'true' ]; then
             tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testBeforePublicStampExamples)
           elif [ '${{ inputs.stream_only }}' = 'true' ]; then

@@ -108,6 +108,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
 }
 
 public struct MIRAPost: Codable, Identifiable, Hashable {
+  public var editorOverlays: [CaptroMediaWritingEnvelope]? = nil
   public let id: String
   public let userId: String?
   public let userUsername: String?
@@ -1665,6 +1666,17 @@ public struct MIRAEditorUploadMetadata: Encodable, Hashable {
   public let editorVersion: String
   public let appliedFilter: String
   public let hasTextOverlay: Bool
+  public var writing: CaptroMediaWriting? = nil
+
+  public init(mediaIndex: Int, writing: CaptroMediaWriting) {
+    self.type = "media_writing"
+    self.mediaIndex = mediaIndex
+    self.wasEdited = false
+    self.editorVersion = "media-writing-1"
+    self.appliedFilter = "original"
+    self.hasTextOverlay = true
+    self.writing = writing
+  }
 
   public init(mediaIndex: Int, metadata: MIRANativeEditedMediaMetadata) {
     self.type = "native_editor"

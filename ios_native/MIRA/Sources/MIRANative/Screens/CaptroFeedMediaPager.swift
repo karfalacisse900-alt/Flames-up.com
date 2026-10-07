@@ -88,7 +88,7 @@ struct CaptroMediaPager: View {
         stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: frameSize.width,
           accessibility: dynamicTypeSize.isAccessibilitySize),
         clearance: currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 64 : 20,
-        reading: stampReading, minimumStampTop: currentMediaIsVideo ? 64 : 0) {
+        reading: stampReading, minimumStampTop: writingClearance(in: frameSize)) {
         mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         feedStamp(readingBudget: max(normalReadingBudget, frameSize.height * 0.70))
       }
@@ -164,7 +164,7 @@ struct CaptroMediaPager: View {
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: .fit,
+      contentMode: .fill,
       shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
       videoMuted: isVideoMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
@@ -172,7 +172,22 @@ struct CaptroMediaPager: View {
       plainBackground: true
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .overlay {
+      if let writing = post.mediaWriting(at: index) {
+        GeometryReader { geometry in
+          CaptroMediaWritingLayer(writing: writing, container: geometry.size, caption: post.caption ?? post.content)
+        }
+      }
+    }
     .clipped()
+  }
+
+  private func writingClearance(in size: CGSize) -> CGFloat {
+    let floor: CGFloat = currentMediaIsVideo ? 64 : 0
+    // Keep published writing fixed. Move only the stamp/real continuation, not
+    // the image or artwork, if the creator deliberately chose a low position.
+    guard let writing = post.mediaWriting(at: selectedMediaIndex) else { return floor }
+    return max(floor, writing.textRect(in: size, fill: true).maxY + 12)
   }
 
   private var declaredCoverHeightToWidthRatio: CGFloat? {
@@ -279,8 +294,13 @@ struct CaptroMediaPager: View {
 
   private var mediaAccessibilityLabel: String {
     let kind = currentMediaIsVideo ? "video" : "photo"
-    guard mediaURLs.count > 1 && !showsCoverMediaOnly else { return "Post \(kind)" }
-    return "Post \(kind) \(min(selectedMediaIndex + 1, mediaURLs.count)) of \(mediaURLs.count)"
+    var label = mediaURLs.count > 1 && !showsCoverMediaOnly
+      ? "Post \(kind) \(min(selectedMediaIndex + 1, mediaURLs.count)) of \(mediaURLs.count)" : "Post \(kind)"
+    if let text = post.mediaWriting(at: selectedMediaIndex)?.text,
+       text.trimmingCharacters(in: .whitespacesAndNewlines) != (post.caption ?? post.content)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+      label += ". " + text
+    }
+    return label
   }
 
   private func mediaPlaceholderURL(for index: Int, mediaURL: String) -> String? {

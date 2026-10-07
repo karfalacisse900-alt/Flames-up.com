@@ -42,6 +42,20 @@ public struct CaptroHomeFeedVisualTestView: View {
           let order = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--captro-public-posts=") }?
             .dropFirst("--captro-public-posts=".count).split(separator: ",").map(String.init) ?? []
           model.posts = order.compactMap { id in posts.first { $0.id == id } }
+          if ProcessInfo.processInfo.arguments.contains("--captro-writing-overlays") {
+            model.posts = model.posts.enumerated().map { index, original in
+              var post = original
+              post.editorOverlays = post.mediaURLs.enumerated().map { slide, _ in
+                var writing = CaptroMediaWriting()
+                writing.text = slide == 0 ? ["FRIDAY NIGHT\nNYC", "SUNDAY RUN\nBRONX", "PLACES FOR\nA FIRST DATE", "NYC AFTER\nMIDNIGHT"][index % 4] : "PHOTO \(slide + 1)"
+                writing.sourceAspectRatio = 1 / (post.mediaHeightToWidthRatios.first ?? 1)
+                writing.style = index % 2 == 0 ? "bold" : "editorial"
+                writing.readability = true
+                return CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: slide, writing: writing)
+              }
+              return post
+            }
+          }
           assert(model.posts.count == order.count, "Requested public post no longer available")
         } catch { assertionFailure("Public feed verification request failed") }
         return
