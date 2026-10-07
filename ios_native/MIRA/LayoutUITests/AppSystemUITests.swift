@@ -67,7 +67,9 @@ final class AppSystemUITests: XCTestCase {
     XCTAssertTrue(longCard.isHittable)
     XCTAssertGreaterThan(longCard.frame.height, shortHeight)
     capture(app, "home-text-long-dark")
-    XCTAssertTrue(app.staticTexts["More. Open full post"].isHittable)
+    // Home copy is finished/bounded without a reading CTA. Details remains
+    // available through the post itself and retains the complete source text.
+    XCTAssertFalse(app.staticTexts["More. Open full post"].isHittable)
     longTitle.tap()
     XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
     capture(app, "text-post-details")
