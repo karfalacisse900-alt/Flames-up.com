@@ -28,14 +28,25 @@ final class StampRefinementTests: XCTestCase {
         }
       }
       capture(app, "\(baseline ? "before" : "after")-stamp-\(index)")
+      if !baseline && index == 2 {
+        let media = page.otherElements["home.post.media"].firstMatch
+        let more = page.buttons["home.post.stamp.expand"]
+        if more.exists && more.isHittable { more.tap() }
+        let height = page.frame.height
+        media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.12))
+          .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.12)))
+        XCTAssertTrue(page.staticTexts["Photo 2 of 10"].waitForExistence(timeout: 5))
+        XCTAssertEqual(page.frame.height, height, accuracy: 1)
+        capture(app, "after-expanded-carousel")
+      }
     }
   }
 
   func testInlineExpansionAndCollapse() {
-    let app = launch(["--captro-visual-size=fourfive", "--captro-visual-long-text", "--captro-visual-pager"])
+    let app = launch(["--captro-visual-size=threefour", "--captro-visual-long-text", "--captro-visual-pager", "--captro-visual-video"])
     let stream = app.scrollViews["home.post.stream"]
     XCTAssertTrue(stream.waitForExistence(timeout: 15))
-    let page = app.otherElements["home.post.page.full-bleed-fourfive-0"]
+    let page = app.otherElements["home.post.page.full-bleed-threefour-0"]
     let media = page.otherElements["home.post.media"].firstMatch
     let stamp = page.otherElements["home.post.stamp"].firstMatch
     let more = page.buttons["home.post.stamp.expand"]
@@ -53,7 +64,11 @@ final class StampRefinementTests: XCTestCase {
     XCTAssertEqual(stamp.frame.minY, beforeStamp.minY, accuracy: 2)
     XCTAssertGreaterThan(page.frame.height, beforeHeight)
     XCTAssertGreaterThan(stamp.frame.maxY, media.frame.maxY)
-    let next = app.otherElements["home.post.page.full-bleed-fourfive-1"]
+    let pause = page.buttons["Pause video"].firstMatch
+    XCTAssertTrue(pause.isHittable, "Expanded reading must not cover playback controls")
+    pause.tap()
+    XCTAssertTrue(page.buttons["Play video"].firstMatch.waitForExistence(timeout: 3))
+    let next = app.otherElements["home.post.page.full-bleed-threefour-1"]
     if next.exists { XCTAssertGreaterThanOrEqual(next.frame.minY, stamp.frame.maxY + 11) }
     capture(app, "inline-expanded")
     for _ in 0..<5 where !less.isHittable { stream.swipeUp(velocity: .slow) }

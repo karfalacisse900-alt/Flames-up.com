@@ -37,7 +37,14 @@ struct CaptroMediaPager: View {
     naturalMediaHeightToWidthRatio
   }
   private var showsStampOnCurrentSlide: Bool {
-    showsCoverMediaOnly || selectedMediaIndex == 0
+    // Once the reader expands, keep the actual continuation present when they
+    // swipe media. Collapsed stamps retain the existing first-slide behavior.
+    stampReading.expanded || showsCoverMediaOnly || selectedMediaIndex == 0
+  }
+  private var needsTopVideoControls: Bool {
+    guard currentMediaIsVideo, let frameSize else { return false }
+    return stampReading.expanded || dynamicTypeSize.isAccessibilitySize
+      || stampReading.collapsedHeight > frameSize.height * 0.75 - 64
   }
 
   var body: some View {
@@ -81,7 +88,7 @@ struct CaptroMediaPager: View {
         stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: frameSize.width,
           accessibility: dynamicTypeSize.isAccessibilitySize),
         clearance: currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 64 : 20,
-        reading: stampReading) {
+        reading: stampReading, minimumStampTop: currentMediaIsVideo ? 64 : 0) {
         mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         feedStamp(readingBudget: max(normalReadingBudget, frameSize.height * 0.70))
       }
@@ -112,7 +119,10 @@ struct CaptroMediaPager: View {
 
         if currentMediaIsVideo {
           videoControls
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            // Keep the existing actions. Only overflow reading moves them into
+            // the clear upper-left strip, away from text and the slide counter.
+            .frame(maxWidth: .infinity, maxHeight: .infinity,
+              alignment: needsTopVideoControls ? .topLeading : .bottomTrailing)
             .padding(12)
         }
 

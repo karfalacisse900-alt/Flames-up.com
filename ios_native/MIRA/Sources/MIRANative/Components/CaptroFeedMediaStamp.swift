@@ -80,7 +80,7 @@ struct CaptroFeedMediaStamp: View {
           .padding(.top, 2)
           .accessibilityIdentifier("home.post.stamp.caption")
       }
-      if let readingAction {
+      if let readingAction, (clean(content.description) ?? clean(content.summaryText)) != nil {
         Button(readingAction) {
           // A layout change, not navigation. Avoid a spring/scroll animation
           // that would move the reader or animate a playing video.
@@ -148,12 +148,13 @@ struct CaptroMediaStampLayout: Layout {
   let stampWidth: CGFloat
   let clearance: CGFloat
   let reading: CaptroFeedStampReadingState
+  var minimumStampTop: CGFloat = 0
 
   private func placement(_ subviews: Subviews) -> (size: CGSize, y: CGFloat) {
     let size = subviews[1].sizeThatFits(ProposedViewSize(width: stampWidth, height: nil))
     let anchorHeight = reading.expanded && reading.collapsedHeight > 0 ? reading.collapsedHeight : size.height
-    return (size, CaptroFeedStampGeometry.originY(mediaHeight: mediaSize.height,
-      stampHeight: anchorHeight, clearance: clearance))
+    return (size, max(minimumStampTop, CaptroFeedStampGeometry.originY(mediaHeight: mediaSize.height,
+      stampHeight: anchorHeight, clearance: clearance)))
   }
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     let stamp = placement(subviews)
