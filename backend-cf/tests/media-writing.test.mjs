@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateMediaWritingOverlays } from '../src/media-writing.ts';
+import { PGlite } from '@electric-sql/pglite';
 const overlay = () => ({ type: 'media_writing', media_index: 0, writing: {
   schema_version: 1, text: 'FRIDAY NIGHT\nNYC', style: 'bold', alignment: 'left', color: 'white',
   readability: false, x: 0.5, y: 0.2, width: 0.82, size: 'medium', source_aspect_ratio: 0.75,
@@ -26,4 +27,12 @@ test('invalid versions, typography, coordinates, paragraphs fail instead of sile
 });
 test('legacy editor metadata is not misinterpreted as unflattened writing', () => {
   assert.deepEqual(validateMediaWritingOverlays([{ type: 'native_editor', hasTextOverlay: true }], 1), []);
+});
+test('existing JSONB editor_data preserves source-relative writing without flattening', async () => {
+  const db = new PGlite();
+  try {
+    const overlays = validateMediaWritingOverlays([overlay()], 1);
+    const result = await db.query("SELECT ($1::jsonb)->'overlays' AS overlays", [JSON.stringify({ overlays })]);
+    assert.deepEqual(result.rows[0].overlays, overlays);
+  } finally { await db.close(); }
 });

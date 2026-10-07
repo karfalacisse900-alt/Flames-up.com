@@ -7,6 +7,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
     const w = item.writing;
     const version = w?.schemaVersion ?? w?.schema_version;
     const ratio = w?.sourceAspectRatio ?? w?.source_aspect_ratio;
+    const showsStamp = w?.showsStamp ?? w?.shows_stamp ?? true;
     const finite = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
     const count = typeof w?.text === 'string' ? [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(w.text)].length : 0;
     if (!Number.isInteger(index) || index < 0 || index >= mediaCount || seen.has(index)
@@ -17,6 +18,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
       || !['white', 'black', 'green', 'cream'].includes(w.color)
       || !['small', 'medium', 'large'].includes(w.size)
       || typeof w.readability !== 'boolean'
+      || typeof showsStamp !== 'boolean'
       || !finite(w.x, 0, 1) || !finite(w.y, 0, 1) || !finite(w.width, 0.2, 0.9)
       || !finite(ratio, 0.05, 20)) {
       throw new Error('Check your media writing: use a short phrase and valid placement for each media item.');
@@ -25,7 +27,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
     return { type: 'media_writing', mediaIndex: index, writing: {
       schemaVersion: 1, text: w.text, style: w.style, alignment: w.alignment,
       color: w.color, readability: w.readability, x: w.x, y: w.y, width: w.width,
-      size: w.size, sourceAspectRatio: ratio,
+      size: w.size, sourceAspectRatio: ratio, showsStamp,
     } };
   });
 }

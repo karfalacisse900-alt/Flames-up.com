@@ -14,6 +14,7 @@ public struct CaptroMediaWriting: Codable, Hashable {
   public var width: CGFloat = 0.82
   public var size = "medium"
   public var sourceAspectRatio: CGFloat = 1
+  public var showsStamp: Bool? = nil
 
   public init() {}
 

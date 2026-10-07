@@ -1083,7 +1083,7 @@ public struct CreatePostNativeView: View {
   @ScaledMetric(relativeTo: .body) private var writingSize: CGFloat = 18
   @State private var writingFocused = false
   private enum Presentation: Equatable, Identifiable {
-    case startWith, audience, time, add, media, camera, voice, structured, mediaWriting
+    case startWith, audience, time, add, media, camera, voice, structured, mediaWriting, writingSource
     case detail(PostDetailSheet)
     var id: String {
       switch self {
@@ -1364,11 +1364,16 @@ public struct CreatePostNativeView: View {
     .photosPicker(isPresented: presentationBinding(.media), selection: $pickerItems,
       maxSelectionCount: max(1, 10 - mediaItems.count),
       matching: .any(of: [.images, .videos]), preferredItemEncoding: .current)
-    .fullScreenCover(isPresented: presentationBinding(.camera)) {
+    .fullScreenCover(isPresented: presentationBinding(.camera), onDismiss: {
+      if writingAfterMediaSelection, !mediaItems.isEmpty {
+        writingAfterMediaSelection = false
+        openPresentation(.mediaWriting)
+      }
+    }) {
       MIRAStoryLiveCameraView(captureMode: .photoAndVideo, showsMusicButton: false,
         showsGridOverlay: false, simpleCaptureUI: true,
         onCapture: { media in addCapturedMediaAndContinue(media); presentation = nil },
-        onCancel: { presentation = nil },
+        onCancel: { writingAfterMediaSelection = false; presentation = nil },
         onGallerySelection: { media in addGalleryMedia(media); presentation = nil })
         .ignoresSafeArea()
     }
@@ -1382,6 +1387,11 @@ public struct CreatePostNativeView: View {
       case .audience: audiencePicker
       case .time: timePicker
       case .add: addPicker
+      case .writingSource:
+        CaptroSelectionSheet(title: "Text on media") {
+          CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { transitionFromSelection(to: .media) }
+          CaptroSelectionRow(title: "Camera", symbol: "camera") { transitionFromSelection(to: .camera) }
+        }
       case .detail(.location):
         PostLocationPickerSheet(api: api, selectedPlace: $draft.selectedPlace, onClose: closeSheet)
       case .detail(.city):
@@ -1430,7 +1440,7 @@ public struct CreatePostNativeView: View {
   private var selectionPresentationBinding: Binding<Presentation?> {
     Binding(
       get: {
-        switch presentation { case .startWith, .audience, .time, .add, .detail: return presentation; default: return nil }
+        switch presentation { case .startWith, .audience, .time, .add, .detail, .writingSource: return presentation; default: return nil }
       },
       set: { presentation = $0 }
     )
@@ -1667,13 +1677,13 @@ public struct CreatePostNativeView: View {
 
   private var addPicker: some View {
     CaptroSelectionSheet(title: "Add") {
-      CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { transitionFromSelection(to: .media) }
+      CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { writingAfterMediaSelection = false; transitionFromSelection(to: .media) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
-      CaptroSelectionRow(title: "Camera", symbol: "camera") { transitionFromSelection(to: .camera) }
+      CaptroSelectionRow(title: "Camera", symbol: "camera") { writingAfterMediaSelection = false; transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       CaptroSelectionRow(title: "Text on media", symbol: "textformat") {
         writingAfterMediaSelection = mediaItems.isEmpty
-        transitionFromSelection(to: mediaItems.isEmpty ? .media : .mediaWriting)
+        transitionFromSelection(to: mediaItems.isEmpty ? .writingSource : .mediaWriting)
       }.disabled(isLoadingMedia)
       CaptroSelectionRow(title: "Responses", symbol: "checkmark.circle") { transitionFromSelection(to: .detail(.response)) }
         .disabled(!mediaItems.isEmpty || voiceDraft != nil)
@@ -1692,7 +1702,11 @@ public struct CreatePostNativeView: View {
                 }
               }
             HStack {
-              Button("Edit") { writingFocused = false; editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index) }
+              Button("Edit") {
+                writingFocused = false
+                if item.mediaWriting != nil { openPresentation(.mediaWriting) }
+                else { editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index) }
+              }
               Spacer()
               Button("Remove", role: .destructive) { removeMedia(at: index) }
             }.font(.caption).frame(minHeight: 44)
@@ -2198,6 +2212,15 @@ public struct CreatePostNativeView: View {
       activeUploadIndex = nil
     }
     do {
+      if mediaItems.contains(where: { $0.mediaWriting != nil }) {
+        let capabilities: CaptroCreationCapabilities = try await api.get("/posts/creation-capabilities")
+        guard capabilities.mediaWritingVersion == 1 else {
+          throw MIRAAPIError.server(status: 409, code: "MEDIA_WRITING_UNAVAILABLE", detail: "Text on media is not available on this server yet. Your draft is saved; try again later.")
+        }
+        if let invalid = mediaItems.compactMap({ $0.mediaWriting?.validationMessage }).first {
+          throw MIRAAPIError.server(status: 400, code: "MEDIA_WRITING_INVALID", detail: invalid)
+        }
+      }
       if commerceDraft.enabled && commerceDraft.isPaid && commerceDraft.isUsedOutsideApp {
         guard await preparePayoutAccountForPublishing() else { return }
       }

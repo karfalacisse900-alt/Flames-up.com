@@ -83,7 +83,15 @@ struct CaptroMediaPager: View {
 
   @ViewBuilder
   private var sizedMedia: some View {
-    if let frameSize {
+    if let frameSize, post.mediaWriting(at: 0)?.showsStamp == false {
+      mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
+        .overlay(alignment: .bottomLeading) {
+          if post.detail?.voice != nil || post.hasAudio {
+            CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
+              .padding(8).background(MIRATheme.Color.surface).padding(.leading, 20).padding(.bottom, 64)
+          }
+        }
+    } else if let frameSize {
       CaptroMediaStampLayout(mediaSize: frameSize,
         stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: frameSize.width,
           accessibility: dynamicTypeSize.isAccessibilitySize),
@@ -186,8 +194,8 @@ struct CaptroMediaPager: View {
     let floor: CGFloat = currentMediaIsVideo ? 64 : 0
     // Keep published writing fixed. Move only the stamp/real continuation, not
     // the image or artwork, if the creator deliberately chose a low position.
-    guard let writing = post.mediaWriting(at: selectedMediaIndex) else { return floor }
-    return max(floor, writing.textRect(in: size, fill: true).maxY + 12)
+    let bottom = mediaURLs.indices.compactMap { post.mediaWriting(at: $0)?.textRect(in: size, fill: true).maxY }.max() ?? 0
+    return max(floor, bottom > 0 ? bottom + 12 : 0)
   }
 
   private var declaredCoverHeightToWidthRatio: CGFloat? {

@@ -65,5 +65,5 @@ struct CaptroCompositionDraft {
 
 struct CaptroCreationCapabilities: Decodable {
   let structuredTypes: [String]
+  var mediaWritingVersion: Int? = nil
 }
-

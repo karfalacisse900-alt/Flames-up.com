@@ -1,9 +1,25 @@
 import XCTest
 import UIKit
 import UniformTypeIdentifiers
+import ImageIO
 @testable import MIRANative
 
 final class CaptroPostMediaTests: XCTestCase {
+  func testRotatedPhotoMetadataUsesDisplayedOrientationWithoutReencoding() async throws {
+    let format = UIGraphicsImageRendererFormat(); format.scale = 1
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 20), format: format).image { context in
+      UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 40, height: 20))
+    }
+    let bytes = NSMutableData()
+    let destination = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, UTType.jpeg.identifier as CFString, 1, nil))
+    CGImageDestinationAddImage(destination, try XCTUnwrap(image.cgImage), [kCGImagePropertyOrientation: 6] as CFDictionary)
+    XCTAssertTrue(CGImageDestinationFinalize(destination))
+    let media = MIRAPickedMedia(data: bytes as Data, kind: .image, fileName: "rotated.jpg", mimeType: "image/jpeg")
+    let dimension = await media.mediaDimension()
+    XCTAssertEqual(dimension.originalWidth, 20)
+    XCTAssertEqual(dimension.originalHeight, 40)
+    XCTAssertEqual(media.data, bytes as Data)
+  }
   func testMediaWritingRoundTripPreservesOriginalBytesAndMetadata() throws {
     var writing = CaptroMediaWriting()
     writing.text = "FRIDAY NIGHT\nNYC"

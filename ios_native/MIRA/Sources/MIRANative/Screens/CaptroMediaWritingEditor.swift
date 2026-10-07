@@ -44,14 +44,15 @@ struct CaptroMediaWritingEditor: View {
     items.compactMap { item -> String? in
       guard let value = item.mediaWriting, !value.text.isEmpty else { return nil }
       if let error = value.validationMessage { return error }
-      let size = CGSize(width: 390, height: 390 * MIRAMediaSizing.supportedPostHeightToWidthRatio(1 / value.sourceAspectRatio))
+      let size = CGSize(width: 390, height: 390 * homeRatio)
       let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 10, dy: 10)
       if !bounds.contains(value.textRect(in: size, fill: true)) { return "The writing extends outside Home’s crop. Move it inward or choose Small." }
       return nil
     }.first
   }
   private var sourceRatio: CGFloat { ratios.indices.contains(selected) ? ratios[selected] : 1 }
-  private var homeRatio: CGFloat { MIRAMediaSizing.supportedPostHeightToWidthRatio(1 / sourceRatio) }
+  // A carousel has one cover-derived Home canvas, even for mixed source ratios.
+  private var homeRatio: CGFloat { MIRAMediaSizing.supportedPostHeightToWidthRatio(1 / (ratios.first ?? 1)) }
 
   var body: some View {
     NavigationStack {
@@ -59,7 +60,7 @@ struct CaptroMediaWritingEditor: View {
         ScrollView {
           VStack(spacing: 12) {
             if !items.isEmpty {
-              let width = page.size.width - 32
+              let width = min(page.size.width - 32, max(160, (page.size.height - 205) / homeRatio))
               canvas(size: CGSize(width: width, height: width * homeRatio))
               if items.count > 1 {
                 HStack {
@@ -110,6 +111,7 @@ struct CaptroMediaWritingEditor: View {
       ratios = loaded
     }
     .task(id: selected) { await loadMedia() }
+    .onAppear { MIRAPlaybackCoordinator.pauseAll(reason: "media_writing_editor_open") }
     .onChange(of: scenePhase) { _, phase in if phase != .active { player?.pause() } }
     .onDisappear { cleanup() }
   }
@@ -123,13 +125,13 @@ struct CaptroMediaWritingEditor: View {
         else { ProgressView() }
       }.frame(width: size.width, height: size.height).clipped()
       // Advisory preview, not a permanent overlay on published media.
-      Rectangle().fill(.black.opacity(0.08))
+      if writing.showsStamp != false { Rectangle().fill(.black.opacity(0.08))
         .overlay(alignment: .topLeading) {
           Text("Stamp area").font(.caption2).padding(6).background(.ultraThinMaterial)
         }
         .frame(width: size.width * 0.73, height: size.height * 0.50)
         .offset(x: size.width * 0.054, y: size.height * 0.48)
-        .allowsHitTesting(false).accessibilityHidden(true)
+        .allowsHitTesting(false).accessibilityHidden(true) }
       if !writing.text.isEmpty {
         CaptroMediaWritingLayer(writing: resolvedWriting, container: size)
         let rect = resolvedWriting.textRect(in: size, fill: true)
@@ -153,7 +155,13 @@ struct CaptroMediaWritingEditor: View {
           .offset(x: size.width / 2).allowsHitTesting(false).accessibilityHidden(true)
       }
       if player != nil {
-        Button { if player?.rate == 0 { player?.play() } else { player?.pause() } } label: {
+        Button {
+          if let player, player.rate == 0 {
+            if let duration = player.currentItem?.duration.seconds, duration.isFinite,
+               player.currentTime().seconds >= duration { player.seek(to: .zero) }
+            player.play()
+          } else { player?.pause() }
+        } label: {
           Image(systemName: "playpause.fill").padding(12).background(.ultraThinMaterial, in: Circle())
         }.padding(8).frame(width: size.width, height: size.height, alignment: .bottomTrailing)
           .accessibilityLabel("Play or pause video preview")
@@ -183,6 +191,10 @@ struct CaptroMediaWritingEditor: View {
         Text("Left").tag("left"); Text("Center").tag("center"); Text("Right").tag("right")
       }.pickerStyle(.segmented)
     case "position":
+      if selected == 0 {
+        Toggle("Show Captro stamp", isOn: Binding(get: { writing.showsStamp != false }, set: { writing.showsStamp = $0 }))
+          .font(.subheadline)
+      }
       Text("Drag the writing on the photo, or choose a position. Lower writing may put the stamp below the image.")
         .font(.footnote).foregroundStyle(.secondary)
       HStack {
@@ -225,7 +237,8 @@ struct CaptroMediaWritingEditor: View {
     do {
       let ext = (item.fileName as NSString).pathExtension
       let url = FileManager.default.temporaryDirectory.appendingPathComponent("captro-writing-\(UUID().uuidString).\(ext.isEmpty ? "mov" : ext)")
-      try item.data.write(to: url, options: .atomic)
+      try await Task.detached(priority: .userInitiated) { try item.data.write(to: url, options: .atomic) }.value
+      guard !Task.isCancelled else { try? FileManager.default.removeItem(at: url); return }
       temporaryVideo = url; player = AVPlayer(url: url)
     } catch { loadError = "This video could not be opened. Try selecting it again." }
   }

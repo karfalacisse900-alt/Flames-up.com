@@ -51,7 +51,7 @@ test('Post Assist uses the same server-side OpenAI key and does not return fake 
 test('new post text, captions, and comment replies are screened before publication', () => {
   const create = backend.split("api.post('/posts', authMiddleware")[1].split("api.get('/posts/feed'")[0];
   const comments = backend.split("api.post('/posts/:postId/comments', authMiddleware")[1].split("api.get('/posts/:postId/comments'")[0];
-  assert.match(create, /screenCaptroText\(c\.env, \[postTitle, postContent\]/);
+  assert.match(create, /screenCaptroText\(c\.env, \[postTitle, postContent, \.\.\.mediaWriting\.map\(item => item\.writing\.text\)\]/);
   assert.match(create, /TEXT_NEEDS_REVISION/);
   assert.match(create, /TEXT_SCREENING_UNAVAILABLE/);
   assert.match(comments, /surface: parentId \? 'comment_reply' : 'comment'/);

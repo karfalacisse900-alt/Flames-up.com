@@ -148,14 +148,13 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(mainFeed, /safeAreaPadding\(\.bottom, bottomInset \+ 12\)/);
 });
 
-test('Home media preserves every supported source ratio inside the rectangular viewport', () => {
+test('Home media uses supported metadata ratios and controlled crop; Details preserves originals', () => {
   assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.doesNotMatch(mediaPager, /measuredCoverHeightToWidthRatio|onMeasuredRatio:/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
-  assert.match(mediaPager, /contentMode: \.fit/);
-  assert.doesNotMatch(mediaPager, /contentMode: \.fill/);
+  assert.match(mediaPager, /contentMode: \.fill/);
   assert.match(mediaPager, /MIRAMediaSizing\.supportedPostHeightToWidthRatio\(ratio\)/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
@@ -238,7 +237,7 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.doesNotMatch(mediaPager, /feedStamp\(lines:|min\(280, max\(68/);
   assert.match(mediaStamp, /ViewThatFits\(in: \.vertical\)/);
   assert.match(mediaStamp, /card\(captionLines: nil, readingAction: nil\)/);
-  assert.match(mediaStamp, /card\(captionLines: 6, readingAction: "Read more"\)/);
+  assert.match(mediaStamp, /card\(captionLines: 4, readingAction: "Read more"\)/);
   assert.match(mediaStamp, /card\(captionLines: nil, readingAction: "Show less"\)/);
   assert.match(mediaStamp, /reading\.expanded\.toggle\(\)/);
   assert.match(mediaStamp, /stamp\.y \+ stamp\.size\.height \+ 12/);

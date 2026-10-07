@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import UIKit
+import ImageIO
 import UniformTypeIdentifiers
 
 public enum MIRAPickedMediaKind: String, Hashable {
@@ -37,6 +38,15 @@ public struct MIRAPickedMedia: Hashable {
     switch kind {
     case .image:
       size = await Task.detached(priority: .utility) {
+        if let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+           let height = properties[kCGImagePropertyPixelHeight] as? NSNumber {
+          let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+          let swapped = (5...8).contains(orientation)
+          return CGSize(width: swapped ? height.doubleValue : width.doubleValue,
+            height: swapped ? width.doubleValue : height.doubleValue)
+        }
         guard let image = UIImage(data: data) else { return nil }
         return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
       }.value

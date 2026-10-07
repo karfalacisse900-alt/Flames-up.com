@@ -16707,7 +16707,7 @@ api.get('/posts/creation-capabilities', authMiddleware, async (c) => {
   if (restricted) return restricted;
   const user = await getSupabaseAppUserRowByAnyId(c, getUserId(c));
   if (!user) return c.json({ detail: 'User not found.' }, 404);
-  return c.json({ structured_types: ['club', 'event', 'meetup', 'deal'] }, 200,
+  return c.json({ structured_types: ['club', 'event', 'meetup', 'deal'], media_writing_version: 1 }, 200,
     { 'Cache-Control': 'no-store' });
 });
 
