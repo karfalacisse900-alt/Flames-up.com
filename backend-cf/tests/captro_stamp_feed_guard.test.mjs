@@ -53,7 +53,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 3\)/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 16\)/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
