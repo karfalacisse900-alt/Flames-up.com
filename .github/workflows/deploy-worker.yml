@@ -30,6 +30,10 @@ on:
         description: Validate reliability deployment without changing production
         type: boolean
         default: true
+      worker_only:
+        description: With reliability_only, deploy API code only; never apply database migrations
+        type: boolean
+        default: false
       refresh_stream_token:
         description: Refresh only the Worker Stream upload credential from the existing deployment token
         type: boolean
@@ -80,6 +84,7 @@ jobs:
           cache: npm
           cache-dependency-path: backend-cf/package-lock.json
       - uses: supabase/setup-cli@v1
+        if: ${{ inputs.worker_only != true }}
         with:
           version: v2.106.0
       - run: npm ci
@@ -89,6 +94,7 @@ jobs:
       - run: npm test
         working-directory: backend-cf
       - name: Verify pending migrations are limited to the reviewed Captro changes
+        if: ${{ inputs.worker_only != true }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
@@ -126,7 +132,7 @@ jobs:
             echo '::warning::Production Worker has no OPENAI_API_KEY; voice uploads remain private and fail closed.'
           fi
       - name: Apply only validated Captro migrations
-        if: ${{ inputs.reliability_dry_run != true }}
+        if: ${{ inputs.reliability_dry_run != true && inputs.worker_only != true }}
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
