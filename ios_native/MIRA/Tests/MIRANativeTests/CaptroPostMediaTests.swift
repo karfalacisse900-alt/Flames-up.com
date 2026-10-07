@@ -5,6 +5,13 @@ import ImageIO
 @testable import MIRANative
 
 final class CaptroPostMediaTests: XCTestCase {
+  func testFutureOverlayDoesNotBreakPostDecoding() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let post = try decoder.decode(MIRAPost.self, from: Data("""
+      {"id":"future","editor_overlays":[{"type":"media_writing","media_index":0,"writing":{"schema_version":99}}]}
+      """.utf8))
+    XCTAssertNil(post.mediaWriting(at: 0))
+  }
   func testRotatedPhotoMetadataUsesDisplayedOrientationWithoutReencoding() async throws {
     let format = UIGraphicsImageRendererFormat(); format.scale = 1
     let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 20), format: format).image { context in

@@ -18,8 +18,9 @@ struct CaptroMediaWritingEditor: View {
   @FocusState private var textFocused: Bool
   let onSave: ([MIRAPickedMedia]) -> Void
 
-  init(items: [MIRAPickedMedia], onSave: @escaping ([MIRAPickedMedia]) -> Void) {
+  init(items: [MIRAPickedMedia], initialIndex: Int = 0, onSave: @escaping ([MIRAPickedMedia]) -> Void) {
     _items = State(initialValue: items)
+    _selected = State(initialValue: min(max(0, initialIndex), max(0, items.count - 1)))
     self.onSave = onSave
   }
   private var writing: CaptroMediaWriting {
@@ -31,7 +32,7 @@ struct CaptroMediaWritingEditor: View {
       let source = value.sourceRect(in: canvas, fill: true)
       value.width = min(value.width, (canvas.width - 24) / source.width)
       let textSize = value.measuredSize(mediaWidth: source.width)
-      let minY = (12 - source.minY + textSize.height / 2) / source.height
+      let minY = (52 - source.minY + textSize.height / 2) / source.height
       let maxY = (canvas.height - 52 - source.minY - textSize.height / 2) / source.height
       if minY <= maxY { value.y = min(maxY, max(minY, value.y)) }
       items[selected].mediaWriting = value
@@ -125,7 +126,7 @@ struct CaptroMediaWritingEditor: View {
         else { ProgressView() }
       }.frame(width: size.width, height: size.height).clipped()
       // Advisory preview, not a permanent overlay on published media.
-      if writing.showsStamp != false { Rectangle().fill(.black.opacity(0.08))
+      if items.first?.mediaWriting?.showsStamp != false { Rectangle().fill(.black.opacity(0.08))
         .overlay(alignment: .topLeading) {
           Text("Stamp area").font(.caption2).padding(6).background(.ultraThinMaterial)
         }
@@ -215,7 +216,7 @@ struct CaptroMediaWritingEditor: View {
     let text = value.measuredSize(mediaWidth: source.width)
     let minX = (12 - source.minX + text.width / 2) / source.width
     let maxX = (canvas.width - 12 - source.minX - text.width / 2) / source.width
-    let minY = (12 - source.minY + text.height / 2) / source.height
+    let minY = (52 - source.minY + text.height / 2) / source.height
     let maxY = (canvas.height - 52 - source.minY - text.height / 2) / source.height
     value.x = min(maxX, max(minX, x)); value.y = min(maxY, max(minY, y))
     writing = value

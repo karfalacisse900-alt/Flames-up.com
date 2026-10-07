@@ -1095,6 +1095,7 @@ public struct CreatePostNativeView: View {
   @State private var presentation: Presentation?
   @State private var queuedPresentation: Presentation?
   @State private var writingAfterMediaSelection = false
+  @State private var writingMediaIndex = 0
   @State private var showsMoreCreationWays = false
   @State private var pendingTime = Date()
   @State private var creationCapabilities: CaptroCreationCapabilities?
@@ -1359,7 +1360,7 @@ public struct CreatePostNativeView: View {
       stampDetailsPage
     }
     .fullScreenCover(isPresented: presentationBinding(.mediaWriting)) {
-      CaptroMediaWritingEditor(items: mediaItems) { updated in mediaItems = updated }
+      CaptroMediaWritingEditor(items: mediaItems, initialIndex: writingMediaIndex) { updated in mediaItems = updated }
     }
     .photosPicker(isPresented: presentationBinding(.media), selection: $pickerItems,
       maxSelectionCount: max(1, 10 - mediaItems.count),
@@ -1682,6 +1683,7 @@ public struct CreatePostNativeView: View {
       CaptroSelectionRow(title: "Camera", symbol: "camera") { writingAfterMediaSelection = false; transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       CaptroSelectionRow(title: "Text on media", symbol: "textformat") {
+        writingMediaIndex = 0
         writingAfterMediaSelection = mediaItems.isEmpty
         transitionFromSelection(to: mediaItems.isEmpty ? .writingSource : .mediaWriting)
       }.disabled(isLoadingMedia)
@@ -1704,7 +1706,7 @@ public struct CreatePostNativeView: View {
             HStack {
               Button("Edit") {
                 writingFocused = false
-                if item.mediaWriting != nil { openPresentation(.mediaWriting) }
+                if item.mediaWriting != nil { writingMediaIndex = index; openPresentation(.mediaWriting) }
                 else { editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index) }
               }
               Spacer()

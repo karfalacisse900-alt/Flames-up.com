@@ -126,12 +126,17 @@ struct CaptroMediaPager: View {
         }
 
         if currentMediaIsVideo {
-          videoControls
+          if let writing = post.mediaWriting(at: selectedMediaIndex) {
+            videoControls.padding(.trailing, 12)
+              .padding(.top, min(proxy.size.height - 52, writing.textRect(in: proxy.size, fill: true).maxY + 8))
+              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+          } else { videoControls
             // Keep the existing actions. Only overflow reading moves them into
             // the clear upper-left strip, away from text and the slide counter.
             .frame(maxWidth: .infinity, maxHeight: .infinity,
               alignment: needsTopVideoControls ? .topLeading : .bottomTrailing)
             .padding(12)
+          }
         }
 
         if mediaURLs.count > 1 && !showsCoverMediaOnly {
@@ -195,7 +200,7 @@ struct CaptroMediaPager: View {
     // Keep published writing fixed. Move only the stamp/real continuation, not
     // the image or artwork, if the creator deliberately chose a low position.
     let bottom = mediaURLs.indices.compactMap { post.mediaWriting(at: $0)?.textRect(in: size, fill: true).maxY }.max() ?? 0
-    return max(floor, bottom > 0 ? bottom + 12 : 0)
+    return max(floor, bottom > 0 ? bottom + (mediaURLs.contains(where: { $0.isVideoURL }) ? 64 : 12) : 0)
   }
 
   private var declaredCoverHeightToWidthRatio: CGFloat? {

@@ -31,6 +31,7 @@ final class MediaWritingTests: XCTestCase {
     app.launch()
     let stream = app.scrollViews["home.post.stream"]
     XCTAssertTrue(stream.waitForExistence(timeout: 40))
+    XCTAssertTrue(app.otherElements["home.post.media"].firstMatch.waitForExistence(timeout: 40))
     for index in 0..<7 {
       capture(app, "writing-runtime-feed-\(index)")
       stream.swipeUp(velocity: .slow)

@@ -77,6 +77,19 @@ public struct CaptroMediaWritingEnvelope: Codable, Hashable {
   public var type: String?
   public var mediaIndex: Int?
   public var writing: CaptroMediaWriting?
+
+  public init(type: String?, mediaIndex: Int?, writing: CaptroMediaWriting?) {
+    self.type = type; self.mediaIndex = mediaIndex; self.writing = writing
+  }
+  private enum CodingKeys: String, CodingKey { case type, mediaIndex, writing }
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    type = try? container.decode(String.self, forKey: .type)
+    mediaIndex = try? container.decode(Int.self, forKey: .mediaIndex)
+    // A legacy or future editor record must not prevent the whole feed loading.
+    writing = try? container.decode(CaptroMediaWriting.self, forKey: .writing)
+    if writing?.schemaVersion != 1 { writing = nil }
+  }
 }
 
 extension MIRAPost {
