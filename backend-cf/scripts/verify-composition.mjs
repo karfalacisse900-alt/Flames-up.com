@@ -52,6 +52,7 @@ try {
   const read = await request(`${api}/posts/${first.id}`, { headers: owner });
   assert.equal(read.visibility, 'private');
   assert.equal(read.content, body.content, 'The message was rewritten');
+  assert.equal(read.creation_intent, 'looking_for', 'Home cannot distinguish an authored title from an index headline');
   await request(`${api}/posts/${first.id}`, { headers: other }, 404);
   const metadata = async (id) => {
     const rows = await request(`${base}/rest/v1/app_posts?legacy_post_id=eq.${encodeURIComponent(id)}&select=metadata,visibility`, { headers: admin });
@@ -71,6 +72,20 @@ try {
     creation_time: null, post_response: null, client_request_id: `composer-smoke:${crypto.randomUUID()}` });
   const emojiRead = await request(`${api}/posts/${emoji.id}`, { headers: owner });
   assert.equal(emojiRead.content, emojiMessage, 'Valid extended emoji message was truncated');
+  const publicPosts = await request(`${api}/posts/world-board?limit=10&skip=0`);
+  const media = publicPosts.flatMap(post => post.images || []).find(value => typeof value === 'string' && value);
+  assert.ok(media, 'Need one real public media reference for rejection-only tests');
+  // These oversized requests must fail before media ownership/upload work; no
+  // public asset is copied or republished by the disposable account.
+  const withMedia = { ...body, images: [media], post_response: null, creation_time: null };
+  assert.equal((await create({ ...withMedia, content: 'a'.repeat(221), client_request_id: crypto.randomUUID() }, 400)).code, 'MEDIA_CAPTION_TOO_LONG');
+  assert.equal((await create({ ...withMedia, title: 'a'.repeat(61), client_request_id: crypto.randomUUID() }, 400)).code, 'MEDIA_TITLE_TOO_LONG');
+  assert.equal((await create({ ...withMedia, post_type: 'club', creation_intent: null,
+    commerce: { title: 'a'.repeat(61) }, client_request_id: crypto.randomUUID() }, 400)).code, 'MEDIA_TITLE_TOO_LONG');
+  const writing = { schemaVersion: 1, text: 'a'.repeat(61), style: 'clean', alignment: 'left', color: 'white',
+    readability: false, x: .5, y: .2, width: .8, size: 'small', sourceAspectRatio: .75 };
+  assert.equal((await create({ ...withMedia, editor_overlays: [{ type: 'media_writing', mediaIndex: 0, writing }],
+    client_request_id: crypto.randomUUID() }, 400)).code, 'MEDIA_WRITING_INVALID');
   await create({ ...body, content: 'a'.repeat(501), client_request_id: crypto.randomUUID() }, 400);
   await create({ ...body, creation_intent: 'post', client_request_id: crypto.randomUUID() }, 400);
   await create({ ...body, visibility: 'invalid', client_request_id: crypto.randomUUID() }, 400);
@@ -79,7 +94,7 @@ try {
     retryIdempotent: true, originalMessagePreserved: true, privateVisibilityEnforced: true,
     intentAndTimePersisted: true, concernTimeExcluded: true, customChoicesPersisted: true,
     invalidInputRejected: true, extendedEmojiPreserved: true, mediaWritingCapability: 1,
-    productionCredentialsExposed: false }));
+    newMediaWritingLimitsEnforced: true, productionCredentialsExposed: false }));
 } finally {
   const failures = [];
   for (const user of users) {

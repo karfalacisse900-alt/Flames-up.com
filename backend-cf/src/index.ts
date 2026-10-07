@@ -16782,11 +16782,13 @@ api.post('/posts', authMiddleware, async (c) => {
     return c.json({ detail: 'Choose a valid message and audience.', code: 'COMPOSITION_INVALID' }, 400);
   }
   const rawContent = typeof (b.content ?? b.text) === 'string' ? (b.content ?? b.text) : '';
-  const stampWritingError = newMediaStampWritingError({
-    mediaCount: sanitizeMediaReferences(b.images, b.image).length, postType,
-    title: typeof (b.title ?? b.headline) === 'string' ? (b.title ?? b.headline) : '', caption: rawContent,
-  });
-  if (stampWritingError) return c.json(stampWritingError, 400);
+  for (const suppliedTitle of [b.title ?? b.headline, b.commerce?.title]) {
+    const stampWritingError = newMediaStampWritingError({
+      mediaCount: sanitizeMediaReferences(b.images, b.image).length, postType,
+      title: typeof suppliedTitle === 'string' ? suppliedTitle : '', caption: rawContent,
+    });
+    if (stampWritingError) return c.json(stampWritingError, 400);
+  }
   if (creationIntent && compositionCharacterCount(rawContent) > 500) {
     return c.json({ detail: 'Keep your message within 500 characters.', code: 'COMPOSITION_TOO_LONG' }, 400);
   }
