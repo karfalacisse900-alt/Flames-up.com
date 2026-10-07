@@ -17,7 +17,7 @@ export function newMediaStampWritingError(input: {
   if (compositionCharacterCount(input.title) > 60) {
     return { code: 'MEDIA_TITLE_TOO_LONG', detail: 'Keep media titles within 60 characters. Your draft was not published.' };
   }
-  if (['general', 'social', 'moment', 'place', 'check_in'].includes(input.postType)
+  if (['general', 'social', 'moment', 'check_in'].includes(input.postType)
       && compositionCharacterCount(input.caption) > 220) {
     return { code: 'MEDIA_CAPTION_TOO_LONG', detail: 'Keep media captions within 220 characters. Your draft was not published.' };
   }

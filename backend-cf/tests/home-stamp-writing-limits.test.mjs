@@ -10,7 +10,7 @@ test('new media captions and supplied titles have independent grapheme limits', 
   assert.equal(newMediaStampWritingError({ ...input, caption: '👨‍👩‍👧‍👦'.repeat(220) }), null);
 });
 test('text-only and full structured descriptions retain their separate limits', () => {
-  for (const postType of ['club', 'event', 'meetup', 'deal']) {
+  for (const postType of ['club', 'event', 'meetup', 'deal', 'place']) {
     assert.equal(newMediaStampWritingError({ ...input, postType, caption: 'a'.repeat(4000) }), null);
   }
   assert.equal(newMediaStampWritingError({ ...input, mediaCount: 0, title: 'a'.repeat(100), caption: 'a'.repeat(500) }), null);
