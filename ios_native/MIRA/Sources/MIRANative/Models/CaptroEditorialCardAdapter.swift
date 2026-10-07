@@ -183,6 +183,18 @@ enum CaptroHomeStampContext {
 }
 
 extension CaptroEditorialCardContent {
+  var homeStampMetadata: String {
+    let values: [String?] = [.event, .meetup].contains(type)
+      ? [scheduleText, locationText, chipText, priceText, availabilityText]
+      : [subtitle ?? locationText, chipText, priceText, scheduleText, availabilityText]
+    var parts: [String] = []
+    for value in values {
+      let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if !value.isEmpty && !parts.contains(value) { parts.append(value) }
+    }
+    return parts.joined(separator: " · ")
+  }
+
   /// Draft preview uses only entered fields. Counts, benefits, and payment
   /// states are never invented before the attached object exists on the server.
   init(draftStamp stamp: CaptroStampContent) {

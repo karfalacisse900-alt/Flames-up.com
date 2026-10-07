@@ -36,6 +36,7 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertEqual(titleless.captroMediaFeedCardContent.title, "")
     XCTAssertNil(titleless.captroMediaFeedCardContent.subtitle)
     XCTAssertEqual(titleless.captroMediaFeedCardContent.description, "My words")
+    XCTAssertEqual(titleless.captroMediaFeedCardContent.homeStampMetadata, "")
     let authored = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"authored","post_type":"general","title":"Moment","caption":"Not a generated label"}"#.utf8))
     XCTAssertEqual(authored.captroMediaFeedCardContent.title, "Moment", "Never delete a user's actual title")
     let intent = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"intent","post_type":"general","title":"A generated headline","content":"A generated headline","creation_intent":"want_to"}"#.utf8))

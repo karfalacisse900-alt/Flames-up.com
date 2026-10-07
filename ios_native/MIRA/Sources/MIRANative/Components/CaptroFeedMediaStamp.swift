@@ -91,17 +91,7 @@ struct CaptroFeedMediaStamp: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private var metadata: String {
-    var parts: [String] = []
-    let values: [String?] = [.event, .meetup].contains(content.type)
-      ? [content.scheduleText, content.locationText, content.chipText, content.priceText, content.availabilityText]
-      : [content.subtitle ?? content.locationText, content.chipText, content.priceText, content.scheduleText, content.availabilityText]
-    for value in values {
-      if let value = clean(value), !parts.contains(value) { parts.append(value) }
-    }
-    // No invented type label when all metadata is absent.
-    return parts.joined(separator: " · ")
-  }
+  private var metadata: String { content.homeStampMetadata }
   private var caption: String? { clean(content.description) ?? clean(content.summaryText) }
   private func clean(_ value: String?) -> String? {
     let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

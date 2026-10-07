@@ -100,6 +100,8 @@ final class HomeFullBleedTests: XCTestCase {
     let stream = app.scrollViews["home.post.stream"]
     XCTAssertTrue(stream.waitForExistence(timeout: 15))
     XCTAssertFalse(app.otherElements["home.post.media"].exists)
+    XCTAssertFalse(app.staticTexts["MOMENT"].exists)
+    XCTAssertFalse(app.staticTexts["More"].exists)
     XCTAssertTrue(app.staticTexts["A walk around the neighborhood"].exists)
     capture(app, "continuous-text-accessibility-dark")
     stream.swipeUp()

@@ -104,9 +104,11 @@ test('Moment detail keeps writing on one editorial card without a separate capti
   assert.match(momentDetail, /expanded: true, showsProfileRow: false/);
   assert.doesNotMatch(momentDetail, /fullDescription/);
   assert.doesNotMatch(commerce, /CaptroEditorialOverlayCard\(/);
-  const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('if let voice = post.detail?.voice'));
-  assert.match(textOnly, /textOnlyStamp\(maxBodyLines: 3\)/);
-  assert.match(postView, /let content = post\.captroTextOnlyCardContent/);
+  const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('private func textOnlyStamp'));
+  assert.match(textOnly, /textOnlyStamp\(maxBodyLines: 16\)/);
+  assert.match(postView, /let content = post\.captroMediaFeedCardContent/);
+  const homeTextCard = postView.slice(postView.indexOf('private struct CaptroTextOnlyStampCard'), postView.indexOf('private struct CaptroAuthorHeader'));
+  assert.doesNotMatch(homeTextCard, /Text\(content\.type\.rawValue|CaptroMeasuredCaption/);
   assert.doesNotMatch(textOnly, /Text\(caption\)/);
   assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
 });

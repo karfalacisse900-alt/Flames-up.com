@@ -34,7 +34,7 @@ struct CaptroFeedPostView: View {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
       } else {
-        textOnlyStamp(maxBodyLines: 3)
+        textOnlyStamp(maxBodyLines: 16)
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: max(0, feedWidth - 32), alignment: .leading)
         .padding(.horizontal, 16)
@@ -91,27 +91,24 @@ private struct CaptroTextOnlyStampCard: View {
   @ScaledMetric(relativeTo: .body) private var bodySize = 16.0
 
   var body: some View {
-    let content = post.captroTextOnlyCardContent
+    let content = post.captroMediaFeedCardContent
     VStack(alignment: .leading, spacing: 0) {
       Button(action: onOpen) {
         VStack(alignment: .leading, spacing: 0) {
-          Text(content.type.rawValue.uppercased())
-            .font(.system(size: 12, weight: .medium))
-            .tracking(2)
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .padding(.bottom, 16)
-          Text(content.title)
+          if !content.title.isEmpty { Text(content.title)
             .font(.system(size: titleSize, weight: .bold))
             .tracking(-0.5)
             .lineLimit(3)
             .fixedSize(horizontal: false, vertical: true)
-          if let location = content.subtitle, !location.isEmpty {
-            Text(location).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
-              .padding(.top, 6)
+          }
+          if !content.homeStampMetadata.isEmpty {
+            Text(content.homeStampMetadata).font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+              .padding(.top, content.title.isEmpty ? 0 : 6)
           }
           if let caption = content.description ?? content.summaryText, !caption.isEmpty {
-            CaptroMeasuredCaption(text: caption, size: bodySize, maxLines: maxBodyLines)
-              .padding(.top, 12)
+            Text(caption).font(.system(size: bodySize)).lineSpacing(2)
+              .lineLimit(maxBodyLines).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
+              .padding(.top, content.title.isEmpty && content.homeStampMetadata.isEmpty ? 0 : 12)
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
