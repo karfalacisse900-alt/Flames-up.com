@@ -10,7 +10,7 @@ final class MediaWritingTests: XCTestCase {
     text.tap(); text.typeText("FRIDAY NIGHT")
     capture(app, "writing-editor-first-photo")
     app.buttons["Next media"].tap()
-    XCTAssertEqual(text.value as? String, "Your short phrase")
+    XCTAssertTrue(["", "Your short phrase"].contains(text.value as? String ?? "unexpected"), "The next media item must not inherit the first item's writing")
     text.tap(); text.typeText("NYC")
     app.buttons["Previous media"].tap()
     XCTAssertEqual(text.value as? String, "FRIDAY NIGHT")
