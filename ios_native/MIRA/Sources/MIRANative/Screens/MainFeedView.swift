@@ -877,6 +877,7 @@ public struct MainFeedView: View {
   private let isGuest: Bool
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @ScaledMetric(relativeTo: .body) private var homeTabClearance: CGFloat = 80
   @Environment(\.scenePhase) private var scenePhase
   @State private var activeVideoPostID: String?
   @State private var selectedPostID: String?
@@ -1290,7 +1291,7 @@ public struct MainFeedView: View {
     }
     // Extend beneath Captro's existing tab bar, but reserve its measured safe
     // region ONCE, on the scroll content. Never add this space to each post.
-    .safeAreaPadding(.bottom, bottomInset + 12)
+    .safeAreaPadding(.bottom, bottomInset + homeTabClearance)
     .ignoresSafeArea(.container, edges: .bottom)
     .background(MIRATheme.Color.appBackground)
     .scrollIndicators(.hidden)

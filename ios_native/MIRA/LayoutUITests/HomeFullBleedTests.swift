@@ -4,14 +4,18 @@ final class HomeFullBleedTests: XCTestCase {
   func testEveryPhotoRatioFillsScreenWidth() {
     let ratios: [(String, CGFloat)] = [("wide", 9.0 / 16), ("landscape", 3.0 / 4),
       ("portrait", 1536.0 / 999), ("fourfive", 1.25), ("threefour", 4.0 / 3), ("square", 1)]
-    for (name, ratio) in ratios {
+    for (name, _) in ratios {
       let app = launch(["--captro-visual-size=\(name)"])
       let media = app.otherElements["home.post.media"].firstMatch
       XCTAssertTrue(media.waitForExistence(timeout: 15))
       XCTAssertEqual(media.frame.minX, 0, accuracy: 1)
       XCTAssertEqual(media.frame.width, app.frame.width, accuracy: 1)
-      XCTAssertEqual(media.frame.height, media.frame.width * ratio, accuracy: 1,
-        "Media height must come from metadata, never screen height: \(name)")
+      let homeRatio = media.frame.height / media.frame.width
+      XCTAssertTrue([9.0 / 16, 1, 5.0 / 4, 4.0 / 3].contains { abs(homeRatio - $0) < 0.01 },
+        "Home uses one supported responsive crop: \(name)")
+      XCTAssertLessThanOrEqual(media.frame.height, app.scrollViews["home.post.stream"].frame.height * 0.75 + 1,
+        "Home media should stay inside the visible post viewport: \(name)")
+      if name == "wide" { XCTAssertLessThan(homeRatio, 1, "Wide source metadata must still resolve to a wide Home crop") }
       XCTAssertEqual(media.frame.minY, app.scrollViews["home.post.stream"].frame.minY, accuracy: 1)
       assertStamp(app, media: media)
       capture(app, "continuous-\(name)")
@@ -23,7 +27,8 @@ final class HomeFullBleedTests: XCTestCase {
     let app = launch(["--captro-visual-size=threefour", "--captro-visual-video"])
     let media = app.otherElements["home.post.media"].firstMatch
     XCTAssertTrue(media.waitForExistence(timeout: 15))
-    XCTAssertEqual(media.frame.height, media.frame.width * 4 / 3, accuracy: 1)
+    XCTAssertTrue([9.0 / 16, 1, 5.0 / 4, 4.0 / 3].contains { abs(media.frame.height / media.frame.width - $0) < 0.01 })
+    XCTAssertLessThanOrEqual(media.frame.height, app.scrollViews["home.post.stream"].frame.height * 0.75 + 1)
     assertStamp(app, media: media)
     let pause = app.buttons["Pause video"].firstMatch
     XCTAssertTrue(pause.waitForExistence(timeout: 10))

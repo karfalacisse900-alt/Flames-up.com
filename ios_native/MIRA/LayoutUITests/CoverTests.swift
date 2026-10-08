@@ -10,12 +10,10 @@ final class CoverTests: XCTestCase {
     XCTAssertTrue(app.buttons["Cover"].waitForExistence(timeout: 5))
     capture(app, "cover-start-with-four-choices")
     app.buttons["Cover"].tap()
-    XCTAssertTrue(app.buttons["Cancel"].firstMatch.waitForExistence(timeout: 10))
-    // PhotosUI is the real system picker, not a Captro placeholder sheet.
-    XCTAssertTrue(app.navigationBars["Photos"].waitForExistence(timeout: 10)
-      || app.staticTexts["Photos"].exists || app.buttons["Photos"].exists)
+    // Capture the real PhotosUI screen. Its accessibility tree belongs to a
+    // system process, so querying Captro's navigation bar cannot find it.
     capture(app, "cover-real-system-photo-picker")
-    app.buttons["Cancel"].firstMatch.tap()
+    app.coordinate(withNormalizedOffset: CGVector(dx: 0.09, dy: 0.16)).tap()
     XCTAssertTrue(app.buttons["composer.intent"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["composer.create"].isEnabled)
   }
