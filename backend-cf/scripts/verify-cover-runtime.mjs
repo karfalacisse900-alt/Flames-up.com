@@ -59,7 +59,9 @@ if (mode === 'prepare') {
   assert.equal(user.email, session.email, 'Cleanup identity did not match the account created by this test');
   if (mode === 'verify') {
     const posts = await request(`${base}/rest/v1/app_posts?user_id=eq.${session.userID}&select=metadata,editor_data,visibility`, { headers: admin });
-    assert.ok(posts.length >= 6, 'Native app did not publish all six real Cover examples');
+    assert.ok(posts.length >= 7, 'Native app did not publish all seven real Cover examples');
+    assert.ok(posts.some(post => post.editor_data?.overlays?.filter(o => o.type === 'media_writing').length === 2),
+      'Per-photo carousel overlays were not persisted');
     for (const post of posts) {
       assert.equal(post.visibility, 'private');
       assert.equal(post.metadata.creation_intent, 'cover');

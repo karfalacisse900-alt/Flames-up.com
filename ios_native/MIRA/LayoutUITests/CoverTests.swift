@@ -28,7 +28,8 @@ final class CoverTests: XCTestCase {
       ("dining.jpg", "BROOKLYN\nDINNER SPOTS", "Handwritten"),
       ("travel.jpg", "A WEEKEND IN\nNEW YORK", "Classic"),
       ("photography.jpg", "LITTLE MOMENTS", "Classic"),
-      ("video.mp4", "FRIDAY NIGHT\nIN NYC", "Bold")]
+      ("video.mp4", "FRIDAY NIGHT\nIN NYC", "Bold"),
+      ("carousel", "FRIDAY NIGHT\nIN NYC", "Handwritten")]
     for (file, phrase, style) in cases {
       let app = XCUIApplication()
       app.launchArguments = ["--captro-design-quality-test", "--captro-quality-cover-runtime", "--cover-file=\(file)"]
@@ -41,6 +42,14 @@ final class CoverTests: XCTestCase {
       text.tap(); text.typeText(phrase)
       app.buttons["Style"].tap()
       app.buttons[style].tap()
+      if file == "carousel" {
+        app.buttons["Text"].tap()
+        app.buttons["Next media"].tap()
+        XCTAssertTrue(["", "Your short phrase"].contains(text.value as? String ?? "unexpected"), "Second carousel photo must have independent artwork")
+        text.tap(); text.typeText("BROOKLYN\nDINNER SPOTS")
+        app.buttons["Previous media"].tap()
+        XCTAssertEqual(text.value as? String, phrase)
+      }
       if file == "dining.jpg" {
         app.switches["Rectangular backing"].tap()
         app.buttons["Text color"].tap(); app.buttons["Black"].tap()

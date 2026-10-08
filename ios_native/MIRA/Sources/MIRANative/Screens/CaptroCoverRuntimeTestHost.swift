@@ -8,6 +8,7 @@ struct CaptroCoverRuntimeTestHost: View {
   private struct Session: Decodable { let token: String; let userID: String }
   @State private var api: MIRAAPIClient?
   @State private var media: MIRAPickedMedia?
+  @State private var additionalMedia: [MIRAPickedMedia] = []
   @State private var userID = ""
   @State private var feed: MainFeedModel?
   @State private var error: String?
@@ -22,7 +23,8 @@ struct CaptroCoverRuntimeTestHost: View {
           Text("Me").tabItem { Label("Me", systemImage: "person") }
         }
       } else if ready, let api {
-        CreatePostNativeView(api: api, initialMedia: media, onClose: { Task { await readPublishedPost() } })
+        CreatePostNativeView(api: api, initialMedia: media, initialAdditionalMedia: additionalMedia,
+          onClose: { Task { await readPublishedPost() } })
       } else if let error { Text(error).accessibilityIdentifier("cover.runtime.error") }
       else { ProgressView() }
     }
@@ -35,10 +37,15 @@ struct CaptroCoverRuntimeTestHost: View {
         userID = session.userID; api = client
         let file = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--cover-file=") }?.dropFirst("--cover-file=".count) ?? "fashion.jpg"
         if file != "picker" {
-          let name = String(file)
+          let name = file == "carousel" ? "fashion.jpg" : String(file)
           media = MIRAPickedMedia(data: try Data(contentsOf: folder.appendingPathComponent(name)),
             kind: name.hasSuffix(".mp4") ? .video : .image, fileName: name,
             mimeType: name.hasSuffix(".mp4") ? "video/mp4" : "image/jpeg")
+          if file == "carousel" {
+            let second = "dining.jpg"
+            additionalMedia = [MIRAPickedMedia(data: try Data(contentsOf: folder.appendingPathComponent(second)),
+              kind: .image, fileName: second, mimeType: "image/jpeg")]
+          }
         }
         await MIRAAppCacheStore.shared.clearPostDraft()
         UserDefaults.standard.set("private", forKey: "captro.composer.audience.\(session.userID)")

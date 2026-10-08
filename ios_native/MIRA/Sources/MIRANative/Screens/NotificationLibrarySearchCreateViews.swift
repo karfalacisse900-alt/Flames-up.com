@@ -1074,6 +1074,7 @@ public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
   private let initialMedia: MIRAPickedMedia?
+  private let initialAdditionalMedia: [MIRAPickedMedia]
   private let initialVoiceDraft: CaptroVoiceDraft?
   private let initialCaption: String?
   @Environment(\.dismiss) private var dismiss
@@ -1197,9 +1198,10 @@ public struct CreatePostNativeView: View {
   @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
-  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialVoiceDraft: CaptroVoiceDraft? = nil, initialCaption: String? = nil, onClose: (() -> Void)? = nil) {
+  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialAdditionalMedia: [MIRAPickedMedia] = [], initialVoiceDraft: CaptroVoiceDraft? = nil, initialCaption: String? = nil, onClose: (() -> Void)? = nil) {
     self.api = api
     self.initialMedia = initialMedia
+    self.initialAdditionalMedia = initialAdditionalMedia
     self.initialVoiceDraft = initialVoiceDraft
     self.initialCaption = initialCaption
     self.onClose = onClose
@@ -2454,6 +2456,9 @@ public struct CreatePostNativeView: View {
       didApplyInitialCapture = true
       if let initialMedia, !mediaItems.contains(where: { $0.fileName == initialMedia.fileName }) {
         mediaItems.append(initialMedia)
+      }
+      for additional in initialAdditionalMedia where mediaItems.count < 10 && !mediaItems.contains(where: { $0.fileName == additional.fileName }) {
+        mediaItems.append(additional)
       }
       if let initialVoiceDraft, voiceDraft == nil {
         voiceDraft = initialVoiceDraft
