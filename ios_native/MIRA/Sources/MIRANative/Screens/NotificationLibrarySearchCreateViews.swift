@@ -4891,7 +4891,7 @@ private struct LocalVideoPreview: View {
   }
 }
 
-private struct LocalMediaThumb: View {
+struct LocalMediaThumb: View {
   let media: MIRAPickedMedia
   var width: CGFloat = 96
   var height: CGFloat = 96
