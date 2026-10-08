@@ -117,8 +117,13 @@ final class HomeFullBleedTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["More"].exists)
     XCTAssertTrue(app.staticTexts["A walk around the neighborhood"].exists)
     capture(app, "continuous-text-accessibility-dark")
-    stream.swipeUp()
-    XCTAssertTrue(app.staticTexts["Looking for people to build with"].isHittable)
+    let secondPost = app.otherElements["home.post.page.text-system-1"]
+    reveal(secondPost, in: stream, app: app)
+    let secondTitle = secondPost.staticTexts["Looking for people to build with"]
+    XCTAssertTrue(secondTitle.exists)
+    XCTAssertGreaterThanOrEqual(secondTitle.frame.minY, stream.frame.minY - 1)
+    XCTAssertLessThan(secondTitle.frame.maxY, app.tabBars.firstMatch.frame.minY,
+      "The next text post must be readable above floating navigation")
   }
 
   func testPublicContentStreamRecording() {
