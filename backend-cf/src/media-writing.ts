@@ -1,4 +1,4 @@
-// Version 1 artwork metadata. Source media is never rewritten by this feature.
+// Backward-compatible v1 writing and v2 Cover/crop metadata. Source media stays intact.
 export function validateMediaWritingOverlays(value: unknown, mediaCount: number): any[] {
   const raw = Array.isArray(value) ? value : [];
   const seen = new Set<number>();
@@ -8,26 +8,33 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
     const version = w?.schemaVersion ?? w?.schema_version;
     const ratio = w?.sourceAspectRatio ?? w?.source_aspect_ratio;
     const showsStamp = w?.showsStamp ?? w?.shows_stamp ?? true;
+    const cover = version === 2;
+    const homeAspectRatio = w?.homeAspectRatio ?? w?.home_aspect_ratio;
+    const cropX = w?.cropX ?? w?.crop_x ?? 0.5;
+    const cropY = w?.cropY ?? w?.crop_y ?? 0.5;
     const finite = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
     const count = typeof w?.text === 'string' ? [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(w.text)].length : 0;
     if (!Number.isInteger(index) || index < 0 || index >= mediaCount || seen.has(index)
-      || version !== 1 || typeof w?.text !== 'string' || !w.text.trim() || count > 60
+      || ![1, 2].includes(version) || typeof w?.text !== 'string' || (!cover && !w.text.trim()) || count > (cover ? 70 : 60)
       || w.text.split(/\r\n|\r|\n/).length > 4 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(w.text)
-      || !['bold', 'clean', 'editorial'].includes(w.style)
+      || !['bold', 'clean', 'editorial', 'handwritten', 'classic'].includes(w.style)
       || !['left', 'center', 'right'].includes(w.alignment)
       || !['white', 'black', 'green', 'cream'].includes(w.color)
       || !['small', 'medium', 'large'].includes(w.size)
       || typeof w.readability !== 'boolean'
       || typeof showsStamp !== 'boolean'
-      || !finite(w.x, 0, 1) || !finite(w.y, 0, 1) || !finite(w.width, 0.2, 0.9)
+      || !finite(w.x, 0, 1) || !finite(w.y, 0, 1) || !finite(w.width, cover ? 0.05 : 0.2, 0.9)
+      || (cover && (!finite(cropX, 0, 1) || !finite(cropY, 0, 1)
+        || ![0.8, 1, 0.75, 16 / 9].some(r => Math.abs(r - homeAspectRatio) < 0.00001)))
       || !finite(ratio, 0.05, 20)) {
       throw new Error('Check your media writing: use a short phrase and valid placement for each media item.');
     }
     seen.add(index);
     return { type: 'media_writing', mediaIndex: index, writing: {
-      schemaVersion: 1, text: w.text, style: w.style, alignment: w.alignment,
+      schemaVersion: version, text: w.text, style: w.style, alignment: w.alignment,
       color: w.color, readability: w.readability, x: w.x, y: w.y, width: w.width,
       size: w.size, sourceAspectRatio: ratio, showsStamp,
+      ...(cover ? { homeAspectRatio, cropX, cropY } : {}),
     } };
   });
 }

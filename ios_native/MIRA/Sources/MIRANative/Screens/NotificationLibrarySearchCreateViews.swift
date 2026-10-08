@@ -1096,6 +1096,7 @@ public struct CreatePostNativeView: View {
   @State private var queuedPresentation: Presentation?
   @State private var writingAfterMediaSelection = false
   @State private var writingMediaIndex = 0
+  @State private var compositionCardWidth: CGFloat = 320
   @State private var showsMoreCreationWays = false
   @State private var pendingTime = Date()
   @State private var creationCapabilities: CaptroCreationCapabilities?
@@ -1360,7 +1361,7 @@ public struct CreatePostNativeView: View {
       stampDetailsPage
     }
     .fullScreenCover(isPresented: presentationBinding(.mediaWriting)) {
-      CaptroMediaWritingEditor(items: mediaItems, initialIndex: writingMediaIndex) { updated in mediaItems = updated }
+      CaptroMediaWritingEditor(items: mediaItems, initialIndex: writingMediaIndex, coverMode: draft.isCover) { updated in mediaItems = updated }
     }
     .photosPicker(isPresented: presentationBinding(.media), selection: $pickerItems,
       maxSelectionCount: max(1, 10 - mediaItems.count),
@@ -1575,6 +1576,7 @@ public struct CreatePostNativeView: View {
           }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }.buttonStyle(.plain).accessibilityLabel("Edit response options")
       }
+      if !draft.isCover {
       Divider().overlay(MIRATheme.Color.hairline)
       CaptroCompositionChipLayout {
         if selectedPlace == nil && shouldPublishBroadLocation {
@@ -1604,10 +1606,12 @@ public struct CreatePostNativeView: View {
         }
       }
       .buttonStyle(.plain)
+      }
     }
     .padding(16)
     .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 17))
     .overlay(RoundedRectangle(cornerRadius: 17).stroke(MIRATheme.Color.divider, lineWidth: 1))
+    .onGeometryChange(for: CGFloat.self) { max(1, $0.size.width - 32) } action: { compositionCardWidth = $0 }
   }
 
   private var intentSelector: some View {
@@ -1641,7 +1645,11 @@ public struct CreatePostNativeView: View {
             draft.intent = intent
             selectedStampKind = .social
             hasSelectedStamp = false
-            presentation = nil
+            if intent == .cover {
+              writingMediaIndex = 0
+              writingAfterMediaSelection = mediaItems.isEmpty
+              transitionFromSelection(to: mediaItems.isEmpty ? .media : .mediaWriting)
+            } else { presentation = nil }
           }
         }
         if creationCapabilities?.structuredTypes.isEmpty == false {
@@ -1682,9 +1690,9 @@ public struct CreatePostNativeView: View {
 
   private var addPicker: some View {
     CaptroSelectionSheet(title: "Add") {
-      CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { writingAfterMediaSelection = false; transitionFromSelection(to: .media) }
+      CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .media) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
-      CaptroSelectionRow(title: "Camera", symbol: "camera") { writingAfterMediaSelection = false; transitionFromSelection(to: .camera) }
+      CaptroSelectionRow(title: "Camera", symbol: "camera") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       CaptroSelectionRow(title: "Text on media", symbol: "textformat") {
         writingMediaIndex = 0
@@ -1696,7 +1704,25 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private var compositionAttachments: some View {
+  @ViewBuilder private var compositionAttachments: some View {
+    if draft.isCover {
+      let width = compositionCardWidth
+      let ratio = mediaItems.first?.mediaWriting?.homeAspectRatio ?? 1
+      let index = min(writingMediaIndex, mediaItems.count - 1)
+      let item = mediaItems[index]
+      VStack(alignment: .leading, spacing: 4) {
+        CaptroCoverPreview(media: item, size: CGSize(width: width, height: width / ratio))
+        HStack {
+          Button("Edit cover") { openPresentation(.mediaWriting) }.accessibilityIdentifier("composer.editCover")
+          if mediaItems.count > 1 {
+            Spacer()
+            Button { writingMediaIndex = (index + 1) % mediaItems.count } label: { Text("\(index + 1) / \(mediaItems.count)").monospacedDigit() }
+              .accessibilityLabel("Next cover media")
+          }
+          Spacer(); Button("Remove", role: .destructive) { removeMedia(at: index); writingMediaIndex = 0 }
+        }.font(.caption).frame(minHeight: 44)
+      }
+    } else {
     ScrollView(.horizontal) {
       HStack(alignment: .top, spacing: 12) {
         ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
@@ -1720,6 +1746,7 @@ public struct CreatePostNativeView: View {
         }
       }
     }.scrollIndicators(.hidden)
+    }
   }
 
   private func composerVoiceAttachment(_ recording: CaptroVoiceDraft) -> some View {
@@ -2097,6 +2124,8 @@ public struct CreatePostNativeView: View {
 
   private var canPost: Bool {
     guard draft.writingValidationMessage == nil else { return false }
+    if draft.isCover && mediaItems.isEmpty { return false }
+    if mediaItems.contains(where: { $0.mediaWriting?.validationMessage != nil }) { return false }
     if draft.structured {
       guard creationCapabilities?.structuredTypes.contains(selectedStampKind.backendPostType) == true,
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -2223,7 +2252,8 @@ public struct CreatePostNativeView: View {
     do {
       if mediaItems.contains(where: { $0.mediaWriting != nil }) {
         let capabilities: CaptroCreationCapabilities = try await api.get("/posts/creation-capabilities")
-        guard capabilities.mediaWritingVersion == 1 else {
+        let requiredVersion = draft.isCover ? 2 : 1
+        guard (capabilities.mediaWritingVersion ?? 0) >= requiredVersion else {
           throw MIRAAPIError.server(status: 409, code: "MEDIA_WRITING_UNAVAILABLE", detail: "Text on media is not available on this server yet. Your draft is saved; try again later.")
         }
         if let invalid = mediaItems.compactMap({ $0.mediaWriting?.validationMessage }).first {
@@ -2432,7 +2462,7 @@ public struct CreatePostNativeView: View {
         bodyText = bodyText.isEmpty ? initialCaption : bodyText + "\n\n" + initialCaption
       }
     }
-    if !draft.hasWriting { writingFocused = true }
+    if !draft.hasWriting && !draft.isCover { writingFocused = true }
     await loadBroadLocationDefaultIfNeeded()
   }
 
@@ -2493,7 +2523,7 @@ public struct CreatePostNativeView: View {
     let metadata = mediaItems.enumerated().flatMap { index, item -> [MIRAEditorUploadMetadata] in
       var values: [MIRAEditorUploadMetadata] = []
       if let editorMetadata = item.editorMetadata { values.append(MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)) }
-      if let writing = item.mediaWriting, !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      if let writing = item.mediaWriting, writing.schemaVersion == 2 || !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         values.append(MIRAEditorUploadMetadata(mediaIndex: index, writing: writing))
       }
       return values

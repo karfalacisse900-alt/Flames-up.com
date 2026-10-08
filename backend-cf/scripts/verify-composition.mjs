@@ -37,7 +37,7 @@ try {
   const owner = await session();
   const other = await session();
   const capabilities = await request(`${api}/posts/creation-capabilities`, { headers: owner });
-  assert.equal(capabilities.media_writing_version, 1, 'Deployed API cannot persist media writing');
+  assert.equal(capabilities.media_writing_version, 2, 'Deployed API cannot persist Cover writing');
   assert.deepEqual(new Set(capabilities.structured_types), new Set(['club', 'event', 'meetup', 'deal']));
   const body = { title: '', content: 'Looking for people who enjoy photography.\nI\'m building Captro. "Let\'s create" <3',
     post_type: 'general', visibility: 'private', images: [], media_types: [],
@@ -93,7 +93,7 @@ try {
   console.log(JSON.stringify({ deployedComposerContract: 'PASS', actualServerPublishing: true,
     retryIdempotent: true, originalMessagePreserved: true, privateVisibilityEnforced: true,
     intentAndTimePersisted: true, concernTimeExcluded: true, customChoicesPersisted: true,
-    invalidInputRejected: true, extendedEmojiPreserved: true, mediaWritingCapability: 1,
+    invalidInputRejected: true, extendedEmojiPreserved: true, mediaWritingCapability: 2,
     newMediaWritingLimitsEnforced: true, productionCredentialsExposed: false }));
 } finally {
   const failures = [];

@@ -16708,7 +16708,7 @@ api.get('/posts/creation-capabilities', authMiddleware, async (c) => {
   if (restricted) return restricted;
   const user = await getSupabaseAppUserRowByAnyId(c, getUserId(c));
   if (!user) return c.json({ detail: 'User not found.' }, 404);
-  return c.json({ structured_types: ['club', 'event', 'meetup', 'deal'], media_writing_version: 1 }, 200,
+  return c.json({ structured_types: ['club', 'event', 'meetup', 'deal'], media_writing_version: 2 }, 200,
     { 'Cache-Control': 'no-store' });
 });
 
@@ -16774,7 +16774,8 @@ api.post('/posts', authMiddleware, async (c) => {
   const visibility = normalizeVisibility(b.visibility);
   const rawIntent = b.creation_intent ?? b.creationIntent;
   const creationIntent = normalizeCreationIntent(rawIntent);
-  if (rawIntent != null && (!creationIntent || !['general', 'social', 'moment'].includes(postType))) {
+  if (rawIntent != null && (!creationIntent || (!['general', 'social', 'moment'].includes(postType)
+      && !(creationIntent === 'cover' && ['club', 'event', 'meetup', 'deal'].includes(postType))))) {
     return c.json({ detail: 'Choose a valid writing intent.', code: 'CREATION_INTENT_INVALID' }, 400);
   }
   if (creationIntent && ((b.content != null && typeof b.content !== 'string')
@@ -16782,6 +16783,9 @@ api.post('/posts', authMiddleware, async (c) => {
     return c.json({ detail: 'Choose a valid message and audience.', code: 'COMPOSITION_INVALID' }, 400);
   }
   const rawContent = typeof (b.content ?? b.text) === 'string' ? (b.content ?? b.text) : '';
+  if (creationIntent === 'cover' && sanitizeMediaReferences(b.images, b.image).length === 0) {
+    return c.json({ detail: 'Choose a photo or video for your Cover.', code: 'COVER_MEDIA_REQUIRED' }, 400);
+  }
   for (const suppliedTitle of [b.title ?? b.headline, b.commerce?.title]) {
     const stampWritingError = newMediaStampWritingError({
       mediaCount: sanitizeMediaReferences(b.images, b.image).length, postType,
@@ -16800,7 +16804,8 @@ api.post('/posts', authMiddleware, async (c) => {
   // Validated Swift-compatible character count already bounds this composition.
   // Do not cut a valid 500-character message at a legacy UTF-16 length limit.
   let postContent = creationIntent ? compositionBody(rawContent) : cleanMultilineText(b.content || b.text, 5000);
-  let postTitle = creationIntent ? compositionHeadline(postContent) : cleanText(b.title || b.headline, 180);
+  let postTitle = creationIntent === 'cover' ? cleanText(b.title || b.commerce?.title, 180)
+    : creationIntent ? compositionHeadline(postContent) : cleanText(b.title || b.headline, 180);
   let mediaWriting: any[];
   try { mediaWriting = validateMediaWritingOverlays(parseJsonArray(b.editor_overlays), sanitizeMediaReferences(b.images, b.image).length); }
   catch (error: any) { return c.json({ detail: error.message, code: 'MEDIA_WRITING_INVALID' }, 400); }

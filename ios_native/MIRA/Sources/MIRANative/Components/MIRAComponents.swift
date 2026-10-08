@@ -1537,13 +1537,25 @@ public enum MIRAMediaSizing {
     aspectRatios: [CGFloat] = []
   ) -> CGFloat {
     if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
-      return supportedFeedHeightToWidthRatio(ratio)
+      return homeDisplayRatio(ratio)
     }
     let lowercased = urls.map { $0.lowercased() }
     if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
-      return supportedFeedHeightToWidthRatio(ratio)
+      return homeDisplayRatio(ratio)
     }
     return feedPreviewRatio
+  }
+
+  /// Home crops only; historical source/upload formats and Details stay intact.
+  public static let homeHeightToWidthRatios: [CGFloat] = [9.0 / 16, 1, 5.0 / 4, 4.0 / 3]
+  public static func homeDisplayRatio(_ sourceRatio: CGFloat, width: CGFloat = 0, visibleHeight: CGFloat = 0) -> CGFloat {
+    let ratio = sourceRatio.isFinite && sourceRatio > 0 ? sourceRatio : feedPreviewRatio
+    var choices = homeHeightToWidthRatios
+    if width > 0, visibleHeight > 0 {
+      let fitting = choices.filter { width * $0 <= visibleHeight * 0.75 }
+      if !fitting.isEmpty { choices = fitting }
+    }
+    return choices.min { abs(log($0 / ratio)) < abs(log($1 / ratio)) } ?? 1
   }
 
   public static func detailHeight(

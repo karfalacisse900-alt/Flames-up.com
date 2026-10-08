@@ -23,7 +23,9 @@ struct CaptroMediaPager: View {
   @State private var isVideoPaused = false
   @State private var isVideoMuted = false
 
-  private var mediaURLs: [String] { post.feedMediaURLs }
+  // Cover coordinates refer to the source, not a provider's pre-cropped feed
+  // variant. Downsample the source in the existing image cache; crop once here.
+  private var mediaURLs: [String] { post.isCoverPost && !post.mediaURLs.isEmpty ? post.mediaURLs : post.feedMediaURLs }
   private var naturalMediaHeightToWidthRatio: CGFloat {
     boundedHomeMediaRatio(
       declaredCoverHeightToWidthRatio
@@ -81,7 +83,9 @@ struct CaptroMediaPager: View {
 
   @ViewBuilder
   private var sizedMedia: some View {
-    if let frameSize, post.mediaWriting(at: 0)?.showsStamp == false {
+    if let frameSize, post.isCoverPost {
+      mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
+    } else if let frameSize, post.mediaWriting(at: 0)?.showsStamp == false {
       mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         .overlay(alignment: .bottomLeading) {
           if post.detail?.voice != nil || post.hasAudio {
@@ -127,7 +131,9 @@ struct CaptroMediaPager: View {
         }
 
         if currentMediaIsVideo {
-          if let writing = post.mediaWriting(at: selectedMediaIndex) {
+          if post.isCoverPost { videoControls.padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+          } else if let writing = post.mediaWriting(at: selectedMediaIndex) {
             videoControls.padding(.trailing, 12)
               .padding(.top, min(proxy.size.height - 52, writing.textRect(in: proxy.size, fill: true).maxY + 8))
               .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -173,6 +179,9 @@ struct CaptroMediaPager: View {
   }
 
   private func mediaView(url: String, index: Int) -> some View {
+    let writing = post.mediaWriting(at: index)
+    let crop = writing?.schemaVersion == 2 ? frameSize.map { writing!.sourceRect(in: $0, fill: true) } : nil
+    return ZStack(alignment: .topLeading) {
     RemoteMediaView(
       url: url,
       isVideo: url.isVideoURL,
@@ -185,14 +194,16 @@ struct CaptroMediaPager: View {
       placeholderColor: .black,
       plainBackground: true
     )
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .overlay {
+    .frame(width: crop?.width, height: crop?.height)
+    .frame(maxWidth: crop == nil ? .infinity : nil, maxHeight: crop == nil ? .infinity : nil)
+    .offset(x: crop?.minX ?? 0, y: crop?.minY ?? 0)
       if let writing = post.mediaWriting(at: index) {
         GeometryReader { geometry in
           CaptroMediaWritingLayer(writing: writing, container: geometry.size, caption: post.caption ?? post.content)
         }
       }
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .clipped()
   }
 

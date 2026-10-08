@@ -53,7 +53,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager\s*\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 16\)/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager[\s\S]*?\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 16\)/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -215,7 +215,8 @@ test('Home media uses supported metadata ratios and controlled crop; Details pre
 test('media canvas is metadata-sized without a separate More row or viewport height', () => {
   const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
   assert.match(sizing, /MIRAMediaSizing\.mainFeedDisplayRatio/);
-  assert.match(sizing, /height: feedWidth \* ratio/);
+  assert.match(sizing, /height: feedWidth \* resolved/);
+  assert.match(sizing, /homeDisplayRatio\(ratio, width: feedWidth, visibleHeight: visibleFeedHeight\)/);
   assert.doesNotMatch(postView, /showsMoreButton|Button\("More"|fixedVerticalContent/);
   assert.doesNotMatch(sizing, /availableMediaHeight\s*\/|min\(pageSize\.width/);
   assert.match(postView, /frameSize: mediaSize/);

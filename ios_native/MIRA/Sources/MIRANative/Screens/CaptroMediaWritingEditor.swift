@@ -15,26 +15,34 @@ struct CaptroMediaWritingEditor: View {
   @State private var dragOrigin: CGPoint?
   @State private var guide = false
   @State private var panel = "text"
+  @State private var adjustsCrop = false
+  @State private var cropOrigin: CGPoint?
   @FocusState private var textFocused: Bool
+  let coverMode: Bool
   let onSave: ([MIRAPickedMedia]) -> Void
 
-  init(items: [MIRAPickedMedia], initialIndex: Int = 0, onSave: @escaping ([MIRAPickedMedia]) -> Void) {
-    _items = State(initialValue: items)
+  init(items: [MIRAPickedMedia], initialIndex: Int = 0, coverMode: Bool = false, onSave: @escaping ([MIRAPickedMedia]) -> Void) {
+    self.coverMode = coverMode
+    _items = State(initialValue: items.map { item in
+      guard coverMode else { return item }
+      var item = item
+      var writing = item.mediaWriting ?? .cover()
+      writing.schemaVersion = 2; writing.showsStamp = false
+      if writing.style == "clean" { writing.style = "bold" }
+      if writing.style == "editorial" { writing.style = "classic" }
+      item.mediaWriting = writing; return item
+    })
     _selected = State(initialValue: min(max(0, initialIndex), max(0, items.count - 1)))
     self.onSave = onSave
   }
   private var writing: CaptroMediaWriting {
-    get { items[selected].mediaWriting ?? CaptroMediaWriting() }
+    get { items[selected].mediaWriting ?? (coverMode ? .cover() : CaptroMediaWriting()) }
     nonmutating set {
       var value = newValue
       value.sourceAspectRatio = sourceRatio
-      let canvas = CGSize(width: 390, height: 390 * homeRatio)
+      let canvas = CGSize(width: 1000, height: 1000 * homeRatio)
       let source = value.sourceRect(in: canvas, fill: true)
-      value.width = min(value.width, (canvas.width - 24) / source.width)
-      let textSize = value.measuredSize(mediaWidth: source.width)
-      let minY = (52 - source.minY + textSize.height / 2) / source.height
-      let maxY = (canvas.height - 52 - source.minY - textSize.height / 2) / source.height
-      if minY <= maxY { value.y = min(maxY, max(minY, value.y)) }
+      value.width = min(value.width, (canvas.width * 0.92) / source.width)
       items[selected].mediaWriting = value
     }
   }
@@ -42,18 +50,23 @@ struct CaptroMediaWritingEditor: View {
     Binding(get: { writing }, set: { writing = $0 })
   }
   private var error: String? {
-    items.compactMap { item -> String? in
-      guard let value = item.mediaWriting, !value.text.isEmpty else { return nil }
+    items.enumerated().compactMap { index, item -> String? in
+      guard let stored = item.mediaWriting, !stored.text.isEmpty else { return nil }
+      var value = stored
       if let error = value.validationMessage { return error }
-      let size = CGSize(width: 390, height: 390 * homeRatio)
-      let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 10, dy: 10)
+      if ratios.indices.contains(index) { value.sourceAspectRatio = ratios[index] }
+      let size = CGSize(width: 1000, height: 1000 * homeRatio)
+      let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 26, dy: 26)
       if !bounds.contains(value.textRect(in: size, fill: true)) { return "The writing extends outside Home’s crop. Move it inward or choose Small." }
       return nil
     }.first
   }
   private var sourceRatio: CGFloat { ratios.indices.contains(selected) ? ratios[selected] : 1 }
   // A carousel has one cover-derived Home canvas, even for mixed source ratios.
-  private var homeRatio: CGFloat { MIRAMediaSizing.supportedPostHeightToWidthRatio(1 / (ratios.first ?? 1)) }
+  private var homeRatio: CGFloat {
+    if let ratio = items.first?.mediaWriting?.homeAspectRatio { return 1 / ratio }
+    return MIRAMediaSizing.homeDisplayRatio(1 / (ratios.first ?? 1))
+  }
 
   var body: some View {
     NavigationStack {
@@ -80,7 +93,10 @@ struct CaptroMediaWritingEditor: View {
               if let message = error {
                 Text(message).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("mediaWriting.validation")
               }
-              Button("Remove text", role: .destructive) { items[selected].mediaWriting = nil }
+              Button("Remove text", role: .destructive) {
+                if coverMode { var value = writing; value.text = ""; writing = value }
+                else { items[selected].mediaWriting = nil }
+              }
                 .disabled(writing.text.isEmpty).frame(minHeight: 44)
             }
           }.padding(16)
@@ -92,7 +108,7 @@ struct CaptroMediaWritingEditor: View {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") {
-            for index in items.indices where items[index].mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            for index in items.indices where !coverMode && items[index].mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
               items[index].mediaWriting = nil
             }
             onSave(items); dismiss()
@@ -110,6 +126,12 @@ struct CaptroMediaWritingEditor: View {
       }
       guard !Task.isCancelled else { return }
       ratios = loaded
+      for index in items.indices {
+        if var value = items[index].mediaWriting {
+          value.sourceAspectRatio = loaded[index]
+          items[index].mediaWriting = value
+        }
+      }
     }
     .task(id: selected) { await loadMedia() }
     .onAppear { MIRAPlaybackCoordinator.pauseAll(reason: "media_writing_editor_open") }
@@ -119,14 +141,27 @@ struct CaptroMediaWritingEditor: View {
 
   private func canvas(size: CGSize) -> some View {
     ZStack(alignment: .topLeading) {
+      let source = resolvedWriting.sourceRect(in: size, fill: true)
       Group {
         if let player { WritingVideoCanvas(player: player) }
         else if let image { Image(uiImage: image).resizable().scaledToFill() }
         else if let loadError { Text(loadError).foregroundStyle(.secondary) }
         else { ProgressView() }
-      }.frame(width: size.width, height: size.height).clipped()
+      }.frame(width: source.width, height: source.height).clipped()
+        .offset(x: source.minX, y: source.minY)
+        .contentShape(Rectangle())
+        .onTapGesture { panel = "text"; textFocused = true }
+        .gesture(DragGesture().onChanged { gesture in
+          guard adjustsCrop else { return }
+          textFocused = false
+          if cropOrigin == nil { cropOrigin = CGPoint(x: writing.cropX ?? 0.5, y: writing.cropY ?? 0.5) }
+          var value = writing
+          if source.width > size.width + 1 { value.cropX = min(1, max(0, cropOrigin!.x - gesture.translation.width / (source.width - size.width))) }
+          if source.height > size.height + 1 { value.cropY = min(1, max(0, cropOrigin!.y - gesture.translation.height / (source.height - size.height))) }
+          writing = value
+        }.onEnded { _ in cropOrigin = nil })
       // Advisory preview, not a permanent overlay on published media.
-      if items.first?.mediaWriting?.showsStamp != false { Rectangle().fill(.black.opacity(0.08))
+      if !coverMode && items.first?.mediaWriting?.showsStamp != false { Rectangle().fill(.black.opacity(0.08))
         .overlay(alignment: .topLeading) {
           Text("Stamp area").font(.caption2).padding(6).background(.ultraThinMaterial)
         }
@@ -138,6 +173,8 @@ struct CaptroMediaWritingEditor: View {
         let rect = resolvedWriting.textRect(in: size, fill: true)
         Color.clear.frame(width: max(44, rect.width), height: max(44, rect.height))
           .contentShape(Rectangle()).position(x: rect.midX, y: rect.midY)
+          .onTapGesture { panel = "text"; textFocused = true }
+          .allowsHitTesting(!adjustsCrop)
           .gesture(DragGesture(minimumDistance: 3)
             .onChanged { value in
               textFocused = false
@@ -150,6 +187,12 @@ struct CaptroMediaWritingEditor: View {
               place(x: x, y: y, canvas: size)
             }.onEnded { _ in dragOrigin = nil; guide = false })
           .accessibilityLabel("Move media text. Use Position controls for precise placement.")
+      }
+      if writing.text.isEmpty {
+        Button("Add text") { panel = "text"; textFocused = true }
+          .font(.subheadline.weight(.medium)).padding(10)
+          .background(.regularMaterial, in: Capsule())
+          .position(x: size.width / 2, y: size.height / 2)
       }
       if guide {
         Rectangle().fill(.white.opacity(0.8)).frame(width: 1, height: size.height)
@@ -177,7 +220,7 @@ struct CaptroMediaWritingEditor: View {
     switch panel {
     case "style":
       Picker("Style", selection: writingBinding.style) {
-        Text("Bold").tag("bold"); Text("Clean").tag("clean"); Text("Editorial").tag("editorial")
+        Text("Handwritten").tag("handwritten"); Text("Bold").tag("bold"); Text("Classic").tag("classic")
       }.pickerStyle(.segmented)
       Picker("Size", selection: writingBinding.size) {
         Text("Small").tag("small"); Text("Medium").tag("medium"); Text("Large").tag("large")
@@ -186,29 +229,47 @@ struct CaptroMediaWritingEditor: View {
         Text("White").tag("white"); Text("Black").tag("black")
         Text("Green").tag("green"); Text("Cream").tag("cream")
       }.pickerStyle(.menu)
-      Toggle("Readability backing", isOn: writingBinding.readability).font(.subheadline)
+      Toggle("Rectangular backing", isOn: writingBinding.readability).font(.subheadline)
     case "alignment":
       Picker("Text alignment", selection: writingBinding.alignment) {
         Text("Left").tag("left"); Text("Center").tag("center"); Text("Right").tag("right")
       }.pickerStyle(.segmented)
     case "position":
-      if selected == 0 {
+      if selected == 0 && !coverMode {
         Toggle("Show Captro stamp", isOn: Binding(get: { writing.showsStamp != false }, set: { writing.showsStamp = $0 }))
           .font(.subheadline)
       }
-      Text("Drag the writing on the photo, or choose a position. Lower writing may put the stamp below the image.")
+      if coverMode {
+        Picker("Home crop", selection: Binding(get: { 1 / homeRatio }, set: { ratio in
+          for index in items.indices {
+            var value = items[index].mediaWriting ?? .cover(sourceAspectRatio: ratios.indices.contains(index) ? ratios[index] : 1)
+            value.homeAspectRatio = ratio; items[index].mediaWriting = value
+          }
+        })) {
+          Text("4:5").tag(CGFloat(4.0 / 5)); Text("1:1").tag(CGFloat(1))
+          Text("3:4").tag(CGFloat(3.0 / 4)); Text("16:9").tag(CGFloat(16.0 / 9))
+        }.pickerStyle(.segmented)
+        Toggle("Adjust crop", isOn: $adjustsCrop).font(.subheadline)
+      }
+      Text(adjustsCrop ? "Drag the photo to adjust Home’s crop. The original stays intact." : "Drag the writing on the photo, or choose a position.")
         .font(.footnote).foregroundStyle(.secondary)
       HStack {
-        Button("Upper") { writing.y = 0.20 }
-        Button("Center") { writing.y = 0.5 }
-        Button("Lower") { writing.y = 0.75 }
+        Button("Upper") { positionInCanvas(y: 0.22) }
+        Button("Center") { positionInCanvas(y: 0.5) }
+        Button("Lower") { positionInCanvas(y: 0.75) }
       }.buttonStyle(.bordered)
     default:
       TextField("Your short phrase", text: writingBinding.text, axis: .vertical)
         .lineLimit(1...4).focused($textFocused).font(.body)
         .accessibilityIdentifier("mediaWriting.text")
-      Text("\(writing.text.count)/60 · Up to 4 lines").font(.caption).foregroundStyle(.secondary)
+      Text("\(writing.text.count)/\(writing.characterLimit) · Up to 4 lines").font(.caption).foregroundStyle(.secondary)
     }
+  }
+  private func positionInCanvas(y: CGFloat) {
+    let size = CGSize(width: 1000, height: 1000 * homeRatio)
+    let source = resolvedWriting.sourceRect(in: size, fill: true)
+    place(x: (size.width / 2 - source.minX) / source.width,
+      y: (size.height * y - source.minY) / source.height, canvas: size)
   }
   private func place(x: CGFloat, y: CGFloat, canvas: CGSize) {
     var value = resolvedWriting

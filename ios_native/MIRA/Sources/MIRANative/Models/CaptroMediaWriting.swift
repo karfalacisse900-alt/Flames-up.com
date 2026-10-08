@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import CoreText
 
 /// Versioned, source-relative artwork. Never changes the media bytes.
 public struct CaptroMediaWriting: Codable, Hashable {
@@ -15,13 +16,27 @@ public struct CaptroMediaWriting: Codable, Hashable {
   public var size = "medium"
   public var sourceAspectRatio: CGFloat = 1
   public var showsStamp: Bool? = nil
+  public var homeAspectRatio: CGFloat? = nil
+  public var cropX: CGFloat? = nil
+  public var cropY: CGFloat? = nil
 
   public init() {}
+  public static func cover(sourceAspectRatio: CGFloat = 1) -> Self {
+    var value = Self(); value.schemaVersion = 2; value.style = "handwritten"
+    value.alignment = "center"; value.y = 0.5; value.width = 0.78
+    value.sourceAspectRatio = sourceAspectRatio; value.showsStamp = false
+    value.homeAspectRatio = 1; return value
+  }
+  public var characterLimit: Int { schemaVersion == 2 ? 70 : 60 }
 
   public var fontFraction: CGFloat { size == "small" ? 0.065 : size == "large" ? 0.105 : 0.085 }
   public func font(mediaWidth: CGFloat) -> UIFont {
     let points = mediaWidth * fontFraction
-    if style == "editorial" {
+    if style == "handwritten" {
+      CaptroCoverTypography.register()
+      return UIFont(name: "Knewave-Regular", size: points) ?? UIFont.systemFont(ofSize: points, weight: .heavy)
+    }
+    if style == "editorial" || style == "classic" {
       let base = UIFont.systemFont(ofSize: points, weight: .semibold)
       return UIFont(descriptor: base.fontDescriptor.withDesign(.serif) ?? base.fontDescriptor, size: points)
     }
@@ -40,7 +55,8 @@ public struct CaptroMediaWriting: Codable, Hashable {
   }
   public var validationMessage: String? {
     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
-    if text.count > 60 { return "Keep visual writing to 60 characters or fewer." }
+    if text.count > characterLimit { return "Keep \(schemaVersion == 2 ? "Cover headlines" : "visual writing") to \(characterLimit) characters or fewer." }
+    if text.components(separatedBy: .newlines).count > 4 { return "Use up to four short lines." }
     // Use a canonical source width, not device pixels or Dynamic Type, to keep
     // published creative geometry reproducible. Accessible text remains separate.
     let font = font(mediaWidth: 1000)
@@ -62,7 +78,8 @@ public struct CaptroMediaWriting: Codable, Hashable {
     let source = CGSize(width: ratio, height: 1)
     let factor = fill ? max(container.width / source.width, container.height) : min(container.width / source.width, container.height)
     let size = CGSize(width: source.width * factor, height: factor)
-    return CGRect(x: (container.width - size.width) / 2, y: (container.height - size.height) / 2, width: size.width, height: size.height)
+    return CGRect(x: (container.width - size.width) * (fill ? (cropX ?? 0.5) : 0.5),
+      y: (container.height - size.height) * (fill ? (cropY ?? 0.5) : 0.5), width: size.width, height: size.height)
   }
   public func textRect(in container: CGSize, fill: Bool) -> CGRect {
     let source = sourceRect(in: container, fill: fill)
@@ -88,14 +105,25 @@ public struct CaptroMediaWritingEnvelope: Codable, Hashable {
     mediaIndex = try? container.decode(Int.self, forKey: .mediaIndex)
     // A legacy or future editor record must not prevent the whole feed loading.
     writing = try? container.decode(CaptroMediaWriting.self, forKey: .writing)
-    if writing?.schemaVersion != 1 { writing = nil }
+    if let version = writing?.schemaVersion, ![1, 2].contains(version) { writing = nil }
   }
 }
 
 extension MIRAPost {
   func mediaWriting(at index: Int) -> CaptroMediaWriting? {
-    editorOverlays?.first { $0.type == "media_writing" && $0.mediaIndex == index && $0.writing?.schemaVersion == 1 }?.writing
+    editorOverlays?.first { $0.type == "media_writing" && $0.mediaIndex == index && [1, 2].contains($0.writing?.schemaVersion ?? 0) }?.writing
   }
+  var isCoverPost: Bool { creationIntent == "cover" }
+}
+
+enum CaptroCoverTypography {
+  // Loaded once from our application resource bundle, never fetched at runtime.
+  private static let registered: Void = {
+    if let url = Bundle.module.url(forResource: "Knewave-Regular", withExtension: "ttf") {
+      CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }
+  }()
+  static func register() { _ = registered }
 }
 
 struct CaptroMediaWritingLayer: View {
@@ -114,7 +142,8 @@ struct CaptroMediaWritingLayer: View {
       .fixedSize(horizontal: false, vertical: true)
       .frame(width: rect.width, alignment: writing.alignment == "center" ? .center : writing.alignment == "right" ? .trailing : .leading)
       .padding(writing.readability ? 5 : 0)
-      .background(writing.readability ? (writing.color == "black" || writing.color == "green" ? Color.white.opacity(0.75) : Color.black.opacity(0.48)) : .clear)
+      .background(writing.readability ? (writing.color == "black" || writing.color == "green" ? Color.white : Color.black) : .clear)
+      .overlay { if writing.readability { Rectangle().strokeBorder(writing.color == "black" || writing.color == "green" ? Color.black.opacity(0.8) : Color.white.opacity(0.8), lineWidth: 0.7) } }
       .position(x: rect.midX, y: rect.midY)
       .accessibilityLabel(writing.text)
       .accessibilityHidden(writing.text.trimmingCharacters(in: .whitespacesAndNewlines) == caption?.trimmingCharacters(in: .whitespacesAndNewlines))

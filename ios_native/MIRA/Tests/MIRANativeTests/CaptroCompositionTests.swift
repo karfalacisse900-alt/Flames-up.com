@@ -2,6 +2,35 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCompositionTests: XCTestCase {
+  func testCoverDefaultsAndTypographyAreRealNativeFonts() throws {
+    let writing = CaptroMediaWriting.cover(sourceAspectRatio: 9.0 / 16)
+    XCTAssertEqual(writing.y, 0.5); XCTAssertEqual(writing.alignment, "center")
+    XCTAssertEqual(writing.showsStamp, false); XCTAssertEqual(writing.characterLimit, 70)
+    XCTAssertEqual(writing.font(mediaWidth: 390).fontName, "Knewave-Regular", "Bundled licensed font must actually load")
+    var bold = writing; bold.style = "bold"
+    var classic = writing; classic.style = "classic"
+    XCTAssertNotEqual(bold.font(mediaWidth: 390).fontName, classic.font(mediaWidth: 390).fontName)
+    var short = writing; short.text = "FRIDAY NIGHT\nIN NYC"
+    XCTAssertNil(short.validationMessage)
+    short.text = String(repeating: "a", count: 71)
+    XCTAssertNotNil(short.validationMessage); XCTAssertEqual(short.text.count, 71)
+    let restored = try JSONDecoder().decode(CaptroMediaWriting.self, from: JSONEncoder().encode(writing))
+    XCTAssertEqual(restored, writing)
+  }
+  func testCoverCropKeepsMediaAndWritingInTheSameCoordinateSpace() {
+    var writing = CaptroMediaWriting.cover(sourceAspectRatio: 9.0 / 16)
+    writing.text = "LITTLE MOMENTS"; writing.cropY = 0.7
+    let canvas = CGSize(width: 390, height: 390)
+    let source = writing.sourceRect(in: canvas, fill: true)
+    let text = writing.textRect(in: canvas, fill: true)
+    XCTAssertEqual(source.minY, (canvas.height - source.height) * 0.7, accuracy: 0.001)
+    XCTAssertEqual(text.midY, source.minY + source.height * writing.y, accuracy: 0.001)
+    XCTAssertLessThan(source.minY, 0)
+    XCTAssertEqual(MIRAMediaSizing.homeHeightToWidthRatios.count, 4)
+    XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(16.0 / 9), 4.0 / 3, accuracy: 0.001)
+    let ratio = MIRAMediaSizing.homeDisplayRatio(16.0 / 9, width: 390, visibleHeight: 600)
+    XCTAssertLessThanOrEqual(390 * ratio, 600 * 0.75)
+  }
   func testNewMediaLimitsDoNotTruncateDraftOrReduceTextOnlyAndStructuredDescriptions() {
     var draft = CaptroCompositionDraft()
     draft.bodyText = String(repeating: "a", count: 500)
@@ -23,7 +52,7 @@ final class CaptroCompositionTests: XCTestCase {
   func testDefaultAndIntentChangesKeepWritingAttachmentsAndSchedule() {
     var draft = CaptroCompositionDraft()
     XCTAssertEqual(draft.intent, .wantTo)
-    XCTAssertEqual(CaptroWritingIntent.allCases.count, 3)
+    XCTAssertEqual(CaptroWritingIntent.allCases.count, 4)
     XCTAssertEqual(draft.intent.byline, "wants to")
     draft.bodyText = "A designer and developer."
     let attachment = MIRAPickedMedia(data: Data([1, 2, 3]), kind: .image,

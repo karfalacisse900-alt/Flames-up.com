@@ -78,7 +78,7 @@ final class CaptroPostMediaTests: XCTestCase {
         XCTAssertEqual(ratio, format.heightToWidthRatio, accuracy: 0.001)
         for screenHeight: CGFloat in [568, 852, 956] {
           XCTAssertEqual(MIRAMediaSizing.mainFeedHeight(for: [], aspectRatios: [ratio],
-            width: width, screenHeight: screenHeight), width * ratio, accuracy: 0.001)
+            width: width, screenHeight: screenHeight), width * MIRAMediaSizing.homeDisplayRatio(ratio), accuracy: 0.001)
         }
       }
     }

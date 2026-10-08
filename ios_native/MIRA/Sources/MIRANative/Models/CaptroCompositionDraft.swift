@@ -4,15 +4,16 @@ enum CaptroWritingIntent: String, Codable, CaseIterable, Identifiable {
   case wantTo = "want_to"
   case lookingFor = "looking_for"
   case concern
+  case cover
   var id: String { rawValue }
   var title: String {
-    switch self { case .wantTo: return "Want to"; case .lookingFor: return "Looking for"; case .concern: return "Concern" }
+    switch self { case .wantTo: return "Want to"; case .lookingFor: return "Looking for"; case .concern: return "Concern"; case .cover: return "Cover" }
   }
   var byline: String {
-    switch self { case .wantTo: return "wants to"; case .lookingFor: return "is looking for"; case .concern: return "is concerned about" }
+    switch self { case .wantTo: return "wants to"; case .lookingFor: return "is looking for"; case .concern: return "is concerned about"; case .cover: return "Cover" }
   }
   var placeholder: String {
-    switch self { case .wantTo: return "What do you want to do?"; case .lookingFor: return "What are you looking for?"; case .concern: return "What’s on your mind?" }
+    switch self { case .wantTo: return "What do you want to do?"; case .lookingFor: return "What are you looking for?"; case .concern: return "What’s on your mind?"; case .cover: return "Add a caption (optional)…" }
   }
 }
 
@@ -55,9 +56,10 @@ struct CaptroCompositionDraft {
   var voiceDraft: CaptroVoiceDraft?
   var requestID = UUID().uuidString
   var structured: Bool { [.club, .event, .meetup, .deal].contains(selectedStampKind) }
-  var submittedIntent: String? { structured ? nil : intent.rawValue }
+  var isCover: Bool { intent == .cover }
+  var submittedIntent: String? { structured && !isCover ? nil : intent.rawValue }
   var submittedTime: String? {
-    guard !structured, intent != .concern, let time else { return nil }
+    guard !structured, intent != .concern, !isCover, let time else { return nil }
     return ISO8601DateFormatter().string(from: time)
   }
   var hasWriting: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
