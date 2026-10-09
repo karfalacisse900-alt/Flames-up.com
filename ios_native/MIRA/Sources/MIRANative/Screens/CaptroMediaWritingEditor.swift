@@ -166,6 +166,7 @@ struct CaptroMediaWritingEditor: View {
         else { ProgressView() }
       }.frame(width: source.width, height: source.height).clipped()
         .offset(x: source.minX, y: source.minY)
+        .accessibilityIdentifier("mediaWriting.canvas")
         .contentShape(Rectangle())
         .onTapGesture { panel = "text"; textFocused = true }
         .gesture(DragGesture().onChanged { gesture in
@@ -230,7 +231,6 @@ struct CaptroMediaWritingEditor: View {
           .accessibilityLabel("Play or pause video preview")
       }
     }.frame(width: size.width, height: size.height).clipped()
-      .accessibilityIdentifier("mediaWriting.canvas")
   }
   private func coverHeadlineField(in size: CGSize) -> some View {
     let value = resolvedWriting

@@ -33,7 +33,9 @@ final class CoverTests: XCTestCase {
       app.launchArguments = ["--captro-design-quality-test", "--captro-quality-cover-runtime", "--cover-file=\(file)"]
       app.launch()
       XCTAssertTrue(app.buttons["composer.intent"].waitForExistence(timeout: 45))
-      XCTAssertTrue(app.buttons["composer.audience"].label.contains("Only me"))
+      let privateAudience = expectation(for: NSPredicate(format: "label CONTAINS %@", "Only me"),
+        evaluatedWith: app.buttons["composer.audience"])
+      wait(for: [privateAudience], timeout: 20)
       app.buttons["composer.intent"].tap(); app.buttons["Cover"].tap()
       let text = app.descendants(matching: .any)["mediaWriting.text"].firstMatch
       XCTAssertTrue(text.waitForExistence(timeout: 10))

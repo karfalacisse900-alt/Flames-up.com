@@ -71,11 +71,12 @@ if (mode === 'prepare') {
         assert.equal(overlay.writing.schemaVersion, 2);
         assert.equal(overlay.writing.showsStamp, false);
         assert.ok(overlay.writing.text.length > 0 && overlay.writing.text.length <= 70);
-        assert.equal(overlay.writing.y, .5, 'Centered artwork position changed in persistence');
+        assert.ok(Math.abs(overlay.writing.y - .46) < .00001,
+          'The current slightly-above-center Cover placement changed in persistence');
       }
     }
     console.log(JSON.stringify({ realNativeCoverPublishing: 'PASS', privateExamples: posts.length,
-      overlayPersisted: true, centeredArtworkPreserved: true, noCompetingStamp: true,
+      overlayPersisted: true, coverPlacementPreserved: true, noCompetingStamp: true,
       sourceRevision: process.env.GITHUB_SHA }));
   } else if (mode === 'cleanup') {
     const assets = await request(`${base}/rest/v1/app_media_assets?user_id=eq.${session.userID}&select=storage_provider,storage_key,media_type`, { headers: admin });
