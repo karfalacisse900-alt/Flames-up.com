@@ -89,8 +89,17 @@ if (mode === 'prepare') {
           'The current slightly-above-center Cover placement changed in persistence');
       }
     }
+    const feedHeaders = { Authorization: `Bearer ${session.token}` };
+    const forYou = await request(`${api}/posts/feed?scope=for_you&limit=50`, { headers: feedHeaders });
+    const following = await request(`${api}/posts/feed?scope=following&limit=20`, { headers: feedHeaders });
+    const around = await request(`${api}/posts/feed?scope=around&limit=20`, { headers: feedHeaders });
+    assert.ok(Array.isArray(forYou) && forYou.some(post => post.user_id === session.userID || post.userId === session.userID),
+      'For You did not include the disposable owner’s visible posts');
+    assert.deepEqual(following, [], 'A new account with no follows must not receive a For You duplicate');
+    assert.deepEqual(around, [], 'An account without a profile city must not receive a fake Around feed');
     console.log(JSON.stringify({ realNativeCoverPublishing: 'PASS', privateExamples: posts.length,
       overlayPersisted: true, coverPlacementPreserved: true, noCompetingStamp: true,
+      feedScopes: 'PASS',
       sourceRevision: process.env.GITHUB_SHA }));
   } else if (mode === 'cleanup' || mode === 'cleanup-user') {
     const assets = await request(`${base}/rest/v1/app_media_assets?user_id=eq.${session.userID}&select=storage_provider,storage_key,media_type`, { headers: admin });
