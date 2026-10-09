@@ -63,6 +63,7 @@ final class CoverTests: XCTestCase {
       XCTAssertTrue(stream.waitForExistence(timeout: 150), "Upload/moderation/publishing must really succeed")
       XCTAssertTrue(app.otherElements["home.post.media"].firstMatch.waitForExistence(timeout: 30))
       XCTAssertFalse(app.otherElements["home.post.stamp"].firstMatch.exists, "Cover must not get a competing ordinary stamp")
+      XCTAssertFalse(app.otherElements["home.cover.attribution"].exists, "Cover author identity belongs in Details, not below the Home media")
       capture(app, "cover-published-home-\(file)")
       app.terminate()
     }

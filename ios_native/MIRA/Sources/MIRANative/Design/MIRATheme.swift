@@ -51,6 +51,27 @@ public enum MIRATheme {
       light: UIColor(red: 0.925, green: 0.965, blue: 0.905, alpha: 1),
       dark: UIColor(red: 0.055, green: 0.095, blue: 0.065, alpha: 1)
     )
+    public static let editorialOlive = adaptive(
+      light: UIColor(red: 0.205, green: 0.255, blue: 0.145, alpha: 1),
+      dark: UIColor(red: 0.140, green: 0.205, blue: 0.125, alpha: 1)
+    )
+    public static let editorialCream = adaptive(
+      light: UIColor(red: 0.985, green: 0.975, blue: 0.937, alpha: 1),
+      dark: UIColor(red: 0.150, green: 0.160, blue: 0.135, alpha: 1)
+    )
+    public static let editorialInk = adaptive(
+      light: UIColor(red: 0.125, green: 0.165, blue: 0.095, alpha: 1),
+      dark: UIColor(red: 0.950, green: 0.945, blue: 0.895, alpha: 1)
+    )
+    public static let editorialMenuText = adaptive(light: .white, dark: UIColor(red: 0.965, green: 0.965, blue: 0.925, alpha: 1))
+    public static let editorialBorder = adaptive(
+      light: UIColor(red: 0.240, green: 0.285, blue: 0.180, alpha: 0.36),
+      dark: UIColor(red: 0.770, green: 0.810, blue: 0.690, alpha: 0.32)
+    )
+    public static let editorialMenuBorder = adaptive(
+      light: UIColor(red: 0.075, green: 0.105, blue: 0.055, alpha: 0.70),
+      dark: UIColor(red: 0.730, green: 0.790, blue: 0.660, alpha: 0.58)
+    )
     /// Foreground for controls filled with the adaptive primary accent.
     public static let onPrimary = adaptive(light: .white, dark: UIColor(white: 0.06, alpha: 1))
     public static let accent = forest

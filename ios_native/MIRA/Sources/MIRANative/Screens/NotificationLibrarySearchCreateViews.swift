@@ -739,20 +739,22 @@ private struct CaptroPostResponsePicker: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 12) {
         HStack {
-          Text("Add response").font(.system(size: 22, weight: .semibold))
+          Text("Responses").font(.system(.headline, design: .serif, weight: .semibold))
           Spacer()
-          Button("Done", action: onClose).font(.system(size: 15, weight: .semibold))
+          Button("Close", action: onClose).font(.subheadline)
             .frame(minWidth: 44, minHeight: 44)
         }
-        .padding(.bottom, 8)
         if !showsPollEditor {
-          responseRow("None", type: nil)
-          responseRow("Yes / No", type: "yes_no")
-          responseRow("Interested", type: "interested")
-          if allowsGoing { responseRow("Going", type: "going") }
-          responseRow("Custom choices", type: "poll")
-          responseRow("Poll", type: "poll")
-          responseRow("Question / replies", type: "question")
+          VStack(spacing: 7) {
+            responseRow("None", type: nil)
+            responseRow("Yes / No", type: "yes_no")
+            responseRow("Interested", type: "interested")
+            if allowsGoing { responseRow("Going", type: "going") }
+            responseRow("Custom choices", type: "poll")
+            responseRow("Question / replies", type: "question")
+          }
+          .padding(10)
+          .background(MIRATheme.Color.editorialOlive)
         } else {
           Button("Change response type") { focusedPollField = nil; showsPollEditor = false }
             .font(.subheadline).frame(minHeight: 44)
@@ -785,6 +787,7 @@ private struct CaptroPostResponsePicker: View {
       .padding(20)
     }
     .scrollDismissesKeyboard(.interactively)
+    .background(MIRATheme.Color.launchBackground)
     .onAppear {
       if selected?.type == "poll" {
         showsPollEditor = true
@@ -802,26 +805,14 @@ private struct CaptroPostResponsePicker: View {
   }
 
   private func responseRow(_ title: String, type: String?) -> some View {
-    Button {
+    CaptroEditorialMenuRow(title: title, selected: selected?.type == type || (type == nil && selected == nil)) {
       if type == "poll" {
         showsPollEditor = true
       } else {
         selected = type.map { CaptroPostResponseDraft(type: $0) }
         onClose()
       }
-    } label: {
-      HStack {
-        Text(title).foregroundStyle(MIRATheme.Color.textPrimary)
-        Spacer()
-        if selected?.type == type || (type == nil && selected == nil) {
-          Image(systemName: "checkmark").foregroundStyle(MIRATheme.Color.forest)
-        }
-      }
-      .frame(minHeight: 48)
-      .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
-    .overlay(alignment: .bottom) { MIRATheme.Color.hairline.frame(height: 1) }
   }
 }
 
@@ -1210,7 +1201,7 @@ public struct CreatePostNativeView: View {
   public var body: some View {
     NavigationStack {
       composerSheetPage
-        .navigationTitle("")
+        .navigationTitle("Create")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { compositionNavigation }
         .toolbarBackground(MIRATheme.Color.launchBackground, for: .navigationBar)
@@ -1282,7 +1273,7 @@ public struct CreatePostNativeView: View {
     Button { Task { await submit() } } label: {
       Group {
         if isPosting { ProgressView().controlSize(.small) }
-        else { Text("Create").font(.body.weight(.semibold)) }
+        else { Text("Done").font(.body.weight(.semibold)) }
       }.fixedSize(horizontal: true, vertical: false)
         .frame(minWidth: 60, minHeight: 44).contentShape(Rectangle())
     }
@@ -1387,15 +1378,7 @@ public struct CreatePostNativeView: View {
       let closeSheet: () -> Void = { activePostDetailSheet = nil }
       Group {
       switch selection {
-      case .startWith: startWithPicker
-      case .audience: audiencePicker
       case .time: timePicker
-      case .add: addPicker
-      case .writingSource:
-        CaptroSelectionSheet(title: "Text on media") {
-          CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { transitionFromSelection(to: .media) }
-          CaptroSelectionRow(title: "Camera", symbol: "camera") { transitionFromSelection(to: .camera) }
-        }
       case .detail(.location):
         PostLocationPickerSheet(api: api, selectedPlace: $draft.selectedPlace, onClose: closeSheet)
       case .detail(.city):
@@ -1428,7 +1411,7 @@ public struct CreatePostNativeView: View {
         CaptroPostResponsePicker(selected: $draft.postResponse,
           allowsGoing: !commerceDraft.enabled && (!isEventStamp || !eventDraft.attendanceEnabled),
           onClose: closeSheet)
-          .presentationDetents([.fraction(0.72), .large])
+          .presentationDetents([.height(440), .large])
       default:
         Color.clear
       }
@@ -1444,7 +1427,7 @@ public struct CreatePostNativeView: View {
   private var selectionPresentationBinding: Binding<Presentation?> {
     Binding(
       get: {
-        switch presentation { case .startWith, .audience, .time, .add, .detail, .writingSource: return presentation; default: return nil }
+        switch presentation { case .time, .detail: return presentation; default: return nil }
       },
       set: { presentation = $0 }
     )
@@ -1453,6 +1436,12 @@ public struct CreatePostNativeView: View {
   private func presentationBinding(_ target: Presentation) -> Binding<Bool> {
     Binding(get: { presentation == target }, set: { shown in
       if shown { openPresentation(target) } else if presentation == target { presentation = nil }
+    })
+  }
+  private var addPopoverBinding: Binding<Bool> {
+    Binding(get: { presentation == .add || presentation == .writingSource }, set: { shown in
+      if shown { openPresentation(.add) }
+      else if presentation == .add || presentation == .writingSource { presentation = nil }
     })
   }
   private func openPresentation(_ target: Presentation) {
@@ -1465,6 +1454,12 @@ public struct CreatePostNativeView: View {
   private func transitionFromSelection(to target: Presentation) {
     queuedPresentation = target
     presentation = nil
+  }
+
+  private func resumeQueuedPresentation() {
+    guard let next = queuedPresentation else { return }
+    queuedPresentation = nil
+    openPresentation(next)
   }
 
   private var postDetailSheetHeightFraction: CGFloat {
@@ -1490,13 +1485,17 @@ public struct CreatePostNativeView: View {
           } icon: { Image(systemName: draft.audience.icon) }
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(MIRATheme.Color.forestSoft, in: Capsule())
+            .background(MIRATheme.Color.editorialCream)
+            .overlay(Rectangle().stroke(MIRATheme.Color.editorialBorder, lineWidth: 0.65))
             .frame(minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.forest)
         .frame(minHeight: 44, alignment: .leading)
         .accessibilityLabel("Audience, \(draft.audience.title)")
         .accessibilityIdentifier("composer.audience")
+        .popover(isPresented: presentationBinding(.audience), attachmentAnchor: .point(.bottomLeading), arrowEdge: .top) {
+          audiencePicker
+        }
 
         compositionCard
         composerToolBar
@@ -1612,8 +1611,8 @@ public struct CreatePostNativeView: View {
       }
     }
     .padding(16)
-    .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 17))
-    .overlay(RoundedRectangle(cornerRadius: 17).stroke(MIRATheme.Color.divider, lineWidth: 1))
+    .background(MIRATheme.Color.editorialCream)
+    .overlay(Rectangle().stroke(MIRATheme.Color.editorialBorder, lineWidth: 0.65))
     .onGeometryChange(for: CGFloat.self) { max(1, $0.size.width - 32) } action: { compositionCardWidth = $0 }
   }
 
@@ -1628,14 +1627,17 @@ public struct CreatePostNativeView: View {
     }
     .accessibilityLabel("Creation intent, \(draft.structured ? selectedStampKind.displayName : draft.intent.byline)")
     .accessibilityIdentifier("composer.intent")
+    .popover(isPresented: presentationBinding(.startWith), attachmentAnchor: .point(.bottomLeading), arrowEdge: .top) {
+      startWithPicker.onDisappear(perform: resumeQueuedPresentation)
+    }
   }
 
   private var startWithPicker: some View {
-    CaptroSelectionSheet(title: showsMoreCreationWays ? "More ways to create" : "Start with",
-      onBack: showsMoreCreationWays ? { showsMoreCreationWays = false } : nil) {
+    CaptroEditorialMenu(title: showsMoreCreationWays ? "More ways to create" : "Start with") {
       if showsMoreCreationWays {
+        CaptroEditorialMenuRow(title: "Back", disclosure: false) { showsMoreCreationWays = false }
         ForEach(stampPickerKinds) { kind in
-          CaptroSelectionRow(title: kind.displayName, disclosure: true) {
+          CaptroEditorialMenuRow(title: kind.displayName, disclosure: true) {
             selectedStampKind = kind
             hasSelectedStamp = true
             if [.event, .meetup].contains(kind) { eventDraft.hasSchedule = true }
@@ -1644,7 +1646,7 @@ public struct CreatePostNativeView: View {
         }
       } else {
         ForEach(CaptroWritingIntent.allCases) { intent in
-          CaptroSelectionRow(title: intent.title, selected: draft.intent == intent && !draft.structured) {
+          CaptroEditorialMenuRow(title: intent.title, selected: draft.intent == intent && !draft.structured) {
             draft.intent = intent
             selectedStampKind = .social
             hasSelectedStamp = false
@@ -1656,8 +1658,8 @@ public struct CreatePostNativeView: View {
           }
         }
         if creationCapabilities?.structuredTypes.isEmpty == false {
-          Divider().padding(.vertical, 8)
-          CaptroSelectionRow(title: "More ways to create", disclosure: true) { showsMoreCreationWays = true }
+          Rectangle().fill(MIRATheme.Color.editorialMenuText.opacity(0.28)).frame(height: 0.5).padding(.vertical, 3)
+          CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) { showsMoreCreationWays = true }
         }
       }
     }
@@ -1669,7 +1671,8 @@ public struct CreatePostNativeView: View {
   private func chipLabel(_ title: String, icon: String) -> some View {
     Label(title, systemImage: icon).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
       .padding(.horizontal, 12).padding(.vertical, 8)
-      .background(MIRATheme.Color.surfaceSoft, in: Capsule())
+      .background(MIRATheme.Color.editorialCream)
+      .overlay(Rectangle().stroke(MIRATheme.Color.editorialBorder, lineWidth: 0.65))
       .frame(minHeight: 44)
       .contentShape(Rectangle())
   }
@@ -1681,6 +1684,17 @@ public struct CreatePostNativeView: View {
           .frame(minHeight: 44)
           .contentShape(Rectangle())
       }.accessibilityIdentifier("composer.add")
+        .popover(isPresented: addPopoverBinding, attachmentAnchor: .point(.bottomLeading), arrowEdge: .top) {
+          Group {
+            if presentation == .writingSource {
+              CaptroEditorialMenu(title: "Text on media") {
+                CaptroEditorialMenuRow(title: "Back") { presentation = .add }
+                CaptroEditorialMenuRow(title: "Photos & videos") { transitionFromSelection(to: .media) }
+                CaptroEditorialMenuRow(title: "Camera") { transitionFromSelection(to: .camera) }
+              }
+            } else { addPicker }
+          }.onDisappear(perform: resumeQueuedPresentation)
+        }
       Spacer()
       Button {
         openPresentation(.voice)
@@ -1692,19 +1706,20 @@ public struct CreatePostNativeView: View {
   }
 
   private var addPicker: some View {
-    CaptroSelectionSheet(title: "Add") {
-      CaptroSelectionRow(title: "Photos & videos", symbol: "photo.on.rectangle") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .media) }
+    CaptroEditorialMenu(title: "Add") {
+      CaptroEditorialMenuRow(title: "Photos & videos") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .media) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
-      CaptroSelectionRow(title: "Camera", symbol: "camera") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .camera) }
+      CaptroEditorialMenuRow(title: "Camera") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       if !draft.isCover {
-        CaptroSelectionRow(title: "Text on media", symbol: "textformat") {
+        CaptroEditorialMenuRow(title: "Text on media") {
           writingMediaIndex = 0
           writingAfterMediaSelection = mediaItems.isEmpty
-          transitionFromSelection(to: mediaItems.isEmpty ? .writingSource : .mediaWriting)
+          if mediaItems.isEmpty { presentation = .writingSource }
+          else { transitionFromSelection(to: .mediaWriting) }
         }.disabled(isLoadingMedia)
       }
-      CaptroSelectionRow(title: "Responses", symbol: "checkmark.circle") { transitionFromSelection(to: .detail(.response)) }
+      CaptroEditorialMenuRow(title: "Responses") { transitionFromSelection(to: .detail(.response)) }
         .disabled(!mediaItems.isEmpty || voiceDraft != nil)
     }
   }
@@ -1764,10 +1779,9 @@ public struct CreatePostNativeView: View {
   }
 
   private var audiencePicker: some View {
-    CaptroSelectionSheet(title: "Audience") {
+    CaptroEditorialMenu(title: "Audience") {
       ForEach(CaptroCompositionAudience.allCases) { audience in
-        CaptroSelectionRow(title: audience.title, subtitle: audience.explanation,
-          symbol: audience.icon, selected: draft.audience == audience) {
+        CaptroEditorialMenuRow(title: audience.title, selected: draft.audience == audience) {
           draft.audience = audience
           // Selection affects this draft only; opening/cancelling never widens visibility.
           presentation = nil

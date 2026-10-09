@@ -147,7 +147,7 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(mainFeed, /\.scrollPosition\(id: \$selectedPostID, anchor: \.top\)/);
   assert.match(postView, /showsCoverMediaOnly: false/);
   assert.match(mainFeed, /LazyVStack\(spacing: 12\)/);
-  assert.match(mainFeed, /safeAreaPadding\(\.bottom, bottomInset \+ 12\)/);
+  assert.match(mainFeed, /safeAreaPadding\(\.bottom, bottomInset \+ homeTabClearance\)/);
 });
 
 test('Home media uses supported metadata ratios and controlled crop; Details preserves originals', () => {
@@ -216,7 +216,7 @@ test('media canvas is metadata-sized without a separate More row or viewport hei
   const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
   assert.match(sizing, /MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.match(sizing, /height: feedWidth \* resolved/);
-  assert.match(sizing, /homeDisplayRatio\(ratio, width: feedWidth, visibleHeight: visibleFeedHeight\)/);
+  assert.doesNotMatch(sizing, /visibleFeedHeight|UIScreen\.main\.bounds/);
   assert.doesNotMatch(postView, /showsMoreButton|Button\("More"|fixedVerticalContent/);
   assert.doesNotMatch(sizing, /availableMediaHeight\s*\/|min\(pageSize\.width/);
   assert.match(postView, /frameSize: mediaSize/);
@@ -321,7 +321,8 @@ test('composer exposes quiet tools, native actions, and no Post category', () =>
   assert.match(canvas, /Label\("Add", systemImage: "plus.circle"\)/);
   assert.match(canvas, /accessibilityLabel\("Record voice attachment"\)/);
   assert.match(composer, /ToolbarItem\(placement: \.confirmationAction\)/);
-  assert.match(composer, /Text\("Create"\)/);
+  assert.match(composer, /navigationTitle\("Create"\)/);
+  assert.match(composer, /Text\("Done"\)/);
   assert.match(canvas, /ForEach\(CaptroWritingIntent\.allCases\)/);
   assert.doesNotMatch(canvas, /Text\("Post"\)|Text\("Create Post"\)|composerToolLabel|shadow\(|LinearGradient/);
   assert.match(canvas, /scrollDismissesKeyboard\(\.(interactively|immediately)\)/);
@@ -335,13 +336,15 @@ test('feed image upload preserves composition and stays within the hosted-image 
   assert.doesNotMatch(mediaUpload, /let drawOrigin = CGPoint/);
 });
 
-test('composer selectors use one lifecycle owner and flat content-sized sheets', () => {
+test('composer selectors use one lifecycle owner and anchored editorial menus', () => {
   const intent = composer.slice(composer.indexOf('private var intentSelector'), composer.indexOf('private func compositionChip'));
   const audience = composer.slice(composer.indexOf('private var audiencePicker'), composer.indexOf('private var timePicker'));
   assert.doesNotMatch(intent, /Menu\s*\{/);
-  assert.match(intent, /CaptroSelectionSheet\(title:/);
+  assert.match(intent, /CaptroEditorialMenu\(title:/);
   assert.match(intent, /More ways to create/);
-  assert.match(audience, /CaptroSelectionSheet\(title: "Audience"/);
+  assert.match(audience, /CaptroEditorialMenu\(title: "Audience"/);
+  assert.match(composer, /popover\(isPresented: presentationBinding\(\.startWith\)/);
+  assert.match(composer, /popover\(isPresented: presentationBinding\(\.audience\)/);
   assert.doesNotMatch(audience, /List\s*\{|listStyle|UserDefaults/);
   assert.match(composer, /sheet\(item: selectionPresentationBinding, onDismiss:/);
   assert.match(composer, /queuedPresentation = nil; openPresentation\(next\)/);

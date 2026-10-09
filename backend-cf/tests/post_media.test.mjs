@@ -122,7 +122,7 @@ test('post creation accepts both kinds; Home scrolls vertically with in-media ca
   assert.doesNotMatch(composer, /Feed posts are photo-only/);
   assert.doesNotMatch(worker, /FEED_POSTS_PHOTO_ONLY/);
   const home = ios('Screens/MainFeedView.swift');
-  const topBar = home.slice(home.indexOf('private var homeTopBar'), home.indexOf('private func homeSectionButton'));
+  const topBar = home.slice(home.indexOf('private var homeTopBar'), home.indexOf('private func homeStoryAvatar'));
   assert.match(topBar, /square\.and\.pencil/);
   assert.doesNotMatch(topBar, /bell|NotificationNativeView/);
   assert.match(home, /private func verticalPostStream[\s\S]*?ScrollView\(\.vertical\)/);
@@ -133,6 +133,6 @@ test('post creation accepts both kinds; Home scrolls vertically with in-media ca
   assert.doesNotMatch(pager, /isVideoMuted = true/);
   assert.match(pager, /shouldPlay: isVideoActive && !isVideoPaused/);
   assert.match(pager, /mediaURLs.count > 1 && !showsCoverMediaOnly/);
-  assert.match(pager, /if currentMediaIsVideo \{\s*isVideoPaused.toggle\(\)/);
+  assert.match(pager, /if currentMediaIsVideo && !post\.isCoverPost \{\s*isVideoPaused.toggle\(\)/);
   assert.match(ios('Screens/PostDetailNativeView.swift'), /TabView\(selection: \$selectedIndex\)/);
 });

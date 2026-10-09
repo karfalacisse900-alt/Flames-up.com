@@ -36,6 +36,8 @@ final class MainFeedModel: ObservableObject {
   private var hasPreparedStartup = false
   private var mediaPrefetchTask: Task<Void, Never>?
   private var followingAuthorIds = Set<String>()
+  private var feedSection: MainFeedSection = .forYou
+  private var sectionSnapshots: [MainFeedSection: [MIRAPost]] = [:]
   private var likeMutationVersions: [String: Int] = [:]
   private let firstPageLimit = 12
   private let paginationTriggerRatio = 0.70
@@ -74,6 +76,8 @@ final class MainFeedModel: ObservableObject {
     isLoading = true
     isLoadingMore = false
     followingAuthorIds.removeAll()
+    sectionSnapshots.removeAll()
+    feedSection = .forYou
     likeMutationVersions.removeAll()
   }
 
@@ -193,6 +197,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func hydrateCachedFeedIfNeeded() async {
+    guard feedSection == .forYou else { return }
     guard posts.isEmpty else { return }
     let generation = accountGeneration
     let guest = isGuestFeedMode
@@ -607,6 +612,10 @@ final class MainFeedModel: ObservableObject {
   }
 
   func applyFollowUpdate(_ update: MIRAUserFollowUpdate) {
+    if !update.following {
+      sectionSnapshots[.following]?.removeAll { $0.userId == update.userId }
+      if feedSection == .following { posts.removeAll { $0.userId == update.userId } }
+    }
     let updated = posts.map { post in
       post.userId == update.userId ? post.updating(following: update.following) : post
     }
@@ -617,12 +626,14 @@ final class MainFeedModel: ObservableObject {
 
   func hidePost(_ post: MIRAPost) {
     posts.removeAll { $0.id == post.id }
+    for section in MainFeedSection.allCases { sectionSnapshots[section]?.removeAll { $0.id == post.id } }
     cacheCurrentPosts()
     MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
   }
 
   func hidePosts(byUserId userId: String) {
     posts.removeAll { $0.userId == userId }
+    for section in MainFeedSection.allCases { sectionSnapshots[section]?.removeAll { $0.userId == userId } }
     cacheCurrentPosts()
   }
 
@@ -632,6 +643,7 @@ final class MainFeedModel: ObservableObject {
     posts.removeAll { $0.userId == userId }
     do {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      for section in MainFeedSection.allCases { sectionSnapshots[section]?.removeAll { $0.userId == userId } }
       cacheCurrentPosts()
       errorMessage = nil
     } catch {
@@ -719,6 +731,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func cacheCurrentPosts() {
+    guard feedSection == .forYou else { return }
     let snapshot = posts
     let isGuest = isGuestFeedMode
     let publicCacheKey = publicFeedCacheKey
@@ -732,6 +745,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func persistCurrentFeed() async {
+    guard feedSection == .forYou else { return }
     if isGuestFeedMode {
       await MIRALocalJSONCache.save(Array(posts.prefix(120)), key: publicFeedCacheKey)
     } else {
@@ -745,8 +759,10 @@ final class MainFeedModel: ObservableObject {
   }
 
   func removePostLocally(id postId: String) {
-    guard posts.contains(where: { $0.id == postId }) else { return }
+    let hadVisiblePost = posts.contains(where: { $0.id == postId })
     posts.removeAll { $0.id == postId }
+    for section in MainFeedSection.allCases { sectionSnapshots[section]?.removeAll { $0.id == postId } }
+    guard hadVisiblePost else { return }
     localContentVersion += 1
     cacheCurrentPosts()
   }
@@ -772,7 +788,33 @@ final class MainFeedModel: ObservableObject {
     }
     // A failed or legitimately empty personalized feed must not silently turn
     // into a different public feed while retaining the signed-in UI state.
-    return try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)")
+    return try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)&scope=\(feedSection.apiScope)")
+  }
+
+  fileprivate func selectFeedSection(_ section: MainFeedSection) {
+#if DEBUG
+    if isVisualFixture {
+      feedSection = section
+      return
+    }
+#endif
+    guard feedSection != section else { return }
+    sectionSnapshots[feedSection] = posts
+    accountGeneration += 1 // Late page responses cannot replace the newly selected source.
+    mediaPrefetchTask?.cancel()
+    feedSection = section
+    posts = sectionSnapshots[section] ?? []
+    errorMessage = nil
+    isLoading = posts.isEmpty
+    isLoadingMore = false
+    isLoadingFreshFeed = false
+    isLoadingCurrentUser = false
+    hasLoadedFreshFeed = false
+    canLoadMore = true
+    refreshRequested = false
+    lastRevalidationAttemptAt = nil
+    if !posts.isEmpty { prefetchInitialMediaWindow() }
+    Task { await load(forceRefresh: true) }
   }
 
   private func stableEngagementCount(current: Int?, incoming: Int?, optimistic: Int? = nil, toggledOn: Bool? = nil) -> Int? {
@@ -861,9 +903,16 @@ final class MainFeedModel: ObservableObject {
 private struct MainPostVisibilityUpdateBody: Encodable {
   let visibility: String
 }
-private enum MainFeedSection: String {
+fileprivate enum MainFeedSection: String, CaseIterable {
+  case around
+  case following
   case forYou
-  case friends
+  var title: String {
+    switch self { case .around: return "Around"; case .following: return "Following"; case .forYou: return "For You" }
+  }
+  var apiScope: String {
+    switch self { case .around: return "around"; case .following: return "following"; case .forYou: return "for_you" }
+  }
 }
 
 public struct MainFeedView: View {
@@ -885,7 +934,7 @@ public struct MainFeedView: View {
   @State private var postActivationTask: Task<Void, Never>?
   @State private var selectedPostFallbackIndex = 0
   @State private var selectedFeedSection: MainFeedSection = .forYou
-  @AppStorage("captro.home.selectedCity") private var selectedCity = "NYC"
+  @State private var isFeedSelectorPresented = false
   @State private var isShowingCreatePost = false
   @State private var detailPost: MIRAPost?
   @State private var postOptionsTarget: MIRAPost?
@@ -896,7 +945,6 @@ public struct MainFeedView: View {
   @State private var reportSourcePost: MIRAPost?
   @State private var isReportSheetPresented = false
 
-  private let homeCities = ["NYC", "LA", "CHI", "MIA", "SF"]
 
   public init(api: MIRAAPIClient, isGuest: Bool = false) {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
@@ -1058,6 +1106,7 @@ public struct MainFeedView: View {
         reconcileCurrentPostSelection()
       }
       .onChange(of: selectedFeedSection) { _, _ in
+        model.selectFeedSection(selectedFeedSection)
         selectedPostID = nil
         selectedPostFallbackIndex = 0
         reconcileCurrentPostSelection()
@@ -1083,25 +1132,10 @@ public struct MainFeedView: View {
   private var homeTopBar: some View {
     HStack(spacing: 0) {
       HStack(spacing: 8) {
-        Menu {
-          ForEach(homeCities, id: \.self) { city in
-            Button {
-              selectedCity = city
-            } label: {
-              if selectedCity == city {
-                Label(city, systemImage: "checkmark")
-              } else {
-                Text(city)
-              }
-            }
-          }
-          Divider()
-          Button("For you") { selectedFeedSection = .forYou }
-          Button("Friends") { selectedFeedSection = .friends }
-        } label: {
+        Button { isFeedSelectorPresented = true } label: {
           HStack(spacing: 4) {
-            Text(selectedCity)
-              .font(.headline)
+            Text(selectedFeedSection.title)
+              .font(.system(.subheadline, design: .serif, weight: .semibold))
               .lineLimit(1)
             Image(systemName: "chevron.down")
               .font(.system(size: 10, weight: .bold))
@@ -1110,8 +1144,20 @@ public struct MainFeedView: View {
           .frame(width: 92, height: 52, alignment: .leading)
           .contentShape(Rectangle())
         }
-        .menuIndicator(.hidden)
-        .accessibilityLabel("Selected city, \(selectedCity)")
+        .buttonStyle(.plain)
+        .accessibilityLabel("Feed selection, \(selectedFeedSection.title)")
+        .accessibilityIdentifier("home.feed.selector")
+        .popover(isPresented: $isFeedSelectorPresented, attachmentAnchor: .point(.bottomLeading), arrowEdge: .top) {
+          CaptroEditorialMenu(title: "Feed") {
+            ForEach(MainFeedSection.allCases, id: \.self) { section in
+              CaptroEditorialMenuRow(title: section.title, selected: selectedFeedSection == section) {
+                isFeedSelectorPresented = false
+                selectedFeedSection = section
+              }
+              .disabled(isGuest && section != .forYou)
+            }
+          }
+        }
 
         Button {
           CaptroHaptics.light()
@@ -1219,35 +1265,6 @@ public struct MainFeedView: View {
       // Keep cached stories visible when offline.
     }
   }
-  private func homeSectionButton(title: String, section: MainFeedSection) -> some View {
-    Button {
-      guard selectedFeedSection != section else { return }
-      CaptroHaptics.light()
-      withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-        selectedFeedSection = section
-      }
-    } label: {
-      VStack(spacing: 8) {
-        Text(title)
-          .font(.system(size: 17, weight: selectedFeedSection == section ? .bold : .semibold))
-          .foregroundStyle(
-            selectedFeedSection == section
-              ? MIRATheme.Color.textPrimary
-              : MIRATheme.Color.textMuted
-          )
-          .lineLimit(1)
-
-        Capsule()
-          .fill(selectedFeedSection == section ? MIRATheme.Color.textPrimary : Color.clear)
-          .frame(width: 42, height: 3)
-      }
-      .frame(minHeight: 44, alignment: .bottom)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .accessibilityAddTraits(selectedFeedSection == section ? .isSelected : [])
-  }
-
   @ViewBuilder
   private func feedContent(size: CGSize, bottomInset: CGFloat) -> some View {
     if model.isLoading && model.posts.isEmpty {
@@ -1265,11 +1282,11 @@ public struct MainFeedView: View {
       }
     } else if displayedPosts.isEmpty {
       MIRAEmptyState(
-        title: selectedFeedSection == .friends ? "No friends posts yet" : localization.string("feed.empty.title"),
-        message: selectedFeedSection == .friends
+        title: selectedFeedSection == .following ? "No following posts yet" : selectedFeedSection == .around ? "No posts around you yet" : localization.string("feed.empty.title"),
+        message: selectedFeedSection == .following
           ? "Posts from people you follow will appear here."
-          : localization.string("feed.empty.message"),
-        systemImage: selectedFeedSection == .friends ? "person.2" : "sparkles"
+          : selectedFeedSection == .around ? "Around uses your profile city and posts with a shared city." : localization.string("feed.empty.message"),
+        systemImage: selectedFeedSection == .following ? "person.2" : selectedFeedSection == .around ? "mappin" : "sparkles"
       )
       .frame(width: size.width, height: size.height)
     } else {
@@ -1334,12 +1351,7 @@ public struct MainFeedView: View {
   }
 
   private var displayedPosts: [MIRAPost] {
-    switch selectedFeedSection {
-    case .forYou:
-      return model.posts
-    case .friends:
-      return model.posts.filter(\.viewerFollowing)
-    }
+    model.posts
   }
 
   private var currentPostIndex: Int {

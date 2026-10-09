@@ -5641,6 +5641,8 @@ type SupabasePostReadOptions = {
   category?: DiscoverCategory | 'all';
   photoOnly?: boolean;
   search?: string;
+  feedAuthorIds?: string[];
+  feedDisplayCity?: string;
   limit?: number;
   offset?: number;
   order?: 'newest' | 'trending';
@@ -7130,6 +7132,19 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
   const ownerId = publicId(options.ownerId, 120);
   const search = postgrestSearchTerm(options.search || '');
+
+  if (options.feedAuthorIds?.length) {
+    filters.app_user_id = postgrestInFilter(options.feedAuthorIds);
+  }
+  if (options.feedDisplayCity) {
+    // Around never infers proximity from hidden location data. It only uses a
+    // city the author elected to display on this post.
+    const city = cleanText(options.feedDisplayCity, 80).replace(/[%*_(),]/g, '').trim();
+    if (city) {
+      filters['metadata->>display_city'] = `ilike.${city}`;
+      filters['metadata->>display_location_visibility'] = postgrestEqFilter('public');
+    }
+  }
 
   if (postIds.length) {
     const uuidPostIds = postIds.map((value) => isUuidText(value)).filter((value): value is string => !!value);
@@ -17123,16 +17138,37 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   if (limited) return limited;
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
+  const scope = c.req.query('scope') || 'for_you';
+  if (!['for_you', 'following', 'around'].includes(scope)) {
+    return c.json({ detail: 'Unknown feed selection.' }, 400);
+  }
   try {
-    const [feedRows, viewer] = await Promise.all([
-      supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' }),
-      skip === 0 ? getSupabaseAppUserRowByAnyId(c, userId) : Promise.resolve(null),
-    ]);
+    const viewer = scope === 'around' || skip === 0
+      ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
+    let feedAuthorIds: string[] | undefined;
+    let feedDisplayCity: string | undefined;
+    if (scope === 'following') {
+      const aliases = await supabaseRelatedInteractionUserIds(c, userId);
+      const relationships = aliases.length ? await supabaseAdminQueryRows(c, 'app_follows', {
+        select: 'app_following_id',
+        filters: { app_follower_id: postgrestInFilter(aliases), status: postgrestEqFilter('active') },
+        limit: 1000,
+      }) : [];
+      feedAuthorIds = Array.from(new Set(relationships.map((row: any) => publicId(row?.app_following_id, 120)).filter(Boolean)));
+      if (!feedAuthorIds.length) return c.json([]);
+    }
+    if (scope === 'around') {
+      feedDisplayCity = cleanText(viewer?.city, 80).replace(/[%*_(),]/g, '').trim();
+      if (!feedDisplayCity) return c.json([]);
+    }
+    const feedRows = await supabaseReadVisiblePosts(c, userId, {
+      limit, offset: skip, order: 'newest', feedAuthorIds, feedDisplayCity,
+    });
     // Visibility, blocking and moderation are resolved before this bounded
     // ordering pass. Later pages stay chronological, so pagination cannot
     // duplicate or skip posts promoted out of a different page.
     const viewerInterests = parseJsonObject(viewer?.profile).interests;
-    const ordered = skip === 0 ? rankVisibleFeedWindow(feedRows, viewerInterests) : feedRows;
+    const ordered = scope === 'for_you' && skip === 0 ? rankVisibleFeedWindow(feedRows, viewerInterests) : feedRows;
     const response = c.json(ordered.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;

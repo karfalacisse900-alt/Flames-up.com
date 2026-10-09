@@ -33,7 +33,6 @@ struct CaptroFeedPostView: View {
     VStack(alignment: .leading, spacing: 0) {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
-        if post.isCoverPost { coverAttribution }
       } else {
         textOnlyStamp(maxBodyLines: 16)
         .fixedSize(horizontal: false, vertical: true)
@@ -83,27 +82,6 @@ struct CaptroFeedPostView: View {
     return CGSize(width: feedWidth, height: feedWidth * resolved)
   }
 
-  private var coverAttribution: some View {
-    let content = post.captroMediaFeedCardContent
-    return VStack(alignment: .leading, spacing: 8) {
-      if post.detail?.commerce != nil {
-        if !content.title.isEmpty { Text(content.title).font(.subheadline.weight(.semibold)).lineLimit(2) }
-        if !content.homeStampMetadata.isEmpty { Text(content.homeStampMetadata).font(.caption).foregroundStyle(.secondary) }
-      }
-      if let caption = post.caption ?? post.content, !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        Text(caption).font(.subheadline).lineLimit(6).fixedSize(horizontal: false, vertical: true)
-      }
-      Button(action: onOpenPost) {
-        HStack(spacing: 7) {
-          RemoteAvatar(url: post.userProfileImage, size: 24)
-          Text(content.username ?? post.authorDisplayName).font(.caption.weight(.semibold))
-          Spacer(minLength: 0)
-        }.frame(minHeight: 36).contentShape(Rectangle())
-      }.buttonStyle(.plain).accessibilityHint("Opens post details")
-      if post.detail?.voice != nil || post.hasAudio { CaptroStampAudio(post: post, api: api, isActive: isPostActive) }
-    }.padding(.horizontal, 18).padding(.vertical, 10)
-      .accessibilityIdentifier("home.cover.attribution")
-  }
 }
 
 /// A first-class image-free Stamp. No fake media, fixed caption box or shared

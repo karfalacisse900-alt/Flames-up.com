@@ -121,7 +121,7 @@ struct CaptroMediaPager: View {
           .accessibilityElement(children: .ignore)
           .accessibilityIdentifier("home.post.media")
           .accessibilityLabel(mediaAccessibilityLabel)
-          .accessibilityHint(currentMediaIsVideo ? "Tap to pause or play video" : "Opens the post detail screen")
+          .accessibilityHint(currentMediaIsVideo && !post.isCoverPost ? "Tap to pause or play video" : "Opens the post detail screen")
           .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
 
         if mediaURLs.count > 1 && !showsCoverMediaOnly {
@@ -275,7 +275,7 @@ struct CaptroMediaPager: View {
 
   private func handleMediaTap() {
     guard !suppressTapAfterStampPeek else { return }
-    if currentMediaIsVideo {
+    if currentMediaIsVideo && !post.isCoverPost {
       isVideoPaused.toggle()
     } else {
       onOpenPost()
