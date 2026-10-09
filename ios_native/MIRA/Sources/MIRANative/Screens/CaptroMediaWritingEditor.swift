@@ -25,7 +25,7 @@ struct CaptroMediaWritingEditor: View {
 
   init(items: [MIRAPickedMedia], initialIndex: Int = 0, coverMode: Bool = false, onSave: @escaping ([MIRAPickedMedia]) -> Void) {
     self.coverMode = coverMode
-    _automaticallySizedCoverIndices = State(initialValue: Set(items.indices.filter { coverMode && items[$0].mediaWriting == nil }))
+    _automaticallySizedCoverIndices = State(initialValue: Set(items.indices.filter { coverMode && items[$0].mediaWriting?.schemaVersion != 2 }))
     _items = State(initialValue: items.map { item in
       guard coverMode else { return item }
       var item = item
@@ -59,7 +59,7 @@ struct CaptroMediaWritingEditor: View {
     if coverMode && items.first?.mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
       return "Write a short headline for the first photo or video."
     }
-    items.enumerated().compactMap { index, item -> String? in
+    return items.enumerated().compactMap { index, item -> String? in
       guard let stored = item.mediaWriting, !stored.text.isEmpty else { return nil }
       var value = stored
       if let error = value.validationMessage { return error }
