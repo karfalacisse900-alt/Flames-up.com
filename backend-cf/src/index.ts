@@ -17150,11 +17150,13 @@ api.get('/posts/feed', authMiddleware, async (c) => {
     if (scope === 'following') {
       const aliases = await supabaseRelatedInteractionUserIds(c, userId);
       const relationships = aliases.length ? await supabaseAdminQueryRows(c, 'app_follows', {
-        select: 'app_following_id',
-        filters: { app_follower_id: postgrestInFilter(aliases), status: postgrestEqFilter('active') },
+        select: 'app_following_id,status',
+        filters: { app_follower_id: postgrestInFilter(aliases) },
         limit: 1000,
       }) : [];
-      feedAuthorIds = Array.from(new Set(relationships.map((row: any) => publicId(row?.app_following_id, 120)).filter(Boolean)));
+      feedAuthorIds = Array.from(new Set(relationships
+        .filter((row: any) => cleanText(row?.status || 'active', 40) === 'active')
+        .map((row: any) => publicId(row?.app_following_id, 120)).filter(Boolean)));
       if (!feedAuthorIds.length) return c.json([]);
     }
     if (scope === 'around') {
