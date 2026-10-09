@@ -15,7 +15,6 @@ struct CaptroFeedPostView: View {
   let onSave: () -> Void
   let canFollowAuthor: Bool
   let feedWidth: CGFloat
-  var visibleFeedHeight: CGFloat = 0
   @Binding var stampReading: CaptroFeedStampReadingState
   @State private var selectedMediaIndex = 0
   var canRespond = true
@@ -76,10 +75,11 @@ struct CaptroFeedPostView: View {
     // One cover ratio sizes every carousel slide before any image downloads.
     let ratio = MIRAMediaSizing.mainFeedDisplayRatio(
       for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
-    // An explicitly chosen Cover crop is stable, including text geometry. For
-    // ordinary tall imports choose a supported responsive crop, never a spacer.
+    // An explicitly chosen Cover crop is stable, including text geometry.
+    // Ordinary posts keep their supported ratio; only unusually tall source
+    // ratios have already been normalized by mainFeedDisplayRatio.
     let resolved = post.isCoverPost ? 1 / (post.mediaWriting(at: 0)?.homeAspectRatio ?? 1)
-      : MIRAMediaSizing.homeDisplayRatio(ratio, width: feedWidth, visibleHeight: visibleFeedHeight)
+      : ratio
     return CGSize(width: feedWidth, height: feedWidth * resolved)
   }
 

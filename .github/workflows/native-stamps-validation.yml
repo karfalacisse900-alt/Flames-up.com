@@ -48,10 +48,9 @@ jobs:
           elif [ '${{ inputs.stream_only }}' = 'true' ]; then
             tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
           elif [ '${{ inputs.cover_runtime }}' = 'true' ]; then
-            # All other Home/editor UI cases passed on the immediately preceding
-            # source revision; rerun the corrected large-type case and actual
-            # Cover selector before the private end-to-end publish sequence.
-            tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/CoverTests/testCoverSelectorOpensRealPhotoPicker -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testTextOnlyAndAccessibilityDoNotReserveMediaHeight)
+            # One focused run verifies the restored distinct media ratios,
+            # active Cover route, then real private publish/persistence below.
+            tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/CoverTests/testCoverSelectorOpensRealPhotoPicker -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testTextOnlyAndAccessibilityDoNotReserveMediaHeight)
           fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination 'platform=iOS Simulator,name=iPhone 17' \

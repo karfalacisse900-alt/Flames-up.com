@@ -1546,16 +1546,16 @@ public enum MIRAMediaSizing {
     return feedPreviewRatio
   }
 
-  /// Home crops only; historical source/upload formats and Details stay intact.
+  /// Home crops only. Supported source ratios retain their distinct heights;
+  /// unusually tall imports resolve to the tallest supported Home crop.
   public static let homeHeightToWidthRatios: [CGFloat] = [9.0 / 16, 1, 5.0 / 4, 4.0 / 3]
-  public static func homeDisplayRatio(_ sourceRatio: CGFloat, width: CGFloat = 0, visibleHeight: CGFloat = 0) -> CGFloat {
+  public static func homeDisplayRatio(_ sourceRatio: CGFloat) -> CGFloat {
     let ratio = sourceRatio.isFinite && sourceRatio > 0 ? sourceRatio : feedPreviewRatio
-    var choices = homeHeightToWidthRatios
-    if width > 0, visibleHeight > 0 {
-      let fitting = choices.filter { width * $0 <= visibleHeight * 0.75 }
-      if !fitting.isEmpty { choices = fitting }
-    }
-    return choices.min { abs(log($0 / ratio)) < abs(log($1 / ratio)) } ?? 1
+    // Home's only landscape treatment is 16:9. Resolve intermediate 4:3
+    // imports deterministically rather than letting a floating-point tie
+    // alternate between landscape and square on different devices.
+    if ratio < 1 { return 9.0 / 16 }
+    return homeHeightToWidthRatios.min { abs(log($0 / ratio)) < abs(log($1 / ratio)) } ?? 1
   }
 
   public static func detailHeight(

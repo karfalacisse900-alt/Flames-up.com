@@ -17,19 +17,25 @@ struct CaptroMediaWritingEditor: View {
   @State private var panel = "text"
   @State private var adjustsCrop = false
   @State private var cropOrigin: CGPoint?
+  @State private var automaticallySizedCoverIndices: Set<Int>
+  @State private var didFocusCoverHeadline = false
   @FocusState private var textFocused: Bool
   let coverMode: Bool
   let onSave: ([MIRAPickedMedia]) -> Void
 
   init(items: [MIRAPickedMedia], initialIndex: Int = 0, coverMode: Bool = false, onSave: @escaping ([MIRAPickedMedia]) -> Void) {
     self.coverMode = coverMode
+    _automaticallySizedCoverIndices = State(initialValue: Set(items.indices.filter { coverMode && items[$0].mediaWriting == nil }))
     _items = State(initialValue: items.map { item in
       guard coverMode else { return item }
       var item = item
-      var writing = item.mediaWriting ?? .cover()
-      writing.schemaVersion = 2; writing.showsStamp = false
-      if writing.style == "clean" { writing.style = "bold" }
-      if writing.style == "editorial" { writing.style = "classic" }
+      var writing: CaptroMediaWriting
+      if let existing = item.mediaWriting, existing.schemaVersion == 2 {
+        writing = existing // Existing published/draft artwork is never restyled implicitly.
+      } else {
+        writing = .cover()
+        writing.text = item.mediaWriting?.text ?? ""
+      }
       item.mediaWriting = writing; return item
     })
     _selected = State(initialValue: min(max(0, initialIndex), max(0, items.count - 1)))
@@ -50,6 +56,9 @@ struct CaptroMediaWritingEditor: View {
     Binding(get: { writing }, set: { writing = $0 })
   }
   private var error: String? {
+    if coverMode && items.first?.mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+      return "Write a short headline for the first photo or video."
+    }
     items.enumerated().compactMap { index, item -> String? in
       guard let stored = item.mediaWriting, !stored.text.isEmpty else { return nil }
       var value = stored
@@ -74,7 +83,7 @@ struct CaptroMediaWritingEditor: View {
         ScrollView {
           VStack(spacing: 12) {
             if !items.isEmpty {
-              let width = min(page.size.width - 32, max(160, (page.size.height - 205) / homeRatio))
+              let width = min(page.size.width - 32, max(160, (page.size.height - (coverMode ? 96 : 205)) / homeRatio))
               canvas(size: CGSize(width: width, height: width * homeRatio))
               if items.count > 1 {
                 HStack {
@@ -85,29 +94,29 @@ struct CaptroMediaWritingEditor: View {
                     .disabled(selected == items.count - 1).accessibilityLabel("Next media")
                 }
               }
-              Picker("Editing controls", selection: $panel) {
-                Text("Text").tag("text"); Text("Style").tag("style")
-                Text("Alignment").tag("alignment"); Text("Position").tag("position")
-              }.pickerStyle(.segmented)
-              controls.disabled(ratios.count != items.count)
-              if let message = error {
+              if !coverMode {
+                Picker("Editing controls", selection: $panel) {
+                  Text("Text").tag("text"); Text("Style").tag("style")
+                  Text("Alignment").tag("alignment"); Text("Position").tag("position")
+                }.pickerStyle(.segmented)
+                controls.disabled(ratios.count != items.count)
+                Button("Remove text", role: .destructive) { items[selected].mediaWriting = nil }
+                  .disabled(writing.text.isEmpty).frame(minHeight: 44)
+              }
+              if let message = error, !writing.text.isEmpty {
                 Text(message).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("mediaWriting.validation")
               }
-              Button("Remove text", role: .destructive) {
-                if coverMode { var value = writing; value.text = ""; writing = value }
-                else { items[selected].mediaWriting = nil }
-              }
-                .disabled(writing.text.isEmpty).frame(minHeight: 44)
             }
           }.padding(16)
         }.scrollDismissesKeyboard(.interactively)
       }
       .background(MIRATheme.Color.launchBackground)
-      .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+      .navigationTitle(coverMode ? "Cover" : "").navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") {
+            textFocused = false
             for index in items.indices where !coverMode && items[index].mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
               items[index].mediaWriting = nil
             }
@@ -126,11 +135,19 @@ struct CaptroMediaWritingEditor: View {
       }
       guard !Task.isCancelled else { return }
       ratios = loaded
+      let resolvedHomeRatio = MIRAMediaSizing.homeDisplayRatio(1 / (loaded.first ?? 1))
       for index in items.indices {
         if var value = items[index].mediaWriting {
           value.sourceAspectRatio = loaded[index]
+          if automaticallySizedCoverIndices.contains(index) { value.homeAspectRatio = 1 / resolvedHomeRatio }
           items[index].mediaWriting = value
         }
+      }
+    }
+    .onChange(of: ratios.count) { _, count in
+      if coverMode && count == items.count && !didFocusCoverHeadline {
+        didFocusCoverHeadline = true
+        textFocused = true
       }
     }
     .task(id: selected) { await loadMedia() }
@@ -168,7 +185,9 @@ struct CaptroMediaWritingEditor: View {
         .frame(width: size.width * 0.73, height: size.height * 0.50)
         .offset(x: size.width * 0.054, y: size.height * 0.48)
         .allowsHitTesting(false).accessibilityHidden(true) }
-      if !writing.text.isEmpty {
+      if coverMode {
+        coverHeadlineField(in: size)
+      } else if !writing.text.isEmpty {
         CaptroMediaWritingLayer(writing: resolvedWriting, container: size)
         let rect = resolvedWriting.textRect(in: size, fill: true)
         Color.clear.frame(width: max(44, rect.width), height: max(44, rect.height))
@@ -188,13 +207,13 @@ struct CaptroMediaWritingEditor: View {
             }.onEnded { _ in dragOrigin = nil; guide = false })
           .accessibilityLabel("Move media text. Use Position controls for precise placement.")
       }
-      if writing.text.isEmpty {
+      if !coverMode && writing.text.isEmpty {
         Button("Add text") { panel = "text"; textFocused = true }
           .font(.subheadline.weight(.medium)).padding(10)
           .background(.regularMaterial, in: Capsule())
           .position(x: size.width / 2, y: size.height / 2)
       }
-      if guide {
+      if !coverMode && guide {
         Rectangle().fill(.white.opacity(0.8)).frame(width: 1, height: size.height)
           .offset(x: size.width / 2).allowsHitTesting(false).accessibilityHidden(true)
       }
@@ -212,6 +231,25 @@ struct CaptroMediaWritingEditor: View {
       }
     }.frame(width: size.width, height: size.height).clipped()
       .accessibilityIdentifier("mediaWriting.canvas")
+  }
+  private func coverHeadlineField(in size: CGSize) -> some View {
+    let value = resolvedWriting
+    let source = value.sourceRect(in: size, fill: true)
+    let rect = value.textRect(in: size, fill: true)
+    return TextField("Write a headline", text: writingBinding.text, axis: .vertical)
+      .font(Font(value.font(mediaWidth: source.width)))
+      .foregroundStyle(value.tint)
+      .multilineTextAlignment(value.alignment == "center" ? .center : value.alignment == "right" ? .trailing : .leading)
+      .lineLimit(1...4)
+      .textFieldStyle(.plain)
+      .padding(value.readability ? 8 : 0)
+      .frame(width: rect.width + (value.readability ? 16 : 0))
+      .background(value.readability ? (value.color == "black" || value.color == "green" ? Color.white : Color.black) : .clear)
+      .overlay { if value.readability { Rectangle().strokeBorder(value.color == "black" || value.color == "green" ? Color.black.opacity(0.8) : Color.white.opacity(0.8), lineWidth: 0.7) } }
+      .position(x: rect.midX, y: rect.midY)
+      .focused($textFocused)
+      .accessibilityLabel("Cover headline")
+      .accessibilityIdentifier("mediaWriting.text")
   }
   private var resolvedWriting: CaptroMediaWriting {
     var value = writing; value.sourceAspectRatio = sourceRatio; return value
@@ -238,18 +276,6 @@ struct CaptroMediaWritingEditor: View {
       if selected == 0 && !coverMode {
         Toggle("Show Captro stamp", isOn: Binding(get: { writing.showsStamp != false }, set: { writing.showsStamp = $0 }))
           .font(.subheadline)
-      }
-      if coverMode {
-        Picker("Home crop", selection: Binding(get: { 1 / homeRatio }, set: { ratio in
-          for index in items.indices {
-            var value = items[index].mediaWriting ?? .cover(sourceAspectRatio: ratios.indices.contains(index) ? ratios[index] : 1)
-            value.homeAspectRatio = ratio; items[index].mediaWriting = value
-          }
-        })) {
-          Text("4:5").tag(CGFloat(4.0 / 5)); Text("1:1").tag(CGFloat(1))
-          Text("3:4").tag(CGFloat(3.0 / 4)); Text("16:9").tag(CGFloat(16.0 / 9))
-        }.pickerStyle(.segmented)
-        Toggle("Adjust crop", isOn: $adjustsCrop).font(.subheadline)
       }
       Text(adjustsCrop ? "Drag the photo to adjust Home’s crop. The original stays intact." : "Drag the writing on the photo, or choose a position.")
         .font(.footnote).foregroundStyle(.secondary)
@@ -284,7 +310,8 @@ struct CaptroMediaWritingEditor: View {
   }
   private func select(_ index: Int) {
     guard items.indices.contains(index) else { return }
-    textFocused = false; selected = index
+    if !coverMode { textFocused = false }
+    selected = index
   }
   private func cleanup() {
     player?.pause(); player?.replaceCurrentItem(with: nil); player = nil

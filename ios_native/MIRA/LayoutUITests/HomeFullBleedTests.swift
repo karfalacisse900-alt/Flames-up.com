@@ -2,22 +2,17 @@ import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
   func testEveryPhotoRatioFillsScreenWidth() {
-    let ratios: [(String, CGFloat)] = [("wide", 9.0 / 16), ("landscape", 3.0 / 4),
-      ("portrait", 1536.0 / 999), ("fourfive", 1.25), ("threefour", 4.0 / 3), ("square", 1)]
-    for (name, _) in ratios {
+    let ratios: [(String, CGFloat)] = [("wide", 9.0 / 16), ("landscape", 9.0 / 16),
+      ("portrait", 4.0 / 3), ("fourfive", 5.0 / 4), ("threefour", 4.0 / 3), ("square", 1)]
+    for (name, expectedRatio) in ratios {
       let app = launch(["--captro-visual-size=\(name)"])
       let media = app.otherElements["home.post.media"].firstMatch
       XCTAssertTrue(media.waitForExistence(timeout: 15))
       XCTAssertEqual(media.frame.minX, 0, accuracy: 1)
       XCTAssertEqual(media.frame.width, app.frame.width, accuracy: 1)
       let homeRatio = media.frame.height / media.frame.width
-      let supportedRatios: [CGFloat] = [9.0 / 16, 1, 5.0 / 4, 4.0 / 3]
-      let supported = supportedRatios.contains(where: { ratio in abs(homeRatio - ratio) < 0.01 })
-      XCTAssertTrue(supported, "Home uses one supported responsive crop: \(name)")
-      let viewportHeight = app.scrollViews["home.post.stream"].frame.height
-      let maximumHeight = viewportHeight * 0.75 + 1
-      XCTAssertLessThanOrEqual(media.frame.height, maximumHeight,
-        "Home media should stay inside the visible post viewport: \(name)")
+      XCTAssertEqual(homeRatio, expectedRatio, accuracy: 0.01,
+        "Supported source ratios retain their distinct natural Home proportions: \(name)")
       if name == "wide" { XCTAssertLessThan(homeRatio, 1, "Wide source metadata must still resolve to a wide Home crop") }
       XCTAssertEqual(media.frame.minY, app.scrollViews["home.post.stream"].frame.minY, accuracy: 1)
       assertStamp(app, media: media)
@@ -34,9 +29,7 @@ final class HomeFullBleedTests: XCTestCase {
     let supportedRatios: [CGFloat] = [9.0 / 16, 1, 5.0 / 4, 4.0 / 3]
     let supported = supportedRatios.contains(where: { ratio in abs(homeRatio - ratio) < 0.01 })
     XCTAssertTrue(supported)
-    let viewportHeight = app.scrollViews["home.post.stream"].frame.height
-    let maximumHeight = viewportHeight * 0.75 + 1
-    XCTAssertLessThanOrEqual(media.frame.height, maximumHeight)
+    XCTAssertEqual(homeRatio, 4.0 / 3, accuracy: 0.01)
     assertStamp(app, media: media)
     let pause = app.buttons["Pause video"].firstMatch
     XCTAssertTrue(pause.waitForExistence(timeout: 10))

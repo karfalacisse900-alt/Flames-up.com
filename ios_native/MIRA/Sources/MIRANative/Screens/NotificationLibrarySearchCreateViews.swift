@@ -1540,6 +1540,7 @@ public struct CreatePostNativeView: View {
         }
         Spacer(minLength: 0)
       }
+      if draft.isCover && !mediaItems.isEmpty { compositionAttachments }
       ZStack(alignment: .topLeading) {
         if bodyText.isEmpty {
           Text(draft.structured ? "Add a message…" : draft.intent.placeholder)
@@ -1552,7 +1553,7 @@ public struct CreatePostNativeView: View {
           .accessibilityIdentifier("composer.writing")
       }
       if isLoadingMedia { ProgressView("Preparing media…").font(.footnote) }
-      if !mediaItems.isEmpty { compositionAttachments }
+      if !draft.isCover && !mediaItems.isEmpty { compositionAttachments }
       if let voiceDraft { composerVoiceAttachment(voiceDraft) }
       if draft.structured {
         Button { isEditingPostDetails = true } label: {
@@ -1696,11 +1697,13 @@ public struct CreatePostNativeView: View {
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       CaptroSelectionRow(title: "Camera", symbol: "camera") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
-      CaptroSelectionRow(title: "Text on media", symbol: "textformat") {
-        writingMediaIndex = 0
-        writingAfterMediaSelection = mediaItems.isEmpty
-        transitionFromSelection(to: mediaItems.isEmpty ? .writingSource : .mediaWriting)
-      }.disabled(isLoadingMedia)
+      if !draft.isCover {
+        CaptroSelectionRow(title: "Text on media", symbol: "textformat") {
+          writingMediaIndex = 0
+          writingAfterMediaSelection = mediaItems.isEmpty
+          transitionFromSelection(to: mediaItems.isEmpty ? .writingSource : .mediaWriting)
+        }.disabled(isLoadingMedia)
+      }
       CaptroSelectionRow(title: "Responses", symbol: "checkmark.circle") { transitionFromSelection(to: .detail(.response)) }
         .disabled(!mediaItems.isEmpty || voiceDraft != nil)
     }
@@ -2126,7 +2129,10 @@ public struct CreatePostNativeView: View {
 
   private var canPost: Bool {
     guard draft.writingValidationMessage == nil else { return false }
-    if draft.isCover && mediaItems.isEmpty { return false }
+    if draft.isCover {
+      guard let cover = mediaItems.first?.mediaWriting, cover.schemaVersion == 2,
+        !cover.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+    }
     if mediaItems.contains(where: { $0.mediaWriting?.validationMessage != nil }) { return false }
     if draft.structured {
       guard creationCapabilities?.structuredTypes.contains(selectedStampKind.backendPostType) == true,

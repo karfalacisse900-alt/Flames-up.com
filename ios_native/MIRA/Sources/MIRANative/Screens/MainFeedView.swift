@@ -1273,15 +1273,15 @@ public struct MainFeedView: View {
       )
       .frame(width: size.width, height: size.height)
     } else {
-      verticalPostStream(width: size.width, visibleHeight: max(0, size.height - bottomInset), bottomInset: bottomInset)
+      verticalPostStream(width: size.width, bottomInset: bottomInset)
     }
   }
 
-  private func verticalPostStream(width: CGFloat, visibleHeight: CGFloat, bottomInset: CGFloat) -> some View {
+  private func verticalPostStream(width: CGFloat, bottomInset: CGFloat) -> some View {
     ScrollView(.vertical) {
       LazyVStack(spacing: 12) {
         ForEach(displayedPosts, id: \.id) { post in
-          feedPage(post: post, width: width, visibleHeight: visibleHeight, isCurrent: post.id == currentPost?.id)
+          feedPage(post: post, width: width, isCurrent: post.id == currentPost?.id)
             .id(post.id)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.post.page.\(post.id)")
@@ -1301,7 +1301,7 @@ public struct MainFeedView: View {
     .accessibilityIdentifier("home.post.stream")
   }
 
-  private func feedPage(post: MIRAPost, width: CGFloat, visibleHeight: CGFloat, isCurrent: Bool) -> some View {
+  private func feedPage(post: MIRAPost, width: CGFloat, isCurrent: Bool) -> some View {
     CaptroFeedPostView(
       post: post,
       api: model.api,
@@ -1326,7 +1326,6 @@ public struct MainFeedView: View {
       },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       feedWidth: width,
-      visibleFeedHeight: visibleHeight,
       stampReading: Binding(
         get: { stampReadingStates[post.id] ?? CaptroFeedStampReadingState() },
         set: { stampReadingStates[post.id] = $0 }),

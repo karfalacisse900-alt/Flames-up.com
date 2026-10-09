@@ -4,14 +4,18 @@ import XCTest
 final class CaptroCompositionTests: XCTestCase {
   func testCoverDefaultsAndTypographyAreRealNativeFonts() throws {
     let writing = CaptroMediaWriting.cover(sourceAspectRatio: 9.0 / 16)
-    XCTAssertEqual(writing.y, 0.5); XCTAssertEqual(writing.alignment, "center")
+    XCTAssertEqual(writing.y, 0.46); XCTAssertEqual(writing.alignment, "center")
     XCTAssertEqual(writing.showsStamp, false); XCTAssertEqual(writing.characterLimit, 70)
+    XCTAssertEqual(writing.homeAspectRatio ?? 0, 3.0 / 4, accuracy: 0.001)
+    XCTAssertEqual(writing.color, "black"); XCTAssertTrue(writing.readability)
     XCTAssertEqual(writing.font(mediaWidth: 390).fontName, "Knewave-Regular", "Bundled licensed font must actually load")
-    var bold = writing; bold.style = "bold"
-    var classic = writing; classic.style = "classic"
-    XCTAssertNotEqual(bold.font(mediaWidth: 390).fontName, classic.font(mediaWidth: 390).fontName)
     var short = writing; short.text = "FRIDAY NIGHT\nIN NYC"
     XCTAssertNil(short.validationMessage)
+    for phrase in ["NIGHTLIFE FRIDAY IN NYC", "INTIMATE JAZZ CLUBS WORTH SAVING",
+      "NEIGHBORHOOD THAI RESTAURANTS", "THE NEW YORK GIFT GUIDE"] {
+      short.text = phrase
+      XCTAssertNil(short.validationMessage, "The automatic Cover treatment must fit \(phrase)")
+    }
     short.text = String(repeating: "a", count: 71)
     XCTAssertNotNil(short.validationMessage); XCTAssertEqual(short.text.count, 71)
     let restored = try JSONDecoder().decode(CaptroMediaWriting.self, from: JSONEncoder().encode(writing))
@@ -20,7 +24,7 @@ final class CaptroCompositionTests: XCTestCase {
   func testCoverCropKeepsMediaAndWritingInTheSameCoordinateSpace() {
     var writing = CaptroMediaWriting.cover(sourceAspectRatio: 9.0 / 16)
     writing.text = "LITTLE MOMENTS"; writing.cropY = 0.7
-    let canvas = CGSize(width: 390, height: 390)
+    let canvas = CGSize(width: 390, height: 390 / (writing.homeAspectRatio ?? 1))
     let source = writing.sourceRect(in: canvas, fill: true)
     let text = writing.textRect(in: canvas, fill: true)
     XCTAssertEqual(source.minY, (canvas.height - source.height) * 0.7, accuracy: 0.001)
@@ -28,8 +32,11 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertLessThan(source.minY, 0)
     XCTAssertEqual(MIRAMediaSizing.homeHeightToWidthRatios.count, 4)
     XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(16.0 / 9), 4.0 / 3, accuracy: 0.001)
-    let ratio = MIRAMediaSizing.homeDisplayRatio(16.0 / 9, width: 390, visibleHeight: 600)
-    XCTAssertLessThanOrEqual(390 * ratio, 600 * 0.75)
+    XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(9.0 / 16), 9.0 / 16, accuracy: 0.001)
+    XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(1), 1, accuracy: 0.001)
+    XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(5.0 / 4), 5.0 / 4, accuracy: 0.001)
+    XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(4.0 / 3), 4.0 / 3, accuracy: 0.001)
+    XCTAssertGreaterThan(MIRAMediaSizing.homeDisplayRatio(4.0 / 3), MIRAMediaSizing.homeDisplayRatio(1))
   }
   func testNewMediaLimitsDoNotTruncateDraftOrReduceTextOnlyAndStructuredDescriptions() {
     var draft = CaptroCompositionDraft()

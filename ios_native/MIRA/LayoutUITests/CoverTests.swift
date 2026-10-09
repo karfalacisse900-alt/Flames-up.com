@@ -21,14 +21,14 @@ final class CoverTests: XCTestCase {
   /// Run only after protected CI installs a disposable real account and legally
   /// available photography. Publishes Only me, reads real saved records in Home.
   func testRealPrivateCoverPublishing() {
-    let cases = [("fashion.jpg", "WHAT I WORE\nTHIS WEEK", "Handwritten"),
-      ("nightlife.jpg", "FRIDAY NIGHT\nIN NYC", "Bold"),
-      ("dining.jpg", "BROOKLYN\nDINNER SPOTS", "Handwritten"),
-      ("travel.jpg", "A WEEKEND IN\nNEW YORK", "Classic"),
-      ("photography.jpg", "LITTLE MOMENTS", "Classic"),
-      ("video.mp4", "FRIDAY NIGHT\nIN NYC", "Bold"),
-      ("carousel", "FRIDAY NIGHT\nIN NYC", "Handwritten")]
-    for (file, phrase, style) in cases {
+    let cases = [("fashion.jpg", "WHAT I WORE\nTHIS WEEK"),
+      ("nightlife.jpg", "FRIDAY NIGHT\nIN NYC"),
+      ("dining.jpg", "BROOKLYN\nDINNER SPOTS"),
+      ("travel.jpg", "A WEEKEND IN\nNEW YORK"),
+      ("photography.jpg", "LITTLE MOMENTS"),
+      ("video.mp4", "FRIDAY NIGHT\nIN NYC"),
+      ("carousel", "FRIDAY NIGHT\nIN NYC")]
+    for (file, phrase) in cases {
       let app = XCUIApplication()
       app.launchArguments = ["--captro-design-quality-test", "--captro-quality-cover-runtime", "--cover-file=\(file)"]
       app.launch()
@@ -38,19 +38,15 @@ final class CoverTests: XCTestCase {
       let text = app.descendants(matching: .any)["mediaWriting.text"].firstMatch
       XCTAssertTrue(text.waitForExistence(timeout: 10))
       text.tap(); text.typeText(phrase)
-      app.buttons["Style"].tap()
-      app.buttons[style].tap()
+      XCTAssertFalse(app.buttons["Style"].exists)
+      XCTAssertFalse(app.buttons["Alignment"].exists)
+      XCTAssertFalse(app.buttons["Position"].exists)
       if file == "carousel" {
-        app.buttons["Text"].tap()
         app.buttons["Next media"].tap()
-        XCTAssertTrue(["", "Your short phrase"].contains(text.value as? String ?? "unexpected"), "Second carousel photo must have independent artwork")
+        XCTAssertTrue(["", "Write a headline"].contains(text.value as? String ?? "unexpected"), "Second carousel photo must have independent artwork")
         text.tap(); text.typeText("BROOKLYN\nDINNER SPOTS")
         app.buttons["Previous media"].tap()
         XCTAssertEqual(text.value as? String, phrase)
-      }
-      if file == "dining.jpg" {
-        app.switches["Rectangular backing"].tap()
-        app.buttons["Text color"].tap(); app.buttons["Black"].tap()
       }
       capture(app, "cover-editor-\(file)")
       let done = app.buttons["mediaWriting.done"]
