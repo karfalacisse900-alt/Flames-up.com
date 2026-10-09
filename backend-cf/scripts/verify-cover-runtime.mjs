@@ -12,9 +12,12 @@ const admin = { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`, 'Content-Type': 'application/json' };
 assert.ok(process.env.SUPABASE_SERVICE_ROLE_KEY && process.env.SUPABASE_ANON_KEY, 'Protected test credentials required');
 async function request(url, init = {}) {
-  const response = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', ...init.headers }, signal: AbortSignal.timeout(60_000) });
+  const { allowMissing = false, ...requestInit } = init;
+  const response = await fetch(url, { ...requestInit, headers: { 'Content-Type': 'application/json', ...requestInit.headers }, signal: AbortSignal.timeout(60_000) });
+  if (allowMissing && response.status === 404) return null;
   if (!response.ok) throw new Error(`Cover test HTTP ${response.status} at ${new URL(url).pathname}`);
-  return response.status === 204 ? null : response.json();
+  const body = await response.text();
+  return body ? JSON.parse(body) : null;
 }
 const sessionFile = join(folder, 'cover-session.json');
 const mode = process.argv[2];
@@ -52,7 +55,18 @@ if (mode === 'prepare') {
   }
   console.log('Prepared one disposable account and licensed private Cover test inputs.');
 } else {
-  const session = JSON.parse(await readFile(sessionFile, 'utf8'));
+  let session;
+  if (mode === 'cleanup-user') {
+    const id = process.env.COVER_CLEANUP_USER_ID;
+    assert.match(id || '', /^[a-f0-9-]{36}$/, 'An exact disposable account ID is required');
+    const user = await request(`${base}/auth/v1/admin/users/${id}`, { headers: admin });
+    assert.match(user.email, /^captro-cover-runtime-[a-f0-9-]+@captro\.invalid$/);
+    assert.ok(Date.parse(user.created_at) >= Date.parse('2026-10-09T20:00:00Z'),
+      'Refusing to clean an account older than this Cover test');
+    session = { email: user.email, authID: id, userID: id };
+  } else {
+    session = JSON.parse(await readFile(sessionFile, 'utf8'));
+  }
   assert.match(session.email, /^captro-cover-runtime-[a-f0-9-]+@captro\.invalid$/);
   assert.match(session.authID, /^[a-f0-9-]{36}$/);
   const user = await request(`${base}/auth/v1/admin/users/${session.authID}`, { headers: admin });
@@ -78,7 +92,7 @@ if (mode === 'prepare') {
     console.log(JSON.stringify({ realNativeCoverPublishing: 'PASS', privateExamples: posts.length,
       overlayPersisted: true, coverPlacementPreserved: true, noCompetingStamp: true,
       sourceRevision: process.env.GITHUB_SHA }));
-  } else if (mode === 'cleanup') {
+  } else if (mode === 'cleanup' || mode === 'cleanup-user') {
     const assets = await request(`${base}/rest/v1/app_media_assets?user_id=eq.${session.userID}&select=storage_provider,storage_key,media_type`, { headers: admin });
     for (const asset of assets) {
       const video = asset.media_type === 'video';
@@ -87,7 +101,7 @@ if (mode === 'prepare') {
       assert.ok(token && process.env.CLOUDFLARE_ACCOUNT_ID, 'Asset cleanup authorization missing');
       assert.match(asset.storage_key, /^[a-zA-Z0-9-]+$/, 'Unexpected test asset identity');
       await request(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/${video ? 'stream' : 'images/v1'}/${asset.storage_key}`,
-        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` }, allowMissing: true });
     }
     for (const path of [`app_posts?user_id=eq.${session.userID}`, `app_media_assets?user_id=eq.${session.userID}`, `app_users?id=eq.${session.userID}`]) {
       await request(`${base}/rest/v1/${path}`, { method: 'DELETE', headers: admin });
