@@ -75,6 +75,36 @@ final class CaptroFeedStabilityTests: XCTestCase {
     XCTAssertFalse(MIRAPlaybackCoordinator.ownsVideo(second))
   }
 
+  func testPaginationCoalescesAndAdvancesByServerCountNotUniqueCount() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.configureGuestMode(true)
+    let initial = try (0..<11).map { try post("p\($0)") } + [post("p0")]
+    let next = try (10..<22).map { try post("p\($0)") }
+    var offsets: [Int] = []
+    var continuation: CheckedContinuation<[MIRAPost], Error>?
+    let requested = expectation(description: "one page requested")
+    model.testPageLoader = { _, skip in
+      offsets.append(skip)
+      if skip == 0 { return initial }
+      return try await withCheckedThrowingContinuation { pending in
+        continuation = pending; requested.fulfill()
+      }
+    }
+    await model.load()
+    let before = model.posts.map(\.id)
+    let last = try XCTUnwrap(model.posts.last)
+    let page = Task { await model.loadMoreIfNeeded(after: last) }
+    await fulfillment(of: [requested], timeout: 3)
+    await model.loadMoreIfNeeded(after: last)
+    await model.loadMoreIfNeeded(after: last)
+    XCTAssertEqual(offsets, [0, 12])
+    continuation?.resume(returning: next)
+    await page.value
+    XCTAssertEqual(Array(model.posts.prefix(before.count)).map(\.id), before)
+    XCTAssertEqual(Set(model.posts.map(\.id)).count, model.posts.count)
+    XCTAssertEqual(model.posts.count, 22)
+  }
+
   func testSupportedHomeFramesAndUnknownMetadataAreDeterministic() {
     for ratio: CGFloat in [1, 1.25, 4.0 / 3, 9.0 / 16] {
       XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(ratio), ratio, accuracy: 0.001)

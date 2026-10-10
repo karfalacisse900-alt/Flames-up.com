@@ -602,13 +602,15 @@ final class MainFeedModel: ObservableObject {
 
   func applyEngagementUpdate(_ update: MIRAPostEngagementUpdate) {
     guard let index = posts.firstIndex(where: { $0.id == update.postId }) else { return }
-    posts[index] = posts[index].updating(
+    let updated = posts[index].updating(
       liked: update.liked,
       likesCount: stableEngagementCount(current: posts[index].likesCount, incoming: update.likesCount, toggledOn: update.liked),
       commentsCount: update.commentsCount,
       saved: update.saved,
       savesCount: update.savesCount
     )
+    guard updated != posts[index] else { return }
+    posts[index] = updated
     cacheCurrentPosts()
   }
 

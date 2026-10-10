@@ -20,6 +20,7 @@ struct CaptroMediaPager: View {
   @State private var isHoldingStamp = false
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
+  @State private var carouselPrefetchTask: Task<Void, Never>?
   private var currentMediaID: String {
     post.feedMediaIdentities.indices.contains(selectedMediaIndex) ? post.feedMediaIdentities[selectedMediaIndex] : ""
   }
@@ -73,6 +74,7 @@ struct CaptroMediaPager: View {
         updateStampPeekTapSuppression(isHidden: isHidden)
       }
       .onDisappear {
+        carouselPrefetchTask?.cancel()
         stampTapResetTask?.cancel()
         isHoldingStamp = false
         suppressTapAfterStampPeek = false
@@ -376,14 +378,15 @@ struct CaptroMediaPager: View {
   }
 
   private func prefetchCarouselNeighbors() {
+    carouselPrefetchTask?.cancel()
     guard !showsCoverMediaOnly, mediaURLs.count > 1 else { return }
     let selected = min(max(selectedMediaIndex, 0), mediaURLs.count - 1)
     var previews: [String] = []
     var priorityImages: [String] = []
-    var remainingImages: [String] = []
     var videos: [String] = []
 
     for index in mediaURLs.indices {
+      guard index >= max(0, selected - 1), index <= min(mediaURLs.count - 1, selected + 2) else { continue }
       let url = mediaURLs[index]
       if let placeholder = mediaPlaceholderURL(for: index, mediaURL: url) {
         previews.append(placeholder)
@@ -391,12 +394,9 @@ struct CaptroMediaPager: View {
       let fallback = mediaFallbackURL(for: index, mediaURL: url)
       if url.isVideoURL {
         if abs(index - selected) <= 1 { videos.append(url) }
-      } else if index >= selected && index <= min(mediaURLs.count - 1, selected + 2) {
+      } else {
         priorityImages.append(url)
         if let fallback { priorityImages.append(fallback) }
-      } else {
-        remainingImages.append(url)
-        if let fallback { remainingImages.append(fallback) }
       }
     }
 
@@ -406,18 +406,18 @@ struct CaptroMediaPager: View {
       }
     }
 
-    let imageURLs = orderedUniqueURLs(priorityImages + remainingImages)
+    let imageURLs = orderedUniqueURLs(priorityImages)
     let previewURLs = orderedUniqueURLs(previews)
     guard !previewURLs.isEmpty || !imageURLs.isEmpty else { return }
-    Task.detached(priority: .utility) {
+    carouselPrefetchTask = Task.detached(priority: .utility) {
       if !previewURLs.isEmpty {
         await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: 16)
       }
-      if !imageURLs.isEmpty {
+      if !Task.isCancelled, !imageURLs.isEmpty {
         await MIRAImagePrefetcher.prefetch(
           urls: imageURLs,
           maxPixelSize: MIRAMediaSizing.feedTargetHeight,
-          limit: max(18, imageURLs.count)
+          limit: 8
         )
       }
     }

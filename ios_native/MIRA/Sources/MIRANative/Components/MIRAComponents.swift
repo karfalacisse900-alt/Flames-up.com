@@ -1009,7 +1009,12 @@ private struct MIRAResolvedVideoPlayer: View {
       globallyPaused = true
       streamReadyRetryAttempt += 1
       videoRetryAttempt += 1
-      if let player { MIRAPlaybackCoordinator.releaseVideo(player) }
+      if let player {
+        MIRAPlaybackCoordinator.releaseVideo(player)
+        player.replaceCurrentItem(with: nil)
+      }
+      player = nil
+      isPlayerReady = false
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
       pauseForGlobalInterruption()
@@ -1175,6 +1180,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
     thumbnailURL = info.thumbnail
+    guard !createPlayer || (isOnScreen && wantsPlayback) else { return }
     if createPlayer, let player {
       syncPlayback(player)
       return
