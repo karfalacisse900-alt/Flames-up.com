@@ -1459,8 +1459,8 @@ public struct MainFeedView: View {
   }
 
   private var currentPost: MIRAPost? {
-    guard displayedPosts.indices.contains(currentPostIndex) else { return nil }
-    return displayedPosts[currentPostIndex]
+    guard let selectedPostID else { return nil }
+    return displayedPosts.first { $0.id == selectedPostID }
   }
 
   private func reconcileCurrentPostSelection() {
