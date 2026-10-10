@@ -69,7 +69,8 @@ public struct CaptroMediaWriting: Codable, Hashable {
   public var validationMessage: String? {
     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
     if text.count > characterLimit { return "Keep \(schemaVersion == 2 ? "Cover headlines" : "visual writing") to \(characterLimit) characters or fewer." }
-    if text.components(separatedBy: .newlines).count > 4 { return "Use up to four short lines." }
+    let maximumLines = schemaVersion == 2 ? 5 : 4
+    if text.components(separatedBy: .newlines).count > maximumLines { return "Use up to \(maximumLines) short lines." }
     // Use a canonical source width, not device pixels or Dynamic Type, to keep
     // published creative geometry reproducible. Accessible text remains separate.
     let font = font(mediaWidth: 1000)
@@ -79,8 +80,8 @@ public struct CaptroMediaWriting: Codable, Hashable {
         .map { (String($0) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
       if longest > availableWidth { return "Shorten the longest word so the headline fits on the photograph." }
     }
-    if measuredSize(mediaWidth: 1000).height > ceil(font.lineHeight * 4) + 1 {
-      return schemaVersion == 2 ? "Use up to four short lines. Shorten the headline to continue."
+    if measuredSize(mediaWidth: 1000).height > ceil(font.lineHeight * CGFloat(maximumLines)) + 1 {
+      return schemaVersion == 2 ? "Use up to five short lines. Shorten the headline to continue."
         : "Use up to four short lines. Shorten the phrase or choose Small."
     }
     return nil

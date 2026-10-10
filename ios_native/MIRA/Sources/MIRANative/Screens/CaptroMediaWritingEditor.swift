@@ -248,7 +248,7 @@ struct CaptroMediaWritingEditor: View {
       .lineSpacing(-2)
       .foregroundStyle(value.tint)
       .multilineTextAlignment(value.alignment == "center" ? .center : value.alignment == "right" ? .trailing : .leading)
-      .lineLimit(1...4)
+      .lineLimit(1...5)
       .textFieldStyle(.plain)
       .textInputAutocapitalization(.characters)
       .padding(value.readability ? 7 : 0)

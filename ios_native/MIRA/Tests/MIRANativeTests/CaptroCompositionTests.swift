@@ -17,7 +17,8 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertEqual(short.font(mediaWidth: 390).pointSize, writing.font(mediaWidth: 390).pointSize,
       "Short phrases must not scale larger than long ones")
     for phrase in ["NIGHTLIFE FRIDAY IN NYC", "INTIMATE JAZZ CLUBS WORTH SAVING",
-      "NEIGHBORHOOD THAI RESTAURANTS", "THE NEW YORK GIFT GUIDE"] {
+      "NEIGHBORHOOD THAI RESTAURANTS", "THE NEW YORK GIFT GUIDE",
+      "COZY ITALIAN\nRESTAURANTS\nWITH HANDMADE\nPASTA TO KNOW\nIN NEW YORK"] {
       short.text = phrase
       XCTAssertNil(short.validationMessage, "The automatic Cover treatment must fit \(phrase)")
     }
