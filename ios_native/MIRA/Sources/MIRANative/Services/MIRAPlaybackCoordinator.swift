@@ -35,12 +35,6 @@ public enum MIRAPlaybackCoordinator {
   }
   public static func pauseAll(reason: String) {
     NotificationCenter.default.post(name: .miraPlaybackShouldPause, object: reason)
-    Task { @MainActor in
-      activeVideoPlayer?.pause()
-      activeVideoPlayer?.isMuted = true
-      activeVideoPlayer = nil
-      activeVideoID = nil
-    }
   }
 
   public static func resumeVisible(reason: String) {
