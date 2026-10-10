@@ -8,7 +8,7 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertEqual(writing.showsStamp, false); XCTAssertEqual(writing.characterLimit, 70)
     XCTAssertEqual(writing.homeAspectRatio ?? 0, 3.0 / 4, accuracy: 0.001)
     XCTAssertEqual(writing.color, "black"); XCTAssertTrue(writing.readability)
-    XCTAssertEqual(writing.font(mediaWidth: 390).fontName, "MarkerFelt-Wide", "The native marker face must load, without the old brush script")
+    XCTAssertEqual(writing.font(mediaWidth: 390).fontName, "WalterTurncoat-Regular", "The licensed hand-lettered face must load, without the old brush script")
     XCTAssertEqual(writing.font(mediaWidth: 390).pointSize, 22.23, accuracy: 0.1)
     var short = writing; short.text = "FRIDAY NIGHT\nIN NYC"
     XCTAssertNil(short.validationMessage)

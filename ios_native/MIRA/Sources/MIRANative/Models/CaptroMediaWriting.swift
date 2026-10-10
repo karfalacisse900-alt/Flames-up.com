@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import CoreText
 
 /// Versioned, source-relative artwork. Never changes the media bytes.
 public struct CaptroMediaWriting: Codable, Hashable {
@@ -39,7 +40,8 @@ public struct CaptroMediaWriting: Codable, Hashable {
   }
   private func makeFont(points: CGFloat) -> UIFont {
     if style == "handwritten" {
-      return UIFont(name: "MarkerFelt-Wide", size: points) ?? UIFont.systemFont(ofSize: points, weight: .medium)
+      CaptroCoverTypography.register()
+      return UIFont(name: "WalterTurncoat-Regular", size: points) ?? UIFont.systemFont(ofSize: points, weight: .medium)
     }
     if style == "editorial" || style == "classic" {
       let base = UIFont.systemFont(ofSize: points, weight: .semibold)
@@ -135,6 +137,16 @@ extension MIRAPost {
     editorOverlays?.first { $0.type == "media_writing" && $0.mediaIndex == index && [1, 2].contains($0.writing?.schemaVersion ?? 0) }?.writing
   }
   var isCoverPost: Bool { creationIntent == "cover" }
+}
+
+enum CaptroCoverTypography {
+  // The bundled Apache-2.0 face is loaded once. No font download at runtime.
+  private static let registered: Void = {
+    if let url = Bundle.module.url(forResource: "WalterTurncoat-Regular", withExtension: "ttf") {
+      CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }
+  }()
+  static func register() { _ = registered }
 }
 
 struct CaptroMediaWritingLayer: View {
