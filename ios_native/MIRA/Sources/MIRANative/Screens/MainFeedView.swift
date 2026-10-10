@@ -864,39 +864,42 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func interleavePostFormats(_ rankedPosts: [MIRAPost]) -> [MIRAPost] {
-    let mediaPosts = rankedPosts.filter { !$0.feedMediaURLs.isEmpty }
-    let textPosts = rankedPosts.filter { $0.feedMediaURLs.isEmpty }
-    guard !mediaPosts.isEmpty, !textPosts.isEmpty else { return rankedPosts }
-
-    var mediaIndex = 0
-    var textIndex = 0
-    var wantsMedia = !rankedPosts[0].feedMediaURLs.isEmpty
-    var mixed: [MIRAPost] = []
-    mixed.reserveCapacity(rankedPosts.count)
-
-    while mediaIndex < mediaPosts.count || textIndex < textPosts.count {
-      if wantsMedia, mediaIndex < mediaPosts.count {
-        mixed.append(mediaPosts[mediaIndex])
-        mediaIndex += 1
-      } else if !wantsMedia, textIndex < textPosts.count {
-        mixed.append(textPosts[textIndex])
-        textIndex += 1
-      } else if mediaIndex < mediaPosts.count {
-        mixed.append(mediaPosts[mediaIndex])
-        mediaIndex += 1
-      } else {
-        mixed.append(textPosts[textIndex])
-        textIndex += 1
-      }
-      wantsMedia.toggle()
+    CaptroFeedFormatMixer.mix(rankedPosts) { post in
+      if post.feedMediaURLs.isEmpty { return 2 }
+      return post.isCoverPost ? 0 : 1
     }
-
-    return mixed
   }
 
   nonisolated private static func ageHours(from value: String?, formatter: ISO8601DateFormatter) -> Double {
     guard let value, let date = formatter.date(from: value) else { return 24 }
     return max(0, Date().timeIntervalSince(date) / 3600)
+  }
+}
+
+/// Mix existing ranked posts without changing their order within each format.
+/// Applied to cached, initial, and paginated results; it never fabricates posts.
+enum CaptroFeedFormatMixer {
+  static func mix<Item, Kind: Hashable>(_ items: [Item], category: (Item) -> Kind) -> [Item] {
+    var kinds: [Kind] = []
+    var buckets: [Kind: [Item]] = [:]
+    for item in items {
+      let kind = category(item)
+      if buckets[kind] == nil { kinds.append(kind) }
+      buckets[kind, default: []].append(item)
+    }
+    guard kinds.count > 1 else { return items }
+    var offsets: [Kind: Int] = [:]
+    var mixed: [Item] = []
+    mixed.reserveCapacity(items.count)
+    while mixed.count < items.count {
+      for kind in kinds {
+        let offset = offsets[kind, default: 0]
+        guard let bucket = buckets[kind], offset < bucket.count else { continue }
+        mixed.append(bucket[offset])
+        offsets[kind] = offset + 1
+      }
+    }
+    return mixed
   }
 }
 

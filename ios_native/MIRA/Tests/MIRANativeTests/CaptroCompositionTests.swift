@@ -8,9 +8,14 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertEqual(writing.showsStamp, false); XCTAssertEqual(writing.characterLimit, 70)
     XCTAssertEqual(writing.homeAspectRatio ?? 0, 3.0 / 4, accuracy: 0.001)
     XCTAssertEqual(writing.color, "black"); XCTAssertTrue(writing.readability)
-    XCTAssertEqual(writing.font(mediaWidth: 390).fontName, "Knewave-Regular", "Bundled licensed font must actually load")
+    XCTAssertEqual(writing.font(mediaWidth: 390).fontName, "MarkerFelt-Wide", "The native marker face must load, without the old brush script")
+    XCTAssertEqual(writing.font(mediaWidth: 390).pointSize, 22.23, accuracy: 0.1)
     var short = writing; short.text = "FRIDAY NIGHT\nIN NYC"
     XCTAssertNil(short.validationMessage)
+    XCTAssertLessThan(short.measuredSize(mediaWidth: 390).width + 14, 390 * 0.60,
+      "A short headline must have a content-sized label, not a full-width banner")
+    XCTAssertEqual(short.font(mediaWidth: 390).pointSize, writing.font(mediaWidth: 390).pointSize,
+      "Short phrases must not scale larger than long ones")
     for phrase in ["NIGHTLIFE FRIDAY IN NYC", "INTIMATE JAZZ CLUBS WORTH SAVING",
       "NEIGHBORHOOD THAI RESTAURANTS", "THE NEW YORK GIFT GUIDE"] {
       short.text = phrase
@@ -20,6 +25,12 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertNotNil(short.validationMessage); XCTAssertEqual(short.text.count, 71)
     let restored = try JSONDecoder().decode(CaptroMediaWriting.self, from: JSONEncoder().encode(writing))
     XCTAssertEqual(restored, writing)
+  }
+  func testFeedMixesCoversOtherMediaAndTextWithoutLosingRankWithinEachFormat() {
+    let ranked = ["cover-1", "cover-2", "cover-3", "photo-1", "photo-2", "text-1", "text-2"]
+    let mixed = CaptroFeedFormatMixer.mix(ranked) { item in String(item.split(separator: "-")[0]) }
+    XCTAssertEqual(mixed, ["cover-1", "photo-1", "text-1", "cover-2", "photo-2", "text-2", "cover-3"])
+    XCTAssertEqual(CaptroFeedFormatMixer.mix(["cover-1", "cover-2"]) { _ in "cover" }, ["cover-1", "cover-2"])
   }
   func testCoverCropKeepsMediaAndWritingInTheSameCoordinateSpace() {
     var writing = CaptroMediaWriting.cover(sourceAspectRatio: 9.0 / 16)

@@ -55,6 +55,13 @@ struct CaptroMediaWritingEditor: View {
   private var writingBinding: Binding<CaptroMediaWriting> {
     Binding(get: { writing }, set: { writing = $0 })
   }
+  private var coverTextBinding: Binding<String> {
+    Binding(get: { writing.text.uppercased() }, set: {
+      var value = writing
+      value.text = $0.uppercased()
+      writing = value
+    })
+  }
   private var error: String? {
     if coverMode && items.first?.mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
       return "Write a short headline for the first photo or video."
@@ -236,16 +243,18 @@ struct CaptroMediaWritingEditor: View {
     let value = resolvedWriting
     let source = value.sourceRect(in: size, fill: true)
     let rect = value.textRect(in: size, fill: true)
-    return TextField("Write a headline", text: writingBinding.text, axis: .vertical)
-      .font(Font(value.font(mediaWidth: source.width)))
+    return TextField("Write a headline", text: coverTextBinding, axis: .vertical)
+      .font(Font(value.font(mediaWidth: source.width, visibleWidth: size.width)))
+      .lineSpacing(-2)
       .foregroundStyle(value.tint)
       .multilineTextAlignment(value.alignment == "center" ? .center : value.alignment == "right" ? .trailing : .leading)
       .lineLimit(1...4)
       .textFieldStyle(.plain)
-      .padding(value.readability ? 8 : 0)
-      .frame(width: rect.width + (value.readability ? 16 : 0))
+      .textInputAutocapitalization(.characters)
+      .padding(value.readability ? 7 : 0)
+      .frame(width: rect.width + (value.readability ? 14 : 0))
       .background(value.readability ? (value.color == "black" || value.color == "green" ? Color.white : Color.black) : .clear)
-      .overlay { if value.readability { Rectangle().strokeBorder(value.color == "black" || value.color == "green" ? Color.black.opacity(0.8) : Color.white.opacity(0.8), lineWidth: 0.7) } }
+      .overlay { if value.readability { Rectangle().strokeBorder(value.color == "black" || value.color == "green" ? Color.black : Color.white, lineWidth: 1) } }
       .position(x: rect.midX, y: rect.midY)
       .focused($textFocused)
       .accessibilityLabel("Cover headline")
@@ -300,7 +309,7 @@ struct CaptroMediaWritingEditor: View {
   private func place(x: CGFloat, y: CGFloat, canvas: CGSize) {
     var value = resolvedWriting
     let source = value.sourceRect(in: canvas, fill: true)
-    let text = value.measuredSize(mediaWidth: source.width)
+    let text = value.measuredSize(mediaWidth: source.width, visibleWidth: canvas.width)
     let minX = (12 - source.minX + text.width / 2) / source.width
     let maxX = (canvas.width - 12 - source.minX - text.width / 2) / source.width
     let minY = (52 - source.minY + text.height / 2) / source.height

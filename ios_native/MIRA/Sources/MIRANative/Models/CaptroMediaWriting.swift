@@ -1,6 +1,5 @@
 import SwiftUI
 import UIKit
-import CoreText
 
 /// Versioned, source-relative artwork. Never changes the media bytes.
 public struct CaptroMediaWriting: Codable, Hashable {
@@ -23,7 +22,7 @@ public struct CaptroMediaWriting: Codable, Hashable {
   public init() {}
   public static func cover(sourceAspectRatio: CGFloat = 1) -> Self {
     var value = Self(); value.schemaVersion = 2; value.style = "handwritten"
-    value.alignment = "center"; value.y = 0.46; value.width = 0.72
+    value.alignment = "center"; value.y = 0.46; value.width = 0.60
     value.color = "black"; value.readability = true
     value.sourceAspectRatio = sourceAspectRatio; value.showsStamp = false
     let sourceHeightToWidth = sourceAspectRatio.isFinite && sourceAspectRatio > 0 ? 1 / sourceAspectRatio : 1
@@ -32,29 +31,15 @@ public struct CaptroMediaWriting: Codable, Hashable {
   }
   public var characterLimit: Int { schemaVersion == 2 ? 70 : 60 }
 
-  public var fontFraction: CGFloat { size == "small" ? 0.065 : size == "large" ? 0.105 : 0.085 }
-  public func font(mediaWidth: CGFloat) -> UIFont {
-    let points = mediaWidth * fontFraction
-    let preferred = makeFont(points: points)
-    guard schemaVersion == 2, !text.isEmpty else { return preferred }
-    // A Cover has no manual size control. Choose the largest readable size
-    // that fits its measured lines and keeps whole words inside the backing.
-    let minimum = mediaWidth * 0.065
-    let availableWidth = mediaWidth * width
-    let words = text.split(whereSeparator: \.isWhitespace)
-    for step in 0...10 {
-      let candidate = makeFont(points: points - (points - minimum) * CGFloat(step) / 10)
-      let longest = words.map { (String($0) as NSString).size(withAttributes: [.font: candidate]).width }.max() ?? 0
-      let height = (text as NSString).boundingRect(with: CGSize(width: availableWidth, height: .greatestFiniteMagnitude),
-        options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: candidate], context: nil).height
-      if longest <= availableWidth && ceil(height) <= ceil(candidate.lineHeight * 4) + 1 { return candidate }
-    }
-    return makeFont(points: minimum)
+  public var fontFraction: CGFloat { schemaVersion == 2 ? 0.057 : size == "small" ? 0.065 : size == "large" ? 0.105 : 0.085 }
+  public func font(mediaWidth: CGFloat, visibleWidth: CGFloat? = nil) -> UIFont {
+    // Cover type is proportional to the visible image, not the uncropped source.
+    // It never grows to fill a short phrase or shrinks to hide overflow.
+    makeFont(points: (schemaVersion == 2 ? (visibleWidth ?? mediaWidth) : mediaWidth) * fontFraction)
   }
   private func makeFont(points: CGFloat) -> UIFont {
     if style == "handwritten" {
-      CaptroCoverTypography.register()
-      return UIFont(name: "Knewave-Regular", size: points) ?? UIFont.systemFont(ofSize: points, weight: .heavy)
+      return UIFont(name: "MarkerFelt-Wide", size: points) ?? UIFont.systemFont(ofSize: points, weight: .medium)
     }
     if style == "editorial" || style == "classic" {
       let base = UIFont.systemFont(ofSize: points, weight: .semibold)
@@ -65,13 +50,21 @@ public struct CaptroMediaWriting: Codable, Hashable {
       ? UIFont(descriptor: base.fontDescriptor.withSymbolicTraits(.traitCondensed) ?? base.fontDescriptor, size: points)
       : base
   }
-  public func measuredSize(mediaWidth: CGFloat) -> CGSize {
-    let font = font(mediaWidth: mediaWidth)
+  public func measuredSize(mediaWidth: CGFloat, visibleWidth: CGFloat? = nil) -> CGSize {
+    let font = font(mediaWidth: mediaWidth, visibleWidth: visibleWidth)
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = alignment == "center" ? .center : alignment == "right" ? .right : .left
-    let rect = (text as NSString).boundingRect(with: CGSize(width: mediaWidth * width, height: .greatestFiniteMagnitude),
+    if schemaVersion == 2 { paragraph.lineSpacing = -2 }
+    let availableWidth = schemaVersion == 2
+      ? max(1, min(mediaWidth * width, (visibleWidth ?? mediaWidth) * 0.60) - 14)
+      : mediaWidth * width
+    let renderedText = schemaVersion == 2 ? text.uppercased() : text
+    let longestLine = renderedText.components(separatedBy: .newlines)
+      .map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+    let textWidth = schemaVersion == 2 ? min(availableWidth, max(64, ceil(longestLine) + 3)) : availableWidth
+    let rect = (renderedText as NSString).boundingRect(with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
       options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font, .paragraphStyle: paragraph], context: nil)
-    return CGSize(width: mediaWidth * width, height: ceil(rect.height))
+    return CGSize(width: textWidth, height: max(font.lineHeight, ceil(rect.height)))
   }
   public var validationMessage: String? {
     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
@@ -81,8 +74,8 @@ public struct CaptroMediaWriting: Codable, Hashable {
     // published creative geometry reproducible. Accessible text remains separate.
     let font = font(mediaWidth: 1000)
     if schemaVersion == 2 {
-      let availableWidth = 1000 * width
-      let longest = text.split(whereSeparator: \.isWhitespace)
+      let availableWidth = 1000 * min(width, 0.60) - 14
+      let longest = text.uppercased().split(whereSeparator: \.isWhitespace)
         .map { (String($0) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
       if longest > availableWidth { return "Shorten the longest word so the headline fits on the photograph." }
     }
@@ -110,7 +103,7 @@ public struct CaptroMediaWriting: Codable, Hashable {
   }
   public func textRect(in container: CGSize, fill: Bool) -> CGRect {
     let source = sourceRect(in: container, fill: fill)
-    let size = measuredSize(mediaWidth: source.width)
+    let size = measuredSize(mediaWidth: source.width, visibleWidth: container.width)
     return CGRect(x: source.minX + source.width * x - size.width / 2,
       y: source.minY + source.height * y - size.height / 2, width: size.width, height: size.height)
   }
@@ -143,16 +136,6 @@ extension MIRAPost {
   var isCoverPost: Bool { creationIntent == "cover" }
 }
 
-enum CaptroCoverTypography {
-  // Loaded once from our application resource bundle, never fetched at runtime.
-  private static let registered: Void = {
-    if let url = Bundle.module.url(forResource: "Knewave-Regular", withExtension: "ttf") {
-      CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
-    }
-  }()
-  static func register() { _ = registered }
-}
-
 struct CaptroMediaWritingLayer: View {
   let writing: CaptroMediaWriting
   let container: CGSize
@@ -162,16 +145,17 @@ struct CaptroMediaWritingLayer: View {
   var body: some View {
     let source = writing.sourceRect(in: container, fill: fill)
     let rect = writing.textRect(in: container, fill: fill)
-    let backingPadding: CGFloat = writing.schemaVersion == 2 ? 8 : 5
-    Text(writing.text)
-      .font(Font(writing.font(mediaWidth: source.width)))
+    let backingPadding: CGFloat = writing.schemaVersion == 2 ? 7 : 5
+    Text(writing.schemaVersion == 2 ? writing.text.uppercased() : writing.text)
+      .font(Font(writing.font(mediaWidth: source.width, visibleWidth: container.width)))
+      .lineSpacing(writing.schemaVersion == 2 ? -2 : 0)
       .foregroundStyle(writing.tint)
       .multilineTextAlignment(writing.alignment == "center" ? .center : writing.alignment == "right" ? .trailing : .leading)
       .fixedSize(horizontal: false, vertical: true)
       .frame(width: rect.width, alignment: writing.alignment == "center" ? .center : writing.alignment == "right" ? .trailing : .leading)
       .padding(writing.readability ? backingPadding : 0)
       .background(writing.readability ? (writing.color == "black" || writing.color == "green" ? Color.white : Color.black) : .clear)
-      .overlay { if writing.readability { Rectangle().strokeBorder(writing.color == "black" || writing.color == "green" ? Color.black.opacity(0.8) : Color.white.opacity(0.8), lineWidth: 0.7) } }
+      .overlay { if writing.readability { Rectangle().strokeBorder(writing.color == "black" || writing.color == "green" ? Color.black : Color.white, lineWidth: writing.schemaVersion == 2 ? 1 : 0.7) } }
       .position(x: rect.midX, y: rect.midY)
       .accessibilityLabel(writing.text)
       .accessibilityHidden(writing.text.trimmingCharacters(in: .whitespacesAndNewlines) == caption?.trimmingCharacters(in: .whitespacesAndNewlines))
