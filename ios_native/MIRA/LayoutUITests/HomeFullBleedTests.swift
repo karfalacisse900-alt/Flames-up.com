@@ -37,6 +37,13 @@ final class HomeFullBleedTests: XCTestCase {
       XCTAssertEqual(page.frame.height, fixedHeight, accuracy: 1, "Swipe must not resize the post")
       capture(app, "mixed-carousel-slide-\(index)")
     }
+    media.tap()
+    let detailMedia = app.otherElements["post.detail.media"]
+    let writing = app.otherElements["post.detail.mediaWriting"]
+    XCTAssertTrue(detailMedia.waitForExistence(timeout: 5))
+    XCTAssertTrue(writing.waitForExistence(timeout: 5))
+    XCTAssertGreaterThanOrEqual(writing.frame.minY, detailMedia.frame.maxY - 1,
+      "Details writing belongs below the clean original media")
   }
 
   func testVideoFillsScreenWidth() {

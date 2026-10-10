@@ -286,6 +286,7 @@ struct CaptroDetailMediaWriting: View {
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 16)
       .padding(.top, 16)
+      .accessibilityIdentifier("post.detail.mediaWriting")
     }
   }
 }

@@ -1048,6 +1048,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
       }
     }
     .frame(height: currentHeight)
+    .accessibilityIdentifier("post.detail.media")
     .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedIndex)
     .frame(maxWidth: .infinity)
     .background(Color.black.opacity(0.03))
