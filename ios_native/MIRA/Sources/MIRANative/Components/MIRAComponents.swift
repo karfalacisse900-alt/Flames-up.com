@@ -858,8 +858,8 @@ public struct RemoteMediaView: View {
               image
                 .resizable()
                 .aspectRatio(contentMode: contentMode)
-                .blur(radius: contentMode == .fill ? 8 : 0)
-                .scaleEffect(contentMode == .fill ? 1.035 : 1)
+                .blur(radius: contentMode == .fill && !plainBackground ? 8 : 0)
+                .scaleEffect(contentMode == .fill && !plainBackground ? 1.035 : 1)
                 .opacity(0.92)
             } placeholder: {
               Color.clear
@@ -937,6 +937,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var globallyPaused = false
   @State private var videoRetryAttempt = 0
   @State private var streamReadyRetryAttempt = 0
+  @State private var isOnScreen = false
 
   var body: some View {
     ZStack {
@@ -979,6 +980,7 @@ private struct MIRAResolvedVideoPlayer: View {
     }
     .task(id: playbackTaskID) { await configurePlayer() }
     .onAppear {
+      isOnScreen = true
       guard shouldPlay else { return }
       globallyPaused = false
       if let player {
@@ -990,6 +992,16 @@ private struct MIRAResolvedVideoPlayer: View {
         syncPlayback(player)
       }
     }
+    .onChange(of: isMuted) { _, _ in
+      if let player { syncPlayback(player) }
+    }
+    .onDisappear {
+      isOnScreen = false
+      globallyPaused = true
+      streamReadyRetryAttempt += 1
+      videoRetryAttempt += 1
+      if let player { MIRAPlaybackCoordinator.releaseVideo(player) }
+    }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
       pauseForGlobalInterruption()
     }
@@ -998,14 +1010,15 @@ private struct MIRAResolvedVideoPlayer: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
       guard let player, let item = notification.object as? AVPlayerItem,
-            item === player.currentItem, shouldPlay, !globallyPaused else { return }
+            item === player.currentItem, shouldPlay, isOnScreen, !globallyPaused,
+            MIRAPlaybackCoordinator.ownsVideo(player) else { return }
       player.seek(to: .zero)
       syncPlayback(player)
     }
   }
 
   private var playbackTaskID: String {
-    "\(url)|\(shouldPlay ? "play" : "poster")|\(isMuted ? "muted" : "sound")"
+    "\(url)|\(shouldPlay ? "play" : "poster")"
   }
 
   private var placeholder: some View {
@@ -1122,7 +1135,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func resolveCloudflareStream(createPlayer: Bool, expectedURL: String) async {
     if let cachedInfo = MIRAVideoPrewarmManager.shared.streamInfo(for: url) {
-      guard loadedVideoURL == expectedURL else { return }
+      guard loadedVideoURL == expectedURL, !Task.isCancelled else { return }
       applyStreamPlaybackInfo(cachedInfo, createPlayer: createPlayer)
       return
     }
@@ -1312,7 +1325,11 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func syncPlayback(_ player: AVPlayer) {
-    if shouldPlay && !globallyPaused && !MIRAPlaybackCoordinator.isLiveVoiceActive {
+    guard self.player === player, loadedVideoURL == url else {
+      MIRAPlaybackCoordinator.releaseVideo(player)
+      return
+    }
+    if shouldPlay && isOnScreen && !globallyPaused && !MIRAPlaybackCoordinator.isLiveVoiceActive {
       MIRAPlaybackCoordinator.activateVideo(player, id: url)
       configureAudioSession()
       player.isMuted = isMuted
@@ -1389,7 +1406,7 @@ private struct MIRAVideoPlayerView: UIViewRepresentable {
   }
 
   private var videoGravity: AVLayerVideoGravity {
-    .resizeAspect
+    contentMode == .fill ? .resizeAspectFill : .resizeAspect
   }
 
   final class PlayerView: UIView {
@@ -1524,28 +1541,30 @@ public enum MIRAMediaSizing {
     screenHeight: CGFloat = UIScreen.main.bounds.height
   ) -> CGFloat {
     let displayRatio = mainFeedDisplayRatio(for: urls, aspectRatios: aspectRatios)
-    return min(width * displayRatio, screenHeight * maxMainFeedScreenHeightFraction)
+    return width * displayRatio
   }
 
   public static func mainFeedDisplayRatio(
     for urls: [String],
     aspectRatios: [CGFloat] = []
   ) -> CGFloat {
-    if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
-      return ratio
+    if let ratio = aspectRatios.first, ratio.isFinite, ratio > 0 {
+      return homeDisplayRatio(ratio)
     }
-    let lowercased = urls.map { $0.lowercased() }
+    let lowercased = urls.prefix(1).map { $0.lowercased() }
     if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
-      return ratio
+      return homeDisplayRatio(ratio)
     }
-    return feedPreviewRatio
+    return feedShortPortraitRatio
   }
 
   /// Home crops only. Supported source ratios retain their distinct heights;
   /// unusually tall imports resolve to the tallest supported Home crop.
   public static let homeHeightToWidthRatios: [CGFloat] = [9.0 / 16, 1, 5.0 / 4, 4.0 / 3]
   public static func homeDisplayRatio(_ sourceRatio: CGFloat) -> CGFloat {
-    sourceRatio.isFinite && sourceRatio > 0 ? sourceRatio : feedPreviewRatio
+    guard sourceRatio.isFinite, sourceRatio > 0 else { return feedShortPortraitRatio }
+    if sourceRatio > 4.0 / 3.0 + 0.01 { return feedShortPortraitRatio }
+    return homeHeightToWidthRatios.min(by: { abs($0 - sourceRatio) < abs($1 - sourceRatio) }) ?? feedShortPortraitRatio
   }
 
   public static func detailHeight(

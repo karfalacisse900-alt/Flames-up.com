@@ -1,9 +1,36 @@
 import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
+  func testIdleBackgroundUpdatesPreserveReadingPositionAndHeader() {
+    let app = launch(["--captro-visual-mixed-carousel", "--captro-stability-updates"])
+    let page = app.otherElements["home.post.page.mixed-carousel"]
+    XCTAssertTrue(page.waitForExistence(timeout: 20))
+    let media = page.otherElements["home.post.media"].firstMatch
+    media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.14))
+      .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.14)))
+    XCTAssertTrue(page.staticTexts["Photo 2 of 4"].waitForExistence(timeout: 5))
+    let before = media.frame
+    let elapsed = expectation(description: "Two minutes of background updates")
+    DispatchQueue.main.asyncAfter(deadline: .now() + 120) { elapsed.fulfill() }
+    wait(for: [elapsed], timeout: 125)
+    XCTAssertEqual(media.frame.minY, before.minY, accuracy: 1)
+    XCTAssertEqual(media.frame.height, before.height, accuracy: 1)
+    XCTAssertTrue(page.staticTexts["Photo 2 of 4"].exists)
+    XCTAssertFalse(app.staticTexts["For You"].exists)
+    let menu = app.buttons["home.feed.selector"]
+    let create = app.buttons["Create post"]
+    XCTAssertEqual(menu.frame.width, 44, accuracy: 1)
+    XCTAssertEqual(create.frame.width, 44, accuracy: 1)
+    XCTAssertEqual(menu.frame.midY, create.frame.midY, accuracy: 1)
+    capture(app, "stable-after-two-minute-background-updates")
+    menu.tap()
+    XCTAssertTrue(app.staticTexts["For You"].waitForExistence(timeout: 3) || app.buttons["For You"].exists)
+    capture(app, "header-feed-choice-menu")
+  }
+
   func testEveryPhotoRatioFillsScreenWidth() {
-    let ratios: [(String, CGFloat)] = [("wide", 9.0 / 16), ("landscape", 3.0 / 4),
-      ("portrait", 1536.0 / 999), ("fourfive", 5.0 / 4), ("threefour", 4.0 / 3), ("square", 1)]
+    let ratios: [(String, CGFloat)] = [("wide", 9.0 / 16), ("landscape", 9.0 / 16),
+      ("portrait", 5.0 / 4), ("fourfive", 5.0 / 4), ("threefour", 4.0 / 3), ("square", 1)]
     for (name, expectedRatio) in ratios {
       let app = launch(["--captro-visual-size=\(name)"])
       let media = app.otherElements["home.post.media"].firstMatch

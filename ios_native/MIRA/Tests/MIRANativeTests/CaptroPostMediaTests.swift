@@ -101,12 +101,12 @@ final class CaptroPostMediaTests: XCTestCase {
         XCTAssertEqual(ratio, 1, accuracy: 0.001)
         for screenHeight: CGFloat in [568, 852, 956] {
           XCTAssertEqual(MIRAMediaSizing.mainFeedHeight(for: [], aspectRatios: [ratio],
-            width: width, screenHeight: screenHeight), min(width, screenHeight * 0.78), accuracy: 0.001)
+            width: width, screenHeight: screenHeight), width, accuracy: 0.001)
         }
       }
     }
     XCTAssertEqual(MIRAMediaSizing.mainFeedHeight(for: [], aspectRatios: [16.0 / 9],
-      width: 390, screenHeight: 852), 852 * 0.78, accuracy: 0.001)
+      width: 390, screenHeight: 852), 390 * 1.25, accuracy: 0.001)
   }
   func testVoiceWatchdogStartsAtAudioActivationNotAuthorization() {
     let health = CaptroVoicePipelineHealth(now: 100)

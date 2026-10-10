@@ -20,8 +20,23 @@ struct CaptroMediaPager: View {
   @State private var isHoldingStamp = false
   @State private var suppressTapAfterStampPeek = false
   @State private var stampTapResetTask: Task<Void, Never>?
-  @State private var isVideoPaused = false
-  @State private var isVideoMuted = false
+  private var currentMediaID: String {
+    post.feedMediaIdentities.indices.contains(selectedMediaIndex) ? post.feedMediaIdentities[selectedMediaIndex] : ""
+  }
+  private var isVideoPaused: Bool {
+    get { stampReading.pausedMediaIDs.contains(currentMediaID) }
+    nonmutating set {
+      if newValue { stampReading.pausedMediaIDs.insert(currentMediaID) }
+      else { stampReading.pausedMediaIDs.remove(currentMediaID) }
+    }
+  }
+  private var isVideoMuted: Bool {
+    get { stampReading.mutedMediaIDs.contains(currentMediaID) }
+    nonmutating set {
+      if newValue { stampReading.mutedMediaIDs.insert(currentMediaID) }
+      else { stampReading.mutedMediaIDs.remove(currentMediaID) }
+    }
+  }
 
   // Cover coordinates refer to the source, not a provider's pre-cropped feed
   // variant. Downsample the source in the existing image cache; crop once here.
@@ -52,18 +67,7 @@ struct CaptroMediaPager: View {
         }
       }
       .onChange(of: selectedMediaIndex) { _, _ in
-        isVideoPaused = false
-        isVideoMuted = false
         prefetchCarouselNeighbors()
-      }
-      .onChange(of: post.id) { _, _ in
-        isVideoPaused = false
-        isVideoMuted = false
-      }
-      .onChange(of: isVideoActive) { _, active in
-        if !active {
-          isVideoPaused = false
-        }
       }
       .onChange(of: isHoldingStamp) { _, isHidden in
         updateStampPeekTapSuppression(isHidden: isHidden)
@@ -87,12 +91,28 @@ struct CaptroMediaPager: View {
               .padding(8).background(MIRATheme.Color.surface).padding(.leading, 20).padding(.bottom, 64)
           }
         }
+    } else if let frameSize, post.captroMediaFeedCardContent.hasHomeStampContent == false,
+              post.detail?.voice == nil, !post.hasAudio {
+      mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
+        .overlay(alignment: .bottomLeading) {
+          Button(action: onOpenPost) {
+            HStack(spacing: 7) {
+              RemoteAvatar(url: post.userProfileImage, size: 24)
+              Text(post.captroMediaFeedCardContent.username ?? post.authorDisplayName)
+                .font(.caption.weight(.semibold)).lineLimit(1)
+            }
+            .padding(8).background(MIRATheme.Color.surface)
+          }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("home.post.attribution")
+          .padding(.leading, 20).padding(.bottom, 64)
+        }
     } else if let frameSize {
       let visible = fittedMediaRect(in: frameSize)
       CaptroMediaStampLayout(mediaSize: frameSize,
         stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: visible.width,
           accessibility: dynamicTypeSize.isAccessibilitySize),
-        clearance: currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 64 : 20,
+        clearance: mediaURLs.contains(where: \.isVideoURL) || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 64 : 20,
         reading: stampReading, minimumStampTop: writingClearance(in: frameSize), visibleMediaRect: visible) {
         mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         feedStamp(readingBudget: dynamicTypeSize.isAccessibilitySize ? normalReadingBudget
@@ -127,7 +147,7 @@ struct CaptroMediaPager: View {
 
         if currentMediaIsVideo {
           if post.isCoverPost { videoControls.padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
           } else if let writing = post.mediaWriting(at: selectedMediaIndex) {
             videoControls.padding(.trailing, 12)
               .padding(.top, min(proxy.size.height - 52, writing.textRect(in: proxy.size, fill: false).maxY + 8))
@@ -163,7 +183,9 @@ struct CaptroMediaPager: View {
         .allowsHitTesting(false)
     } else {
       TabView(selection: $selectedMediaIndex) {
-        ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
+        ForEach(post.feedMediaIdentities, id: \.self) { mediaID in
+          let index = post.feedMediaIdentities.firstIndex(of: mediaID) ?? 0
+          let url = mediaURLs.indices.contains(index) ? mediaURLs[index] : ""
           mediaView(url: url, index: index)
             .background(CaptroCarouselDirectionGateInstaller())
             .tag(index)
@@ -174,35 +196,38 @@ struct CaptroMediaPager: View {
   }
 
   private func mediaView(url: String, index: Int) -> some View {
-    return ZStack(alignment: .topLeading) {
+    GeometryReader { geometry in
+    let writing = post.mediaWriting(at: index)
+    let source = writing?.sourceRect(in: geometry.size, fill: true) ?? CGRect(origin: .zero, size: geometry.size)
+    ZStack(alignment: .topLeading) {
     RemoteMediaView(
       url: url,
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: .fit,
+      contentMode: .fill,
       shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
       videoMuted: isVideoMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
       placeholderColor: MIRATheme.Color.mediaPlaceholder,
       plainBackground: true
     )
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-      if let writing = post.mediaWriting(at: index) {
-        GeometryReader { geometry in
-          CaptroMediaWritingLayer(writing: writing, container: geometry.size, fill: false, caption: post.caption ?? post.content)
-        }
+    .frame(width: source.width, height: source.height)
+    .offset(x: source.minX, y: source.minY)
+      if let writing {
+          CaptroMediaWritingLayer(writing: writing, container: geometry.size, fill: true, caption: post.caption ?? post.content)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .clipped()
+    }
   }
 
   private func writingClearance(in size: CGSize) -> CGFloat {
-    let floor: CGFloat = currentMediaIsVideo ? 64 : 0
+    let floor: CGFloat = mediaURLs.contains(where: \.isVideoURL) ? 64 : 0
     // Keep published writing fixed. Move only the stamp/real continuation, not
     // the image or artwork, if the creator deliberately chose a low position.
-    let bottom = post.mediaWriting(at: 0)?.textRect(in: size, fill: false).maxY ?? 0
+    let bottom = post.mediaWriting(at: 0)?.textRect(in: size, fill: true).maxY ?? 0
     return max(floor, bottom > 0 ? bottom + (mediaURLs.contains(where: { $0.isVideoURL }) ? 64 : 12) : 0)
   }
 
@@ -218,7 +243,7 @@ struct CaptroMediaPager: View {
     VStack(spacing: 0) {
       CaptroFeedMediaStamp(content: post.captroMediaFeedCardContent,
         readingBudget: max(90, readingBudget - stampAudioHeight), stampWidth: stampWidth,
-        maxCaptionLines: (frameSize?.height ?? 0) < 300 ? 1 : ([.club, .event, .meetup, .deal].contains(post.captroMediaFeedCardContent.type) ? 2 : 3),
+        maxCaptionLines: [.club, .event, .meetup, .deal].contains(post.captroMediaFeedCardContent.type) ? 3 : 5,
         onOpen: openPostUnlessPeeking)
       if post.detail?.voice != nil || post.hasAudio {
         CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
@@ -268,11 +293,7 @@ struct CaptroMediaPager: View {
   private func fittedMediaRect(in frame: CGSize) -> CGRect {
     // The feed stamp is only visible on the cover slide, so its placement
     // must not depend on a different carousel item's dimensions.
-    let ratio = mediaHeightToWidthRatio
-    guard ratio.isFinite, ratio > 0 else { return CGRect(origin: .zero, size: frame) }
-    let width = min(frame.width, frame.height / ratio)
-    let height = width * ratio
-    return CGRect(x: (frame.width - width) / 2, y: (frame.height - height) / 2, width: width, height: height)
+    CGRect(origin: .zero, size: frame)
   }
 
   private func handleMediaTap() {

@@ -84,6 +84,7 @@ targets:
       - path: Tests/MIRANativeTests/CaptroPostMediaTests.swift
       - path: Tests/MIRANativeTests/CaptroCacheIsolationTests.swift
       - path: Tests/MIRANativeTests/CaptroCompositionTests.swift
+      - path: Tests/MIRANativeTests/CaptroFeedStabilityTests.swift
     dependencies:
       - package: MIRANative
         product: MIRANative

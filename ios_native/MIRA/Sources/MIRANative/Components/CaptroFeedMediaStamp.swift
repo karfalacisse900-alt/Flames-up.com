@@ -1,10 +1,20 @@
 import SwiftUI
 import UIKit
 
+extension CaptroEditorialCardContent {
+  var hasHomeStampContent: Bool {
+    [title, homeStampMetadata, description ?? "", summaryText ?? ""].contains {
+      !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+  }
+}
+
 /// Owned by Home, keyed by post ID; measurements do not change post data.
 struct CaptroFeedStampReadingState: Equatable {
   var expanded = false
   var collapsedHeight: CGFloat = 0
+  var pausedMediaIDs: Set<String> = []
+  var mutedMediaIDs: Set<String> = []
 }
 
 enum CaptroFeedStampGeometry {

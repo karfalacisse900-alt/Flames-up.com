@@ -2388,7 +2388,13 @@ public struct CreatePostNativeView: View {
         mediaTypes: mediaTypes,
         mediaDimensions: mediaDimensions,
         mediaAssetIds: mediaAssetIds.isEmpty ? nil : mediaAssetIds,
-        editorOverlays: editorUploadMetadata(),
+        editorOverlays: editorUploadMetadata()?.map { metadata in
+          var bound = metadata
+          if uploaded.indices.contains(metadata.mediaIndex) {
+            bound.mediaId = MIRAPost.mediaIdentity(uploaded[metadata.mediaIndex])
+          }
+          return bound
+        },
         location: selectedPlace?.addressText ?? selectedPlace?.displayName,
         displayCity: shouldPublishBroadLocation ? broadLocation.city : nil,
         displayRegion: shouldPublishBroadLocation ? broadLocation.region : nil,

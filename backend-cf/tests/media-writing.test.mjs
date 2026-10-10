@@ -6,6 +6,14 @@ const overlay = () => ({ type: 'media_writing', media_index: 0, writing: {
   schema_version: 1, text: 'FRIDAY NIGHT\nNYC', style: 'bold', alignment: 'left', color: 'white',
   readability: false, x: 0.5, y: 0.2, width: 0.82, size: 'medium', source_aspect_ratio: 0.75,
 } });
+
+test('stable source identity survives validation without accepting URLs or arbitrary identifiers', () => {
+  const item = { ...overlay(), media_id: 'a'.repeat(64) };
+  const saved = validateMediaWritingOverlays([item], 2);
+  assert.equal(saved[0].mediaId, item.media_id);
+  assert.deepEqual(validateMediaWritingOverlays(saved, 2), saved);
+  assert.throws(() => validateMediaWritingOverlays([{ ...item, media_id: 'https://private.example/image' }], 2));
+});
 test('writing round trip preserves exact words, line breaks and source geometry', () => {
   const saved = validateMediaWritingOverlays([overlay()], 1);
   assert.equal(saved[0].writing.text, 'FRIDAY NIGHT\nNYC');

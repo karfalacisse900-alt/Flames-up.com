@@ -116,16 +116,18 @@ public struct CaptroMediaWriting: Codable, Hashable {
 public struct CaptroMediaWritingEnvelope: Codable, Hashable {
   public var type: String?
   public var mediaIndex: Int?
+  public var mediaId: String? = nil
   public var writing: CaptroMediaWriting?
 
   public init(type: String?, mediaIndex: Int?, writing: CaptroMediaWriting?) {
     self.type = type; self.mediaIndex = mediaIndex; self.writing = writing
   }
-  private enum CodingKeys: String, CodingKey { case type, mediaIndex, writing }
+  private enum CodingKeys: String, CodingKey { case type, mediaIndex, mediaId, writing }
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     type = try? container.decode(String.self, forKey: .type)
     mediaIndex = try? container.decode(Int.self, forKey: .mediaIndex)
+    mediaId = try? container.decode(String.self, forKey: .mediaId)
     // A legacy or future editor record must not prevent the whole feed loading.
     writing = try? container.decode(CaptroMediaWriting.self, forKey: .writing)
     if let version = writing?.schemaVersion, ![1, 2].contains(version) { writing = nil }
@@ -134,11 +136,25 @@ public struct CaptroMediaWritingEnvelope: Codable, Hashable {
 
 extension MIRAPost {
   func mediaWriting(at index: Int) -> CaptroMediaWriting? {
-    editorOverlays?.first {
-      $0.type == "media_writing" && $0.mediaIndex == index
+    let identity = feedMediaIdentities.indices.contains(index) ? feedMediaIdentities[index] : nil
+    return editorOverlays?.first {
+      $0.type == "media_writing" && ($0.mediaId != nil ? $0.mediaId == identity : $0.mediaIndex == index)
         && [1, 2].contains($0.writing?.schemaVersion ?? 0)
         && $0.writing?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }?.writing
+  }
+  /// Bind legacy positional records at ingestion, before any in-session edits.
+  func bindingWritingIdentities() -> MIRAPost {
+    var value = self
+    let identities = feedMediaIdentities
+    value.editorOverlays = editorOverlays?.map { original in
+      var item = original
+      if item.mediaId == nil, let index = item.mediaIndex, identities.indices.contains(index) {
+        item.mediaId = identities[index]
+      }
+      return item
+    }
+    return value
   }
   var isCoverPost: Bool { creationIntent == "cover" }
 }

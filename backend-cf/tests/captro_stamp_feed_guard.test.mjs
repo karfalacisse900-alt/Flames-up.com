@@ -144,20 +144,21 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.doesNotMatch(postBody, /\.background\(MIRATheme\.Color\.surface\)/);
   assert.doesNotMatch(postBody, /\.clipShape\(RoundedRectangle|\.cornerRadius\(|\.shadow\(/);
   assert.doesNotMatch(mainFeed, /\.scrollTargetBehavior\(\.paging\)|horizontalPostPager/);
-  assert.match(mainFeed, /\.scrollPosition\(id: \$selectedPostID, anchor: \.top\)/);
+  assert.doesNotMatch(mainFeed, /\.scrollPosition\(id: \$selectedPostID/);
+  assert.match(mainFeed, /CaptroFeedViewportMarker/);
   assert.match(postView, /showsCoverMediaOnly: false/);
   assert.match(mainFeed, /LazyVStack\(spacing: 12\)/);
   assert.match(mainFeed, /safeAreaPadding\(\.bottom, bottomInset \+ homeTabClearance\)/);
 });
 
-test('Home media uses each source ratio and fit while Details preserves originals', () => {
+test('Home uses a stable supported fill preview while Details preserves originals', () => {
   assert.match(mediaPager, /post\.feedFrameHeightToWidthRatio/);
   assert.doesNotMatch(mediaPager, /measuredCoverHeightToWidthRatio|onMeasuredRatio:/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
   assert.match(mediaPager, /contentMode: \.fit/);
-  assert.doesNotMatch(mediaPager, /contentMode: \.fill/);
+  assert.match(mediaPager, /contentMode: \.fill/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
   const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);

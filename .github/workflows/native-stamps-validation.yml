@@ -58,6 +58,7 @@ jobs:
             tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
           elif [ '${{ inputs.feed_fixes_only }}' = 'true' ]; then
             tests=(-only-testing:CaptroStampTests
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testIdleBackgroundUpdatesPreserveReadingPositionAndHeader
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth

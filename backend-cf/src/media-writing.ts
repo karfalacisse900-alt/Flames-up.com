@@ -6,6 +6,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
     .filter((item) => !(typeof item.writing?.text === 'string' && !item.writing.text.trim()))
     .map((item) => {
     const index = item.mediaIndex ?? item.media_index;
+    const mediaId = item.mediaId ?? item.media_id;
     const w = item.writing;
     const version = w?.schemaVersion ?? w?.schema_version;
     const ratio = w?.sourceAspectRatio ?? w?.source_aspect_ratio;
@@ -17,6 +18,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
     const finite = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
     const count = typeof w?.text === 'string' ? [...new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(w.text)].length : 0;
     if (!Number.isInteger(index) || index < 0 || index >= mediaCount || seen.has(index)
+      || (mediaId !== undefined && mediaId !== null && (typeof mediaId !== 'string' || !/^[a-f0-9]{64}$/.test(mediaId)))
       || ![1, 2].includes(version) || typeof w?.text !== 'string' || (!cover && !w.text.trim()) || count > (cover ? 70 : 60)
       || w.text.split(/\r\n|\r|\n/).length > 4 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(w.text)
       || !['bold', 'clean', 'editorial', 'handwritten', 'classic'].includes(w.style)
@@ -32,7 +34,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
       throw new Error('Check your media writing: use a short phrase and valid placement for each media item.');
     }
     seen.add(index);
-    return { type: 'media_writing', mediaIndex: index, writing: {
+    return { type: 'media_writing', mediaIndex: index, ...(mediaId ? { mediaId } : {}), writing: {
       schemaVersion: version, text: w.text, style: w.style, alignment: w.alignment,
       color: w.color, readability: w.readability, x: w.x, y: w.y, width: w.width,
       size: w.size, sourceAspectRatio: ratio, showsStamp,

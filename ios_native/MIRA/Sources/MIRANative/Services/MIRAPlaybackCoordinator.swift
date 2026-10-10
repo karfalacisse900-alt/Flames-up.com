@@ -13,11 +13,14 @@ public enum MIRAPlaybackCoordinator {
     activeVideoID = id
   }
   @MainActor public static func releaseVideo(_ player: AVPlayer) {
-    guard activeVideoPlayer === player else { return }
+    // A stale/offscreen player must stop even after another owner took over.
     player.pause()
+    player.isMuted = true
+    guard activeVideoPlayer === player else { return }
     activeVideoPlayer = nil
     activeVideoID = nil
   }
+  @MainActor static func ownsVideo(_ player: AVPlayer) -> Bool { activeVideoPlayer === player }
   // A live voice session owns duplex audio until its matching generation ends.
   // Late video loads may prepare assets, but must not replace the microphone's
   // playAndRecord category with playback/moviePlayback.

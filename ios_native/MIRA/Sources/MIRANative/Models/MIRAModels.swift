@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CryptoKit
 
 public enum MIRAUsernameRules {
   public static func normalized(_ value: String?) -> String {
@@ -215,6 +216,20 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     return optimized.isEmpty ? mediaURLs : optimized
   }
 
+  /// Source identity is independent of an expiring delivery URL and array index.
+  /// Current API exposes source URLs, not a per-item asset ID, so canonicalize
+  /// the immutable source path (never log the URL).
+  public var feedMediaIdentities: [String] {
+    let sources = mediaURLs.isEmpty ? feedMediaURLs : mediaURLs
+    return sources.map { Self.mediaIdentity($0) }
+  }
+
+  public static func mediaIdentity(_ source: String) -> String {
+    var components = URLComponents(string: source)
+    components?.query = nil; components?.fragment = nil
+    return SHA256.hash(data: Data((components?.string ?? source).utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
   public var thumbnailMediaURLs: [String] {
     let thumbnails = uniqueMediaURLs(from: thumbnailUrls?.values ?? [], fallback: nil)
     return thumbnails.isEmpty ? feedMediaURLs : thumbnails
@@ -252,7 +267,10 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   /// Feed geometry belongs to the post, not the currently selected slide.
   /// Missing legacy dimensions fall back to the first media URL's hint.
   public var feedFrameHeightToWidthRatio: CGFloat {
-    MIRAMediaSizing.mainFeedDisplayRatio(for: feedMediaURLs, aspectRatios: mediaHeightToWidthRatios)
+    if let requested = mediaWriting(at: 0)?.homeAspectRatio, requested.isFinite, requested > 0 {
+      return MIRAMediaSizing.homeDisplayRatio(1 / requested)
+    }
+    return MIRAMediaSizing.mainFeedDisplayRatio(for: feedMediaURLs, aspectRatios: mediaHeightToWidthRatios)
   }
 
   public var placeDisplayName: String? {
@@ -1696,6 +1714,7 @@ public struct CreatePostBody: Encodable {
 }
 
 public struct MIRAEditorUploadMetadata: Encodable, Hashable {
+  public var mediaId: String? = nil
   public let type: String
   public let mediaIndex: Int
   public let wasEdited: Bool

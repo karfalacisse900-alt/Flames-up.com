@@ -15,8 +15,16 @@ struct CaptroFeedPostView: View {
   let onSave: () -> Void
   let canFollowAuthor: Bool
   let feedWidth: CGFloat
+  var frameRatio: CGFloat? = nil
+  @Binding var selectedMediaID: String?
   @Binding var stampReading: CaptroFeedStampReadingState
-  @State private var selectedMediaIndex = 0
+  private var selectedMediaIndex: Binding<Int> {
+    Binding(get: { post.feedMediaIdentities.firstIndex(of: selectedMediaID ?? "") ?? 0 }, set: { index in
+      guard post.feedMediaIdentities.indices.contains(index) else { return }
+      selectedMediaID = post.feedMediaIdentities[index]
+      CaptroFeedDiagnostics.event("slide", feed: "home", reason: "carousel_selection", post: post.id, media: selectedMediaID)
+    })
+  }
   var canRespond = true
 
   @Environment(\.displayScale) private var displayScale
@@ -25,9 +33,6 @@ struct CaptroFeedPostView: View {
   var body: some View {
     postContent
     .frame(maxWidth: .infinity, alignment: .topLeading)
-    .onChange(of: post.id) { _, _ in
-      selectedMediaIndex = 0
-    }
   }
 
   private var postContent: some View {
@@ -59,7 +64,7 @@ struct CaptroFeedPostView: View {
       api: api,
       isVideoActive: isVideoActive,
       isAudioActive: isPostActive,
-      selectedMediaIndex: $selectedMediaIndex,
+      selectedMediaIndex: selectedMediaIndex,
       onOpenPost: onOpenPost,
       onSave: onSave,
       showsCoverMediaOnly: false,
@@ -68,18 +73,12 @@ struct CaptroFeedPostView: View {
     )
 
     pager.frame(width: mediaSize.width)
-      .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedMediaIndex)
   }
 
   private var mediaSize: CGSize {
     // The first item establishes the feed frame for the whole post. Individual
     // slides retain their own source ratios and are fitted inside this frame.
-    let ratio = post.feedFrameHeightToWidthRatio
-    let naturalHeight = feedWidth * ratio
-    // Extremely tall content is scaled down in a neutral fitted viewport;
-    // the source is never cropped to enforce a preferred feed ratio.
-    let maximumHeight = UIScreen.main.bounds.height * MIRAMediaSizing.maxMainFeedScreenHeightFraction
-    return CGSize(width: feedWidth, height: min(naturalHeight, maximumHeight))
+    CGSize(width: feedWidth, height: feedWidth * (frameRatio ?? post.feedFrameHeightToWidthRatio))
   }
 
 }

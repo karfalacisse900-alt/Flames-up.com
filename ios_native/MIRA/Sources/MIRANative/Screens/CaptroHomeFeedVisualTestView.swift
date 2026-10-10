@@ -22,7 +22,7 @@ public struct CaptroHomeFeedVisualTestView: View {
   public var body: some View {
     TabView(selection: $selectedTab) {
       NavigationStack {
-        MainFeedView(api: model.api, model: model)
+        MainFeedView(api: model.api, model: model, isTabActive: selectedTab == 0)
       }
         .tag(0)
         .tabItem { Label("Home", systemImage: "house.fill") }
@@ -40,6 +40,17 @@ public struct CaptroHomeFeedVisualTestView: View {
     .background(MIRATheme.Color.appBackground)
     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
+    .task {
+      guard ProcessInfo.processInfo.arguments.contains("--captro-stability-updates") else { return }
+      // Deterministic DEBUG traffic through the same reconciliation used by
+      // background refresh. No production writes or private content.
+      for tick in 1...125 {
+        try? await Task.sleep(for: .seconds(1))
+        guard !Task.isCancelled else { return }
+        let updates = model.posts.reversed().map { $0.updating(likesCount: tick) }
+        model.posts = CaptroFeedReconciliation.background(existing: model.posts, fresh: updates)
+      }
+    }
     .task {
       if ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") {
         do {

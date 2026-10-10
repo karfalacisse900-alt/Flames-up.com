@@ -129,7 +129,7 @@ test('post creation accepts both kinds; Home scrolls vertically with in-media ca
   assert.match(ios('Screens/CaptroFeedPostView.swift'), /showsCoverMediaOnly: false/);
   assert.match(home, /scenePhase != \.active \|\| detailPost != nil/);
   const pager = ios('Screens/CaptroFeedMediaPager.swift');
-  assert.match(pager, /isVideoMuted = false/);
+  assert.match(pager, /stampReading\.mutedMediaIDs\.contains\(currentMediaID\)/);
   assert.doesNotMatch(pager, /isVideoMuted = true/);
   assert.match(pager, /shouldPlay: isVideoActive && !isVideoPaused/);
   assert.match(pager, /mediaURLs.count > 1 && !showsCoverMediaOnly/);

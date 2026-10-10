@@ -1,6 +1,34 @@
 import SwiftUI
 import UIKit
 
+enum CaptroFeedDiagnostics {
+  static func event(_ name: String, feed: String, generation: Int = 0, reason: String, post: String? = nil, media: String? = nil) {
+#if DEBUG
+    // Identifiers and state only. Never include captions, URLs, tokens or audio.
+    print("[CaptroFeed] \(name) feed=\(feed) generation=\(generation) reason=\(reason) post=\(post ?? "none") media=\(media ?? "none")")
+#endif
+  }
+}
+
+enum CaptroFeedReconciliation {
+  static func unique(_ posts: [MIRAPost]) -> [MIRAPost] {
+    var seen = Set<String>()
+    return posts.filter { seen.insert($0.id).inserted }.map { $0.bindingWritingIdentities() }
+  }
+  static func background(existing: [MIRAPost], fresh: [MIRAPost]) -> [MIRAPost] {
+    let records = Dictionary(uniqueKeysWithValues: unique(fresh).map { ($0.id, $0) })
+    // First-page absence is not proof of deletion. Explicit removal/block
+    // events still remove records. New records wait for pull-to-refresh.
+    return unique(existing).map { current in
+      guard let update = records[current.id] else { return current }
+      // Keep reading geometry/content fixed during browsing. Details/edit events
+      // apply full records; background revalidation updates mutable counters.
+      return current.updating(liked: update.viewerLikedValue, likesCount: update.likesCount,
+        commentsCount: update.commentsCount, saved: update.viewerSavedValue, savesCount: update.savesCount)
+    }
+  }
+}
+
 private struct MainFeedMediaPreloadPlan: Sendable {
   var previewURLs: [String] = []
   var feedImageURLs: [String] = []
@@ -38,6 +66,10 @@ final class MainFeedModel: ObservableObject {
   private var followingAuthorIds = Set<String>()
   private var feedSection: MainFeedSection = .forYou
   private var sectionSnapshots: [MainFeedSection: [MIRAPost]] = [:]
+  private var pageOffsets: [MainFeedSection: Int] = [:]
+  private var exhaustedSections = Set<MainFeedSection>()
+  private var requestGeneration = 0
+  private var pendingPosts: [MIRAPost] = []
   private var likeMutationVersions: [String: Int] = [:]
   private let firstPageLimit = 12
   private let paginationTriggerRatio = 0.70
@@ -49,6 +81,7 @@ final class MainFeedModel: ObservableObject {
 
 #if DEBUG
   private var isVisualFixture = false
+  var testPageLoader: ((String, Int) async throws -> [MIRAPost])?
 
   convenience init(api: MIRAAPIClient, visualPosts: [MIRAPost]) {
     self.init(api: api)
@@ -77,6 +110,10 @@ final class MainFeedModel: ObservableObject {
     isLoadingMore = false
     followingAuthorIds.removeAll()
     sectionSnapshots.removeAll()
+    pageOffsets.removeAll()
+    exhaustedSections.removeAll()
+    pendingPosts.removeAll()
+    requestGeneration += 1
     feedSection = .forYou
     likeMutationVersions.removeAll()
   }
@@ -106,7 +143,7 @@ final class MainFeedModel: ObservableObject {
     await load(forceRefresh: true)
   }
 
-  func load(forceRefresh: Bool = false) async {
+  func load(forceRefresh: Bool = false, userInitiated: Bool = false) async {
 #if DEBUG
     if isVisualFixture { return }
 #endif
@@ -116,11 +153,15 @@ final class MainFeedModel: ObservableObject {
     // A foreground refresh and pull-to-refresh should coalesce, not race to
     // replace the same first page in an arbitrary completion order.
     if isLoadingFreshFeed {
-      if forceRefresh { refreshRequested = true }
+      if userInitiated { refreshRequested = true }
       return
     }
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
     isLoadingFreshFeed = true
+    requestGeneration += 1
+    let request = requestGeneration
+    let section = feedSection
+    isLoadingMore = false
     lastRevalidationAttemptAt = Date()
     let generation = accountGeneration
     let contentVersion = localContentVersion
@@ -130,14 +171,14 @@ final class MainFeedModel: ObservableObject {
         isLoadingFreshFeed = false
         if refreshRequested {
           refreshRequested = false
-          Task { await load(forceRefresh: true) }
+          Task { await load(forceRefresh: true, userInitiated: true) }
         }
       }
     }
     MIRAPerformanceTimeline.mark("home_load_start", detail: forceRefresh ? "refresh" : "normal")
 
     await hydrateCachedFeedIfNeeded()
-    guard accountGeneration == generation else { return }
+    guard accountGeneration == generation, requestGeneration == request else { return }
 
     if posts.isEmpty { isLoading = true }
     let loaded: [MIRAPost]
@@ -150,44 +191,40 @@ final class MainFeedModel: ObservableObject {
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "first_page")
       return
     }
-    guard accountGeneration == generation else { return }
+    guard accountGeneration == generation, requestGeneration == request else { return }
     guard localContentVersion == contentVersion else {
-      refreshRequested = true
       return
     }
     hasLoadedFreshFeed = true
-    canLoadMore = loaded.count >= firstPageLimit
+    if posts.isEmpty || userInitiated {
+      pageOffsets[section] = loaded.count
+      canLoadMore = loaded.count >= firstPageLimit
+      if canLoadMore { exhaustedSections.remove(section) } else { exhaustedSections.insert(section) }
+    }
     if loaded.isEmpty {
       // A successful empty response is not a network error. Retire stale
       // cached first-page posts instead of leaving deleted content on screen.
-      posts = []
+      if userInitiated { posts = [] }
       errorMessage = nil
       await persistCurrentFeed()
       return
     }
 
-    let sorted = await sortedByNativeScore(loaded)
-    guard accountGeneration == generation else { return }
+    // Rank only a new reading session. Never rerank the on-screen collection
+    // because a like, foreground revalidation, or first-page request completed.
+    let startsNewOrder = posts.isEmpty || userInitiated
+    let sorted = startsNewOrder ? await sortedByNativeScore(loaded) : loaded
+    guard accountGeneration == generation, requestGeneration == request else { return }
     guard localContentVersion == contentVersion else {
-      refreshRequested = true
       return
     }
-    let merged: [MIRAPost]
-    if isGuestFeedMode {
-      merged = mergePublicFirstPage(existing: posts, fresh: sorted)
-    } else {
-      merged = await MIRAAppCacheStore.shared.mergeFreshFirstPage(
-        existing: posts,
-        fresh: sorted,
-        pageLimit: firstPageLimit
-      )
-    }
-    guard accountGeneration == generation else { return }
-    guard localContentVersion == contentVersion else {
-      refreshRequested = true
-      return
-    }
-    let mixed = interleavePostFormats(merged)
+    let existingIDs = Set(posts.map(\.id))
+    pendingPosts = loaded.filter { !existingIDs.contains($0.id) }
+    let mixed = startsNewOrder
+      ? CaptroFeedReconciliation.unique(interleavePostFormats(sorted))
+      : CaptroFeedReconciliation.background(existing: posts, fresh: loaded)
+    CaptroFeedDiagnostics.event("page_accept", feed: section.rawValue, generation: request,
+      reason: startsNewOrder ? "initial_or_user_refresh" : "background_preserve_order")
     if posts != mixed { posts = mixed }
     await persistCurrentFeed()
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
@@ -197,6 +234,9 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func hydrateCachedFeedIfNeeded() async {
+#if DEBUG
+    if testPageLoader != nil { return }
+#endif
     guard feedSection == .forYou else { return }
     guard posts.isEmpty else { return }
     let generation = accountGeneration
@@ -224,7 +264,8 @@ final class MainFeedModel: ObservableObject {
     if guest { hydrated = cached }
     else { hydrated = await MIRAPostEngagementSync.apply(to: cached) }
     guard accountGeneration == generation else { return }
-    posts = interleavePostFormats(hydrated)
+    guard posts.isEmpty, feedSection == .forYou else { return }
+    posts = CaptroFeedReconciliation.unique(hydrated)
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "cache")
     errorMessage = nil
     isLoading = false
@@ -331,13 +372,15 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func loadNextPage(reason: String) async {
-    guard canLoadMore, !isLoadingMore else { return }
+    guard canLoadMore, !isLoadingMore, !isLoadingFreshFeed else { return }
     isLoadingMore = true
     let generation = accountGeneration
     let contentVersion = localContentVersion
-    defer { if accountGeneration == generation { isLoadingMore = false } }
+    let request = requestGeneration
+    let section = feedSection
+    defer { if accountGeneration == generation, requestGeneration == request { isLoadingMore = false } }
 
-    let skip = posts.count
+    let skip = pageOffsets[section] ?? posts.count
     MIRAPerformanceTimeline.mark("home_load_more_start", detail: "\(reason) skip=\(skip)")
     let loaded: [MIRAPost]
     do {
@@ -346,18 +389,22 @@ final class MainFeedModel: ObservableObject {
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "skip=\(skip)")
       return
     }
-    guard accountGeneration == generation else { return }
+    guard accountGeneration == generation, requestGeneration == request else {
+      CaptroFeedDiagnostics.event("page_reject", feed: section.rawValue, generation: request, reason: "stale_pagination")
+      return
+    }
     guard localContentVersion == contentVersion else {
-      Task { await load(forceRefresh: true) }
       return
     }
     guard !loaded.isEmpty else {
       canLoadMore = false
+      exhaustedSections.insert(section)
       MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
       return
     }
+    pageOffsets[section] = skip + loaded.count
     let existing = Set(posts.map(\.id))
-    let unique = loaded.filter { !existing.contains($0.id) }
+    let unique = CaptroFeedReconciliation.unique(loaded).filter { !existing.contains($0.id) }
 
     if unique.isEmpty {
       canLoadMore = loaded.count >= firstPageLimit
@@ -366,21 +413,24 @@ final class MainFeedModel: ObservableObject {
     }
 
     let sorted = await sortedByNativeScore(unique)
-    guard accountGeneration == generation else { return }
+    guard accountGeneration == generation, requestGeneration == request else { return }
     guard localContentVersion == contentVersion else {
-      Task { await load(forceRefresh: true) }
       return
     }
     posts.append(contentsOf: interleavePostFormats(sorted))
+    assert(Set(posts.map(\.id)).count == posts.count)
     canLoadMore = loaded.count >= firstPageLimit
+    if !canLoadMore { exhaustedSections.insert(section) }
     MIRAPerformanceTimeline.mark("home_load_more_done", detail: "added=\(unique.count) total=\(posts.count)")
     cacheCurrentPosts()
   }
 
   private func prefetchNextPageIfNeeded(afterInitialCount initialCount: Int) {
     guard canLoadMore, initialCount <= firstPageLimit else { return }
+    let generation = accountGeneration
     Task { [weak self] in
       try? await Task.sleep(nanoseconds: 350_000_000)
+      guard self?.accountGeneration == generation else { return }
       await self?.prefetchNextPageIfStillCurrent(initialCount)
     }
   }
@@ -528,7 +578,7 @@ final class MainFeedModel: ObservableObject {
   func applyPostRecord(_ record: MIRAPost) {
     guard let index = posts.firstIndex(where: { $0.id == record.id }) else { return }
     let current = posts[index]
-    var merged = record.updating(
+    var merged = record.bindingWritingIdentities().updating(
       liked: record.viewerLikedValue ?? current.viewerLikedValue,
       likesCount: record.likesCount ?? current.likesCount,
       commentsCount: record.commentsCount ?? current.commentsCount,
@@ -563,6 +613,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func followAuthor(_ post: MIRAPost) async -> Bool {
+    let generation = accountGeneration
     guard canFollowAuthor(post) else { return false }
     guard let userId = post.userId, !userId.isEmpty else { return false }
     guard !followingAuthorIds.contains(userId) else { return false }
@@ -574,13 +625,19 @@ final class MainFeedModel: ObservableObject {
 
     do {
       let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: true))
+      guard accountGeneration == generation else { return false }
       let serverFollowing = response.following ?? true
       posts = posts.map { $0.userId == userId ? $0.updating(following: serverFollowing) : $0 }
       cacheCurrentPosts()
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: serverFollowing, followersCount: response.followersCount ?? response.followingCount))
       return serverFollowing
     } catch {
-      posts = previous
+      guard accountGeneration == generation else { return false }
+      let old = Dictionary(uniqueKeysWithValues: previous.map { ($0.id, $0) })
+      posts = posts.map { current in
+        guard current.userId == userId, let prior = old[current.id] else { return current }
+        return current.updating(following: prior.viewerFollowing)
+      }
       errorMessage = "Could not follow this user. Try again in a moment."
       return false
     }
@@ -625,6 +682,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func hidePost(_ post: MIRAPost) {
+    localContentVersion += 1
     posts.removeAll { $0.id == post.id }
     for section in MainFeedSection.allCases { sectionSnapshots[section]?.removeAll { $0.id == post.id } }
     cacheCurrentPosts()
@@ -632,22 +690,29 @@ final class MainFeedModel: ObservableObject {
   }
 
   func hidePosts(byUserId userId: String) {
+    localContentVersion += 1
     posts.removeAll { $0.userId == userId }
     for section in MainFeedSection.allCases { sectionSnapshots[section]?.removeAll { $0.userId == userId } }
     cacheCurrentPosts()
   }
 
   func blockAuthor(_ post: MIRAPost) async {
+    let generation = accountGeneration
+    localContentVersion += 1
     guard let userId = post.userId, !userId.isEmpty else { return }
     let previous = posts
     posts.removeAll { $0.userId == userId }
     do {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      guard accountGeneration == generation else { return }
       for section in MainFeedSection.allCases { sectionSnapshots[section]?.removeAll { $0.userId == userId } }
       cacheCurrentPosts()
       errorMessage = nil
     } catch {
-      posts = previous
+      guard accountGeneration == generation else { return }
+      for (index, removed) in previous.enumerated() where removed.userId == userId && !posts.contains(where: { $0.id == removed.id }) {
+        posts.insert(removed, at: min(index, posts.count))
+      }
       errorMessage = "Could not block this user. Try again in a moment."
     }
   }
@@ -669,15 +734,21 @@ final class MainFeedModel: ObservableObject {
   }
 
   func deletePost(_ post: MIRAPost) async {
+    let generation = accountGeneration
+    localContentVersion += 1
     let previous = posts
     posts.removeAll { $0.id == post.id }
     do {
       let _: EmptyResponse = try await api.delete("/posts/\(post.id)")
+      guard accountGeneration == generation else { return }
       cacheCurrentPosts()
       MIRAPostRemovalSync.publish(MIRAPostRemovalUpdate(postId: post.id))
       errorMessage = nil
     } catch {
-      posts = previous
+      guard accountGeneration == generation else { return }
+      if !posts.contains(where: { $0.id == post.id }) {
+        posts.insert(post, at: min(previous.firstIndex(where: { $0.id == post.id }) ?? posts.count, posts.count))
+      }
       errorMessage = "Could not delete this post."
     }
   }
@@ -781,6 +852,9 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func fetchFeedPage(skip: Int) async throws -> [MIRAPost] {
+#if DEBUG
+    if let testPageLoader { return try await testPageLoader(feedSection.apiScope, skip) }
+#endif
     if isGuestFeedMode {
       let publicPosts: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
       MIRAPerformanceTimeline.mark("home_feed_public", detail: "guest skip=\(skip)")
@@ -791,7 +865,7 @@ final class MainFeedModel: ObservableObject {
     return try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)&scope=\(feedSection.apiScope)")
   }
 
-  fileprivate func selectFeedSection(_ section: MainFeedSection) {
+  func selectFeedSection(_ section: MainFeedSection) {
 #if DEBUG
     if isVisualFixture {
       feedSection = section
@@ -801,6 +875,7 @@ final class MainFeedModel: ObservableObject {
     guard feedSection != section else { return }
     sectionSnapshots[feedSection] = posts
     accountGeneration += 1 // Late page responses cannot replace the newly selected source.
+    requestGeneration += 1
     mediaPrefetchTask?.cancel()
     feedSection = section
     posts = sectionSnapshots[section] ?? []
@@ -810,7 +885,7 @@ final class MainFeedModel: ObservableObject {
     isLoadingFreshFeed = false
     isLoadingCurrentUser = false
     hasLoadedFreshFeed = false
-    canLoadMore = true
+    canLoadMore = !exhaustedSections.contains(section)
     refreshRequested = false
     lastRevalidationAttemptAt = nil
     if !posts.isEmpty { prefetchInitialMediaWindow() }
@@ -906,7 +981,7 @@ enum CaptroFeedFormatMixer {
 private struct MainPostVisibilityUpdateBody: Encodable {
   let visibility: String
 }
-fileprivate enum MainFeedSection: String, CaseIterable {
+enum MainFeedSection: String, CaseIterable {
   case around
   case following
   case forYou
@@ -933,6 +1008,9 @@ public struct MainFeedView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var activeVideoPostID: String?
   @State private var selectedPostID: String?
+  @StateObject private var viewport = CaptroFeedViewport()
+  @State private var selectedMediaIDs: [String: String] = [:]
+  @State private var feedFrameRatios: [String: CGFloat] = [:]
   @State private var stampReadingStates: [String: CaptroFeedStampReadingState] = [:]
   @State private var postActivationTask: Task<Void, Never>?
   @State private var selectedPostFallbackIndex = 0
@@ -1106,9 +1184,11 @@ public struct MainFeedView: View {
         }
       }
       .onChange(of: displayedPosts.map(\.id)) { _, _ in
+        viewport.updateOrder(displayedPosts.map(\.id))
         reconcileCurrentPostSelection()
       }
       .onChange(of: selectedFeedSection) { _, _ in
+        viewport.select(selectedFeedSection.rawValue)
         model.selectFeedSection(selectedFeedSection)
         selectedPostID = nil
         selectedPostFallbackIndex = 0
@@ -1118,6 +1198,12 @@ public struct MainFeedView: View {
         scheduleCurrentPostActivation()
       }
       .onAppear {
+        viewport.onVisible = { [selection = $selectedPostID, active = $activeVideoPostID] id in
+          selection.wrappedValue = id
+          if id == nil { active.wrappedValue = nil }
+          CaptroFeedDiagnostics.event("visible", feed: "home", reason: "visibility_threshold", post: id)
+        }
+        viewport.updateOrder(displayedPosts.map(\.id))
         reconcileCurrentPostSelection()
         MIRAApplePerformanceLogger.event("feed_render", detail: model.posts.isEmpty ? "empty" : "posts")
         if !isMediaPlaybackSuppressed {
@@ -1136,15 +1222,10 @@ public struct MainFeedView: View {
     HStack(spacing: 0) {
       HStack(spacing: 8) {
         Button { isFeedSelectorPresented = true } label: {
-          HStack(spacing: 6) {
-            Image(systemName: "line.3.horizontal")
-              .font(.system(size: 15, weight: .semibold))
-            Text(selectedFeedSection.title)
-              .font(.system(.subheadline, design: .serif, weight: .semibold))
-              .lineLimit(1)
-          }
+          Image(systemName: "line.3.horizontal")
+          .font(.system(size: 20, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 102, height: 52, alignment: .leading)
+          .frame(width: 44, height: 44)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1167,15 +1248,15 @@ public struct MainFeedView: View {
           isShowingCreatePost = true
         } label: {
           Image(systemName: "square.and.pencil")
-            .font(.title3.weight(.medium))
+            .font(.system(size: 20, weight: .medium))
             .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 48, height: 52)
+            .frame(width: 44, height: 44)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Create post")
       }
-      .frame(width: 158, alignment: .leading)
+      .frame(width: 96, alignment: .leading)
       .padding(.leading, 8)
       .accessibilityElement(children: .contain)
       .accessibilityIdentifier("home.fixed.controls")
@@ -1302,6 +1383,7 @@ public struct MainFeedView: View {
       LazyVStack(spacing: 12) {
         ForEach(displayedPosts, id: \.id) { post in
           feedPage(post: post, width: width, isCurrent: post.id == currentPost?.id)
+            .background(CaptroFeedViewportMarker(owner: viewport, postID: post.id).allowsHitTesting(false))
             .id(post.id)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.post.page.\(post.id)")
@@ -1315,7 +1397,7 @@ public struct MainFeedView: View {
     .ignoresSafeArea(.container, edges: .bottom)
     .background(MIRATheme.Color.appBackground)
     .scrollIndicators(.hidden)
-    .scrollPosition(id: $selectedPostID, anchor: .top)
+    .refreshable { await model.load(forceRefresh: true, userInitiated: true) }
     .accessibilityLabel("Home posts")
     .accessibilityValue("Post \(currentPostIndex + 1) of \(displayedPosts.count)")
     .accessibilityIdentifier("home.post.stream")
@@ -1346,11 +1428,16 @@ public struct MainFeedView: View {
       },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       feedWidth: width,
+      frameRatio: feedFrameRatios[post.id] ?? post.feedFrameHeightToWidthRatio,
+      selectedMediaID: Binding(get: { selectedMediaIDs[post.id] }, set: { selectedMediaIDs[post.id] = $0 }),
       stampReading: Binding(
         get: { stampReadingStates[post.id] ?? CaptroFeedStampReadingState() },
         set: { stampReadingStates[post.id] = $0 }),
       canRespond: !isGuest
     )
+    .onAppear {
+      if feedFrameRatios[post.id] == nil { feedFrameRatios[post.id] = post.feedFrameHeightToWidthRatio }
+    }
   }
 
   private var displayedPosts: [MIRAPost] {
@@ -1415,11 +1502,6 @@ public struct MainFeedView: View {
   private func scheduleCurrentPostActivation() {
     postActivationTask?.cancel()
     let expectedPostID = selectedPostID
-    if activeVideoPostID != nil {
-      var transaction = Transaction()
-      transaction.disablesAnimations = true
-      withTransaction(transaction) { activeVideoPostID = nil }
-    }
     guard expectedPostID != nil else { return }
     postActivationTask = Task { @MainActor in
       try? await Task.sleep(for: .milliseconds(140))
