@@ -27,10 +27,7 @@ struct CaptroMediaPager: View {
   // variant. Downsample the source in the existing image cache; crop once here.
   private var mediaURLs: [String] { post.isCoverPost && !post.mediaURLs.isEmpty ? post.mediaURLs : post.feedMediaURLs }
   private var naturalMediaHeightToWidthRatio: CGFloat {
-      MIRAMediaSizing.mainFeedDisplayRatio(
-          for: mediaURLs,
-          aspectRatios: post.mediaHeightToWidthRatios
-      )
+      post.feedFrameHeightToWidthRatio
   }
   private var mediaHeightToWidthRatio: CGFloat {
     naturalMediaHeightToWidthRatio
@@ -177,7 +174,6 @@ struct CaptroMediaPager: View {
   }
 
   private func mediaView(url: String, index: Int) -> some View {
-    let writing = post.mediaWriting(at: index)
     return ZStack(alignment: .topLeading) {
     RemoteMediaView(
       url: url,
@@ -206,7 +202,7 @@ struct CaptroMediaPager: View {
     let floor: CGFloat = currentMediaIsVideo ? 64 : 0
     // Keep published writing fixed. Move only the stamp/real continuation, not
     // the image or artwork, if the creator deliberately chose a low position.
-    let bottom = mediaURLs.indices.compactMap { post.mediaWriting(at: $0)?.textRect(in: size, fill: false).maxY }.max() ?? 0
+    let bottom = post.mediaWriting(at: 0)?.textRect(in: size, fill: false).maxY ?? 0
     return max(floor, bottom > 0 ? bottom + (mediaURLs.contains(where: { $0.isVideoURL }) ? 64 : 12) : 0)
   }
 
@@ -222,6 +218,7 @@ struct CaptroMediaPager: View {
     VStack(spacing: 0) {
       CaptroFeedMediaStamp(content: post.captroMediaFeedCardContent,
         readingBudget: max(90, readingBudget - stampAudioHeight), stampWidth: stampWidth,
+        maxCaptionLines: (frameSize?.height ?? 0) < 300 ? 1 : ([.club, .event, .meetup, .deal].contains(post.captroMediaFeedCardContent.type) ? 2 : 3),
         onOpen: openPostUnlessPeeking)
       if post.detail?.voice != nil || post.hasAudio {
         CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
@@ -269,8 +266,9 @@ struct CaptroMediaPager: View {
   }
 
   private func fittedMediaRect(in frame: CGSize) -> CGRect {
-    let ratios = post.mediaHeightToWidthRatios
-    let ratio = ratios.indices.contains(selectedMediaIndex) ? ratios[selectedMediaIndex] : mediaHeightToWidthRatio
+    // The feed stamp is only visible on the cover slide, so its placement
+    // must not depend on a different carousel item's dimensions.
+    let ratio = mediaHeightToWidthRatio
     guard ratio.isFinite, ratio > 0 else { return CGRect(origin: .zero, size: frame) }
     let width = min(frame.width, frame.height / ratio)
     let height = width * ratio

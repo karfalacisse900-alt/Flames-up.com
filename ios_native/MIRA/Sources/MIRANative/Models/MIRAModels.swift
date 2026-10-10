@@ -249,6 +249,12 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     mediaDimensions?.values.map { $0.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio } ?? []
   }
 
+  /// Feed geometry belongs to the post, not the currently selected slide.
+  /// Missing legacy dimensions fall back to the first media URL's hint.
+  public var feedFrameHeightToWidthRatio: CGFloat {
+    MIRAMediaSizing.mainFeedDisplayRatio(for: feedMediaURLs, aspectRatios: mediaHeightToWidthRatios)
+  }
+
   public var placeDisplayName: String? {
     let name = placeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     return name.isEmpty ? nil : name

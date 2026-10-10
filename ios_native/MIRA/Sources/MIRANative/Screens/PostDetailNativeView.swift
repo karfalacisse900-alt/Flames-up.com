@@ -661,6 +661,7 @@ public struct PostDetailNativeView: View {
                   width: layout.size.width,
                   maximumHeight: layout.size.height * MIRAMediaSizing.maxMainFeedScreenHeightFraction
                 )
+                CaptroDetailMediaWriting(post: model.post)
               }
 
               CaptroPostDetailSections(model: model, onOpenOptions: { isPostOptionsPresented = true },
@@ -1141,13 +1142,6 @@ private struct PostDetailOptimizedMediaCarousel: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())
     .onTapGesture { isMediaViewerPresented = true }
-    .overlay {
-      if let writing = post.mediaWriting(at: index) {
-        GeometryReader { geometry in
-          CaptroMediaWritingLayer(writing: writing, container: geometry.size, fill: false, caption: post.caption ?? post.content)
-        }
-      }
-    }
     .clipped()
   }
 

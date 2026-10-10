@@ -134,7 +134,11 @@ public struct CaptroMediaWritingEnvelope: Codable, Hashable {
 
 extension MIRAPost {
   func mediaWriting(at index: Int) -> CaptroMediaWriting? {
-    editorOverlays?.first { $0.type == "media_writing" && $0.mediaIndex == index && [1, 2].contains($0.writing?.schemaVersion ?? 0) }?.writing
+    editorOverlays?.first {
+      $0.type == "media_writing" && $0.mediaIndex == index
+        && [1, 2].contains($0.writing?.schemaVersion ?? 0)
+        && $0.writing?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }?.writing
   }
   var isCoverPost: Bool { creationIntent == "cover" }
 }
@@ -156,6 +160,7 @@ struct CaptroMediaWritingLayer: View {
   var caption: String? = nil
 
   var body: some View {
+    if !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
     let source = writing.sourceRect(in: container, fill: fill)
     let rect = writing.textRect(in: container, fill: fill)
     let backingPadding: CGFloat = writing.schemaVersion == 2 ? 7 : 5
@@ -173,5 +178,6 @@ struct CaptroMediaWritingLayer: View {
       .accessibilityLabel(writing.text)
       .accessibilityHidden(writing.text.trimmingCharacters(in: .whitespacesAndNewlines) == caption?.trimmingCharacters(in: .whitespacesAndNewlines))
       .allowsHitTesting(false)
+    }
   }
 }

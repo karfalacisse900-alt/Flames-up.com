@@ -22,6 +22,7 @@ struct CaptroFeedMediaStamp: View {
   let content: CaptroEditorialCardContent
   let readingBudget: CGFloat
   let stampWidth: CGFloat
+  let maxCaptionLines: Int
   let onOpen: () -> Void
   @ScaledMetric(relativeTo: .title3) private var titleSize: CGFloat = 21
   @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
@@ -36,10 +37,10 @@ struct CaptroFeedMediaStamp: View {
   }
 
   private var captionLines: Int? {
-    CaptroHomeStampTextBudget.captionLines(title: clean(content.title), metadata: metadata,
+    min(maxCaptionLines, CaptroHomeStampTextBudget.captionLines(title: clean(content.title), metadata: metadata,
       caption: caption, creator: clean(content.username) != nil, width: stampWidth - 22,
       height: readingBudget, titleSize: titleSize, bodySize: bodySize,
-      metadataSize: metadataSize, creatorSize: creatorSize)
+      metadataSize: metadataSize, creatorSize: creatorSize) ?? maxCaptionLines)
   }
 
   private var card: some View {
@@ -60,7 +61,8 @@ struct CaptroFeedMediaStamp: View {
       if !metadata.isEmpty {
         Text(metadata).font(.system(size: metadataSize, weight: .medium))
           .foregroundStyle(MIRATheme.Color.forest)
-          .lineLimit(2)
+          .lineLimit(1)
+          .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, clean(content.title) == nil ? 0 : 5)
       }
@@ -77,7 +79,7 @@ struct CaptroFeedMediaStamp: View {
           HStack(spacing: 7) {
             RemoteAvatar(url: content.avatarURL, size: 24)
             Text(username).font(.system(size: creatorSize, weight: .semibold))
-              .fixedSize(horizontal: false, vertical: true)
+              .lineLimit(1)
             Spacer(minLength: 0)
           }
           .contentShape(Rectangle())
@@ -142,8 +144,14 @@ struct CaptroMediaStampLayout: Layout {
   private func placement(_ subviews: Subviews) -> (size: CGSize, y: CGFloat) {
     let visible = visibleMediaRect ?? CGRect(origin: .zero, size: mediaSize)
     let size = subviews[1].sizeThatFits(ProposedViewSize(width: stampWidth, height: nil))
-    return (size, max(minimumStampTop, visible.minY + CaptroFeedStampGeometry.originY(mediaHeight: visible.height,
-      stampHeight: size.height, clearance: clearance)))
+    let overlayTop = max(minimumStampTop, visible.minY + CaptroFeedStampGeometry.originY(mediaHeight: visible.height,
+      stampHeight: size.height, clearance: clearance))
+    // A short landscape frame or accessibility text must not be buried under
+    // a mostly white overlay. Real overflow continues below the media instead.
+    if size.height > visible.height * 0.60 || overlayTop + size.height > visible.maxY {
+      return (size, mediaSize.height + 8)
+    }
+    return (size, overlayTop)
   }
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     let stamp = placement(subviews)

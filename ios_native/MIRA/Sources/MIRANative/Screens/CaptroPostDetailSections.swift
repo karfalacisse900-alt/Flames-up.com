@@ -113,8 +113,12 @@ struct CaptroPostDetailSections: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Post options")
       }
-      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
-        expanded: true, showsProfileRow: false)
+      if post.isCoverPost {
+        fullDescription
+      } else {
+        CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
+          expanded: true, showsProfileRow: false)
+      }
     }
     .padding(16)
   }
@@ -246,6 +250,43 @@ struct CaptroPostDetailSections: View {
 
   private var detailDivider: some View {
     Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
+  }
+}
+
+/// Creative writing is feed artwork, but Details always shows the original
+/// clean media. Keep every slide's words readable below it instead.
+struct CaptroDetailMediaWriting: View {
+  let post: MIRAPost
+
+  private var entries: [(index: Int, text: String)] {
+    post.mediaURLs.indices.compactMap { index in
+      guard let text = post.mediaWriting(at: index)?.text else { return nil }
+      return (index, text)
+    }
+  }
+
+  var body: some View {
+    if !entries.isEmpty {
+      VStack(alignment: .leading, spacing: 10) {
+        ForEach(entries.indices, id: \.self) { offset in
+          let entry = entries[offset]
+          VStack(alignment: .leading, spacing: 4) {
+            if post.mediaURLs.count > 1 {
+              Text("Media \(entry.index + 1)")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(CaptroDetailStyle.secondary)
+            }
+            Text(entry.text)
+              .font(.system(size: 21, weight: .bold))
+              .fixedSize(horizontal: false, vertical: true)
+              .textSelection(.enabled)
+          }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 16)
+      .padding(.top, 16)
+    }
   }
 }
 

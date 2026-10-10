@@ -67,7 +67,8 @@ struct CaptroMediaWritingEditor: View {
       return "Write a short headline for the first photo or video."
     }
     return items.enumerated().compactMap { index, item -> String? in
-      guard let stored = item.mediaWriting, !stored.text.isEmpty else { return nil }
+      guard let stored = item.mediaWriting,
+        !stored.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
       var value = stored
       if let error = value.validationMessage { return error }
       if ratios.indices.contains(index) { value.sourceAspectRatio = ratios[index] }
@@ -122,7 +123,7 @@ struct CaptroMediaWritingEditor: View {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") {
             textFocused = false
-            for index in items.indices where !coverMode && items[index].mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            for index in items.indices where items[index].mediaWriting?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
               items[index].mediaWriting = nil
             }
             onSave(items); dismiss()
@@ -238,6 +239,7 @@ struct CaptroMediaWritingEditor: View {
   }
   private func coverHeadlineField(in size: CGSize) -> some View {
     let value = resolvedWriting
+    let hasText = !value.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     let source = value.sourceRect(in: size, fill: false)
     let rect = value.textRect(in: size, fill: false)
     return TextField("Write a headline", text: coverTextBinding, axis: .vertical)
@@ -250,8 +252,8 @@ struct CaptroMediaWritingEditor: View {
       .textInputAutocapitalization(.characters)
       .padding(value.readability ? 7 : 0)
       .frame(width: rect.width + (value.readability ? 14 : 0))
-      .background(value.readability ? (value.color == "black" || value.color == "green" ? Color.white : Color.black) : .clear)
-      .overlay { if value.readability { Rectangle().strokeBorder(value.color == "black" || value.color == "green" ? Color.black : Color.white, lineWidth: 1) } }
+      .background(value.readability && hasText ? (value.color == "black" || value.color == "green" ? Color.white : Color.black) : .clear)
+      .overlay { if value.readability && hasText { Rectangle().strokeBorder(value.color == "black" || value.color == "green" ? Color.black : Color.white, lineWidth: 1) } }
       .position(x: rect.midX, y: rect.midY)
       .focused($textFocused)
       .accessibilityLabel("Cover headline")

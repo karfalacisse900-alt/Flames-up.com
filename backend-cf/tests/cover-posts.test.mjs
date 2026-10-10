@@ -23,9 +23,18 @@ test('Cover persists distinct per-item typography and crop without replacing sou
 test('Cover has its own 70-grapheme limit, no paragraph or unsupported crop', () => {
   assert.equal(validateMediaWritingOverlays([envelope(0, { ...writing, text: 'a'.repeat(70) })], 1)[0].writing.text.length, 70);
   for (const patch of [{ text: 'a'.repeat(71) }, { text: 'one\ntwo\nthree\nfour\nfive' },
-    { homeAspectRatio: 9 / 16 }, { cropY: 2 }, { width: 2 }, { style: 'arbitrary-font' }]) {
+    { homeAspectRatio: 0 }, { cropY: 2 }, { width: 2 }, { style: 'arbitrary-font' }]) {
     assert.throws(() => validateMediaWritingOverlays([envelope(0, { ...writing, ...patch })], 1));
   }
-  assert.equal(validateMediaWritingOverlays([envelope(0, { ...writing, text: '' })], 1)[0].writing.homeAspectRatio, .8,
-    'Removing text must not remove the chosen non-destructive crop');
+  assert.deepEqual(validateMediaWritingOverlays([envelope(0, { ...writing, text: '' })], 1), [],
+    'Blank slide writing is absent, not a visible white rectangle');
+});
+test('unwritten carousel slides store no label and arbitrary source ratios remain valid', () => {
+  const saved = validateMediaWritingOverlays([
+    envelope(0, { ...writing, homeAspectRatio: 9 / 16 }),
+    envelope(1, { ...writing, text: ' \n ' }),
+  ], 2);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].mediaIndex, 0);
+  assert.equal(saved[0].writing.homeAspectRatio, 9 / 16);
 });

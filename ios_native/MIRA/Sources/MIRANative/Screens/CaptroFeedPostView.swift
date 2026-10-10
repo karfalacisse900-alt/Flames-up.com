@@ -72,9 +72,9 @@ struct CaptroFeedPostView: View {
   }
 
   private var mediaSize: CGSize {
-    let ratios = post.mediaHeightToWidthRatios
-    let ratio = ratios.indices.contains(selectedMediaIndex) ? ratios[selectedMediaIndex]
-      : MIRAMediaSizing.mainFeedDisplayRatio(for: post.feedMediaURLs, aspectRatios: ratios)
+    // The first item establishes the feed frame for the whole post. Individual
+    // slides retain their own source ratios and are fitted inside this frame.
+    let ratio = post.feedFrameHeightToWidthRatio
     let naturalHeight = feedWidth * ratio
     // Extremely tall content is scaled down in a neutral fitted viewport;
     // the source is never cropped to enforce a preferred feed ratio.

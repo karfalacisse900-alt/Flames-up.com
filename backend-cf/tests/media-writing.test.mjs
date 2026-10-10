@@ -20,10 +20,12 @@ test('one independent overlay per media item; missing and duplicate indices reje
 });
 test('invalid versions, typography, coordinates, paragraphs fail instead of silent rewriting', () => {
   for (const change of [{ schema_version: 2 }, { text: 'a'.repeat(61) }, { text: '1\n2\n3\n4\n5' },
-    { text: ' ' }, { x: NaN }, { y: 1.1 }, { width: 0 }, { style: 'url(font)' }, { source_aspect_ratio: 0 }]) {
+    { x: NaN }, { y: 1.1 }, { width: 0 }, { style: 'url(font)' }, { source_aspect_ratio: 0 }]) {
     const item = overlay(); Object.assign(item.writing, change);
     assert.throws(() => validateMediaWritingOverlays([item], 1));
   }
+  const blank = overlay(); blank.writing.text = ' \n ';
+  assert.deepEqual(validateMediaWritingOverlays([blank], 1), []);
 });
 test('legacy editor metadata is not misinterpreted as unflattened writing', () => {
   assert.deepEqual(validateMediaWritingOverlays([{ type: 'native_editor', hasTextOverlay: true }], 1), []);

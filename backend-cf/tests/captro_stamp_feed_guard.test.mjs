@@ -94,14 +94,15 @@ test('Event, Meetup and Deal use one restrained listing hierarchy without changi
   assert.match(adapter, /redemptionRules/);
   assert.match(adapter, /Full qualifying conditions in details/);
 });
-test('Moment detail keeps writing on one editorial card without a separate caption', () => {
+test('Moment details keep full writing below clean media without duplicating Cover artwork', () => {
   const detail = readIOS('Screens/CaptroPostDetailSections.swift');
   const commerce = readIOS('Screens/CaptroCommerceDetailViews.swift');
   const adapter = readIOS('Models/CaptroEditorialCardAdapter.swift');
   const momentDetail = detail.slice(detail.indexOf('private var regularPost'), detail.indexOf('private var eventPost'));
   assert.match(momentDetail, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
   assert.match(momentDetail, /expanded: true, showsProfileRow: false/);
-  assert.doesNotMatch(momentDetail, /fullDescription/);
+  assert.match(momentDetail, /if post\.isCoverPost \{[\s\S]*?fullDescription/);
+  assert.match(detail, /struct CaptroDetailMediaWriting/);
   assert.doesNotMatch(commerce, /CaptroEditorialOverlayCard\(/);
   const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('private func textOnlyStamp'));
   assert.match(textOnly, /textOnlyStamp\(maxBodyLines: 16\)/);
@@ -150,7 +151,7 @@ test('Home post is a full-width feed section without an outer card', () => {
 });
 
 test('Home media uses each source ratio and fit while Details preserves originals', () => {
-  assert.match(mediaPager, /MIRAMediaSizing\.mainFeedDisplayRatio/);
+  assert.match(mediaPager, /post\.feedFrameHeightToWidthRatio/);
   assert.doesNotMatch(mediaPager, /measuredCoverHeightToWidthRatio|onMeasuredRatio:/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
@@ -211,10 +212,10 @@ test('Home media uses each source ratio and fit while Details preserves original
   assert.match(worker, /const explicit = SUPPORTED_FEED_MEDIA_RATIOS\.find[\s\S]*?if \(explicit\) return explicit;/);
 });
 
-test('media canvas uses the selected slide ratio and fits extreme height without a More row', () => {
+test('media canvas keeps the first slide frame stable and fits extreme height without a More row', () => {
   const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
-  assert.match(sizing, /MIRAMediaSizing\.mainFeedDisplayRatio/);
-  assert.match(sizing, /ratios\[selectedMediaIndex\]/);
+  assert.match(sizing, /post\.feedFrameHeightToWidthRatio/);
+  assert.doesNotMatch(sizing, /ratios\[selectedMediaIndex\]/);
   assert.match(sizing, /min\(naturalHeight, maximumHeight\)/);
   assert.match(sizing, /UIScreen\.main\.bounds\.height/);
   assert.doesNotMatch(postView, /showsMoreButton|Button\("More"|fixedVerticalContent/);

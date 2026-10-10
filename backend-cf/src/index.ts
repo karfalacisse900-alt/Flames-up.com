@@ -16875,6 +16875,9 @@ api.post('/posts', authMiddleware, async (c) => {
   let mediaWriting: any[];
   try { mediaWriting = validateMediaWritingOverlays(parseJsonArray(b.editor_overlays), sanitizeMediaReferences(b.images, b.image).length); }
   catch (error: any) { return c.json({ detail: error.message, code: 'MEDIA_WRITING_INVALID' }, 400); }
+  if (creationIntent === 'cover' && !mediaWriting.some(item => item.mediaIndex === 0 && item.writing.schemaVersion === 2)) {
+    return c.json({ detail: 'Write a headline on the first cover item.', code: 'COVER_HEADLINE_REQUIRED' }, 400);
+  }
   if (postTitle || postContent || mediaWriting.length) {
     const safety = await screenCaptroText(c.env, [postTitle, postContent, ...mediaWriting.map(item => item.writing.text)].filter(Boolean).join('\n'), {
       surface: 'post_text', subjectId: id, requestId: c.get?.('requestId') || '',

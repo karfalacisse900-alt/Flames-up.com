@@ -5,6 +5,24 @@ import ImageIO
 @testable import MIRANative
 
 final class CaptroPostMediaTests: XCTestCase {
+  func testMixedCarouselKeepsFirstItemFeedFrameAndIndependentWriting() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    var post = try decoder.decode(MIRAPost.self, from: Data(#"{
+      "id":"mixed", "images":["https://example.com/portrait.jpg","https://example.com/landscape.mp4"],
+      "media_dimensions":[{"width":1080,"height":1350},{"width":1920,"height":1080}]
+    }"#.utf8))
+    XCTAssertEqual(post.feedFrameHeightToWidthRatio, 1.25, accuracy: 0.001)
+    XCTAssertEqual(post.mediaHeightToWidthRatios[1], 0.5625, accuracy: 0.001)
+    var first = CaptroMediaWriting(); first.text = "Only the first image"
+    var blank = CaptroMediaWriting(); blank.text = "  \n "
+    post.editorOverlays = [
+      CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: 0, writing: first),
+      CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: 1, writing: blank),
+    ]
+    XCTAssertEqual(post.mediaWriting(at: 0)?.text, "Only the first image")
+    XCTAssertNil(post.mediaWriting(at: 1), "Whitespace must not draw an empty label")
+  }
+
   func testFutureOverlayDoesNotBreakPostDecoding() throws {
     let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
     let post = try decoder.decode(MIRAPost.self, from: Data("""

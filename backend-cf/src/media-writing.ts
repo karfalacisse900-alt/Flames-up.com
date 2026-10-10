@@ -2,7 +2,9 @@
 export function validateMediaWritingOverlays(value: unknown, mediaCount: number): any[] {
   const raw = Array.isArray(value) ? value : [];
   const seen = new Set<number>();
-  return raw.filter((item) => item?.type === 'media_writing').map((item) => {
+  return raw.filter((item) => item?.type === 'media_writing')
+    .filter((item) => !(typeof item.writing?.text === 'string' && !item.writing.text.trim()))
+    .map((item) => {
     const index = item.mediaIndex ?? item.media_index;
     const w = item.writing;
     const version = w?.schemaVersion ?? w?.schema_version;
@@ -25,7 +27,7 @@ export function validateMediaWritingOverlays(value: unknown, mediaCount: number)
       || typeof showsStamp !== 'boolean'
       || !finite(w.x, 0, 1) || !finite(w.y, 0, 1) || !finite(w.width, cover ? 0.05 : 0.2, 0.9)
       || (cover && (!finite(cropX, 0, 1) || !finite(cropY, 0, 1)
-        || ![0.8, 1, 0.75, 16 / 9].some(r => Math.abs(r - homeAspectRatio) < 0.00001)))
+        || !finite(homeAspectRatio, 0.05, 20)))
       || !finite(ratio, 0.05, 20)) {
       throw new Error('Check your media writing: use a short phrase and valid placement for each media item.');
     }

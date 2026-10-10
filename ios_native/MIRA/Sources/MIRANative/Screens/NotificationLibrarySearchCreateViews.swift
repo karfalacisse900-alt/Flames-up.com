@@ -2562,7 +2562,7 @@ public struct CreatePostNativeView: View {
     let metadata = mediaItems.enumerated().flatMap { index, item -> [MIRAEditorUploadMetadata] in
       var values: [MIRAEditorUploadMetadata] = []
       if let editorMetadata = item.editorMetadata { values.append(MIRAEditorUploadMetadata(mediaIndex: index, metadata: editorMetadata)) }
-      if let writing = item.mediaWriting, writing.schemaVersion == 2 || !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      if let writing = item.mediaWriting, !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         values.append(MIRAEditorUploadMetadata(mediaIndex: index, writing: writing))
       }
       return values
