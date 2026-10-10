@@ -1389,12 +1389,7 @@ private struct MIRAVideoPlayerView: UIViewRepresentable {
   }
 
   private var videoGravity: AVLayerVideoGravity {
-    switch contentMode {
-    case .fit:
-      return .resizeAspect
-    case .fill:
-      return .resizeAspectFill
-    }
+    .resizeAspect
   }
 
   final class PlayerView: UIView {

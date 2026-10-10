@@ -385,7 +385,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     previewContainer.addSubview(gridOverlay)
 
     capturedImageView.translatesAutoresizingMaskIntoConstraints = false
-    capturedImageView.contentMode = .scaleAspectFill
+    capturedImageView.contentMode = .scaleAspectFit
     capturedImageView.clipsToBounds = true
     capturedImageView.isHidden = true
     previewContainer.addSubview(capturedImageView)
@@ -1622,7 +1622,7 @@ final class MIRAStoryCameraViewController: UIViewController, AVCapturePhotoCaptu
     player.actionAtItemEnd = .pause
 
     let layer = AVPlayerLayer(player: player)
-    layer.videoGravity = .resizeAspectFill
+    layer.videoGravity = .resizeAspect
     layer.frame = capturedImageView.bounds
     layer.isHidden = true
     capturedImageView.layer.addSublayer(layer)
