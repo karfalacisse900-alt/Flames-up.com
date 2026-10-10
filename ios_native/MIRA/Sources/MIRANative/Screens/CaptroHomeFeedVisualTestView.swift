@@ -21,7 +21,9 @@ public struct CaptroHomeFeedVisualTestView: View {
 
   public var body: some View {
     TabView(selection: $selectedTab) {
-      MainFeedView(api: model.api, model: model)
+      NavigationStack {
+        MainFeedView(api: model.api, model: model)
+      }
         .tag(0)
         .tabItem { Label("Home", systemImage: "house.fill") }
       Color.white

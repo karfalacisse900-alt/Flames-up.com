@@ -206,7 +206,8 @@ final class CaptroPostMediaTests: XCTestCase {
     )
     let dimension = await media.postMediaDimension()
     XCTAssertEqual(dimension.cropMode, "preserve_aspect")
-    XCTAssertEqual(dimension.format, "16:9")
+    XCTAssertNil(dimension.format, "Source geometry is stored without forcing a preset crop format")
+    XCTAssertEqual(dimension.originalAspectRatio ?? 0, 16.0 / 9, accuracy: 0.001)
   }
 
   func testTusVideoUploadSendsAlignedChunksAndChecksProviderOffset() async throws {

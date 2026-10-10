@@ -1,7 +1,8 @@
 #if DEBUG
 import SwiftUI
+import UIKit
 
-/// Runtime-only test entry. Reads public media, never publishes or edits posts.
+/// Runtime-only test entry. Uses local generated media and never publishes posts.
 public struct CaptroMediaWritingVisualTestView: View {
   @State private var items: [MIRAPickedMedia] = []
   @State private var showEditor = false
@@ -20,16 +21,19 @@ public struct CaptroMediaWritingVisualTestView: View {
       CaptroMediaWritingEditor(items: items) { items = $0 }
     }
     .task {
-      do {
-        let posts: [MIRAPost] = try await MIRAAPIClient().get("/posts/world-board?limit=50&skip=0")
-        guard let post = posts.first(where: { $0.id == "7ff613af-f80a-474a-85cc-b159bbcf6a79" }) else { return }
-        for url in post.mediaURLs.prefix(2) {
-          let (data, response) = try await URLSession.shared.data(from: URL(string: url)!)
-          guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-          items.append(MIRAPickedMedia(data: data, kind: .image, fileName: "test-photo.jpg", mimeType: "image/jpeg"))
+      let size = CGSize(width: 480, height: 600)
+      let format = UIGraphicsImageRendererFormat(); format.scale = 1
+      items = [0, 1].compactMap { index in
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+          (index == 0 ? UIColor.systemTeal : UIColor.systemIndigo).setFill()
+          context.fill(CGRect(origin: .zero, size: size))
         }
-        showEditor = true
-      } catch { self.error = "Test media unavailable" }
+        guard let data = image.jpegData(compressionQuality: 0.8) else { return nil }
+        return MIRAPickedMedia(data: data, kind: .image,
+          fileName: "media-writing-\(index).jpg", mimeType: "image/jpeg")
+      }
+      if items.count == 2 { showEditor = true }
+      else { error = "Test media unavailable" }
     }
   }
 }

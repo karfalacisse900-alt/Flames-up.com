@@ -37,7 +37,13 @@ final class HomeFullBleedTests: XCTestCase {
       XCTAssertEqual(page.frame.height, fixedHeight, accuracy: 1, "Swipe must not resize the post")
       capture(app, "mixed-carousel-slide-\(index)")
     }
-    media.tap()
+    for index in (1...3).reversed() {
+      media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.14))
+        .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.14)))
+      XCTAssertTrue(page.staticTexts["Photo \(index) of 4"].waitForExistence(timeout: 5))
+      XCTAssertEqual(page.frame.height, fixedHeight, accuracy: 1)
+    }
+    page.buttons["captro.editorialCard"].tap()
     let detailMedia = app.otherElements["post.detail.media"]
     let writing = app.otherElements["post.detail.mediaWriting"]
     XCTAssertTrue(detailMedia.waitForExistence(timeout: 5))
