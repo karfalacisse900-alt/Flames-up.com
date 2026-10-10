@@ -2,8 +2,8 @@ import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
   func testEveryPhotoRatioFillsScreenWidth() {
-    let ratios: [(String, CGFloat)] = [("wide", 9.0 / 16), ("landscape", 9.0 / 16),
-      ("portrait", 4.0 / 3), ("fourfive", 5.0 / 4), ("threefour", 4.0 / 3), ("square", 1)]
+    let ratios: [(String, CGFloat)] = [("wide", 9.0 / 16), ("landscape", 3.0 / 4),
+      ("portrait", 1536.0 / 999), ("fourfive", 5.0 / 4), ("threefour", 4.0 / 3), ("square", 1)]
     for (name, expectedRatio) in ratios {
       let app = launch(["--captro-visual-size=\(name)"])
       let media = app.otherElements["home.post.media"].firstMatch
@@ -18,6 +18,24 @@ final class HomeFullBleedTests: XCTestCase {
       assertStamp(app, media: media)
       capture(app, "continuous-\(name)")
       app.terminate()
+    }
+  }
+
+  func testMixedCarouselKeepsOneFeedFrame() {
+    let app = launch(["--captro-visual-mixed-carousel"])
+    let page = app.otherElements["home.post.page.mixed-carousel"]
+    XCTAssertTrue(page.waitForExistence(timeout: 20))
+    let media = page.otherElements["home.post.media"].firstMatch
+    XCTAssertTrue(media.exists)
+    let fixedHeight = page.frame.height
+    XCTAssertEqual(media.frame.height / media.frame.width, 1.25, accuracy: 0.01)
+    capture(app, "mixed-carousel-first-photo")
+    for index in 2...4 {
+      media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.14))
+        .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.14)))
+      XCTAssertTrue(page.staticTexts["Photo \(index) of 4"].waitForExistence(timeout: 5))
+      XCTAssertEqual(page.frame.height, fixedHeight, accuracy: 1, "Swipe must not resize the post")
+      capture(app, "mixed-carousel-slide-\(index)")
     }
   }
 

@@ -9,11 +9,14 @@ public struct CaptroHomeFeedVisualTestView: View {
   @State private var selectedTab = 0
   @StateObject private var model: MainFeedModel
   @State private var videoPrepared = !ProcessInfo.processInfo.arguments.contains("--captro-visual-video")
+    && !ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel")
 
   public init() {
     let api = MIRAAPIClient()
     _model = StateObject(wrappedValue: MainFeedModel(api: api, visualPosts:
-      ProcessInfo.processInfo.arguments.contains("--captro-visual-video") || ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") ? [] : CaptroHomeFeedVisualFixtures.posts()))
+      ProcessInfo.processInfo.arguments.contains("--captro-visual-video")
+        || ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel")
+        || ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") ? [] : CaptroHomeFeedVisualFixtures.posts()))
   }
 
   public var body: some View {
@@ -72,6 +75,9 @@ public struct CaptroHomeFeedVisualTestView: View {
 
 private enum CaptroHomeFeedVisualFixtures {
   static func posts(videoURL: URL? = nil) -> [MIRAPost] {
+    if ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel"), let videoURL {
+      return mixedCarouselPosts(videoURL: videoURL)
+    }
     if ProcessInfo.processInfo.arguments.contains("--captro-visual-stream") {
       return streamPosts(videoURL: videoURL)
     }
@@ -144,6 +150,39 @@ private enum CaptroHomeFeedVisualFixtures {
       assertionFailure("Full-bleed visual fixture failed: \(error)")
       return []
     }
+  }
+
+  static func mixedCarouselPosts(videoURL: URL) -> [MIRAPost] {
+    let sizes = [CGSize(width: 480, height: 600), CGSize(width: 640, height: 360),
+      CGSize(width: 480, height: 640), CGSize(width: 480, height: 480)]
+    do {
+      var urls: [String] = []
+      for index in [0, 1, 3] {
+        let size = sizes[index]
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mixed-carousel-\(index).png")
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+          UIColor(red: 0.18 + CGFloat(index) * 0.15, green: 0.48, blue: 0.52, alpha: 1).setFill()
+          context.fill(CGRect(origin: .zero, size: size))
+        }
+        try image.pngData()!.write(to: url)
+        urls.append(url.absoluteString)
+      }
+      urls.insert(videoURL.absoluteString, at: 2)
+      let value: [String: Any] = ["id": "mixed-carousel", "userUsername": "test_creator",
+        "userFullName": "Test Creator", "title": "Mixed media", "caption": "The original frame remains visible on every slide.",
+        "images": urls, "feedMediaUrls": urls,
+        "mediaDimensions": sizes.map { ["width": $0.width, "height": $0.height] },
+        "postType": "general"]
+      var post = try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: value))
+      var first = CaptroMediaWriting(); first.text = "FIRST PHOTO"; first.sourceAspectRatio = 480 / 600
+      var empty = CaptroMediaWriting(); empty.text = " \n "; empty.sourceAspectRatio = 640 / 360
+      post.editorOverlays = [
+        CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: 0, writing: first),
+        CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: 1, writing: empty),
+      ]
+      return [post]
+    } catch { assertionFailure("Mixed carousel fixture failed: \(error)"); return [] }
   }
 
   // Test-only data rendered by the actual Home cells, never published or bundled
