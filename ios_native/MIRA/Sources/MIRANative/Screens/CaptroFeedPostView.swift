@@ -20,6 +20,7 @@ struct CaptroFeedPostView: View {
   var canRespond = true
 
   @Environment(\.displayScale) private var displayScale
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
     postContent
@@ -67,19 +68,18 @@ struct CaptroFeedPostView: View {
     )
 
     pager.frame(width: mediaSize.width)
+      .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedMediaIndex)
   }
 
   private var mediaSize: CGSize {
-    // The model resolves orientation and the existing supported media policy.
-    // One cover ratio sizes every carousel slide before any image downloads.
-    let ratio = MIRAMediaSizing.mainFeedDisplayRatio(
-      for: post.feedMediaURLs, aspectRatios: post.mediaHeightToWidthRatios)
-    // An explicitly chosen Cover crop is stable, including text geometry.
-    // Ordinary posts keep their supported ratio; only unusually tall source
-    // ratios have already been normalized by mainFeedDisplayRatio.
-    let resolved = post.isCoverPost ? 1 / (post.mediaWriting(at: 0)?.homeAspectRatio ?? 1)
-      : ratio
-    return CGSize(width: feedWidth, height: feedWidth * resolved)
+    let ratios = post.mediaHeightToWidthRatios
+    let ratio = ratios.indices.contains(selectedMediaIndex) ? ratios[selectedMediaIndex]
+      : MIRAMediaSizing.mainFeedDisplayRatio(for: post.feedMediaURLs, aspectRatios: ratios)
+    let naturalHeight = feedWidth * ratio
+    // Extremely tall content is scaled down in a neutral fitted viewport;
+    // the source is never cropped to enforce a preferred feed ratio.
+    let maximumHeight = UIScreen.main.bounds.height * MIRAMediaSizing.maxMainFeedScreenHeightFraction
+    return CGSize(width: feedWidth, height: min(naturalHeight, maximumHeight))
   }
 
 }

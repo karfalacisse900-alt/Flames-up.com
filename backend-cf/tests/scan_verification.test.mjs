@@ -409,8 +409,7 @@ test('iOS Scan uses centered review, adaptive feedback, and a private reward bal
   assert.match(camera, /AVCaptureSession\(\)/);
   assert.match(camera, /VNDetectRectanglesRequest\(/);
   assert.match(camera, /CIPerspectiveCorrection/);
-  assert.match(screen, /cameraImportControl\(systemImage: "photo\.on\.rectangle", label: "Photos"\)/);
-  assert.match(screen, /cameraImportControl\(systemImage: "doc", label: "Files"\)/);
+  assert.doesNotMatch(screen, /cameraImportControl|PhotosPicker|fileImporter/);
   assert.match(screen, /Text\("Review"\)/);
   assert.match(screen, /statusLine\("Processing your document\.\.\."/);
   assert.match(screen, /Text\("Next"\)/);

@@ -47,7 +47,7 @@ struct CaptroMediaWritingEditor: View {
       var value = newValue
       value.sourceAspectRatio = sourceRatio
       let canvas = CGSize(width: 1000, height: 1000 * homeRatio)
-      let source = value.sourceRect(in: canvas, fill: true)
+      let source = value.sourceRect(in: canvas, fill: false)
       value.width = min(value.width, (canvas.width * 0.92) / source.width)
       items[selected].mediaWriting = value
     }
@@ -72,16 +72,14 @@ struct CaptroMediaWritingEditor: View {
       if let error = value.validationMessage { return error }
       if ratios.indices.contains(index) { value.sourceAspectRatio = ratios[index] }
       let size = CGSize(width: 1000, height: 1000 * homeRatio)
-      let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 26, dy: 26)
-      if !bounds.contains(value.textRect(in: size, fill: true)) { return "The writing extends outside Home’s crop. Move it inward or choose Small." }
+      let bounds = value.sourceRect(in: size, fill: false).insetBy(dx: 12, dy: 12)
+      if !bounds.contains(value.textRect(in: size, fill: false)) { return "Move the writing inside the photo or choose Small." }
       return nil
     }.first
   }
   private var sourceRatio: CGFloat { ratios.indices.contains(selected) ? ratios[selected] : 1 }
-  // A carousel has one cover-derived Home canvas, even for mixed source ratios.
   private var homeRatio: CGFloat {
-    if let ratio = items.first?.mediaWriting?.homeAspectRatio { return 1 / ratio }
-    return MIRAMediaSizing.homeDisplayRatio(1 / (ratios.first ?? 1))
+    1 / sourceRatio
   }
 
   var body: some View {
@@ -142,11 +140,10 @@ struct CaptroMediaWritingEditor: View {
       }
       guard !Task.isCancelled else { return }
       ratios = loaded
-      let resolvedHomeRatio = MIRAMediaSizing.homeDisplayRatio(1 / (loaded.first ?? 1))
       for index in items.indices {
         if var value = items[index].mediaWriting {
           value.sourceAspectRatio = loaded[index]
-          if automaticallySizedCoverIndices.contains(index) { value.homeAspectRatio = 1 / resolvedHomeRatio }
+          if automaticallySizedCoverIndices.contains(index) { value.homeAspectRatio = loaded[index] }
           items[index].mediaWriting = value
         }
       }
@@ -165,10 +162,10 @@ struct CaptroMediaWritingEditor: View {
 
   private func canvas(size: CGSize) -> some View {
     ZStack(alignment: .topLeading) {
-      let source = resolvedWriting.sourceRect(in: size, fill: true)
+      let source = resolvedWriting.sourceRect(in: size, fill: false)
       Group {
         if let player { WritingVideoCanvas(player: player) }
-        else if let image { Image(uiImage: image).resizable().scaledToFill() }
+        else if let image { Image(uiImage: image).resizable().scaledToFit() }
         else if let loadError { Text(loadError).foregroundStyle(.secondary) }
         else { ProgressView() }
       }.frame(width: source.width, height: source.height).clipped()
@@ -197,7 +194,7 @@ struct CaptroMediaWritingEditor: View {
         coverHeadlineField(in: size)
       } else if !writing.text.isEmpty {
         CaptroMediaWritingLayer(writing: resolvedWriting, container: size)
-        let rect = resolvedWriting.textRect(in: size, fill: true)
+        let rect = resolvedWriting.textRect(in: size, fill: false)
         Color.clear.frame(width: max(44, rect.width), height: max(44, rect.height))
           .contentShape(Rectangle()).position(x: rect.midX, y: rect.midY)
           .onTapGesture { panel = "text"; textFocused = true }
@@ -206,7 +203,7 @@ struct CaptroMediaWritingEditor: View {
             .onChanged { value in
               textFocused = false
               if dragOrigin == nil { dragOrigin = CGPoint(x: writing.x, y: writing.y) }
-              let source = resolvedWriting.sourceRect(in: size, fill: true)
+              let source = resolvedWriting.sourceRect(in: size, fill: false)
               var x = dragOrigin!.x + value.translation.width / source.width
               let y = dragOrigin!.y + value.translation.height / source.height
               guide = abs(x - 0.5) < 0.025
@@ -241,8 +238,8 @@ struct CaptroMediaWritingEditor: View {
   }
   private func coverHeadlineField(in size: CGSize) -> some View {
     let value = resolvedWriting
-    let source = value.sourceRect(in: size, fill: true)
-    let rect = value.textRect(in: size, fill: true)
+    let source = value.sourceRect(in: size, fill: false)
+    let rect = value.textRect(in: size, fill: false)
     return TextField("Write a headline", text: coverTextBinding, axis: .vertical)
       .font(Font(value.font(mediaWidth: source.width, visibleWidth: size.width)))
       .lineSpacing(-2)
@@ -286,7 +283,7 @@ struct CaptroMediaWritingEditor: View {
         Toggle("Show Captro stamp", isOn: Binding(get: { writing.showsStamp != false }, set: { writing.showsStamp = $0 }))
           .font(.subheadline)
       }
-      Text(adjustsCrop ? "Drag the photo to adjust Home’s crop. The original stays intact." : "Drag the writing on the photo, or choose a position.")
+      Text("Drag the writing on the photo, or choose a position.")
         .font(.footnote).foregroundStyle(.secondary)
       HStack {
         Button("Upper") { positionInCanvas(y: 0.22) }
@@ -302,13 +299,13 @@ struct CaptroMediaWritingEditor: View {
   }
   private func positionInCanvas(y: CGFloat) {
     let size = CGSize(width: 1000, height: 1000 * homeRatio)
-    let source = resolvedWriting.sourceRect(in: size, fill: true)
+    let source = resolvedWriting.sourceRect(in: size, fill: false)
     place(x: (size.width / 2 - source.minX) / source.width,
       y: (size.height * y - source.minY) / source.height, canvas: size)
   }
   private func place(x: CGFloat, y: CGFloat, canvas: CGSize) {
     var value = resolvedWriting
-    let source = value.sourceRect(in: canvas, fill: true)
+    let source = value.sourceRect(in: canvas, fill: false)
     let text = value.measuredSize(mediaWidth: source.width, visibleWidth: canvas.width)
     let minX = (12 - source.minX + text.width / 2) / source.width
     let maxX = (canvas.width - 12 - source.minX - text.width / 2) / source.width
@@ -350,7 +347,7 @@ private struct WritingVideoCanvas: UIViewRepresentable {
   final class CanvasView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    override init(frame: CGRect) { super.init(frame: frame); playerLayer.videoGravity = .resizeAspectFill }
+    override init(frame: CGRect) { super.init(frame: frame); playerLayer.videoGravity = .resizeAspect }
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
   }
 }

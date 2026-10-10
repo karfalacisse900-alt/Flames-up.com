@@ -244,7 +244,9 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   }
 
   public var mediaHeightToWidthRatios: [CGFloat] {
-    mediaDimensions?.values.compactMap(\.heightToWidthRatio) ?? []
+    // Keep positions aligned with media URLs even when one legacy item lacks
+    // dimensions; compactMap would shift every later carousel slide.
+    mediaDimensions?.values.map { $0.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio } ?? []
   }
 
   public var placeDisplayName: String? {
@@ -592,6 +594,10 @@ public struct MIRAMediaDimension: Codable, Hashable {
   public let displayAspectRatio: Double?
   public let cropMode: String?
   public let mediaType: String?
+  public let sourceOrientation: Int?
+  public let sourcePixelWidth: Double?
+  public let sourcePixelHeight: Double?
+  public let rotationDegrees: Double?
 
   enum CodingKeys: String, CodingKey {
     case width
@@ -619,6 +625,10 @@ public struct MIRAMediaDimension: Codable, Hashable {
     case cropModeSnake = "crop_mode"
     case mediaType
     case mediaTypeSnake = "media_type"
+    case sourceOrientationSnake = "source_orientation"
+    case sourcePixelWidthSnake = "source_pixel_width"
+    case sourcePixelHeightSnake = "source_pixel_height"
+    case rotationDegreesSnake = "rotation_degrees"
   }
 
   public init(
@@ -635,7 +645,11 @@ public struct MIRAMediaDimension: Codable, Hashable {
     feedAspectRatio: Double? = nil,
     displayAspectRatio: Double? = nil,
     cropMode: String? = nil,
-    mediaType: String? = nil
+    mediaType: String? = nil,
+    sourceOrientation: Int? = nil,
+    sourcePixelWidth: Double? = nil,
+    sourcePixelHeight: Double? = nil,
+    rotationDegrees: Double? = nil
   ) {
     self.width = width
     self.height = height
@@ -651,6 +665,10 @@ public struct MIRAMediaDimension: Codable, Hashable {
     self.displayAspectRatio = displayAspectRatio
     self.cropMode = cropMode
     self.mediaType = mediaType
+    self.sourceOrientation = sourceOrientation
+    self.sourcePixelWidth = sourcePixelWidth
+    self.sourcePixelHeight = sourcePixelHeight
+    self.rotationDegrees = rotationDegrees
   }
 
   public init(from decoder: Decoder) throws {
@@ -671,6 +689,10 @@ public struct MIRAMediaDimension: Codable, Hashable {
     displayAspectRatio = Self.decodeDouble(container, keys: [.displayAspectRatio, .displayAspectRatioSnake])
     cropMode = Self.decodeString(container, keys: [.cropMode, .cropModeSnake])
     mediaType = Self.decodeString(container, keys: [.mediaType, .mediaTypeSnake])
+    sourceOrientation = try? container.decodeIfPresent(Int.self, forKey: .sourceOrientationSnake)
+    sourcePixelWidth = Self.decodeDouble(container, keys: [.sourcePixelWidthSnake])
+    sourcePixelHeight = Self.decodeDouble(container, keys: [.sourcePixelHeightSnake])
+    rotationDegrees = Self.decodeDouble(container, keys: [.rotationDegreesSnake])
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -689,33 +711,36 @@ public struct MIRAMediaDimension: Codable, Hashable {
     try container.encodeIfPresent(displayAspectRatio, forKey: .displayAspectRatioSnake)
     try container.encodeIfPresent(cropMode, forKey: .cropModeSnake)
     try container.encodeIfPresent(mediaType, forKey: .mediaTypeSnake)
+    try container.encodeIfPresent(sourceOrientation, forKey: .sourceOrientationSnake)
+    try container.encodeIfPresent(sourcePixelWidth, forKey: .sourcePixelWidthSnake)
+    try container.encodeIfPresent(sourcePixelHeight, forKey: .sourcePixelHeightSnake)
+    try container.encodeIfPresent(rotationDegrees, forKey: .rotationDegreesSnake)
   }
 
   public var heightToWidthRatio: CGFloat? {
+    // Legacy feed/format fields may describe a crop. The recorded display
+    // dimensions are authoritative for preserving the complete source.
+    if let originalWidth, let originalHeight, originalWidth > 0, originalHeight > 0 {
+      return CGFloat(originalHeight / originalWidth)
+    }
+    if let width, let height, width > 0, height > 0 {
+      return CGFloat(height / width)
+    }
+    if let originalAspectRatio, originalAspectRatio > 0 {
+      return CGFloat(1 / originalAspectRatio)
+    }
+    if let ratio, ratio > 0 { return CGFloat(1 / ratio) }
     if let formatRatio = MIRASupportedPostAspectRatio.from(format: format) {
       return formatRatio.heightToWidthRatio
     }
     if let feedWidth, let feedHeight, feedWidth > 0, feedHeight > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(feedHeight / feedWidth))
+      return CGFloat(feedHeight / feedWidth)
     }
     if let displayAspectRatio, displayAspectRatio > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / displayAspectRatio))
+      return CGFloat(1 / displayAspectRatio)
     }
     if let feedAspectRatio, feedAspectRatio > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / feedAspectRatio))
-    }
-    if let width, let height, width > 0, height > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(height / width))
-    }
-    if let originalWidth, let originalHeight, originalWidth > 0, originalHeight > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(originalHeight / originalWidth))
-    }
-    if let originalAspectRatio, originalAspectRatio > 0 {
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / originalAspectRatio))
-    }
-    if let ratio, ratio > 0 {
-      // Backend stores ratio as width / height. Feed sizing needs height / width.
-      return MIRAMediaSizing.supportedPostHeightToWidthRatio(CGFloat(1 / ratio))
+      return CGFloat(1 / feedAspectRatio)
     }
     return MIRAMediaSizing.heightToWidthRatio(forFormat: format)
   }

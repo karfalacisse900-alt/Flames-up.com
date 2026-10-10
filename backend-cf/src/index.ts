@@ -2482,9 +2482,9 @@ function cloudflareImageTransformBaseUrl(env?: Env): string {
 function cloudflareImageTransformOptions(preset: 'feed' | 'thumbnail'): string {
   const metadata = 'metadata=copyright';
   if (preset === 'thumbnail') {
-    return `width=480,quality=84,format=auto,${metadata}`;
+    return `width=480,fit=scale-down,quality=84,format=auto,${metadata}`;
   }
-  return `width=1080,quality=92,format=auto,${metadata}`;
+  return `width=1080,fit=scale-down,quality=92,format=auto,${metadata}`;
 }
 
 function canProxyThroughCloudflareImageTransform(url: URL): boolean {
@@ -4268,28 +4268,32 @@ function sanitizeMediaDimensions(value: unknown): any[] {
         ?? item?.ratio
         ?? (originalWidth > 0 && originalHeight > 0 ? originalWidth / originalHeight : 0),
         0,
-        4,
+        100,
         0
       );
-      const variant = supportedFeedMediaVariant({ ...item, width, height, original_width: originalWidth, original_height: originalHeight, original_aspect_ratio: originalAspectRatio });
-      const ratio = clampFloat(item?.ratio || originalAspectRatio || (width > 0 && height > 0 ? width / height : 0), 0, 4, 0);
+      const ratio = clampFloat(item?.ratio || originalAspectRatio || (width > 0 && height > 0 ? width / height : 0), 0, 100, 0);
       const type = String(item?.media_type || item?.mediaType || item?.type || '').toLowerCase().includes('video') ? 'video' : 'image';
+      const sourceOrientation = Math.round(clampNumber(item?.source_orientation ?? item?.sourceOrientation, 0, 8, 0));
       if (!width && !height && !ratio && !originalWidth && !originalHeight && !item?.format) return null;
       return {
         width,
         height,
         ratio,
-        format: variant.format,
+        format: cleanText(item?.format || '', 16) || null,
         type,
         original_width: originalWidth || width || null,
         original_height: originalHeight || height || null,
         original_aspect_ratio: originalAspectRatio || ratio || null,
-        feed_width: variant.feed_width,
-        feed_height: variant.feed_height,
-        feed_aspect_ratio: variant.feed_aspect_ratio,
-        display_aspect_ratio: variant.feed_aspect_ratio,
-        crop_mode: cleanText(item?.crop_mode || item?.cropMode || 'center_crop', 40),
+        feed_width: originalWidth || width || null,
+        feed_height: originalHeight || height || null,
+        feed_aspect_ratio: originalAspectRatio || ratio || null,
+        display_aspect_ratio: originalAspectRatio || ratio || null,
+        crop_mode: 'preserve_aspect',
         media_type: type,
+        source_orientation: sourceOrientation >= 1 ? sourceOrientation : null,
+        source_pixel_width: clampNumber(item?.source_pixel_width ?? item?.sourcePixelWidth, 0, 12000, 0) || null,
+        source_pixel_height: clampNumber(item?.source_pixel_height ?? item?.sourcePixelHeight, 0, 12000, 0) || null,
+        rotation_degrees: clampFloat(item?.rotation_degrees ?? item?.rotationDegrees, 0, 360, 0),
       };
     })
     .filter(Boolean)
@@ -4978,11 +4982,46 @@ function appendBytes(out: number[], bytes: Uint8Array) {
   for (let i = 0; i < bytes.length; i += 1) out.push(bytes[i]);
 }
 
+function jpegExifOrientation(payload: Uint8Array): number | null {
+  if (payload.length < 20 || String.fromCharCode(...payload.subarray(0, 4)) !== 'Exif') return null;
+  const tiff = 6;
+  const little = payload[tiff] === 0x49 && payload[tiff + 1] === 0x49;
+  const big = payload[tiff] === 0x4d && payload[tiff + 1] === 0x4d;
+  if (!little && !big) return null;
+  const read16 = (offset: number) => little
+    ? payload[offset] | (payload[offset + 1] << 8)
+    : (payload[offset] << 8) | payload[offset + 1];
+  const read32 = (offset: number) => little
+    ? (payload[offset] | (payload[offset + 1] << 8) | (payload[offset + 2] << 16) | (payload[offset + 3] << 24)) >>> 0
+    : ((payload[offset] << 24) | (payload[offset + 1] << 16) | (payload[offset + 2] << 8) | payload[offset + 3]) >>> 0;
+  if (read16(tiff + 2) !== 42) return null;
+  const directory = tiff + read32(tiff + 4);
+  if (directory + 2 > payload.length) return null;
+  const count = read16(directory);
+  if (directory + 2 + count * 12 > payload.length) return null;
+  for (let index = 0; index < count; index += 1) {
+    const entry = directory + 2 + index * 12;
+    if (read16(entry) !== 0x0112 || read16(entry + 2) !== 3 || read32(entry + 4) !== 1) continue;
+    const orientation = read16(entry + 8);
+    return orientation >= 1 && orientation <= 8 ? orientation : null;
+  }
+  return null;
+}
+
+function orientationOnlyExif(orientation: number): number[] {
+  // Minimal little-endian TIFF IFD0 containing only Orientation (0x0112).
+  const payload = [69, 120, 105, 102, 0, 0, 73, 73, 42, 0, 8, 0, 0, 0,
+    1, 0, 18, 1, 3, 0, 1, 0, 0, 0, orientation, 0, 0, 0, 0, 0, 0, 0];
+  const length = payload.length + 2;
+  return [0xff, 0xe1, length >> 8, length & 0xff, ...payload];
+}
+
 function stripJpegMetadata(bytes: Uint8Array): { bytes: Uint8Array; stripped: boolean } {
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return { bytes, stripped: false };
   const out: number[] = [0xff, 0xd8];
   let offset = 2;
   let stripped = false;
+  let preservedOrientation = false;
 
   while (offset < bytes.length) {
     if (bytes[offset] !== 0xff) {
@@ -5011,6 +5050,13 @@ function stripJpegMetadata(bytes: Uint8Array): { bytes: Uint8Array; stripped: bo
 
     // APP1 contains EXIF/XMP, including device, timestamp, and location metadata.
     if (marker === 0xe1) {
+      if (!preservedOrientation) {
+        const orientation = jpegExifOrientation(bytes.subarray(offset + 2, offset + length));
+        if (orientation != null && orientation !== 1) {
+          out.push(...orientationOnlyExif(orientation));
+          preservedOrientation = true;
+        }
+      }
       offset += length;
       stripped = true;
       continue;
@@ -5356,12 +5402,13 @@ function feedPhotoPostWhere(postAlias = 'p'): string {
 function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
   if (mediaType === 'video') return url;
-  return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'feed');
+  // Retain the stored asset variant. A configured feed variant may be cropped.
+  return cloudflareTransformedImageUrl(env, url, 'feed');
 }
 
 function posterDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
-  if (mediaType !== 'video') return cloudflareTransformedImageUrl(env, replaceCloudflareImageVariant(url, variant), 'thumbnail');
+  if (mediaType !== 'video') return cloudflareTransformedImageUrl(env, url, 'thumbnail');
   return streamThumbnailUrl(url);
 }
 
@@ -5387,7 +5434,6 @@ function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensio
     const originalAspectRatio = Number(original.ratio || original.aspect_ratio || (originalWidth && originalHeight ? originalWidth / originalHeight : 0)) || null;
     const rawType = String(mediaTypes[index] || original.type || '').toLowerCase();
     const mediaType = rawType.includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
-    const variant = supportedFeedMediaVariant({ ...original, original_width: originalWidth, original_height: originalHeight, original_aspect_ratio: originalAspectRatio });
     return {
       ...original,
       original_width: originalWidth,
@@ -5396,12 +5442,12 @@ function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensio
       width: originalWidth,
       height: originalHeight,
       ratio: originalAspectRatio,
-      format: variant.format,
-      feed_width: variant.feed_width,
-      feed_height: variant.feed_height,
-      feed_aspect_ratio: variant.feed_aspect_ratio,
-      display_aspect_ratio: variant.feed_aspect_ratio,
-      crop_mode: cleanText(original.crop_mode || original.cropMode || 'center_crop', 40),
+      format: original.format || null,
+      feed_width: originalWidth,
+      feed_height: originalHeight,
+      feed_aspect_ratio: originalAspectRatio,
+      display_aspect_ratio: originalAspectRatio,
+      crop_mode: 'preserve_aspect',
       media_type: mediaType,
       type: mediaType,
     };
@@ -16821,6 +16867,11 @@ api.post('/posts', authMiddleware, async (c) => {
   let postContent = creationIntent ? compositionBody(rawContent) : cleanMultilineText(b.content || b.text, 5000);
   let postTitle = creationIntent === 'cover' ? cleanText(b.title || b.commerce?.title, 180)
     : creationIntent ? compositionHeadline(postContent) : cleanText(b.title || b.headline, 180);
+  // Free-writing text posts keep the complete authored body while the legacy
+  // post index receives a derived display title. No preset phrase is inserted.
+  if (!postTitle && !sanitizeMediaReferences(b.images, b.image).length && postContent) {
+    postTitle = compositionHeadline(postContent);
+  }
   let mediaWriting: any[];
   try { mediaWriting = validateMediaWritingOverlays(parseJsonArray(b.editor_overlays), sanitizeMediaReferences(b.images, b.image).length); }
   catch (error: any) { return c.json({ detail: error.message, code: 'MEDIA_WRITING_INVALID' }, 400); }

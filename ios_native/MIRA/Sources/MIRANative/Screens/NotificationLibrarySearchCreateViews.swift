@@ -1535,7 +1535,7 @@ public struct CreatePostNativeView: View {
           Text((composerUser?.fullName?.isEmpty == false ? composerUser?.fullName : nil)
             ?? composerUser?.displayName ?? "You")
             .font(.subheadline.weight(.semibold)).foregroundStyle(MIRATheme.Color.textPrimary)
-          intentSelector
+          if draft.isCover || draft.structured { intentSelector }
         }
         Spacer(minLength: 0)
       }
@@ -1596,7 +1596,7 @@ public struct CreatePostNativeView: View {
           } label: { chipLabel(selectedPlace!.displayName, icon: "mappin") }
             .accessibilityLabel("Location, \(selectedPlace!.displayName)")
         }
-        if !draft.structured && draft.intent != .concern {
+        if !draft.structured && draft.intent != .free && draft.intent != .concern {
           if let time = draft.time {
             Menu {
               Button("Edit time") { pendingTime = time; openPresentation(.time) }
@@ -1645,7 +1645,7 @@ public struct CreatePostNativeView: View {
           }
         }
       } else {
-        ForEach(CaptroWritingIntent.allCases) { intent in
+        ForEach([CaptroWritingIntent.free, .cover]) { intent in
           CaptroEditorialMenuRow(title: intent.title, selected: draft.intent == intent && !draft.structured) {
             draft.intent = intent
             selectedStampKind = .social
@@ -1712,6 +1712,14 @@ public struct CreatePostNativeView: View {
       CaptroEditorialMenuRow(title: "Camera") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       if !draft.isCover {
+        CaptroEditorialMenuRow(title: "Cover", disclosure: true) {
+          draft.intent = .cover
+          writingMediaIndex = 0
+          writingAfterMediaSelection = mediaItems.isEmpty
+          transitionFromSelection(to: mediaItems.isEmpty ? .media : .mediaWriting)
+        }
+      }
+      if !draft.isCover {
         CaptroEditorialMenuRow(title: "Text on media") {
           writingMediaIndex = 0
           writingAfterMediaSelection = mediaItems.isEmpty
@@ -1721,15 +1729,21 @@ public struct CreatePostNativeView: View {
       }
       CaptroEditorialMenuRow(title: "Responses") { transitionFromSelection(to: .detail(.response)) }
         .disabled(!mediaItems.isEmpty || voiceDraft != nil)
+      if creationCapabilities?.structuredTypes.isEmpty == false {
+        CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) {
+          presentation = .startWith
+          showsMoreCreationWays = true
+        }
+      }
     }
   }
 
   @ViewBuilder private var compositionAttachments: some View {
     if draft.isCover {
       let width = compositionCardWidth
-      let ratio = mediaItems.first?.mediaWriting?.homeAspectRatio ?? 1
       let index = min(writingMediaIndex, mediaItems.count - 1)
       let item = mediaItems[index]
+      let ratio = item.mediaWriting?.sourceAspectRatio ?? 1
       VStack(alignment: .leading, spacing: 4) {
         CaptroCoverPreview(media: item, size: CGSize(width: width, height: width / ratio))
         HStack {
@@ -1814,7 +1828,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var hasUnsavedPost: Bool {
-    hasDraftContent || draft.intent != .wantTo || draft.time != nil || draft.audience != initialAudience
+    hasDraftContent || draft.intent != .free || draft.time != nil || draft.audience != initialAudience
   }
   private var stampPickerKinds: [CaptroStampKind] {
     [.club, .event, .meetup, .deal].filter { creationCapabilities?.structuredTypes.contains($0.backendPostType) == true }
@@ -2572,7 +2586,7 @@ public struct CreatePostNativeView: View {
        !draft.title.isEmpty {
       bodyText = [draft.title, draft.bodyText].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
-    self.draft.intent = CaptroWritingIntent(rawValue: draft.creationIntent ?? "") ?? .wantTo
+    self.draft.intent = draft.creationIntent == CaptroWritingIntent.cover.rawValue ? .cover : .free
     self.draft.audience = CaptroCompositionAudience(rawValue: draft.audience ?? "") ?? .everyone
     self.draft.time = draft.compositionTime
     self.draft.requestID = draft.clientRequestID ?? UUID().uuidString
@@ -2649,7 +2663,7 @@ public struct CreatePostNativeView: View {
       stampType: hasSelectedStamp ? selectedStampKind.rawValue : nil,
       stampVariant: nil,
       momentType: momentType,
-      creationIntent: draft.intent.rawValue,
+      creationIntent: draft.submittedIntent,
       audience: draft.audience.rawValue,
       compositionTime: draft.time,
       clientRequestID: postRequestID,

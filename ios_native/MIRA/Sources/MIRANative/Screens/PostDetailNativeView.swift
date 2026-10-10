@@ -658,9 +658,8 @@ public struct PostDetailNativeView: View {
                 PostDetailOptimizedMediaCarousel(
                   urls: detailMediaURLs,
                   post: model.post,
-                  height: layout.size.width * MIRAMediaSizing.mainFeedDisplayRatio(
-                    for: detailMediaURLs, aspectRatios: model.post.mediaHeightToWidthRatios
-                  )
+                  width: layout.size.width,
+                  maximumHeight: layout.size.height * MIRAMediaSizing.maxMainFeedScreenHeightFraction
                 )
               }
 
@@ -1012,12 +1011,22 @@ public struct PostDetailNativeView: View {
 private struct PostDetailOptimizedMediaCarousel: View {
   let urls: [String]
   let post: MIRAPost
-  let height: CGFloat
+  let width: CGFloat
+  let maximumHeight: CGFloat
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var selectedIndex = 0
   @State private var isVisible = false
   @State private var isVideoPaused = false
   @State private var isMuted = false
+  @State private var isMediaViewerPresented = false
+
+  private var currentHeight: CGFloat {
+    let ratios = post.mediaHeightToWidthRatios
+    let ratio = ratios.indices.contains(selectedIndex) ? ratios[selectedIndex]
+      : MIRAMediaSizing.mainFeedDisplayRatio(for: urls, aspectRatios: ratios)
+    return min(width * ratio, maximumHeight)
+  }
 
   private var visibleDots: [Int] {
     let start = min(max(0, selectedIndex - 3), max(0, urls.count - 7))
@@ -1037,7 +1046,8 @@ private struct PostDetailOptimizedMediaCarousel: View {
         .tabViewStyle(.page(indexDisplayMode: .never))
       }
     }
-    .frame(height: height)
+    .frame(height: currentHeight)
+    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedIndex)
     .frame(maxWidth: .infinity)
     .background(Color.black.opacity(0.03))
     .clipped()
@@ -1104,8 +1114,16 @@ private struct PostDetailOptimizedMediaCarousel: View {
     .onAppear { isVisible = true }
     .onDisappear { isVisible = false }
     .onChange(of: selectedIndex) { _, _ in isVideoPaused = false }
+    .onChange(of: isMediaViewerPresented) { _, shown in
+      isVisible = !shown
+      if shown { MIRAPlaybackCoordinator.pauseAll(reason: "full_media_viewer_open") }
+      else { MIRAPlaybackCoordinator.resumeVisible(reason: "full_media_viewer_closed") }
+    }
     .onChange(of: urls) { _, _ in selectedIndex = 0 }
     .task(id: urls.joined(separator: "|")) { await prefetchNearbyMedia() }
+    .fullScreenCover(isPresented: $isMediaViewerPresented) {
+      CaptroFullscreenMediaViewer(urls: urls, post: post, initialIndex: selectedIndex)
+    }
   }
 
   private func mediaSlide(index: Int, url: String) -> some View {
@@ -1121,6 +1139,8 @@ private struct PostDetailOptimizedMediaCarousel: View {
       placeholderColor: Color.black.opacity(0.03)
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .contentShape(Rectangle())
+    .onTapGesture { isMediaViewerPresented = true }
     .overlay {
       if let writing = post.mediaWriting(at: index) {
         GeometryReader { geometry in

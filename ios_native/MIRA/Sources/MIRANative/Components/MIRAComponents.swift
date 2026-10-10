@@ -809,7 +809,7 @@ public struct RemoteMediaView: View {
     isVideo: Bool,
     placeholderURL: String? = nil,
     fallbackURL: String? = nil,
-    contentMode: ContentMode = .fill,
+    contentMode: ContentMode = .fit,
     shouldPlay: Bool = false,
     videoMuted: Bool = false,
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
@@ -960,7 +960,7 @@ private struct MIRAResolvedVideoPlayer: View {
           .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: isPlayerReady)
           .onAppear { syncPlayback(player) }
           .onDisappear {
-            player.pause()
+            MIRAPlaybackCoordinator.releaseVideo(player)
             stopVideoMetric(status: "disappear")
           }
       }
@@ -983,15 +983,11 @@ private struct MIRAResolvedVideoPlayer: View {
       globallyPaused = false
       if let player {
         syncPlayback(player)
-      } else {
-        Task { await configurePlayer() }
       }
     }
     .onChange(of: shouldPlay) { _, _ in
       if let player {
         syncPlayback(player)
-      } else if shouldPlay {
-        Task { await configurePlayer() }
       }
     }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in
@@ -1047,7 +1043,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func configurePlayer() async {
     if loadedVideoURL != url {
-      player?.pause()
+      if let player { MIRAPlaybackCoordinator.releaseVideo(player) }
       stopVideoMetric(status: "url_changed")
       player = nil
       thumbnailURL = nil
@@ -1074,7 +1070,7 @@ private struct MIRAResolvedVideoPlayer: View {
         player.pause()
       }
       if thumbnailURL == nil && url.lowercased().hasPrefix("cfstream:") {
-        await resolveCloudflareStream(createPlayer: false)
+        await resolveCloudflareStream(createPlayer: false, expectedURL: url)
       }
       return
     }
@@ -1120,12 +1116,13 @@ private struct MIRAResolvedVideoPlayer: View {
       return
     }
 
-    await resolveCloudflareStream(createPlayer: true)
+    await resolveCloudflareStream(createPlayer: true, expectedURL: url)
   }
 
   @MainActor
-  private func resolveCloudflareStream(createPlayer: Bool) async {
+  private func resolveCloudflareStream(createPlayer: Bool, expectedURL: String) async {
     if let cachedInfo = MIRAVideoPrewarmManager.shared.streamInfo(for: url) {
+      guard loadedVideoURL == expectedURL else { return }
       applyStreamPlaybackInfo(cachedInfo, createPlayer: createPlayer)
       return
     }
@@ -1137,12 +1134,14 @@ private struct MIRAResolvedVideoPlayer: View {
       do {
         let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
         await metric.finish(status: "\(result.status)", bytes: result.bytes)
+        guard loadedVideoURL == expectedURL, !Task.isCancelled else { return }
         applyStreamPlaybackInfo(result.info, createPlayer: createPlayer)
       } catch {
         await metric.finish(status: "error")
         throw error
       }
     } catch {
+      guard loadedVideoURL == expectedURL, !Task.isCancelled else { return }
       if createPlayer {
         failed = false
         stopVideoMetric(status: "error")
@@ -1190,7 +1189,7 @@ private struct MIRAResolvedVideoPlayer: View {
       await MainActor.run {
         guard shouldPlay, loadedVideoURL == expectedURL, streamReadyRetryAttempt == attempt, player == nil else { return }
         MIRAApplePerformanceLogger.event("stream_video_retry_ready", detail: "attempt=\(attempt)")
-        Task { await resolveCloudflareStream(createPlayer: true) }
+        Task { await resolveCloudflareStream(createPlayer: true, expectedURL: expectedURL) }
       }
     }
   }
@@ -1262,7 +1261,7 @@ private struct MIRAResolvedVideoPlayer: View {
       try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_200_000_000)
       await MainActor.run {
         guard shouldPlay, loadedVideoURL == expectedURL, videoRetryAttempt == attempt else { return }
-        player?.pause()
+        if let player { MIRAPlaybackCoordinator.releaseVideo(player) }
         player = nil
         isPlayerReady = false
         failed = false
@@ -1314,12 +1313,13 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func syncPlayback(_ player: AVPlayer) {
     if shouldPlay && !globallyPaused && !MIRAPlaybackCoordinator.isLiveVoiceActive {
+      MIRAPlaybackCoordinator.activateVideo(player, id: url)
       configureAudioSession()
       player.isMuted = isMuted
       player.volume = isMuted ? 0 : 1
       player.playImmediately(atRate: 1)
     } else {
-      player.pause()
+      MIRAPlaybackCoordinator.releaseVideo(player)
     }
   }
 
@@ -1338,7 +1338,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func pauseForGlobalInterruption() {
     globallyPaused = true
-    player?.pause()
+    if let player { MIRAPlaybackCoordinator.releaseVideo(player) }
   }
 
   @MainActor
@@ -1529,7 +1529,7 @@ public enum MIRAMediaSizing {
     screenHeight: CGFloat = UIScreen.main.bounds.height
   ) -> CGFloat {
     let displayRatio = mainFeedDisplayRatio(for: urls, aspectRatios: aspectRatios)
-    return width * displayRatio
+    return min(width * displayRatio, screenHeight * maxMainFeedScreenHeightFraction)
   }
 
   public static func mainFeedDisplayRatio(
@@ -1537,11 +1537,11 @@ public enum MIRAMediaSizing {
     aspectRatios: [CGFloat] = []
   ) -> CGFloat {
     if let ratio = aspectRatios.first(where: { $0.isFinite && $0 > 0 }) {
-      return homeDisplayRatio(ratio)
+      return ratio
     }
     let lowercased = urls.map { $0.lowercased() }
     if let ratio = lowercased.compactMap({ flexibleDimensionsRatio(in: $0) ?? aspectRatioHint(in: $0) }).first {
-      return homeDisplayRatio(ratio)
+      return ratio
     }
     return feedPreviewRatio
   }
@@ -1550,12 +1550,7 @@ public enum MIRAMediaSizing {
   /// unusually tall imports resolve to the tallest supported Home crop.
   public static let homeHeightToWidthRatios: [CGFloat] = [9.0 / 16, 1, 5.0 / 4, 4.0 / 3]
   public static func homeDisplayRatio(_ sourceRatio: CGFloat) -> CGFloat {
-    let ratio = sourceRatio.isFinite && sourceRatio > 0 ? sourceRatio : feedPreviewRatio
-    // Home's only landscape treatment is 16:9. Resolve intermediate 4:3
-    // imports deterministically rather than letting a floating-point tie
-    // alternate between landscape and square on different devices.
-    if ratio < 1 { return 9.0 / 16 }
-    return homeHeightToWidthRatios.min { abs(log($0 / ratio)) < abs(log($1 / ratio)) } ?? 1
+    sourceRatio.isFinite && sourceRatio > 0 ? sourceRatio : feedPreviewRatio
   }
 
   public static func detailHeight(
@@ -1592,13 +1587,11 @@ public enum MIRAMediaSizing {
     let mediaWidth = CGFloat(Double(String(normalized[widthRange])) ?? 0)
     let mediaHeight = CGFloat(Double(String(normalized[heightRange])) ?? 0)
     guard mediaWidth > 0, mediaHeight > 0 else { return namedDimensionsRatio(in: normalized) ?? dimensionsRatio(in: value) }
-    return supportedFeedHeightToWidthRatio(mediaHeight / mediaWidth)
+    return mediaHeight / mediaWidth
   }
 
   private static func boundedHeight(_ height: CGFloat, width: CGFloat) -> CGFloat {
-    let minHeight = width * feedWideLandscapeRatio
-    let maxHeight = width * feedTallRatio
-    return min(max(height, minHeight), maxHeight)
+    min(height, UIScreen.main.bounds.height * maxMainFeedScreenHeightFraction)
   }
 
   private static func supportedFeedHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {
@@ -1607,9 +1600,7 @@ public enum MIRAMediaSizing {
 
   public static func supportedPostHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {
     guard ratio.isFinite, ratio > 0 else { return feedPreviewRatio }
-    return supportedPostHeightToWidthRatios.min { lhs, rhs in
-      abs(log(lhs / ratio)) < abs(log(rhs / ratio))
-    } ?? feedPreviewRatio
+    return ratio
   }
 
   public static func boundedFeedHeightToWidthRatio(_ ratio: CGFloat) -> CGFloat {

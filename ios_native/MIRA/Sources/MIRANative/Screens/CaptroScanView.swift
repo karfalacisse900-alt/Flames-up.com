@@ -1,42 +1,22 @@
 import Foundation
 import AVFoundation
-import AVKit
-import PhotosUI
 import SwiftUI
-import UniformTypeIdentifiers
 import UIKit
 
 public struct CaptroScanView: View {
   let api: MIRAAPIClient
   let onClose: () -> Void
 
-  @State private var stage: CaptroReceiptStage = .hub
-  @State private var showingRecordCamera = false
-  @State private var pendingRecordPreview = false
-  @State private var showingVoiceAssistant = false
-  @State private var pendingVoiceFromPreview = false
-  @State private var pendingAssistantEdit: CaptroAssistantEditorRequest?
-  @State private var assistantEditorRequest: CaptroAssistantEditorRequest?
-  @State private var completedAssistantDestination: CaptroCaptureDestination?
-  @State private var pendingRetake = false
-  @State private var recordedMedia: MIRAPickedMedia?
-  @State private var currentRecordingID: String?
-  @State private var handoffMedia: MIRAPickedMedia?
-  @State private var recordedMediaURL: URL?
-  @State private var showingRecordPreview = false
-  @State private var pendingCreationDestination: CaptroCaptureDestination?
-  @State private var creationDestination: CaptroCaptureDestination?
+  @State private var stage: CaptroReceiptStage = .capture
   @State private var selectedDocument: CaptroLocalDocument?
   @State private var review: CaptroReceiptReview?
   @State private var reward: CaptroReceiptRewardResult?
-  @State private var selectedPhoto: PhotosPickerItem?
   @State private var ratings: [String: Int] = [:]
   @State private var note = ""
   @State private var reviewIdempotencyKey: String?
   @State private var feedbackIdempotencyKey: String?
   @State private var isProcessingReview = false
   @State private var isSubmittingFeedback = false
-  @State private var showingImporter = false
   @State private var showingOriginal = false
   @State private var showingDocumentDetails = false
   @State private var captureRequestID = 0
@@ -58,128 +38,6 @@ public struct CaptroScanView: View {
         .toolbar(.hidden, for: .navigationBar)
     }
     .toolbar(.hidden, for: .tabBar)
-    .fullScreenCover(isPresented: $showingRecordCamera, onDismiss: {
-      if pendingRecordPreview {
-        pendingRecordPreview = false
-        showingRecordPreview = true
-      }
-    }) {
-      MIRAStoryLiveCameraView(
-        captureMode: .videoOnly,
-        showsMusicButton: false,
-        showsGridOverlay: false,
-        dismissesOnCapture: false,
-        dismissesOnCancel: false,
-        simpleCaptureUI: true,
-        onCapture: { media in
-          recordedMedia = media
-          currentRecordingID = UUID().uuidString
-          recordedMediaURL = nil
-          pendingRecordPreview = true
-          showingRecordCamera = false
-        },
-        onCancel: { showingRecordCamera = false }
-      )
-      .ignoresSafeArea()
-    }
-    .fullScreenCover(isPresented: $showingRecordPreview, onDismiss: {
-      if pendingRetake {
-        pendingRetake = false
-        showingRecordCamera = true
-      }
-      if pendingVoiceFromPreview {
-        pendingVoiceFromPreview = false
-        showingVoiceAssistant = true
-      }
-      if let pendingCreationDestination {
-        self.pendingCreationDestination = nil
-        creationDestination = pendingCreationDestination
-      }
-    }) {
-      if let recordedMedia {
-        CaptroRecordPreview(media: recordedMedia, previewURL: $recordedMediaURL, onClose: { showingRecordPreview = false }, onAskCaptro: {
-          pendingVoiceFromPreview = true
-          showingRecordPreview = false
-        }, onRetake: {
-          pendingRetake = true
-          showingRecordPreview = false
-        }, onDiscard: {
-          if let recordedMediaURL { try? FileManager.default.removeItem(at: recordedMediaURL) }
-          recordedMediaURL = nil
-          self.recordedMedia = nil
-          currentRecordingID = nil
-          handoffMedia = nil
-          showingRecordPreview = false
-        }) { destination, chosenMedia in
-          handoffMedia = chosenMedia
-          pendingCreationDestination = destination
-          showingRecordPreview = false
-        }
-      }
-    }
-    .fullScreenCover(item: $creationDestination) { destination in
-      switch destination {
-      case .story:
-        if let handoffMedia {
-          CreateStoryNativeView(api: api, initialMedia: handoffMedia) {
-            creationDestination = nil
-            self.handoffMedia = nil
-          }
-        }
-      case .post:
-        CreatePostNativeView(api: api, initialMedia: handoffMedia) {
-          creationDestination = nil
-          handoffMedia = nil
-        }
-      }
-    }
-    .fullScreenCover(isPresented: $showingVoiceAssistant, onDismiss: {
-      if let pendingAssistantEdit, recordedMedia != nil {
-        self.pendingAssistantEdit = nil
-        assistantEditorRequest = pendingAssistantEdit
-      } else if recordedMedia != nil {
-        // A failed or cancelled AI request never strands the original video.
-        showingRecordPreview = true
-      }
-    }) {
-      CaptroCaptureAssistantView(api: api, hasCurrentRecording: recordedMedia != nil, currentRecordingID: currentRecordingID, onClose: {
-        showingVoiceAssistant = false
-      }, onOpenEditor: { destination, plan in
-        pendingAssistantEdit = CaptroAssistantEditorRequest(
-          destination: destination == .story ? .story : .post,
-          plan: plan
-        )
-        showingVoiceAssistant = false
-      })
-    }
-    .fullScreenCover(item: $assistantEditorRequest, onDismiss: {
-      if let completedAssistantDestination {
-        self.completedAssistantDestination = nil
-        creationDestination = completedAssistantDestination
-      }
-    }) { request in
-      if let recordedMedia {
-        MIRANativeMediaEditorView(
-          media: recordedMedia,
-          mode: request.destination == .story ? .story : .post,
-          suggestedPlan: request.plan,
-          onClose: { assistantEditorRequest = nil }
-        ) { edited in
-          handoffMedia = edited
-          completedAssistantDestination = request.destination
-        }
-      }
-    }
-    .onChange(of: selectedPhoto) { _, item in
-      guard let item else { return }
-      Task { await loadPhoto(item) }
-    }
-    .fileImporter(
-      isPresented: $showingImporter,
-      allowedContentTypes: [.pdf, .image],
-      allowsMultipleSelection: false,
-      onCompletion: handleImportedURLs
-    )
     .sheet(isPresented: $showingOriginal) {
       if let selectedDocument {
         CaptroLocalDocumentViewer(document: selectedDocument)
@@ -213,8 +71,6 @@ public struct CaptroScanView: View {
   @ViewBuilder
   private var stageContent: some View {
     switch stage {
-    case .hub:
-      captureHub
     case .capture:
       captureStage
     case .review:
@@ -224,73 +80,6 @@ public struct CaptroScanView: View {
     case .success:
       successStage
     }
-  }
-
-  private var captureHub: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      HStack {
-        Text("Capture")
-          .font(.system(.title, design: .rounded).weight(.bold))
-          .foregroundStyle(CaptroReceiptPalette.ink)
-        Spacer()
-        if recordedMedia != nil {
-          Menu {
-            if recordedMedia != nil { Button("Recent video") { showingRecordPreview = true } }
-          } label: {
-            Image(systemName: "clock.arrow.circlepath")
-              .font(.system(size: 17))
-              .frame(width: 44, height: 44)
-          }
-          .accessibilityLabel("Recent captures")
-        }
-        Button(action: onClose) {
-          Image(systemName: "xmark")
-            .font(.system(size: 15, weight: .semibold))
-            .frame(width: 44, height: 44)
-        }
-        .accessibilityLabel("Close Capture")
-      }
-      .padding(.top, 12)
-
-      Spacer(minLength: 32)
-
-      Text("Scan, record, or speak.")
-        .font(.title2.weight(.semibold))
-        .foregroundStyle(CaptroReceiptPalette.ink)
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
-
-      Spacer(minLength: 32)
-
-      HStack(spacing: 0) {
-        hubMode("Scan", detail: "Receipts and documents", symbol: "viewfinder") { stage = .capture }
-        Divider().frame(height: 64)
-        hubMode("Record", detail: "New camera video", symbol: "video") { showingRecordCamera = true }
-        Divider().frame(height: 64)
-        hubMode("Voice", detail: "Talk to Captro", symbol: "waveform") { showingVoiceAssistant = true }
-      }
-      .background(.white, in: RoundedRectangle(cornerRadius: 20))
-      .padding(.bottom, 44)
-    }
-    .padding(.horizontal, 20)
-    .background(CaptroReceiptPalette.background.ignoresSafeArea())
-    .tint(MIRATheme.Color.forest)
-  }
-
-  private func hubMode(_ title: String, detail: String, symbol: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      VStack(spacing: 12) {
-        Image(systemName: symbol)
-          .font(.system(size: 25, weight: .regular))
-          .frame(height: 30)
-        Text(title).font(.subheadline.weight(.semibold))
-      }
-      .foregroundStyle(CaptroReceiptPalette.ink)
-      .frame(maxWidth: .infinity, minHeight: 112)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel("\(title), \(detail)")
   }
 
   private var captureStage: some View {
@@ -311,7 +100,7 @@ public struct CaptroScanView: View {
             .font(.system(size: 34, weight: .light))
           Text("Camera unavailable")
             .font(.system(size: 19, weight: .semibold))
-          Text("Choose a receipt or invoice from Photos or Files.")
+          Text("Allow camera access in Settings to scan a receipt.")
             .font(.system(size: 14, weight: .regular))
             .multilineTextAlignment(.center)
         }
@@ -323,7 +112,7 @@ public struct CaptroScanView: View {
         HStack {
           cameraCircleButton(systemImage: "xmark", accessibilityLabel: "Close Scan") {
             torchEnabled = false
-            stage = .hub
+            onClose()
           }
           Spacer()
           if cameraAvailable {
@@ -353,11 +142,6 @@ public struct CaptroScanView: View {
         }
 
         HStack(alignment: .center) {
-          PhotosPicker(selection: $selectedPhoto, matching: .images, preferredItemEncoding: .current) {
-            cameraImportControl(systemImage: "photo.on.rectangle", label: "Photos")
-          }
-          .accessibilityLabel("Choose from Photos")
-
           Spacer()
 
           Button(action: captureDocument) {
@@ -374,15 +158,9 @@ public struct CaptroScanView: View {
           }
           .buttonStyle(.plain)
           .disabled(!cameraAvailable || cameraStatus == .capturing)
-          .accessibilityLabel("Capture document")
+          .accessibilityLabel("Capture receipt")
 
           Spacer()
-
-          Button(action: beginImport) {
-            cameraImportControl(systemImage: "doc", label: "Files")
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel("Import from Files")
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 24)
@@ -406,21 +184,6 @@ public struct CaptroScanView: View {
     }
     .buttonStyle(.plain)
     .accessibilityLabel(accessibilityLabel)
-  }
-
-  private func cameraImportControl(systemImage: String, label: String) -> some View {
-    VStack(spacing: 6) {
-      Image(systemName: systemImage)
-        .font(.system(size: 16, weight: .semibold))
-        .foregroundStyle(CaptroReceiptPalette.ink)
-        .frame(width: 44, height: 44)
-        .background(Color.white.opacity(0.94))
-        .clipShape(Circle())
-      Text(label)
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(cameraAvailable ? Color.white : CaptroReceiptPalette.secondaryInk)
-    }
-    .frame(width: 64, height: 66)
   }
 
   private var reviewStage: some View {
@@ -943,36 +706,11 @@ public struct CaptroScanView: View {
     captureRequestID += 1
   }
 
-  private func beginImport() {
-    showingImporter = true
-  }
-
   private func handleCameraCapture(_ result: Result<Data, Error>) {
     do {
       select(try CaptroLocalDocument.scanned(pages: [result.get()]))
     } catch {
       cameraStatus = .looking
-      errorMessage = error.localizedDescription
-    }
-  }
-
-  private func handleImportedURLs(_ result: Result<[URL], Error>) {
-    do {
-      guard let url = try result.get().first else { return }
-      select(try CaptroLocalDocument.imported(url: url))
-    } catch {
-      errorMessage = error.localizedDescription
-    }
-  }
-
-  @MainActor
-  private func loadPhoto(_ item: PhotosPickerItem) async {
-    do {
-      guard let data = try await item.loadTransferable(type: Data.self) else {
-        throw CaptroLocalDocumentError.inaccessible
-      }
-      select(try CaptroLocalDocument.photoImported(data: data))
-    } catch {
       errorMessage = error.localizedDescription
     }
   }
@@ -1008,12 +746,12 @@ public struct CaptroScanView: View {
   private func processingMessage(for error: Error) -> String {
     let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
     if detail.localizedCaseInsensitiveContains("upload") {
-      return "Couldn't upload the document. Try again."
+      return "Couldn't upload the receipt. Try again."
     }
     if detail.localizedCaseInsensitiveContains("supported") {
-      return "This does not appear to be a supported receipt or invoice."
+      return "This does not appear to be a supported receipt."
     }
-    return "We couldn't process this document. Try another photo or file."
+    return "We couldn't check this receipt. Retake it and try again."
   }
 
   private func continueToFeedback() {
@@ -1048,7 +786,6 @@ public struct CaptroScanView: View {
     selectedDocument = nil
     review = nil
     reward = nil
-    selectedPhoto = nil
     ratings = [:]
     note = ""
     reviewIdempotencyKey = nil
@@ -1086,131 +823,10 @@ public struct CaptroScanView: View {
 }
 
 private enum CaptroReceiptStage {
-  case hub
   case capture
   case review
   case feedback
   case success
-}
-
-private enum CaptroCaptureDestination: String, Identifiable {
-  case story
-  case post
-  var id: String { rawValue }
-}
-
-private struct CaptroAssistantEditorRequest: Identifiable {
-  let id = UUID()
-  let destination: CaptroCaptureDestination
-  let plan: CaptroAssistantEditPlan
-}
-
-private struct CaptroRecordPreview: View {
-  let media: MIRAPickedMedia
-  @Binding var previewURL: URL?
-  let onClose: () -> Void
-  let onAskCaptro: () -> Void
-  let onRetake: () -> Void
-  let onDiscard: () -> Void
-  let onUse: (CaptroCaptureDestination, MIRAPickedMedia) -> Void
-  @State private var player: AVPlayer?
-  @State private var errorMessage: String?
-  @State private var editingDestination: CaptroCaptureDestination?
-  @State private var editedMedia: MIRAPickedMedia?
-  @State private var completedEditDestination: CaptroCaptureDestination?
-  @State private var showingDiscardConfirmation = false
-
-  var body: some View {
-    NavigationStack {
-      VStack(spacing: 20) {
-        Group {
-          if let player {
-            VideoPlayer(player: player)
-          } else if let errorMessage {
-            ContentUnavailableView("Preview unavailable", systemImage: "video.slash", description: Text(errorMessage))
-          } else {
-            ProgressView("Preparing preview…")
-          }
-        }
-        .frame(maxWidth: .infinity)
-        .frame(maxHeight: .infinity)
-        .background(.black)
-
-        VStack(spacing: 10) {
-          Button("Ask Captro", action: onAskCaptro)
-          Button("Use original", action: { onUse(.post, media) })
-          HStack(spacing: 12) {
-            Button("Story") { editingDestination = .story }
-            Button("Post") { editingDestination = .post }
-          }
-          Button("Retake", action: onRetake)
-            .buttonStyle(.bordered)
-          Button("Discard recording", role: .destructive) { showingDiscardConfirmation = true }
-            .buttonStyle(.bordered)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(MIRATheme.Color.forest)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 16)
-      }
-      .background(CaptroReceiptPalette.background)
-      .navigationTitle("Preview")
-      .navigationBarTitleDisplayMode(.inline)
-      .tint(MIRATheme.Color.forest)
-      .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done", action: onClose) } }
-      .task { await preparePreview() }
-      .onDisappear { player?.pause(); player = nil }
-      .confirmationDialog("Discard this recording?", isPresented: $showingDiscardConfirmation) {
-        Button("Discard recording", role: .destructive, action: onDiscard)
-        Button("Keep recording", role: .cancel) {}
-      } message: {
-        Text("This removes the local original from Capture.")
-      }
-      .fullScreenCover(item: $editingDestination, onDismiss: {
-        if let completedEditDestination, let editedMedia {
-          self.completedEditDestination = nil
-          self.editedMedia = nil
-          onUse(completedEditDestination, editedMedia)
-        }
-      }) { destination in
-        MIRANativeMediaEditorView(
-          media: media,
-          mode: destination == .story ? .story : .post,
-          onClose: { editingDestination = nil }
-        ) { result in
-          editedMedia = result
-          completedEditDestination = destination
-        }
-      }
-    }
-  }
-
-  @MainActor
-  private func preparePreview() async {
-    guard player == nil else { return }
-    if let previewURL {
-      player = AVPlayer(url: previewURL)
-      return
-    }
-    guard let directory = postDraftMediaDirectory() else {
-      errorMessage = "This recording could not be saved locally."
-      return
-    }
-    let url = directory.appendingPathComponent("captro-capture-\(UUID().uuidString).mov")
-    let mediaData = media.data
-    do {
-      try await Task.detached(priority: .utility) { try mediaData.write(to: url, options: [.atomic]) }.value
-      if Task.isCancelled {
-        try? FileManager.default.removeItem(at: url)
-        return
-      }
-      previewURL = url
-      player = AVPlayer(url: url)
-    } catch {
-      errorMessage = "This recording could not be prepared. The original remains in this Capture session."
-    }
-  }
 }
 
 private struct CaptroFeedbackQuestion: Identifiable {

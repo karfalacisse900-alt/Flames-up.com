@@ -63,5 +63,5 @@ test('human chat microphone has a distinct deliberate recording and preview flow
   assert.match(room, /CaptroChatAudioMessage\(url: url/);
   assert.match(room, /sendVoiceRecording/);
   assert.match(room, /hasNewMessages/);
-  assert.match(read('Screens/ProfileChatVerificationStudio.swift'), /fullScreenCover\(isPresented: \$showsCaptroAI\)/);
+  assert.doesNotMatch(read('Screens/ProfileChatVerificationStudio.swift'), /fullScreenCover\(isPresented: \$showsCaptroAI\)/);
 });

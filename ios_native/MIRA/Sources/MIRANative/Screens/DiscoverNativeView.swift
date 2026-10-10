@@ -949,7 +949,7 @@ struct DiscoverSinglePhotoPreviewSheet: View {
                 isVideo: false,
                 placeholderURL: placeholderURL,
                 fallbackURL: fallbackURL(for: mediaURL),
-                contentMode: .fill,
+                contentMode: .fit,
                 shouldPlay: false,
                 maxPixelSize: MIRAMediaSizing.feedTargetHeight,
                 showsVideoPlaceholderIcon: false

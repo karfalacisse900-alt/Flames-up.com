@@ -38,12 +38,12 @@ enum CaptroCameraDocumentStatus: Equatable {
 
   var title: String {
     switch self {
-    case .looking: return "Looking for a document..."
+    case .looking: return "Position your receipt inside the frame"
     case .receiptDetected: return "Receipt detected"
-    case .invoiceDetected: return "Invoice detected"
+    case .invoiceDetected: return "Position your receipt inside the frame"
     case .holdSteady: return "Hold steady"
-    case .ready: return "Ready"
-    case .capturing: return "Capturing..."
+    case .ready: return "Hold steady"
+    case .capturing: return "Capturing receipt"
     }
   }
 }
@@ -57,9 +57,9 @@ private enum CaptroReceiptCameraError: Error, LocalizedError {
   var errorDescription: String? {
     switch self {
     case .unavailable: return "Camera scanning is unavailable on this device."
-    case .permissionDenied: return "Allow camera access in Settings to scan a document."
-    case .configurationFailed: return "Captro could not start the document camera."
-    case .captureFailed: return "Captro could not capture that document. Try again."
+    case .permissionDenied: return "Allow camera access in Settings to scan a receipt."
+    case .configurationFailed: return "Captro could not start the receipt camera."
+    case .captureFailed: return "Captro could not capture that receipt. Try again."
     }
   }
 }

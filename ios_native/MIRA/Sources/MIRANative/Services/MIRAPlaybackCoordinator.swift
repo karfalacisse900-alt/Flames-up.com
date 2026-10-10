@@ -2,6 +2,22 @@ import AVFoundation
 import Foundation
 
 public enum MIRAPlaybackCoordinator {
+  @MainActor private static weak var activeVideoPlayer: AVPlayer?
+  @MainActor private static var activeVideoID: String?
+  @MainActor public static func activateVideo(_ player: AVPlayer, id: String) {
+    if activeVideoPlayer !== player {
+      activeVideoPlayer?.pause()
+      activeVideoPlayer?.isMuted = true
+    }
+    activeVideoPlayer = player
+    activeVideoID = id
+  }
+  @MainActor public static func releaseVideo(_ player: AVPlayer) {
+    guard activeVideoPlayer === player else { return }
+    player.pause()
+    activeVideoPlayer = nil
+    activeVideoID = nil
+  }
   // A live voice session owns duplex audio until its matching generation ends.
   // Late video loads may prepare assets, but must not replace the microphone's
   // playAndRecord category with playback/moviePlayback.
@@ -19,6 +35,12 @@ public enum MIRAPlaybackCoordinator {
   }
   public static func pauseAll(reason: String) {
     NotificationCenter.default.post(name: .miraPlaybackShouldPause, object: reason)
+    Task { @MainActor in
+      activeVideoPlayer?.pause()
+      activeVideoPlayer?.isMuted = true
+      activeVideoPlayer = nil
+      activeVideoID = nil
+    }
   }
 
   public static func resumeVisible(reason: String) {

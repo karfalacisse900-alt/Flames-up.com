@@ -16,30 +16,11 @@ const editorial = read('ios_native/MIRA/Sources/MIRANative/Components/CaptroEdit
 const viewer = read('ios_native/MIRA/Sources/MIRANative/Screens/DiscoverNativeView.swift');
 const editor = read('ios_native/MIRA/Sources/MIRANative/Screens/MIRANativeMediaEditorView.swift');
 
-test('Capture Voice opens the AI assistant, not a voice-post recorder', () => {
-  assert.match(capture, /hubMode\("Voice", detail: "Talk to Captro"/);
-  assert.match(capture, /CaptroCaptureAssistantView\(api: api/);
-  assert.doesNotMatch(capture, /CaptroVoiceRecorderSheet|Create voice post|Use text as post caption/);
-  assert.match(realtime, /"\/ai\/realtime\/session"/);
-  assert.match(realtime, /input_audio_buffer\.append/);
-  assert.match(realtime, /input_audio_buffer\.speech_started/);
-  assert.match(realtime, /input_audio_buffer\.committed/);
-  assert.doesNotMatch(realtime, /"type": "response\.create"/);
-  assert.match(realtime, /"create_response": true/);
-  assert.match(realtime, /recoverTransport\(\)/);
-  assert.match(realtime, /response\.output_audio\.delta/);
-  assert.doesNotMatch(assistant, /Send to Captro|Record again|uploadMultipart/);
-  assert.doesNotMatch(assistant, /supportsOnDeviceRecognition|SFSpeechRecognizer/);
-  assert.match(backend, /api\.post\('\/ai\/realtime\/session', authMiddleware/);
-  assert.match(backend, /https:\/\/api\.openai\.com\/v1\/realtime\/client_secrets/);
-  assert.match(backend, /semantic_vad/);
-  assert.match(realtimeConfig, /create_response: true, interrupt_response: true/);
-  assert.match(backend, /store: false/);
-  assert.match(backend, /c\.env\.OPENAI_API_KEY/);
-  assert.match(backend, /trim_duration_seconds/);
-  assert.match(editor, /suggestedPlan\.trimDurationSeconds/);
-  assert.match(assistant, /Button\("Done"\)/);
-  assert.match(capture, /showingRecordPreview = true/);
+test('Capture opens only the live receipt camera', () => {
+  assert.match(capture, /@State private var stage: CaptroReceiptStage = \.capture/);
+  assert.match(capture, /CaptroReceiptCameraView\(/);
+  assert.doesNotMatch(capture, /CaptroCaptureAssistantView|PhotosPicker|fileImporter|hubMode\(|captureMode: \.videoOnly/);
+  assert.doesNotMatch(capture, /Looking for documents|Choose photo|Import document|Upload receipt/);
 });
 
 test('Post Assist uses the same server-side OpenAI key and does not return fake suggestions on failure', () => {
@@ -67,14 +48,11 @@ test('Story viewer and default editor preserve the entire original frame', () =>
   assert.match(editor, /return \[\.original, \.story9x16/);
 });
 
-test('Capture Record is new video only and has no gallery route', () => {
-  assert.match(capture, /captureMode: \.videoOnly/);
-  assert.match(capture, /simpleCaptureUI: true/);
-  assert.doesNotMatch(capture, /onGallerySelection:/);
+test('ordinary post camera and voice comments remain separate from receipt Capture', () => {
+  assert.doesNotMatch(capture, /MIRACameraCaptureView|CaptroVoiceRecorderSheet/);
   assert.match(camera, /galleryButton\.isHidden = simpleCaptureUI/);
   assert.match(camera, /guard !simpleCaptureUI else \{ return \}/);
-  assert.match(capture, /Button\("Ask Captro"/);
-  assert.match(capture, /Button\("Retake"/);
+  assert.match(read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift'), /CaptroVoiceRecorderSheet\(limit: 60\)/);
 });
 
 test('feed caption overflow uses rendered height instead of character count', () => {

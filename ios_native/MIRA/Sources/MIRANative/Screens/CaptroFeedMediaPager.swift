@@ -27,13 +27,10 @@ struct CaptroMediaPager: View {
   // variant. Downsample the source in the existing image cache; crop once here.
   private var mediaURLs: [String] { post.isCoverPost && !post.mediaURLs.isEmpty ? post.mediaURLs : post.feedMediaURLs }
   private var naturalMediaHeightToWidthRatio: CGFloat {
-    boundedHomeMediaRatio(
-      declaredCoverHeightToWidthRatio
-        ?? MIRAMediaSizing.mainFeedDisplayRatio(
+      MIRAMediaSizing.mainFeedDisplayRatio(
           for: mediaURLs,
           aspectRatios: post.mediaHeightToWidthRatios
       )
-    )
   }
   private var mediaHeightToWidthRatio: CGFloat {
     naturalMediaHeightToWidthRatio
@@ -94,15 +91,16 @@ struct CaptroMediaPager: View {
           }
         }
     } else if let frameSize {
+      let visible = fittedMediaRect(in: frameSize)
       CaptroMediaStampLayout(mediaSize: frameSize,
-        stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: frameSize.width,
+        stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: visible.width,
           accessibility: dynamicTypeSize.isAccessibilitySize),
         clearance: currentMediaIsVideo || (mediaURLs.count > 1 && !showsCoverMediaOnly) ? 64 : 20,
-        reading: stampReading, minimumStampTop: writingClearance(in: frameSize)) {
+        reading: stampReading, minimumStampTop: writingClearance(in: frameSize), visibleMediaRect: visible) {
         mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         feedStamp(readingBudget: dynamicTypeSize.isAccessibilitySize ? normalReadingBudget
           : min(normalReadingBudget, max(150, frameSize.height * 0.55)),
-          stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: frameSize.width,
+          stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: visible.width,
             accessibility: dynamicTypeSize.isAccessibilitySize))
       }
     } else {
@@ -113,7 +111,7 @@ struct CaptroMediaPager: View {
   private var mediaLayers: some View {
     GeometryReader { proxy in
       ZStack {
-        Color.black
+        MIRATheme.Color.mediaPlaceholder
         mediaContent
           .frame(width: proxy.size.width, height: proxy.size.height)
           .contentShape(Rectangle())
@@ -135,7 +133,7 @@ struct CaptroMediaPager: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
           } else if let writing = post.mediaWriting(at: selectedMediaIndex) {
             videoControls.padding(.trailing, 12)
-              .padding(.top, min(proxy.size.height - 52, writing.textRect(in: proxy.size, fill: true).maxY + 8))
+              .padding(.top, min(proxy.size.height - 52, writing.textRect(in: proxy.size, fill: false).maxY + 8))
               .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
           } else { videoControls
             // Keep the existing actions. Only overflow reading moves them into
@@ -180,26 +178,23 @@ struct CaptroMediaPager: View {
 
   private func mediaView(url: String, index: Int) -> some View {
     let writing = post.mediaWriting(at: index)
-    let crop = writing?.schemaVersion == 2 ? frameSize.map { writing!.sourceRect(in: $0, fill: true) } : nil
     return ZStack(alignment: .topLeading) {
     RemoteMediaView(
       url: url,
       isVideo: url.isVideoURL,
       placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
       fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-      contentMode: .fill,
+      contentMode: .fit,
       shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
       videoMuted: isVideoMuted,
       maxPixelSize: MIRAMediaSizing.feedTargetHeight,
-      placeholderColor: .black,
+      placeholderColor: MIRATheme.Color.mediaPlaceholder,
       plainBackground: true
     )
-    .frame(width: crop?.width, height: crop?.height)
-    .frame(maxWidth: crop == nil ? .infinity : nil, maxHeight: crop == nil ? .infinity : nil)
-    .offset(x: crop?.minX ?? 0, y: crop?.minY ?? 0)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
       if let writing = post.mediaWriting(at: index) {
         GeometryReader { geometry in
-          CaptroMediaWritingLayer(writing: writing, container: geometry.size, caption: post.caption ?? post.content)
+          CaptroMediaWritingLayer(writing: writing, container: geometry.size, fill: false, caption: post.caption ?? post.content)
         }
       }
     }
@@ -211,7 +206,7 @@ struct CaptroMediaPager: View {
     let floor: CGFloat = currentMediaIsVideo ? 64 : 0
     // Keep published writing fixed. Move only the stamp/real continuation, not
     // the image or artwork, if the creator deliberately chose a low position.
-    let bottom = mediaURLs.indices.compactMap { post.mediaWriting(at: $0)?.textRect(in: size, fill: true).maxY }.max() ?? 0
+    let bottom = mediaURLs.indices.compactMap { post.mediaWriting(at: $0)?.textRect(in: size, fill: false).maxY }.max() ?? 0
     return max(floor, bottom > 0 ? bottom + (mediaURLs.contains(where: { $0.isVideoURL }) ? 64 : 12) : 0)
   }
 
@@ -271,6 +266,15 @@ struct CaptroMediaPager: View {
   private var currentMediaIsVideo: Bool {
     let index = showsCoverMediaOnly ? 0 : selectedMediaIndex
     return mediaURLs.indices.contains(index) && mediaURLs[index].isVideoURL
+  }
+
+  private func fittedMediaRect(in frame: CGSize) -> CGRect {
+    let ratios = post.mediaHeightToWidthRatios
+    let ratio = ratios.indices.contains(selectedMediaIndex) ? ratios[selectedMediaIndex] : mediaHeightToWidthRatio
+    guard ratio.isFinite, ratio > 0 else { return CGRect(origin: .zero, size: frame) }
+    let width = min(frame.width, frame.height / ratio)
+    let height = width * ratio
+    return CGRect(x: (frame.width - width) / 2, y: (frame.height - height) / 2, width: width, height: height)
   }
 
   private func handleMediaTap() {

@@ -70,9 +70,9 @@ final class CaptroCompositionTests: XCTestCase {
   }
   func testDefaultAndIntentChangesKeepWritingAttachmentsAndSchedule() {
     var draft = CaptroCompositionDraft()
-    XCTAssertEqual(draft.intent, .wantTo)
-    XCTAssertEqual(CaptroWritingIntent.allCases.count, 4)
-    XCTAssertEqual(draft.intent.byline, "wants to")
+    XCTAssertEqual(draft.intent, .free)
+    XCTAssertEqual(CaptroWritingIntent.allCases.count, 5)
+    XCTAssertEqual(draft.intent.byline, "")
     draft.bodyText = "A designer and developer."
     let attachment = MIRAPickedMedia(data: Data([1, 2, 3]), kind: .image,
       fileName: "draft-test.jpg", mimeType: "image/jpeg")
@@ -89,7 +89,7 @@ final class CaptroCompositionTests: XCTestCase {
     XCTAssertEqual(draft.requestID, id)
     draft.intent = .lookingFor
     XCTAssertNotNil(draft.submittedTime)
-    XCTAssertEqual(draft.submittedIntent, "looking_for")
+    XCTAssertNil(draft.submittedIntent)
     draft.selectedStampKind = .event
     XCTAssertNil(draft.submittedIntent)
     XCTAssertNil(draft.submittedTime)

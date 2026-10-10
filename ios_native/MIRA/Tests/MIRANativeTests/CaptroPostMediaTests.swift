@@ -25,6 +25,9 @@ final class CaptroPostMediaTests: XCTestCase {
     let dimension = await media.mediaDimension()
     XCTAssertEqual(dimension.originalWidth, 20)
     XCTAssertEqual(dimension.originalHeight, 40)
+    XCTAssertEqual(dimension.sourceOrientation, 6)
+    XCTAssertEqual(dimension.sourcePixelWidth, 40)
+    XCTAssertEqual(dimension.sourcePixelHeight, 20)
     XCTAssertEqual(media.data, bytes as Data)
   }
   func testMediaWritingRoundTripPreservesOriginalBytesAndMetadata() throws {
@@ -67,7 +70,7 @@ final class CaptroPostMediaTests: XCTestCase {
     writing.text = String(repeating: "a", count: 81)
     XCTAssertNotNil(writing.validationMessage)
   }
-  func testHomeHeightUsesResolvedMetadataNotDeviceHeight() throws {
+  func testHomePreservesSourceRatioAndOnlyFitsExtremeHeight() throws {
     for width: CGFloat in [320, 390, 440] {
       for format in MIRASupportedPostAspectRatio.allCases {
         let json: [String: Any] = ["format": format.rawValue,
@@ -75,13 +78,15 @@ final class CaptroPostMediaTests: XCTestCase {
         let dimensions = try JSONDecoder().decode(MIRAMediaDimension.self,
           from: JSONSerialization.data(withJSONObject: json))
         let ratio = try XCTUnwrap(dimensions.heightToWidthRatio)
-        XCTAssertEqual(ratio, format.heightToWidthRatio, accuracy: 0.001)
+        XCTAssertEqual(ratio, 1, accuracy: 0.001)
         for screenHeight: CGFloat in [568, 852, 956] {
           XCTAssertEqual(MIRAMediaSizing.mainFeedHeight(for: [], aspectRatios: [ratio],
-            width: width, screenHeight: screenHeight), width * MIRAMediaSizing.homeDisplayRatio(ratio), accuracy: 0.001)
+            width: width, screenHeight: screenHeight), min(width, screenHeight * 0.78), accuracy: 0.001)
         }
       }
     }
+    XCTAssertEqual(MIRAMediaSizing.mainFeedHeight(for: [], aspectRatios: [16.0 / 9],
+      width: 390, screenHeight: 852), 852 * 0.78, accuracy: 0.001)
   }
   func testVoiceWatchdogStartsAtAudioActivationNotAuthorization() {
     let health = CaptroVoicePipelineHealth(now: 100)

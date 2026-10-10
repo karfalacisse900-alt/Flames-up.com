@@ -137,10 +137,12 @@ struct CaptroMediaStampLayout: Layout {
   let clearance: CGFloat
   let reading: CaptroFeedStampReadingState
   var minimumStampTop: CGFloat = 0
+  var visibleMediaRect: CGRect? = nil
 
   private func placement(_ subviews: Subviews) -> (size: CGSize, y: CGFloat) {
+    let visible = visibleMediaRect ?? CGRect(origin: .zero, size: mediaSize)
     let size = subviews[1].sizeThatFits(ProposedViewSize(width: stampWidth, height: nil))
-    return (size, max(minimumStampTop, CaptroFeedStampGeometry.originY(mediaHeight: mediaSize.height,
+    return (size, max(minimumStampTop, visible.minY + CaptroFeedStampGeometry.originY(mediaHeight: visible.height,
       stampHeight: size.height, clearance: clearance)))
   }
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -150,7 +152,8 @@ struct CaptroMediaStampLayout: Layout {
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(mediaSize))
     let stamp = placement(subviews)
-    subviews[1].place(at: CGPoint(x: bounds.minX + CaptroFeedStampGeometry.leadingInset(width: mediaSize.width),
+    let visible = visibleMediaRect ?? CGRect(origin: .zero, size: mediaSize)
+    subviews[1].place(at: CGPoint(x: bounds.minX + visible.minX + CaptroFeedStampGeometry.leadingInset(width: visible.width),
       y: bounds.minY + stamp.y), anchor: .topLeading,
       proposal: ProposedViewSize(width: stampWidth, height: stamp.size.height))
   }

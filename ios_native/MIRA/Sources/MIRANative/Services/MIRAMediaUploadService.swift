@@ -9,6 +9,13 @@ public enum MIRAPickedMediaKind: String, Hashable {
   case video
 }
 
+private enum CaptroImagePreparationError: LocalizedError {
+  case sourceTooLarge
+  var errorDescription: String? {
+    "This photo is too large to upload without changing its dimensions. Choose a smaller original."
+  }
+}
+
 public struct MIRAPickedMedia: Hashable {
   public let data: Data
   public let kind: MIRAPickedMediaKind
@@ -35,23 +42,36 @@ public struct MIRAPickedMedia: Hashable {
 
   public func mediaDimension() async -> MIRAMediaDimension {
     let size: CGSize?
+    let sourceOrientation: Int?
+    let sourcePixelSize: CGSize?
+    let rotationDegrees: Double?
     switch kind {
     case .image:
-      size = await Task.detached(priority: .utility) {
+      let geometry = await Task.detached(priority: .utility) { () -> (CGSize?, Int?, CGSize?) in
         if let source = CGImageSourceCreateWithData(data as CFData, nil),
            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
            let height = properties[kCGImagePropertyPixelHeight] as? NSNumber {
           let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
           let swapped = (5...8).contains(orientation)
-          return CGSize(width: swapped ? height.doubleValue : width.doubleValue,
-            height: swapped ? width.doubleValue : height.doubleValue)
+          return (CGSize(width: swapped ? height.doubleValue : width.doubleValue,
+            height: swapped ? width.doubleValue : height.doubleValue), orientation,
+            CGSize(width: width.doubleValue, height: height.doubleValue))
         }
-        guard let image = UIImage(data: data) else { return nil }
-        return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        guard let image = UIImage(data: data) else { return (nil, nil, nil) }
+        let pixels = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        return (pixels, nil, pixels)
       }.value
+      size = geometry.0
+      sourceOrientation = geometry.1
+      sourcePixelSize = geometry.2
+      rotationDegrees = nil
     case .video:
-      size = await videoNaturalSize()
+      let geometry = await videoNaturalSize()
+      size = geometry.0
+      sourceOrientation = nil
+      sourcePixelSize = geometry.2
+      rotationDegrees = geometry.1
     }
 
     guard let size, size.width > 0, size.height > 0 else {
@@ -78,35 +98,19 @@ public struct MIRAPickedMedia: Hashable {
       feedAspectRatio: width / height,
       displayAspectRatio: width / height,
       cropMode: "preserve_aspect",
-      mediaType: kind.rawValue
+      mediaType: kind.rawValue,
+      sourceOrientation: sourceOrientation,
+      sourcePixelWidth: sourcePixelSize.map { Double($0.width) },
+      sourcePixelHeight: sourcePixelSize.map { Double($0.height) },
+      rotationDegrees: rotationDegrees
     )
   }
 
   public func postMediaDimension() async -> MIRAMediaDimension {
-    let source = await mediaDimension()
-    let supported = MIRASupportedPostAspectRatio.nearest(
-      width: source.originalWidth ?? source.width,
-      height: source.originalHeight ?? source.height
-    )
-    return MIRAMediaDimension(
-      width: source.width,
-      height: source.height,
-      ratio: source.ratio,
-      format: supported.rawValue,
-      type: source.type,
-      originalWidth: source.originalWidth,
-      originalHeight: source.originalHeight,
-      originalAspectRatio: source.originalAspectRatio,
-      feedWidth: supported.feedWidth,
-      feedHeight: supported.feedHeight,
-      feedAspectRatio: supported.widthToHeightRatio,
-      displayAspectRatio: supported.widthToHeightRatio,
-      cropMode: "preserve_aspect",
-      mediaType: source.mediaType
-    )
+    await mediaDimension()
   }
 
-  private func videoNaturalSize() async -> CGSize? {
+  private func videoNaturalSize() async -> (CGSize?, Double?, CGSize?) {
     let ext = URL(fileURLWithPath: fileName).pathExtension.isEmpty ? "mov" : URL(fileURLWithPath: fileName).pathExtension
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).\(ext)")
     do {
@@ -114,14 +118,16 @@ public struct MIRAPickedMedia: Hashable {
       defer { try? FileManager.default.removeItem(at: url) }
       let asset = AVURLAsset(url: url)
       let tracks = try await asset.loadTracks(withMediaType: .video)
-      guard let track = tracks.first else { return nil }
+      guard let track = tracks.first else { return (nil, nil, nil) }
       let naturalSize = try await track.load(.naturalSize)
       let transform = try await track.load(.preferredTransform)
       let transformed = naturalSize.applying(transform)
-      return CGSize(width: abs(transformed.width), height: abs(transformed.height))
+      let rotation = (atan2(Double(transform.b), Double(transform.a)) * 180 / Double.pi + 360)
+        .truncatingRemainder(dividingBy: 360)
+      return (CGSize(width: abs(transformed.width), height: abs(transformed.height)), rotation, naturalSize)
     } catch {
       try? FileManager.default.removeItem(at: url)
-      return nil
+      return (nil, nil, nil)
     }
   }
 
@@ -240,7 +246,7 @@ public final class MIRAMediaUploadService {
     onUploadProgress: (@Sendable (Double) -> Void)?,
     onProcessing: (@Sendable () -> Void)?
   ) async throws -> MIRAMediaUploadResult {
-    let prepared = await prepareImageUpload(media)
+    let prepared = try await prepareImageUpload(media)
     return try await uploadModeratedMedia(
       media: media,
       uploadData: prepared.data,
@@ -287,8 +293,9 @@ public final class MIRAMediaUploadService {
       dimensions = await media.mediaDimension()
     }
     let uploadedImageSize = mediaType == "image" ? await imagePixelSize(uploadData) : nil
-    let actualWidth = uploadedImageSize.map { Double($0.width) } ?? dimensions.width
-    let actualHeight = uploadedImageSize.map { Double($0.height) } ?? dimensions.height
+    let uploadPreservesSourceBytes = mediaType == "image" && uploadData == media.data
+    let actualWidth = uploadPreservesSourceBytes ? dimensions.width : uploadedImageSize.map { Double($0.width) } ?? dimensions.width
+    let actualHeight = uploadPreservesSourceBytes ? dimensions.height : uploadedImageSize.map { Double($0.height) } ?? dimensions.height
     return try await performUpload(kind: mediaType, bytes: uploadData.count) {
       if let pending = pendingUploads[media] {
         return try await finishPendingUpload(media, completion: pending)
@@ -470,8 +477,11 @@ public final class MIRAMediaUploadService {
     }.value
   }
 
-  private func prepareImageUpload(_ media: MIRAPickedMedia) async -> PreparedImageUpload {
-    if target == .feedPost, let feedImage = await prepareFeedImage(media.data) {
+  private func prepareImageUpload(_ media: MIRAPickedMedia) async throws -> PreparedImageUpload {
+    if target == .feedPost {
+      guard let feedImage = await prepareFeedImage(media.data) else {
+        throw CaptroImagePreparationError.sourceTooLarge
+      }
       return PreparedImageUpload(
         data: feedImage,
         mimeType: "image/jpeg",
@@ -487,7 +497,9 @@ public final class MIRAMediaUploadService {
       )
     }
 
-    let prepared = await prepareImage(media.data) ?? media.data
+    guard let prepared = await prepareImage(media.data), prepared.count <= 10_000_000 else {
+      throw CaptroImagePreparationError.sourceTooLarge
+    }
     return PreparedImageUpload(
       data: prepared,
       mimeType: "image/jpeg",
@@ -503,15 +515,14 @@ public final class MIRAMediaUploadService {
   }
 
   func prepareFeedImage(_ data: Data) async -> Data? {
-    await Task.detached(priority: .userInitiated) {
+    if detectedImageMimeType(data) != nil && data.count <= 10_000_000 { return data }
+    return await Task.detached(priority: .userInitiated) {
       guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
       // Cloudflare Images accepts at most 10 MB. Keep the selected composition
       // intact; the feed layout must not crop pixels from the uploaded source.
-      let maxSide: CGFloat = 2560
-      let scale = min(1, maxSide / max(image.size.width, image.size.height))
       let targetSize = CGSize(
-        width: (image.size.width * scale).rounded(),
-        height: (image.size.height * scale).rounded()
+        width: (image.size.width * image.scale).rounded(),
+        height: (image.size.height * image.scale).rounded()
       )
       let format = UIGraphicsImageRendererFormat()
       format.scale = 1
@@ -520,7 +531,7 @@ public final class MIRAMediaUploadService {
       let rendered = renderer.image { _ in
         image.draw(in: CGRect(origin: .zero, size: targetSize))
       }
-      let renderedData = [0.94, 0.88, 0.82, 0.76].lazy
+      let renderedData = [0.94, 0.88, 0.82, 0.76, 0.68].lazy
         .compactMap { rendered.jpegData(compressionQuality: $0) }
         .first { $0.count <= 9_500_000 }
       #if DEBUG

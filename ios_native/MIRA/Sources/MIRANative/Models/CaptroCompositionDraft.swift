@@ -1,19 +1,20 @@
 import Foundation
 
 enum CaptroWritingIntent: String, Codable, CaseIterable, Identifiable {
+  case free
   case wantTo = "want_to"
   case lookingFor = "looking_for"
   case concern
   case cover
   var id: String { rawValue }
   var title: String {
-    switch self { case .wantTo: return "Want to"; case .lookingFor: return "Looking for"; case .concern: return "Concern"; case .cover: return "Cover" }
+    switch self { case .free: return "Write"; case .wantTo: return "Want to"; case .lookingFor: return "Looking for"; case .concern: return "Concern"; case .cover: return "Cover" }
   }
   var byline: String {
-    switch self { case .wantTo: return "wants to"; case .lookingFor: return "is looking for"; case .concern: return "is concerned about"; case .cover: return "Cover" }
+    switch self { case .free: return ""; case .wantTo: return "wants to"; case .lookingFor: return "is looking for"; case .concern: return "is concerned about"; case .cover: return "Cover" }
   }
   var placeholder: String {
-    switch self { case .wantTo: return "What do you want to do?"; case .lookingFor: return "What are you looking for?"; case .concern: return "What’s on your mind?"; case .cover: return "Add a caption (optional)…" }
+    switch self { case .free, .wantTo, .lookingFor, .concern: return "Write something…"; case .cover: return "Add a caption (optional)…" }
   }
 }
 
@@ -39,7 +40,7 @@ enum CaptroCompositionAudience: String, Codable, CaseIterable, Identifiable {
 /// One editing source of truth. UI/presentation and upload resources live outside it.
 /// Scheduling is retained while switching intents, but never submitted for Concern.
 struct CaptroCompositionDraft {
-  var intent: CaptroWritingIntent = .wantTo
+  var intent: CaptroWritingIntent = .free
   var audience: CaptroCompositionAudience = .everyone
   var time: Date?
   var title = "" // Structured object name; ordinary writing has no separate title field.
@@ -57,9 +58,9 @@ struct CaptroCompositionDraft {
   var requestID = UUID().uuidString
   var structured: Bool { [.club, .event, .meetup, .deal].contains(selectedStampKind) }
   var isCover: Bool { intent == .cover }
-  var submittedIntent: String? { structured && !isCover ? nil : intent.rawValue }
+  var submittedIntent: String? { isCover ? CaptroWritingIntent.cover.rawValue : nil }
   var submittedTime: String? {
-    guard !structured, intent != .concern, !isCover, let time else { return nil }
+    guard !structured, intent != .free, intent != .concern, !isCover, let time else { return nil }
     return ISO8601DateFormatter().string(from: time)
   }
   var hasWriting: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

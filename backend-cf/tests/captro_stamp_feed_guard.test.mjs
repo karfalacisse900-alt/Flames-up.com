@@ -46,9 +46,8 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.doesNotMatch(mainFeed, /photoFeedPosts/);
   assert.match(mainFeed, /let sorted = await sortedByNativeScore\(loaded\)/);
   assert.match(mainFeed, /interleavePostFormats\(merged\)/);
-  assert.match(mainFeed, /let mediaPosts = rankedPosts\.filter \{ !\$0\.feedMediaURLs\.isEmpty \}/);
-  assert.match(mainFeed, /let textPosts = rankedPosts\.filter \{ \$0\.feedMediaURLs\.isEmpty \}/);
-  assert.match(mainFeed, /wantsMedia\.toggle\(\)/);
+  assert.match(mainFeed, /CaptroFeedFormatMixer\.mix\(rankedPosts\)/);
+  assert.match(mainFeed, /if post\.feedMediaURLs\.isEmpty \{ return 2 \}/);
   assert.match(mainFeed, /loaded = try await fetchFeedPage\(skip: skip\)/);
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
@@ -150,14 +149,14 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(mainFeed, /safeAreaPadding\(\.bottom, bottomInset \+ homeTabClearance\)/);
 });
 
-test('Home media uses supported metadata ratios and controlled crop; Details preserves originals', () => {
-  assert.match(mediaPager, /declaredCoverHeightToWidthRatio[\s\S]*?MIRAMediaSizing\.mainFeedDisplayRatio/);
+test('Home media uses each source ratio and fit while Details preserves originals', () => {
+  assert.match(mediaPager, /MIRAMediaSizing\.mainFeedDisplayRatio/);
   assert.doesNotMatch(mediaPager, /measuredCoverHeightToWidthRatio|onMeasuredRatio:/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
-  assert.match(mediaPager, /contentMode: \.fill/);
-  assert.match(mediaPager, /MIRAMediaSizing\.supportedPostHeightToWidthRatio\(ratio\)/);
+  assert.match(mediaPager, /contentMode: \.fit/);
+  assert.doesNotMatch(mediaPager, /contentMode: \.fill/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
   const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
@@ -208,15 +207,16 @@ test('Home media uses supported metadata ratios and controlled crop; Details pre
   assert.match(workerRatios, /'1:1'[\s\S]*?1080[\s\S]*?1080/);
   assert.doesNotMatch(workerRatios, /'2:3'|1620/);
   assert.match(mediaSizing, /supportedPostHeightToWidthRatios:[\s\S]*?feedWideLandscapeRatio[\s\S]*?feedLandscapeRatio[\s\S]*?feedTallPortraitRatio[\s\S]*?feedShortPortraitRatio[\s\S]*?feedPreviewRatio[\s\S]*?feedSquareRatio/);
-  assert.match(mediaModels, /public var heightToWidthRatio:[\s\S]*?MIRASupportedPostAspectRatio\.from\(format: format\)[\s\S]*?feedWidth[\s\S]*?originalWidth/);
+  assert.match(mediaModels, /public var heightToWidthRatio:[\s\S]*?originalWidth[\s\S]*?MIRASupportedPostAspectRatio\.from\(format: format\)/);
   assert.match(worker, /const explicit = SUPPORTED_FEED_MEDIA_RATIOS\.find[\s\S]*?if \(explicit\) return explicit;/);
 });
 
-test('media canvas is metadata-sized without a separate More row or viewport height', () => {
+test('media canvas uses the selected slide ratio and fits extreme height without a More row', () => {
   const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
   assert.match(sizing, /MIRAMediaSizing\.mainFeedDisplayRatio/);
-  assert.match(sizing, /height: feedWidth \* resolved/);
-  assert.doesNotMatch(sizing, /visibleFeedHeight|UIScreen\.main\.bounds/);
+  assert.match(sizing, /ratios\[selectedMediaIndex\]/);
+  assert.match(sizing, /min\(naturalHeight, maximumHeight\)/);
+  assert.match(sizing, /UIScreen\.main\.bounds\.height/);
   assert.doesNotMatch(postView, /showsMoreButton|Button\("More"|fixedVerticalContent/);
   assert.doesNotMatch(sizing, /availableMediaHeight\s*\/|min\(pageSize\.width/);
   assert.match(postView, /frameSize: mediaSize/);
@@ -293,9 +293,9 @@ test('Home carousel locks each touch to horizontal or vertical intent', () => {
   assert.doesNotMatch(mediaPager, /highPriorityGesture/);
 });
 
-test('composer persists one draft and hides structured setup behind the intent selector', () => {
+test('composer persists one free-writing draft and keeps structured setup behind Add', () => {
   assert.match(composer, /@State private var draft = CaptroCompositionDraft/);
-  assert.match(composer, /creationIntent: draft\.intent\.rawValue/);
+  assert.match(composer, /creationIntent: draft\.submittedIntent/);
   assert.match(composer, /stampType: hasSelectedStamp \? selectedStampKind\.rawValue : nil/);
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
   assert.match(composer, /private var stampPickerKinds:[\s\S]*?\[\.club, \.event, \.meetup, \.deal\]\.filter/);
@@ -323,7 +323,8 @@ test('composer exposes quiet tools, native actions, and no Post category', () =>
   assert.match(composer, /ToolbarItem\(placement: \.confirmationAction\)/);
   assert.match(composer, /navigationTitle\("Create"\)/);
   assert.match(composer, /Text\("Done"\)/);
-  assert.match(canvas, /ForEach\(CaptroWritingIntent\.allCases\)/);
+  assert.match(canvas, /CaptroEditorialMenuRow\(title: "Cover"/);
+  assert.doesNotMatch(canvas, /ForEach\(CaptroWritingIntent\.allCases\)/);
   assert.doesNotMatch(canvas, /Text\("Post"\)|Text\("Create Post"\)|composerToolLabel|shadow\(|LinearGradient/);
   assert.match(canvas, /scrollDismissesKeyboard\(\.(interactively|immediately)\)/);
 });

@@ -1136,15 +1136,15 @@ public struct MainFeedView: View {
     HStack(spacing: 0) {
       HStack(spacing: 8) {
         Button { isFeedSelectorPresented = true } label: {
-          HStack(spacing: 4) {
+          HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal")
+              .font(.system(size: 15, weight: .semibold))
             Text(selectedFeedSection.title)
               .font(.system(.subheadline, design: .serif, weight: .semibold))
               .lineLimit(1)
-            Image(systemName: "chevron.down")
-              .font(.system(size: 10, weight: .bold))
           }
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .frame(width: 92, height: 52, alignment: .leading)
+          .frame(width: 102, height: 52, alignment: .leading)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1637,7 +1637,7 @@ private struct MainNativePostCard: View {
         isVideo: url.isVideoURL,
         placeholderURL: mediaPlaceholderURL(for: 0, mediaURL: url),
         fallbackURL: mediaFallbackURL(for: 0, mediaURL: url),
-        contentMode: .fill,
+        contentMode: .fit,
         shouldPlay: isVideoActive,
         maxPixelSize: MIRAMediaSizing.feedTargetHeight,
         placeholderColor: MIRATheme.Color.mediaPlaceholder
@@ -1656,7 +1656,7 @@ private struct MainNativePostCard: View {
               isVideo: url.isVideoURL,
               placeholderURL: mediaPlaceholderURL(for: index, mediaURL: url),
               fallbackURL: mediaFallbackURL(for: index, mediaURL: url),
-              contentMode: .fill,
+              contentMode: .fit,
               shouldPlay: isVideoActive && selectedMediaIndex == index,
               maxPixelSize: MIRAMediaSizing.feedTargetHeight,
               placeholderColor: MIRATheme.Color.mediaPlaceholder
