@@ -88,6 +88,16 @@ public struct CaptroHomeFeedVisualTestView: View {
 
 private enum CaptroHomeFeedVisualFixtures {
   static func posts(videoURL: URL? = nil) -> [MIRAPost] {
+    if ProcessInfo.processInfo.arguments.contains("--captro-stability-forty") {
+      let seed = streamPosts(videoURL: videoURL)
+      guard !seed.isEmpty else { return [] }
+      return (0..<40).compactMap { index in
+        guard let data = try? JSONEncoder().encode(seed[index % seed.count]),
+          var record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        record["id"] = "stress-\(index)"
+        return (try? JSONSerialization.data(withJSONObject: record)).flatMap { try? JSONDecoder().decode(MIRAPost.self, from: $0) }
+      }
+    }
     if ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel"), let videoURL {
       return mixedCarouselPosts(videoURL: videoURL)
     }

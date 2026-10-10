@@ -30,7 +30,10 @@ test('Home status rail is API-backed, neutral, and masked by fixed controls', ()
   assert.match(home, /try await model\.api\.get\("\/statuses"\)/);
   assert.ok(home.includes('.accessibilityIdentifier("home.fixed.controls")'));
   assert.match(home, /\.clipped\(\)\s*\.accessibilityIdentifier\("home\.story\.rail"\)/);
-  assert.ok(home.includes('.frame(width: 158, alignment: .leading)'));
+  assert.ok(home.includes('.frame(width: 96, alignment: .leading)'));
+  const header = home.slice(home.indexOf('private var homeTopBar'), home.indexOf('private func homeStoryAvatar'));
+  assert.doesNotMatch(header, /Text\(selectedFeedSection.title\)/);
+  assert.match(header, /frame\(width: 44, height: 44\)/);
   assert.ok(home.includes('RemoteAvatar(url: url, size: 64)'));
   assert.doesNotMatch(home.slice(home.indexOf('private var homeTopBar'), home.indexOf('private func homeStoryAvatar')), /linearGradient|AngularGradient|rainbow/i);
 });

@@ -1,6 +1,30 @@
 import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
+  func testFortyMixedPostsAndDetailsReturn() {
+    let app = launch(["--captro-visual-video", "--captro-stability-forty", "--captro-stability-updates"])
+    let stream = app.scrollViews["home.post.stream"]
+    XCTAssertTrue(stream.waitForExistence(timeout: 20))
+    for index in 0..<40 {
+      let page = app.otherElements["home.post.page.stress-\(index)"]
+      reveal(page, in: stream, app: app)
+      XCTAssertTrue(page.exists && page.frame.intersects(stream.frame), "Stable post \(index) remains reachable")
+      if [0, 7, 14].contains(index) {
+        let title = page.buttons["captro.editorialCard"].firstMatch
+        XCTAssertTrue(title.isHittable, "Details action must be reachable")
+        if title.exists {
+          let y = page.frame.minY
+          title.tap()
+          XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
+          app.buttons["Back"].tap()
+          XCTAssertTrue(page.waitForExistence(timeout: 5))
+          XCTAssertEqual(page.frame.minY, y, accuracy: 2, "Details return must preserve pixel offset")
+        }
+      }
+      if index % 10 == 0 || index == 39 { capture(app, "stable-stream-\(index)") }
+    }
+  }
+
   func testIdleBackgroundUpdatesPreserveReadingPositionAndHeader() {
     let app = launch(["--captro-visual-mixed-carousel", "--captro-stability-updates"])
     let page = app.otherElements["home.post.page.mixed-carousel"]

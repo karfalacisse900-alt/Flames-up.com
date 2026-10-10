@@ -90,6 +90,9 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
       guard let view = cells[id]?.value else { return nil }
       return (id, view.convert(view.bounds, to: scroll))
     }
+    // Do not clamp a saved offset against the previous feed's layout while
+    // SwiftUI is still replacing its lazy targets.
+    guard !frames.isEmpty else { return }
     if let pending, !scroll.isDragging, !scroll.isDecelerating {
       // If a lazy target isn't mounted, the saved offset first materializes it.
       // Complete once; don't retry/correct against subsequent user gestures.

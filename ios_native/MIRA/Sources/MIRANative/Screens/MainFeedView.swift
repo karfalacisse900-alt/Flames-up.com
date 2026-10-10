@@ -1039,8 +1039,7 @@ public struct MainFeedView: View {
     self.isGuest = isGuest
   }
 
-  public var body: some View {
-    NavigationStack {
+  private var presentedFeed: some View {
       GeometryReader { proxy in
         VStack(spacing: 0) {
           homeTopBar
@@ -1135,6 +1134,11 @@ public struct MainFeedView: View {
           }
         )
       }
+  }
+
+  public var body: some View {
+    NavigationStack {
+      presentedFeed
       .task(id: isGuest) {
         model.configureGuestMode(isGuest)
         async let feed: Void = model.prepareForStartup()

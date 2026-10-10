@@ -448,7 +448,8 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   public var body: some View {
     Group {
-      if let uiImage, loadedScope == MIRALocalJSONCache.currentScopeIdentifier {
+      if let uiImage, loadedScope == MIRALocalJSONCache.currentScopeIdentifier,
+         keepsPreviousImageWhileLoading || loadedURL.map({ candidateURLs.contains($0) }) == true {
         content(Image(uiImage: uiImage))
           .opacity(isImageVisible ? 1 : 0)
       } else if let memoryImage = memoryImageForCurrentURL {
@@ -513,7 +514,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
     for remoteURL in remoteURLs {
       if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
-        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
         await MainActor.run {
           uiImage = memoryImage
           loadedURL = remoteURL
@@ -938,6 +939,8 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var videoRetryAttempt = 0
   @State private var streamReadyRetryAttempt = 0
   @State private var isOnScreen = false
+  @State private var wantsPlayback = false
+  @State private var wantsMuted = false
 
   var body: some View {
     ZStack {
@@ -981,22 +984,28 @@ private struct MIRAResolvedVideoPlayer: View {
     .task(id: playbackTaskID) { await configurePlayer() }
     .onAppear {
       isOnScreen = true
+      wantsPlayback = shouldPlay
+      wantsMuted = isMuted
       guard shouldPlay else { return }
       globallyPaused = false
       if let player {
         syncPlayback(player)
       }
     }
-    .onChange(of: shouldPlay) { _, _ in
+    .onChange(of: shouldPlay) { _, requested in
+      wantsPlayback = requested
+      if requested && isOnScreen { globallyPaused = false }
       if let player {
         syncPlayback(player)
       }
     }
-    .onChange(of: isMuted) { _, _ in
+    .onChange(of: isMuted) { _, requested in
+      wantsMuted = requested
       if let player { syncPlayback(player) }
     }
     .onDisappear {
       isOnScreen = false
+      wantsPlayback = false
       globallyPaused = true
       streamReadyRetryAttempt += 1
       videoRetryAttempt += 1
@@ -1010,7 +1019,7 @@ private struct MIRAResolvedVideoPlayer: View {
     }
     .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
       guard let player, let item = notification.object as? AVPlayerItem,
-            item === player.currentItem, shouldPlay, isOnScreen, !globallyPaused,
+            item === player.currentItem, wantsPlayback, isOnScreen, !globallyPaused,
             MIRAPlaybackCoordinator.ownsVideo(player) else { return }
       player.seek(to: .zero)
       syncPlayback(player)
@@ -1074,7 +1083,7 @@ private struct MIRAResolvedVideoPlayer: View {
     }
 
     let directURL = URL(string: url)
-    if let directURL, directURL.isPlayableFileOrRemoteVideo, generatedThumbnail == nil {
+    if let directURL, directURL.isPlayableFileOrRemoteVideo, generatedThumbnail == nil, currentPosterURL == nil {
       Task { await loadGeneratedThumbnail(for: directURL, expectedURL: url) }
     }
 
@@ -1166,6 +1175,10 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
     thumbnailURL = info.thumbnail
+    if createPlayer, let player {
+      syncPlayback(player)
+      return
+    }
     if createPlayer, let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines), !hls.isEmpty, let hlsURL = URL(string: hls) {
       let item = AVPlayerItem(url: hlsURL)
       configurePlayerItemForFastStoryPlayback(item)
@@ -1329,11 +1342,14 @@ private struct MIRAResolvedVideoPlayer: View {
       MIRAPlaybackCoordinator.releaseVideo(player)
       return
     }
-    if shouldPlay && isOnScreen && !globallyPaused && !MIRAPlaybackCoordinator.isLiveVoiceActive {
+    // Read live state, not the `shouldPlay` value captured by an older async
+    // readiness/retry task before another carousel item took ownership.
+    if wantsPlayback && isOnScreen && !globallyPaused && !MIRAPlaybackCoordinator.isLiveVoiceActive {
+      let alreadyOwnsAudio = MIRAPlaybackCoordinator.ownsVideo(player)
       MIRAPlaybackCoordinator.activateVideo(player, id: url)
-      configureAudioSession()
-      player.isMuted = isMuted
-      player.volume = isMuted ? 0 : 1
+      if !alreadyOwnsAudio { configureAudioSession() }
+      player.isMuted = wantsMuted
+      player.volume = wantsMuted ? 0 : 1
       player.playImmediately(atRate: 1)
     } else {
       MIRAPlaybackCoordinator.releaseVideo(player)
@@ -1342,7 +1358,6 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func configurePlayback(for player: AVPlayer) {
-    configureAudioSession()
     player.actionAtItemEnd = .none
     player.automaticallyWaitsToMinimizeStalling = false
     player.isMuted = isMuted

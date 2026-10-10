@@ -59,6 +59,7 @@ jobs:
           elif [ '${{ inputs.feed_fixes_only }}' = 'true' ]; then
             tests=(-only-testing:CaptroStampTests
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testIdleBackgroundUpdatesPreserveReadingPositionAndHeader
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testFortyMixedPostsAndDetailsReturn
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth
@@ -77,20 +78,26 @@ jobs:
             "${tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/stamp-build.log"
       - name: Record continuous Home scrolling
-        if: ${{ !inputs.baseline && !inputs.cover_runtime && !inputs.feed_fixes_only }}
+        if: ${{ !inputs.baseline && !inputs.cover_runtime }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
           device=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if d["name"] == "iPhone 17"))')
+          xcrun simctl boot "$device" || true
           xcrun simctl bootstatus "$device" -b
           xcrun simctl io "$device" recordVideo --codec=h264 "$RUNNER_TEMP/home-continuous-stream.mp4" > "$RUNNER_TEMP/home-recording.log" 2>&1 &
           capture_pid=$!
           trap 'kill -INT "$capture_pid" 2>/dev/null || true; wait "$capture_pid" || true' EXIT
+          recording_tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testPublicStampExamples
+            -only-testing:CaptroLayoutUITests/StampRefinementTests/testLegacyCaptionIsBoundedWithoutMoreAndVideoControlsRemainUsable)
+          if [ '${{ inputs.feed_fixes_only }}' = 'true' ]; then
+            recording_tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testFortyMixedPostsAndDetailsReturn)
+          fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/StampBuild" -resultBundlePath "$RUNNER_TEMP/StreamRecording.xcresult" \
-            -only-testing:CaptroLayoutUITests/StampRefinementTests/testPublicStampExamples \
-            -only-testing:CaptroLayoutUITests/StampRefinementTests/testLegacyCaptionIsBoundedWithoutMoreAndVideoControlsRemainUsable \
+            "${recording_tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/home-recording-test.log"
       - uses: actions/setup-node@v6
         if: ${{ inputs.cover_runtime }}

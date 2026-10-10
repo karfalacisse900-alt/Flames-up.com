@@ -212,8 +212,15 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   }
 
   public var feedMediaURLs: [String] {
-    let optimized = uniqueMediaURLs(from: feedMediaUrls?.values ?? [], fallback: nil)
-    return optimized.isEmpty ? mediaURLs : optimized
+    let optimized = feedMediaUrls?.values ?? []
+    let originals = mediaURLs
+    guard !originals.isEmpty else { return uniqueMediaURLs(from: optimized, fallback: nil) }
+    // A missing rendition cannot shift every later slide onto another source.
+    guard optimized.count == originals.count else { return originals }
+    return optimized.enumerated().map { index, value in
+      let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+      return value.isEmpty ? originals[index] : value
+    }
   }
 
   /// Source identity is independent of an expiring delivery URL and array index.
@@ -231,17 +238,17 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   }
 
   public var thumbnailMediaURLs: [String] {
-    let thumbnails = uniqueMediaURLs(from: thumbnailUrls?.values ?? [], fallback: nil)
+    let thumbnails = thumbnailUrls?.values ?? []
     return thumbnails.isEmpty ? feedMediaURLs : thumbnails
   }
 
   public var posterMediaURLs: [String] {
-    let posters = uniqueMediaURLs(from: posterUrls?.values ?? [], fallback: nil)
+    let posters = posterUrls?.values ?? []
     return posters.isEmpty ? thumbnailMediaURLs : posters
   }
 
   public var fallbackMediaURLs: [String] {
-    let fallbacks = uniqueMediaURLs(from: mediaFallbackUrls?.values ?? [], fallback: nil)
+    let fallbacks = mediaFallbackUrls?.values ?? []
     return fallbacks.isEmpty ? mediaURLs : fallbacks
   }
 

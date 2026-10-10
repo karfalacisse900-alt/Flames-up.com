@@ -84,4 +84,16 @@ final class CaptroFeedStabilityTests: XCTestCase {
     XCTAssertEqual(MIRAMediaSizing.mainFeedDisplayRatio(for: [], aspectRatios: []), 1.25)
     XCTAssertEqual(MIRAMediaSizing.mainFeedDisplayRatio(for: [], aspectRatios: [1.25, 0.5625]), 1.25)
   }
+
+  func testRepeatedPostersAndMissingRenditionsCannotShiftSlides() throws {
+    let post = try JSONDecoder().decode(MIRAPost.self, from: Data("""
+      {"id":"mixed","images":["https://example.com/a.jpg","https://example.com/b.mp4","https://example.com/c.jpg"],
+       "feedMediaUrls":["https://example.com/only-one-rendition.jpg"],
+       "posterUrls":["https://example.com/same.jpg","https://example.com/same.jpg","https://example.com/last.jpg"]}
+      """.utf8))
+    XCTAssertEqual(post.feedMediaURLs, post.mediaURLs)
+    XCTAssertEqual(post.posterMediaURLs.count, 3)
+    XCTAssertEqual(post.posterMediaURLs[2], "https://example.com/last.jpg")
+    XCTAssertEqual(Set(post.feedMediaIdentities).count, 3)
+  }
 }

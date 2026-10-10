@@ -44,8 +44,8 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
 
 test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.doesNotMatch(mainFeed, /photoFeedPosts/);
-  assert.match(mainFeed, /let sorted = await sortedByNativeScore\(loaded\)/);
-  assert.match(mainFeed, /interleavePostFormats\(merged\)/);
+  assert.match(mainFeed, /startsNewOrder \? await sortedByNativeScore\(loaded\) : loaded/);
+  assert.match(mainFeed, /CaptroFeedReconciliation\.background\(existing: posts, fresh: loaded\)/);
   assert.match(mainFeed, /CaptroFeedFormatMixer\.mix\(rankedPosts\)/);
   assert.match(mainFeed, /if post\.feedMediaURLs\.isEmpty \{ return 2 \}/);
   assert.match(mainFeed, /loaded = try await fetchFeedPage\(skip: skip\)/);
@@ -217,8 +217,8 @@ test('media canvas keeps the first slide frame stable and fits extreme height wi
   const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
   assert.match(sizing, /post\.feedFrameHeightToWidthRatio/);
   assert.doesNotMatch(sizing, /ratios\[selectedMediaIndex\]/);
-  assert.match(sizing, /min\(naturalHeight, maximumHeight\)/);
-  assert.match(sizing, /UIScreen\.main\.bounds\.height/);
+  assert.match(sizing, /height: feedWidth \* \(frameRatio \?\? post\.feedFrameHeightToWidthRatio\)/);
+  assert.doesNotMatch(sizing, /UIScreen\.main\.bounds\.height/);
   assert.doesNotMatch(postView, /showsMoreButton|Button\("More"|fixedVerticalContent/);
   assert.doesNotMatch(sizing, /availableMediaHeight\s*\/|min\(pageSize\.width/);
   assert.match(postView, /frameSize: mediaSize/);
