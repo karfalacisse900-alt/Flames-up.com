@@ -7,10 +7,12 @@ import ImageIO
 final class CaptroPostMediaTests: XCTestCase {
   func testMixedCarouselKeepsFirstItemFeedFrameAndIndependentWriting() throws {
     let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
-    var post = try decoder.decode(MIRAPost.self, from: Data(#"{
+    var post = try decoder.decode(MIRAPost.self, from: Data("""
+      {
       "id":"mixed", "images":["https://example.com/portrait.jpg","https://example.com/landscape.mp4"],
       "media_dimensions":[{"width":1080,"height":1350},{"width":1920,"height":1080}]
-    }"#.utf8))
+      }
+      """.utf8))
     XCTAssertEqual(post.feedFrameHeightToWidthRatio, 1.25, accuracy: 0.001)
     XCTAssertEqual(post.mediaHeightToWidthRatios[1], 0.5625, accuracy: 0.001)
     var first = CaptroMediaWriting(); first.text = "Only the first image"
