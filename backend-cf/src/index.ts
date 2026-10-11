@@ -5388,9 +5388,10 @@ function streamPlaybackUrl(url: string): string {
 function feedMediaDimensions(mediaUrls: string[], mediaTypes: string[], dimensions: any[]) {
   return mediaUrls.map((url, index) => {
     const original = dimensions[index] || {};
-    const originalWidth = Number(original.width || original.original_width || 0) || null;
-    const originalHeight = Number(original.height || original.original_height || 0) || null;
-    const originalAspectRatio = Number(original.ratio || original.aspect_ratio || (originalWidth && originalHeight ? originalWidth / originalHeight : 0)) || null;
+    const originalWidth = Number(original.original_width || original.originalWidth || original.width || 0) || null;
+    const originalHeight = Number(original.original_height || original.originalHeight || original.height || 0) || null;
+    const originalAspectRatio = Number(original.original_aspect_ratio || original.originalAspectRatio
+      || (originalWidth && originalHeight ? originalWidth / originalHeight : 0) || original.ratio || original.aspect_ratio || 0) || null;
     const rawType = String(mediaTypes[index] || original.type || '').toLowerCase();
     const mediaType = rawType.includes('video') || isVideoMediaUrl(url) ? 'video' : 'image';
     const variant = supportedFeedMediaVariant({ ...original, original_width: originalWidth, original_height: originalHeight, original_aspect_ratio: originalAspectRatio });
