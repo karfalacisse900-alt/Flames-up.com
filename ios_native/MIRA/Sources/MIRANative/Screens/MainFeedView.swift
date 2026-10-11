@@ -1138,8 +1138,7 @@ public struct MainFeedView: View {
       }
   }
 
-  public var body: some View {
-    NavigationStack {
+  private var observingFeed: some View {
       presentedFeed
       .task(id: isGuest) {
         model.configureGuestMode(isGuest)
@@ -1173,6 +1172,10 @@ public struct MainFeedView: View {
         guard let update = MIRAUserFollowSync.update(from: notification) else { return }
         model.applyFollowUpdate(update)
       }
+  }
+
+  private var activeFeed: some View {
+      observingFeed
       .onChange(of: scenePhase) { _, phase in
         guard phase == .active, !model.posts.isEmpty else { return }
         Task {
@@ -1203,24 +1206,32 @@ public struct MainFeedView: View {
       .onChange(of: selectedPostID) { _, _ in
         scheduleCurrentPostActivation()
       }
-      .onAppear {
-        viewport.onVisible = { [selection = $selectedPostID, active = $activeVideoPostID] id in
-          selection.wrappedValue = id
-          if id == nil { active.wrappedValue = nil }
-          CaptroFeedDiagnostics.event("visible", feed: "home", reason: "visibility_threshold", post: id)
-        }
-        viewport.updateOrder(displayedPosts.map(\.id))
-        reconcileCurrentPostSelection()
-        MIRAApplePerformanceLogger.event("feed_render", detail: model.posts.isEmpty ? "empty" : "posts")
-        if !isMediaPlaybackSuppressed {
-          activateCurrentPost(reason: "home_feed_appeared")
-          MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_appeared")
-        }
-      }
+  }
+
+  public var body: some View {
+    NavigationStack {
+      activeFeed.onAppear(perform: feedDidAppear)
       .onDisappear {
         postActivationTask?.cancel()
         pauseVisibleMedia(reason: "home_feed_disappeared")
       }
+    }
+  }
+
+  private func feedDidAppear() {
+    let selection: Binding<String?> = $selectedPostID
+    let active: Binding<String?> = $activeVideoPostID
+    viewport.onVisible = { (id: String?) in
+      selection.wrappedValue = id
+      if id == nil { active.wrappedValue = nil }
+      CaptroFeedDiagnostics.event("visible", feed: "home", reason: "visibility_threshold", post: id)
+    }
+    viewport.updateOrder(displayedPosts.map(\.id))
+    reconcileCurrentPostSelection()
+    MIRAApplePerformanceLogger.event("feed_render", detail: model.posts.isEmpty ? "empty" : "posts")
+    if !isMediaPlaybackSuppressed {
+      activateCurrentPost(reason: "home_feed_appeared")
+      MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_appeared")
     }
   }
 
