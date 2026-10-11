@@ -54,9 +54,14 @@ public struct CaptroHomeFeedVisualTestView: View {
     .task {
       if ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") {
         do {
-          let posts: [MIRAPost] = try await model.api.get("/posts/world-board?limit=50&skip=0")
+          var posts: [MIRAPost] = try await model.api.get("/posts/world-board?limit=50&skip=0")
           let order = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--captro-public-posts=") }?
             .dropFirst("--captro-public-posts=".count).split(separator: ",").map(String.init) ?? []
+          for page in 1...3 where !Set(order).isSubset(of: Set(posts.map(\.id))) {
+            let next: [MIRAPost] = try await model.api.get("/posts/world-board?limit=50&skip=\(page * 50)")
+            posts.append(contentsOf: next)
+            if next.count < 50 { break }
+          }
           model.posts = order.compactMap { id in posts.first { $0.id == id } }
           if ProcessInfo.processInfo.arguments.contains("--captro-writing-overlays") {
             model.posts = model.posts.enumerated().map { index, original in

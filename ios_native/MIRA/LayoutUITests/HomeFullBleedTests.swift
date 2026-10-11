@@ -1,6 +1,18 @@
 import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
+  func testLiveNYPLHomeAndDetailsShareStoredPortraitFrame() {
+    let app = launch(["--captro-public-feed-test", "--captro-public-posts=7ff613af-f80a-474a-85cc-b159bbcf6a79"])
+    let media = app.otherElements["home.post.media"].firstMatch
+    XCTAssertTrue(media.waitForExistence(timeout: 45))
+    XCTAssertEqual(media.frame.height / media.frame.width, 4.0 / 3, accuracy: 0.01)
+    capture(app, "live-NYPL-home-shared-framing")
+    app.buttons["captro.editorialCard"].firstMatch.tap()
+    let detail = app.descendants(matching: .any)["post.detail.media"].firstMatch
+    XCTAssertTrue(detail.waitForExistence(timeout: 10))
+    XCTAssertEqual(detail.frame.height / detail.frame.width, 4.0 / 3, accuracy: 0.01)
+    capture(app, "live-NYPL-details-shared-framing")
+  }
   func testFortyMixedPostsAndDetailsReturn() {
     verifyMixedPosts(count: 40)
   }
