@@ -1372,6 +1372,7 @@ public struct CreatePostNativeView: View {
     }) {
       CaptroPostFramingEditor(items: pendingFramingItems, selected: writingMediaIndex) { updated in
         mediaItems = updated; didCommitFraming = true
+        if errorMessage == "Review media framing before publishing. Your originals stay unchanged." { errorMessage = nil }
       }
     }
     .fullScreenCover(isPresented: presentationBinding(.mediaWriting)) {
@@ -1767,7 +1768,10 @@ public struct CreatePostNativeView: View {
       VStack(alignment: .leading, spacing: 4) {
         CaptroPickedMediaPreview(media: item, size: CGSize(width: width, height: width / ratio))
         HStack {
-          Button("Edit cover") { openPresentation(.mediaWriting) }.accessibilityIdentifier("composer.editCover")
+          Menu("Edit cover") {
+            Button("Headline") { openPresentation(.mediaWriting) }
+            Button("Frame media") { pendingFramingItems = mediaItems; openPresentation(.framing) }
+          }.accessibilityIdentifier("composer.editCover")
           if mediaItems.count > 1 {
             Spacer()
             Button { writingMediaIndex = (index + 1) % mediaItems.count } label: { Text("\(index + 1) / \(mediaItems.count)").monospacedDigit() }
@@ -2173,6 +2177,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var canPost: Bool {
+    guard mediaItems.allSatisfy({ $0.postFraming?.isValid == true }) else { return false }
     guard draft.writingValidationMessage == nil else { return false }
     if draft.isCover {
       guard let cover = mediaItems.first?.mediaWriting, cover.schemaVersion == 2,
@@ -2526,7 +2531,13 @@ public struct CreatePostNativeView: View {
         bodyText = bodyText.isEmpty ? initialCaption : bodyText + "\n\n" + initialCaption
       }
     }
-    if !draft.hasWriting && !draft.isCover { writingFocused = true }
+    if mediaItems.contains(where: { $0.postFraming?.isValid != true }) {
+      writingFocused = false
+      pendingFramingItems = mediaItems
+      writingMediaIndex = 0
+      errorMessage = "Review media framing before publishing. Your originals stay unchanged."
+      openPresentation(.framing)
+    } else if !draft.hasWriting && !draft.isCover { writingFocused = true }
     await loadBroadLocationDefaultIfNeeded()
   }
 

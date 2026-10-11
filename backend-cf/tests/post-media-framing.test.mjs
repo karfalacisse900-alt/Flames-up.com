@@ -1,8 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { PGlite } from '@electric-sql/pglite';
 import { validatePostMediaFraming as validate } from '../src/post-media-framing.ts';
 const frame = { version: 1, sourceAspectRatio: 9/16, displayAspectRatio: 0.8, cropX: 0.3, cropY: 0.8, mediaId: 'a'.repeat(64) };
+test('legacy source dimensions are not overwritten by an old feed derivative', () => {
+  const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('function feedMediaDimensions('), source.indexOf('function normalizeDisplayLocationSource('));
+  const js = ts.transpileModule(body, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const render = new Function('supportedFeedMediaVariant', 'isVideoMediaUrl', 'cleanText', `${js}; return feedMediaDimensions;`)(
+    () => ({ format: '4:5', feed_width: 1080, feed_height: 1350, feed_aspect_ratio: .8 }), () => false, value => value);
+  const [dimension] = render(['https://example.com/image.jpg'], ['image'], [{ width: 1440, height: 810, ratio: 16/9,
+    original_width: 1080, original_height: 1920, original_aspect_ratio: 9/16, framing: frame }]);
+  assert.equal(dimension.original_width, 1080); assert.equal(dimension.original_height, 1920);
+  assert.equal(dimension.original_aspect_ratio, 9/16); assert.deepEqual(dimension.framing, frame);
+});
 test('framing keeps original dimensions and explicit user crop through JSONB', async () => {
   const db = new PGlite();
   try {

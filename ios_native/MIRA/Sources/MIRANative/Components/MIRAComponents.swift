@@ -499,7 +499,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   }
 
   private var loadTaskID: String {
-    "\(MIRALocalJSONCache.currentScopeIdentifier)|\(Int(resolvedMaxPixelSize.rounded()))|\(candidateURLStrings.joined(separator: "|"))"
+    "\(MIRALocalJSONCache.currentScopeIdentifier)|\(Int(max(64, maxPixelSize).rounded()))|\(candidateURLStrings.joined(separator: "|"))"
   }
 
   private var candidateURLStrings: [String] {
@@ -531,7 +531,8 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
     let isAlreadyLoaded = await MainActor.run {
       if let loadedURL {
-        return loadedScope == scope && remoteURLs.contains(loadedURL) && uiImage != nil
+        return loadedScope == scope && remoteURLs.contains(loadedURL)
+          && max(uiImage?.size.width ?? 0, uiImage?.size.height ?? 0) >= max(64, maxPixelSize)
       }
       return false
     }

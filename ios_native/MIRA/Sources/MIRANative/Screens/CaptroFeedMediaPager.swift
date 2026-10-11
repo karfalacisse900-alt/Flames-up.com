@@ -152,7 +152,8 @@ struct CaptroMediaPager: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
           } else if let writing = post.mediaWriting(at: selectedMediaIndex) {
             videoControls.padding(.trailing, 12)
-              .padding(.top, min(proxy.size.height - 52, writing.textRect(in: proxy.size, fill: false).maxY + 8))
+              .padding(.top, min(proxy.size.height - 52,
+                post.mediaGeometry(at: selectedMediaIndex).applying(to: writing).textRect(in: proxy.size, fill: true).maxY + 8))
               .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
           } else { videoControls
             // Keep the existing actions. Only overflow reading moves them into
