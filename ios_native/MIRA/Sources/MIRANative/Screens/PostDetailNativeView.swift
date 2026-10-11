@@ -1019,6 +1019,14 @@ private struct PostDetailOptimizedMediaCarousel: View {
   @State private var isVideoPaused = false
   @State private var isMuted = false
   @State private var isMediaViewerPresented = false
+  private struct Slide: Identifiable {
+    let id: String
+    let index: Int
+    let url: String
+  }
+  private var slides: [Slide] {
+    urls.enumerated().map { Slide(id: MIRAPost.mediaIdentity($0.element), index: $0.offset, url: $0.element) }
+  }
 
   private var currentHeight: CGFloat {
     post.mediaGeometry(at: 0).size(width: width).height
@@ -1035,8 +1043,8 @@ private struct PostDetailOptimizedMediaCarousel: View {
         mediaSlide(index: 0, url: urls[0])
       } else {
         TabView(selection: $selectedIndex) {
-          ForEach(Array(urls.enumerated()), id: \.element) { index, url in
-            mediaSlide(index: index, url: url).tag(index)
+          ForEach(slides) { slide in
+            mediaSlide(index: slide.index, url: slide.url).tag(slide.index)
           }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))

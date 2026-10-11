@@ -327,11 +327,9 @@ final class MainFeedModel: ObservableObject {
 
     for (rank, index) in orderedIndices.enumerated() {
       let post = posts[index]
-      previewURLs.append(contentsOf: post.posterMediaURLs)
-      previewURLs.append(contentsOf: post.thumbnailMediaURLs)
-
-      let mediaURLs = post.feedMediaURLs
-      let imageURLs = orderedMediaURLs(mediaURLs + post.fallbackMediaURLs).filter { !$0.isVideoURL }
+      let mediaURLs = post.mediaURLs.isEmpty ? post.feedMediaURLs : post.mediaURLs
+      if mediaURLs.first?.isVideoURL == true, let poster = post.posterMediaURLs.first { previewURLs.append(poster) }
+      let imageURLs = orderedMediaURLs(mediaURLs).filter { !$0.isVideoURL }
       let videoURLs = mediaURLs.filter { $0.isVideoURL }
 
       if rank <= 3 {

@@ -370,7 +370,7 @@ struct CaptroMediaPager: View {
     for index in mediaURLs.indices {
       guard index >= max(0, selected - 1), index <= min(mediaURLs.count - 1, selected + 2) else { continue }
       let url = mediaURLs[index]
-      if let placeholder = mediaPlaceholderURL(for: index, mediaURL: url) {
+      if url.isVideoURL, let placeholder = mediaPlaceholderURL(for: index, mediaURL: url) {
         previews.append(placeholder)
       }
       let fallback = mediaFallbackURL(for: index, mediaURL: url)

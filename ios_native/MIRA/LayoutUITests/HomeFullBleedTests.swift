@@ -72,6 +72,12 @@ final class HomeFullBleedTests: XCTestCase {
       XCTAssertEqual(media.frame.minY, app.scrollViews["home.post.stream"].frame.minY, accuracy: 1)
       assertStamp(app, media: media)
       capture(app, "continuous-\(name)")
+      app.buttons["captro.editorialCard"].firstMatch.tap()
+      let detail = app.descendants(matching: .any)["post.detail.media"].firstMatch
+      XCTAssertTrue(detail.waitForExistence(timeout: 5))
+      XCTAssertEqual(detail.frame.height / detail.frame.width, homeRatio, accuracy: 0.01,
+        "Home and Details must match for \(name)")
+      capture(app, "details-matching-\(name)")
       app.terminate()
     }
   }

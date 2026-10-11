@@ -66,7 +66,8 @@ jobs:
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testHundredMixedPostsAndDetailsReturn
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testIdleBackgroundUpdatesPreserveReadingPositionAndHeader
-              -only-testing:CaptroLayoutUITests/MediaWritingTests/testEditorCommitCancelAndIndependentCarouselText)
+              -only-testing:CaptroLayoutUITests/MediaWritingTests/testEditorCommitCancelAndIndependentCarouselText
+              -only-testing:CaptroLayoutUITests/MediaWritingTests/testPostFramingPreviewCommitAndCancel)
           elif [ '${{ inputs.baseline }}' = 'true' ]; then
             tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testBeforePublicStampExamples)
           elif [ '${{ inputs.stream_only }}' = 'true' ]; then

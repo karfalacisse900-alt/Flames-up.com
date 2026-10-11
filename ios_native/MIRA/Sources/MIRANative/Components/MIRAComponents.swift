@@ -499,7 +499,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   }
 
   private var loadTaskID: String {
-    "\(MIRALocalJSONCache.currentScopeIdentifier)|\(candidateURLStrings.joined(separator: "|"))"
+    "\(MIRALocalJSONCache.currentScopeIdentifier)|\(Int(resolvedMaxPixelSize.rounded()))|\(candidateURLStrings.joined(separator: "|"))"
   }
 
   private var candidateURLStrings: [String] {
@@ -732,15 +732,6 @@ public enum MIRAImagePrefetcher {
     let key = "\(scope):\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
     guard await MIRAImagePrefetchState.shared.begin(key) else { return }
     defer { Task { await MIRAImagePrefetchState.shared.finish(key) } }
-
-    if MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) != nil {
-      return
-    }
-    if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
-      guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-      MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost, scope: scope)
-      return
-    }
 
     guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
     _ = await MIRAImageLoadPipeline.shared.image(
