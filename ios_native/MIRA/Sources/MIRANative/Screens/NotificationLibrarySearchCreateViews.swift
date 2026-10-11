@@ -1075,7 +1075,7 @@ public struct CreatePostNativeView: View {
   @ScaledMetric(relativeTo: .body) private var writingSize: CGFloat = 18
   @State private var writingFocused = false
   private enum Presentation: Equatable, Identifiable {
-    case startWith, audience, time, add, media, camera, voice, structured, mediaWriting, writingSource
+    case startWith, audience, time, add, media, camera, voice, structured, mediaWriting, writingSource, framing
     case detail(PostDetailSheet)
     var id: String {
       switch self {
@@ -1110,6 +1110,8 @@ public struct CreatePostNativeView: View {
     nonmutating set { draft.mediaItems = newValue }
   }
   @State private var pickerItems: [PhotosPickerItem] = []
+  @State private var pendingFramingItems: [MIRAPickedMedia] = []
+  @State private var didCommitFraming = false
   @State private var coverMediaRatio = MIRAMediaSizing.feedPreviewRatio
   @State private var composerUser: MIRAUser?
   private var isEditingPostDetails: Bool {
@@ -1226,13 +1228,20 @@ public struct CreatePostNativeView: View {
         } else if let index = item.replacementIndex, mediaItems.indices.contains(index) {
           let source = mediaItems[index]
           if !draft.originalMediaItems.contains(source) { draft.originalMediaItems.append(source) }
-          mediaItems[index] = edited
+          var updated = mediaItems
+          updated[index] = edited
+          pendingFramingItems = updated
+          writingMediaIndex = index
         } else {
-          mediaItems.append(edited)
+          pendingFramingItems = mediaItems + [edited]
+          writingMediaIndex = mediaItems.count
           focusedPostDetailsField = .caption
         }
       }
       .ignoresSafeArea()
+    }
+    .onChange(of: editingMedia == nil) { _, closed in
+      if closed && !pendingFramingItems.isEmpty && presentation != .camera { openPresentation(.framing) }
     }
     .fullScreenCover(isPresented: presentationBinding(.voice)) {
       CaptroVoiceRecorderSheet(limit: 60) { draft in
@@ -1301,7 +1310,7 @@ public struct CreatePostNativeView: View {
     .task(id: mediaItems.first) {
       guard let cover = mediaItems.first else { return }
       let dimensions = await cover.postMediaDimension()
-      coverMediaRatio = dimensions.heightToWidthRatio ?? MIRAMediaSizing.feedPreviewRatio
+      coverMediaRatio = 1 / (dimensions.framing?.displayAspectRatio ?? 0.8)
     }
   }
 
@@ -1353,6 +1362,18 @@ public struct CreatePostNativeView: View {
     .fullScreenCover(isPresented: presentationBinding(.structured)) {
       stampDetailsPage
     }
+    .fullScreenCover(isPresented: presentationBinding(.framing), onDismiss: {
+      pendingFramingItems = []
+      if didCommitFraming && writingAfterMediaSelection {
+        writingAfterMediaSelection = false
+        openPresentation(.mediaWriting)
+      } else { writingAfterMediaSelection = false }
+      didCommitFraming = false
+    }) {
+      CaptroPostFramingEditor(items: pendingFramingItems, selected: writingMediaIndex) { updated in
+        mediaItems = updated; didCommitFraming = true
+      }
+    }
     .fullScreenCover(isPresented: presentationBinding(.mediaWriting)) {
       CaptroMediaWritingEditor(items: mediaItems, initialIndex: writingMediaIndex, coverMode: draft.isCover) { updated in mediaItems = updated }
     }
@@ -1360,9 +1381,8 @@ public struct CreatePostNativeView: View {
       maxSelectionCount: max(1, 10 - mediaItems.count),
       matching: .any(of: [.images, .videos]), preferredItemEncoding: .current)
     .fullScreenCover(isPresented: presentationBinding(.camera), onDismiss: {
-      if writingAfterMediaSelection, !mediaItems.isEmpty {
-        writingAfterMediaSelection = false
-        openPresentation(.mediaWriting)
+      if !pendingFramingItems.isEmpty {
+        openPresentation(.framing)
       }
     }) {
       MIRAStoryLiveCameraView(captureMode: .photoAndVideo, showsMusicButton: false,
@@ -1743,9 +1763,9 @@ public struct CreatePostNativeView: View {
       let width = compositionCardWidth
       let index = min(writingMediaIndex, mediaItems.count - 1)
       let item = mediaItems[index]
-      let ratio = item.mediaWriting?.sourceAspectRatio ?? 1
+      let ratio = item.postFraming?.displayAspectRatio ?? 0.8
       VStack(alignment: .leading, spacing: 4) {
-        CaptroCoverPreview(media: item, size: CGSize(width: width, height: width / ratio))
+        CaptroPickedMediaPreview(media: item, size: CGSize(width: width, height: width / ratio))
         HStack {
           Button("Edit cover") { openPresentation(.mediaWriting) }.accessibilityIdentifier("composer.editCover")
           if mediaItems.count > 1 {
@@ -1759,19 +1779,16 @@ public struct CreatePostNativeView: View {
     } else {
     ScrollView(.horizontal) {
       HStack(alignment: .top, spacing: 12) {
-        ForEach(Array(mediaItems.enumerated()), id: \.offset) { index, item in
+        ForEach(mediaItems, id: \.localID) { item in
+          let index = mediaItems.firstIndex(where: { $0.localID == item.localID }) ?? 0
           VStack(spacing: 4) {
-            LocalMediaThumb(media: item, width: 150, height: 120, cornerRadius: 8, fitsOriginal: true)
-              .overlay {
-                if let writing = item.mediaWriting {
-                  CaptroMediaWritingLayer(writing: writing, container: CGSize(width: 150, height: 120), fill: false)
-                }
-              }
+            CaptroPickedMediaPreview(media: item, size: CGSize(width: 150, height: 150 / (item.postFraming?.displayAspectRatio ?? 0.8)))
+              .clipShape(RoundedRectangle(cornerRadius: 8))
             HStack {
-              Button("Edit") {
-                writingFocused = false
-                if item.mediaWriting != nil { writingMediaIndex = index; openPresentation(.mediaWriting) }
-                else { editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index) }
+              Menu("Edit") {
+                Button("Frame media") { pendingFramingItems = mediaItems; writingMediaIndex = index; openPresentation(.framing) }
+                Button("Text on media") { writingMediaIndex = index; openPresentation(.mediaWriting) }
+                Button("Photo and video adjustments") { editingMedia = MIRAEditorPresentation(media: item, replacementIndex: index) }
               }
               Spacer()
               Button("Remove", role: .destructive) { removeMedia(at: index) }
@@ -2346,7 +2363,9 @@ public struct CreatePostNativeView: View {
           mediaAssetIds.append(mediaAssetId)
         }
         mediaTypes.append(item.kind.rawValue)
-        mediaDimensions.append(await item.postMediaDimension())
+        var dimensions = await item.postMediaDimension()
+        dimensions.framing?.mediaId = MIRAPost.mediaIdentity(upload.url)
+        mediaDimensions.append(dimensions)
       }
       let tagLine = cleanedTags.isEmpty ? "" : cleanedTags.map { "#\($0)" }.joined(separator: " ")
       let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), draft.structured ? tagLine : ""]
@@ -2535,17 +2554,17 @@ public struct CreatePostNativeView: View {
       errorMessage = nil
     }
     let remainingSlots = max(0, 10 - mediaItems.count)
-    mediaItems.append(contentsOf: loaded.prefix(remainingSlots))
-    if writingAfterMediaSelection {
-      writingAfterMediaSelection = false
-      if !loaded.isEmpty { openPresentation(.mediaWriting) }
+    if !loaded.isEmpty {
+      pendingFramingItems = mediaItems + loaded.prefix(remainingSlots)
+      writingMediaIndex = mediaItems.count
+      openPresentation(.framing)
     }
   }
 
   private func addCapturedMediaAndContinue(_ media: MIRAPickedMedia) {
     editedCameraMedia = nil
     isCameraReviewingMedia = false
-    mediaItems.append(media)
+    pendingFramingItems = mediaItems + [media]
     focusedPostDetailsField = .caption
   }
 
@@ -2553,9 +2572,8 @@ public struct CreatePostNativeView: View {
     guard !media.isEmpty else { return }
     editedCameraMedia = nil
     isCameraReviewingMedia = false
-    withAnimation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion)) {
-      mediaItems.append(contentsOf: media.prefix(max(0, 10 - mediaItems.count)))
-    }
+    pendingFramingItems = mediaItems + media.prefix(max(0, 10 - mediaItems.count))
+    writingMediaIndex = mediaItems.count
   }
 
   private func continueToPostDetails() {

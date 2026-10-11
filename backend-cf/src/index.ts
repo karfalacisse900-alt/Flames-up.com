@@ -1,5 +1,6 @@
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
 import { validateMediaWritingOverlays } from './media-writing';
+import { validatePostMediaFraming } from './post-media-framing';
 import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody, newMediaStampWritingError } from './creation-intent';
 // Captro Cloudflare Workers API — Hono + Supabase Postgres + Cloudflare Images/R2/Stream
 // Deploy: wrangler deploy --env production --keep-vars
@@ -4294,6 +4295,7 @@ function sanitizeMediaDimensions(value: unknown): any[] {
         source_pixel_width: clampNumber(item?.source_pixel_width ?? item?.sourcePixelWidth, 0, 12000, 0) || null,
         source_pixel_height: clampNumber(item?.source_pixel_height ?? item?.sourcePixelHeight, 0, 12000, 0) || null,
         rotation_degrees: clampFloat(item?.rotation_degrees ?? item?.rotationDegrees, 0, 360, 0),
+        framing: validatePostMediaFraming(item?.framing),
       };
     })
     .filter(Boolean)
@@ -16947,7 +16949,9 @@ api.post('/posts', authMiddleware, async (c) => {
     ...parseJsonArray(b.media_backup_ids).map(String).filter(Boolean),
     ...mediaBackupIdsFromReferences([primaryImage, ...imageUrls]),
   ]));
-  const mediaDimensions = sanitizeMediaDimensions(b.media_dimensions);
+  let mediaDimensions: any[];
+  try { mediaDimensions = sanitizeMediaDimensions(b.media_dimensions); }
+  catch { return c.json({ detail: 'Invalid media framing. Review the crop before publishing.' }, 400); }
   const editorOverlays = [...sanitizePostEditorOverlays(b.editor_overlays), ...mediaWriting];
   const taggedUsers = sanitizeTaggedUsers(b.tagged_users);
   const audioProvider = b.audio_provider === 'audius' ? 'audius' : '';

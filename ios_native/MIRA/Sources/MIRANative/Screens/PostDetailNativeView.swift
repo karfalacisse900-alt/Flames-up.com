@@ -658,8 +658,7 @@ public struct PostDetailNativeView: View {
                 PostDetailOptimizedMediaCarousel(
                   urls: detailMediaURLs,
                   post: model.post,
-                  width: layout.size.width,
-                  maximumHeight: layout.size.height * MIRAMediaSizing.maxMainFeedScreenHeightFraction
+                  width: layout.size.width
                 )
                 CaptroDetailMediaWriting(post: model.post)
               }
@@ -1013,7 +1012,6 @@ private struct PostDetailOptimizedMediaCarousel: View {
   let urls: [String]
   let post: MIRAPost
   let width: CGFloat
-  let maximumHeight: CGFloat
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var selectedIndex = 0
@@ -1023,10 +1021,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
   @State private var isMediaViewerPresented = false
 
   private var currentHeight: CGFloat {
-    let ratios = post.mediaHeightToWidthRatios
-    let ratio = ratios.indices.contains(selectedIndex) ? ratios[selectedIndex]
-      : MIRAMediaSizing.mainFeedDisplayRatio(for: urls, aspectRatios: ratios)
-    return min(width * ratio, maximumHeight)
+    post.mediaGeometry(at: 0).size(width: width).height
   }
 
   private var visibleDots: [Int] {
@@ -1040,7 +1035,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
         mediaSlide(index: 0, url: urls[0])
       } else {
         TabView(selection: $selectedIndex) {
-          ForEach(Array(urls.enumerated()), id: \.offset) { index, url in
+          ForEach(Array(urls.enumerated()), id: \.element) { index, url in
             mediaSlide(index: index, url: url).tag(index)
           }
         }
@@ -1049,7 +1044,6 @@ private struct PostDetailOptimizedMediaCarousel: View {
     }
     .frame(height: currentHeight)
     .accessibilityIdentifier("post.detail.media")
-    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedIndex)
     .frame(maxWidth: .infinity)
     .background(Color.black.opacity(0.03))
     .clipped()
@@ -1121,24 +1115,22 @@ private struct PostDetailOptimizedMediaCarousel: View {
       if shown { MIRAPlaybackCoordinator.pauseAll(reason: "full_media_viewer_open") }
       else { MIRAPlaybackCoordinator.resumeVisible(reason: "full_media_viewer_closed") }
     }
-    .onChange(of: urls) { _, _ in selectedIndex = 0 }
-    .task(id: urls.joined(separator: "|")) { await prefetchNearbyMedia() }
+    .onChange(of: urls) { old, new in
+      let previous = old.indices.contains(selectedIndex) ? MIRAPost.mediaIdentity(old[selectedIndex]) : nil
+      selectedIndex = new.firstIndex(where: { MIRAPost.mediaIdentity($0) == previous }) ?? min(selectedIndex, max(0, new.count - 1))
+    }
+    .task(id: "\(post.id):\(selectedIndex)") { await prefetchNearbyMedia() }
     .fullScreenCover(isPresented: $isMediaViewerPresented) {
       CaptroFullscreenMediaViewer(urls: urls, post: post, initialIndex: selectedIndex)
     }
   }
 
   private func mediaSlide(index: Int, url: String) -> some View {
-    RemoteMediaView(
-      url: url,
-      isVideo: isVideo(at: index, url: url),
-      placeholderURL: placeholderURL(at: index, mediaURL: url),
-      fallbackURL: fallbackURL(at: index, mediaURL: url),
-      contentMode: .fit,
+    CaptroPostMediaView(url: url, geometry: post.mediaGeometry(at: index),
+      size: CGSize(width: width, height: currentHeight), isVideo: isVideo(at: index, url: url),
+      placeholderURL: isVideo(at: index, url: url) ? placeholderURL(at: index, mediaURL: url) : nil,
       shouldPlay: isVisible && scenePhase == .active && selectedIndex == index && !isVideoPaused,
-      videoMuted: isMuted,
-      maxPixelSize: MIRAMediaSizing.feedTargetHeight,
-      placeholderColor: Color.black.opacity(0.03)
+      muted: isMuted
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())
@@ -1159,8 +1151,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
     if posters.indices.contains(index), posters[index] != mediaURL { return posters[index] }
     let thumbnails = post.thumbnailMediaURLs
     if thumbnails.indices.contains(index), thumbnails[index] != mediaURL { return thumbnails[index] }
-    return (post.posterMediaURLs + post.thumbnailMediaURLs)
-      .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0 != mediaURL && !$0.isVideoURL }
+    return nil // Never borrow another slide's poster.
   }
 
   private func fallbackURL(at index: Int, mediaURL: String) -> String? {
@@ -1172,15 +1163,11 @@ private struct PostDetailOptimizedMediaCarousel: View {
   }
 
   private func prefetchNearbyMedia() async {
-    let previewURLs = (post.posterMediaURLs + post.thumbnailMediaURLs)
-      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    let fallbackURLs = post.fallbackMediaURLs
-      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.isVideoURL }
-    let imageURLs = urls.filter { !$0.isVideoURL }
-    await MIRAImagePrefetcher.prefetch(urls: previewURLs, maxPixelSize: 560, limit: max(12, previewURLs.count))
-    await MIRAImagePrefetcher.prefetch(urls: imageURLs + fallbackURLs, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: max(18, imageURLs.count + fallbackURLs.count))
+    let neighbors = urls.indices.filter { abs($0 - selectedIndex) <= 1 }.map { urls[$0] }
+    await MIRAImagePrefetcher.prefetch(urls: neighbors.filter { !$0.isVideoURL }, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 3)
+    guard !Task.isCancelled else { return }
     await MainActor.run {
-      MIRAVideoPrewarmManager.shared.prewarm(urls: urls.filter(\.isVideoURL), keepOnly: Set(urls.filter(\.isVideoURL).prefix(2)))
+      MIRAVideoPrewarmManager.shared.prewarm(urls: neighbors.filter(\.isVideoURL), keepOnly: Set(neighbors.filter(\.isVideoURL).prefix(2)))
     }
   }
 }

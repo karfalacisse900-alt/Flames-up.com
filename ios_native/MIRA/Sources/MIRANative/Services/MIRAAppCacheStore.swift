@@ -37,6 +37,8 @@ struct MIRAPostDraftMediaSnapshot: Codable, Hashable, Identifiable {
   let mimeType: String
   let editorMetadata: MIRANativeEditedMediaMetadata?
   var mediaWriting: CaptroMediaWriting? = nil
+  var sourceDimension: MIRAMediaDimension? = nil
+  var postFraming: CaptroPostMediaGeometry? = nil
 }
 
 struct MIRAVoiceDraftSnapshot: Codable, Hashable {
@@ -360,7 +362,7 @@ actor MIRAAppCacheStore {
           fileName: item.fileName,
           mimeType: item.mimeType,
           editorMetadata: item.editorMetadata,
-          mediaWriting: item.mediaWriting
+          mediaWriting: item.mediaWriting, sourceDimension: item.sourceDimension, postFraming: item.postFraming
         ))
       }
       return snapshots
@@ -381,7 +383,7 @@ actor MIRAAppCacheStore {
         fileName: item.fileName,
         mimeType: item.mimeType,
         editorMetadata: item.editorMetadata,
-        mediaWriting: item.mediaWriting
+        mediaWriting: item.mediaWriting, sourceDimension: item.sourceDimension, postFraming: item.postFraming
       )
     }
   }

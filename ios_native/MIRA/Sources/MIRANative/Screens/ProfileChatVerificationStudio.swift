@@ -1615,17 +1615,14 @@ private struct ProfilePostTile: View {
   private var tileContent: some View {
     GeometryReader { proxy in
       let tileWidth = size ?? proxy.size.width
-      let tileHeight = tileWidth * MIRAMediaSizing.profileGridRatio
+      let geometry = post.mediaGeometry(at: 0)
+      let tileHeight = geometry.size(width: tileWidth).height
       ZStack(alignment: .topTrailing) {
         Group {
-          if let media = post.thumbnailMediaURLs.first {
-            RemoteMediaView(
-              url: media,
-              isVideo: media.isVideoURL,
-              shouldPlay: false,
-              maxPixelSize: 520,
-              showsVideoPlaceholderIcon: false
-            )
+          if let media = post.mediaURLs.first {
+            CaptroPostMediaView(url: media, geometry: geometry,
+              size: CGSize(width: tileWidth, height: tileHeight), isVideo: media.isVideoURL,
+              placeholderURL: media.isVideoURL ? post.thumbnailMediaURLs.first : nil, maxPixelSize: 520)
           } else {
             MIRATheme.Color.surfaceSoft
           }
@@ -1637,7 +1634,7 @@ private struct ProfilePostTile: View {
       }
       .frame(width: tileWidth, height: tileHeight)
     }
-    .aspectRatio(1.0 / MIRAMediaSizing.profileGridRatio, contentMode: .fit)
+    .aspectRatio(post.mediaGeometry(at: 0).displayAspectRatio, contentMode: .fit)
     .contentShape(Rectangle())
   }
 

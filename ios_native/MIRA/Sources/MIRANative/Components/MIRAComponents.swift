@@ -338,7 +338,31 @@ private struct MIRAImageLoadResult {
 
 private actor MIRAImageLoadPipeline {
   static let shared = MIRAImageLoadPipeline()
-  private var inFlight: [String: Task<MIRAImageLoadResult?, Never>] = [:]
+  private struct Load {
+    let id = UUID()
+    let task: Task<MIRAImageLoadResult?, Never>
+    var readers: Set<UUID>
+  }
+  private var inFlight: [String: Load] = [:]
+
+  private func release(_ reader: UUID, key: String, generation: UUID) {
+    guard var load = inFlight[key], load.id == generation else { return }
+    load.readers.remove(reader)
+    if load.readers.isEmpty {
+      load.task.cancel()
+      inFlight[key] = nil
+    } else { inFlight[key] = load }
+  }
+
+  private func wait(for load: Load, reader: UUID, key: String) async -> MIRAImageLoadResult? {
+    await withTaskCancellationHandler {
+      let result = await load.task.value
+      release(reader, key: key, generation: load.id)
+      return Task.isCancelled ? nil : result
+    } onCancel: {
+      Task { await self.release(reader, key: key, generation: load.id) }
+    }
+  }
 
   func image(
     for remoteURL: URL, maxPixelSize: CGFloat,
@@ -354,8 +378,12 @@ private actor MIRAImageLoadPipeline {
       return MIRAImageLoadResult(image: cached, source: .memory)
     }
 
-    if let existing = inFlight[key] {
-      return await existing.value
+    guard !Task.isCancelled else { return nil }
+    let reader = UUID()
+    if var existing = inFlight[key] {
+      existing.readers.insert(reader)
+      inFlight[key] = existing
+      return await wait(for: existing, reader: reader, key: key)
     }
 
     let task = Task.detached(priority: .userInitiated) { () -> MIRAImageLoadResult? in
@@ -392,7 +420,7 @@ private actor MIRAImageLoadPipeline {
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 200
         await metric.finish(status: String(status), bytes: data.count)
-        guard (200..<300).contains(status), data.count <= 24 * 1024 * 1024 else { return nil }
+        guard !Task.isCancelled, (200..<300).contains(status), data.count <= 24 * 1024 * 1024 else { return nil }
         guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return nil }
         guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
 
@@ -404,10 +432,9 @@ private actor MIRAImageLoadPipeline {
       }
     }
 
-    inFlight[key] = task
-    let result = await task.value
-    inFlight[key] = nil
-    return result
+    let load = Load(task: task, readers: [reader])
+    inFlight[key] = load
+    return await wait(for: load, reader: reader, key: key)
   }
 }
 
@@ -1584,8 +1611,7 @@ public enum MIRAMediaSizing {
   public static let homeHeightToWidthRatios: [CGFloat] = [9.0 / 16, 1, 5.0 / 4, 4.0 / 3]
   public static func homeDisplayRatio(_ sourceRatio: CGFloat) -> CGFloat {
     guard sourceRatio.isFinite, sourceRatio > 0 else { return feedShortPortraitRatio }
-    if sourceRatio > 4.0 / 3.0 + 0.01 { return feedShortPortraitRatio }
-    return homeHeightToWidthRatios.min(by: { abs($0 - sourceRatio) < abs($1 - sourceRatio) }) ?? feedShortPortraitRatio
+    return 1 / CaptroPostMediaGeometry.selectedRatio(for: 1 / sourceRatio)
   }
 
   public static func detailHeight(

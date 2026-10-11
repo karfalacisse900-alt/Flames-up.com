@@ -88,10 +88,11 @@ public struct CaptroHomeFeedVisualTestView: View {
 
 private enum CaptroHomeFeedVisualFixtures {
   static func posts(videoURL: URL? = nil) -> [MIRAPost] {
-    if ProcessInfo.processInfo.arguments.contains("--captro-stability-forty") {
+    if ProcessInfo.processInfo.arguments.contains("--captro-stability-forty") || ProcessInfo.processInfo.arguments.contains("--captro-stability-hundred") {
       let seed = streamPosts(videoURL: videoURL)
       guard !seed.isEmpty else { return [] }
-      return (0..<40).compactMap { index in
+      let count = ProcessInfo.processInfo.arguments.contains("--captro-stability-hundred") ? 100 : 40
+      return (0..<count).compactMap { index in
         guard let data = try? JSONEncoder().encode(seed[index % seed.count]),
           var record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         record["id"] = "stress-\(index)"

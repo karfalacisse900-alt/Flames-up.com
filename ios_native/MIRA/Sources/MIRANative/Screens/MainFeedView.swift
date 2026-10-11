@@ -1012,7 +1012,6 @@ public struct MainFeedView: View {
   @State private var selectedPostID: String?
   @StateObject private var viewport = CaptroFeedViewport()
   @State private var selectedMediaIDs: [String: String] = [:]
-  @State private var feedFrameRatios: [String: CGFloat] = [:]
   @State private var stampReadingStates: [String: CaptroFeedStampReadingState] = [:]
   @State private var postActivationTask: Task<Void, Never>?
   @State private var selectedPostFallbackIndex = 0
@@ -1445,16 +1444,13 @@ public struct MainFeedView: View {
       },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       feedWidth: width,
-      frameRatio: feedFrameRatios[post.id] ?? post.feedFrameHeightToWidthRatio,
+      frameRatio: post.feedFrameHeightToWidthRatio,
       selectedMediaID: Binding(get: { selectedMediaIDs[post.id] }, set: { selectedMediaIDs[post.id] = $0 }),
       stampReading: Binding(
         get: { stampReadingStates[post.id] ?? CaptroFeedStampReadingState() },
         set: { stampReadingStates[post.id] = $0 }),
       canRespond: !isGuest
     )
-    .onAppear {
-      if feedFrameRatios[post.id] == nil { feedFrameRatios[post.id] = post.feedFrameHeightToWidthRatio }
-    }
   }
 
   private var displayedPosts: [MIRAPost] {

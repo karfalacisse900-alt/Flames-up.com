@@ -17,6 +17,9 @@ private enum CaptroImagePreparationError: LocalizedError {
 }
 
 public struct MIRAPickedMedia: Hashable {
+  public let localID: UUID
+  public var sourceDimension: MIRAMediaDimension?
+  public var postFraming: CaptroPostMediaGeometry?
   public let data: Data
   public let kind: MIRAPickedMediaKind
   public let fileName: String
@@ -30,7 +33,10 @@ public struct MIRAPickedMedia: Hashable {
     fileName: String,
     mimeType: String,
     editorMetadata: MIRANativeEditedMediaMetadata? = nil,
-    mediaWriting: CaptroMediaWriting? = nil
+    mediaWriting: CaptroMediaWriting? = nil,
+    sourceDimension: MIRAMediaDimension? = nil,
+    postFraming: CaptroPostMediaGeometry? = nil,
+    localID: UUID = UUID()
   ) {
     self.data = data
     self.kind = kind
@@ -38,9 +44,29 @@ public struct MIRAPickedMedia: Hashable {
     self.mimeType = mimeType
     self.editorMetadata = editorMetadata
     self.mediaWriting = mediaWriting
+    self.sourceDimension = sourceDimension; self.postFraming = postFraming; self.localID = localID
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.localID == rhs.localID && lhs.mediaWriting == rhs.mediaWriting && lhs.postFraming == rhs.postFraming
+  }
+  public func hash(into hasher: inout Hasher) {
+    // Never hash multi-megabyte image/video data on SwiftUI's rendering path.
+    hasher.combine(localID); hasher.combine(mediaWriting); hasher.combine(postFraming)
+  }
+
+  public func preparedForPost() async -> Self {
+    var item = self
+    let dimension = await mediaDimension()
+    item.sourceDimension = dimension
+    if item.postFraming == nil {
+      item.postFraming = CaptroPostMediaGeometry(sourceAspectRatio: dimension.originalAspectRatio ?? dimension.ratio ?? 0.8)
+    }
+    return item
   }
 
   public func mediaDimension() async -> MIRAMediaDimension {
+    if let sourceDimension { return sourceDimension }
     let size: CGSize?
     let sourceOrientation: Int?
     let sourcePixelSize: CGSize?
@@ -107,14 +133,16 @@ public struct MIRAPickedMedia: Hashable {
   }
 
   public func postMediaDimension() async -> MIRAMediaDimension {
-    await mediaDimension()
+    var dimension = await mediaDimension()
+    dimension.framing = postFraming
+    return dimension
   }
 
   private func videoNaturalSize() async -> (CGSize?, Double?, CGSize?) {
     let ext = URL(fileURLWithPath: fileName).pathExtension.isEmpty ? "mov" : URL(fileURLWithPath: fileName).pathExtension
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).\(ext)")
     do {
-      try data.write(to: url, options: .atomic)
+      try await Task.detached(priority: .utility) { try data.write(to: url, options: .atomic) }.value
       defer { try? FileManager.default.removeItem(at: url) }
       let asset = AVURLAsset(url: url)
       let tracks = try await asset.loadTracks(withMediaType: .video)

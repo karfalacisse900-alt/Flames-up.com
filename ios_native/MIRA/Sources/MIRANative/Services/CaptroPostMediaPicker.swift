@@ -47,13 +47,13 @@ enum CaptroPostMediaPicker {
         throw MIRAAPIError.emptyResponse
       }
       _ = try await movie.media.validatedVideoDuration()
-      return movie.media
+      return await movie.media.preparedForPost()
     }
     guard let data = try await item.loadTransferable(type: Data.self) else {
       throw MIRAAPIError.emptyResponse
     }
     let (kind, fileName, mimeType) = pickedMediaKind(from: item.supportedContentTypes, fallbackData: data)
-    return MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType)
+    return await MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType).preparedForPost()
   }
 }
 
@@ -63,7 +63,7 @@ extension MIRAPickedMedia {
     let file = FileManager.default.temporaryDirectory
       .appendingPathComponent("captro-video-check-\(UUID().uuidString)")
       .appendingPathExtension(URL(fileURLWithPath: fileName).pathExtension)
-    try data.write(to: file)
+    try await Task.detached(priority: .utility) { try data.write(to: file) }.value
     defer { try? FileManager.default.removeItem(at: file) }
     let asset = AVURLAsset(url: file)
     let duration = try await asset.load(.duration).seconds

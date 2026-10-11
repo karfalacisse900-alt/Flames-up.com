@@ -274,10 +274,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
   /// Feed geometry belongs to the post, not the currently selected slide.
   /// Missing legacy dimensions fall back to the first media URL's hint.
   public var feedFrameHeightToWidthRatio: CGFloat {
-    if let requested = mediaWriting(at: 0)?.homeAspectRatio, requested.isFinite, requested > 0 {
-      return MIRAMediaSizing.homeDisplayRatio(1 / requested)
-    }
-    return MIRAMediaSizing.mainFeedDisplayRatio(for: feedMediaURLs, aspectRatios: mediaHeightToWidthRatios)
+    1 / mediaGeometry(at: 0).displayAspectRatio
   }
 
   public var placeDisplayName: String? {
@@ -611,6 +608,7 @@ public enum MIRASupportedPostAspectRatio: String, CaseIterable, Codable, Hashabl
 }
 
 public struct MIRAMediaDimension: Codable, Hashable {
+  public var framing: CaptroPostMediaGeometry? = nil
   public let width: Double?
   public let height: Double?
   public let ratio: Double?
@@ -631,6 +629,7 @@ public struct MIRAMediaDimension: Codable, Hashable {
   public let rotationDegrees: Double?
 
   enum CodingKeys: String, CodingKey {
+    case framing
     case width
     case height
     case ratio
@@ -704,6 +703,7 @@ public struct MIRAMediaDimension: Codable, Hashable {
 
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    framing = try? container.decodeIfPresent(CaptroPostMediaGeometry.self, forKey: .framing)
     width = Self.decodeDouble(container, keys: [.width])
     height = Self.decodeDouble(container, keys: [.height])
     ratio = Self.decodeDouble(container, keys: [.ratio, .aspectRatio, .aspectRatioSnake])
@@ -728,6 +728,7 @@ public struct MIRAMediaDimension: Codable, Hashable {
 
   public func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encodeIfPresent(framing, forKey: .framing)
     try container.encodeIfPresent(width, forKey: .width)
     try container.encodeIfPresent(height, forKey: .height)
     try container.encodeIfPresent(ratio, forKey: .ratio)

@@ -2,10 +2,14 @@ import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
   func testFortyMixedPostsAndDetailsReturn() {
-    let app = launch(["--captro-visual-video", "--captro-stability-forty", "--captro-stability-updates"])
+    verifyMixedPosts(count: 40)
+  }
+  func testHundredMixedPostsAndDetailsReturn() { verifyMixedPosts(count: 100) }
+  private func verifyMixedPosts(count: Int) {
+    let app = launch(["--captro-visual-video", count == 100 ? "--captro-stability-hundred" : "--captro-stability-forty", "--captro-stability-updates"])
     let stream = app.scrollViews["home.post.stream"]
     XCTAssertTrue(stream.waitForExistence(timeout: 20))
-    for index in 0..<40 {
+    for index in 0..<count {
       let page = app.otherElements["home.post.page.stress-\(index)"]
       reveal(page, in: stream, app: app)
       XCTAssertTrue(page.exists && page.frame.intersects(stream.frame), "Stable post \(index) remains reachable")
@@ -98,6 +102,8 @@ final class HomeFullBleedTests: XCTestCase {
     let detailMedia = app.collectionViews["post.detail.media"]
     let writing = app.staticTexts["post.detail.mediaWriting"].firstMatch
     XCTAssertTrue(detailMedia.waitForExistence(timeout: 5))
+    XCTAssertEqual(detailMedia.frame.height / detailMedia.frame.width, 1.25, accuracy: 0.01,
+      "Details must use the exact same selected framing as Home")
     XCTAssertTrue(writing.waitForExistence(timeout: 5))
     XCTAssertFalse(detailMedia.staticTexts["FIRST PHOTO"].exists,
       "Original media stays clear in Details")
