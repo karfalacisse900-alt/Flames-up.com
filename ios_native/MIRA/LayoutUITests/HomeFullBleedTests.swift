@@ -155,9 +155,9 @@ final class HomeFullBleedTests: XCTestCase {
           "No per-post bottom filler or separate caption region")
         let next = app.otherElements["home.post.page.stream-\(index + 1)"]
         if next.exists {
-          // Text-only cards have 12 pt of their own inner top padding. Their
-          // accessibility frame excludes that padding; media rows do not.
-          XCTAssertEqual(next.frame.minY - page.frame.maxY, index == 5 ? 24 : 12, accuracy: 2,
+          // Page frames include their own content padding. Only the stream's
+          // 12 pt inter-post spacing sits between adjacent page frames.
+          XCTAssertEqual(next.frame.minY - page.frame.maxY, 12, accuracy: 2,
             "Next post follows with normal spacing, not a viewport spacer")
         }
       }

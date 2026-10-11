@@ -99,7 +99,9 @@ jobs:
           trap 'kill -INT "$capture_pid" 2>/dev/null || true; wait "$capture_pid" || true' EXIT
           recording_tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testPublicStampExamples
             -only-testing:CaptroLayoutUITests/StampRefinementTests/testLegacyCaptionIsBoundedWithoutMoreAndVideoControlsRemainUsable)
-          if [ '${{ inputs.stability_layout_retry }}' = 'true' ]; then
+          if [ '${{ inputs.stream_only }}' = 'true' ]; then
+            recording_tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
+          elif [ '${{ inputs.stability_layout_retry }}' = 'true' ]; then
             recording_tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
           elif [ '${{ inputs.feed_fixes_only }}' = 'true' ]; then
