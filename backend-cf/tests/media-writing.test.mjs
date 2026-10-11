@@ -6,6 +6,18 @@ const overlay = () => ({ type: 'media_writing', media_index: 0, writing: {
   schema_version: 1, text: 'FRIDAY NIGHT\nNYC', style: 'bold', alignment: 'left', color: 'white',
   readability: false, x: 0.5, y: 0.2, width: 0.82, size: 'medium', source_aspect_ratio: 0.75,
 } });
+
+test('stable media identity survives validation and JSON round trip; legacy clients remain supported', () => {
+  for (const key of ['mediaId', 'media_id']) {
+    const saved = validateMediaWritingOverlays([{ ...overlay(), [key]: 'a'.repeat(64) }], 1);
+    assert.equal(saved[0].mediaId, 'a'.repeat(64));
+    assert.deepEqual(validateMediaWritingOverlays(JSON.parse(JSON.stringify(saved)), 1), saved);
+  }
+  assert.equal(validateMediaWritingOverlays([overlay()], 1)[0].mediaId, undefined);
+  for (const mediaId of ['', 'wrong', 'A'.repeat(64), 17, {}]) {
+    assert.throws(() => validateMediaWritingOverlays([{ ...overlay(), mediaId }], 1));
+  }
+});
 test('writing round trip preserves exact words, line breaks and source geometry', () => {
   const saved = validateMediaWritingOverlays([overlay()], 1);
   assert.equal(saved[0].writing.text, 'FRIDAY NIGHT\nNYC');
