@@ -2,6 +2,20 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroMediaGeometryTests: XCTestCase {
+  func testLegacyNYPLFormatWinsOverUnrotatedSourceDimensions() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let post = try decoder.decode(MIRAPost.self, from: Data("""
+    {"id":"legacy-nypl","images":["https://example.com/library.jpg"],"media_dimensions":[
+      {"width":4032,"height":3024,"original_width":4032,"original_height":3024,
+       "display_aspect_ratio":0.75,"feed_aspect_ratio":0.75,"format":"3:4"}]}
+    """.utf8))
+    let geometry = post.mediaGeometry(at: 0)
+    XCTAssertEqual(geometry.displayAspectRatio, 0.75)
+    XCTAssertFalse(geometry.usesSourceCoordinates, "Do not double-crop an EXIF-oriented legacy image using untrusted source dimensions")
+    let size = geometry.size(width: 390)
+    XCTAssertEqual(geometry.sourceRect(in: size), CGRect(origin: .zero, size: size))
+    XCTAssertEqual(size.height, 520)
+  }
   func testSupportedFormatsAndTallUploadDefault() {
     for ratio in CaptroPostMediaGeometry.ratios {
       XCTAssertEqual(CaptroPostMediaGeometry.selectedRatio(for: ratio), ratio, accuracy: 0.00001)

@@ -9,6 +9,12 @@ public struct CaptroPostMediaGeometry: Codable, Hashable, Sendable {
   public var cropX: Double = 0.5
   public var cropY: Double = 0.5
   public var mediaId: String? = nil
+  // Compatibility-only rendering state, not persisted crop metadata. Legacy
+  // EXIF dimensions may be unrotated: let the image/player fill once itself.
+  public var usesSourceCoordinates = true
+  private enum CodingKeys: String, CodingKey {
+    case version, sourceAspectRatio, displayAspectRatio, cropX, cropY, mediaId
+  }
 
   public static let ratios: [Double] = [0.8, 1, 0.75, 16.0 / 9]
   public static func selectedRatio(for source: Double) -> Double {
@@ -31,6 +37,7 @@ public struct CaptroPostMediaGeometry: Codable, Hashable, Sendable {
   }
   public func size(width: CGFloat) -> CGSize { CGSize(width: width, height: width / displayAspectRatio) }
   public func sourceRect(in container: CGSize) -> CGRect {
+    if !usesSourceCoordinates { return CGRect(origin: .zero, size: container) }
     let width = max(container.width, container.height * sourceAspectRatio)
     let height = width / sourceAspectRatio
     return CGRect(x: (container.width - width) * cropX, y: (container.height - height) * cropY, width: width, height: height)
@@ -56,10 +63,14 @@ extension MIRAPost {
       ?? writing.map { Double($0.sourceAspectRatio) } ?? 0.8
     let legacyFirst = dimensions.first?.heightToWidthRatio.map { Double(1 / $0) }
       ?? mediaWriting(at: 0).map { Double($0.sourceAspectRatio) } ?? 0.8
+    let legacyFormat = MIRASupportedPostAspectRatio.from(format: dimensions.first?.format).map { Double(1 / $0.heightToWidthRatio) }
+    let persistedDisplay = [dimensions.first?.displayAspectRatio, dimensions.first?.feedAspectRatio, legacyFormat]
+      .compactMap { $0 }.first { candidate in CaptroPostMediaGeometry.ratios.contains { abs($0 - candidate) < 0.00001 } }
     let display = first?.isValid == true ? first!.displayAspectRatio
-      : CaptroPostMediaGeometry.selectedRatio(for: mediaWriting(at: 0)?.homeAspectRatio.map { Double($0) } ?? legacyFirst)
+      : CaptroPostMediaGeometry.selectedRatio(for: mediaWriting(at: 0)?.homeAspectRatio.map { Double($0) } ?? persistedDisplay ?? legacyFirst)
     var result = CaptroPostMediaGeometry(sourceAspectRatio: source, displayAspectRatio: display,
       cropX: Double(writing?.cropX ?? 0.5), cropY: Double(writing?.cropY ?? 0.5))
+    result.usesSourceCoordinates = writing != nil
     if let saved = dimension?.framing, saved.isValid,
        saved.mediaId == nil || (mediaURLs.indices.contains(index) && saved.mediaId == Self.mediaIdentity(mediaURLs[index])) {
       result = saved
