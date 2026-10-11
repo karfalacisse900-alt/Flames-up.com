@@ -6,6 +6,10 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      media_framing_smoke:
+        description: Verify selected crop through a disposable private upload and post, then clean up
+        type: boolean
+        default: false
       checkout_readiness_only:
         description: Read deployed Stripe and access routes using a disposable authenticated account, no charges
         type: boolean
@@ -194,6 +198,16 @@ jobs:
             echo "Authenticated status publishing returned HTTP $status, expected 401 without a session"
             exit 1
           fi
+      - name: Verify deployed media framing through the real private post API
+        if: ${{ inputs.media_framing_smoke && inputs.reliability_dry_run != true }}
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_IMAGES_TOKEN: ${{ secrets.CLOUDFLARE_IMAGES_TOKEN }}
+        run: node backend-cf/scripts/verify-media-framing.mjs
   deploy:
     if: ${{ inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
