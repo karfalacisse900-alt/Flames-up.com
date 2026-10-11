@@ -118,7 +118,7 @@ struct CaptroMediaPager: View {
         reading: stampReading, minimumStampTop: writingClearance(in: frameSize), visibleMediaRect: visible) {
         mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         feedStamp(readingBudget: dynamicTypeSize.isAccessibilitySize ? normalReadingBudget
-          : min(normalReadingBudget, max(150, frameSize.height * 0.55)),
+          : min(normalReadingBudget, frameSize.height * 0.55),
           stampWidth: CaptroFeedStampGeometry.stampWidth(mediaWidth: visible.width,
             accessibility: dynamicTypeSize.isAccessibilitySize))
       }

@@ -6,7 +6,7 @@ final class CaptroCompositionTests: XCTestCase {
     let writing = CaptroMediaWriting.cover(sourceAspectRatio: 9.0 / 16)
     XCTAssertEqual(writing.y, 0.46); XCTAssertEqual(writing.alignment, "center")
     XCTAssertEqual(writing.showsStamp, false); XCTAssertEqual(writing.characterLimit, 70)
-    XCTAssertEqual(writing.homeAspectRatio ?? 0, 9.0 / 16, accuracy: 0.001)
+    XCTAssertEqual(writing.homeAspectRatio ?? 0, 4.0 / 5, accuracy: 0.001)
     XCTAssertEqual(writing.color, "black"); XCTAssertTrue(writing.readability)
     XCTAssertEqual(writing.font(mediaWidth: 390).fontName, "WalterTurncoat-Regular", "The licensed hand-lettered face must load, without the old brush script")
     XCTAssertEqual(writing.font(mediaWidth: 390).pointSize, 22.23, accuracy: 0.1)

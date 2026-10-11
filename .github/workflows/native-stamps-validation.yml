@@ -14,6 +14,10 @@ on:
         description: Verify compact stamps, stable mixed carousels, blank writing, and clean Details media
         type: boolean
         default: false
+      stability_layout_retry:
+        description: Recheck landscape stamp budget after the complete stability run, with all native unit tests
+        type: boolean
+        default: false
       cover_runtime:
         description: Publish private Cover examples from the native app with a disposable account and licensed inputs
         type: boolean
@@ -56,6 +60,11 @@ jobs:
             tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testBeforePublicStampExamples)
           elif [ '${{ inputs.stream_only }}' = 'true' ]; then
             tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
+          elif [ '${{ inputs.stability_layout_retry }}' = 'true' ]; then
+            tests=(-only-testing:CaptroStampTests
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth)
           elif [ '${{ inputs.feed_fixes_only }}' = 'true' ]; then
             tests=(-only-testing:CaptroStampTests
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testIdleBackgroundUpdatesPreserveReadingPositionAndHeader
@@ -90,7 +99,10 @@ jobs:
           trap 'kill -INT "$capture_pid" 2>/dev/null || true; wait "$capture_pid" || true' EXIT
           recording_tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testPublicStampExamples
             -only-testing:CaptroLayoutUITests/StampRefinementTests/testLegacyCaptionIsBoundedWithoutMoreAndVideoControlsRemainUsable)
-          if [ '${{ inputs.feed_fixes_only }}' = 'true' ]; then
+          if [ '${{ inputs.stability_layout_retry }}' = 'true' ]; then
+            recording_tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testContinuousStreamRecording)
+          elif [ '${{ inputs.feed_fixes_only }}' = 'true' ]; then
             recording_tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testFortyMixedPostsAndDetailsReturn)
           fi
