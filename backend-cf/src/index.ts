@@ -4291,6 +4291,10 @@ function sanitizeMediaDimensions(value: unknown): any[] {
         display_aspect_ratio: variant.feed_aspect_ratio,
         crop_mode: cleanText(item?.crop_mode || item?.cropMode || 'center_crop', 40),
         framing: validatePostMediaFraming(item?.framing),
+        source_orientation: clampNumber(item?.source_orientation ?? item?.sourceOrientation, 0, 8, 0) || null,
+        source_pixel_width: clampNumber(item?.source_pixel_width ?? item?.sourcePixelWidth, 0, 12000, 0) || null,
+        source_pixel_height: clampNumber(item?.source_pixel_height ?? item?.sourcePixelHeight, 0, 12000, 0) || null,
+        rotation_degrees: clampFloat(item?.rotation_degrees ?? item?.rotationDegrees, 0, 360, 0),
         media_type: type,
       };
     })

@@ -47,7 +47,8 @@ try {
   const posted = await request(`${api}/posts`, 'POST', {
     title: '', content: 'Private media framing verification', visibility: 'private', post_type: 'general',
     image: status.public_url, images: [status.public_url], media_types: ['image'], media_asset_ids: [assetID],
-    media_dimensions: [{ width: 720, height: 1280, ratio: 9/16, original_width: 720, original_height: 1280, framing }],
+    media_dimensions: [{ width: 720, height: 1280, ratio: 9/16, original_width: 720, original_height: 1280,
+      source_orientation: 1, source_pixel_width: 720, source_pixel_height: 1280, framing }],
     client_request_id: randomUUID(),
   }, auth);
   postID = posted.id; assert.ok(postID);
@@ -56,6 +57,8 @@ try {
   assert.deepEqual(dimensions[0].framing, framing, 'Details must return the exact selected crop');
   assert.equal(dimensions[0].original_width, 720);
   assert.equal(dimensions[0].original_height, 1280);
+  assert.equal(dimensions[0].source_orientation, 1);
+  assert.equal(dimensions[0].source_pixel_height, 1280);
   const rows = await request(`${db}/rest/v1/app_posts?id=eq.${postID}&select=media_dimensions,visibility,user_id`, 'GET', undefined, admin);
   assert.equal(rows.length, 1); assert.equal(rows[0].user_id, owner); assert.equal(rows[0].visibility, 'private');
   assert.deepEqual(rows[0].media_dimensions[0].framing, framing, 'PostgreSQL must retain crop metadata');
