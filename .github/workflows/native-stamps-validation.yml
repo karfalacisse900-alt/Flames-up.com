@@ -161,6 +161,7 @@ jobs:
             # Preserve errors instead of presenting an unavailable trace as evidence.
             (
               xcrun xctrace list templates > "$RUNNER_TEMP/feed-profiler-templates.log" 2>&1 || true
+              xcrun xctrace list devices > "$RUNNER_TEMP/feed-profiler-devices.log" 2>&1 || true
               echo 'Collector started; waiting for Captro.' > "$RUNNER_TEMP/feed-profiler.log"
               captured=false
               for attempt in $(seq 1 300); do
@@ -168,8 +169,10 @@ jobs:
                 # guard Actions' bash -e/pipefail exits before the second attempt.
                 app_pid=$(pgrep -x Captro | head -1 || true)
                 if [ -n "$app_pid" ]; then
-                  echo "Attaching to Captro PID $app_pid after discovery attempt $attempt." >> "$RUNNER_TEMP/feed-profiler.log"
-                  xcrun xctrace record --template 'Time Profiler' --attach "$app_pid" \
+                  echo "Attaching to Captro PID $app_pid on simulator $device after discovery attempt $attempt." >> "$RUNNER_TEMP/feed-profiler.log"
+                  # A simulator PID is not a process in the default local-Mac
+                  # recording target. Use the same explicitly selected device.
+                  xcrun xctrace record --device "$device" --template 'Time Profiler' --attach "$app_pid" \
                     --time-limit 45s --output "$RUNNER_TEMP/FeedScroll.trace" >> "$RUNNER_TEMP/feed-profiler.log" 2>&1 || true
                   if [ -d "$RUNNER_TEMP/FeedScroll.trace" ]; then
                     captured=true
