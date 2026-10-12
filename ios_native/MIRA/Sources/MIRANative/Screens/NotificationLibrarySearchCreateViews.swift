@@ -701,7 +701,6 @@ private enum PostDetailSheet: Identifiable, Equatable {
   case tags
   case music
   case aiAssist
-  case response
 
   var id: String {
     switch self {
@@ -711,107 +710,6 @@ private enum PostDetailSheet: Identifiable, Equatable {
     case .tags: return "tags"
     case .music: return "music"
     case .aiAssist: return "aiAssist"
-    case .response: return "response"
-    }
-  }
-}
-
-private struct CaptroPostResponsePicker: View {
-  @Binding var selected: CaptroPostResponseDraft?
-  let allowsGoing: Bool
-  let onClose: () -> Void
-  @State private var pollOptions = ["", "", "", ""]
-  @State private var showsPollEditor = false
-  @FocusState private var focusedPollField: Int?
-
-  static func title(for type: String) -> String {
-    switch type {
-    case "yes_no": return "Yes / No"
-    case "interested": return "Interested"
-    case "going": return "Going"
-    case "poll": return "Poll"
-    case "question": return "Question / replies"
-    default: return "Add response"
-    }
-  }
-
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 12) {
-        HStack {
-          Text("Responses").font(.system(.headline, design: .serif, weight: .semibold))
-          Spacer()
-          Button("Close", action: onClose).font(.subheadline)
-            .frame(minWidth: 44, minHeight: 44)
-        }
-        if !showsPollEditor {
-          VStack(spacing: 7) {
-            responseRow("None", type: nil)
-            responseRow("Yes / No", type: "yes_no")
-            responseRow("Interested", type: "interested")
-            if allowsGoing { responseRow("Going", type: "going") }
-            responseRow("Custom choices", type: "poll")
-            responseRow("Question / replies", type: "question")
-          }
-          .padding(10)
-          .background(MIRATheme.Color.editorialOlive)
-        } else {
-          Button("Change response type") { focusedPollField = nil; showsPollEditor = false }
-            .font(.subheadline).frame(minHeight: 44)
-        }
-        if showsPollEditor {
-          VStack(alignment: .leading, spacing: 10) {
-            Text("Response choices · 2–4 options").font(.subheadline.weight(.semibold))
-            ForEach(0..<4, id: \.self) { index in
-              TextField("Option \(index + 1)\(index >= 2 ? " (optional)" : "")", text: $pollOptions[index])
-                .textInputAutocapitalization(.sentences)
-                .focused($focusedPollField, equals: index)
-                .submitLabel(.done)
-                .onSubmit { focusedPollField = nil }
-                .padding(12)
-                .background(MIRATheme.Color.surfaceSoft, in: RoundedRectangle(cornerRadius: 8))
-            }
-            Button("Use poll") {
-              let options = pollOptions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-              selected = CaptroPostResponseDraft(type: "poll", options: options)
-              focusedPollField = nil
-              onClose()
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(MIRATheme.Color.forest)
-            .disabled(!validPoll)
-          }
-          .padding(.top, 8)
-        }
-      }
-      .padding(20)
-    }
-    .scrollDismissesKeyboard(.interactively)
-    .background(MIRATheme.Color.launchBackground)
-    .onAppear {
-      if selected?.type == "poll" {
-        showsPollEditor = true
-        let existing = selected?.options ?? []
-        for index in 0..<min(4, existing.count) { pollOptions[index] = existing[index] }
-      }
-    }
-  }
-
-  private var validPoll: Bool {
-    let options = pollOptions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-    return options.count >= 2 && options.count <= 4
-      && options.allSatisfy { $0.count <= 60 }
-      && Set(options.map { $0.lowercased() }).count == options.count
-  }
-
-  private func responseRow(_ title: String, type: String?) -> some View {
-    CaptroEditorialMenuRow(title: title, selected: selected?.type == type || (type == nil && selected == nil)) {
-      if type == "poll" {
-        showsPollEditor = true
-      } else {
-        selected = type.map { CaptroPostResponseDraft(type: $0) }
-        onClose()
-      }
     }
   }
 }
@@ -1428,11 +1326,6 @@ public struct CreatePostNativeView: View {
           },
           onClose: closeSheet
         )
-      case .detail(.response):
-        CaptroPostResponsePicker(selected: $draft.postResponse,
-          allowsGoing: !commerceDraft.enabled && (!isEventStamp || !eventDraft.attendanceEnabled),
-          onClose: closeSheet)
-          .presentationDetents([.height(440), .large])
       default:
         Color.clear
       }
@@ -1489,7 +1382,6 @@ public struct CreatePostNativeView: View {
     case .city: return 0.62
     case .music: return 0.78
     case .aiAssist: return 0.70
-    case .response: return 0.72
     default: return 0.76
     }
   }
@@ -1589,15 +1481,13 @@ public struct CreatePostNativeView: View {
           }.frame(minHeight: 44)
         }.buttonStyle(.plain).accessibilityIdentifier("composer.object")
       }
-      if let response = postResponse {
-        Button { writingFocused = false; activePostDetailSheet = .response } label: {
-          VStack(alignment: .leading, spacing: 4) {
-            Text(CaptroPostResponsePicker.title(for: response.type)).font(.subheadline.weight(.medium))
-            if !response.options.isEmpty {
-              Text(response.options.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary)
-            }
-          }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        }.buttonStyle(.plain).accessibilityLabel("Edit response options")
+      if let message = draft.mediaRequirementMessage {
+        Text(message).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+          .accessibilityIdentifier("composer.mediaRequired")
+      }
+      if postResponse != nil {
+        Text("This saved draft contains retired response choices. They remain saved in the draft, but will not appear in the published post.")
+          .font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
       }
       if !draft.isCover {
       Divider().overlay(MIRATheme.Color.hairline)
@@ -1748,8 +1638,6 @@ public struct CreatePostNativeView: View {
           else { transitionFromSelection(to: .mediaWriting) }
         }.disabled(isLoadingMedia)
       }
-      CaptroEditorialMenuRow(title: "Responses") { transitionFromSelection(to: .detail(.response)) }
-        .disabled(!mediaItems.isEmpty || voiceDraft != nil)
       if creationCapabilities?.structuredTypes.isEmpty == false {
         CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) {
           presentation = .startWith
@@ -2178,7 +2066,7 @@ public struct CreatePostNativeView: View {
 
   private var canPost: Bool {
     guard mediaItems.allSatisfy({ $0.postFraming?.isValid == true }) else { return false }
-    guard draft.writingValidationMessage == nil else { return false }
+    guard draft.writingValidationMessage == nil, draft.mediaRequirementMessage == nil else { return false }
     if draft.isCover {
       guard let cover = mediaItems.first?.mediaWriting, cover.schemaVersion == 2,
         !cover.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
@@ -2190,8 +2078,7 @@ public struct CreatePostNativeView: View {
       if isEventStamp && eventDraft.validationError != nil { return false }
       if commerceDraft.enabled && commerceDraft.validationError != nil { return false }
     }
-    if postResponse != nil && (!mediaItems.isEmpty || voiceDraft != nil) { return false }
-    return draft.hasWriting || !mediaItems.isEmpty || voiceDraft != nil || draft.structured
+    return !mediaItems.isEmpty || draft.structured
   }
 
   private var resolvedPublishTitle: String {
@@ -2278,14 +2165,6 @@ public struct CreatePostNativeView: View {
 
   private func submit() async {
     guard !isPosting, !isLoadingMedia, canPost else { return }
-    if postResponse != nil && (!mediaItems.isEmpty || voiceDraft != nil) {
-      errorMessage = "Responses are available on text-only posts. Remove the media or response to continue."
-      return
-    }
-    if postResponse?.type == "going" && (commerceDraft.enabled || (isEventStamp && eventDraft.attendanceEnabled)) {
-      errorMessage = "Use the official join or ticket action for this Stamp. Turn off access and attendance details to use an informal Going response."
-      return
-    }
     if isEventStamp, let error = eventDraft.validationError {
       errorMessage = error
       isEditingPostDetails = true
@@ -2429,7 +2308,7 @@ public struct CreatePostNativeView: View {
         postType: selectedStampKind.backendPostType,
         event: isEventStamp ? eventDraft.input : nil,
         commerce: commerceInput,
-        postResponse: postResponse,
+        postResponse: nil, // Never resubmit legacy draft response choices.
         placeId: selectedPlace?.providerPlaceId,
         placeName: selectedPlace?.displayName,
         placeProvider: selectedPlace?.provider,

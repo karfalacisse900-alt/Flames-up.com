@@ -39,8 +39,8 @@ struct CaptroFeedPostView: View {
     VStack(alignment: .leading, spacing: 0) {
       if !post.feedMediaURLs.isEmpty {
         mediaPager
-      } else {
-        textOnlyStamp(maxBodyLines: 16)
+      } else if !post.isLegacyOrdinaryTextPost {
+        structuredStamp(maxBodyLines: 3)
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: max(0, feedWidth - 32), alignment: .leading)
         .padding(.horizontal, 16)
@@ -52,8 +52,8 @@ struct CaptroFeedPostView: View {
     .frame(maxWidth: .infinity, alignment: .topLeading)
   }
 
-  private func textOnlyStamp(maxBodyLines: Int) -> some View {
-    CaptroTextOnlyStampCard(post: post, api: api, canRespond: canRespond,
+  private func structuredStamp(maxBodyLines: Int) -> some View {
+    CaptroStructuredFeedCard(post: post, api: api,
       maxBodyLines: maxBodyLines, isActive: isPostActive, onOpen: onOpenPost)
   }
 
@@ -83,12 +83,11 @@ struct CaptroFeedPostView: View {
 
 }
 
-/// A first-class image-free Stamp. No fake media, fixed caption box or shared
-/// tap gesture around the response controls. Header/creator open real details.
-private struct CaptroTextOnlyStampCard: View {
+/// Image-free structured objects retain their real Details/action destination.
+/// Ordinary legacy text posts are not rendered by the Home card component.
+private struct CaptroStructuredFeedCard: View {
   let post: MIRAPost
   let api: MIRAAPIClient
-  let canRespond: Bool
   let maxBodyLines: Int
   let isActive: Bool
   let onOpen: () -> Void
@@ -122,12 +121,6 @@ private struct CaptroTextOnlyStampCard: View {
       .buttonStyle(.plain)
       .accessibilityHint("Opens full post")
 
-      if post.response != nil {
-        CaptroPostResponseView(post: post, api: api, canRespond: canRespond,
-          outlinedStamp: true, onReply: onOpen)
-          .padding(.top, 20)
-      }
-
       if post.detail?.voice != nil || post.hasAudio {
         CaptroStampAudio(post: post, api: api, isActive: isActive).padding(.top, 14)
       }
@@ -153,7 +146,7 @@ private struct CaptroTextOnlyStampCard: View {
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 0.8))
     .accessibilityElement(children: .contain)
-    .accessibilityIdentifier("captro.textOnlyStamp")
+    .accessibilityIdentifier("captro.structuredStamp")
   }
 }
 

@@ -131,6 +131,14 @@ private struct CaptroContributorAvatars: View {
 }
 
 extension MIRAPost {
+  /// Home-only compatibility policy. Stored records, Profile and direct Details
+  /// remain available; legitimate image-free structured objects are not retired.
+  var isLegacyOrdinaryTextPost: Bool {
+    feedMediaURLs.isEmpty && captroStampKind == .social
+      && detail?.commerce == nil && detail?.event == nil
+      && detail?.collection == nil && detail?.travel == nil && detail?.document == nil
+  }
+
   var captroCleanTitle: String? {
     cleanedCaptroFeedValue(title)
   }

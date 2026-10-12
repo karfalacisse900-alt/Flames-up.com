@@ -13,7 +13,9 @@ public struct CaptroDesignQualityTestView: View {
 
   public var body: some View {
     Group {
-      if ProcessInfo.processInfo.arguments.contains("--captro-quality-cover-runtime") {
+      if ProcessInfo.processInfo.arguments.contains("--captro-presentation-review") {
+        CaptroPresentationReviewHost()
+      } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-cover-runtime") {
         CaptroCoverRuntimeTestHost()
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-auth") {
         AuthNativeView(session: session, api: api)

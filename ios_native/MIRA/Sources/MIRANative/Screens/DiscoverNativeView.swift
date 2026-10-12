@@ -1220,15 +1220,15 @@ struct StoryViewerNativeView: View {
     CaptroCaptureFocusView(
       captureID: currentStory?.id ?? activeGroup.id,
       counter: captureCounter,
-      stamp: captureStamp,
-      title: currentStory?.linkedItem?.title ?? activeGroup.displayName,
-      subtitle: currentStory?.locationName,
+      stamp: CaptroStoryStampPresentation.make(story: currentStory),
+      caption: currentStory?.mediaURL == nil ? nil : currentStory?.content,
       onPrevious: goToPreviousStory,
       onNext: goToNextStory,
       onClose: closeStoryViewer,
       onDetails: { showCaptureDetails = true },
       media: storyMediaLayer,
-      identity: storyTopBar
+      identity: storyHeader,
+      actions: storyQuickActions
     )
     .miraStatusBarHidden(true)
     .onAppear {
@@ -1317,6 +1317,14 @@ struct StoryViewerNativeView: View {
     }
     .sheet(isPresented: $showViewers) {
       if let id = currentStory?.id { StoryViewersSheet(api: api, storyId: id) }
+    }
+    .onChange(of: storyPresentationPaused) { _, paused in
+      if paused {
+        pauseStoryAudioForInterruption()
+      } else {
+        armStoryPlaybackForCurrentStory(reason: "story_sheet_closed")
+        resumeStoryAudioIfNeeded()
+      }
     }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active {
@@ -1416,8 +1424,13 @@ struct StoryViewerNativeView: View {
     "\(activeGroup.userId)|\(selectedIndex)|\(currentStory?.id ?? "none")"
   }
 
+  private var storyPresentationPaused: Bool {
+    showCaptureDetails || showPrivateReply || showStoryMenu || showViewers || isReplyFocused
+  }
+
   private var shouldPlayCurrentStory: Bool {
-    isStoryPlaybackArmed && !isClosing && !isStoryPaused && scenePhase == .active
+    isStoryPlaybackArmed && !isClosing && !isStoryPaused
+      && !storyPresentationPaused && scenePhase == .active
   }
 
   private func storyPlaybackIdentity(for mediaURL: String) -> String {
@@ -1609,13 +1622,55 @@ struct StoryViewerNativeView: View {
   }
 
   private var captureStamp: String {
-    switch currentStory?.linkedItem?.type.lowercased() {
-    case "club": return "CLUB"
-    case "event": return "EVENT"
-    case "meetup": return "MEETUP"
-    case "deal", "offer": return "DEAL"
-    default: return activeGroup.ownerType == "club" ? "CLUB" : "MOMENT"
+    CaptroStoryStampPresentation.make(story: currentStory)?.label ?? "CAPTURED"
+  }
+
+  private var storyHeader: some View {
+    VStack(spacing: 8) {
+      HStack(spacing: 3) {
+        ForEach(stories.indices, id: \.self) { index in
+          Rectangle().fill(index <= selectedIndex ? Color.white : Color.white.opacity(0.3))
+            .frame(height: 2)
+        }
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Story \(selectedIndex + 1) of \(stories.count)")
+      storyTopBar
     }
+  }
+
+  private var storyQuickActions: some View {
+    HStack(spacing: 8) {
+      if let action = CaptroStoryStampPresentation.make(story: currentStory)?.action {
+        Button { showCaptureDetails = true } label: {
+          Text(action).font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .background(MIRATheme.Color.editorialCream)
+        }.accessibilityIdentifier("story.openStamp")
+      } else {
+        Button { showPrivateReply = true } label: {
+          Text("Reply…").font(.subheadline)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 12)
+            .overlay(Capsule().strokeBorder(.white.opacity(0.7), lineWidth: 0.7))
+        }.accessibilityLabel("Reply privately")
+      }
+      if currentStory?.linkedItem != nil {
+        Button { showPrivateReply = true } label: {
+          Image(systemName: "bubble.left").frame(width: 44, height: 44)
+        }.accessibilityLabel("Reply privately")
+      }
+      Button(action: toggleStoryLike) {
+        Image(systemName: currentStory?.viewerLiked == true ? "heart.fill" : "heart")
+          .frame(width: 44, height: 44)
+      }
+      .disabled(currentStory == nil || isSubmittingStoryLike)
+      .accessibilityLabel(currentStory?.viewerLiked == true ? "Unlike story" : "Like story")
+    }
+    .foregroundStyle(.white)
+    .background(.black.opacity(0.28))
+    .buttonStyle(.plain)
   }
 
   private var captureCounter: String {
@@ -1799,7 +1854,7 @@ struct StoryViewerNativeView: View {
     guard !isSubmittingStoryLike, let story = currentStory else { return }
     let nextLiked = !story.viewerLiked
     let nextCount = max(0, (story.likesCount ?? 0) + (nextLiked ? 1 : -1))
-    updateCurrentStory(liked: nextLiked, likesCount: nextCount)
+    updateStory(id: story.id, liked: nextLiked, likesCount: nextCount)
     isSubmittingStoryLike = true
     CaptroHaptics.light()
 
@@ -1807,15 +1862,15 @@ struct StoryViewerNativeView: View {
       do {
         let response: PostLikeResponse = try await api.post("/statuses/\(story.id)/like", body: LikeBody(liked: nextLiked))
         await MainActor.run {
-          updateCurrentStory(
-            liked: response.liked ?? nextLiked,
+          updateStory(
+            id: story.id, liked: response.liked ?? nextLiked,
             likesCount: response.likesCount ?? nextCount
           )
           isSubmittingStoryLike = false
         }
       } catch {
         await MainActor.run {
-          updateCurrentStory(liked: story.viewerLiked, likesCount: story.likesCount ?? 0)
+          updateStory(id: story.id, liked: story.viewerLiked, likesCount: story.likesCount ?? 0)
           isSubmittingStoryLike = false
           CaptroHaptics.warning()
         }
@@ -1824,10 +1879,10 @@ struct StoryViewerNativeView: View {
   }
 
   @MainActor
-  private func updateCurrentStory(liked: Bool, likesCount: Int) {
-    guard stories.indices.contains(selectedIndex) else { return }
+  private func updateStory(id: String, liked: Bool, likesCount: Int) {
+    guard let index = stories.firstIndex(where: { $0.id == id }) else { return }
     var updatedStories = stories
-    updatedStories[selectedIndex] = updatedStories[selectedIndex].updating(liked: liked, likesCount: likesCount)
+    updatedStories[index] = updatedStories[index].updating(liked: liked, likesCount: likesCount)
     localStories = updatedStories
   }
 
@@ -1838,10 +1893,15 @@ struct StoryViewerNativeView: View {
     isStoryAudioLoading = true
     defer { isStoryAudioLoading = false }
     guard let stream = await storyAudioStreamURL(for: story), let url = URL(string: stream) else { return }
+    guard !Task.isCancelled, currentStory?.id == story.id, !isClosing else { return }
     let player = AVPlayer(url: url)
     storyAudioPlayer = player
-    player.play()
-    isStoryAudioPlaying = true
+    if shouldPlayCurrentStory {
+      player.play()
+      isStoryAudioPlaying = true
+    } else {
+      resumeStoryAudioAfterInterruption = true
+    }
   }
 
   private func storyAudioStreamURL(for story: MIRAStatusPreview) async -> String? {
@@ -1884,13 +1944,13 @@ struct StoryViewerNativeView: View {
   }
 
   private func pauseStoryAudioForInterruption() {
-    resumeStoryAudioAfterInterruption = isStoryAudioPlaying
+    resumeStoryAudioAfterInterruption = resumeStoryAudioAfterInterruption || isStoryAudioPlaying
     storyAudioPlayer?.pause()
     isStoryAudioPlaying = false
   }
 
   private func resumeStoryAudioIfNeeded() {
-    guard resumeStoryAudioAfterInterruption, let storyAudioPlayer else { return }
+    guard shouldPlayCurrentStory, resumeStoryAudioAfterInterruption, let storyAudioPlayer else { return }
     storyAudioPlayer.play()
     isStoryAudioPlaying = true
     resumeStoryAudioAfterInterruption = false

@@ -709,6 +709,7 @@ public struct PostDetailNativeView: View {
                   .padding(.bottom, 16)
               }
 
+              reactionRow { isCommentFocused = true }
               commentsSection
                 .id("post-comments")
             }
@@ -720,7 +721,7 @@ public struct PostDetailNativeView: View {
       }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) { commentBar }
-    .background(MIRATheme.Color.surface)
+    .background(MIRATheme.Color.editorialCream)
     .foregroundStyle(CaptroDetailStyle.ink)
     .tint(CaptroDetailStyle.accent)
     .miraScreenEnter(.push)
@@ -801,19 +802,21 @@ public struct PostDetailNativeView: View {
 
   @ToolbarContentBuilder
   private var detailHeader: some ToolbarContent {
-    ToolbarItemGroup(placement: .topBarTrailing) {
-      ShareLink(item: captroDetailShareURL(model.post)) {
-        Image(systemName: "square.and.arrow.up")
-          .frame(minWidth: 44, minHeight: 44)
+    ToolbarItem(placement: .topBarTrailing) {
+      Menu {
+        ShareLink(item: captroDetailShareURL(model.post)) { Label("Share post", systemImage: "square.and.arrow.up") }
+        Button { Task { await model.toggleSave() } } label: {
+          Label(model.post.viewerSaved ? "Unsave post" : "Save post",
+            systemImage: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
+        }.disabled(model.isSaving)
+        if model.canEditEvent { Button("Edit event") { isEditingEvent = true } }
+        Button("Report post", role: .destructive) { presentPostReport() }
+      } label: {
+        Image(systemName: "ellipsis").frame(width: 44, height: 44)
+          .contentShape(Rectangle())
       }
-      .accessibilityLabel("Share post")
-      Button { Task { await model.toggleSave() } } label: {
-        Image(systemName: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
-          .foregroundStyle(model.post.viewerSaved ? CaptroDetailStyle.accent : CaptroDetailStyle.ink)
-          .frame(minWidth: 44, minHeight: 44)
-      }
-      .disabled(model.isSaving)
-      .accessibilityLabel(model.post.viewerSaved ? "Unsave post" : "Save post")
+      .accessibilityLabel("Post options")
+      .accessibilityIdentifier("post.detail.options")
     }
   }
 
@@ -830,16 +833,7 @@ public struct PostDetailNativeView: View {
         reactionLabel("bubble.right", text: compact(model.post.commentsCount ?? model.comments.count))
       }
       .accessibilityLabel("Comments")
-      ShareLink(item: captroDetailShareURL(model.post)) {
-        reactionLabel("square.and.arrow.up", text: "Share")
-      }
-      Button {
-        Task { await model.toggleSave() }
-      } label: {
-        reactionLabel(model.post.viewerSaved ? "bookmark.fill" : "bookmark", text: model.post.viewerSaved ? "Saved" : "Save")
-          .foregroundStyle(model.post.viewerSaved ? CaptroDetailStyle.accent : CaptroDetailStyle.ink)
-      }
-      .disabled(model.isSaving)
+      Spacer(minLength: 0)
     }
     .buttonStyle(.plain)
     .foregroundStyle(CaptroDetailStyle.ink)
@@ -1166,11 +1160,13 @@ private struct PostDetailOptimizedMediaCarousel: View {
   }
 
   private func mediaSlide(index: Int, url: String) -> some View {
-    CaptroPostMediaView(url: url, geometry: mediaSnapshot.geometry(post: post, index: index),
-      size: CGSize(width: width, height: currentHeight), isVideo: isVideo(at: index, url: url),
+    // Details is the full-picture view. Home retains its approved selected frame;
+    // fitting here never alters or recrops the uploaded original.
+    RemoteMediaView(url: url, isVideo: isVideo(at: index, url: url),
       placeholderURL: isVideo(at: index, url: url) ? placeholderURL(at: index, mediaURL: url) : nil,
+      contentMode: .fit,
       shouldPlay: isVisible && scenePhase == .active && selectedIndex == index && !isVideoPaused,
-      muted: isMuted
+      videoMuted: isMuted
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())

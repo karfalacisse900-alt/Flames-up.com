@@ -64,6 +64,10 @@ struct CaptroCompositionDraft {
     return ISO8601DateFormatter().string(from: time)
   }
   var hasWriting: Bool { !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+  // Prospective rule only: legacy drafts retain their original writing and data.
+  var mediaRequirementMessage: String? {
+    !structured && mediaItems.isEmpty ? "Add a photo or video to publish." : nil
+  }
   var bodyCharacterLimit: Int { !structured && !mediaItems.isEmpty ? 220 : 500 }
   var titleValidationMessage: String? {
     !mediaItems.isEmpty && title.count > 60 ? "Keep the title within 60 characters. Your writing has not been removed." : nil

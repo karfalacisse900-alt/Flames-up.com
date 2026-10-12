@@ -56,7 +56,7 @@ final class MainFeedModel: ObservableObject {
   private var hasLoadedFreshFeed = false
   private var isLoadingFreshFeed = false
   private var refreshRequested = false
-  private var canLoadMore = true
+  private(set) var canLoadMore = true
   private var isLoadingCurrentUser = false
   private var accountGeneration = 0
   private var localContentVersion = 0
@@ -276,8 +276,14 @@ final class MainFeedModel: ObservableObject {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
     let ratioTriggerIndex = max(0, Int((Double(max(posts.count - 1, 0)) * paginationTriggerRatio).rounded(.down)))
     let isNearEnd = posts.suffix(paginationTriggerWindow).contains(where: { $0.id == post.id })
-    guard index >= ratioTriggerIndex || isNearEnd else { return }
+    let isLastVisible = posts.last(where: { !$0.isLegacyOrdinaryTextPost })?.id == post.id
+    guard index >= ratioTriggerIndex || isNearEnd || isLastVisible else { return }
     await loadNextPage(reason: "pager")
+  }
+
+  func loadPastLegacyTextPage() async {
+    // Offset advances using raw server records, never the filtered UI count.
+    await loadNextPage(reason: "legacy_text_page")
   }
 
   func prefetchMedia(around post: MIRAPost) {
@@ -1385,6 +1391,7 @@ public struct MainFeedView: View {
         .frame(maxWidth: .infinity, minHeight: size.height)
       }
     } else if displayedPosts.isEmpty {
+      VStack(spacing: 12) {
       MIRAEmptyState(
         title: selectedFeedSection == .following ? "No following posts yet" : selectedFeedSection == .around ? "No posts around you yet" : localization.string("feed.empty.title"),
         message: selectedFeedSection == .following
@@ -1392,7 +1399,17 @@ public struct MainFeedView: View {
           : selectedFeedSection == .around ? "Around uses your profile city and posts with a shared city." : localization.string("feed.empty.message"),
         systemImage: selectedFeedSection == .following ? "person.2" : selectedFeedSection == .around ? "mappin" : "sparkles"
       )
+        if model.canLoadMore {
+          Button("Load more posts") { Task { await model.loadPastLegacyTextPage() } }
+            .frame(minHeight: 44)
+            .disabled(model.isLoadingMore)
+        }
+      }
       .frame(width: size.width, height: size.height)
+      .task(id: model.posts.last?.id) {
+        guard !model.posts.isEmpty else { return }
+        await model.loadPastLegacyTextPage()
+      }
     } else {
       verticalPostStream(width: size.width, bottomInset: bottomInset)
     }
@@ -1466,7 +1483,7 @@ public struct MainFeedView: View {
   }
 
   private var displayedPosts: [MIRAPost] {
-    model.posts
+    model.posts.filter { !$0.isLegacyOrdinaryTextPost }
   }
 
   private var currentPostIndex: Int {

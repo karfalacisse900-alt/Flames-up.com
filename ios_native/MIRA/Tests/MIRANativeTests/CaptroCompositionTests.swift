@@ -2,6 +2,58 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCompositionTests: XCTestCase {
+  func testOrdinaryPublishingRequiresMediaWithoutDestroyingLegacyDrafts() {
+    var draft = CaptroCompositionDraft()
+    draft.bodyText = "Keep this saved text."
+    draft.postResponse = CaptroPostResponseDraft(type: "poll", options: ["Yes", "No"])
+    XCTAssertEqual(draft.mediaRequirementMessage, "Add a photo or video to publish.")
+    draft.mediaItems = [MIRAPickedMedia(data: Data([1]), kind: .image, fileName: "photo.jpg", mimeType: "image/jpeg")]
+    XCTAssertNil(draft.mediaRequirementMessage)
+    XCTAssertEqual(draft.bodyText, "Keep this saved text.")
+    XCTAssertEqual(draft.postResponse?.options, ["Yes", "No"], "Retain old draft data, not new poll UI")
+    draft.mediaItems = []
+    draft.selectedStampKind = .club
+    XCTAssertNil(draft.mediaRequirementMessage, "Do not remove legitimate image-free structured creation")
+  }
+
+  func testHomeEligibilityRetainsEveryStructuredKindAndLegacyStoredContent() throws {
+    let decoder = JSONDecoder()
+    func post(_ type: String, image: String? = nil) throws -> MIRAPost {
+      var json: [String: Any] = ["id": type, "postType": type, "content": "Original writing"]
+      if let image { json["image"] = image }
+      return try decoder.decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+    for type in ["general", "social", "text", "note", "photo", "video"] {
+      let legacy = try post(type)
+      XCTAssertTrue(legacy.isLegacyOrdinaryTextPost, type)
+      XCTAssertEqual(legacy.content, "Original writing")
+      XCTAssertFalse(try post(type, image: "https://example.com/photo.jpg").isLegacyOrdinaryTextPost)
+    }
+    for type in ["place", "club", "group", "group_access", "meetup", "event", "party",
+      "ticket", "access_pass", "booking", "reservation", "deal", "offer", "local_offer",
+      "guide", "collection", "travel", "boarding_pass", "receipt", "invoice"] {
+      XCTAssertFalse(try post(type).isLegacyOrdinaryTextPost, type)
+    }
+  }
+
+  func testStoryStampInventoryDoesNotInventPricesOrPurchaseOnOpen() throws {
+    let cases = ["club": "Club", "group_access": "Group", "meetup": "Meetup",
+      "event": "Event", "party": "Party", "ticket": "Ticket", "booking": "Booking",
+      "deal": "Deal", "local_offer": "Offer", "place": "Place", "guide": "Collection",
+      "travel": "Trip", "receipt": "Receipt", "invoice": "Invoice"]
+    for (type, label) in cases {
+      let json: [String: Any] = ["id": "story", "linkedItem": [
+        "id": "attachment-not-post-id", "type": type, "title": "Original title"]]
+      let story = try JSONDecoder().decode(MIRAStatusPreview.self, from: JSONSerialization.data(withJSONObject: json))
+      let stamp = try XCTUnwrap(CaptroStoryStampPresentation.make(story: story))
+      XCTAssertEqual(stamp.label, label.uppercased())
+      XCTAssertEqual(stamp.action, "View " + label.lowercased())
+      XCTAssertNil(stamp.context, "Do not fabricate prices or locations")
+    }
+    let empty = try JSONDecoder().decode(MIRAStatusPreview.self, from: Data(#"{"id":"empty"}"#.utf8))
+    XCTAssertNil(CaptroStoryStampPresentation.make(story: empty))
+  }
+
   func testCoverDefaultsAndTypographyAreRealNativeFonts() throws {
     let writing = CaptroMediaWriting.cover(sourceAspectRatio: 9.0 / 16)
     XCTAssertEqual(writing.y, 0.46); XCTAssertEqual(writing.alignment, "center")

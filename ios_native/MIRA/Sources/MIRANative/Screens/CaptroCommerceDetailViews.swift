@@ -37,11 +37,12 @@ struct CaptroCommerceDetailSection: View {
         if !commerce.description.isEmpty && commerce.description != model.post.detailCaption {
           factBlock("ABOUT", commerce.description)
         }
-        CaptroDetailCreatorRow(post: model.post, api: model.api, context: creatorContext(commerce), showsTime: false)
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 20)
       .background(MIRATheme.Color.surface)
+      .overlay(Rectangle().strokeBorder(CaptroDetailStyle.divider, lineWidth: 0.7))
+      .padding(.horizontal, 16)
       .sheet(isPresented: $isShowingPass) {
         if let pass = model.commercePass {
           CaptroCommercePassView(post: model.post, commerce: commerce, pass: pass)

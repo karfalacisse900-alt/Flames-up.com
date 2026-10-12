@@ -17,7 +17,12 @@ struct CaptroPostDetailSections: View {
   @State private var transcriptVoiceId: String?
 
   var body: some View {
-    VStack(spacing: 0) {
+    VStack(alignment: .leading, spacing: 0) {
+      CaptroDetailCreatorRow(post: post, api: model.api)
+        .padding(16)
+      fullDescription
+        .padding(.horizontal, 16)
+        .padding(.bottom, post.detailCaption.isEmpty ? 0 : 16)
       Group {
         if model.commerce != nil || post.detail?.commerce != nil {
           CaptroCommerceDetailSection(model: model)
@@ -40,11 +45,6 @@ struct CaptroPostDetailSections: View {
             }
           }
         }
-      }
-      if post.response != nil {
-        CaptroPostResponseView(post: post, api: model.api, onReply: onReply)
-          .padding(.horizontal, 16)
-          .padding(.vertical, 12)
       }
       voicePlayer
         .padding(.horizontal, 16)
@@ -84,43 +84,27 @@ struct CaptroPostDetailSections: View {
         detailDivider
       }
 
-      fullDescription
-      CaptroDetailCreatorRow(
-        post: post,
-        api: model.api,
-        context: post.detail?.creatorVisited == true ? "visited" : nil
-      )
     }
     .padding(20)
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().stroke(CaptroDetailStyle.divider, lineWidth: 1))
     .padding(.horizontal, 16)
-    .padding(.top, post.feedMediaURLs.isEmpty ? 16 : -12)
+    .padding(.top, 0)
     .padding(.bottom, 8)
   }
 
+  @ViewBuilder
   private var regularPost: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        CaptroDetailCreatorRow(post: post, api: model.api)
-        Spacer(minLength: 0)
-        Button(action: onOpenOptions) {
-          Image(systemName: "ellipsis")
-            .font(.system(size: 18, weight: .semibold))
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Post options")
-      }
-      if post.isCoverPost {
-        fullDescription
-      } else {
-        CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
-          expanded: true, showsProfileRow: false)
-      }
+    // An ordinary photo/caption has no second business or category card.
+    if post.captroStampKind != .social {
+      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
+        expanded: true, showsProfileRow: false)
+        .padding(.horizontal, 16).padding(.bottom, 16)
+    } else if let title = post.captroCleanTitle, title != post.detailCaption {
+      Text(title).font(.title3.weight(.semibold))
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 16).padding(.bottom, 12)
     }
-    .padding(16)
   }
 
   private var eventPost: some View {
@@ -133,8 +117,6 @@ struct CaptroPostDetailSections: View {
             .frame(minHeight: 44)
         }.buttonStyle(.plain)
       }
-      CaptroDetailCreatorRow(post: post, api: model.api, context: "Hosted by", showsTime: false)
-      fullDescription
 
       if let event = post.detail?.event,
          event.attendeesCount != nil || !(event.attendees ?? []).isEmpty {
@@ -186,8 +168,6 @@ struct CaptroPostDetailSections: View {
         .font(.system(size: 24, weight: .bold))
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityAddTraits(.isHeader)
-      CaptroDetailCreatorRow(post: post, api: model.api, context: "by", showsTime: false)
-      fullDescription
 
       HStack(spacing: 10) {
         Button {
@@ -320,7 +300,7 @@ struct CaptroDetailCreatorRow: View {
           .foregroundStyle(CaptroDetailStyle.ink)
           .lineLimit(2)
         if showsTime {
-          Text([context, relativeAge(post.createdAt)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+          Text([context, post.displayCity, relativeAge(post.createdAt)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
             .font(.system(size: 11))
             .foregroundStyle(CaptroDetailStyle.secondary)
         }

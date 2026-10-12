@@ -2,6 +2,10 @@ name: Validate Captro Stamps
 on:
   workflow_dispatch:
     inputs:
+      presentation_review:
+        description: Review media-only creation and native Details/Stories with isolated fixtures; no publishing
+        type: boolean
+        default: false
       restore_audit:
         description: Instrument real lazy Home restoration without distributing a build
         type: boolean
@@ -132,6 +136,24 @@ jobs:
             # active Cover route, then real private publish/persistence below.
             tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/CoverTests/testCoverSelectorOpensRealPhotoPicker -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testTextOnlyAndAccessibilityDoNotReserveMediaHeight)
           fi
+          if [ '${{ inputs.presentation_review }}' = 'true' ]; then
+            tests=(-only-testing:CaptroStampTests
+              -only-testing:CaptroLayoutUITests/PostPresentationReviewTests
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedGestureDirectionsAndBackgroundReturn
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame)
+            xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+              -destination "platform=iOS Simulator,id=$FEED_SIMULATOR" \
+              -derivedDataPath "$RUNNER_TEMP/StampBuild" CODE_SIGNING_ALLOWED=NO build-for-testing \
+              2>&1 | tee "$RUNNER_TEMP/stamp-build.log"
+            xcrun simctl install "$FEED_SIMULATOR" "$RUNNER_TEMP/StampBuild/Build/Products/Debug-iphonesimulator/Captro.app"
+            container=$(xcrun simctl get_app_container "$FEED_SIMULATOR" com.captro.app data)
+            mkdir -p "$container/Documents"
+            # Same licensed photograph used by the existing review fixtures.
+            curl --fail --retry 2 --max-time 60 \
+              'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?auto=format&fit=max&w=900&q=85&fm=jpg' \
+              -o "$container/Documents/presentation-photo.jpg"
+          fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$FEED_SIMULATOR" \
             -parallel-testing-enabled NO \
@@ -139,7 +161,7 @@ jobs:
             "${tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/stamp-build.log"
       - name: Record continuous Home scrolling
-        if: ${{ !inputs.baseline && !inputs.cover_runtime }}
+        if: ${{ !inputs.baseline && !inputs.cover_runtime && !inputs.presentation_review }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
