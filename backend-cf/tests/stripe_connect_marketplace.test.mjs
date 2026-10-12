@@ -385,10 +385,10 @@ test('buyer checkout never runs seller verification or payout setup', () => {
 });
 
 test('stamp has one detail target while saving remains available in the detail header', () => {
-  assert.equal((details.match(/reactionRow\(/g) || []).length, 1, 'reactionRow must remain unused except for its private declaration');
+  assert.match(details, /reactionRow \{ isCommentFocused = true \}/);
   assert.match(details, /detailHeader/);
-  assert.match(details, /Image\(systemName: model\.post\.viewerSaved \? "bookmark\.fill" : "bookmark"\)/);
+  assert.match(details, /Menu \{[\s\S]*?model\.toggleSave\(\)/);
   assert.doesNotMatch(overlayCard, /Button\(action: onSave\)/);
-  assert.match(homePost, /CaptroTextOnlyStampCard\(post: post,[\s\S]*?onOpen: onOpenPost\)/);
+  assert.match(homePost, /CaptroStructuredFeedCard\(post: post,[\s\S]*?onOpen: onOpenPost\)/);
   assert.match(homePost, /let content = post\.captroMediaFeedCardContent/);
 });

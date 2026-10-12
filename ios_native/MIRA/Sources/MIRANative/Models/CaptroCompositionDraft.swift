@@ -8,7 +8,7 @@ enum CaptroWritingIntent: String, Codable, CaseIterable, Identifiable {
   case cover
   var id: String { rawValue }
   var title: String {
-    switch self { case .free: return "Write"; case .wantTo: return "Want to"; case .lookingFor: return "Looking for"; case .concern: return "Concern"; case .cover: return "Cover" }
+    switch self { case .free: return "Photo or video"; case .wantTo: return "Want to"; case .lookingFor: return "Looking for"; case .concern: return "Concern"; case .cover: return "Cover" }
   }
   var byline: String {
     switch self { case .free: return ""; case .wantTo: return "wants to"; case .lookingFor: return "is looking for"; case .concern: return "is concerned about"; case .cover: return "Cover" }

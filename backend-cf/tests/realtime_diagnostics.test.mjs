@@ -39,17 +39,17 @@ test('native voice readiness follows confirmed config plus PCM send, never permi
   assert.match(session, /func suspendForBackground\(\)[\s\S]*?stop\(\)/);
 });
 
-test('text-only Stamp is outlined, measured, creator-configured and separate from media/header UI', () => {
-  assert.match(feed, /CaptroTextOnlyStampCard/);
-  assert.match(feed, /textOnlyStamp\(maxBodyLines: 16\)\s*\.fixedSize\(horizontal: false, vertical: true\)/);
+test('structured image-free cards remain compact; ordinary text and poll cards are retired', () => {
+  assert.match(feed, /CaptroStructuredFeedCard/);
+  assert.match(feed, /structuredStamp\(maxBodyLines: 3\)\s*\.fixedSize\(horizontal: false, vertical: true\)/);
   assert.doesNotMatch(feed, /pageSize|ScrollView\(\.vertical\)/);
-  assert.match(feed, /outlinedStamp: true/);
-  const card = feed.split('private struct CaptroTextOnlyStampCard')[1].split('private struct CaptroAuthorHeader')[0];
+  assert.doesNotMatch(feed, /outlinedStamp: true/);
+  const card = feed.split('private struct CaptroStructuredFeedCard')[1].split('private struct CaptroAuthorHeader')[0];
   assert.match(card, /\.lineLimit\(maxBodyLines\)\.truncationMode\(\.tail\)/);
   assert.doesNotMatch(card, /CaptroMeasuredCaption|Text\(content\.type\.rawValue/);
   assert.match(card, /Rectangle\(\)\.strokeBorder\(MIRATheme.Color.textPrimary/);
-  assert.match(feed, /canRespond: canRespond/);
+  assert.doesNotMatch(feed, /CaptroPostResponseView/);
   assert.doesNotMatch(feed, /canRespond: showsFeedControls/);
-  assert.match(card, /if post\.response != nil/);
+  assert.doesNotMatch(card, /if post\.response != nil/);
   assert.doesNotMatch(card, /Developers|Designers|Co-founders|gradient|shadow|minimumScaleFactor/);
 });

@@ -33,7 +33,7 @@ test('guest Home reads only the public feed and keeps an isolated cache', () => 
 
 test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.match(postView, /CaptroMediaPager\(/);
-  assert.match(postView, /CaptroTextOnlyStampCard\(post: post/);
+  assert.match(postView, /CaptroStructuredFeedCard\(post: post/);
   assert.doesNotMatch(postView, /CaptroExpandableCaption/);
   assert.doesNotMatch(postView, /CaptroLocationRow/);
   assert.match(mediaPager, /CaptroFeedMediaStamp\(content: post\.captroMediaFeedCardContent/);
@@ -42,7 +42,7 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
 
-test('Home keeps text, note, image, and video posts in the same feed', () => {
+test('Home hides ordinary legacy text but retains media and structured posts without deleting data', () => {
   assert.doesNotMatch(mainFeed, /photoFeedPosts/);
   assert.match(mainFeed, /startsNewOrder \? await sortedByNativeScore\(loaded\) : loaded/);
   assert.match(mainFeed, /CaptroFeedReconciliation\.background\(existing: posts, fresh: loaded\)/);
@@ -52,7 +52,7 @@ test('Home keeps text, note, image, and video posts in the same feed', () => {
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
-    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager[\s\S]*?\} else \{[\s\S]*?textOnlyStamp\(maxBodyLines: 16\)/,
+    /if !post\.feedMediaURLs\.isEmpty \{\s*mediaPager[\s\S]*?\} else if !post\.isLegacyOrdinaryTextPost \{[\s\S]*?structuredStamp\(maxBodyLines: 3\)/,
   );
 
   const readStart = worker.indexOf('async function supabaseReadVisiblePosts');
@@ -101,13 +101,14 @@ test('Moment details keep full writing below clean media without duplicating Cov
   const momentDetail = detail.slice(detail.indexOf('private var regularPost'), detail.indexOf('private var eventPost'));
   assert.match(momentDetail, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
   assert.match(momentDetail, /expanded: true, showsProfileRow: false/);
-  assert.match(momentDetail, /if post\.isCoverPost \{[\s\S]*?fullDescription/);
+  assert.match(momentDetail, /if post\.captroStampKind != \.social/);
+  assert.match(detail, /fullDescription[\s\S]*?Group \{/);
   assert.match(detail, /struct CaptroDetailMediaWriting/);
   assert.doesNotMatch(commerce, /CaptroEditorialOverlayCard\(/);
-  const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('private func textOnlyStamp'));
-  assert.match(textOnly, /textOnlyStamp\(maxBodyLines: 16\)/);
+  const textOnly = postView.slice(postView.indexOf('if !post.feedMediaURLs.isEmpty'), postView.indexOf('private func structuredStamp'));
+  assert.match(textOnly, /structuredStamp\(maxBodyLines: 3\)/);
   assert.match(postView, /let content = post\.captroMediaFeedCardContent/);
-  const homeTextCard = postView.slice(postView.indexOf('private struct CaptroTextOnlyStampCard'), postView.indexOf('private struct CaptroAuthorHeader'));
+  const homeTextCard = postView.slice(postView.indexOf('private struct CaptroStructuredFeedCard'), postView.indexOf('private struct CaptroAuthorHeader'));
   assert.doesNotMatch(homeTextCard, /Text\(content\.type\.rawValue|CaptroMeasuredCaption/);
   assert.doesNotMatch(textOnly, /Text\(caption\)/);
   assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
@@ -214,7 +215,7 @@ test('Home uses a stable supported fill preview while Details preserves original
 });
 
 test('media canvas keeps the first slide frame stable and fits extreme height without a More row', () => {
-  const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroTextOnlyStampCard'));
+  const sizing = postView.slice(postView.indexOf('private var mediaSize:'), postView.indexOf('private struct CaptroStructuredFeedCard'));
   assert.match(sizing, /post\.feedFrameHeightToWidthRatio/);
   assert.doesNotMatch(sizing, /ratios\[selectedMediaIndex\]/);
   assert.match(sizing, /height: feedWidth \* \(frameRatio \?\? post\.feedFrameHeightToWidthRatio\)/);

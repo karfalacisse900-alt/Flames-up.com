@@ -296,12 +296,13 @@ struct CaptroDetailCreatorRow: View {
       RemoteAvatar(url: post.userProfileImage, size: 34)
       VStack(alignment: .leading, spacing: 4) {
         Text(showsTime ? post.detailCreatorHandle : [context, post.detailCreatorHandle].compactMap { $0 }.joined(separator: " "))
-          .font(.system(size: 13, weight: .semibold))
+          .font(.subheadline.weight(.semibold))
           .foregroundStyle(CaptroDetailStyle.ink)
           .lineLimit(2)
         if showsTime {
-          Text([context, post.displayCity, relativeAge(post.createdAt)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
-            .font(.system(size: 11))
+          Text([context, post.displayLocationText == nil ? nil : post.displayCity, relativeAge(post.createdAt)]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+            .font(.caption)
             .foregroundStyle(CaptroDetailStyle.secondary)
         }
       }

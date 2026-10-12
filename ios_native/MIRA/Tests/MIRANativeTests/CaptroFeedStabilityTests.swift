@@ -277,6 +277,27 @@ final class CaptroFeedStabilityTests: XCTestCase {
     XCTAssertEqual(model.posts.count, 22)
   }
 
+  func testLegacyTextPageDoesNotStrandLaterMediaOrDeleteCachedRecords() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.configureGuestMode(true)
+    let legacy = try (0..<12).map { index in
+      try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
+        ["id": "legacy-\(index)", "postType": "general", "content": "Original saved writing"]))
+    }
+    let media = try [post("photo-a"), post("photo-b")]
+    var offsets: [Int] = []
+    model.testPageLoader = { _, skip in
+      offsets.append(skip)
+      return skip == 0 ? legacy : media
+    }
+    await model.load()
+    XCTAssertTrue(model.posts.allSatisfy(\.isLegacyOrdinaryTextPost))
+    await model.loadPastLegacyTextPage()
+    XCTAssertEqual(offsets, [0, 12], "Offset must include hidden raw records")
+    XCTAssertEqual(model.posts.filter { !$0.isLegacyOrdinaryTextPost }.map(\.id), ["photo-a", "photo-b"])
+    XCTAssertEqual(model.posts.count, 14, "Home presentation must not delete legacy content")
+  }
+
   func testSupportedHomeFramesAndUnknownMetadataAreDeterministic() {
     for ratio: CGFloat in [1, 1.25, 4.0 / 3, 9.0 / 16] {
       XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(ratio), ratio, accuracy: 0.001)

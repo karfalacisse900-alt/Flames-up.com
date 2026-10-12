@@ -134,9 +134,11 @@ extension MIRAPost {
   /// Home-only compatibility policy. Stored records, Profile and direct Details
   /// remain available; legitimate image-free structured objects are not retired.
   var isLegacyOrdinaryTextPost: Bool {
-    feedMediaURLs.isEmpty && captroStampKind == .social
-      && detail?.commerce == nil && detail?.event == nil
-      && detail?.collection == nil && detail?.travel == nil && detail?.document == nil
+    guard feedMediaURLs.isEmpty, detail?.commerce == nil, detail?.event == nil,
+      detail?.collection == nil, detail?.travel == nil, detail?.document == nil else { return false }
+    let type = (postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    // A location attached to an ordinary caption doesn't turn it into a listing.
+    return ["", "general", "social", "moment", "text", "note", "photo", "image", "video", "cover"].contains(type)
   }
 
   var captroCleanTitle: String? {

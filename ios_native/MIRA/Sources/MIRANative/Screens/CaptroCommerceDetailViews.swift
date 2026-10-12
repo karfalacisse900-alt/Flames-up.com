@@ -28,21 +28,25 @@ struct CaptroCommerceDetailSection: View {
   var body: some View {
     if let commerce {
       VStack(alignment: .leading, spacing: 18) {
-        heading(commerce)
-        typeSpecificFacts(commerce)
-        purchaseControls(commerce)
+        VStack(alignment: .leading, spacing: 12) {
+          heading(commerce)
+          typeSpecificFacts(commerce)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(MIRATheme.Color.editorialCream)
+        .overlay(Rectangle().strokeBorder(CaptroDetailStyle.divider, lineWidth: 0.7))
         if !commerce.refundPolicy.isEmpty {
           factBlock("REFUND / CANCELLATION", commerce.refundPolicy)
         }
         if !commerce.description.isEmpty && commerce.description != model.post.detailCaption {
           factBlock("ABOUT", commerce.description)
         }
+        purchaseControls(commerce)
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 20)
       .background(MIRATheme.Color.surface)
-      .overlay(Rectangle().strokeBorder(CaptroDetailStyle.divider, lineWidth: 0.7))
-      .padding(.horizontal, 16)
       .sheet(isPresented: $isShowingPass) {
         if let pass = model.commercePass {
           CaptroCommercePassView(post: model.post, commerce: commerce, pass: pass)
@@ -64,7 +68,7 @@ struct CaptroCommerceDetailSection: View {
         .font(.system(size: 11, weight: .bold))
         .foregroundStyle(CaptroDetailStyle.accent)
       Text(commerce.title)
-        .font(.system(size: 26, weight: .bold))
+        .font(.title2.weight(.bold))
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityAddTraits(.isHeader)
       if let location = commerce.displayLocation {
