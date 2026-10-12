@@ -135,7 +135,7 @@ jobs:
             # Preserve errors instead of presenting an unavailable trace as evidence.
             (
               xcrun xctrace list templates > "$RUNNER_TEMP/feed-profiler-templates.log" 2>&1
-              for attempt in $(seq 1 90); do
+              for attempt in $(seq 1 300); do
                 app_pid=$(pgrep -x Captro | head -1)
                 if [ -n "$app_pid" ]; then
                   xcrun xctrace record --template 'Time Profiler' --attach "$app_pid" \
@@ -146,6 +146,10 @@ jobs:
                 fi
                 sleep 1
               done
+              if [ ! -f "$RUNNER_TEMP/feed-profiler.log" ]; then
+                echo 'Instruments capture unavailable: Captro did not launch within the 300-second discovery window.' > "$RUNNER_TEMP/feed-profiler.log"
+                echo '::warning::No Captro CPU trace was collected; do not treat the run as profiled.'
+              fi
             ) &
           fi
           recording_tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testPublicStampExamples
