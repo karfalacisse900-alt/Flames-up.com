@@ -6,6 +6,10 @@ on:
         description: Instrument real lazy Home restoration without distributing a build
         type: boolean
         default: false
+      profile_only:
+        description: Build and run only the restoration recording/profile checks (not the full acceptance suite)
+        type: boolean
+        default: false
       cached_framing:
         description: Verify delayed conflicting Details metadata and navigation scroll anchors
         type: boolean
@@ -85,6 +89,11 @@ jobs:
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testFortyMixedPostsAndDetailsReturn
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testCachedHomeSurvivesConflictingDelayedDetailsRefresh
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame)
+            if [ '${{ inputs.profile_only }}' = 'true' ]; then
+              # Full acceptance was already run against these identical app sources.
+              # Keep this collector investigation focused instead of replaying it.
+              tests=(-only-testing:CaptroStampTests)
+            fi
           elif [ '${{ inputs.cached_framing }}' = 'true' ]; then
             tests=(-only-testing:CaptroStampTests
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testCachedHomeSurvivesConflictingDelayedDetailsRefresh
@@ -151,23 +160,31 @@ jobs:
             # Best-effort Instruments capture, separate from pass/fail assertions.
             # Preserve errors instead of presenting an unavailable trace as evidence.
             (
-              xcrun xctrace list templates > "$RUNNER_TEMP/feed-profiler-templates.log" 2>&1
+              xcrun xctrace list templates > "$RUNNER_TEMP/feed-profiler-templates.log" 2>&1 || true
+              echo 'Collector started; waiting for Captro.' > "$RUNNER_TEMP/feed-profiler.log"
+              captured=false
               for attempt in $(seq 1 300); do
-                app_pid=$(pgrep -x Captro | head -1)
+                # An absent process is expected while XCTest starts. Without this
+                # guard Actions' bash -e/pipefail exits before the second attempt.
+                app_pid=$(pgrep -x Captro | head -1 || true)
                 if [ -n "$app_pid" ]; then
+                  echo "Attaching to Captro PID $app_pid after discovery attempt $attempt." >> "$RUNNER_TEMP/feed-profiler.log"
                   xcrun xctrace record --template 'Time Profiler' --attach "$app_pid" \
-                    --time-limit 45s --output "$RUNNER_TEMP/FeedScroll.trace" > "$RUNNER_TEMP/feed-profiler.log" 2>&1
-                  xcrun xctrace export --input "$RUNNER_TEMP/FeedScroll.trace" --toc \
-                    --output "$RUNNER_TEMP/feed-profiler-toc.xml" >> "$RUNNER_TEMP/feed-profiler.log" 2>&1
-                  xcrun xctrace export --input "$RUNNER_TEMP/FeedScroll.trace" \
-                    --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' \
-                    --output "$RUNNER_TEMP/feed-profiler-samples.xml" >> "$RUNNER_TEMP/feed-profiler.log" 2>&1
+                    --time-limit 45s --output "$RUNNER_TEMP/FeedScroll.trace" >> "$RUNNER_TEMP/feed-profiler.log" 2>&1 || true
+                  if [ -d "$RUNNER_TEMP/FeedScroll.trace" ]; then
+                    captured=true
+                    xcrun xctrace export --input "$RUNNER_TEMP/FeedScroll.trace" --toc \
+                      --output "$RUNNER_TEMP/feed-profiler-toc.xml" >> "$RUNNER_TEMP/feed-profiler.log" 2>&1 || true
+                    xcrun xctrace export --input "$RUNNER_TEMP/FeedScroll.trace" \
+                      --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' \
+                      --output "$RUNNER_TEMP/feed-profiler-samples.xml" >> "$RUNNER_TEMP/feed-profiler.log" 2>&1 || true
+                  fi
                   break
                 fi
                 sleep 1
               done
-              if [ ! -f "$RUNNER_TEMP/feed-profiler.log" ]; then
-                echo 'Instruments capture unavailable: Captro did not launch within the 300-second discovery window.' > "$RUNNER_TEMP/feed-profiler.log"
+              if [ "$captured" != true ]; then
+                echo 'Instruments capture unavailable: no trace produced; inspect discovery/attach output above.' >> "$RUNNER_TEMP/feed-profiler.log"
                 echo '::warning::No Captro CPU trace was collected; do not treat the run as profiled.'
               fi
             ) &
