@@ -1,0 +1,113 @@
+CAPTRO — MEDIA POSTS / DETAILS / STORIES REVIEW
+Review branch: fix/media-posts-story-review
+Status: implementation awaiting runtime review; not a release.
+
+Approved compatibility decisions
+- New ordinary posts require a photo or video. Captions are optional.
+- Home hides legacy ordinary text-only posts. Their records remain in the feed
+  cache/model and remain accessible through Profile and direct Details.
+- Stored captions, votes and response configurations are not deleted.
+- Legacy drafts retain writing and response metadata. The composer explains
+  that response choices will not publish and asks for a photo/video.
+- New publishing requests omit postResponse. Structured access actions are not polls.
+- No database migration, backend deployment, production settings change,
+  merge or TestFlight upload is part of this review.
+
+Inventory checked against the actual native enum and routes
+CaptroFeedPostOverlays.swift: CaptroStampKind / MIRAPost.captroStampKind
+  Ordinary/general: social, moment, note/text/photo/video aliases; Cover is
+  media writing, not a separate commerce type.
+  Place: place/location/review/check_in/checkin.
+  Club.
+  Group: group/access/group_access.
+  Meetup.
+  Event: event/concert/show.
+  Party.
+  Ticket/pass: ticket/access_pass; travel enrichment selects travel Details.
+  Booking: booking/reservation.
+  Deal.
+  Local offer: offer/local_offer/local-offer.
+  Guide: guide/collection/list/album/collaborative_album/collaborative-album.
+  Travel: travel/trip/boarding_pass/train/flight/bus.
+  Receipt.
+  Invoice.
+No kind has been removed or consolidated.
+
+Current creation capabilities
+- Ordinary media/Cover and place attachment remain in the main composer.
+- The existing server capability endpoint authorizes Club, Event, Meetup, Deal.
+  Other supported kinds remain readable/routable; this change does not invent
+  permission to create them in the ordinary composer.
+- Event editing remains the existing CaptroEventEditSheet / PUT post event flow.
+  A generic published-post media/caption editor was not found in the active
+  native routes. Draft editing is retained; no new general editor is claimed.
+- Private receipts still enter through Capture and verified document Details.
+
+Destinations and authorization preserved
+- Club/group membership: server commerce state; open the existing conversation
+  only when active access supplies a destination ID.
+- Event/party/ticket: existing checkout and server-issued pass loading.
+- Meetup: existing authorized attendance or commerce flow as applicable.
+- Deal/offer: existing checkout/redemption/fulfillment.
+- Booking: existing reservation selection/checkout.
+- Place, collection, travel, receipt, invoice: existing specialized Details.
+- Story links open current details, never automatically buy/join/claim.
+  An attachment ID is not treated as a post ID. Missing destinations show the
+  existing unavailable state rather than inventing a route.
+
+Implementation
+1. CaptroCompositionDraft / NotificationLibrarySearchCreateViews
+   Shared media requirement used by publish validation; response picker/routes
+   removed. Legacy response data remains in saved drafts but not CreatePostBody.
+2. MainFeedView / CaptroFeedPostOverlays / CaptroFeedPostView
+   Home-only legacy filter; raw server pagination offsets retained, including
+   pages containing only retired text posts. Preserve structured image-free
+   records and their Details destination. Ordinary dedicated text card removed.
+3. CaptroPostDetailSections / PostDetailNativeView / CaptroCommerceDetailViews
+   One creator row, full caption, slim three-dot menu, restrained reactions;
+   only attached stamps get an information panel. Commerce action stays inline
+   in scrolling content above the single existing safe-area reply composer.
+   Hidden location metadata is not exposed by the creator row.
+   Details fits original media within its stable container; fullscreen remains
+   available. Home's selected-frame geometry is unchanged. App-added writing
+   remains below Details media.
+4. CaptroCaptureFocusView / CaptroStoryPresentation / DiscoverNativeView
+   Compact cream rectangular Story stamp, position indicators, minimal creator/
+   close controls, reply/like and safe View action. Personal stamps use only
+   already-shared location/date, not reverse-geocoded or precise coordinates.
+   All existing stamp kinds are recognized; absent facts are not fabricated.
+   Modal/reply/keyboard state pauses playback. Delayed audio must still match
+   the selected Story ID. Like completions target their original Story ID.
+5. CaptroPostResponseView deleted: native poll controls/results/networking UI
+   removed; backend response endpoints/data remain for compatibility.
+
+Restoration/performance boundary
+- CaptroFeedViewport.swift is byte-for-byte unchanged from restoration 2e79701b.
+- No new scroll commands, offset corrections or feed-wide animation were added.
+- No claim of resolving real-iPhone jitter/freezes is made by this work.
+
+Backend compatibility requiring separate approval
+- Older clients can still submit ordinary text/poll posts using existing APIs.
+- The updated client hides retired presentation without deleting server data.
+- Server-wide rejection requires a separately reviewed, version-aware rollout
+  and older-client upgrade behavior. No such backend change was applied.
+
+Verification records will be finalized after the native review run.
+Local suite: 251/253 pass. Two pre-existing source guards still assume obsolete
+media-ratio code (captro_stamp_feed_guard.test.mjs); they were not hidden.
+New source guards cover media-required publishing, preserved legacy drafts,
+removed poll UI, raw pagination, stable Story identity and pause guards.
+Native tests added for legacy/media eligibility, complete stamp aliases,
+Story presentation, draft preservation and pagination beyond hidden text pages.
+
+Runtime screenshots use running native screens with isolated DEBUG fixture
+records and a licensed test photograph. They are not production posts or
+generated mockups, and they do not prove live purchases or receipt verification.
+
+Still required before release
+- Inspect the runtime screenshots and approve the presentation.
+- Physical-iPhone interaction/performance, VoiceOver and small-screen checks.
+- Live owner/viewer, joined/purchased, pending, expired and sold-out flows.
+- Real upload/retry, edit/publish and interruption tests with each supported type.
+  Existing permissions, receipts, payments and backend behavior were preserved,
+  not re-certified by a source check or screenshot.

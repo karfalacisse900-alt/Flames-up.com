@@ -1,5 +1,6 @@
 #if DEBUG
 import SwiftUI
+import ImageIO
 
 /// Native-screen review fixtures only. No production records or payments are
 /// created. The simulator workflow supplies a photograph in Documents.
@@ -12,6 +13,17 @@ enum CaptroPresentationReviewFixture {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("presentation-photo.jpg").absoluteString
   }
+  static let dimensions: [String: Int] = {
+    guard let url = URL(string: mediaURL),
+      let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+      let width = properties[kCGImagePropertyPixelWidth] as? Int,
+      let height = properties[kCGImagePropertyPixelHeight] as? Int else {
+      preconditionFailure("Review photograph must be installed before launching")
+    }
+    let rotated = [5, 6, 7, 8].contains(properties[kCGImagePropertyOrientation] as? Int ?? 1)
+    return ["width": rotated ? height : width, "height": rotated ? width : height]
+  }()
   static var postRecord: [String: Any] {
     var value: [String: Any] = [
       "id": "review-post", "userId": "review-author", "userUsername": "captro_test",
@@ -19,7 +31,7 @@ enum CaptroPresentationReviewFixture {
       "caption": "An afternoon around the neighborhood. Full captions remain readable here, with room for the details that matter.",
       "displayCity": "New York", "createdAt": "2026-10-12T14:00:00Z",
       "image": mediaURL, "images": [mediaURL], "feedMediaUrls": [mediaURL],
-      "mediaDimensions": [["width": 900, "height": 1125]],
+      "mediaDimensions": [dimensions],
       "likesCount": 12, "commentsCount": 0,
       "response": ["type": "yes_no", "options": ["Yes", "No"], "counts": ["Yes": 2], "totalCount": 2]
     ]
