@@ -1182,6 +1182,7 @@ public struct MainFeedView: View {
         }
       }
       .onChange(of: isMediaPlaybackSuppressed) { _, suppressed in
+        viewport.setActive(!suppressed)
         if suppressed {
           MIRAPlaybackCoordinator.pauseAll(reason: "home_feed_overlay")
         } else {
@@ -1209,6 +1210,7 @@ public struct MainFeedView: View {
     NavigationStack {
       activeFeed.onAppear(perform: feedDidAppear)
       .onDisappear {
+        viewport.setActive(false)
         postActivationTask?.cancel()
         pauseVisibleMedia(reason: "home_feed_disappeared")
       }
@@ -1216,6 +1218,7 @@ public struct MainFeedView: View {
   }
 
   private func feedDidAppear() {
+    viewport.setActive(!isMediaPlaybackSuppressed)
     let selection: Binding<String?> = $selectedPostID
     let active: Binding<String?> = $activeVideoPostID
     viewport.onVisible = { (id: String?) in
@@ -1396,7 +1399,7 @@ public struct MainFeedView: View {
     ScrollView(.vertical) {
       LazyVStack(spacing: 12) {
         ForEach(displayedPosts, id: \.id) { post in
-          feedPage(post: post, width: width, isCurrent: post.id == currentPost?.id)
+          feedPage(post: post, width: width, isCurrent: post.id == selectedPostID)
             .background(CaptroFeedViewportMarker(owner: viewport, postID: post.id).allowsHitTesting(false))
             .id(post.id)
             .accessibilityElement(children: .contain)
@@ -1432,6 +1435,7 @@ public struct MainFeedView: View {
       },
       onOpenPost: {
         CaptroHaptics.light()
+        viewport.setActive(false)
         detailPost = post
       },
       onSave: {

@@ -656,9 +656,13 @@ public struct MIRAMediaDimension: Codable, Hashable {
     case mediaType
     case mediaTypeSnake = "media_type"
     case sourceOrientationSnake = "source_orientation"
+    case sourceOrientation
     case sourcePixelWidthSnake = "source_pixel_width"
+    case sourcePixelWidth
     case sourcePixelHeightSnake = "source_pixel_height"
+    case sourcePixelHeight
     case rotationDegreesSnake = "rotation_degrees"
+    case rotationDegrees
   }
 
   public init(
@@ -720,10 +724,10 @@ public struct MIRAMediaDimension: Codable, Hashable {
     displayAspectRatio = Self.decodeDouble(container, keys: [.displayAspectRatio, .displayAspectRatioSnake])
     cropMode = Self.decodeString(container, keys: [.cropMode, .cropModeSnake])
     mediaType = Self.decodeString(container, keys: [.mediaType, .mediaTypeSnake])
-    sourceOrientation = try? container.decodeIfPresent(Int.self, forKey: .sourceOrientationSnake)
-    sourcePixelWidth = Self.decodeDouble(container, keys: [.sourcePixelWidthSnake])
-    sourcePixelHeight = Self.decodeDouble(container, keys: [.sourcePixelHeightSnake])
-    rotationDegrees = Self.decodeDouble(container, keys: [.rotationDegreesSnake])
+    sourceOrientation = Self.decodeDouble(container, keys: [.sourceOrientation, .sourceOrientationSnake]).flatMap { Int(exactly: $0) }
+    sourcePixelWidth = Self.decodeDouble(container, keys: [.sourcePixelWidth, .sourcePixelWidthSnake])
+    sourcePixelHeight = Self.decodeDouble(container, keys: [.sourcePixelHeight, .sourcePixelHeightSnake])
+    rotationDegrees = Self.decodeDouble(container, keys: [.rotationDegrees, .rotationDegreesSnake])
   }
 
   public func encode(to encoder: Encoder) throws {

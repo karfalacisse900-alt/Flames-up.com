@@ -2,6 +2,65 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroMediaGeometryTests: XCTestCase {
+  private func framedPost(_ ratio: Double, title: String = "Opening", reversed: Bool = false) throws -> MIRAPost {
+    let urls = reversed ? ["b", "a"] : ["a", "b"]
+    let dimensions = urls.map { name in
+      ["width": 1080, "height": 1920, "framing": ["version": 1,
+        "source_aspect_ratio": 0.5625, "display_aspect_ratio": ratio,
+        "crop_x": 0.5, "crop_y": name == "a" ? 0.2 : 0.8]] as [String: Any]
+    }
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
+      ["id": "cached-framing", "title": title,
+       "images": urls.map { "https://example.com/\($0).jpg?token=\(title)" }, "media_dimensions": dimensions]))
+  }
+
+  @MainActor
+  func testDelayedDetailsRefreshPreservesOpeningGeometryButUpdatesContent() async throws {
+    let opening = try framedPost(0.75)
+    let fresh = try framedPost(16.0 / 9, title: "Refreshed")
+    let model = PostDetailModel(post: opening, api: MIRAAPIClient())
+    let started = expectation(description: "Details refresh started")
+    var pending: CheckedContinuation<MIRAPost, Error>?
+    model.testPostLoader = {
+      try await withCheckedThrowingContinuation { pending = $0; started.fulfill() }
+    }
+    let refresh = Task { await model.refreshPost() }
+    await fulfillment(of: [started], timeout: 3)
+    let before = model.mediaSnapshot.geometry(post: model.post, index: 0)
+    pending?.resume(returning: fresh)
+    await refresh.value
+    XCTAssertEqual(model.post.title, "Refreshed")
+    XCTAssertEqual(model.mediaSnapshot.geometry(post: model.post, index: 0), before)
+    XCTAssertEqual(before, opening.mediaGeometry(at: 0))
+    // Deliberate edits are different from a background refresh.
+    model.applyPostRecord(fresh)
+    XCTAssertEqual(model.mediaSnapshot.geometry(post: model.post, index: 0).displayAspectRatio, 16.0 / 9)
+  }
+
+  func testSnapshotUsesMediaIdentityAcrossURLRefreshAndReordering() throws {
+    let opening = try framedPost(0.75)
+    let fresh = try framedPost(1, title: "NewToken", reversed: true)
+    let snapshot = CaptroPostMediaSnapshot(post: opening)
+    XCTAssertEqual(snapshot.geometry(post: fresh, index: 1), opening.mediaGeometry(at: 0))
+    XCTAssertEqual(snapshot.geometry(post: fresh, index: 0), opening.mediaGeometry(at: 1))
+  }
+
+  func testOrientationSurvivesAPIDecodingAndDiskRoundTrip() throws {
+    let data = Data("""
+      {"width":1080,"height":1920,"source_orientation":6,"source_pixel_width":1920,"source_pixel_height":1080,"rotation_degrees":90}
+      """.utf8)
+    for strategy: JSONDecoder.KeyDecodingStrategy in [.useDefaultKeys, .convertFromSnakeCase] {
+      let decoder = JSONDecoder(); decoder.keyDecodingStrategy = strategy
+      let dimension = try decoder.decode(MIRAMediaDimension.self, from: data)
+      let cached = try JSONDecoder().decode(MIRAMediaDimension.self, from: JSONEncoder().encode(dimension))
+      XCTAssertEqual(cached.sourceOrientation, 6)
+      XCTAssertEqual(cached.sourcePixelWidth, 1920)
+      XCTAssertEqual(cached.sourcePixelHeight, 1080)
+      XCTAssertEqual(cached.rotationDegrees, 90)
+    }
+  }
+
   func testLegacyNYPLFormatWinsOverUnrotatedSourceDimensions() throws {
     let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
     let post = try decoder.decode(MIRAPost.self, from: Data("""

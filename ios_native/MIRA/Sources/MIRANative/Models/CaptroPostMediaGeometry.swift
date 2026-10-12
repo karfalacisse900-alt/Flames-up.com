@@ -79,3 +79,27 @@ extension MIRAPost {
     return result
   }
 }
+
+/// A reading-session snapshot, not upload metadata. Opening Details must not
+/// replace Home's composition when cache and a delayed API response disagree.
+/// URLs may rotate their signatures; ownership is always the stable media ID.
+struct CaptroPostMediaSnapshot {
+  private let frames: [String: CaptroPostMediaGeometry]
+  private let displayRatio: Double
+
+  init(post: MIRAPost) {
+    let urls = post.mediaURLs.isEmpty ? post.feedMediaURLs : post.mediaURLs
+    displayRatio = post.mediaGeometry(at: 0).displayAspectRatio
+    frames = Dictionary(urls.enumerated().map {
+      (MIRAPost.mediaIdentity($0.element), post.mediaGeometry(at: $0.offset))
+    }, uniquingKeysWith: { first, _ in first })
+  }
+
+  func geometry(post: MIRAPost, index: Int) -> CaptroPostMediaGeometry {
+    let urls = post.mediaURLs.isEmpty ? post.feedMediaURLs : post.mediaURLs
+    if urls.indices.contains(index), let saved = frames[MIRAPost.mediaIdentity(urls[index])] { return saved }
+    var geometry = post.mediaGeometry(at: index)
+    if !frames.isEmpty { geometry.displayAspectRatio = displayRatio }
+    return geometry
+  }
+}

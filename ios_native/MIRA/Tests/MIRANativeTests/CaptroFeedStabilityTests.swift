@@ -1,10 +1,40 @@
 import XCTest
 import AVFoundation
 import Combine
+import UIKit
 @testable import MIRANative
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  func testCoveredHomeCannotOverwriteAnchorAndRestoresOnlyOnce() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    let controller = UIViewController()
+    window.rootViewController = controller; window.isHidden = false
+    defer { window.isHidden = true }
+    let scroll = UIScrollView(frame: window.bounds)
+    scroll.contentInsetAdjustmentBehavior = .never
+    scroll.contentSize = CGSize(width: 390, height: 3000)
+    controller.view.addSubview(scroll)
+    let owner = CaptroFeedViewport()
+    owner.updateOrder(["first", "second", "third"])
+    for (index, id) in ["first", "second", "third"].enumerated() {
+      let marker = UIView(frame: CGRect(x: 0, y: CGFloat(index) * 1000, width: 390, height: 1000))
+      scroll.addSubview(marker); owner.register(marker, id: id)
+    }
+    scroll.contentOffset.y = 1123; owner.sample()
+    owner.setActive(false)
+    scroll.contentOffset.y = 1400; owner.sample()
+    owner.setActive(true); owner.sample()
+    XCTAssertEqual(scroll.contentOffset.y, 1123, accuracy: 0.1)
+    scroll.contentOffset.y = 1250; owner.sample()
+    XCTAssertEqual(scroll.contentOffset.y, 1250, accuracy: 0.1, "No repeating correction loop")
+    owner.setActive(false)
+    scroll.contentOffset.y = 1500
+    owner.setActive(true)
+    owner.cancelRestorationForUserInteraction(); owner.sample()
+    XCTAssertEqual(scroll.contentOffset.y, 1500, accuracy: 0.1, "A new drag cancels restoration")
+  }
+
   private func post(_ id: String, likes: Int = 0) throws -> MIRAPost {
     try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
       ["id": id, "likesCount": likes, "images": ["https://example.com/\(id).jpg"]]))

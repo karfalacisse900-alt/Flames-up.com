@@ -1,6 +1,33 @@
 import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
+  func testCachedHomeSurvivesConflictingDelayedDetailsRefresh() {
+    let app = launch(["--captro-visual-size=threefour", "--captro-visual-pager", "--captro-delayed-detail-framing-test"])
+    let stream = app.scrollViews["home.post.stream"]
+    XCTAssertTrue(stream.waitForExistence(timeout: 20))
+    for index in 0...1 {
+      let page = app.otherElements["home.post.page.full-bleed-threefour-\(index)"]
+      reveal(page, in: stream, app: app)
+      let media = page.otherElements["home.post.media"].firstMatch
+      let home = media.frame
+      let readingY = page.frame.minY
+      XCTAssertEqual(home.height / home.width, 4.0 / 3, accuracy: 0.01)
+      capture(app, "cached-home-\(index)")
+      page.buttons["captro.editorialCard"].firstMatch.tap()
+      let details = app.descendants(matching: .any)["post.detail.media"].firstMatch
+      XCTAssertTrue(details.waitForExistence(timeout: 10))
+      XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "Refreshed server title")).firstMatch.waitForExistence(timeout: 15))
+      XCTAssertEqual(details.frame.height / details.frame.width, home.height / home.width, accuracy: 0.01,
+        "Fresh conflicting landscape metadata must not replace the opening portrait composition")
+      capture(app, "details-after-conflicting-refresh-\(index)")
+      app.buttons["Back"].tap()
+      XCTAssertTrue(page.waitForExistence(timeout: 5))
+      XCTAssertEqual(page.frame.minY, readingY, accuracy: 2)
+      XCTAssertEqual(media.frame.height, home.height, accuracy: 1)
+      capture(app, "cached-home-return-\(index)")
+    }
+  }
+
   func testLiveNYPLHomeAndDetailsShareStoredPortraitFrame() {
     let app = launch(["--captro-public-feed-test", "--captro-public-posts=7ff613af-f80a-474a-85cc-b159bbcf6a79"])
     let media = app.otherElements["home.post.media"].firstMatch

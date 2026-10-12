@@ -27,6 +27,10 @@ final class PostDetailModel: ObservableObject {
   @Published var commerceError: String?
 
   let api: MIRAAPIClient
+  private(set) var mediaSnapshot: CaptroPostMediaSnapshot
+#if DEBUG
+  var testPostLoader: (() async throws -> MIRAPost)?
+#endif
   private let commerceLog = Logger(subsystem: "com.captro.app", category: "commerce")
   private var likeMutationVersions: [String: Int] = [:]
   private var likingCommentIds = Set<String>()
@@ -35,8 +39,23 @@ final class PostDetailModel: ObservableObject {
 
   init(post: MIRAPost, api: MIRAAPIClient) {
     self.post = post
+    self.mediaSnapshot = CaptroPostMediaSnapshot(post: post)
     self.api = api
     self.commerce = post.detail?.commerce
+#if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--captro-delayed-detail-framing-test") {
+      currentUserId = "framing-test-viewer"
+      testPostLoader = {
+        try await Task.sleep(nanoseconds: 500_000_000)
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(post)) as! [String: Any]
+        object["title"] = "Refreshed server title"
+        object["mediaDimensions"] = post.mediaURLs.map { _ in
+          ["width": 1920, "height": 1080, "displayAspectRatio": 16.0 / 9]
+        }
+        return try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: object))
+      }
+    }
+#endif
   }
 
   func hydrateFromLocalCache() async {
@@ -48,7 +67,13 @@ final class PostDetailModel: ObservableObject {
 
   func refreshPost() async {
     do {
-      let apiPost: MIRAPost = try await api.get("/posts/\(post.id)")
+      let apiPost: MIRAPost
+#if DEBUG
+      if let testPostLoader { apiPost = try await testPostLoader() }
+      else { apiPost = try await api.get("/posts/\(post.id)") }
+#else
+      apiPost = try await api.get("/posts/\(post.id)")
+#endif
       let refreshed = await MIRAPostEngagementSync.apply(to: apiPost)
       let current = post
       var merged = refreshed.updating(
@@ -67,7 +92,10 @@ final class PostDetailModel: ObservableObject {
         post = merged
       }
       publishEngagement()
-    } catch {}
+    } catch {
+      // Keep the accepted post/geometry, but leave a privacy-safe diagnostic.
+      CaptroFeedDiagnostics.event("detail_refresh_failed", feed: "details", reason: "request_failed", post: post.id)
+    }
   }
 
   func loadCommerce() async {
@@ -221,6 +249,8 @@ final class PostDetailModel: ObservableObject {
     )
     if merged.detail == nil { merged.detail = current.detail }
     if merged.detail?.commerce == nil { merged.detail?.commerce = current.detail?.commerce }
+    // This route is an explicit edit notification, unlike passive revalidation.
+    mediaSnapshot = CaptroPostMediaSnapshot(post: merged)
     if merged != current { post = merged }
   }
 
@@ -658,6 +688,7 @@ public struct PostDetailNativeView: View {
                 PostDetailOptimizedMediaCarousel(
                   urls: detailMediaURLs,
                   post: model.post,
+                  mediaSnapshot: model.mediaSnapshot,
                   width: layout.size.width
                 )
                 CaptroDetailMediaWriting(post: model.post)
@@ -1011,6 +1042,7 @@ public struct PostDetailNativeView: View {
 private struct PostDetailOptimizedMediaCarousel: View {
   let urls: [String]
   let post: MIRAPost
+  let mediaSnapshot: CaptroPostMediaSnapshot
   let width: CGFloat
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1029,7 +1061,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
   }
 
   private var currentHeight: CGFloat {
-    post.mediaGeometry(at: 0).size(width: width).height
+    mediaSnapshot.geometry(post: post, index: 0).size(width: width).height
   }
 
   private var visibleDots: [Int] {
@@ -1134,7 +1166,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
   }
 
   private func mediaSlide(index: Int, url: String) -> some View {
-    CaptroPostMediaView(url: url, geometry: post.mediaGeometry(at: index),
+    CaptroPostMediaView(url: url, geometry: mediaSnapshot.geometry(post: post, index: index),
       size: CGSize(width: width, height: currentHeight), isVideo: isVideo(at: index, url: url),
       placeholderURL: isVideo(at: index, url: url) ? placeholderURL(at: index, mediaURL: url) : nil,
       shouldPlay: isVisible && scenePhase == .active && selectedIndex == index && !isVideoPaused,

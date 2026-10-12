@@ -17,7 +17,22 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
   private var order: [String] = []
   private var scope = "forYou"
   private var activeID: String?
+  private var isActive = true
   var onVisible: ((String?) -> Void)?
+
+  func setActive(_ active: Bool) {
+    guard isActive != active else { return }
+    if !active {
+      sample() // Capture before navigation/tab-bar layout starts changing.
+      isActive = false
+    } else {
+      isActive = true
+      if pending == nil { pending = snapshots[scope] }
+      schedule()
+    }
+  }
+
+  func cancelRestorationForUserInteraction() { pending = nil }
 
   func select(_ scope: String) {
     guard self.scope != scope else { return }
@@ -28,10 +43,11 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
   }
 
   func updateOrder(_ ids: [String]) {
-    assert(Set(ids).count == ids.count, "Duplicate Home post identity")
+    let validIDs = Set(ids)
+    assert(validIDs.count == ids.count, "Duplicate Home post identity")
     if let anchor = snapshots[scope], !order.isEmpty, pending == nil,
-       order.contains(where: { !ids.contains($0) }) {
-      if ids.contains(anchor.id) { pending = anchor }
+       order.contains(where: { !validIDs.contains($0) }) {
+      if validIDs.contains(anchor.id) { pending = anchor }
       else if !ids.isEmpty {
         let oldIndex = order.firstIndex(of: anchor.id) ?? 0
         pending = Anchor(id: ids[min(oldIndex, ids.count - 1)], y: anchor.y, offset: anchor.offset)
@@ -70,7 +86,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
   }
 
   @objc private func dragChanged() {
-    if scroll?.panGestureRecognizer.state == .began { pending = nil }
+    if scroll?.panGestureRecognizer.state == .began { cancelRestorationForUserInteraction() }
   }
 
   func schedule() {
@@ -83,8 +99,8 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     }
   }
 
-  private func sample() {
-    guard let scroll, scroll.window != nil, scroll.bounds.height > 0 else { return }
+  func sample() {
+    guard isActive, let scroll, scroll.window != nil, scroll.bounds.height > 0 else { return }
     cells = cells.filter { $0.value.value?.window != nil }
     let frames = order.compactMap { id -> (String, CGRect)? in
       guard let view = cells[id]?.value else { return nil }
