@@ -1,6 +1,27 @@
 import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
+  func testLazyFeedTabReturnDoesNotIssueScrollCommands() {
+    let app = launch(["--captro-visual-video", "--captro-stability-forty", "--captro-restore-audit", "--captro-stability-updates"])
+    let stream = app.scrollViews["home.post.stream"]
+    XCTAssertTrue(stream.waitForExistence(timeout: 20))
+    let page = app.otherElements["home.post.page.stress-7"]
+    reveal(page, in: stream, app: app)
+    let beforeY = page.frame.minY
+    let probe = app.descendants(matching: .any)["home.viewport.diagnostics"].firstMatch
+    XCTAssertTrue(probe.exists)
+    let before = probe.value as? String ?? "missing"
+    let initial = XCTAttachment(string: before); initial.name = "viewport-before-tab"; initial.lifetime = .keepAlways; add(initial)
+    app.tabBars.buttons["Me"].tap()
+    app.tabBars.buttons["Home"].tap()
+    XCTAssertTrue(page.waitForExistence(timeout: 5))
+    let after = probe.value as? String ?? "missing"
+    let result = XCTAttachment(string: after); result.name = "viewport-after-tab"; result.lifetime = .keepAlways; add(result)
+    XCTAssertTrue(after.contains("commands=0;"), "Surviving lazy Home scroll view must not receive a restoration command: \(after)")
+    XCTAssertEqual(page.frame.minY, beforeY, accuracy: 2)
+    capture(app, "lazy-feed-tab-return")
+  }
+
   func testCachedHomeSurvivesConflictingDelayedDetailsRefresh() {
     let app = launch(["--captro-visual-size=threefour", "--captro-visual-pager", "--captro-delayed-detail-framing-test"])
     let stream = app.scrollViews["home.post.stream"]

@@ -1418,6 +1418,13 @@ public struct MainFeedView: View {
     .accessibilityLabel("Home posts")
     .accessibilityValue("Post \(currentPostIndex + 1) of \(displayedPosts.count)")
     .accessibilityIdentifier("home.post.stream")
+#if DEBUG
+    .overlay(alignment: .topLeading) {
+      if ProcessInfo.processInfo.arguments.contains("--captro-restore-audit") {
+        CaptroFeedViewportDiagnostics(owner: viewport).frame(width: 2, height: 2).allowsHitTesting(false)
+      }
+    }
+#endif
   }
 
   private func feedPage(post: MIRAPost, width: CGFloat, isCurrent: Bool) -> some View {

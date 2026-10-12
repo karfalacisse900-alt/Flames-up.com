@@ -6,6 +6,31 @@ import UIKit
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  func testResumeCannotClampSavedAnchorAgainstPartiallyMountedContent() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    let controller = UIViewController(); window.rootViewController = controller; window.isHidden = false
+    defer { window.isHidden = true }
+    let scroll = UIScrollView(frame: window.bounds)
+    scroll.contentInsetAdjustmentBehavior = .never
+    controller.view.addSubview(scroll)
+    scroll.contentSize = CGSize(width: 390, height: 4000)
+    let owner = CaptroFeedViewport(); owner.updateOrder(["first", "target"])
+    let first = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 1000))
+    let target = UIView(frame: CGRect(x: 0, y: 1000, width: 390, height: 1000))
+    scroll.addSubview(first); scroll.addSubview(target)
+    owner.register(first, id: "first"); owner.register(target, id: "target")
+    scroll.contentOffset.y = 1123; owner.sample(); owner.setActive(false)
+    target.removeFromSuperview()
+    scroll.contentSize.height = 1000 // Lazy target has not remounted yet.
+    let before = scroll.contentOffset.y
+    owner.setActive(true); owner.sample()
+    XCTAssertEqual(scroll.contentOffset.y, before, accuracy: 0.1,
+      "Reactivation must not clamp against incomplete lazy content")
+    XCTAssertTrue(owner.debugCommands.isEmpty, "No unsolicited command: \(owner.debugSummary)")
+    scroll.contentSize.height = 4000; scroll.addSubview(target); owner.register(target, id: "target"); owner.sample()
+    XCTAssertTrue(owner.debugCommands.isEmpty, "Late remount must not trigger a stale correction")
+  }
+
   func testCoveredHomeCannotOverwriteAnchorAndRestoresOnlyOnce() {
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
     let controller = UIViewController()
