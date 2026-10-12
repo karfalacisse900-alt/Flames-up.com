@@ -105,7 +105,11 @@ private enum CaptroHomeFeedVisualFixtures {
       }
     }
     if ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel"), let videoURL {
-      return mixedCarouselPosts(videoURL: videoURL)
+      let carousel = mixedCarouselPosts(videoURL: videoURL)
+      // The gesture audit needs real following rows so a vertical drag can
+      // scroll, rather than merely rubber-band a one-post fixture.
+      return ProcessInfo.processInfo.arguments.contains("--captro-restore-audit")
+        ? carousel + streamPosts(videoURL: videoURL) : carousel
     }
     if ProcessInfo.processInfo.arguments.contains("--captro-visual-stream") {
       return streamPosts(videoURL: videoURL)
