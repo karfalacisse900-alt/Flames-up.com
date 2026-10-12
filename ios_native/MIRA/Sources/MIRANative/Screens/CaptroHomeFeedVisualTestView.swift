@@ -83,15 +83,38 @@ public struct CaptroHomeFeedVisualTestView: View {
       }
       guard !videoPrepared else { return }
       do {
+        CaptroHomeFeedVisualFixtures.recordStartup("video-request")
         let url = try await CaptroHomeFeedVisualFixtures.video()
+        CaptroHomeFeedVisualFixtures.recordStartup("video-ready")
         model.posts = CaptroHomeFeedVisualFixtures.posts(videoURL: url)
+        CaptroHomeFeedVisualFixtures.recordStartup("posts-assigned count=\(model.posts.count)")
         videoPrepared = true
-      } catch { assertionFailure("Video fixture failed: \(error)") }
+      } catch {
+        CaptroHomeFeedVisualFixtures.recordStartup("video-failed")
+        assertionFailure("Video fixture failed: \(error)")
+      }
     }
   }
 }
 
 private enum CaptroHomeFeedVisualFixtures {
+  // DEBUG fixtures only. Persist small stage timings across XCTest relaunches;
+  // no account, post text, URL, or credentials enter this diagnostic file.
+  static func recordStartup(_ stage: String) {
+    let line = "pid=\(ProcessInfo.processInfo.processIdentifier) uptime=\(ProcessInfo.processInfo.systemUptime) main=\(Thread.isMainThread) stage=\(stage)\n"
+    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("feed-fixture-startup.log")
+    if !FileManager.default.fileExists(atPath: url.path) {
+      FileManager.default.createFile(atPath: url.path, contents: nil)
+    }
+    do {
+      let file = try FileHandle(forWritingTo: url)
+      defer { try? file.close() }
+      try file.seekToEnd()
+      try file.write(contentsOf: Data(line.utf8))
+    } catch { NSLog("Captro DEBUG startup timing unavailable") }
+  }
+
   static func posts(videoURL: URL? = nil) -> [MIRAPost] {
     if ProcessInfo.processInfo.arguments.contains("--captro-stability-forty") || ProcessInfo.processInfo.arguments.contains("--captro-stability-hundred") {
       let seed = streamPosts(videoURL: videoURL)
@@ -318,6 +341,7 @@ private enum CaptroHomeFeedVisualFixtures {
   // Real decodable local video used only by DEBUG layout tests; no network,
   // production account, or fabricated playback success is involved.
   static func video() async throws -> URL {
+    recordStartup("writer-begin")
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-\(UUID().uuidString).mp4")
     let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
     let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -328,6 +352,7 @@ private enum CaptroHomeFeedVisualFixtures {
     writer.add(input)
     guard writer.startWriting() else { throw writer.error ?? MIRAAPIError.emptyResponse }
     writer.startSession(atSourceTime: .zero)
+    recordStartup("writer-started")
     for frame in 0..<30 {
       while !input.isReadyForMoreMediaData {
         guard writer.status == .writing else { throw writer.error ?? MIRAAPIError.emptyResponse }
@@ -351,9 +376,12 @@ private enum CaptroHomeFeedVisualFixtures {
       guard adaptor.append(buffer, withPresentationTime: CMTime(value: Int64(frame), timescale: 30)) else {
         throw writer.error ?? MIRAAPIError.emptyResponse
       }
+      if frame == 0 || frame == 29 { recordStartup("frame-appended \(frame)") }
     }
     input.markAsFinished()
+    recordStartup("writer-finishing")
     await writer.finishWriting()
+    recordStartup("writer-finished")
     guard writer.status == .completed else { throw writer.error ?? MIRAAPIError.emptyResponse }
     return url
   }
