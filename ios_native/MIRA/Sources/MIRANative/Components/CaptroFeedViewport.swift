@@ -5,14 +5,15 @@ import UIKit
 /// switch, recreated scroll view, or required removal. Never seeks for playback.
 @MainActor
 final class CaptroFeedViewport: NSObject, ObservableObject {
-  struct Anchor { var id: String; var y: CGFloat; var offset: CGFloat }
+  struct Anchor { var id: String; var y: CGFloat; var offset: CGFloat; var contentHeight: CGFloat = 0 }
+  private struct Restoration { let anchor: Anchor; let scope: String; let reason: String }
   private final class WeakView { weak var value: UIView?; init(_ value: UIView) { self.value = value } }
   private var cells: [String: WeakView] = [:]
   private weak var scroll: UIScrollView?
   private var observation: NSKeyValueObservation?
   private var sizeObservation: NSKeyValueObservation?
   private var snapshots: [String: Anchor] = [:]
-  private var pending: Anchor?
+  private var pending: Restoration?
   private var scheduled = false
   private var order: [String] = []
   private var scope = "forYou"
@@ -36,7 +37,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     debugCommands.append(ScrollCommand(before: from, after: to, targetMounted: mounted, reason: reason))
     if debugCommands.count > 128 { debugCommands.removeFirst() }
     CaptroFeedDiagnostics.event("offset_write", feed: scope,
-      reason: "\(reason),from=\(from),to=\(to),mounted=\(mounted)", post: pending?.id)
+      reason: "\(reason),from=\(from),to=\(to),mounted=\(mounted)", post: pending?.anchor.id)
   }
 #endif
 
@@ -47,17 +48,31 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
       isActive = false
     } else {
       isActive = true
-      if pending == nil { pending = snapshots[scope] }
+      // A surviving UIScrollView owns its native offset, including deceleration.
+      // Resuming observation/playback is not a navigation intent.
       schedule()
     }
   }
 
-  func cancelRestorationForUserInteraction() { pending = nil }
+  func cancelRestorationForUserInteraction() {
+    if pending != nil { CaptroFeedDiagnostics.event("restore_cancel", feed: scope, reason: "user_interaction") }
+    pending = nil
+  }
+
+  private func requestRestoration(_ anchor: Anchor, reason: String) {
+    // Never defer a correction until after an in-flight user gesture ends.
+    guard scroll.map({ !$0.isTracking && !$0.isDragging && !$0.isDecelerating }) ?? true else { return }
+    pending = Restoration(anchor: anchor, scope: scope, reason: reason)
+    CaptroFeedDiagnostics.event("restore_request", feed: scope, reason: reason, post: anchor.id)
+  }
 
   func select(_ scope: String) {
     guard self.scope != scope else { return }
     self.scope = scope
-    pending = snapshots[scope] ?? Anchor(id: "", y: 0, offset: 0)
+    pending = nil
+    cells.removeAll()
+    order = [] // Old feed markers cannot satisfy the new feed's restoration.
+    requestRestoration(snapshots[scope] ?? Anchor(id: "", y: 0, offset: 0), reason: "feed_selection")
     activeID = nil
     schedule()
   }
@@ -67,17 +82,18 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     assert(validIDs.count == ids.count, "Duplicate Home post identity")
     if let anchor = snapshots[scope], !order.isEmpty, pending == nil,
        order.contains(where: { !validIDs.contains($0) }) {
-      if validIDs.contains(anchor.id) { pending = anchor }
+      if validIDs.contains(anchor.id) { requestRestoration(anchor, reason: "required_removal") }
       else if !ids.isEmpty {
         let oldIndex = order.firstIndex(of: anchor.id) ?? 0
-        pending = Anchor(id: ids[min(oldIndex, ids.count - 1)], y: anchor.y, offset: anchor.offset)
+        requestRestoration(Anchor(id: ids[min(oldIndex, ids.count - 1)], y: anchor.y, offset: anchor.offset), reason: "required_removal")
       }
     }
     order = ids
     schedule()
   }
 
-  func register(_ view: UIView, id: String) {
+  func register(_ view: UIView, id: String, feed: String? = nil) {
+    guard feed == nil || feed == scope else { return }
     cells[id] = WeakView(view)
     attach(from: view)
     schedule()
@@ -91,7 +107,9 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
         scroll?.panGestureRecognizer.removeTarget(self, action: #selector(dragChanged))
         let recreating = scroll != nil || snapshots[scope] != nil
         scroll = target
-        if recreating { pending = snapshots[scope] }
+        if recreating, pending == nil, let anchor = snapshots[scope] {
+          requestRestoration(anchor, reason: "scroll_view_recreated")
+        }
         target.panGestureRecognizer.addTarget(self, action: #selector(dragChanged))
         observation = target.observe(\.contentOffset, options: []) { [weak self] _, _ in
           MainActor.assumeIsolated { self?.schedule() }
@@ -128,7 +146,10 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
       debugMaxSampleMilliseconds = max(debugMaxSampleMilliseconds, (ProcessInfo.processInfo.systemUptime - sampleStart) * 1000)
     }
 #endif
-    cells = cells.filter { $0.value.value?.window != nil }
+    if scroll.isTracking || scroll.isDragging || scroll.isDecelerating {
+      cancelRestorationForUserInteraction()
+    }
+    cells = cells.filter { $0.value.value.map { $0.window != nil && $0.isDescendant(of: scroll) } ?? false }
     let frames = order.compactMap { id -> (String, CGRect)? in
       guard let view = cells[id]?.value else { return nil }
       return (id, view.convert(view.bounds, to: scroll))
@@ -136,25 +157,36 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     // Do not clamp a saved offset against the previous feed's layout while
     // SwiftUI is still replacing its lazy targets.
     guard !frames.isEmpty else { return }
-    if let pending, !scroll.isDragging, !scroll.isDecelerating {
-      // If a lazy target isn't mounted, the saved offset first materializes it.
-      // Complete once; don't retry/correct against subsequent user gestures.
-      let y = frames.first(where: { $0.0 == pending.id }).map { $0.1.minY - pending.y } ?? pending.offset
-      self.pending = nil
+    if let pending, pending.scope == scope {
+      let anchor = pending.anchor
+      let target = frames.first(where: { $0.0 == anchor.id })
       let minimum = -scroll.adjustedContentInset.top
       let maximum = max(minimum, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+      // A lazy target can be absent. Only bootstrap an explicit navigation when
+      // the saved content extent is available; never clamp against partial content.
+      // Removals require the surviving target's actual frame, not the old offset.
+      let canMaterialize = pending.reason != "required_removal" && anchor.contentHeight > 0 &&
+        scroll.contentSize.height >= anchor.contentHeight - 1 && anchor.offset <= maximum
+      guard anchor.id.isEmpty || target != nil || canMaterialize else { return }
+      let y = target.map { $0.1.minY - anchor.y } ?? anchor.offset
+      guard y <= maximum + 1 || pending.reason == "required_removal" else { return }
+      let destination = min(maximum, max(minimum, y))
+      // Complete once, including no-op restoration. No recursive correction loop.
+      if abs(destination - scroll.contentOffset.y) > 0.5 {
 #if DEBUG
-      traceCommand(from: scroll.contentOffset.y, to: min(maximum, max(minimum, y)),
-        mounted: frames.contains { $0.0 == pending.id }, reason: "legacy_restore")
+        traceCommand(from: scroll.contentOffset.y, to: destination,
+          mounted: target != nil, reason: pending.reason)
 #endif
-      scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: min(maximum, max(minimum, y))), animated: false)
-      CaptroFeedDiagnostics.event("restore", feed: scope, reason: "feed_switch_or_removal", post: pending.id)
+        scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: destination), animated: false)
+      }
+      self.pending = nil
     }
     let viewport = scroll.bounds.inset(by: UIEdgeInsets(top: scroll.adjustedContentInset.top, left: 0,
       bottom: scroll.adjustedContentInset.bottom, right: 0))
     let visible = frames.filter { $0.1.intersects(viewport) && $0.1.height > 0 }
     if let first = visible.first {
-      snapshots[scope] = Anchor(id: first.0, y: first.1.minY - scroll.contentOffset.y, offset: scroll.contentOffset.y)
+      snapshots[scope] = Anchor(id: first.0, y: first.1.minY - scroll.contentOffset.y,
+        offset: scroll.contentOffset.y, contentHeight: scroll.contentSize.height)
     }
     func fraction(_ frame: CGRect) -> CGFloat {
       max(0, frame.intersection(viewport).height) / max(1, min(frame.height, viewport.height))
@@ -197,15 +229,17 @@ struct CaptroFeedViewportDiagnostics: UIViewRepresentable {
 struct CaptroFeedViewportMarker: UIViewRepresentable {
   let owner: CaptroFeedViewport
   let postID: String
+  let feed: String
   func makeUIView(context: Context) -> Marker { Marker() }
   func updateUIView(_ view: Marker, context: Context) {
-    view.owner = owner; view.postID = postID
-    owner.register(view, id: postID)
+    view.owner = owner; view.postID = postID; view.feed = feed
+    owner.register(view, id: postID, feed: feed)
   }
   final class Marker: UIView {
     weak var owner: CaptroFeedViewport?
     var postID = ""
-    override func didMoveToWindow() { super.didMoveToWindow(); if window != nil { owner?.register(self, id: postID) } }
-    override func layoutSubviews() { super.layoutSubviews(); owner?.register(self, id: postID) }
+    var feed = ""
+    override func didMoveToWindow() { super.didMoveToWindow(); if window != nil { owner?.register(self, id: postID, feed: feed) } }
+    override func layoutSubviews() { super.layoutSubviews(); owner?.register(self, id: postID, feed: feed) }
   }
 }

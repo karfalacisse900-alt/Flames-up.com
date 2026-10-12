@@ -1182,13 +1182,15 @@ public struct MainFeedView: View {
         }
       }
       .onChange(of: isMediaPlaybackSuppressed) { _, suppressed in
-        viewport.setActive(!suppressed)
         if suppressed {
           MIRAPlaybackCoordinator.pauseAll(reason: "home_feed_overlay")
         } else {
           activateCurrentPost(reason: "home_feed_overlay_closed")
           MIRAPlaybackCoordinator.resumeVisible(reason: "home_feed_overlay_closed")
         }
+      }
+      .onChange(of: isViewportSuspended) { _, suspended in
+        viewport.setActive(!suspended)
       }
       .onChange(of: displayedPosts.map(\.id)) { _, _ in
         viewport.updateOrder(displayedPosts.map(\.id))
@@ -1197,6 +1199,7 @@ public struct MainFeedView: View {
       .onChange(of: selectedFeedSection) { _, _ in
         viewport.select(selectedFeedSection.rawValue)
         model.selectFeedSection(selectedFeedSection)
+        viewport.updateOrder(displayedPosts.map(\.id))
         selectedPostID = nil
         selectedPostFallbackIndex = 0
         reconcileCurrentPostSelection()
@@ -1218,7 +1221,7 @@ public struct MainFeedView: View {
   }
 
   private func feedDidAppear() {
-    viewport.setActive(!isMediaPlaybackSuppressed)
+    viewport.setActive(!isViewportSuspended)
     let selection: Binding<String?> = $selectedPostID
     let active: Binding<String?> = $activeVideoPostID
     viewport.onVisible = { (id: String?) in
@@ -1400,7 +1403,7 @@ public struct MainFeedView: View {
       LazyVStack(spacing: 12) {
         ForEach(displayedPosts, id: \.id) { post in
           feedPage(post: post, width: width, isCurrent: post.id == selectedPostID)
-            .background(CaptroFeedViewportMarker(owner: viewport, postID: post.id).allowsHitTesting(false))
+            .background(CaptroFeedViewportMarker(owner: viewport, postID: post.id, feed: selectedFeedSection.rawValue).allowsHitTesting(false))
             .id(post.id)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.post.page.\(post.id)")
@@ -1624,6 +1627,10 @@ public struct MainFeedView: View {
 
   private var isMediaPlaybackSuppressed: Bool {
     !isTabActive || scenePhase != .active || detailPost != nil || isFeedOverlayPresented
+  }
+
+  private var isViewportSuspended: Bool {
+    !isTabActive || scenePhase != .active || detailPost != nil || isShowingCreatePost || selectedStoryGroup != nil
   }
 
   private var isFeedOverlayPresented: Bool {

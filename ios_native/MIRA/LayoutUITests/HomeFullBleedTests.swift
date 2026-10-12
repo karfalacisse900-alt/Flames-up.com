@@ -1,6 +1,40 @@
 import XCTest
 
 final class HomeFullBleedTests: XCTestCase {
+  func testLazyFeedGestureDirectionsAndBackgroundReturn() {
+    let app = launch(["--captro-visual-mixed-carousel", "--captro-restore-audit", "--captro-stability-updates"])
+    let stream = app.scrollViews["home.post.stream"]
+    let page = app.otherElements["home.post.page.mixed-carousel"]
+    XCTAssertTrue(page.waitForExistence(timeout: 20))
+    let media = page.otherElements["home.post.media"].firstMatch
+    let original = page.frame
+    // Slightly diagonal horizontal drags must remain carousel gestures.
+    for _ in 0..<3 {
+      media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.15))
+        .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.19)))
+      XCTAssertTrue(page.staticTexts["Photo 2 of 4"].waitForExistence(timeout: 5))
+      XCTAssertEqual(page.frame.minY, original.minY, accuracy: 2)
+      XCTAssertEqual(page.frame.height, original.height, accuracy: 1)
+      media.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.19))
+        .press(forDuration: 0.4, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.15)))
+      XCTAssertTrue(page.staticTexts["Photo 1 of 4"].waitForExistence(timeout: 5))
+      XCTAssertEqual(page.frame.minY, original.minY, accuracy: 2)
+    }
+    // Native vertical motion starting over the media must remain enabled.
+    media.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+      .press(forDuration: 0.05, thenDragTo: media.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.05)))
+    XCTAssertLessThan(page.frame.minY, original.minY - 10)
+    let restingY = page.frame.minY
+    XCUIDevice.shared.press(.home); app.activate()
+    XCTAssertTrue(stream.waitForExistence(timeout: 10))
+    XCTAssertEqual(page.frame.minY, restingY, accuracy: 2)
+    let probe = app.descendants(matching: .any)["home.viewport.diagnostics"].firstMatch
+    let summary = probe.value as? String ?? "missing"
+    XCTAssertTrue(summary.contains("commands=0;"), summary)
+    let result = XCTAttachment(string: summary); result.name = "viewport-gestures-background"; result.lifetime = .keepAlways; add(result)
+    capture(app, "lazy-feed-gestures-background-return")
+  }
+
   func testLazyFeedTabReturnDoesNotIssueScrollCommands() {
     let app = launch(["--captro-visual-video", "--captro-stability-forty", "--captro-restore-audit", "--captro-stability-updates"])
     let stream = app.scrollViews["home.post.stream"]

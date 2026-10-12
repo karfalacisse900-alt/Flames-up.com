@@ -71,6 +71,9 @@ jobs:
           if [ '${{ inputs.restore_audit }}' = 'true' ]; then
             tests=(-only-testing:CaptroStampTests
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedGestureDirectionsAndBackgroundReturn
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testFortyMixedPostsAndDetailsReturn
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testCachedHomeSurvivesConflictingDelayedDetailsRefresh
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame)
           elif [ '${{ inputs.cached_framing }}' = 'true' ]; then
             tests=(-only-testing:CaptroStampTests
@@ -127,10 +130,29 @@ jobs:
           xcrun simctl io "$device" recordVideo --codec=h264 "$RUNNER_TEMP/home-continuous-stream.mp4" > "$RUNNER_TEMP/home-recording.log" 2>&1 &
           capture_pid=$!
           trap 'kill -INT "$capture_pid" 2>/dev/null || true; wait "$capture_pid" || true' EXIT
+          if [ '${{ inputs.restore_audit }}' = 'true' ]; then
+            # Best-effort Instruments capture, separate from pass/fail assertions.
+            # Preserve errors instead of presenting an unavailable trace as evidence.
+            (
+              xcrun xctrace list templates > "$RUNNER_TEMP/feed-profiler-templates.log" 2>&1
+              for attempt in $(seq 1 90); do
+                app_pid=$(pgrep -x Captro | head -1)
+                if [ -n "$app_pid" ]; then
+                  xcrun xctrace record --template 'Time Profiler' --attach "$app_pid" \
+                    --time-limit 45s --output "$RUNNER_TEMP/FeedScroll.trace" > "$RUNNER_TEMP/feed-profiler.log" 2>&1
+                  xcrun xctrace export --input "$RUNNER_TEMP/FeedScroll.trace" --toc \
+                    --output "$RUNNER_TEMP/feed-profiler-toc.xml" >> "$RUNNER_TEMP/feed-profiler.log" 2>&1
+                  break
+                fi
+                sleep 1
+              done
+            ) &
+          fi
           recording_tests=(-only-testing:CaptroLayoutUITests/StampRefinementTests/testPublicStampExamples
             -only-testing:CaptroLayoutUITests/StampRefinementTests/testLegacyCaptionIsBoundedWithoutMoreAndVideoControlsRemainUsable)
           if [ '${{ inputs.restore_audit }}' = 'true' ]; then
             recording_tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
+              -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedGestureDirectionsAndBackgroundReturn
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame)
           elif [ '${{ inputs.cached_framing }}' = 'true' ]; then
             recording_tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testCachedHomeSurvivesConflictingDelayedDetailsRefresh
@@ -234,6 +256,9 @@ jobs:
             ${{ runner.temp }}/recording-screenshots/
             ${{ runner.temp }}/home-continuous-stream.mp4
             ${{ runner.temp }}/home-recording-test.log
+            ${{ runner.temp }}/FeedScroll.trace/
+            ${{ runner.temp }}/feed-profiler*.log
+            ${{ runner.temp }}/feed-profiler-toc.xml
             ${{ runner.temp }}/cover-screenshots/
             ${{ runner.temp }}/cover-create-publish.mp4
             ${{ runner.temp }}/cover-runtime-test.log

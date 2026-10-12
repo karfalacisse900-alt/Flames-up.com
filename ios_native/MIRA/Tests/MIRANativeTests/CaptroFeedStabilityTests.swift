@@ -2,10 +2,69 @@ import XCTest
 import AVFoundation
 import Combine
 import UIKit
+import SwiftUI
 @testable import MIRANative
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  private final class LazyFixtureState: ObservableObject {
+    @Published var loaded = false
+    @Published var mounted = true
+  }
+  private struct LazyFixture: View {
+    @ObservedObject var state: LazyFixtureState
+    let owner: CaptroFeedViewport
+    var body: some View {
+      if state.mounted {
+        ScrollView {
+          LazyVStack(spacing: 12) {
+            ForEach(0..<40, id: \.self) { index in
+              ZStack {
+                Color.gray
+                if state.loaded { Text("Loaded \(index)") }
+              }
+              .frame(height: index.isMultiple(of: 2) ? 400 : 240)
+              .background(CaptroFeedViewportMarker(owner: owner, postID: "lazy-\(index)", feed: "forYou"))
+            }
+          }
+        }
+      }
+    }
+  }
+
+  func testActualLazyStackDelayedContentAndRemountDoNotReplayResumeAnchor() async throws {
+    let state = LazyFixtureState(), owner = CaptroFeedViewport()
+    owner.updateOrder((0..<40).map { "lazy-\($0)" })
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    let host = UIHostingController(rootView: LazyFixture(state: state, owner: owner))
+    window.rootViewController = host; window.isHidden = false
+    defer { window.isHidden = true }
+    func nativeScroll(_ view: UIView) -> UIScrollView? {
+      if let scroll = view as? UIScrollView, !scroll.isPagingEnabled { return scroll }
+      return view.subviews.lazy.compactMap { nativeScroll($0) }.first
+    }
+    func layoutTurn() async {
+      let ready = expectation(description: "SwiftUI layout turn")
+      DispatchQueue.main.async { host.view.layoutIfNeeded(); ready.fulfill() }
+      await fulfillment(of: [ready], timeout: 3)
+    }
+    await layoutTurn()
+    let scroll = try XCTUnwrap(nativeScroll(host.view))
+    scroll.contentOffset.y = 500
+    await layoutTurn(); owner.sample()
+    let before = scroll.contentOffset.y
+    owner.setActive(false); state.loaded = true
+    await layoutTurn()
+    owner.setActive(true); owner.sample()
+    XCTAssertEqual(scroll.contentOffset.y, before, accuracy: 1)
+    XCTAssertTrue(owner.debugCommands.isEmpty)
+    owner.setActive(false); state.mounted = false; await layoutTurn()
+    state.mounted = true; await layoutTurn()
+    owner.cancelRestorationForUserInteraction() // A new touch while the lazy tree returns.
+    owner.setActive(true); await layoutTurn(); owner.sample()
+    XCTAssertTrue(owner.debugCommands.isEmpty, "Late lazy registration must not replay a cancelled restore")
+  }
+
   func testResumeCannotClampSavedAnchorAgainstPartiallyMountedContent() {
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
     let controller = UIViewController(); window.rootViewController = controller; window.isHidden = false
@@ -31,7 +90,7 @@ final class CaptroFeedStabilityTests: XCTestCase {
     XCTAssertTrue(owner.debugCommands.isEmpty, "Late remount must not trigger a stale correction")
   }
 
-  func testCoveredHomeCannotOverwriteAnchorAndRestoresOnlyOnce() {
+  func testSurvivingHomeScrollViewRetainsItsNativeOffsetOnResume() {
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
     let controller = UIViewController()
     window.rootViewController = controller; window.isHidden = false
@@ -50,7 +109,8 @@ final class CaptroFeedStabilityTests: XCTestCase {
     owner.setActive(false)
     scroll.contentOffset.y = 1400; owner.sample()
     owner.setActive(true); owner.sample()
-    XCTAssertEqual(scroll.contentOffset.y, 1123, accuracy: 0.1)
+    XCTAssertEqual(scroll.contentOffset.y, 1400, accuracy: 0.1)
+    XCTAssertTrue(owner.debugCommands.isEmpty, "Playback resumption must not seek")
     scroll.contentOffset.y = 1250; owner.sample()
     XCTAssertEqual(scroll.contentOffset.y, 1250, accuracy: 0.1, "No repeating correction loop")
     owner.setActive(false)
@@ -58,6 +118,63 @@ final class CaptroFeedStabilityTests: XCTestCase {
     owner.setActive(true)
     owner.cancelRestorationForUserInteraction(); owner.sample()
     XCTAssertEqual(scroll.contentOffset.y, 1500, accuracy: 0.1, "A new drag cancels restoration")
+  }
+
+  private final class GestureScroll: UIScrollView {
+    var simulatedDeceleration = false
+    var simulatedTracking = false
+    override var isDecelerating: Bool { simulatedDeceleration }
+    override var isTracking: Bool { simulatedTracking }
+  }
+
+  func testRecreatedScrollWaitsForTargetAndRejectsDetachedCells() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    let controller = UIViewController(); window.rootViewController = controller; window.isHidden = false
+    defer { window.isHidden = true }
+    let owner = CaptroFeedViewport(); owner.updateOrder(["first", "target"])
+    let old = UIScrollView(frame: window.bounds); controller.view.addSubview(old)
+    old.contentInsetAdjustmentBehavior = .never; old.contentSize = CGSize(width: 390, height: 4000)
+    let target = UIView(frame: CGRect(x: 0, y: 1000, width: 390, height: 1000))
+    old.addSubview(target); owner.register(target, id: "target")
+    old.contentOffset.y = 1123; owner.sample(); owner.setActive(false)
+    let replacement = UIScrollView(frame: window.bounds); controller.view.addSubview(replacement)
+    replacement.contentInsetAdjustmentBehavior = .never; replacement.contentSize = CGSize(width: 390, height: 1000)
+    let first = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 1000))
+    replacement.addSubview(first); owner.register(first, id: "first")
+    owner.setActive(true); owner.sample()
+    XCTAssertEqual(replacement.contentOffset.y, 0, accuracy: 0.1)
+    XCTAssertTrue(owner.debugCommands.isEmpty, "Old target still in a window belongs to the wrong scroll")
+    replacement.contentSize.height = 4000
+    replacement.addSubview(target); owner.register(target, id: "target"); owner.sample()
+    XCTAssertEqual(replacement.contentOffset.y, 1123, accuracy: 0.1)
+    XCTAssertEqual(owner.debugCommands.count, 1)
+    XCTAssertEqual(owner.debugCommands.first?.reason, "scroll_view_recreated")
+    replacement.contentOffset.y = 1200; owner.sample()
+    XCTAssertEqual(replacement.contentOffset.y, 1200, accuracy: 0.1)
+    XCTAssertEqual(owner.debugCommands.count, 1)
+  }
+
+  func testOldFeedCallbackCannotRestoreNewFeedAndDecelerationCancelsPendingSeek() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    let controller = UIViewController(); window.rootViewController = controller; window.isHidden = false
+    defer { window.isHidden = true }
+    let scroll = GestureScroll(frame: window.bounds); controller.view.addSubview(scroll)
+    scroll.contentInsetAdjustmentBehavior = .never; scroll.contentSize = CGSize(width: 390, height: 4000)
+    let marker = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 4000)); scroll.addSubview(marker)
+    let owner = CaptroFeedViewport(); owner.updateOrder(["shared"])
+    owner.register(marker, id: "shared", feed: "forYou"); scroll.contentOffset.y = 1000; owner.sample()
+    owner.select("following"); owner.updateOrder(["shared"])
+    owner.register(marker, id: "shared", feed: "forYou"); owner.sample()
+    XCTAssertTrue(owner.debugCommands.isEmpty, "A late old-scope marker cannot satisfy restoration")
+    scroll.simulatedDeceleration = true
+    owner.register(marker, id: "shared", feed: "following"); owner.sample()
+    scroll.simulatedDeceleration = false; owner.sample()
+    XCTAssertEqual(scroll.contentOffset.y, 1000, accuracy: 0.1)
+    XCTAssertTrue(owner.debugCommands.isEmpty, "Do not wait until deceleration ends and then snap")
+    owner.select("around"); owner.updateOrder(["shared"])
+    scroll.simulatedTracking = true; owner.register(marker, id: "shared", feed: "around"); owner.sample()
+    scroll.simulatedTracking = false; owner.sample()
+    XCTAssertTrue(owner.debugCommands.isEmpty, "Touch tracking cancels before pan reaches began")
   }
 
   private func post(_ id: String, likes: Int = 0) throws -> MIRAPost {
