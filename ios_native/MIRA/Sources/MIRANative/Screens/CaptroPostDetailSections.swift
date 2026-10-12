@@ -97,7 +97,7 @@ struct CaptroPostDetailSections: View {
   private var regularPost: some View {
     // An ordinary photo/caption has no second business or category card.
     if post.captroStampKind != .social {
-      CaptroEditorialOverlayCard(content: post.captroEditorialCardContent,
+      CaptroEditorialOverlayCard(content: regularStampContent,
         expanded: true, showsProfileRow: false)
         .padding(.horizontal, 16).padding(.bottom, 16)
     } else if let title = post.captroCleanTitle, title != post.detailCaption {
@@ -105,6 +105,15 @@ struct CaptroPostDetailSections: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.horizontal, 16).padding(.bottom, 12)
     }
+  }
+
+  private var regularStampContent: CaptroEditorialCardContent {
+    var content = post.captroEditorialCardContent
+    // A tagged-place/legacy stamp may reuse the caption as its description.
+    // The complete caption is already rendered once above the stamp.
+    if content.description == post.detailCaption { content.description = nil }
+    if content.summaryText == post.detailCaption { content.summaryText = nil }
+    return content
   }
 
   private var eventPost: some View {

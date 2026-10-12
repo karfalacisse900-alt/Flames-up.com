@@ -30,6 +30,9 @@ private final class CaptroComposerTestProtocol: URLProtocol {
     } else if ProcessInfo.processInfo.arguments.contains("--captro-presentation-review"),
        request.httpMethod == "GET", path.hasSuffix("/comments") {
       body = "[]"; status = 200
+    } else if ProcessInfo.processInfo.arguments.contains("--captro-presentation-review"),
+       request.httpMethod == "GET", path.hasSuffix("/posts/review-post/object") {
+      body = "{}"; status = 200 // This viewer has no private ticket/document.
     } else if path.hasSuffix("/auth/me") {
       body = #"{"id":"composer-ui-test","full_name":"Test Creator","username":"test_creator","is_private":false}"#
       status = 200

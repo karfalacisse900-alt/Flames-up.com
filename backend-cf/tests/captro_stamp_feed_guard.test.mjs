@@ -99,7 +99,7 @@ test('Moment details keep full writing below clean media without duplicating Cov
   const commerce = readIOS('Screens/CaptroCommerceDetailViews.swift');
   const adapter = readIOS('Models/CaptroEditorialCardAdapter.swift');
   const momentDetail = detail.slice(detail.indexOf('private var regularPost'), detail.indexOf('private var eventPost'));
-  assert.match(momentDetail, /CaptroEditorialOverlayCard\(content: post\.captroEditorialCardContent/);
+  assert.match(momentDetail, /CaptroEditorialOverlayCard\(content: regularStampContent/);
   assert.match(momentDetail, /expanded: true, showsProfileRow: false/);
   assert.match(momentDetail, /if post\.captroStampKind != \.social/);
   assert.match(detail, /fullDescription[\s\S]*?Group \{/);

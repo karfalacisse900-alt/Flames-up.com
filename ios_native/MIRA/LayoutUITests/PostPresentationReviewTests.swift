@@ -80,4 +80,22 @@ final class PostPresentationReviewTests: XCTestCase {
     app.swipeUp()
     capture(app, "details-club-large-text")
   }
+
+  func testAccessStatePresentationDoesNotOfferAnotherJoinAfterMembership() {
+    for (flag, label) in [("--review-paid", "JOIN CLUB"), ("--review-unavailable", "EXPIRED"), ("--review-joined", "OPEN CLUB")] {
+      let app = launch(["--captro-presentation-review", "--review-kind=club", flag])
+      XCTAssertTrue(app.buttons["Open Details"].waitForExistence(timeout: 15))
+      app.buttons["Open Details"].tap()
+      XCTAssertTrue(app.otherElements["post.detail.media"].waitForExistence(timeout: 15))
+      app.swipeUp()
+      let action = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+      XCTAssertTrue(action.waitForExistence(timeout: 5))
+      if flag == "--review-unavailable" { XCTAssertFalse(action.isEnabled) }
+      if flag == "--review-joined" {
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'JOIN CLUB'")).firstMatch.exists)
+      }
+      capture(app, "club-" + String(flag.dropFirst(9)))
+      app.terminate()
+    }
+  }
 }

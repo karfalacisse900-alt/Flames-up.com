@@ -57,6 +57,10 @@ enum CaptroPresentationReviewFixture {
         "currency": "USD", "billingPeriod": "one_time", "active": true]]
     ]
     if ProcessInfo.processInfo.arguments.contains("--review-unavailable") { value["status"] = "expired" }
+    if ProcessInfo.processInfo.arguments.contains("--review-joined") {
+      value["viewerStatus"] = "active"
+      value["viewerDestinationId"] = "review-group"
+    }
     return value
   }
   static var post: MIRAPost {
