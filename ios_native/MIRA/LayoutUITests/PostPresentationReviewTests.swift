@@ -33,7 +33,9 @@ final class PostPresentationReviewTests: XCTestCase {
     let keyboardDone = app.buttons["composer.keyboardDone"]
     if keyboardDone.exists,
        app.buttons["composer.add"].frame.maxY > keyboardDone.frame.minY {
-      app.swipeUp()
+      let hint = app.staticTexts["composer.mediaRequired"]
+      hint.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        .press(forDuration: 0.05, thenDragTo: editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)))
       XCTAssertEqual(editor.value as? String, "Keep my caption.")
     }
     app.buttons["composer.add"].tap()
