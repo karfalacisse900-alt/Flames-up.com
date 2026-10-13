@@ -54,6 +54,10 @@ final class HomeFullBleedTests: XCTestCase {
   private func compareGestureSequence(_ app: XCUIApplication, media: XCUIElement,
     surface: String, assertStable: Bool, counter: (Int) -> String) {
     let initial = media.frame
+    // XCTest waits for quiescence between these completed gestures. This covers
+    // alternate directions, not a reversal with the finger still down or a
+    // touch interrupting native deceleration. Those remain physical-device
+    // checks, as does uncached network loading (these media fixtures are local).
     let actions: [(Bool, XCUIGestureVelocity, Bool)] = [
       (true, .slow, false), (false, .fast, false),
       (true, .slow, true), (false, .slow, true),

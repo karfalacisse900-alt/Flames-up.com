@@ -239,7 +239,9 @@ final class MainFeedModel: ObservableObject {
     await persistCurrentFeed()
     MIRAPerformanceTimeline.markOnce("time_to_first_real_home_item", detail: "network")
     errorMessage = nil
-    prefetchInitialMediaWindow()
+    // Background revalidation must not replace the visible post's prewarm
+    // neighborhood with the first post while the user is browsing farther down.
+    if startsNewOrder { prefetchInitialMediaWindow() }
     prefetchNextPageIfNeeded(afterInitialCount: posts.count)
   }
 

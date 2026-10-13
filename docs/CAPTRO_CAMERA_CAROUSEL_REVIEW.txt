@@ -50,6 +50,19 @@ Confirmed code defects / changes
    and missing audio input have explicit guards/feedback. These are code-path
    findings with injected-boundary tests, not reproduced hardware failures.
 
+6. Every mounted Home carousel could replace the same global video-preload
+   desired set as MainFeedModel, cancelling/evicting other rows' prepared work.
+   Home now has one existing owner (MainFeedModel); selected stable media and
+   adjacent slides get priority. Background revalidation does not reset that
+   neighborhood to the first post. Row-local image prefetch remains bounded.
+   This confirms competing requests, not a measured cause of the user's freeze.
+
+7. Restoring a 10-item draft then handing off a camera capture could append an
+   11th item. The existing draft stays untouched, the capture remains pending,
+   and an explicit Add capture retry becomes available after making room.
+   Publishing is blocked while that capture is unresolved. Regression tests
+   cover retention, retry, bounds and restored-capture deduplication.
+
 Home shake investigation
 ------------------------
 CaptroFeedViewport.swift is unchanged from restoration fix 2e79701b.
@@ -64,6 +77,12 @@ driver. Implementation workflow runs the same post and gesture sequence. Tests
 attach JSON trajectories, four-edge pixel samples and screenshots, with a
 simulator recording. A passing geometry test is not a real-device smoothness
 measurement and not an Instruments CPU/FPS profile.
+The later diagnostic version also includes pre-recognition tracking and ends
+each range at its idle boundary. Do not compare aggregate figures between those
+different diagnostic versions. XCTest's six completed forward/back gestures do
+not reproduce finger-down reversals or deliberate interrupted deceleration;
+those require manual/device evidence. Local fixtures do not establish slow
+uncached-network performance.
 
 Capture screen flow
 -------------------
@@ -109,8 +128,14 @@ Verification status
 -------------------
 Local: git diff --check; exact baseline patch applicability; unchanged viewport
 diff against 2e79701b. Windows has no iOS SDK or physical iPhone attached.
-Native macOS CI: PENDING. Initial implementation run38469541111;
-instrumented released baseline run38469545521. Results will be appended below.
+Native macOS CI: PENDING. Initial implementation run38469541111 and baseline
+run38469545521 failed before tests: a CGFloat? to Double? conversion in the new
+DEBUG-only trace. Corrected with explicit numeric conversion. Small-layout
+run38471446683 was cancelled because it contained the same error.
+Paired comparison retries: implementation38472364611 / baseline38472368064
+(same c9077b27 driver/instrumentation and iPhone 17 simulator configuration).
+Final-source smaller-layout validation will include the later handoff/prewarm
+corrections. Results will be appended below; no pending run is counted as passed.
 
 New tests cover row publication isolation, shared geometry, MIME/original bytes,
 orientation, image limits/cancellation, reversible enhancement/thumbnail cleanup,
