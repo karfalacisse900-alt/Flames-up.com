@@ -42,17 +42,48 @@ App/MIRANativeRootView.swift — account lifecycle
 
 Verification status (update with final evidence before release)
 - Local TypeScript check passed.
-- Initial complete backend suite: 256 passed; additional route/privacy tests added.
+- Complete backend suite: 259 passed locally and in deployment CI.
 - Actual SQL migration executed in isolated PGlite/Postgres-compatible tests:
   multiple memberships, atomic unsave/Undo, ownership, no direct API privileges,
   idempotency, stale-write rejection, rollback, legacy import/unsave, likes intact.
-- Native runtime and unit tests pending CI. Screenshots are actual SwiftUI views
-  with isolated fixture transport, not mockups and not proof of live-device FPS.
+- iPhone 17 / iOS 26.4: run 38334632868 passed 90 unit tests and 3 UI tests.
+  UI verified tap versus hold, cancel without saving, two collection selections,
+  Undo restoring both selections, no Details navigation from star, unchanged
+  star position on save, All saved, lazy-feed tab return and stable carousel.
+  Unit tests verify rollback/retry, stale-read rejection and account isolation.
+  Source de54a4c9; final source adds only safe image-only collection previews.
+  Final iPhone 13 mini verification: run 38336375736 (pending at this update).
+  Screenshots are actual SwiftUI views with isolated fixture transport, not
+  mockups, not a live customer session and not proof of live-device FPS.
 - Live deployment acceptance script uses only newly-created disposable accounts
   and a private post, with exact-ID cleanup; no customer data or media changes.
 - Physical iPhone, manual VoiceOver, real network interruptions and long mixed
   video scrolling remain device-only verification. Do not infer these passed
   from a build, simulator screenshot, or successful TestFlight upload.
+
+Production deployment
+- Approved migration applied as 20261013021817_private_favorites.
+- Verified RLS enabled; anon/authenticated table and RPC access denied;
+  service_role RPC access allowed. Advisor INFO about RLS without policies is
+  intentional deny-by-default Worker-only access, not a public access grant.
+  Existing unrelated leaked-password-protection warning was not changed.
+  https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy
+- Worker run 38336373204 passed. Version c55c6e34-f4a0-4b7d-91c0-e27cf6027523.
+  Live smoke passed save, multi-collection, idempotency, stale-write rejection,
+  private visibility, cross-owner denial, Undo, deletion preserving saves,
+  old-client unsave clearing memberships and unchanged likes.
+  The two disposable accounts and private fixture were removed; no customer
+  records or uploaded media were changed.
+- TestFlight run 38336551432 started on 990ce2cb; upload waits for matching
+  native source validation. Apple processing not yet verified at this update.
+
+Inspected implementation screenshots (iPhone 17, native fixtures)
+  ../../feed-restoration-evidence/favorites-iphone17/stamp-screenshots/
+  2CD4D2ED-E9C6-4D14-B76F-516858A27365.png — filled star on actual feed component
+  EF6FE125-852D-4F18-A55D-C9DCC0F59102.png — multi-selection collection sheet
+  E954B34B-553A-49F1-83F5-394D00255BFF.png — All saved and collections
+The review-only header/fixture launcher is excluded from Release. Home's real
+header/navigation were not replaced by that test harness.
 
 Authority
 User explicitly approved tested Favorites backend deployment and TestFlight.
