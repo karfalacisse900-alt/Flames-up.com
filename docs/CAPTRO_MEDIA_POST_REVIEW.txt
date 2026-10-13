@@ -92,8 +92,28 @@ Backend compatibility requiring separate approval
 - Server-wide rejection requires a separately reviewed, version-aware rollout
   and older-client upgrade behavior. No such backend change was applied.
 
-Runtime revision: 59559e86d836b8acd0e9bd2998a65da40268ad29.
-Verification records will be finalized after native run 38326078542.
+Production-source runtime revision: 59559e86d836b8acd0e9bd2998a65da40268ad29.
+Review revisions through 532e570f add only test/fixture/workflow/report corrections.
+Native run 38326078542: iPhone 17 simulator, iOS 26.4, Xcode 26.6,
+Debug build passed; 86 native unit tests and 9 UI tests passed.
+The overall workflow failed only when the subsequent small-device setup
+looked up the source photo container after shutting its simulator down.
+That setup error is corrected. Focused smaller-device run 38328818501 on
+0417a47c built successfully: 86 unit tests passed; 2 of 3 UI tests passed.
+Ordinary Details and enlarged-text Story/Details passed on iPhone 13 mini.
+The composer attachment assertion failed: the captured accessibility tree
+shows Add at y=465...509 while the keyboard accessory occupies y=451...495.
+The test tapped the partially obstructed control without revealing it first.
+The screenshot confirms the menu did not open; this is not reported as a pass.
+The test now drags actual composer content above the keyboard to reveal Add,
+checks the caption survived, and then opens the menu. Production code is unchanged.
+Run 38330961686 was cancelled before testing to make that gesture explicit;
+replacement run 38331123178 on 532e570f is pending at this review handoff.
+Small-screen attachment interaction therefore remains unverified until it passes.
+The initial large-text launch flag did not enlarge the presented Story.
+Review fixtures now explicitly forward Dynamic Type into modal/destination
+screens; the measured stamp-growth assertion passed and the exported small-phone
+Story/Details screenshots were visually inspected with genuinely enlarged text.
 Initial run 38323043946 on fc7ac9cf: build passed; 85 native unit tests
 passed; 3 existing Home restoration/carousel UI tests passed. Composer,
 Story inventory and large-text UI tests passed, but 2 Details UI tests had
@@ -127,9 +147,31 @@ they do not certify mixed-video, multi-Story playback, paid access, or live
 publishing. A screenshot-only one-second wait avoids capturing native sheet
 transitions mid-animation; it is not a production performance workaround.
 
+Inspected iPhone 17 runtime evidence
+  ../../feed-restoration-evidence/media-posts-final/stamp-screenshots/
+  F6A7D595-C74B-4322-A141-C312CCD8ABD2.png — ordinary photo Details
+  2E339F85-BFCB-4C38-A300-B1790C29D4F0.png — media-required composer
+  0D32761E-7453-4301-9AC5-652BD9E7C6EA.png — attachment menu without polls
+  F2A81A90-D3E3-4A4D-A342-950EB19C1CF1.png — Club Story
+  188487F6-70E5-4E68-A620-81797CC45C21.png — free Club Details
+  BF62F003-1366-45F6-AD24-0CAD60DB8075.png — paid fixture presentation
+  2C73617C-A66A-4165-8B0B-C6A11771AD48.png — already-joined fixture
+  8A2B1A04-93B2-402C-807F-9A3395254848.png — expired fixture, disabled action
+The adjacent manifest maps all 15 Story type captures and other Details images.
+These use one uncropped landscape test photograph, not every media ratio/video.
+
+Inspected iPhone 13 mini runtime evidence
+  ../../feed-restoration-evidence/media-posts-small/stamp-screenshots/
+  E48C2700-1417-49EB-B8BE-84C3F0108396.png — actual enlarged-text Club Story
+  E7CD5A92-A946-450B-B837-7C0462E57DFA.png — actual enlarged-text Club Details
+  98BE861B-5586-472A-B1E3-23C86EA933C0.png — failed attachment-menu attempt;
+    keyboard remains visible, not a successful menu screenshot.
+  F9A6D368-CE9C-4A8D-991C-9E3527290A23.png — ordinary Details UI test capture
+
 Still required before release
 - Inspect the runtime screenshots and approve the presentation.
-- Physical-iPhone interaction/performance, VoiceOver and small-screen checks.
+- Physical-iPhone interaction/performance, manual VoiceOver, and remaining
+  small-screen attachment-menu verification (pending run above).
 - Live owner/viewer, joined/purchased, pending, expired and sold-out flows.
 - Real upload/retry, edit/publish and interruption tests with each supported type.
   Existing permissions, receipts, payments and backend behavior were preserved,
