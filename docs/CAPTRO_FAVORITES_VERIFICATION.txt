@@ -78,7 +78,10 @@ Production deployment
 - TestFlight run 38336551432 on 990ce2cb succeeded. Build 1.0.1 (616.1).
   Matching-source native verification passed before upload. Apple accepted
   the IPA at 2026-10-13 02:47 UTC with no upload errors.
-  Apple processing is being checked in read-only run 38338686823.
+  Apple status confirmed by read-only run 38338940793 at 02:52 UTC:
+  processing VALID, internalBuildState IN_BETA_TESTING, groups Captro private
+  and Captro private2. External state READY_FOR_BETA_SUBMISSION; no external
+  review submission or new tester invitations were made.
 
 Inspected implementation screenshots (iPhone 17, native fixtures)
   ../../feed-restoration-evidence/favorites-iphone17/stamp-screenshots/
