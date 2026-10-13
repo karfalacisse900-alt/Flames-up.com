@@ -1,6 +1,14 @@
 name: Validate camera and carousel
 run-name: Camera/carousel review - ${{ inputs.baseline && 'released baseline' || 'implementation' }}
 on:
+  workflow_call:
+    inputs:
+      baseline:
+        type: boolean
+        default: false
+      small_phone:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       baseline:

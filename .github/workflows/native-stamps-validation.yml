@@ -2,6 +2,14 @@ name: Validate Captro Stamps
 on:
   workflow_dispatch:
     inputs:
+      camera_carousel:
+        description: Validate native camera review and identical Home/Details carousel gestures without publishing
+        type: boolean
+        default: false
+      carousel_baseline:
+        description: Instrument released 619.1 source for comparison only
+        type: boolean
+        default: false
       favorites_review:
         description: Test private Favorites store and real native star/picker/library with isolated fixtures
         type: boolean
@@ -62,8 +70,14 @@ on:
 permissions:
   contents: read
 jobs:
+  camera-carousel:
+    if: ${{ inputs.camera_carousel }}
+    uses: ./.github/workflows/native-camera-carousel-validation.yml
+    with:
+      baseline: ${{ inputs.carousel_baseline }}
+      small_phone: ${{ inputs.small_review_only }}
   stamps:
-    if: ${{ inputs.cleanup_user_id == '' }}
+    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel }}
     runs-on: macos-26
     environment: captro-payments-live
     timeout-minutes: 65
