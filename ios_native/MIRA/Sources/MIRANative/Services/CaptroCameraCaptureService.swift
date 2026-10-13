@@ -60,6 +60,9 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
   private var captureStartedAt: TimeInterval = 0
   // Main-queue owned. Protects only file finalization, never an offscreen camera.
   private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+#if DEBUG
+  private var testingAudioInstaller: (() throws -> Void)?
+#endif
 
   override init() {
     super.init()
@@ -136,8 +139,11 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
       self.captureMode = value
       self.publish { $0.mode = value; $0.notice = nil }
       self.applyTorch(false)
-      if self.configured { self.configureAndRun(reconfigure: true) }
-      if value == .video && self.wantsActive { self.requestMicrophone() }
+      self.configured = false
+      if self.wantsActive, AVCaptureDevice.authorizationStatus(for: .video) == .authorized {
+        self.configureAndRun()
+        if value == .video { self.requestMicrophone() }
+      }
     }
   }
 
@@ -175,7 +181,7 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
 
   func flip() {
     queue.async { [weak self] in
-      guard let self, self.operation == .ready, !self.hasResult, let oldInput = self.input else { return }
+      guard let self, self.wantsActive, self.session.isRunning, self.operation == .ready, !self.hasResult, let oldInput = self.input else { return }
       let next: AVCaptureDevice.Position = oldInput.device.position == .back ? .front : .back
       guard let device = self.device(position: next), let newInput = try? AVCaptureDeviceInput(device: device) else {
         self.publish { $0.notice = "This camera is unavailable." }; return
@@ -265,6 +271,7 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
     transition(.starting)
     do {
       if !configured || reconfigure {
+        configured = false
         if session.isRunning { session.stopRunning() }
         session.beginConfiguration()
         do {
@@ -290,12 +297,25 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
             if let microphone { session.removeInput(microphone); self.microphone = nil }
           }
           try configureFormat()
-          if captureMode == .video && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized { try installMicrophone() }
+          if captureMode == .video && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
+            do { try installMicrophone() }
+            catch { publish { $0.notice = "Microphone unavailable. Video will be recorded without sound." } }
+          }
           session.commitConfiguration()
         } catch {
           session.commitConfiguration(); throw error
         }
         configured = true
+      }
+      // Permission prompts may background the scene. Reconcile the current OS
+      // authorization when resuming even if the capture session already exists.
+      if captureMode == .video, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, microphone == nil {
+        session.beginConfiguration()
+        do { try installMicrophone(); session.commitConfiguration() }
+        catch {
+          session.commitConfiguration()
+          publish { $0.notice = "Microphone unavailable. Video will be recorded without sound." }
+        }
       }
       applyOrientation()
       session.startRunning()
@@ -360,16 +380,13 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
 
   private func requestMicrophone() {
     guard !microphoneRequestPending else { return }
-    let request = generation
     switch AVCaptureDevice.authorizationStatus(for: .audio) {
     case .notDetermined:
       microphoneRequestPending = true
-      AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+      AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
         guard let self else { return }
         self.queue.async {
-          self.microphoneRequestPending = false
-          guard self.wantsActive, self.generation == request, self.captureMode == .video else { return }
-          self.updateMicrophonePermission(granted)
+          self.completeMicrophonePermission(authorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
         }
       }
     case .authorized: updateMicrophonePermission(true)
@@ -377,18 +394,34 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
     }
   }
 
+  private func completeMicrophonePermission(authorized: Bool) {
+    microphoneRequestPending = false
+    // A permission sheet can change scene activity/generation. Its result is OS
+    // authorization, not a stale session command. Reconcile the present context.
+    guard wantsActive, captureMode == .video, !hasResult else { return }
+    updateMicrophonePermission(authorized)
+  }
+
   private func updateMicrophonePermission(_ granted: Bool) {
     publish { $0.microphoneDenied = !granted; $0.notice = granted ? nil : "Microphone is off. Video will be recorded without sound." }
     guard granted, configured, operation == .ready else { return }
+#if DEBUG
+    if let testingAudioInstaller {
+      do { try testingAudioInstaller() }
+      catch { publish { $0.notice = "Microphone unavailable. Video will be recorded without sound." } }
+      return
+    }
+#endif
     session.beginConfiguration()
     do { try installMicrophone() } catch { publish { $0.notice = "Microphone unavailable. Video will be recorded without sound." } }
     session.commitConfiguration()
   }
 
   private func installMicrophone() throws {
-    guard microphone == nil, let device = AVCaptureDevice.default(for: .audio) else { return }
+    guard microphone == nil else { return }
+    guard let device = AVCaptureDevice.default(for: .audio) else { throw CaptureError.microphoneUnavailable }
     let candidate = try AVCaptureDeviceInput(device: device)
-    guard session.canAddInput(candidate) else { return }
+    guard session.canAddInput(candidate) else { throw CaptureError.microphoneUnavailable }
     session.addInput(candidate); microphone = candidate
   }
 
@@ -570,11 +603,35 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
   }
 
   private enum CaptureError: LocalizedError {
-    case unavailable, videoFormat
+    case unavailable, videoFormat, microphoneUnavailable
     var errorDescription: String? {
       self == .videoFormat ? "1080p at 30 FPS is unavailable on this camera. Try the other camera." : "Camera unavailable. Try again or check camera access in Settings."
     }
   }
+
+#if DEBUG
+  /// Unit-test seam at the hardware boundary. Tests run the real queued permission
+  /// completion and suspend paths, without pretending a simulator has a camera.
+  func preparePermissionTestContext(mode: Mode, active: Bool, generation: Int,
+                                    installAudio: @escaping () throws -> Void) async {
+    await withCheckedContinuation { continuation in
+      queue.async {
+        self.captureMode = mode; self.wantsActive = active; self.generation = generation
+        self.configured = true; self.operation = .ready; self.microphoneRequestPending = true
+        self.testingAudioInstaller = installAudio
+        continuation.resume()
+      }
+    }
+  }
+  func finishPermissionForTesting(authorized: Bool) async -> Bool {
+    await withCheckedContinuation { continuation in
+      queue.async {
+        self.completeMicrophonePermission(authorized: authorized)
+        continuation.resume(returning: self.microphoneRequestPending)
+      }
+    }
+  }
+#endif
 }
 
 extension CaptroCameraCaptureService: AVCapturePhotoCaptureDelegate, AVCaptureFileOutputRecordingDelegate {

@@ -1,9 +1,53 @@
 import AVFoundation
+import Combine
 import UIKit
 import XCTest
 @testable import MIRANative
 
 final class CaptroCameraCaptureTests: XCTestCase {
+  @MainActor
+  func testPermissionCompletionReconcilesCurrentVideoAfterSuspendAndNewGeneration() async {
+    let camera = CaptroCameraCaptureService()
+    let installed = expectation(description: "Current video gets authorized microphone")
+    await camera.preparePermissionTestContext(mode: .video, active: true, generation: 1, installAudio: { installed.fulfill() })
+    camera.suspend() // The permission sheet made the scene inactive.
+    await camera.preparePermissionTestContext(mode: .video, active: true, generation: 3, installAudio: { installed.fulfill() })
+    let stillPending = await camera.finishPermissionForTesting(authorized: true)
+    XCTAssertFalse(stillPending)
+    await fulfillment(of: [installed], timeout: 1)
+    XCTAssertFalse(camera.microphoneDenied)
+  }
+
+  @MainActor
+  func testLatePermissionCompletionDoesNotInstallAudioAfterLeavingOrChoosingPhoto() async {
+    let camera = CaptroCameraCaptureService()
+    let notInstalled = expectation(description: "No obsolete audio install")
+    notInstalled.isInverted = true
+    await camera.preparePermissionTestContext(mode: .video, active: true, generation: 1, installAudio: { notInstalled.fulfill() })
+    camera.suspend()
+    let pendingAfterLeave = await camera.finishPermissionForTesting(authorized: true)
+    XCTAssertFalse(pendingAfterLeave)
+    await camera.preparePermissionTestContext(mode: .photo, active: true, generation: 3, installAudio: { notInstalled.fulfill() })
+    _ = await camera.finishPermissionForTesting(authorized: true)
+    await fulfillment(of: [notInstalled], timeout: 0.1)
+  }
+
+  @MainActor
+  func testAuthorizedButUnavailableMicrophoneReportsSilentVideo() async {
+    let camera = CaptroCameraCaptureService()
+    let reported = expectation(description: "Silent recording notice published")
+    let observation = camera.$notice.sink { message in
+      if message == "Microphone unavailable. Video will be recorded without sound." { reported.fulfill() }
+    }
+    defer { observation.cancel() }
+    await camera.preparePermissionTestContext(mode: .video, active: true, generation: 1, installAudio: {
+      throw NSError(domain: "camera-test", code: 1)
+    })
+    _ = await camera.finishPermissionForTesting(authorized: true)
+    await fulfillment(of: [reported], timeout: 1)
+    XCTAssertEqual(camera.notice, "Microphone unavailable. Video will be recorded without sound.")
+  }
+
   func testOnlyReadyVisibleSessionAcceptsShutter() {
     XCTAssertTrue(CaptroCameraPolicy.canBeginCapture(state: .ready, wantsActive: true, running: true, hasResult: false))
     let blocked: [CaptroCameraCaptureService.State] = [.permissionNeeded, .starting, .capturing, .recording, .finalizing, .interrupted, .failed]

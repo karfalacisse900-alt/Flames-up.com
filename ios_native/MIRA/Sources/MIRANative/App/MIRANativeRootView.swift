@@ -347,6 +347,7 @@ public struct MIRANativeRootView: View {
           )
         } else {
           CaptroCameraNativeView(api: api, isActive: selectedTab == .scan)
+            .id("capture-account-\(authSession.user?.id ?? "")")
         }
       }
         .tag(MIRATab.scan)

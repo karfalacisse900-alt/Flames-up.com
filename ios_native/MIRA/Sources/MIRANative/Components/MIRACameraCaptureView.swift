@@ -1300,6 +1300,7 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
   }
 
   private func showCapturedMedia(_ media: MIRAPickedMedia, thumbnail: UIImage? = nil) {
+    captureService.suspend()
     if simpleCaptureUI {
       delegate?.storyCameraDidCapture(media)
       return

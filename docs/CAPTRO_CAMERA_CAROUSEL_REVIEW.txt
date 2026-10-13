@@ -1,0 +1,134 @@
+CAPTRO CAMERA / CAROUSEL IMPLEMENTATION REVIEW
+2026-10-13 — working review, not a release approval
+
+Scope and source
+---------------
+Started from branch fix/account-safety-voice-cleanup, HEAD 41c9a016.
+Released native source: d615f9096d7a35266198fb36077722096454fbb7,
+TestFlight 1.0.1 (619.1). Existing untracked supabase/.temp/ was preserved.
+No merge, backend deployment, production settings change, billing cancellation,
+financial-data deletion, or TestFlight upload is authorized by this task.
+
+Confirmed code defects / changes
+-------------------------------
+1. Home and Details used different rendering policies within the same selected
+   frame. Home applied CaptroPostMediaView/sourceRect; Details used fit on the
+   uncropped original. PostDetailOptimizedMediaCarousel.mediaSlide now uses the
+   same crop renderer as Home. Details' existing native TabView paging remains.
+   Fullscreen viewing deliberately retains fitted originals. App cover writing
+   remains hidden in Details. No supported-ratio policy was changed.
+
+2. Home stored every carousel selection and stamp measurement in parent @State
+   dictionaries. Swiping/measuring a single row invalidated the parent feed.
+   CaptroFeedRowStateStore retains row-local ObservableObjects without publishing
+   child changes to Home. Media selection remains stable through lazy remounting.
+   Repeated selection writes are coalesced; media ID generation no longer hashes
+   every URL again for every individual slide.
+   This proves unnecessary invalidation existed, NOT that it caused all reported
+   device shaking or freezes.
+
+3. The existing social camera lacked a return/restart path, mixed capture commands
+   across queues, forced portrait output, used deprecated photo sizing and could
+   discard a successfully finalized duration-limited movie because an error was
+   present. Capture, Post and Story cameras now use one serialized foundation:
+   CaptroCameraCaptureService (AVCapturePhotoOutput + AVCaptureMovieFileOutput).
+   Lifecycle, format, permission, orientation, duplicate-shutter, storage and
+   recording-finalization decisions are centralized. No alternate competing
+   session implementation was added to the new tab.
+
+4. Unchanged PNG/WebP image bytes were being uploaded as image/jpeg/*.jpg.
+   MIRAMediaUploadService now preserves supported original bytes/MIME for both
+   Posts and Stories, detects HEIC/HEIF, and preserves dimensions/orientation in
+   the oversized-image fallback. Compression and cancellation are off-main.
+   Story publishing no longer assigns every video a 15-second duration; it uses
+   the existing server's 15/30/60-second bucket covering the validated clip.
+
+5. Independent review of the new camera found permission-sheet lifecycle and
+   reconfiguration recovery races. Permission completion now reconciles current
+   active mode rather than discarding a grant after a scene-generation change.
+   Failed reconfiguration invalidates configuration before retry. Offscreen flip
+   and missing audio input have explicit guards/feedback. These are code-path
+   findings with injected-boundary tests, not reproduced hardware failures.
+
+Home shake investigation
+------------------------
+CaptroFeedViewport.swift is unchanged from restoration fix 2e79701b.
+The Home-only direction recognizer remains unchanged pending baseline evidence.
+No bounce, native scrolling physics, or global animations were disabled.
+DEBUG-only CaptroCarouselDiagnostics samples native pager offset, parent vertical
+offset, media frame, gesture state and parent evaluation count. It does not write
+scroll offsets or publish SwiftUI state. Release builds contain no trace probes.
+
+Baseline workflow uses exact d615f909 plus only the passive diagnostics and test
+driver. Implementation workflow runs the same post and gesture sequence. Tests
+attach JSON trajectories, four-edge pixel samples and screenshots, with a
+simulator recording. A passing geometry test is not a real-device smoothness
+measurement and not an Instruments CPU/FPS profile.
+
+Capture screen flow
+-------------------
+Existing Capture tab -> Photo/Video camera -> Retake / Use photo or video ->
+existing Post or Story composer -> deliberate publishing through existing flow.
+The captured original remains available when the composer is cancelled. Camera
+state is account-scoped. No library importing or Photos permission is added to
+Capture. Existing composer gallery/editing tools remain available.
+
+Photo mode uses full photo output, active-format supported max dimensions and
+quality prioritization; HEIF where available, JPEG fallback. Review provides one
+reversible Enhance treatment with original/enhanced comparison. Enhancement is
+on-device, explicit, and retains the original; no upscaling or cloud processing.
+
+Video mode is intentionally 1080p/30 SDR H.264 with supported stabilization,
+60-second / 200MB existing limits. The current Cloudflare Stream delivery path
+tops out at 1080p, so the UI does not promise end-to-end 4K or unverified HDR/HEVC.
+Zoom is the actual wide-camera factor; no false ultrawide/telephoto lens labels.
+Changing recording camera/lens is disabled rather than implying seamless switching.
+
+Retired receipt UI versus retained financial services
+----------------------------------------------------
+Removed native files/routes:
+  CaptroScanView.swift (scanner, new review/survey/reward flow)
+  CaptroReceiptCameraView.swift (receipt detection/perspective capture)
+  CaptroDocumentScannerView.swift (unused document-scanner wrapper)
+These source files are recoverable in Git. No user receipt or money data removed.
+
+Retained:
+  CaptroLocalDocumentViewer moved to its own small file for historic originals.
+  CaptroScanModels, Profile receipt history/earnings, CaptroDocumentFacts,
+  historic private document access, CaptroScanPurchaseService unfinished purchase
+  recovery, all server ledger/reward/receipt records and settlement endpoints.
+
+No native Veryfi SDK exists in Package.swift. Server scan.ts still supports old
+app versions and outstanding claims. Its review/verify provider calls, receipt
+history/detail/original routes, rewards balance, feedback settlement, credits
+redemption and Veryfi account/subscription are not changed. Retirement requires a
+separate supported-version/pending-claim review and explicit approval.
+No database migration or new backend endpoint is required for this camera UI.
+
+Verification status
+-------------------
+Local: git diff --check; exact baseline patch applicability; unchanged viewport
+diff against 2e79701b. Windows has no iOS SDK or physical iPhone attached.
+Native macOS CI: PENDING. Initial implementation run38469541111;
+instrumented released baseline run38469545521. Results will be appended below.
+
+New tests cover row publication isolation, shared geometry, MIME/original bytes,
+orientation, image limits/cancellation, reversible enhancement/thumbnail cleanup,
+camera state gates, supported photo dimensions, successful native file-limit
+finalization, and permission callback ownership. UI tests compare identical
+carousel gestures and exercise unavailable camera, review, enhancement, framing,
+composer handoff and cancellation. The review test chart is explicitly labeled
+as a fixture, never a real camera capture or generated mockup of the app.
+
+NOT VERIFIED: physical camera image quality, real shutter latency, live-preview
+FPS, recording start/stop/audio synchronization, calls/interruptions, heat/battery,
+low-light capture, actual lens capabilities, real-device memory pressure,
+original user's subtle shaking/freezes. No usable Instruments profile is claimed.
+
+Technical references
+--------------------
+Apple AVCam: https://developer.apple.com/documentation/avfoundation/avcam-building-a-camera-app
+Apple session threading: https://developer.apple.com/documentation/avfoundation/avcapturesession
+Apple photo quality: https://developer.apple.com/documentation/avfoundation/avcapturephotooutput/maxphotoqualityprioritization
+Cloudflare Stream capabilities: https://developers.cloudflare.com/stream/
+Cloudflare Images limits: https://developers.cloudflare.com/images/get-started/limits/

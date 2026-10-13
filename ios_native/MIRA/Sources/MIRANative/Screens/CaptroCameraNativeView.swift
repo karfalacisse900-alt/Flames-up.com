@@ -196,7 +196,9 @@ struct CaptroCameraNativeView: View {
     if camera.state == .permissionNeeded || camera.state == .failed || camera.state == .interrupted {
       VStack(spacing: 12) {
         Image(systemName: "camera").font(.largeTitle)
-        Text(camera.errorMessage ?? "Camera access is needed to take photos and videos.")
+        Text(camera.errorMessage ?? (camera.state == .interrupted
+          ? (camera.notice ?? "Camera interrupted. Try again when it is available.")
+          : "Camera access is needed to take photos and videos."))
           .font(.body).multilineTextAlignment(.center)
         if AVCaptureDevice.authorizationStatus(for: .video) == .denied || AVCaptureDevice.authorizationStatus(for: .video) == .restricted {
           Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
@@ -215,7 +217,7 @@ struct CaptroCameraNativeView: View {
   private var captureControls: some View {
     VStack(spacing: 8) {
       if let notice = camera.notice { Text(notice).font(.caption).multilineTextAlignment(.center) }
-      if camera.microphoneDenied {
+      if camera.mode == .video && camera.microphoneDenied {
         Button("Microphone off · Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
           .font(.caption).frame(minHeight: 44)
       }
