@@ -1597,7 +1597,9 @@ public struct CreatePostNativeView: View {
           .frame(minHeight: 44)
           .contentShape(Rectangle())
       }.accessibilityIdentifier("composer.add")
-        .popover(isPresented: addPopoverBinding, attachmentAnchor: .point(.bottomLeading), arrowEdge: .top) {
+        // Add moves down as the composition grows. Let the native presenter
+        // choose an edge with space rather than clipping its last rows below it.
+        .popover(isPresented: addPopoverBinding, attachmentAnchor: .rect(.bounds), arrowEdge: nil) {
           Group {
             if presentation == .writingSource {
               CaptroEditorialMenu(title: "Text on media") {

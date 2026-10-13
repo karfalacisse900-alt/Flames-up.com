@@ -65,10 +65,14 @@ final class ComposerCreationTests: XCTestCase {
         app.buttons["composer.add"].tap()
         let more = app.buttons["More ways to create"]
         XCTAssertTrue(more.waitForExistence(timeout: 5))
+        XCTAssertTrue(more.isHittable, "The last Add row must remain reachable after the composition grows")
+        XCTAssertLessThanOrEqual(more.frame.maxY, app.frame.maxY)
+        capture(app, "reopened-attachments-before-\(destination.0.lowercased())-native-fixture")
         more.tap()
       }
       let choice = app.buttons[destination.0]
       XCTAssertTrue(choice.waitForExistence(timeout: 5))
+      XCTAssertTrue(choice.isHittable)
       choice.tap()
       XCTAssertTrue(app.navigationBars[destination.0].waitForExistence(timeout: 5))
       XCTAssertTrue(app.textFields[destination.1].exists)
