@@ -5,7 +5,7 @@ import XCTest
   private func client() -> MIRAAPIClient {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [FavoritesTestProtocol.self]
-    let api = MIRAAPIClient(baseURL: URL(string: "https://favorites.invalid")!, sessionProvider: StaticSessionProvider(token: "fixture"), session: URLSession(configuration: config))
+    let api = MIRAAPIClient(baseURL: URL(string: "https://localhost:9443")!, sessionProvider: StaticSessionProvider(token: "fixture"), session: URLSession(configuration: config))
     api.favorites.configure(accountID: "alice")
     return api
   }
@@ -70,7 +70,7 @@ import XCTest
 }
 private final class FavoritesTestProtocol: URLProtocol {
   static var reply: ((URLRequest)->(Int,Data,Double))!
-  override class func canInit(with request: URLRequest)->Bool {request.url?.host == "favorites.invalid"}
+  override class func canInit(with request: URLRequest)->Bool {request.url?.host == "localhost" && request.url?.port == 9443}
   override class func canonicalRequest(for request:URLRequest)->URLRequest {request}
   static func body(_ request:URLRequest)->Data {
     if let data=request.httpBody {return data}

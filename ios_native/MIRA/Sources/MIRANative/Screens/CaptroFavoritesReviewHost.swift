@@ -8,7 +8,7 @@ final class CaptroFavoritesReviewProtocol: URLProtocol {
   static var revision = 0
   static var memberships: [String] = []
   static var names = ["11111111-1111-4111-8111-111111111111":"Dining", "22222222-2222-4222-8222-222222222222":"New York"]
-  override class func canInit(with request:URLRequest)->Bool {request.url?.host == "favorites-review.invalid"}
+  override class func canInit(with request:URLRequest)->Bool {request.url?.host == "localhost" && request.url?.port == 9444}
   override class func canonicalRequest(for request:URLRequest)->URLRequest {request}
   override func startLoading() {
     let path=request.url!.path
@@ -46,7 +46,7 @@ struct CaptroFavoritesReviewHost: View {
   @State private var opened = false
   init() {
     let config=URLSessionConfiguration.ephemeral; config.protocolClasses=[CaptroFavoritesReviewProtocol.self]
-    api=MIRAAPIClient(baseURL:URL(string:"https://favorites-review.invalid")!,sessionProvider:StaticSessionProvider(token:"fixture"),session:URLSession(configuration:config))
+    api=MIRAAPIClient(baseURL:URL(string:"https://localhost:9444")!,sessionProvider:StaticSessionProvider(token:"fixture"),session:URLSession(configuration:config))
     api.favorites.configure(accountID:"review")
   }
   var body: some View {
