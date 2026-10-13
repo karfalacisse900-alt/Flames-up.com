@@ -730,6 +730,9 @@ public struct PostDetailNativeView: View {
     ToolbarItem(placement: .topBarTrailing) {
       Menu {
         ShareLink(item: captroDetailShareURL(model.post)) { Label("Share post", systemImage: "square.and.arrow.up") }
+        Button(model.post.viewerLiked ? "Unlike post" : "Like post") {
+          Task { await model.toggleLike() }
+        }
         Button { Task { await model.toggleSave() } } label: {
           Label(model.post.viewerSaved ? "Remove from Favorites" : "Save to Favorites",
             systemImage: model.post.viewerSaved ? "star.fill" : "star")
@@ -1393,7 +1396,7 @@ private struct CommentRow: View {
         Label("Reply", systemImage: "arrowshape.turn.up.left")
       }
       Button(action: onLike) {
-        Label(comment.viewerLiked ? "Unlike comment" : "Like comment", systemImage: comment.viewerLiked ? "heart.slash" : "heart")
+        Text(comment.viewerLiked ? "Unlike comment" : "Like comment")
       }
       if isPostCreator {
         Button(action: onPin) {
