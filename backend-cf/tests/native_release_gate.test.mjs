@@ -1,12 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { verifyNativeValidation, verifyFromEnvironment } from '../../scripts/app-store/verify-native-validation.mjs';
+import { verifyNativeValidation, verifyFromEnvironment, cameraValidationSource } from '../../scripts/app-store/verify-native-validation.mjs';
 
 const sha = '1'.repeat(40), tree = '2'.repeat(40);
 const run = { path: '.github/workflows/native-stamps-validation.yml', head_branch: 'fix', status: 'completed', conclusion: 'success', head_sha: sha };
 const attestation = { version: 1, validationRun: '123', sourceSHA: sha, nativeTree: tree };
 const valid = { run, branch: 'fix', targetTree: tree, validatedTree: tree, attestation, runID: '123' };
+
+test('camera evidence requires an exact clean non-baseline checkout and both passed suites', () => {
+  const summary = count => ({ result: 'Passed', totalTestCount: count, passedTests: count, failedTests: 0, skippedTests: 0, expectedFailures: 0 });
+  const evidence = { source: `${sha}\n\nDriver: ${sha}\nBaseline: false\n`, interaction: summary(4), regression: summary(146), runID: '123', sourceSHA: sha, nativeTree: tree };
+  assert.deepEqual(cameraValidationSource(evidence), attestation);
+  for (const source of [evidence.source.replace('false', 'true'), evidence.source.replace('Driver: ' + sha, 'Driver: ' + '3'.repeat(40)), evidence.source.replace('\n\n', '\n changed.swift | 2 +-\n')]) {
+    assert.throws(() => cameraValidationSource({ ...evidence, source }));
+  }
+  for (const field of ['interaction', 'regression']) {
+    for (const patch of [{ result: 'Failed' }, { totalTestCount: 0 }, { passedTests: 0 }, { failedTests: 1 }, { skippedTests: 1 }, { expectedFailures: 1 }]) {
+      assert.throws(() => cameraValidationSource({ ...evidence, [field]: { ...evidence[field], ...patch } }));
+    }
+    assert.throws(() => cameraValidationSource({ ...evidence, [field]: undefined }));
+  }
+});
 
 test('release gate accepts only successful matching native source', () => {
   assert.doesNotThrow(() => verifyNativeValidation(valid));
