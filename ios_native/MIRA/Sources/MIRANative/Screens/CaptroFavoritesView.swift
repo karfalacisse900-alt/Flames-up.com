@@ -85,7 +85,7 @@ private struct FavoriteCollectionPreview: View {
   let collection: CaptroFavoriteCollection
   var body: some View {
     Group {
-      if let url=collection.previews?.first?.thumbnailMediaURLs.first ?? collection.previews?.first?.feedMediaURLs.first {
+      if let url=collection.previews?.first?.favoriteThumbnailURL {
         RemoteMediaView(url: url, isVideo: false)
       } else { Image(systemName: "square.stack").foregroundStyle(.secondary) }
     }.frame(width: 40,height:40).clipped().background(MIRATheme.Color.surfaceSoft).accessibilityHidden(true)
@@ -133,7 +133,7 @@ struct CaptroFavoritesView: View {
           if let post=entry.post {
             NavigationLink(destination: PostDetailNativeView(post:post,api:api).miraHideTabBarOnAppear()) {
               HStack(spacing:12) {
-                if let url=post.thumbnailMediaURLs.first ?? post.feedMediaURLs.first {
+                if let url=post.favoriteThumbnailURL {
                   RemoteMediaView(url:url,isVideo:false).frame(width:64,height:64).clipped()
                 } else { Image(systemName:"doc.text").frame(width:64,height:64) }
                 VStack(alignment:.leading,spacing:4) {
@@ -191,5 +191,13 @@ struct CaptroFavoritesView: View {
       hasMore=page.hasMore; nextOffset=page.nextOffset
     } catch {guard request==token else{return}; self.error=error.localizedDescription}
     if request==token {loading=false}
+  }
+}
+
+private extension MIRAPost {
+  // A missing video thumbnail must not download/decode the original movie
+  // through the image cache just to draw a small collection preview.
+  var favoriteThumbnailURL: String? {
+    thumbnailMediaURLs.first(where: { !$0.isVideoURL }) ?? feedMediaURLs.first(where: { !$0.isVideoURL })
   }
 }

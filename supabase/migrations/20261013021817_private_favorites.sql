@@ -1,4 +1,5 @@
 -- Extends canonical app_post_interactions(kind='save'); does not create a second save list.
+-- Filename matches the approved production migration-history version.
 -- Access is through authenticated Worker routes, never direct client table/RPC access.
 create table public.app_favorite_collections (
   id uuid primary key default gen_random_uuid(),

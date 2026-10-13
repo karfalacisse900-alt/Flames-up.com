@@ -53,7 +53,7 @@ test('Favorites list exposes unavailable rows, not private post contents or unsa
   assert.equal(result.body.collections[0].previews[0].id,'visible');
 });
 
-const migration = readFileSync(new URL('../../supabase/migrations/20261013012807_private_favorites.sql',import.meta.url),'utf8');
+const migration = readFileSync(new URL('../../supabase/migrations/20261013021817_private_favorites.sql',import.meta.url),'utf8');
 async function fixture() {
   const db=new PGlite();
   await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
