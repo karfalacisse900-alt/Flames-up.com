@@ -79,6 +79,8 @@ final class PostPresentationReviewTests: XCTestCase {
     XCTAssertTrue(app.buttons["story.openStamp"].waitForExistence(timeout: 15))
     XCTAssertTrue(app.buttons["story.openStamp"].isHittable)
     XCTAssertGreaterThanOrEqual(app.buttons["Close capture"].frame.height, 44)
+    XCTAssertGreaterThan(app.buttons["story.stamp"].frame.height, 110,
+      "The accessibility test must actually enlarge the stamp, not just pass a launch flag")
     capture(app, "story-club-large-text")
     app.buttons["Close capture"].tap()
     app.buttons["Open Details"].tap()

@@ -159,10 +159,18 @@ test('Home uses a stable supported fill preview while Details preserves original
   assert.doesNotMatch(mediaPager, /CaptroNaturalMediaLayout/);
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
   assert.match(mediaPager, /contentMode: \.fit/);
-  assert.match(mediaPager, /contentMode: \.fill/);
+  // Fill moved into the shared source/crop renderer; do not require a second
+  // independent crop policy in the pager. Details deliberately fits originals.
+  assert.match(mediaPager, /CaptroPostMediaView\(url: url, geometry: post\.mediaGeometry\(at: index\)/);
+  const sharedMedia = readIOS('Components/CaptroPostMediaView.swift');
+  assert.match(sharedMedia, /geometry\.sourceRect\(in: size\)/);
+  assert.match(sharedMedia, /contentMode: \.fill/);
+  assert.match(sharedMedia, /\.offset\(x: source\.minX, y: source\.minY\)/);
+  const details = readIOS('Screens/PostDetailNativeView.swift');
+  assert.match(details, /RemoteMediaView\(url: url[\s\S]*?contentMode: \.fit/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
-  const mediaBranchEnd = postView.indexOf('} else {', mediaBranchStart);
+  const mediaBranchEnd = postView.indexOf('} else if !post.isLegacyOrdinaryTextPost', mediaBranchStart);
   const mediaBranch = postView.slice(mediaBranchStart, mediaBranchEnd);
   assert.ok(mediaBranchStart >= 0 && mediaBranchEnd > mediaBranchStart);
   assert.match(mediaBranch, /mediaPager/);
@@ -312,9 +320,12 @@ test('single-card creation preserves native mixed-media picking and original pro
   assert.match(card, /compositionAttachments/);
   assert.doesNotMatch(card, /TextField\(|TextEditor\(|CaptroEditorialOverlayCard/);
   assert.match(composer, /photosPicker\([\s\S]*?matching: \.any\(of: \[\.images, \.videos\]\)/);
-  assert.match(composer, /fitsOriginal: true/);
+  assert.match(composer, /CaptroPickedMediaPreview\(media: item/);
+  assert.match(composer, /item\.postFraming\?\.displayAspectRatio/);
   assert.match(composer, /let remainingSlots = max\(0, 10 - mediaItems\.count\)/);
-  assert.match(composer, /mediaDimensions\.append\(await item\.postMediaDimension\(\)\)/);
+  assert.match(composer, /var dimensions = await item\.postMediaDimension\(\)/);
+  assert.match(composer, /dimensions\.framing\?\.mediaId = MIRAPost\.mediaIdentity\(upload\.url\)/);
+  assert.match(composer, /mediaDimensions\.append\(dimensions\)/);
   assert.match(mediaUpload, /if target == \.feedPost \{[\s\S]*?dimensions = await media\.postMediaDimension\(\)/);
   assert.match(mediaEditorView, /case \.post:[\s\S]*?return \[\.landscape16x9, \.landscape4x3, \.portraitPointSixFive, \.portrait4x5, \.portrait3x4, \.square1x1\]/);
 });

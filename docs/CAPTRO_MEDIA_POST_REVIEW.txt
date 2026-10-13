@@ -92,9 +92,28 @@ Backend compatibility requiring separate approval
 - Server-wide rejection requires a separately reviewed, version-aware rollout
   and older-client upgrade behavior. No such backend change was applied.
 
-Verification records will be finalized after the native review run.
-Local suite: 251/253 pass. Two pre-existing source guards still assume obsolete
-media-ratio code (captro_stamp_feed_guard.test.mjs); they were not hidden.
+Runtime revision: 59559e86d836b8acd0e9bd2998a65da40268ad29.
+Verification records will be finalized after native run 38326078542.
+Initial run 38323043946 on fc7ac9cf: build passed; 85 native unit tests
+passed; 3 existing Home restoration/carousel UI tests passed. Composer,
+Story inventory and large-text UI tests passed, but 2 Details UI tests had
+5 failed assertions: the test queried post.detail.media as Other whereas
+the runtime accessibility tree exposes Image elements. Screenshots and
+the exported accessibility tree confirmed the actual caption/title text.
+Corrected queries inspect the existing media identifier independent of type.
+The isolated review transport also matched /commerce/posts/review-post as
+the ordinary post endpoint; the exact-path correction prevents this fixture
+collision. Production networking was not changed. Fitted media now uses
+the existing plain neutral background instead of the default gradient.
+Run 38324172495 was cancelled after these defects were identified, in favor
+of the corrected run; it is not counted as verification.
+Initial local suite: 251/253 passed. Two pre-existing source guards asserted
+obsolete call sites, not different ratio values: fill rendering had moved
+into CaptroPostMediaView; the composer now uses CaptroPickedMediaPreview and
+binds framing metadata to uploaded media IDs before appending dimensions.
+The guards now trace those actual components and also verify fitted Details.
+All existing ratio-value assertions are retained; no ratio rules changed.
+Final local Node suite: 253 tests passed, 0 failed (8.27 seconds).
 New source guards cover media-required publishing, preserved legacy drafts,
 removed poll UI, raw pagination, stable Story identity and pause guards.
 Native tests added for legacy/media eligibility, complete stamp aliases,
@@ -103,6 +122,10 @@ Story presentation, draft preservation and pagination beyond hidden text pages.
 Runtime screenshots use running native screens with isolated DEBUG fixture
 records and a licensed test photograph. They are not production posts or
 generated mockups, and they do not prove live purchases or receipt verification.
+The Story fixtures verify each stamp's presentation and details-sheet entry;
+they do not certify mixed-video, multi-Story playback, paid access, or live
+publishing. A screenshot-only one-second wait avoids capturing native sheet
+transitions mid-animation; it is not a production performance workaround.
 
 Still required before release
 - Inspect the runtime screenshots and approve the presentation.

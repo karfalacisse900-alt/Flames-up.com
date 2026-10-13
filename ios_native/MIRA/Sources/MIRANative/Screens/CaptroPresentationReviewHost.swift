@@ -85,11 +85,17 @@ enum CaptroPresentationReviewFixture {
 struct CaptroPresentationReviewHost: View {
   @State private var showsStory = false
   private let api = CaptroComposerTestAPI.make()
+  private var reviewTextSize: DynamicTypeSize {
+    ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large
+  }
   var body: some View {
     NavigationStack {
       VStack(spacing: 24) {
         Text("Native UI review · test content").font(.headline)
-        NavigationLink("Open Details") { PostDetailNativeView(post: CaptroPresentationReviewFixture.post, api: api) }
+        NavigationLink("Open Details") {
+          PostDetailNativeView(post: CaptroPresentationReviewFixture.post, api: api)
+            .environment(\.dynamicTypeSize, reviewTextSize)
+        }
         Button("Open Story") { showsStory = true }
       }
       .fullScreenCover(isPresented: $showsStory) {
@@ -97,6 +103,7 @@ struct CaptroPresentationReviewHost: View {
           allGroups: [CaptroPresentationReviewFixture.group], api: api,
           onClose: { showsStory = false }, onReportStory: { _ in },
           onOpenLinkedPost: { _ in showsStory = false })
+          .environment(\.dynamicTypeSize, reviewTextSize)
       }
     }
   }
