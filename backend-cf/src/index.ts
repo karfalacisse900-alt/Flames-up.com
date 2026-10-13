@@ -8146,6 +8146,7 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
 }
 
 async function favoriteRPC(c: any, userId: string, action: string, input: Record<string, unknown>) {
+  c.header('Cache-Control', 'private, no-store');
   const related = await supabaseRelatedInteractionUserIds(c, userId);
   const keys = await supabaseInteractionActorKeys(c, related);
   const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, keys.appUserIds);
