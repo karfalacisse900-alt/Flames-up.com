@@ -293,20 +293,15 @@ final class HomeFullBleedTests: XCTestCase {
 
   func testTextOnlyAndAccessibilityDoNotReserveMediaHeight() {
     let app = launch(["--captro-visual-text", "--captro-quality-dark", "--captro-quality-large-text"])
-    let stream = app.scrollViews["home.post.stream"]
-    XCTAssertTrue(stream.waitForExistence(timeout: 15))
+    XCTAssertTrue(app.tabBars.buttons["Home"].waitForExistence(timeout: 15))
     XCTAssertFalse(app.otherElements["home.post.media"].exists)
     XCTAssertFalse(app.staticTexts["MOMENT"].exists)
     XCTAssertFalse(app.staticTexts["More"].exists)
-    XCTAssertTrue(app.staticTexts["A walk around the neighborhood"].exists)
-    capture(app, "continuous-text-accessibility-dark")
-    let secondPost = app.otherElements["home.post.page.text-system-1"]
-    reveal(secondPost, in: stream, app: app)
-    let secondTitle = secondPost.staticTexts["Looking for people to build with"]
-    XCTAssertTrue(secondTitle.exists)
-    XCTAssertGreaterThanOrEqual(secondTitle.frame.minY, stream.frame.minY - 1)
-    XCTAssertLessThan(secondTitle.frame.maxY, app.tabBars.firstMatch.frame.minY,
-      "The next text post must be readable above floating navigation")
+    XCTAssertFalse(app.staticTexts["A walk around the neighborhood"].exists)
+    XCTAssertFalse(app.staticTexts["Looking for people to build with"].exists)
+    XCTAssertFalse(app.otherElements["home.post.page.text-system-1"].exists,
+      "Retired ordinary text posts do not leave an empty feed card at accessibility sizes")
+    capture(app, "retired-text-accessibility-dark")
   }
 
   func testPublicContentStreamRecording() {

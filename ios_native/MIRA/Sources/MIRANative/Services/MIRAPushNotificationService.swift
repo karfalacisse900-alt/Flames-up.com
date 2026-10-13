@@ -72,7 +72,7 @@ public enum MIRAPushNotificationRegistrar {
   private var registered: Binding?
   private var pendingRemoval: [String: Binding] = [:]
   private var work: Task<Void, Never>?
-  private var revision: UInt64 = 0
+  private(set) var revision: UInt64 = 0
 
   public init() {}
 
@@ -132,7 +132,13 @@ public enum MIRAPushNotificationRegistrar {
         await recordFailure("push_token_unregister_failed", api: old.api)
       }
     }
-    guard let target = desired, registered?.key != target.key else { return }
+    guard let target = desired else { return }
+    if registered?.key == target.key {
+      // A credential refresh can arrive while the first POST is in flight.
+      // No duplicate registration is needed, but logout must use fresh auth.
+      registered = target
+      return
+    }
     do {
       let _: MIRAPushTokenResponse = try await target.api.post("/notifications/device-token", body: target.body)
       registered = target

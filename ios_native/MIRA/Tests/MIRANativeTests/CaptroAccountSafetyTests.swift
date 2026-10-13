@@ -163,6 +163,38 @@ import XCTest
     XCTAssertEqual(own?.id, "a")
     await MIRALocalJSONCache.remove(key: key)
   }
+
+  func testRefreshDuringFirstPushRegistrationUpdatesLogoutCredentials() async {
+    let registry = MIRAPushTokenRegistry(), api = client()
+    let started = expectation(description: "First registration is delayed")
+    let removed = expectation(description: "Logout removes the registration")
+    let gate = AccountSafetyGate(), requests = AccountSafetyRequests()
+    AccountSafetyProtocol.handler = { transport in
+      requests.append(transport.request)
+      if transport.request.httpMethod == "POST" {
+        gate.hold(transport); started.fulfill()
+      } else {
+        transport.reply(200, Data("{\"ok\":true}".utf8))
+        removed.fulfill()
+      }
+    }
+    let token = String(repeating: "a", count: 64)
+    let first = Task { await registry.registerDeviceToken(token, accountID: "a", accessToken: "fixture-old", api: api) }
+    await fulfillment(of: [started], timeout: 3)
+    let nextRevision = registry.revision + 1
+    let refreshed = Task { await registry.registerDeviceToken(token, accountID: "a", accessToken: "fixture-refreshed", api: api) }
+    // Wait for the real queued transition, not a guessed network delay.
+    let deadline = Date().addingTimeInterval(3)
+    while registry.revision < nextRevision, Date() < deadline { await Task.yield() }
+    XCTAssertEqual(registry.revision, nextRevision)
+    gate.release(status: 200, data: Data("{\"ok\":true}".utf8))
+    await first.value
+    await refreshed.value
+    registry.endSession()
+    await fulfillment(of: [removed], timeout: 3)
+    XCTAssertEqual(requests.values.map(\.httpMethod), ["POST", "DELETE"])
+    XCTAssertEqual(requests.values.last?.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-refreshed")
+  }
 }
 
 private final class AccountSafetyRequests: @unchecked Sendable {
