@@ -27,6 +27,15 @@ final class PostPresentationReviewTests: XCTestCase {
     XCTAssertFalse(app.buttons["composer.create"].isEnabled)
     XCTAssertTrue(app.staticTexts["composer.mediaRequired"].exists)
     capture(app, "composer-media-required")
+    // On short screens Add is only partly visible behind the keyboard accessory.
+    // Scroll the actual composer to reveal it, as a user would; do not synthesize
+    // a tap through the accessory's transparent region.
+    let keyboardDone = app.buttons["composer.keyboardDone"]
+    if keyboardDone.exists,
+       app.buttons["composer.add"].frame.maxY > keyboardDone.frame.minY {
+      app.swipeUp()
+      XCTAssertEqual(editor.value as? String, "Keep my caption.")
+    }
     app.buttons["composer.add"].tap()
     XCTAssertTrue(app.buttons["Photos & videos"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Responses"].exists)
