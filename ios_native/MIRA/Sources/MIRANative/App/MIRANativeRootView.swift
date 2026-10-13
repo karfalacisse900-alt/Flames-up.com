@@ -341,14 +341,12 @@ public struct MIRANativeRootView: View {
         if authSession.isGuest {
           GuestSignInRequiredView(
             title: "Sign in to use Capture",
-            message: "Create an account or sign in to capture, post, and submit receipt feedback.",
-            systemImage: "doc.viewfinder.fill",
+            message: "Create an account or sign in to capture photos and videos.",
+            systemImage: "camera",
             onSignIn: leaveGuestModeForSignIn
           )
         } else {
-          CaptroScanView(api: api) {
-            selectedTab = .main
-          }
+          CaptroCameraNativeView(api: api, isActive: selectedTab == .scan)
         }
       }
         .tag(MIRATab.scan)

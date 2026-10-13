@@ -41,8 +41,7 @@ final class CaptroFavoritesReviewProtocol: URLProtocol {
 
 struct CaptroFavoritesReviewHost: View {
   private let api: MIRAAPIClient
-  @State private var selected: String?
-  @State private var reading = CaptroFeedStampReadingState()
+  @StateObject private var rowState = CaptroFeedRowState()
   @State private var opened = false
   init() {
     let config=URLSessionConfiguration.ephemeral; config.protocolClasses=[CaptroFavoritesReviewProtocol.self]
@@ -56,7 +55,7 @@ struct CaptroFavoritesReviewHost: View {
           VStack(spacing:0) {
             CaptroFeedPostView(post:CaptroPresentationReviewFixture.post,api:api,isVideoActive:false,showsFeedControls:true,
               onFollow:{false},onOpenOptions:{},onCreate:{},onOpenPost:{opened=true},onSave:{},canFollowAuthor:false,
-              feedWidth:geometry.size.width,selectedMediaID:$selected,stampReading:$reading)
+              feedWidth:geometry.size.width,rowState:rowState)
             Text("Native review fixture · not a production post").font(.caption).padding()
             NavigationLink("Favorites") {CaptroFavoritesView(api:api)}.padding()
             if opened {Text("Details opened").accessibilityIdentifier("review.details.opened")}

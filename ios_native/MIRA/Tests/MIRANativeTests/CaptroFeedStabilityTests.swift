@@ -7,6 +7,25 @@ import SwiftUI
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  func testCarouselAndStampChangesOnlyPublishToTheirOwningRow() {
+    let store = CaptroFeedRowStateStore()
+    let first = store.state(for: "first"), second = store.state(for: "second")
+    var feedChanges = 0, firstChanges = 0, secondChanges = 0
+    let feed = store.objectWillChange.sink { feedChanges += 1 }
+    let a = first.objectWillChange.sink { firstChanges += 1 }
+    let b = second.objectWillChange.sink { secondChanges += 1 }
+    first.select("stable-media-a")
+    first.select("stable-media-a") // Native paging can repeat the same value.
+    first.stampReading.collapsedHeight = 140
+    XCTAssertEqual(firstChanges, 2)
+    XCTAssertEqual(secondChanges, 0)
+    XCTAssertEqual(feedChanges, 0, "A child paging/measurement event must not invalidate the entire lazy feed")
+    XCTAssertTrue(store.state(for: "first") === first, "Lazy remount/navigation reuse the same state owner")
+    XCTAssertEqual(store.state(for: "first").selectedMediaID, "stable-media-a")
+    XCTAssertEqual(store.state(for: "first").stampReading.collapsedHeight, 140)
+    feed.cancel(); a.cancel(); b.cancel()
+  }
+
   private final class LazyFixtureState: ObservableObject {
     @Published var loaded = false
     @Published var mounted = true

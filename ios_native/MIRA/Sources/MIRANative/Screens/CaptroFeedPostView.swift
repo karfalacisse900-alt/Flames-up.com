@@ -2,6 +2,33 @@ import Foundation
 import SwiftUI
 import UIKit
 
+/// Retained by the feed, but observed only by the affected row. Swiping one
+/// carousel or measuring one stamp must not invalidate the whole lazy stack.
+@MainActor
+final class CaptroFeedRowState: ObservableObject {
+  @Published private(set) var selectedMediaID: String?
+  @Published var stampReading = CaptroFeedStampReadingState()
+
+  func select(_ mediaID: String?) {
+    guard selectedMediaID != mediaID else { return }
+    selectedMediaID = mediaID
+  }
+}
+
+@MainActor
+final class CaptroFeedRowStateStore: ObservableObject {
+  // Intentionally not @Published. The store retains row state through lazy
+  // unmount/remount and navigation without broadcasting child mutations.
+  private var rows: [String: CaptroFeedRowState] = [:]
+
+  func state(for postID: String) -> CaptroFeedRowState {
+    if let existing = rows[postID] { return existing }
+    let state = CaptroFeedRowState()
+    rows[postID] = state
+    return state
+  }
+}
+
 struct CaptroFeedPostView: View {
   let post: MIRAPost
   let api: MIRAAPIClient
@@ -16,13 +43,13 @@ struct CaptroFeedPostView: View {
   let canFollowAuthor: Bool
   let feedWidth: CGFloat
   var frameRatio: CGFloat? = nil
-  @Binding var selectedMediaID: String?
-  @Binding var stampReading: CaptroFeedStampReadingState
+  @ObservedObject var rowState: CaptroFeedRowState
   private var selectedMediaIndex: Binding<Int> {
-    Binding(get: { post.feedMediaIdentities.firstIndex(of: selectedMediaID ?? "") ?? 0 }, set: { index in
-      guard post.feedMediaIdentities.indices.contains(index) else { return }
-      selectedMediaID = post.feedMediaIdentities[index]
-      CaptroFeedDiagnostics.event("slide", feed: "home", reason: "carousel_selection", post: post.id, media: selectedMediaID)
+    Binding(get: { post.feedMediaIdentities.firstIndex(of: rowState.selectedMediaID ?? "") ?? 0 }, set: { index in
+      let identities = post.feedMediaIdentities
+      guard identities.indices.contains(index), rowState.selectedMediaID != identities[index] else { return }
+      rowState.select(identities[index])
+      CaptroFeedDiagnostics.event("slide", feed: "home", reason: "carousel_selection", post: post.id, media: identities[index])
     })
   }
   var canRespond = true
@@ -69,7 +96,7 @@ struct CaptroFeedPostView: View {
       onSave: onSave,
       showsCoverMediaOnly: false,
       frameSize: mediaSize,
-      stampReading: $stampReading
+      stampReading: $rowState.stampReading
     )
 
     pager.frame(width: mediaSize.width)
@@ -77,7 +104,7 @@ struct CaptroFeedPostView: View {
 
   private var mediaSize: CGSize {
     // The first item establishes the feed frame for the whole post. Individual
-    // slides retain their own source ratios and are fitted inside this frame.
+    // slides retain their own source geometry and crop inside this frame.
     CGSize(width: feedWidth, height: feedWidth * (frameRatio ?? post.feedFrameHeightToWidthRatio))
   }
 

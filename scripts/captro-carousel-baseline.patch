@@ -1,0 +1,81 @@
+diff --git a/ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift b/ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift
+--- a/ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift
++++ b/ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift
+@@ -1378,7 +1378,10 @@
+   }
+ 
+   private func verticalPostStream(width: CGFloat, bottomInset: CGFloat) -> some View {
+-    ScrollView(.vertical) {
++#if DEBUG
++    CaptroCarouselTraceRecorder.shared.noteFeedEvaluation()
++#endif
++    return ScrollView(.vertical) {
+       LazyVStack(spacing: 12) {
+         ForEach(displayedPosts, id: \.id) { post in
+           feedPage(post: post, width: width, isCurrent: post.id == selectedPostID)
+diff --git a/ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedMediaPager.swift b/ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedMediaPager.swift
+--- a/ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedMediaPager.swift
++++ b/ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedMediaPager.swift
+@@ -61,6 +61,14 @@
+ 
+   var body: some View {
+     sizedMedia
++#if DEBUG
++      .overlay(alignment: .topLeading) {
++        if CaptroCarouselTraceRecorder.isEnabled {
++          CaptroCarouselTraceSnapshot(surface: "home", postID: post.id)
++            .frame(width: 2, height: 2).allowsHitTesting(false)
++        }
++      }
++#endif
+       .contentShape(Rectangle())
+       .accessibilityElement(children: .contain)
+       .onAppear(perform: prefetchCarouselNeighbors)
+@@ -215,6 +223,14 @@
+       shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
+       muted: isVideoMuted, writing: post.mediaWriting(at: index), caption: post.caption ?? post.content
+     )
++#if DEBUG
++    .background {
++      if CaptroCarouselTraceRecorder.isEnabled {
++        CaptroCarouselTraceProbe(surface: "home", postID: post.id,
++          mediaID: MIRAPost.mediaIdentity(url), selected: selectedMediaIndex == index)
++      }
++    }
++#endif
+     }
+   }
+ 
+diff --git a/ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift b/ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift
+--- a/ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift
++++ b/ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift
+@@ -942,6 +942,14 @@
+     }
+     .frame(height: currentHeight)
+     .accessibilityIdentifier("post.detail.media")
++#if DEBUG
++    .overlay(alignment: .topLeading) {
++      if CaptroCarouselTraceRecorder.isEnabled {
++        CaptroCarouselTraceSnapshot(surface: "details", postID: post.id)
++          .frame(width: 2, height: 2).allowsHitTesting(false)
++      }
++    }
++#endif
+     .frame(maxWidth: .infinity)
+     .background(Color.black.opacity(0.03))
+     .clipped()
+@@ -1034,6 +1042,14 @@
+       plainBackground: true
+     )
+     .frame(maxWidth: .infinity, maxHeight: .infinity)
++#if DEBUG
++    .background {
++      if CaptroCarouselTraceRecorder.isEnabled {
++        CaptroCarouselTraceProbe(surface: "details", postID: post.id,
++          mediaID: MIRAPost.mediaIdentity(url), selected: selectedIndex == index)
++      }
++    }
++#endif
+     .contentShape(Rectangle())
+     .onTapGesture { isMediaViewerPresented = true }
+     .clipped()

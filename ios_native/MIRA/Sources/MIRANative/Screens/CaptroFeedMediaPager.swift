@@ -42,6 +42,15 @@ struct CaptroMediaPager: View {
   // Cover coordinates refer to the source, not a provider's pre-cropped feed
   // variant. Downsample the source in the existing image cache; crop once here.
   private var mediaURLs: [String] { post.mediaURLs.isEmpty ? post.feedMediaURLs : post.mediaURLs }
+  private struct Slide: Identifiable {
+    let id: String
+    let index: Int
+    let url: String
+  }
+  private var slides: [Slide] {
+    // Compute each immutable identity once, not all identities once per slide.
+    mediaURLs.enumerated().map { Slide(id: MIRAPost.mediaIdentity($0.element), index: $0.offset, url: $0.element) }
+  }
   private var naturalMediaHeightToWidthRatio: CGFloat {
       post.feedFrameHeightToWidthRatio
   }
@@ -59,6 +68,14 @@ struct CaptroMediaPager: View {
 
   var body: some View {
     sizedMedia
+#if DEBUG
+      .overlay(alignment: .topLeading) {
+        if CaptroCarouselTraceRecorder.isEnabled {
+          CaptroCarouselTraceSnapshot(surface: "home", postID: post.id)
+            .frame(width: 2, height: 2).allowsHitTesting(false)
+        }
+      }
+#endif
       .contentShape(Rectangle())
       .accessibilityElement(children: .contain)
       .onAppear(perform: prefetchCarouselNeighbors)
@@ -195,12 +212,10 @@ struct CaptroMediaPager: View {
         .allowsHitTesting(false)
     } else {
       TabView(selection: $selectedMediaIndex) {
-        ForEach(post.feedMediaIdentities, id: \.self) { mediaID in
-          let index = post.feedMediaIdentities.firstIndex(of: mediaID) ?? 0
-          let url = mediaURLs.indices.contains(index) ? mediaURLs[index] : ""
-          mediaView(url: url, index: index)
+        ForEach(slides) { slide in
+          mediaView(url: slide.url, index: slide.index)
             .background(CaptroCarouselDirectionGateInstaller())
-            .tag(index)
+            .tag(slide.index)
         }
       }
       .tabViewStyle(.page(indexDisplayMode: .never))
@@ -214,6 +229,14 @@ struct CaptroMediaPager: View {
       shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
       muted: isVideoMuted, writing: post.mediaWriting(at: index), caption: post.caption ?? post.content
     )
+#if DEBUG
+    .background {
+      if CaptroCarouselTraceRecorder.isEnabled {
+        CaptroCarouselTraceProbe(surface: "home", postID: post.id,
+          mediaID: MIRAPost.mediaIdentity(url), selected: selectedMediaIndex == index)
+      }
+    }
+#endif
     }
   }
 

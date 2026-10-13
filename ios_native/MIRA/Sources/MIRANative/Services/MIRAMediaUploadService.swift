@@ -197,6 +197,7 @@ public final class MIRAMediaUploadService {
     onUploadProgress: (@Sendable (Double) -> Void)? = nil,
     onProcessing: (@Sendable () -> Void)? = nil
   ) async throws -> MIRAMediaUploadResult {
+    try Task.checkCancellation()
     if let approved = approvedUploads[media] { return approved }
     if let pending = pendingUploads[media] {
       onProcessing?()
@@ -223,7 +224,7 @@ public final class MIRAMediaUploadService {
     }
   }
 
-  private struct PreparedImageUpload {
+  struct PreparedImageUpload {
     let data: Data
     let mimeType: String
     let fileName: String
@@ -436,6 +437,7 @@ public final class MIRAMediaUploadService {
     let started = Date()
     var lastError: Error?
     for attempt in 1...2 {
+      try Task.checkCancellation()
       do {
         let result = try await operation()
         await recordUploadEvent(kind: kind, status: "success", bytes: bytes, started: started, attempt: attempt)
@@ -446,7 +448,7 @@ public final class MIRAMediaUploadService {
           await recordUploadEvent(kind: kind, status: "error", bytes: bytes, started: started, attempt: attempt)
           throw error
         }
-        try? await Task.sleep(nanoseconds: 450_000_000)
+        try await Task.sleep(nanoseconds: 450_000_000)
       }
     }
     throw lastError ?? MIRAAPIError.emptyResponse
@@ -478,33 +480,11 @@ public final class MIRAMediaUploadService {
     )
   }
 
-  private func prepareImage(_ data: Data) async -> Data? {
-    await Task.detached(priority: .utility) {
-      guard let image = UIImage(data: data) else { return nil }
-      let maxSide = MIRAMediaSizing.feedTargetHeight
-      let scale = min(1, maxSide / max(image.size.width, image.size.height))
-      let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-      let renderer = UIGraphicsImageRenderer(size: targetSize)
-      let rendered = renderer.image { _ in
-        image.draw(in: CGRect(origin: .zero, size: targetSize))
-      }
-      return rendered.jpegData(compressionQuality: 0.92)
-    }.value
-  }
-
-  private func prepareImageUpload(_ media: MIRAPickedMedia) async throws -> PreparedImageUpload {
-    if target == .feedPost {
-      guard let feedImage = await prepareFeedImage(media.data) else {
-        throw CaptroImagePreparationError.sourceTooLarge
-      }
-      return PreparedImageUpload(
-        data: feedImage,
-        mimeType: "image/jpeg",
-        fileName: normalizedImageName(media.fileName, mimeType: "image/jpeg")
-      )
-    }
-
-    if let detectedMimeType = detectedImageMimeType(media.data), media.data.count <= 10_000_000 {
+  /// Posts and Stories use the same original-preserving preparation. Presentation
+  /// geometry never changes the uploaded photograph or its declared MIME type.
+  func prepareImageUpload(_ media: MIRAPickedMedia) async throws -> PreparedImageUpload {
+    try Task.checkCancellation()
+    if let detectedMimeType = Self.detectedImageMimeType(media.data), media.data.count <= 10_000_000 {
       return PreparedImageUpload(
         data: media.data,
         mimeType: detectedMimeType,
@@ -512,9 +492,11 @@ public final class MIRAMediaUploadService {
       )
     }
 
-    guard let prepared = await prepareImage(media.data), prepared.count <= 10_000_000 else {
+    guard let prepared = await prepareFeedImage(media.data), prepared.count <= 10_000_000 else {
+      try Task.checkCancellation()
       throw CaptroImagePreparationError.sourceTooLarge
     }
+    try Task.checkCancellation()
     return PreparedImageUpload(
       data: prepared,
       mimeType: "image/jpeg",
@@ -524,44 +506,59 @@ public final class MIRAMediaUploadService {
 
   private func imagePixelSize(_ data: Data) async -> CGSize? {
     await Task.detached(priority: .utility) {
-      guard let image = UIImage(data: data) else { return nil }
-      return CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+      guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+            let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+            let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else { return nil }
+      let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+      let swapsAxes = (5...8).contains(orientation)
+      return CGSize(width: swapsAxes ? height.doubleValue : width.doubleValue,
+                    height: swapsAxes ? width.doubleValue : height.doubleValue)
     }.value
   }
 
   func prepareFeedImage(_ data: Data) async -> Data? {
-    if detectedImageMimeType(data) != nil && data.count <= 10_000_000 { return data }
-    return await Task.detached(priority: .userInitiated) {
-      guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
+    guard !Task.isCancelled else { return nil }
+    if Self.detectedImageMimeType(data) != nil && data.count <= 10_000_000 { return data }
+    let preparation = Task.detached(priority: .utility) { () -> Data? in
+      guard !Task.isCancelled else { return nil }
+      guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+            CGImageSourceGetCount(source) > 0 else { return nil }
       // Cloudflare Images accepts at most 10 MB. Keep the selected composition
-      // intact; the feed layout must not crop pixels from the uploaded source.
-      let targetSize = CGSize(
-        width: (image.size.width * image.scale).rounded(),
-        height: (image.size.height * image.scale).rounded()
-      )
-      let format = UIGraphicsImageRendererFormat()
-      format.scale = 1
-      format.opaque = true
-      let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
-      let rendered = renderer.image { _ in
-        image.draw(in: CGRect(origin: .zero, size: targetSize))
+      // intact. ImageIO inherits source orientation and color metadata without
+      // retaining a second full-resolution UIKit rendering buffer or downscaling.
+      var renderedData: Data?
+      for quality in [0.94, 0.88, 0.82, 0.76, 0.68] {
+        guard !Task.isCancelled else { return nil }
+        let candidate: Data? = autoreleasepool {
+          let output = NSMutableData()
+          guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+          CGImageDestinationAddImageFromSource(destination, source, 0,
+            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+          guard CGImageDestinationFinalize(destination) else { return nil }
+          return output as Data
+        }
+        if let candidate,
+           candidate.count <= 9_500_000 {
+          renderedData = candidate
+          break
+        }
       }
-      let renderedData = [0.94, 0.88, 0.82, 0.76, 0.68].lazy
-        .compactMap { rendered.jpegData(compressionQuality: $0) }
-        .first { $0.count <= 9_500_000 }
       #if DEBUG
       if let renderedData {
-        print(
-          "CaptroCameraQuality original=\(Int(image.size.width))x\(Int(image.size.height)) bytes=\(data.count) " +
-          "upload=\(Int(targetSize.width))x\(Int(targetSize.height)) mode=preserve_aspect bytes=\(renderedData.count)"
-        )
+        print("CaptroCameraQuality image_preparation original_bytes=\(data.count) upload_bytes=\(renderedData.count) mode=preserve_dimensions")
       }
       #endif
       return renderedData
-    }.value
+    }
+    return await withTaskCancellationHandler {
+      await preparation.value
+    } onCancel: {
+      preparation.cancel()
+    }
   }
 
-  private func detectedImageMimeType(_ data: Data) -> String? {
+  static func detectedImageMimeType(_ data: Data) -> String? {
     if data.starts(with: [0xff, 0xd8, 0xff]) {
       return "image/jpeg"
     }
@@ -575,18 +572,28 @@ public final class MIRAMediaUploadService {
       if isRIFF && isWEBP {
         return "image/webp"
       }
+      let isISOBaseMedia = header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70
+      if isISOBaseMedia {
+        let brand = String(bytes: header[8...11], encoding: .ascii)?.lowercased() ?? ""
+        if ["heic", "heix", "hevc", "hevx"].contains(brand) { return "image/heic" }
+        if ["mif1", "msf1"].contains(brand) { return "image/heif" }
+      }
     }
     return nil
   }
 
   private func normalizedImageName(_ fileName: String, mimeType: String) -> String {
-    let base = fileName.split(separator: ".").first.map(String.init) ?? UUID().uuidString
+    let base = URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
     let ext: String
     switch mimeType.lowercased() {
     case "image/png":
       ext = "png"
     case "image/webp":
       ext = "webp"
+    case "image/heic":
+      ext = "heic"
+    case "image/heif":
+      ext = "heif"
     default:
       ext = "jpg"
     }
@@ -600,6 +607,10 @@ public func pickedMediaKind(from contentTypes: [UTType], fallbackData: Data) -> 
   }
   if let type = contentTypes.first(where: { $0.conforms(to: .image) }) {
     return (.image, "\(UUID().uuidString).\(type.preferredFilenameExtension ?? "jpg")", type.preferredMIMEType ?? "image/jpeg")
+  }
+  if let mimeType = MIRAMediaUploadService.detectedImageMimeType(fallbackData) {
+    let type = UTType(mimeType: mimeType)
+    return (.image, "\(UUID().uuidString).\(type?.preferredFilenameExtension ?? "jpg")", mimeType)
   }
   if fallbackData.count >= 12 {
     let header = Array(fallbackData.prefix(12))

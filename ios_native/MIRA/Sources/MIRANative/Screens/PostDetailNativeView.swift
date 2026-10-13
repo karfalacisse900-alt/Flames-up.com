@@ -942,6 +942,14 @@ private struct PostDetailOptimizedMediaCarousel: View {
     }
     .frame(height: currentHeight)
     .accessibilityIdentifier("post.detail.media")
+#if DEBUG
+    .overlay(alignment: .topLeading) {
+      if CaptroCarouselTraceRecorder.isEnabled {
+        CaptroCarouselTraceSnapshot(surface: "details", postID: post.id)
+          .frame(width: 2, height: 2).allowsHitTesting(false)
+      }
+    }
+#endif
     .frame(maxWidth: .infinity)
     .background(Color.black.opacity(0.03))
     .clipped()
@@ -1024,16 +1032,23 @@ private struct PostDetailOptimizedMediaCarousel: View {
   }
 
   private func mediaSlide(index: Int, url: String) -> some View {
-    // Details is the full-picture view. Home retains its approved selected frame;
-    // fitting here never alters or recrops the uploaded original.
-    RemoteMediaView(url: url, isVideo: isVideo(at: index, url: url),
+    // Keep Details' native pager, but use the exact Home crop transform. The
+    // full-screen viewer remains the intentionally fitted original-media view.
+    CaptroPostMediaView(url: url, geometry: mediaSnapshot.geometry(post: post, index: index),
+      size: CGSize(width: width, height: currentHeight), isVideo: isVideo(at: index, url: url),
       placeholderURL: isVideo(at: index, url: url) ? placeholderURL(at: index, mediaURL: url) : nil,
-      contentMode: .fit,
       shouldPlay: isVisible && scenePhase == .active && selectedIndex == index && !isVideoPaused,
-      videoMuted: isMuted,
-      plainBackground: true
+      muted: isMuted
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+#if DEBUG
+    .background {
+      if CaptroCarouselTraceRecorder.isEnabled {
+        CaptroCarouselTraceProbe(surface: "details", postID: post.id,
+          mediaID: MIRAPost.mediaIdentity(url), selected: selectedIndex == index)
+      }
+    }
+#endif
     .contentShape(Rectangle())
     .onTapGesture { isMediaViewerPresented = true }
     .clipped()

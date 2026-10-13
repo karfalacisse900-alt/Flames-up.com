@@ -1,0 +1,104 @@
+name: Validate camera and carousel
+run-name: Camera/carousel review - ${{ inputs.baseline && 'released baseline' || 'implementation' }}
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        type: boolean
+        default: false
+        description: Released 619.1 source with passive carousel instrumentation only
+      small_phone:
+        type: boolean
+        default: false
+        description: Use iPhone 13 mini instead of iPhone 17 simulator
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prepare instrumented released baseline
+        if: inputs.baseline
+        run: |
+          git fetch origin d615f9096d7a35266198fb36077722096454fbb7
+          git checkout --detach d615f9096d7a35266198fb36077722096454fbb7
+          git checkout "$GITHUB_SHA" -- ios_native/MIRA/Sources/MIRANative/Components/CaptroCarouselDiagnostics.swift ios_native/MIRA/LayoutUITests/HomeFullBleedTests.swift scripts/captro-carousel-baseline.patch
+          git apply scripts/captro-carousel-baseline.patch
+      - name: Record tested source
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/source.txt"
+          git diff --stat >> "$RUNNER_TEMP/source.txt"
+          printf '\nDriver: %s\nBaseline: %s\n' "$GITHUB_SHA" '${{ inputs.baseline }}' >> "$RUNNER_TEMP/source.txt"
+          xcodebuild -version
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Select simulator
+        run: |
+          runtime=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(r for r in json.load(sys.stdin)["devices"] if r.endswith("iOS-26-4")))')
+          kind=com.apple.CoreSimulator.SimDeviceType.iPhone-17
+          if [ '${{ inputs.small_phone }}' = 'true' ]; then kind=com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini; fi
+          device=$(xcrun simctl create 'Captro camera carousel review' "$kind" "$runtime")
+          echo "CAPTRO_SIM=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+      - name: Build without signing or distribution
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" \
+            -derivedDataPath "$RUNNER_TEMP/CameraBuild" CODE_SIGNING_ALLOWED=NO build-for-testing \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Record identical gestures and camera review
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testSameCarouselHomeAndDetailsGestureTrace
+            -only-testing:CaptroLayoutUITests/CaptureCameraTests)
+          if [ '${{ inputs.baseline }}' = 'true' ]; then
+            tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testSameCarouselHomeAndDetailsBaselineTrace)
+          fi
+          xcrun simctl io "$CAPTRO_SIM" recordVideo --codec=h264 "$RUNNER_TEMP/interaction.mp4" > "$RUNNER_TEMP/recording.log" 2>&1 &
+          recorder=$!
+          trap 'kill -INT "$recorder" 2>/dev/null || true; wait "$recorder" || true' EXIT
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/CameraBuild" -resultBundlePath "$RUNNER_TEMP/Interaction.xcresult" \
+            "${tests[@]}" CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/interaction.log"
+      - name: Regression tests
+        if: ${{ !inputs.baseline }}
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/CameraBuild" -resultBundlePath "$RUNNER_TEMP/Regression.xcresult" \
+            -only-testing:CaptroStampTests \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedGestureDirectionsAndBackgroundReturn \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth \
+            CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/regression.log"
+      - name: Export runtime evidence
+        if: always()
+        run: |
+          for result in Interaction Regression; do
+            if [ -d "$RUNNER_TEMP/$result.xcresult" ]; then
+              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$result.xcresult" --output-path "$RUNNER_TEMP/$result-evidence"
+              xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/$result.xcresult" > "$RUNNER_TEMP/$result-summary.json"
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: camera-carousel-${{ inputs.baseline && 'baseline' || 'implementation' }}
+          path: |
+            ${{ runner.temp }}/source.txt
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/interaction.mp4
+            ${{ runner.temp }}/*-summary.json
+            ${{ runner.temp }}/*-evidence/

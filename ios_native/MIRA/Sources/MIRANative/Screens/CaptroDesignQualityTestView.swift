@@ -37,7 +37,7 @@ public struct CaptroDesignQualityTestView: View {
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-story") {
         CaptroStoryPresentationTestHost()
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-capture") {
-        CaptroScanView(api: api)
+        CaptroCameraNativeView(api: CaptroComposerTestAPI.make(), initialReviewMedia: cameraReviewFixture)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-legal") {
         NavigationStack { PrivacyPolicyView() }
       } else {
@@ -84,6 +84,20 @@ public struct CaptroDesignQualityTestView: View {
     .environmentObject(MIRALocalization.shared)
     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
+  }
+
+  private var cameraReviewFixture: MIRAPickedMedia? {
+    guard ProcessInfo.processInfo.arguments.contains("--captro-camera-review-fixture") else { return nil }
+    // Clearly identified diagnostic chart, not a simulated camera capture or quality claim.
+    let format = UIGraphicsImageRendererFormat(); format.scale = 1
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 900, height: 1200), format: format).image { context in
+      UIColor(red: 0.82, green: 0.77, blue: 0.66, alpha: 1).setFill(); context.fill(CGRect(x: 0, y: 0, width: 900, height: 1200))
+      UIColor.darkGray.setStroke(); context.cgContext.setLineWidth(8)
+      context.cgContext.stroke(CGRect(x: 8, y: 8, width: 884, height: 1184))
+      ("REVIEW TEST CHART\n900 × 1200\nNot a camera capture" as NSString).draw(in: CGRect(x: 70, y: 470, width: 760, height: 260),
+        withAttributes: [.font: UIFont.systemFont(ofSize: 42), .foregroundColor: UIColor.black])
+    }
+    return MIRAPickedMedia(data: image.jpegData(compressionQuality: 0.95)!, kind: .image, fileName: "review-test-chart.jpg", mimeType: "image/jpeg")
   }
 }
 

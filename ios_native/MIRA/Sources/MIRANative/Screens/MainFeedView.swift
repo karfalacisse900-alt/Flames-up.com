@@ -973,8 +973,7 @@ public struct MainFeedView: View {
   @State private var activeVideoPostID: String?
   @State private var selectedPostID: String?
   @StateObject private var viewport = CaptroFeedViewport()
-  @State private var selectedMediaIDs: [String: String] = [:]
-  @State private var stampReadingStates: [String: CaptroFeedStampReadingState] = [:]
+  @StateObject private var rowStates = CaptroFeedRowStateStore()
   @State private var postActivationTask: Task<Void, Never>?
   @State private var selectedPostFallbackIndex = 0
   @State private var selectedFeedSection: MainFeedSection = .forYou
@@ -1378,7 +1377,10 @@ public struct MainFeedView: View {
   }
 
   private func verticalPostStream(width: CGFloat, bottomInset: CGFloat) -> some View {
-    ScrollView(.vertical) {
+#if DEBUG
+    CaptroCarouselTraceRecorder.shared.noteFeedEvaluation()
+#endif
+    return ScrollView(.vertical) {
       LazyVStack(spacing: 12) {
         ForEach(displayedPosts, id: \.id) { post in
           feedPage(post: post, width: width, isCurrent: post.id == selectedPostID)
@@ -1452,10 +1454,7 @@ public struct MainFeedView: View {
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       feedWidth: width,
       frameRatio: post.feedFrameHeightToWidthRatio,
-      selectedMediaID: Binding(get: { selectedMediaIDs[post.id] }, set: { selectedMediaIDs[post.id] = $0 }),
-      stampReading: Binding(
-        get: { stampReadingStates[post.id] ?? CaptroFeedStampReadingState() },
-        set: { stampReadingStates[post.id] = $0 }),
+      rowState: rowStates.state(for: post.id),
       canRespond: !isGuest
     )
   }

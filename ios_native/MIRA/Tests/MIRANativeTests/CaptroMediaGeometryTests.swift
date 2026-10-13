@@ -115,6 +115,25 @@ final class CaptroMediaGeometryTests: XCTestCase {
     XCTAssertEqual(saved.mediaGeometry(at: 0).cropY, 0.9)
     XCTAssertEqual(saved.mediaGeometry(at: 1).cropX, 0.2)
   }
+  func testEveryMixedSlideFillsTheSameHomeAndDetailsFrame() throws {
+    let post = try JSONDecoder().decode(MIRAPost.self, from: Data("""
+      {"id":"mixed-crops","images":["https://example.com/a.jpg","https://example.com/b.mp4","https://example.com/c.jpg"],
+       "mediaDimensions":[{"width":1080,"height":1350},{"width":1920,"height":1080},{"width":1080,"height":1080}]}
+      """.utf8))
+    let snapshot = CaptroPostMediaSnapshot(post: post)
+    for index in 0..<3 {
+      let home = post.mediaGeometry(at: index)
+      let details = snapshot.geometry(post: post, index: index)
+      XCTAssertEqual(home, details)
+      for width: CGFloat in [320, 375, 430] {
+        let bounds = CGRect(origin: .zero, size: home.size(width: width))
+        let source = home.sourceRect(in: bounds.size)
+        XCTAssertEqual(home.size(width: width), details.size(width: width))
+        XCTAssertEqual(source.intersection(bounds), bounds,
+          "Every slide covers the post frame; no new fit/contain bands inside a fixed crop")
+      }
+    }
+  }
   func testMissingMetadataIsDeterministicNotDownloadDriven() throws {
     let post = try JSONDecoder().decode(MIRAPost.self, from: Data("{\"id\":\"legacy\",\"images\":[\"https://example.com/a.jpg\"]}".utf8))
     XCTAssertEqual(post.mediaGeometry(at: 0).displayAspectRatio, 0.8)

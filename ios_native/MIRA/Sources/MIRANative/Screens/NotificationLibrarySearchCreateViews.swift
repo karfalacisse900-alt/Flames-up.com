@@ -4527,6 +4527,7 @@ public struct CreateStoryNativeView: View {
     }
     do {
       var uploaded: String?
+      let capturedVideoDuration = try await media?.validatedVideoDuration()
       if let media {
         uploaded = try await MIRAMediaUploadService(api: api).upload(
           media,
@@ -4560,7 +4561,7 @@ public struct CreateStoryNativeView: View {
           clubId: selectedClub?.id,
           visibility: "public",
           mediaType: media?.kind == .video ? "video" : media == nil ? "text" : "image",
-          duration: media?.kind == .video ? 15 : nil,
+          duration: CaptroCaptureReview.storyDuration(for: capturedVideoDuration),
           editorMetadata: media?.editorMetadata,
           audioProvider: selectedAudioTrack == nil ? nil : "audius",
           audioTrackId: selectedAudioTrack?.resolvedTrackId,
