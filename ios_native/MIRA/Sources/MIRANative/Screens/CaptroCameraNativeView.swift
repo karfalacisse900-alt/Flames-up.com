@@ -2,6 +2,13 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
+/// Propagates only the active camera's dark chrome preference. Presenting the
+/// ordinary composer or leaving Capture restores the user's appearance setting.
+struct CaptroCameraDarkChromePreferenceKey: PreferenceKey {
+  static var defaultValue = false
+  static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
 /// The Capture tab owns its result while a composer is presented. Nothing publishes here.
 struct CaptroCameraNativeView: View {
   let api: MIRAAPIClient
@@ -103,6 +110,7 @@ struct CaptroCameraNativeView: View {
       .foregroundStyle(.white)
     }
     .background(Color(white: 0.035).ignoresSafeArea())
+    .preference(key: CaptroCameraDarkChromePreferenceKey.self, value: isActive && destination == nil)
     .onAppear { updateActivity() }
     .onDisappear { camera.suspend() }
     .onChange(of: isActive) { _, _ in updateActivity() }

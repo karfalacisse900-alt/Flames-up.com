@@ -175,6 +175,45 @@ protocol MIRAStoryCameraViewControllerDelegate: AnyObject {
   func storyCameraReviewStateDidChange(_ isReviewing: Bool)
 }
 
+/// Delivery outlives a view transition only while the user still owns this edit.
+/// Temporary editor/permission presentation does not close it; Cancel and a
+/// successful handoff do. This also rejects an export finishing after Cancel.
+struct CaptroCameraDeliveryGate {
+  private enum State { case editing, exporting, closed }
+  private var state: State = .editing
+  var acceptsResult: Bool { state == .editing }
+
+  mutating func cancel() -> Bool {
+    guard state != .closed else { return false }
+    state = .closed
+    return true
+  }
+
+  mutating func handOff() -> Bool {
+    guard state == .editing else { return false }
+    state = .closed
+    return true
+  }
+
+  mutating func beginExport() -> Bool {
+    guard state == .editing else { return false }
+    state = .exporting
+    return true
+  }
+
+  mutating func finishExport() -> Bool {
+    guard state == .exporting else { return false }
+    state = .closed
+    return true
+  }
+
+  mutating func retryExport() -> Bool {
+    guard state == .exporting else { return false }
+    state = .editing
+    return true
+  }
+}
+
 final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControllerDelegate {
   weak var delegate: MIRAStoryCameraViewControllerDelegate?
   var captureMode: MIRAStoryCameraCaptureMode = .photoOnly
@@ -232,6 +271,7 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
   }
 
   private let captureService = CaptroCameraCaptureService()
+  private var deliveryGate = CaptroCameraDeliveryGate()
   private var captureSubscriptions = Set<AnyCancellable>()
   private let previewLayer = AVCaptureVideoPreviewLayer()
   private let imageManager = PHCachingImageManager()
@@ -350,7 +390,7 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
 
   override func viewWillAppear(_ animated: Bool) {
     super.viewWillAppear(animated)
-    if capturedMedia == nil { captureService.resume() }
+    if capturedMedia == nil && deliveryGate.acceptsResult { captureService.resume() }
   }
 
   override func viewWillDisappear(_ animated: Bool) {
@@ -731,7 +771,8 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
     }.store(in: &captureSubscriptions)
     NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
       .sink { [weak self] _ in
-        guard let self, self.viewIfLoaded?.window != nil, self.capturedMedia == nil else { return }
+        guard let self, self.viewIfLoaded?.window != nil, self.capturedMedia == nil,
+              self.deliveryGate.acceptsResult else { return }
         self.captureService.resume()
       }.store(in: &captureSubscriptions)
     if captureMode == .videoOnly { captureService.setMode(.video) }
@@ -915,6 +956,10 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
   }
 
   @objc private func cancelTapped() {
+    guard deliveryGate.cancel() else { return }
+    countdownTimer?.invalidate()
+    captureService.suspend() // Finalize an in-flight recording without accepting its result.
+    cleanupReviewVideoPlayer()
     delegate?.storyCameraDidCancel()
   }
 
@@ -1168,6 +1213,7 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
   }
 
   private func performCaptureAction() {
+    guard deliveryGate.acceptsResult else { return }
     captureService.shutter()
   }
 
@@ -1256,6 +1302,7 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
   }
 
   @objc private func retakeCapturedMedia() {
+    guard deliveryGate.acceptsResult else { return }
     clearCapturedReviewState()
     captureService.discardResult()
     captureService.resume()
@@ -1278,21 +1325,25 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
   }
 
   @objc private func confirmCapturedMedia() {
-    guard let capturedMedia else { return }
+    guard let capturedMedia, deliveryGate.acceptsResult else { return }
     let recipe = currentEditRecipe(for: capturedMedia)
     guard recipe.hasEdits else {
+      guard deliveryGate.handOff() else { return }
       delegate?.storyCameraDidCapture(capturedMedia)
       clearCapturedReviewState()
       return
     }
+    guard deliveryGate.beginExport() else { return }
     showExportState(true)
     Task { @MainActor in
       do {
         let finalMedia = try await exportInlineEditedMedia(from: capturedMedia, recipe: recipe)
+        guard deliveryGate.finishExport() else { return }
         showExportState(false)
         delegate?.storyCameraDidCapture(finalMedia)
         clearCapturedReviewState()
       } catch {
+        guard deliveryGate.retryExport() else { return }
         showExportState(false)
         showTransientMessage("Edits could not be applied. Try again.")
       }
@@ -1300,8 +1351,10 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
   }
 
   private func showCapturedMedia(_ media: MIRAPickedMedia, thumbnail: UIImage? = nil) {
+    guard deliveryGate.acceptsResult else { return }
     captureService.suspend()
     if simpleCaptureUI {
+      guard deliveryGate.handOff() else { return }
       delegate?.storyCameraDidCapture(media)
       return
     }
@@ -1606,10 +1659,14 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
       }
     }
     group.notify(queue: .main) { [weak self] in
-      guard let self else { return }
+      guard let self, self.deliveryGate.acceptsResult else { return }
       if mediaItems.isEmpty {
         self.showTransientMessage("Photos could not be loaded. Try again.")
       } else {
+        if self.simpleCaptureUI {
+          guard self.deliveryGate.handOff() else { return }
+          self.captureService.suspend()
+        }
         self.delegate?.storyCameraDidPickGalleryMedia(mediaItems.sorted { $0.0 < $1.0 }.map { $0.1 })
       }
     }

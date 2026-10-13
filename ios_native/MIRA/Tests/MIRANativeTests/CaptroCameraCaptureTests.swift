@@ -5,6 +5,49 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCameraCaptureTests: XCTestCase {
+  func testExplicitCancelRejectsLateCapturedMediaAndRepeatedCancellation() {
+    var delivery = CaptroCameraDeliveryGate()
+    XCTAssertTrue(delivery.acceptsResult)
+    XCTAssertTrue(delivery.cancel())
+    XCTAssertFalse(delivery.acceptsResult)
+    XCTAssertFalse(delivery.handOff())
+    XCTAssertFalse(delivery.beginExport())
+    XCTAssertFalse(delivery.cancel())
+  }
+
+  func testCancelDuringExportRejectsItsLateSuccessAndFailure() {
+    var delivery = CaptroCameraDeliveryGate()
+    XCTAssertTrue(delivery.beginExport())
+    XCTAssertFalse(delivery.acceptsResult)
+    XCTAssertTrue(delivery.cancel())
+    XCTAssertFalse(delivery.finishExport())
+    XCTAssertFalse(delivery.retryExport())
+    XCTAssertFalse(delivery.acceptsResult)
+  }
+
+  func testSuccessfulHandoffCannotDeliverTwice() {
+    var delivery = CaptroCameraDeliveryGate()
+    XCTAssertTrue(delivery.handOff())
+    XCTAssertFalse(delivery.handOff())
+    XCTAssertFalse(delivery.acceptsResult)
+
+    var exported = CaptroCameraDeliveryGate()
+    XCTAssertTrue(exported.beginExport())
+    XCTAssertFalse(exported.beginExport())
+    XCTAssertTrue(exported.finishExport())
+    XCTAssertFalse(exported.finishExport())
+    XCTAssertFalse(exported.handOff())
+  }
+
+  func testFailedExportCanBeRetriedWithoutLosingEditableResult() {
+    var delivery = CaptroCameraDeliveryGate()
+    XCTAssertTrue(delivery.beginExport())
+    XCTAssertTrue(delivery.retryExport())
+    XCTAssertTrue(delivery.acceptsResult)
+    XCTAssertTrue(delivery.beginExport())
+    XCTAssertTrue(delivery.finishExport())
+  }
+
   @MainActor
   func testPermissionCompletionReconcilesCurrentVideoAfterSuspendAndNewGeneration() async {
     let camera = CaptroCameraCaptureService()

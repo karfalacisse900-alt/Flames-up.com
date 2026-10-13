@@ -170,6 +170,7 @@ public struct MIRANativeRootView: View {
   @State private var loadedTabs: Set<MIRATab> = [.main]
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
+  @State private var cameraDarkChrome = false
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
@@ -216,7 +217,8 @@ public struct MIRANativeRootView: View {
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
     .environmentObject(localization)
-    .preferredColorScheme(MIRAAppearanceResolver.colorScheme(for: appearancePreference))
+    .preferredColorScheme(selectedTab == .scan && cameraDarkChrome ? .dark : MIRAAppearanceResolver.colorScheme(for: appearancePreference))
+    .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }
     .statusBarHidden(shouldHideStatusBar)
     .onPreferenceChange(MIRAStatusBarHiddenPreferenceKey.self) { hidden in
       featureStatusBarHidden = hidden

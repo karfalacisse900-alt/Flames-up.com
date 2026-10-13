@@ -7,6 +7,7 @@ public struct CaptroDesignQualityTestView: View {
   @State private var showSheet = false
   @State private var showActions = false
   @State private var text = ""
+  @State private var cameraDarkChrome = false
   private let api = MIRAAPIClient()
 
   public init() {}
@@ -82,7 +83,8 @@ public struct CaptroDesignQualityTestView: View {
       }
     }
     .environmentObject(MIRALocalization.shared)
-    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
+    .preferredColorScheme(cameraDarkChrome || ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
+    .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
   }
 

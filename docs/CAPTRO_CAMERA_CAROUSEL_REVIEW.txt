@@ -63,6 +63,16 @@ Confirmed code defects / changes
    Publishing is blocked while that capture is unresolved. Regression tests
    cover retention, retry, bounds and restored-capture deduplication.
 
+8. The retained composer-camera adapter could deliver a capture or edited export
+   after explicit Cancel, during dismissal. CaptroCameraDeliveryGate now rejects
+   those late results and duplicate handoffs, without closing on temporary
+   editor/permission transitions. Four production-gate regression tests added.
+   This race was confirmed by code path, not reproduced with camera hardware.
+
+9. Runtime camera screenshots exposed dark status-bar text over dark chrome.
+   The active Capture surface now requests dark appearance only while visible;
+   leaving Capture or presenting the ordinary composer restores user appearance.
+
 Home shake investigation
 ------------------------
 CaptroFeedViewport.swift is unchanged from restoration fix 2e79701b.
@@ -165,7 +175,7 @@ Verification status
 -------------------
 Local: git diff --check; exact baseline patch applicability; unchanged viewport
 diff against 2e79701b. Windows has no iOS SDK or physical iPhone attached.
-Native macOS CI: PENDING. Initial implementation run38469541111 and baseline
+Native macOS CI: final-source validation pending. Initial implementation run38469541111 and baseline
 run38469545521 failed before tests: a CGFloat? to Double? conversion in the new
 DEBUG-only trace. Corrected with explicit numeric conversion. Small-layout
 run38471446683 was cancelled because it contained the same error.
@@ -173,6 +183,51 @@ Paired comparison retries: implementation38472364611 / baseline38472368064
 (same c9077b27 driver/instrumentation and iPhone 17 simulator configuration).
 Final-source smaller-layout validation will include the later handoff/prewarm
 corrections. Results will be appended below; no pending run is counted as passed.
+
+Paired c9077b27 runtime results (iPhone 17 / iOS 26.4.1 simulator)
+----------------------------------------------------------------
+Baseline38472368064: comparison UI test passed on released d615f909 + passive
+instrumentation/test overlay. Implementation38472364611: comparison passed;
+review/Enhance/composer-cancel passed; camera-unavailable assertion failed.
+The actual accessibility hierarchy contained the unavailable message as StaticText,
+not the Other element queried by the test. The first camera permission prompt
+also needed explicit handling. Test repaired without substituting a mock camera.
+
+Same 402 x 502.6667pt media frame and six completed swipe gestures per surface:
+                          Baseline Home  Changed Home  Baseline Details Changed Details
+Maximum feed-Y range      0pt            0pt           0pt              0pt
+Maximum media-frame-Y     0pt            0pt           0pt              0pt
+Maximum height change     0pt            0pt           0pt              0pt
+Maximum width change      <0.000001pt    <0.000001pt   <0.000001pt     <0.000001pt
+Trace samples             576            581           594              598
+Parent evaluations        308            289           327              280
+The evaluation counts cover the entire sampled interval, including test waiting;
+they are NOT FPS, CPU-time, stall counts, or proof of a performance improvement.
+The baseline did not reproduce the reported vertical shake in this sequence.
+
+Banding WAS reproduced: baseline Details landscape top/bottom pixels were
+[223,222,214] (beige) rather than media [84,122,133]. Updated Details and Home
+both sampled media [84,122,133] on all four edges. Before/after runtime screenshots
+confirm the fill change. These are solid-color mixed-ratio test media, not the
+user's original post or camera-quality samples.
+
+The implementation's separate regression job passed all five Home UI tests and
+129/131 unit tests. Both unit failures were enhancement of grayscale fixtures:
+Core Image reported "unsupported colorspace" when monochrome destination space
+was supplied for RGBA8. Corrected to supported RGB/P3 or color-managed sRGB.
+Original failing tests remain; two additional color-space tests were added.
+Final source also restores playback-category audio when deliberately previewing
+a captured video, and pauses that review on audio interruptions.
+
+Evidence root (outside repository):
+C:/Users/The-s/Documents/New project/feed-restoration-evidence/
+  camera-carousel-baseline/       — logs, JSON trajectories, screenshots, interaction.mp4
+  camera-carousel-implementation/ — corresponding changed-source evidence
+
+Final validation dispatched for b6aa49ec5390d681687dd428d378d954e1a1c494:
+  run38476082718. No pending result is counted as passing.
+  run38476029014 was cancelled because dispatch raced the branch push and picked
+  up older 9c4fcc41; it is not final-source evidence.
 
 New tests cover row publication isolation, shared geometry, MIME/original bytes,
 orientation, image limits/cancellation, reversible enhancement/thumbnail cleanup,
@@ -186,6 +241,12 @@ NOT VERIFIED: physical camera image quality, real shutter latency, live-preview
 FPS, recording start/stop/audio synchronization, calls/interruptions, heat/battery,
 low-light capture, actual lens capabilities, real-device memory pressure,
 original user's subtle shaking/freezes. No usable Instruments profile is claimed.
+
+Retained legacy Story-camera inline editing still writes a video review file
+synchronously and keeps that old review muted (MIRACameraCaptureView's
+prepareReviewVideoPlayer). The new Capture review uses off-main file preparation
+and coordinated audible playback. This older editor is a remaining performance/
+usability follow-up, not evidence that the new Capture has been hardware-tested.
 
 Technical references
 --------------------
