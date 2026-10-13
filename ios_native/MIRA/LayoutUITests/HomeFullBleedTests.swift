@@ -79,7 +79,7 @@ final class HomeFullBleedTests: XCTestCase {
     XCTAssertTrue(samples.contains { ($0["feedGesture"] as? Int ?? -1) >= 0 },
       "The vertical parent must be observed; a missing parent is not proof of zero movement")
     if assertStable {
-      for key in ["maxGestureFeedOffsetRange", "maxGestureFrameWidthRange", "maxGestureFrameHeightRange"] {
+      for key in ["maxGestureFeedOffsetRange", "maxGestureFrameYRange", "maxGestureFrameWidthRange", "maxGestureFrameHeightRange"] {
         XCTAssertLessThanOrEqual(metrics[key] as? Double ?? .infinity, 1.5, "\(surface) \(key): \(text)")
       }
     }

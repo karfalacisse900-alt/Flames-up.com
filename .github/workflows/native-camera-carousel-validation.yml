@@ -53,6 +53,7 @@ jobs:
           xcrun simctl boot "$device"
           xcrun simctl bootstatus "$device" -b
       - name: Build without signing or distribution
+        id: native_build
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
@@ -77,7 +78,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/CameraBuild" -resultBundlePath "$RUNNER_TEMP/Interaction.xcresult" \
             "${tests[@]}" CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/interaction.log"
       - name: Regression tests
-        if: ${{ !inputs.baseline }}
+        if: ${{ always() && steps.native_build.outcome == 'success' && !inputs.baseline }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail

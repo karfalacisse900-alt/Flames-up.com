@@ -31,13 +31,16 @@ final class CaptroCarouselTraceRecorder {
   }
   private struct Gesture {
     var feed: Range
+    var frameY: Range
     var width: Range
     var height: Range
     init(_ sample: Sample) {
-      feed = Range(sample.feedY); width = Range(sample.frame[2]); height = Range(sample.frame[3])
+      feed = Range(sample.feedY); frameY = Range(sample.frame[1])
+      width = Range(sample.frame[2]); height = Range(sample.frame[3])
     }
     mutating func include(_ sample: Sample) {
-      feed.include(sample.feedY); width.include(sample.frame[2]); height.include(sample.frame[3])
+      feed.include(sample.feedY); frameY.include(sample.frame[1])
+      width.include(sample.frame[2]); height.include(sample.frame[3])
     }
   }
   private struct Trace {
@@ -78,6 +81,7 @@ final class CaptroCarouselTraceRecorder {
       "totalSamples": trace.totalSamples, "gestureCount": trace.gestures.count,
       "parentFeedEvaluations": feedEvaluations - trace.startedAtFeedEvaluation,
       "maxGestureFeedOffsetRange": trace.gestures.map { $0.feed.distance }.max() ?? 0,
+      "maxGestureFrameYRange": trace.gestures.map { $0.frameY.distance }.max() ?? 0,
       "maxGestureFrameWidthRange": trace.gestures.map { $0.width.distance }.max() ?? 0,
       "maxGestureFrameHeightRange": trace.gestures.map { $0.height.distance }.max() ?? 0,
       "samples": samples
@@ -161,8 +165,8 @@ struct CaptroCarouselTraceProbe: UIViewRepresentable {
       let rect = convert(bounds, to: window)
       CaptroCarouselTraceRecorder.shared.record(surface: surface, postID: postID,
         sample: .init(time: ProcessInfo.processInfo.systemUptime, event: event, mediaID: mediaID,
-          pagerX: pager.contentOffset.x, feedY: feed?.contentOffset.y ?? 0,
-          frame: [rect.minX, rect.minY, rect.width, rect.height],
+          pagerX: Double(pager.contentOffset.x), feedY: Double(feed?.contentOffset.y ?? 0),
+          frame: [Double(rect.minX), Double(rect.minY), Double(rect.width), Double(rect.height)],
           pagerGesture: pager.panGestureRecognizer.state.rawValue,
           feedGesture: feed?.panGestureRecognizer.state.rawValue ?? -1,
           dragging: pager.isDragging, decelerating: pager.isDecelerating))
