@@ -283,7 +283,8 @@ struct CaptroCameraNativeView: View {
         }.frame(minWidth: 70, minHeight: 48).accessibilityIdentifier("capture.retake")
         Spacer()
         Button(media.kind == .image ? "Use photo" : "Use video") { showDestination = true }
-          .font(.headline).foregroundStyle(.black).padding(.horizontal, 24).frame(minHeight: 48)
+          .font(.headline).foregroundStyle(.black).padding(.horizontal, 24)
+          .padding(.vertical, 12).frame(minHeight: 48)
           .background(Color(red: 0.96, green: 0.94, blue: 0.89), in: Capsule())
           .disabled(enhancing).accessibilityIdentifier("capture.use")
       }
