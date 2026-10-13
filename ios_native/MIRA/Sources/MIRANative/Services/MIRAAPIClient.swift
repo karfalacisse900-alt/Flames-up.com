@@ -151,6 +151,7 @@ private actor MIRAAPIRequestDeduplicator {
 }
 
 public final class MIRAAPIClient {
+  @MainActor lazy var favorites = CaptroFavoritesStore(api: self)
   public static let productionSession: URLSession = {
     let configuration = URLSessionConfiguration.default
     configuration.requestCachePolicy = .useProtocolCachePolicy

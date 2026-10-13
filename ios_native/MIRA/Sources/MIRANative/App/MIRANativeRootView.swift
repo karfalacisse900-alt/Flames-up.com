@@ -78,6 +78,7 @@ final class MIRAStartupCoordinator: ObservableObject {
 
     phase = .checkingSession
     await authSession.bootstrap(api: api)
+    api.favorites.configure(accountID: authSession.user?.id ?? "")
 
     guard !Task.isCancelled else { return }
     if authSession.user == nil {
@@ -221,6 +222,7 @@ public struct MIRANativeRootView: View {
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
+      api.favorites.configure(accountID: userID ?? "")
       MIRAPlaybackCoordinator.pauseAll(reason: "account_changed")
       MIRAVideoPrewarmManager.shared.resetForAccountChange()
       MIRAMediaCacheMaintenance.clearMemoryForAccountChange()

@@ -174,6 +174,14 @@ struct CaptroMediaPager: View {
           .frame(maxHeight: .infinity, alignment: .bottom)
           .allowsHitTesting(false)
         }
+        if !showsCoverMediaOnly {
+          CaptroFavoriteButton(post: post, api: api)
+            .padding(.trailing, 14)
+            .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 0 : 68)
+            .padding(.top, dynamicTypeSize.isAccessibilitySize ? 68 : 0)
+            .frame(maxWidth: .infinity, maxHeight: .infinity,
+              alignment: dynamicTypeSize.isAccessibilitySize ? .topTrailing : .bottomTrailing)
+        }
       }
       .frame(width: proxy.size.width, height: proxy.size.height)
     }

@@ -1218,6 +1218,7 @@ public struct MainFeedView: View {
   public var body: some View {
     NavigationStack {
       activeFeed.onAppear(perform: feedDidAppear)
+      .overlay(alignment: .top) { CaptroFavoriteNotice(store: model.api.favorites) }
       .onDisappear {
         viewport.setActive(false)
         postActivationTask?.cancel()
@@ -1466,10 +1467,7 @@ public struct MainFeedView: View {
         detailPost = post
       },
       onSave: {
-        Task {
-          if post.viewerSaved { await model.unsave(post) }
-          else { await model.save(post, to: "saved") }
-        }
+        Task { await model.api.favorites.toggle(post) }
       },
       canFollowAuthor: !isGuest && model.canFollowAuthor(post),
       feedWidth: width,

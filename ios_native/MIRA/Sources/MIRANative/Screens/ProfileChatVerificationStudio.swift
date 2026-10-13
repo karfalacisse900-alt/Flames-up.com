@@ -402,6 +402,11 @@ public struct ProfileNativeView: View {
       ScrollView {
         VStack(spacing: MIRATheme.Space.lg) {
           profileHeader
+          NavigationLink(destination: CaptroFavoritesView(api: model.api)) {
+            Label("Favorites", systemImage: "star").font(.subheadline)
+              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+              .padding(.horizontal, MIRATheme.Space.md)
+          }.accessibilityIdentifier("profile.favorites")
           if model.posts.isEmpty && model.user == nil {
             ProfileGridSkeleton()
           } else {

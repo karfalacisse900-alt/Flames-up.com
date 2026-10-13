@@ -2,6 +2,10 @@ name: Validate Captro Stamps
 on:
   workflow_dispatch:
     inputs:
+      favorites_review:
+        description: Test private Favorites store and real native star/picker/library with isolated fixtures
+        type: boolean
+        default: false
       presentation_review:
         description: Review media-only creation and native Details/Stories with isolated fixtures; no publishing
         type: boolean
@@ -145,7 +149,7 @@ jobs:
             # active Cover route, then real private publish/persistence below.
             tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/CoverTests/testCoverSelectorOpensRealPhotoPicker -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testEveryPhotoRatioFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testVideoFillsScreenWidth -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testTextOnlyAndAccessibilityDoNotReserveMediaHeight)
           fi
-          if [ '${{ inputs.presentation_review }}' = 'true' ]; then
+          if [ '${{ inputs.presentation_review }}' = 'true' ] || [ '${{ inputs.favorites_review }}' = 'true' ]; then
             tests=(-only-testing:CaptroStampTests
               -only-testing:CaptroLayoutUITests/PostPresentationReviewTests
               -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
@@ -156,6 +160,11 @@ jobs:
                 -only-testing:CaptroLayoutUITests/PostPresentationReviewTests/testComposerRequiresMediaAndHasNoResponses
                 -only-testing:CaptroLayoutUITests/PostPresentationReviewTests/testOrdinaryDetailsHasCaptionAndNoPollOrTransaction
                 -only-testing:CaptroLayoutUITests/PostPresentationReviewTests/testLargeTextStoryAndDetails)
+            fi
+            if [ '${{ inputs.favorites_review }}' = 'true' ]; then
+              tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/FavoritesTests
+                -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
+                -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame)
             fi
             xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
               -destination "platform=iOS Simulator,id=$FEED_SIMULATOR" \
@@ -199,7 +208,7 @@ jobs:
             -only-testing:CaptroLayoutUITests/PostPresentationReviewTests/testLargeTextStoryAndDetails \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/small-review.log"
       - name: Record continuous Home scrolling
-        if: ${{ !inputs.baseline && !inputs.cover_runtime && !inputs.presentation_review }}
+        if: ${{ !inputs.baseline && !inputs.cover_runtime && !inputs.presentation_review && !inputs.favorites_review }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail

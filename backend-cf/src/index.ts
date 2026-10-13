@@ -8132,15 +8132,43 @@ async function setCanonicalPostSaveState(c: any, postId: string, userId: string,
   const relatedUserIds = await supabaseRelatedInteractionUserIds(c, userId);
   const wasSaved = await supabaseViewerPostInteractionExists(c, canonicalPostId, relatedUserIds, 'save');
 
-  await supabaseDeletePostInteractionsForUsers(c, canonicalPostId, relatedUserIds, 'save');
-  if (saved) {
-    await supabaseUpsertPostInteraction(c, canonicalPostId, userId, 'save', collectionName);
-  }
+  // The same transaction serves old bookmark clients and new Favorites clients.
+  // Old-client unsave also clears memberships; saving never destroys memberships.
+  await favoriteRPC(c, userId, 'set', {
+    post_key: canonicalPostId, post_uuid: identity.postUuid || null,
+    saved, legacy_collection: collectionName,
+  });
 
   const state = await getCanonicalPostEngagementState(c, canonicalPostId, userId);
   state.saved = saved;
   const changed = saved !== wasSaved;
   return { state, wasSaved, changed, collection: collectionName };
+}
+
+async function favoriteRPC(c: any, userId: string, action: string, input: Record<string, unknown>) {
+  const related = await supabaseRelatedInteractionUserIds(c, userId);
+  const keys = await supabaseInteractionActorKeys(c, related);
+  const appToAuth = await supabaseAuthUserIdMapForAppUserIds(c, keys.appUserIds);
+  const identities = await supabaseAccountIdentityActorKeysMap(c, keys.appUserIds);
+  const owner = keys.appUserIds.find(id => appToAuth.has(id)) || keys.appUserIds[0] || userId;
+  const auth = appToAuth.get(owner) || keys.authUserIds[0] || null;
+  const actor = supabaseInteractionActorKey(auth || '', (identities.get(owner) || [])[0] || '', owner);
+  return supabaseAdminRpc(c, 'captro_favorites', {
+    p_owner: owner,
+    p_identity: { actor_key: actor, auth_id: auth, app_ids: keys.appUserIds,
+      auth_ids: keys.authUserIds, actor_keys: keys.actorKeys },
+    p_action: action, p_input: input,
+  });
+}
+
+function favoriteError(c: any, error: any) {
+  const code = `${getErrorCode(error)} ${String(error?.message || '')}`;
+  if (code.includes('FAVORITES_CONFLICT')) return c.json({ detail: 'Favorites changed on another screen or device. Refresh and try again.' }, 409);
+  if (code.includes('23505')) return c.json({ detail: 'A collection with that name already exists.' }, 409);
+  if (code.includes('FAVORITES_COLLECTION_NOT_FOUND')) return c.json({ detail: 'This collection is no longer available.' }, 404);
+  if (code.includes('FAVORITES_') || code.includes('22P02')) return c.json({ detail: 'Check the collection name and selections, then try again.' }, 400);
+  console.warn(JSON.stringify({ event: 'favorites_request_failed' }));
+  return c.json({ detail: 'Could not update Favorites. Please try again.' }, 503);
 }
 
 async function overlaySupabaseViewerEngagement(c: any, posts: any[], userId: string): Promise<any[]> {
@@ -19106,6 +19134,93 @@ api.post('/client/events', async (c) => {
     created_at: now(),
   }], 'id');
   return c.json({ accepted: true }, 202);
+});
+
+// Private Favorites. All owner identity comes from authentication, never the body.
+api.get('/favorites', authMiddleware, async c => {
+  const required = requireSupabasePrimaryDatabase(c, 'favorites'); if (required) return required;
+  const userId = getUserId(c);
+  try {
+    const input: Record<string, unknown> = { offset: clampNumber(c.req.query('offset') || 0,0,100000,0) };
+    const collection = c.req.query('collection_id');
+    if (collection) { if (!isUuidText(collection)) return c.json({detail:'Invalid collection.'},400); input.collection_id=collection; }
+    const result = await favoriteRPC(c,userId,'read',input);
+    const ids: string[] = result.post_ids || [];
+    const page = ids.slice(0,40);
+    const previewIds: string[] = result.collections.flatMap((x: any) => x.preview_post_ids || []);
+    // Existing visibility policy rechecks deletion, blocking, audience and paid access.
+    const allIds = Array.from(new Set([...page,...previewIds]));
+    const rows: any[] = [];
+    // The shared visibility reader caps each result at 100. Keep all collections'
+    // previews behind that same authorization check without silently dropping them.
+    for (let start=0;start<allIds.length;start+=100) {
+      rows.push(...await supabaseReadVisiblePosts(c,userId,{postIds:allIds.slice(start,start+100),limit:100}));
+    }
+    const byId = new Map<string,any>();
+    for (const row of rows) {
+      const payload = feedPostPayload(row,[],c.env);
+      for (const id of [payload.id,row.id,row.legacy_post_id,row.supabase_post_id]) if(id) byId.set(String(id),payload);
+    }
+    return c.json({ collections: result.collections.map((x: any) => ({id:x.id,name:x.name,count:x.count,
+      previews:x.preview_post_ids.map((id: string)=>byId.get(id)).filter(Boolean)})),
+      entries:page.map(id=>({id,post:byId.get(id)||null})),has_more:ids.length>40,next_offset:Number(input.offset)+page.length });
+  } catch(error) { return favoriteError(c,error); }
+});
+api.get('/favorites/posts/:postId', authMiddleware, async c => {
+  const required = requireSupabasePrimaryDatabase(c, 'favorites'); if(required) return required;
+  try {
+    const userId=getUserId(c),identity=await supabaseResolvePostIdentity(c,c.req.param('postId'));
+    const result=await favoriteRPC(c,userId,'read',{post_key:identity.legacyPostId||identity.postUuid||identity.requestedPostId,post_uuid:identity.postUuid||null});
+    return c.json({...result,state:{...result.state,post_id:c.req.param('postId')}});
+  } catch(error) { return favoriteError(c,error); }
+});
+api.put('/favorites/posts/:postId', authMiddleware, async c => {
+  const required=requireSupabasePrimaryDatabase(c,'favorites'); if(required) return required;
+  const userId=getUserId(c);
+  const limited=await enforceRateLimit(c,'save_post',userId,240,60); if(limited) return limited;
+  const tooLarge=rejectLargeRequest(c,8000); if(tooLarge) return tooLarge;
+  try {
+    const body:any=await c.req.json(),postId=publicId(c.req.param('postId'),120);
+    if(!postId||typeof body.saved!=='boolean'||!isUuidText(body.request_id)||!Number.isSafeInteger(body.expected_revision)||body.expected_revision<0
+      || !Array.isArray(body.collection_ids)||body.collection_ids.length>20||body.collection_ids.some((x:any)=>!isUuidText(x))) {
+      return c.json({detail:'Invalid Favorites update.'},400);
+    }
+    if(body.saved) {
+      const [visible]=await supabaseReadVisiblePosts(c,userId,{postId,limit:1});
+      if(!visible) return c.json({detail:'This post is no longer available.'},404);
+    }
+    const identity=await supabaseResolvePostIdentity(c,postId);
+    const result=await favoriteRPC(c,userId,'set',{post_key:identity.legacyPostId||identity.postUuid||identity.requestedPostId,
+      post_uuid:identity.postUuid||null,saved:body.saved,collection_ids:body.collection_ids,
+      expected_revision:body.expected_revision,request_id:body.request_id});
+    // No like mutation, creator notification, or public event is emitted.
+    return c.json({...result,state:{...result.state,post_id:postId}});
+  } catch(error) { return favoriteError(c,error); }
+});
+api.post('/favorites/collections',authMiddleware,async c=>{
+  const required=requireSupabasePrimaryDatabase(c,'favorites'); if(required) return required;
+  const limited=await enforceRateLimit(c,'favorite_collection',getUserId(c),60,60); if(limited) return limited;
+  const tooLarge=rejectLargeRequest(c,2000); if(tooLarge) return tooLarge;
+  try { const b:any=await c.req.json();
+    if(typeof b.name!=='string'||!b.name.trim()||b.name.trim().length>80) return c.json({detail:'Use 1–80 characters for the name.'},400);
+    return c.json(await favoriteRPC(c,getUserId(c),'create',{name:b.name.trim()}));
+  } catch(error) {return favoriteError(c,error);}
+});
+api.put('/favorites/collections/:id',authMiddleware,async c=>{
+  const required=requireSupabasePrimaryDatabase(c,'favorites'); if(required) return required;
+  const limited=await enforceRateLimit(c,'favorite_collection',getUserId(c),60,60); if(limited) return limited;
+  const tooLarge=rejectLargeRequest(c,2000); if(tooLarge) return tooLarge;
+  try { const b:any=await c.req.json();
+    if(!isUuidText(c.req.param('id'))||typeof b.name!=='string'||!b.name.trim()||b.name.trim().length>80) return c.json({detail:'Use 1–80 characters for the name.'},400);
+    return c.json(await favoriteRPC(c,getUserId(c),'rename',{collection_id:c.req.param('id'),name:b.name.trim()}));
+  } catch(error) {return favoriteError(c,error);}
+});
+api.delete('/favorites/collections/:id',authMiddleware,async c=>{
+  const required=requireSupabasePrimaryDatabase(c,'favorites'); if(required) return required;
+  const limited=await enforceRateLimit(c,'favorite_collection',getUserId(c),60,60); if(limited) return limited;
+  if(!isUuidText(c.req.param('id'))) return c.json({detail:'Invalid collection.'},400);
+  try {return c.json(await favoriteRPC(c,getUserId(c),'delete',{collection_id:c.req.param('id')}));}
+  catch(error){return favoriteError(c,error);}
 });
 
 // Library

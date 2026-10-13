@@ -485,72 +485,11 @@ final class PostDetailModel: ObservableObject {
     finishLikeMutation(mutationVersion, for: post.id)
   }
 
-  func save(to collection: String) async {
-    let previous = post
-    let nextCount = max(0, (post.savesCount ?? 0) + (post.viewerSaved ? 0 : 1))
-    post = post.updating(saved: true, savesCount: nextCount)
-    publishEngagement()
-    do {
-      let response: PostSaveResponse = try await api.post("/library/save/\(post.id)", body: SaveCollectionBody(collection: collection))
-      let reconciledSavesCount = stableEngagementCount(
-        current: previous.savesCount,
-        incoming: response.savesCount,
-        optimistic: nextCount,
-        toggledOn: response.saved ?? true
-      )
-      post = post.updating(
-        liked: response.liked,
-        likesCount: response.likesCount,
-        commentsCount: response.commentsCount,
-        saved: response.saved ?? true,
-        savesCount: reconciledSavesCount
-      )
-      publishEngagement()
-    } catch {
-      post = post.updating(saved: previous.viewerSaved, savesCount: previous.savesCount ?? 0)
-      actionError = "Couldn't save this post. Please try again."
-      publishEngagement()
-    }
-  }
-
-  func unsave() async {
-    guard post.viewerSaved else { return }
-    let previous = post
-    let nextCount = max(0, (post.savesCount ?? 0) - 1)
-    post = post.updating(saved: false, savesCount: nextCount)
-    publishEngagement()
-    do {
-      let response: PostSaveResponse = try await api.delete("/library/save/\(post.id)")
-      let reconciledSavesCount = stableEngagementCount(
-        current: previous.savesCount,
-        incoming: response.savesCount,
-        optimistic: nextCount,
-        toggledOn: response.saved ?? false
-      )
-      post = post.updating(
-        liked: response.liked,
-        likesCount: response.likesCount,
-        commentsCount: response.commentsCount,
-        saved: response.saved ?? false,
-        savesCount: reconciledSavesCount
-      )
-      publishEngagement()
-    } catch {
-      post = post.updating(saved: previous.viewerSaved, savesCount: previous.savesCount ?? 0)
-      actionError = "Couldn't remove this saved post. Please try again."
-      publishEngagement()
-    }
-  }
-
   func toggleSave() async {
     guard !isSaving else { return }
     isSaving = true
     defer { isSaving = false }
-    if post.viewerSaved {
-      await unsave()
-    } else {
-      await save(to: "Inspiration")
-    }
+    await api.favorites.toggle(post)
   }
 
   func toggleAttendance() async {
@@ -663,6 +602,7 @@ public struct PostDetailNativeView: View {
   @State private var isReportSheetPresented = false
   @State private var isPostOptionsPresented = false
   @State private var isEditingEvent = false
+  @State private var isOrganizingFavorite = false
   @State private var voiceDraft: CaptroVoiceDraft?
   @State private var showVoiceRecorder = false
   @FocusState private var isCommentFocused: Bool
@@ -798,6 +738,11 @@ public struct PostDetailNativeView: View {
       guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
       model.applyEngagementUpdate(update)
     }
+    .overlay(alignment: .top) { CaptroFavoriteNotice(store: model.api.favorites) }
+    .sheet(isPresented: $isOrganizingFavorite) {
+      CaptroFavoritePicker(postID: model.post.id, api: model.api)
+        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+    }
   }
 
   @ToolbarContentBuilder
@@ -806,9 +751,10 @@ public struct PostDetailNativeView: View {
       Menu {
         ShareLink(item: captroDetailShareURL(model.post)) { Label("Share post", systemImage: "square.and.arrow.up") }
         Button { Task { await model.toggleSave() } } label: {
-          Label(model.post.viewerSaved ? "Unsave post" : "Save post",
-            systemImage: model.post.viewerSaved ? "bookmark.fill" : "bookmark")
+          Label(model.post.viewerSaved ? "Remove from Favorites" : "Save to Favorites",
+            systemImage: model.post.viewerSaved ? "star.fill" : "star")
         }.disabled(model.isSaving)
+        Button("Organize in collection") { if model.api.favorites.requireAccount() { isOrganizingFavorite = true } }
         if model.canEditEvent { Button("Edit event") { isEditingEvent = true } }
         Button("Report post", role: .destructive) { presentPostReport() }
       } label: {
