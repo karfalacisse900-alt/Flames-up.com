@@ -1,10 +1,11 @@
 import XCTest
 
 final class CaptureCameraTests: XCTestCase {
-  private func launch(review: Bool) -> XCUIApplication {
+  private func launch(review: Bool, largeText: Bool = false) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-design-quality-test", "--captro-quality-capture"]
       + (review ? ["--captro-camera-review-fixture"] : [])
+      + (largeText ? ["--captro-quality-large-text"] : [])
     app.launch(); return app
   }
   private func capture(_ app: XCUIApplication, _ label: String) {
@@ -44,5 +45,22 @@ final class CaptureCameraTests: XCTestCase {
     app.buttons["Discard post"].tap() // Discard this composer draft, not Capture's original.
     XCTAssertTrue(app.buttons["capture.use"].waitForExistence(timeout: 10))
     capture(app, "capture-retained-after-composer-cancel")
+  }
+
+  func testReviewRetainsCaptureAcrossTabsAndLargeTextKeepsActionsAboveNavigation() {
+    let app = launch(review: true, largeText: true)
+    let use = app.buttons["capture.use"]
+    XCTAssertTrue(use.waitForExistence(timeout: 15))
+    let tabs = app.tabBars.firstMatch
+    XCTAssertTrue(tabs.exists)
+    XCTAssertGreaterThanOrEqual(use.frame.height, 44)
+    XCTAssertLessThanOrEqual(use.frame.maxY, tabs.frame.minY + 1,
+      "Use capture must not be hidden beneath the retained bottom navigation")
+    XCTAssertTrue(use.isHittable)
+    app.tabBars.buttons["Home"].tap()
+    app.tabBars.buttons["Capture"].tap()
+    XCTAssertTrue(use.waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["capture.retake"].isHittable)
+    capture(app, "capture-accessibility-tab-return")
   }
 }

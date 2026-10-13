@@ -44,11 +44,13 @@ struct CaptroFeedPostView: View {
   let feedWidth: CGFloat
   var frameRatio: CGFloat? = nil
   @ObservedObject var rowState: CaptroFeedRowState
+  var onMediaSelectionChange: (String) -> Void = { _ in }
   private var selectedMediaIndex: Binding<Int> {
     Binding(get: { post.feedMediaIdentities.firstIndex(of: rowState.selectedMediaID ?? "") ?? 0 }, set: { index in
       let identities = post.feedMediaIdentities
       guard identities.indices.contains(index), rowState.selectedMediaID != identities[index] else { return }
       rowState.select(identities[index])
+      onMediaSelectionChange(identities[index])
       CaptroFeedDiagnostics.event("slide", feed: "home", reason: "carousel_selection", post: post.id, media: identities[index])
     })
   }

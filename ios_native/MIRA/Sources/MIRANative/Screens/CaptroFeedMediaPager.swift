@@ -398,7 +398,6 @@ struct CaptroMediaPager: View {
     let selected = min(max(selectedMediaIndex, 0), mediaURLs.count - 1)
     var previews: [String] = []
     var priorityImages: [String] = []
-    var videos: [String] = []
 
     for index in mediaURLs.indices {
       guard index >= max(0, selected - 1), index <= min(mediaURLs.count - 1, selected + 2) else { continue }
@@ -407,17 +406,9 @@ struct CaptroMediaPager: View {
         previews.append(placeholder)
       }
       let fallback = mediaFallbackURL(for: index, mediaURL: url)
-      if url.isVideoURL {
-        if abs(index - selected) <= 1 { videos.append(url) }
-      } else {
+      if !url.isVideoURL {
         priorityImages.append(url)
         if let fallback { priorityImages.append(fallback) }
-      }
-    }
-
-    if !videos.isEmpty {
-      Task { @MainActor in
-        MIRAVideoPrewarmManager.shared.prewarm(urls: videos, keepOnly: Set(videos))
       }
     }
 

@@ -87,6 +87,10 @@ final class MainFeedModel: ObservableObject {
   var testAutomaticPagination = true
   func paginationOffsetForTesting(_ section: MainFeedSection) -> Int? { pageOffsets[section] }
 
+  func videoPrewarmURLsForTesting(focusIndex: Int, selectedMediaID: String?) -> [String] {
+    makeMediaPreloadPlan(focusIndex: focusIndex, selectedMediaID: selectedMediaID).videoPrewarmURLs
+  }
+
   convenience init(api: MIRAAPIClient, visualPosts: [MIRAPost]) {
     self.init(api: api)
     posts = visualPosts
@@ -299,9 +303,9 @@ final class MainFeedModel: ObservableObject {
     await loadNextPage(reason: "user_retry")
   }
 
-  func prefetchMedia(around post: MIRAPost) {
+  func prefetchMedia(around post: MIRAPost, selectedMediaID: String? = nil) {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
-    let plan = makeMediaPreloadPlan(focusIndex: index)
+    let plan = makeMediaPreloadPlan(focusIndex: index, selectedMediaID: selectedMediaID)
     guard !plan.isEmpty else {
       mediaPrefetchTask?.cancel()
       MIRAVideoPrewarmManager.shared.cancelPendingPrewarm()
@@ -336,7 +340,7 @@ final class MainFeedModel: ObservableObject {
     prefetchMedia(around: firstPost)
   }
 
-  private func makeMediaPreloadPlan(focusIndex: Int) -> MainFeedMediaPreloadPlan {
+  private func makeMediaPreloadPlan(focusIndex: Int, selectedMediaID: String?) -> MainFeedMediaPreloadPlan {
     guard posts.indices.contains(focusIndex) else { return MainFeedMediaPreloadPlan() }
 
     let orderedIndices = mediaPreloadIndices(from: focusIndex)
@@ -352,15 +356,26 @@ final class MainFeedModel: ObservableObject {
       let imageURLs = orderedMediaURLs(mediaURLs).filter { !$0.isVideoURL }
       let videoURLs = mediaURLs.filter { $0.isVideoURL }
 
+      if rank == 0, !mediaURLs.isEmpty {
+        // The feed owns the one global video neighborhood. A mounted offscreen
+        // carousel must not replace this desired set and evict active preloads.
+        let selected = selectedMediaID.flatMap { post.feedMediaIdentities.firstIndex(of: $0) } ?? 0
+        let nearby = [selected, selected + 1, selected - 1]
+          .filter { mediaURLs.indices.contains($0) }
+          .map { mediaURLs[$0] }.filter { $0.isVideoURL }
+        videoPrewarmURLs.append(contentsOf: nearby)
+        videoKeepAliveURLs.append(contentsOf: nearby)
+      }
+
       if rank <= 3 {
-        // Home renders one cover per post; detail screens own the full media carousel.
+        // Row-local prefetch handles adjacent images without owning players.
         feedImageURLs.append(contentsOf: imageURLs.prefix(1))
-        videoPrewarmURLs.append(contentsOf: videoURLs.prefix(1))
+        if rank > 0 { videoPrewarmURLs.append(contentsOf: videoURLs.prefix(1)) }
       } else if rank <= 6 {
         feedImageURLs.append(contentsOf: imageURLs.prefix(1))
       }
 
-      if rank <= 3 {
+      if rank > 0 && rank <= 3 {
         videoKeepAliveURLs.append(contentsOf: videoURLs.prefix(2))
       }
     }
@@ -1455,6 +1470,10 @@ public struct MainFeedView: View {
       feedWidth: width,
       frameRatio: post.feedFrameHeightToWidthRatio,
       rowState: rowStates.state(for: post.id),
+      onMediaSelectionChange: { mediaID in
+        guard selectedPostID == post.id, !isMediaPlaybackSuppressed else { return }
+        model.prefetchMedia(around: post, selectedMediaID: mediaID)
+      },
       canRespond: !isGuest
     )
   }
@@ -1514,7 +1533,7 @@ public struct MainFeedView: View {
       "post_cell_appear",
       detail: post.feedMediaURLs.first?.isVideoURL == true ? "video" : "image"
     )
-    model.prefetchMedia(around: post)
+    model.prefetchMedia(around: post, selectedMediaID: rowStates.state(for: post.id).selectedMediaID)
     Task { await model.loadMoreIfNeeded(after: post) }
   }
 

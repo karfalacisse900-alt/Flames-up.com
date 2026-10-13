@@ -37,7 +37,7 @@ public struct CaptroDesignQualityTestView: View {
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-story") {
         CaptroStoryPresentationTestHost()
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-capture") {
-        CaptroCameraNativeView(api: CaptroComposerTestAPI.make(), initialReviewMedia: cameraReviewFixture)
+        CaptroCameraTabReviewHost(media: cameraReviewFixture)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-legal") {
         NavigationStack { PrivacyPolicyView() }
       } else {
@@ -98,6 +98,24 @@ public struct CaptroDesignQualityTestView: View {
         withAttributes: [.font: UIFont.systemFont(ofSize: 42), .foregroundColor: UIColor.black])
     }
     return MIRAPickedMedia(data: image.jpegData(compressionQuality: 0.95)!, kind: .image, fileName: "review-test-chart.jpg", mimeType: "image/jpeg")
+  }
+}
+
+/// Exercises the production camera inside the same native tab container/safe
+/// areas as the app, without authenticating or publishing production content.
+private struct CaptroCameraTabReviewHost: View {
+  let media: MIRAPickedMedia?
+  @State private var selection = 1
+  var body: some View {
+    TabView(selection: $selection) {
+      Text("Home test destination").tag(0).tabItem { Label("Home", systemImage: "house.fill") }
+      CaptroCameraNativeView(api: CaptroComposerTestAPI.make(), isActive: selection == 1, initialReviewMedia: media)
+        .tag(1).tabItem { Label("Capture", systemImage: "viewfinder") }
+      Text("Profile test destination").tag(2).tabItem { Label("Me", systemImage: "person.fill") }
+    }
+    .tint(MIRATheme.Color.textPrimary)
+    .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
+    .toolbarBackground(.visible, for: .tabBar)
   }
 }
 

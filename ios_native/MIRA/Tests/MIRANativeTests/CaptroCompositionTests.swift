@@ -2,6 +2,35 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCompositionTests: XCTestCase {
+  func testCaptureHandoffRetainsFullDraftAndKeepsCaptureForRetry() {
+    let existing = (0..<10).map { captureMedia("draft-\($0).jpg") }
+    let capture = captureMedia("captured.jpg")
+    let full = CaptroComposerMediaHandoff.merge(existing: existing, incoming: [capture])
+    XCTAssertEqual(full.media, existing, "Never remove or replace saved draft media.")
+    XCTAssertEqual(full.pending, [capture], "Do not silently drop the new capture.")
+    let retried = CaptroComposerMediaHandoff.merge(existing: Array(full.media.dropLast()), incoming: full.pending)
+    XCTAssertEqual(retried.media.count, 10)
+    XCTAssertEqual(retried.media.last?.localID, capture.localID)
+    XCTAssertTrue(retried.pending.isEmpty)
+    XCTAssertEqual(retried.media.first?.localID, existing.first?.localID)
+  }
+
+  func testCaptureHandoffDoesNotDuplicateRestoredCaptureAndBoundsAdditionalMedia() {
+    let original = captureMedia("capture.jpg")
+    let restored = captureMedia("capture.jpg") // Older disk snapshots recreate localID.
+    let duplicate = CaptroComposerMediaHandoff.merge(existing: [restored], incoming: [original])
+    XCTAssertEqual(duplicate.media, [restored])
+    XCTAssertTrue(duplicate.pending.isEmpty)
+    let incoming = (0..<12).map { captureMedia("capture-\($0).jpg") }
+    let result = CaptroComposerMediaHandoff.merge(existing: [], incoming: incoming)
+    XCTAssertEqual(result.media, Array(incoming.prefix(10)))
+    XCTAssertEqual(result.pending, Array(incoming.suffix(2)))
+  }
+
+  private func captureMedia(_ name: String) -> MIRAPickedMedia {
+    MIRAPickedMedia(data: Data([1]), kind: .image, fileName: name, mimeType: "image/jpeg")
+  }
+
   func testOrdinaryPublishingRequiresMediaWithoutDestroyingLegacyDrafts() {
     var draft = CaptroCompositionDraft()
     draft.bodyText = "Keep this saved text."

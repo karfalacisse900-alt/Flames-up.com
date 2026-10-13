@@ -1077,6 +1077,7 @@ public struct CreatePostNativeView: View {
   @State private var postAssistError: String?
   @State private var hasRestoredPostDraft = false
   @State private var didApplyInitialCapture = false
+  @State private var pendingInitialCapture: [MIRAPickedMedia] = []
   @State private var isRestoringPostDraft = false
   @State private var draftMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
   @State private var draftOriginalMediaSnapshots: [MIRAPostDraftMediaSnapshot] = []
@@ -1435,6 +1436,16 @@ public struct CreatePostNativeView: View {
         Spacer(minLength: 0)
       }
       if !mediaItems.isEmpty { compositionAttachments }
+      if !pendingInitialCapture.isEmpty {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("This draft can contain up to 10 photos or videos. Remove a media item, then add your capture. Your capture is kept.")
+            .font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+          Button("Add capture") { retryInitialCapture() }
+            .frame(minHeight: 44)
+            .disabled(mediaItems.count >= CaptroComposerMediaHandoff.maximumItems)
+            .accessibilityIdentifier("composer.retryCapture")
+        }.accessibilityIdentifier("composer.pendingCapture")
+      }
       if !draft.structured && mediaItems.isEmpty {
         Button { openPresentation(.media) } label: {
           Label("Add a photo or video", systemImage: "photo.on.rectangle")
@@ -2061,6 +2072,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var canPost: Bool {
+    guard pendingInitialCapture.isEmpty, mediaItems.count <= CaptroComposerMediaHandoff.maximumItems else { return false }
     guard mediaItems.allSatisfy({ $0.postFraming?.isValid == true }) else { return false }
     guard draft.writingValidationMessage == nil, draft.mediaRequirementMessage == nil else { return false }
     if draft.isCover {
@@ -2371,12 +2383,10 @@ public struct CreatePostNativeView: View {
     await restorePostDraftIfNeeded()
     if !didApplyInitialCapture {
       didApplyInitialCapture = true
-      if let initialMedia, !mediaItems.contains(where: { $0.fileName == initialMedia.fileName }) {
-        mediaItems.append(initialMedia)
-      }
-      for additional in initialAdditionalMedia where mediaItems.count < 10 && !mediaItems.contains(where: { $0.fileName == additional.fileName }) {
-        mediaItems.append(additional)
-      }
+      let handoff = CaptroComposerMediaHandoff.merge(existing: mediaItems,
+        incoming: [initialMedia].compactMap { $0 } + initialAdditionalMedia)
+      mediaItems = handoff.media
+      pendingInitialCapture = handoff.pending
       if let initialCaption, !initialCaption.isEmpty {
         bodyText = bodyText.isEmpty ? initialCaption : bodyText + "\n\n" + initialCaption
       }
@@ -2389,6 +2399,20 @@ public struct CreatePostNativeView: View {
       openPresentation(.framing)
     } else if !mediaItems.isEmpty && !draft.hasWriting && !draft.isCover { writingFocused = true }
     await loadBroadLocationDefaultIfNeeded()
+  }
+
+  private func retryInitialCapture() {
+    guard !pendingInitialCapture.isEmpty, mediaItems.count < CaptroComposerMediaHandoff.maximumItems else { return }
+    let previousCount = mediaItems.count
+    let handoff = CaptroComposerMediaHandoff.merge(existing: mediaItems, incoming: pendingInitialCapture)
+    mediaItems = handoff.media
+    pendingInitialCapture = handoff.pending
+    guard mediaItems.count > previousCount else { return }
+    writingFocused = false
+    pendingFramingItems = mediaItems
+    writingMediaIndex = previousCount
+    errorMessage = "Review media framing before publishing. Your originals stay unchanged."
+    openPresentation(.framing)
   }
 
   @MainActor

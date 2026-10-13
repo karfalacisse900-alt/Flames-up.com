@@ -83,3 +83,26 @@ struct CaptroCreationCapabilities: Decodable {
   let structuredTypes: [String]
   var mediaWritingVersion: Int? = nil
 }
+
+/// A camera handoff must not overwrite a saved draft or exceed the post limit.
+/// Overflow stays with the caller until the user explicitly makes room and retries.
+enum CaptroComposerMediaHandoff {
+  static let maximumItems = 10
+
+  static func merge(existing: [MIRAPickedMedia], incoming: [MIRAPickedMedia])
+    -> (media: [MIRAPickedMedia], pending: [MIRAPickedMedia]) {
+    var media = existing
+    var pending: [MIRAPickedMedia] = []
+    var ids = Set(existing.map(\.localID))
+    // Older disk drafts do not retain localID. Capture filenames contain a UUID,
+    // so keep the existing filename fallback when returning from that draft.
+    var names = Set(existing.map(\.fileName))
+    for item in incoming {
+      guard !ids.contains(item.localID), !names.contains(item.fileName) else { continue }
+      ids.insert(item.localID); names.insert(item.fileName)
+      if media.count < maximumItems { media.append(item) }
+      else { pending.append(item) }
+    }
+    return (media, pending)
+  }
+}

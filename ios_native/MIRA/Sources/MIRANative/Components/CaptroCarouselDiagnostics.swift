@@ -7,7 +7,7 @@ import UIKit
 /// offset correction. All sampling is absent from Release builds.
 @MainActor
 final class CaptroCarouselTraceRecorder {
-  static let shared = CaptroCarouselTraceRecorder()
+  static let shared = CaptroCarouselTraceRecorder(enabled: isEnabled)
   static let isEnabled = ProcessInfo.processInfo.arguments.contains("--captro-carousel-diagnostics")
 
   struct Sample: Codable {
@@ -19,6 +19,7 @@ final class CaptroCarouselTraceRecorder {
     let frame: [Double]
     let pagerGesture: Int
     let feedGesture: Int
+    let tracking: Bool
     let dragging: Bool
     let decelerating: Bool
   }
@@ -47,29 +48,51 @@ final class CaptroCarouselTraceRecorder {
     var samples: [Sample] = []
     var totalSamples = 0
     var gestures: [Gesture] = []
+    var interactionOpen = false
+    var lastSample: Sample?
     var startedAtFeedEvaluation = 0
   }
   private var traces: [String: Trace] = [:]
   private var feedEvaluations = 0
+  private let enabled: Bool
+
+  init(enabled: Bool) { self.enabled = enabled }
+
+  func endInteraction(surface: String, postID: String) {
+    let key = surface + ":" + postID
+    guard var trace = traces[key] else { return }
+    trace.interactionOpen = false
+    trace.lastSample = nil
+    traces[key] = trace
+  }
 
   func noteFeedEvaluation() {
-    guard Self.isEnabled else { return }
+    guard enabled else { return }
     feedEvaluations += 1
   }
 
   func record(surface: String, postID: String, sample: Sample) {
-    guard Self.isEnabled else { return }
+    guard enabled, sample.frame.count == 4 else { return }
     let key = surface + ":" + postID
     var trace = traces[key] ?? Trace(startedAtFeedEvaluation: feedEvaluations)
     trace.totalSamples += 1
     trace.samples.append(sample)
     if trace.samples.count > 256 { trace.samples.removeFirst(trace.samples.count - 256) }
-    if sample.event == "pan_began" {
-      trace.gestures.append(Gesture(sample))
+    let interacting = sample.tracking || sample.dragging || sample.decelerating
+      || sample.event == "pan_began"
+    if interacting && !trace.interactionOpen {
+      // Include movement before the pager's recognizer begins (the Home
+      // direction gate can still be .possible while the parent moves).
+      trace.gestures.append(Gesture(trace.lastSample ?? sample))
       if trace.gestures.count > 64 { trace.gestures.removeFirst() }
-    } else if (sample.dragging || sample.decelerating), !trace.gestures.isEmpty {
-      trace.gestures[trace.gestures.count - 1].include(sample)
+      trace.interactionOpen = true
     }
+    if trace.interactionOpen {
+      trace.gestures[trace.gestures.count - 1].include(sample)
+      if !interacting { trace.interactionOpen = false }
+    }
+    // Idle layout/navigation samples are not attributed to the previous swipe.
+    trace.lastSample = sample
     traces[key] = trace
   }
 
@@ -111,10 +134,13 @@ struct CaptroCarouselTraceProbe: UIViewRepresentable {
     var surface = ""
     var postID = ""
     var mediaID = ""
-    var selected = false
+    var selected = false {
+      didSet { if !selected { stopInteractionSampling() } }
+    }
     private weak var pager: UIScrollView?
     private weak var feed: UIScrollView?
     private var observations: [NSKeyValueObservation] = []
+    private var interactionDisplayLink: CADisplayLink?
 
     override func didMoveToWindow() {
       super.didMoveToWindow()
@@ -154,14 +180,35 @@ struct CaptroCarouselTraceProbe: UIViewRepresentable {
       }
     }
     func detach() {
+      stopInteractionSampling()
+      if selected, pager != nil {
+        CaptroCarouselTraceRecorder.shared.endInteraction(surface: surface, postID: postID)
+      }
       pager?.panGestureRecognizer.removeTarget(self, action: #selector(panChanged(_:)))
       observations.removeAll(); pager = nil; feed = nil
     }
     @objc private func panChanged(_ gesture: UIPanGestureRecognizer) {
       sample(gesture.state == .began ? "pan_began" : "pan_changed")
     }
+    @objc private func sampleInteractionBoundary() { sample("interaction_frame") }
+    private func stopInteractionSampling() {
+      interactionDisplayLink?.invalidate()
+      interactionDisplayLink = nil
+    }
     func sample(_ event: String) {
       guard selected, let pager, let window, bounds.width > 0, bounds.height > 0 else { return }
+      let tracking = pager.isTracking || (feed?.isTracking ?? false)
+      let dragging = pager.isDragging || (feed?.isDragging ?? false)
+      let decelerating = pager.isDecelerating || (feed?.isDecelerating ?? false)
+      if tracking || dragging || decelerating {
+        if interactionDisplayLink == nil {
+          // Opt-in DEBUG only. End each range at its actual idle boundary so
+          // later navigation is not folded into the last carousel gesture.
+          let link = CADisplayLink(target: self, selector: #selector(sampleInteractionBoundary))
+          link.add(to: .main, forMode: .common)
+          interactionDisplayLink = link
+        }
+      } else { stopInteractionSampling() }
       let rect = convert(bounds, to: window)
       CaptroCarouselTraceRecorder.shared.record(surface: surface, postID: postID,
         sample: .init(time: ProcessInfo.processInfo.systemUptime, event: event, mediaID: mediaID,
@@ -169,7 +216,7 @@ struct CaptroCarouselTraceProbe: UIViewRepresentable {
           frame: [Double(rect.minX), Double(rect.minY), Double(rect.width), Double(rect.height)],
           pagerGesture: pager.panGestureRecognizer.state.rawValue,
           feedGesture: feed?.panGestureRecognizer.state.rawValue ?? -1,
-          dragging: pager.isDragging, decelerating: pager.isDecelerating))
+          tracking: tracking, dragging: dragging, decelerating: decelerating))
     }
   }
 }

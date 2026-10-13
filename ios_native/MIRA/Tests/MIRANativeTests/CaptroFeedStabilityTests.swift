@@ -7,6 +7,53 @@ import SwiftUI
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  func testHomeVideoPrewarmPlanPrioritizesSelectedStableMediaAndStaysBounded() throws {
+    func mediaPost(_ id: String, _ urls: [String]) throws -> MIRAPost {
+      let record: [String: Any] = ["id": id, "images": urls]
+      return try JSONDecoder().decode(MIRAPost.self,
+        from: JSONSerialization.data(withJSONObject: record))
+    }
+    let a = "https://example.com/a.mp4", b = "https://example.com/b.mp4"
+    let c = "https://example.com/c.mp4", d = "https://example.com/d.mp4"
+    let model = MainFeedModel(api: MIRAAPIClient())
+    let neighbors = try (1...20).map { try mediaPost("neighbor-\($0)", ["https://example.com/neighbor-\($0).mp4"]) }
+    model.posts = [try mediaPost("active", [a, b, c, d])] + neighbors
+    let selected = model.posts[0].feedMediaIdentities[2]
+    let plan = model.videoPrewarmURLsForTesting(focusIndex: 0, selectedMediaID: selected)
+    XCTAssertEqual(Array(plan.prefix(3)), [c, d, b], "Selected and adjacent slides precede other posts")
+    XCTAssertEqual(plan.count, 5, "Only the selected neighborhood and two upcoming posts are prefetched")
+    XCTAssertEqual(Set(plan).count, plan.count)
+    XCTAssertFalse(plan.contains(a), "Far carousel slides do not displace the current video")
+    model.posts[0] = try mediaPost("active", [c, a, b, d])
+    XCTAssertEqual(model.videoPrewarmURLsForTesting(focusIndex: 0, selectedMediaID: selected).first, c,
+      "Stable media identity, not the old array offset, controls priority after reordering")
+    XCTAssertEqual(model.videoPrewarmURLsForTesting(focusIndex: 0, selectedMediaID: "removed").first, c)
+    XCTAssertTrue(model.videoPrewarmURLsForTesting(focusIndex: 99, selectedMediaID: selected).isEmpty)
+  }
+
+  func testCarouselTraceIncludesPreRecognitionParentMovementButExcludesIdleNavigation() throws {
+    let recorder = CaptroCarouselTraceRecorder(enabled: true)
+    func sample(_ event: String, feedY: Double, tracking: Bool = false,
+                dragging: Bool = false, decelerating: Bool = false) {
+      recorder.record(surface: "home", postID: "post", sample: .init(time: 0, event: event,
+        mediaID: "slide", pagerX: 0, feedY: feedY, frame: [0, 100 - feedY, 390, 488],
+        pagerGesture: dragging ? 1 : 0, feedGesture: 0, tracking: tracking,
+        dragging: dragging, decelerating: decelerating))
+    }
+    sample("mounted", feedY: 0)
+    sample("feed_offset", feedY: 5, tracking: true) // Pager gate is still .possible.
+    sample("pan_began", feedY: 0, tracking: true, dragging: true)
+    sample("interaction_frame", feedY: 0, decelerating: true)
+    sample("interaction_frame", feedY: 0) // First idle frame closes the sequence.
+    sample("layout", feedY: 100) // Unrelated, quiescent navigation/layout change.
+    let summary = try XCTUnwrap(try JSONSerialization.jsonObject(
+      with: Data(recorder.summary(surface: "home", postID: "post").utf8)) as? [String: Any])
+    XCTAssertEqual(summary["gestureCount"] as? Int, 1)
+    XCTAssertEqual(summary["maxGestureFeedOffsetRange"] as? Double, 5)
+    XCTAssertEqual(summary["maxGestureFrameYRange"] as? Double, 5)
+    XCTAssertEqual(summary["maxGestureFrameHeightRange"] as? Double, 0)
+  }
+
   func testCarouselAndStampChangesOnlyPublishToTheirOwningRow() {
     let store = CaptroFeedRowStateStore()
     let first = store.state(for: "first"), second = store.state(for: "second")
