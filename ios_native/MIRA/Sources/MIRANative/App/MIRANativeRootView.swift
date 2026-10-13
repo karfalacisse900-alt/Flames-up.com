@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import StripePayments
 import Darwin
 import Foundation
@@ -176,6 +177,14 @@ public struct MIRANativeRootView: View {
   private let api: MIRAAPIClient
 
   public init() {
+    // Keep the selected symbol readable independently of the photograph beneath
+    // iOS's floating tab bar. Same system tabs/shape, stable opaque app material.
+    let tabAppearance = UITabBarAppearance()
+    tabAppearance.configureWithOpaqueBackground()
+    tabAppearance.backgroundColor = UIColor(MIRATheme.Color.surface)
+    tabAppearance.backgroundEffect = nil
+    UITabBar.appearance().standardAppearance = tabAppearance
+    UITabBar.appearance().scrollEdgeAppearance = tabAppearance
     let session = MIRAAuthSession()
     let client = MIRAAPIClient(sessionProvider: session)
     _authSession = StateObject(wrappedValue: session)
@@ -366,7 +375,7 @@ public struct MIRANativeRootView: View {
         .tag(MIRATab.profile)
         .tabItem { Label("Me", systemImage: "person.fill") }
     }
-    .tint(MIRATheme.Color.forest)
+    .tint(MIRATheme.Color.textPrimary)
     .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
@@ -403,18 +412,25 @@ public struct MIRANativeRootView: View {
   }
 
   private func registerCachedPushTokenIfPossible() {
-    guard authSession.user != nil else { return }
+    guard authSession.user != nil else {
+      MIRAPushTokenRegistry.shared.endSession()
+      return
+    }
+    // Logout disables delivery on this device even if the network is offline.
+    // Re-enable APNs on login, including when a cached token is available.
+    MIRAPushNotificationRegistrar.registerForRemoteNotifications()
     if let token = MIRAPushNotificationRegistrar.cachedDeviceToken {
       registerPushToken(token)
-    } else {
-      MIRAPushNotificationRegistrar.registerForRemoteNotifications()
     }
   }
 
   private func registerPushToken(_ token: String) {
-    guard authSession.user != nil else { return }
+    guard let accountID = authSession.user?.id else { return }
+    let generation = authSession.sessionGeneration
     Task {
-      await MIRAPushTokenRegistry.shared.registerDeviceToken(token, api: api)
+      guard let accessToken = await authSession.accessToken(),
+            generation == authSession.sessionGeneration, accountID == authSession.user?.id else { return }
+      await MIRAPushTokenRegistry.shared.registerDeviceToken(token, accountID: accountID, accessToken: accessToken, api: api)
     }
   }
 }

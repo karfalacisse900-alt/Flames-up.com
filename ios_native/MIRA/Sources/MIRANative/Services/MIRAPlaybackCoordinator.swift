@@ -21,21 +21,6 @@ public enum MIRAPlaybackCoordinator {
     activeVideoID = nil
   }
   @MainActor static func ownsVideo(_ player: AVPlayer) -> Bool { activeVideoPlayer === player }
-  // A live voice session owns duplex audio until its matching generation ends.
-  // Late video loads may prepare assets, but must not replace the microphone's
-  // playAndRecord category with playback/moviePlayback.
-  @MainActor private static var liveVoiceOwner: UUID?
-  @MainActor public static var isLiveVoiceActive: Bool { liveVoiceOwner != nil }
-  @MainActor static func acquireLiveVoice(_ owner: UUID) -> Bool {
-    guard liveVoiceOwner == nil || liveVoiceOwner == owner else { return false }
-    liveVoiceOwner = owner
-    pauseAll(reason: "capture_realtime_voice")
-    return true
-  }
-  @MainActor static func releaseLiveVoice(_ owner: UUID) {
-    guard liveVoiceOwner == owner else { return }
-    liveVoiceOwner = nil
-  }
   public static func pauseAll(reason: String) {
     NotificationCenter.default.post(name: .miraPlaybackShouldPause, object: reason)
   }
@@ -82,28 +67,67 @@ public final class MIRAVideoPrewarmManager {
   private var cachedStreamInfo: [String: MIRAStreamPlaybackInfo] = [:]
   private var preparedPlayers: [String: AVPlayer] = [:]
   private var preparedOrder: [String] = []
-  private var inFlight = Set<String>()
+  private struct PendingRequest {
+    let id: UUID
+    let task: Task<Void, Never>
+  }
+  private var pending: [String: PendingRequest] = [:]
+  private var wantedMetadata = Set<String>()
+  private var wantedPlayers = Set<String>()
   private var accountGeneration = 0
   private let maxMetadataPreloads = 10
   private let maxPreparedPlayers = 2
+  private let resolve: (String) async throws -> MIRAStreamPlaybackInfo
+  private var pauseObserver: NSObjectProtocol?
+  private let notificationCenter: NotificationCenter
 
-  private init() {}
+  init(
+    notificationCenter: NotificationCenter = .default,
+    resolve: @escaping (String) async throws -> MIRAStreamPlaybackInfo = {
+      try await MIRAStreamPlaybackResolver.playbackInfo(for: $0).info
+    }
+  ) {
+    self.resolve = resolve
+    self.notificationCenter = notificationCenter
+    pauseObserver = notificationCenter.addObserver(forName: .miraPlaybackShouldPause, object: nil, queue: .main) { [weak self] _ in
+      MainActor.assumeIsolated { self?.cancelPendingPrewarm() }
+    }
+  }
+
+  deinit {
+    if let pauseObserver { notificationCenter.removeObserver(pauseObserver) }
+    for request in pending.values { request.task.cancel() }
+  }
+
+  /// Playback/navigation interruption invalidates work, not just the players
+  /// already prepared. A cancelled resolver may still return; identity checks
+  /// below prevent it from resurrecting a player in the new viewing context.
+  public func cancelPendingPrewarm() {
+    for request in pending.values { request.task.cancel() }
+    pending.removeAll()
+    wantedMetadata.removeAll()
+    wantedPlayers.removeAll()
+    trimPreparedPlayers(keepOnly: [])
+  }
 
   public func resetForAccountChange() {
     accountGeneration += 1
-    for player in preparedPlayers.values { player.pause() }
-    preparedPlayers.removeAll()
-    preparedOrder.removeAll()
+    cancelPendingPrewarm()
     cachedStreamInfo.removeAll()
-    inFlight.removeAll()
   }
 
   public func prewarm(urls: [String], keepOnly: Set<String> = []) {
     let candidates = Array(orderedUnique(urls).filter(\.isVideoURL).prefix(maxMetadataPreloads))
-    guard !candidates.isEmpty else { return }
     let playerCandidates = Set(candidates.prefix(maxPreparedPlayers).map { normalized($0) })
-
-    trimPreparedPlayers(keepOnly: playerCandidates.union(keepOnly.map { normalized($0) }))
+    wantedMetadata = Set(candidates.map { normalized($0) })
+    wantedPlayers = playerCandidates.union(keepOnly.map { normalized($0) })
+    for key in Array(pending.keys) where !wantedMetadata.contains(key) {
+      pending.removeValue(forKey: key)?.task.cancel()
+    }
+    // Bound metadata as well as players; signed playback URLs from distant
+    // neighborhoods must not accumulate for the lifetime of the account.
+    cachedStreamInfo = cachedStreamInfo.filter { wantedMetadata.contains($0.key) }
+    trimPreparedPlayers(keepOnly: wantedPlayers)
 
     for url in candidates {
       prewarm(url: url, shouldPreparePlayer: playerCandidates.contains(normalized(url)))
@@ -127,7 +151,7 @@ public final class MIRAVideoPrewarmManager {
 
   private func prewarm(url: String, shouldPreparePlayer: Bool) {
     let key = normalized(url)
-    guard !key.isEmpty, !inFlight.contains(key) else {
+    guard !key.isEmpty, pending[key] == nil else {
       if shouldPreparePlayer, let info = cachedStreamInfo[key], let hls = info.hls, let hlsURL = URL(string: hls) {
         preparePlayer(for: key, playbackURL: hlsURL)
       }
@@ -139,69 +163,68 @@ public final class MIRAVideoPrewarmManager {
       }
       return
     }
-    inFlight.insert(key)
     MIRAApplePerformanceLogger.event("video_prewarm_started", detail: key.videoPrewarmLogLabel)
 
     if preparedPlayers[key] != nil {
-      inFlight.remove(key)
       MIRAApplePerformanceLogger.event("video_prewarm_skipped", detail: "prepared")
       return
     }
 
     if key.lowercased().hasPrefix("cfstream:") {
       let generation = accountGeneration
-      Task { [weak self] in
-        await self?.resolveCloudflareStream(
-          for: key, shouldPreparePlayer: shouldPreparePlayer, generation: generation
+      let requestID = UUID()
+      let task = Task<Void, Never> { [weak self] in
+        guard let self else { return }
+        await self.resolveCloudflareStream(
+          for: key, requestID: requestID, generation: generation
         )
       }
+      pending[key] = PendingRequest(id: requestID, task: task)
       return
     }
 
     guard shouldPreparePlayer else {
-      inFlight.remove(key)
       return
     }
 
     guard let url = URL(string: key), url.isPlayableFileOrRemoteVideo else {
-      inFlight.remove(key)
       MIRAApplePerformanceLogger.event("video_prewarm_skipped", detail: key.videoPrewarmLogLabel)
       return
     }
 
     preparePlayer(for: key, playbackURL: url)
-    inFlight.remove(key)
   }
 
   private func resolveCloudflareStream(
-    for key: String, shouldPreparePlayer: Bool, generation: Int
+    for key: String, requestID: UUID, generation: Int
   ) async {
     let uid = String(key.dropFirst("cfstream:".count))
 
     do {
-      let result = try await MIRAStreamPlaybackResolver.playbackInfo(for: uid)
-      guard generation == accountGeneration else { return }
-      let info = result.info
-      inFlight.remove(key)
+      let info = try await resolve(uid)
+      guard !Task.isCancelled, generation == accountGeneration,
+            pending[key]?.id == requestID, wantedMetadata.contains(key) else { return }
+      pending.removeValue(forKey: key)
       let hls = info.hls?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       if info.ready != false || !hls.isEmpty {
         cachedStreamInfo[key] = info
         MIRAApplePerformanceLogger.event("video_ready_to_play", detail: "stream_info")
-        if shouldPreparePlayer, let hls = info.hls, let hlsURL = URL(string: hls) {
+        if wantedPlayers.contains(key), let hls = info.hls, let hlsURL = URL(string: hls) {
           preparePlayer(for: key, playbackURL: hlsURL)
         }
       } else {
         MIRAApplePerformanceLogger.event("video_prewarm_processing", detail: key.videoPrewarmLogLabel)
       }
     } catch {
-      guard generation == accountGeneration else { return }
-      inFlight.remove(key)
+      guard generation == accountGeneration, pending[key]?.id == requestID else { return }
+      pending.removeValue(forKey: key)
+      guard !Task.isCancelled else { return }
       MIRAApplePerformanceLogger.event("video_prewarm_failed", detail: key.videoPrewarmLogLabel)
     }
   }
 
   private func preparePlayer(for key: String, playbackURL: URL) {
-    guard preparedPlayers[key] == nil else { return }
+    guard wantedPlayers.contains(key), preparedPlayers[key] == nil else { return }
     let item = AVPlayerItem(url: playbackURL)
     item.preferredForwardBufferDuration = 0.85
     item.preferredPeakBitRate = 0
@@ -228,10 +251,17 @@ public final class MIRAVideoPrewarmManager {
     guard !keysToRemove.isEmpty else { return }
     for key in keysToRemove {
       preparedPlayers[key]?.pause()
+      preparedPlayers[key]?.replaceCurrentItem(with: nil)
       preparedPlayers.removeValue(forKey: key)
     }
     preparedOrder.removeAll { keysToRemove.contains($0) }
   }
+
+  #if DEBUG
+  var pendingKeysForTesting: Set<String> { Set(pending.keys) }
+  var preparedKeysForTesting: Set<String> { Set(preparedPlayers.keys) }
+  var pendingTasksForTesting: [String: Task<Void, Never>] { pending.mapValues(\.task) }
+  #endif
 
   private func normalized(_ value: String) -> String {
     value.trimmingCharacters(in: .whitespacesAndNewlines)

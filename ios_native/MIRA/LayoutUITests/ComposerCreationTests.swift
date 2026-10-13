@@ -5,167 +5,53 @@ final class ComposerCreationTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-design-quality-test", "--captro-quality-composer"] + extra
     app.launch()
-    XCTAssertTrue(app.textViews["composer.writing"].waitForExistence(timeout: 15))
-    if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
+    XCTAssertTrue(app.buttons["composer.addRequiredMedia"].waitForExistence(timeout: 15))
     return app
   }
-  private func snapshot(_ app: XCUIApplication, _ name: String) {
-    let shot = XCTAttachment(screenshot: app.screenshot())
-    shot.name = name; shot.lifetime = .keepAlways; add(shot)
-  }
-  private func dismissKeyboard(_ app: XCUIApplication) {
-    let done = app.buttons["composer.keyboardDone"]
-    if done.waitForExistence(timeout: 5) { done.tap() }
-    XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-  }
-  private func select(_ app: XCUIApplication, _ title: String) {
-    app.buttons["composer.intent"].tap()
-    if ["Club", "Event", "Meetup", "Deal"].contains(title) {
-      app.buttons["More ways to create"].tap()
-    }
-    XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5))
-    app.buttons[title].tap()
-  }
-  func testEmptyFilledKeyboardAndIntentPreservation() {
+
+  func testOrdinaryComposerStartsWithRequiredMediaNotTextOrVoice() {
     let app = launch()
     XCTAssertFalse(app.buttons["composer.create"].isEnabled)
-    XCTAssertTrue(app.staticTexts["What do you want to do?"].exists)
-    XCTAssertFalse(app.staticTexts["Create Post"].exists)
-    XCTAssertFalse(app.buttons["Personal"].exists)
-    XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
-    snapshot(app, "composer-empty-keyboard")
-    dismissKeyboard(app)
-    snapshot(app, "composer-empty")
-    select(app, "Looking for")
+    XCTAssertFalse(app.textViews["composer.writing"].exists)
+    XCTAssertFalse(app.keyboards.firstMatch.exists)
+    XCTAssertFalse(app.buttons["Record voice attachment"].exists)
+    app.buttons["composer.add"].tap()
+    XCTAssertTrue(app.buttons["Photos & videos"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Responses"].exists)
+    XCTAssertFalse(app.buttons["Want to"].exists)
+    XCTAssertFalse(app.buttons["Looking for"].exists)
+  }
+
+  func testLegacyDraftWritingRemainsEditableButCannotPublishWithoutMedia() {
+    let app = launch(["--captro-composer-legacy-draft"])
     let editor = app.textViews["composer.writing"]
+    XCTAssertTrue(editor.waitForExistence(timeout: 10))
+    XCTAssertEqual(editor.value as? String, "Keep my saved caption.")
+    XCTAssertFalse(app.buttons["composer.create"].isEnabled)
+    XCTAssertTrue(app.staticTexts["composer.mediaRequired"].exists)
     editor.tap()
     if app.buttons["Continue"].exists { app.buttons["Continue"].tap() }
-    let message = "A designer and a developer to help me start a company in NYC. I’m building Captro and looking for people to build with."
-    editor.typeText(message)
-    XCTAssertTrue(app.buttons["composer.create"].isEnabled)
-    snapshot(app, "composer-filled-keyboard")
-    dismissKeyboard(app)
-    snapshot(app, "composer-filled")
-    select(app, "Concern")
-    XCTAssertEqual(editor.value as? String, message)
-    XCTAssertFalse(app.buttons["Add time"].exists)
-    snapshot(app, "composer-concern")
-    select(app, "Want to")
-    XCTAssertTrue(app.buttons["Add time"].exists)
-    XCTAssertEqual(editor.value as? String, message)
+    editor.typeText(" Updated.")
+    XCTAssertTrue((editor.value as? String ?? "").contains("Updated."))
+    XCTAssertFalse(app.buttons["composer.create"].isEnabled)
     app.buttons["Cancel"].tap()
     XCTAssertTrue(app.buttons["Keep editing"].waitForExistence(timeout: 5))
     app.buttons["Keep editing"].tap()
-    XCTAssertEqual(editor.value as? String, message)
+    XCTAssertTrue((editor.value as? String ?? "").contains("Updated."))
   }
-  func testAudienceResponsesAndFailureRetainDraft() {
-    let app = launch()
-    dismissKeyboard(app)
+
+  func testAudienceAndAuthorizedStampChoicesRemainAvailable() {
+    let app = launch(["--captro-composer-authorized"])
     app.buttons["composer.audience"].tap()
-    app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Only me")).firstMatch.tap()
-    XCTAssertTrue(app.buttons["composer.audience"].waitForExistence(timeout: 5))
+    let onlyMe = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Only me")).firstMatch
+    XCTAssertTrue(onlyMe.waitForExistence(timeout: 5))
+    onlyMe.tap()
     XCTAssertTrue(app.buttons["composer.audience"].label.contains("Only me"))
-    app.textViews["composer.writing"].tap()
-    app.textViews["composer.writing"].typeText("Who wants to build something together?")
-    dismissKeyboard(app)
     app.buttons["composer.add"].tap()
-    app.buttons["Responses"].tap()
-    XCTAssertTrue(app.buttons["Custom choices"].waitForExistence(timeout: 5))
-    app.buttons["Custom choices"].tap()
-    let fields = app.textFields
-    XCTAssertGreaterThanOrEqual(fields.count, 2)
-    fields.element(boundBy: 0).tap(); fields.element(boundBy: 0).typeText("Design")
-    fields.element(boundBy: 1).tap(); fields.element(boundBy: 1).typeText("Engineering\n")
-    let use = app.buttons["Use poll"]
-    for _ in 0..<4 where !use.isHittable {
-      let scroll = app.scrollViews.allElementsBoundByIndex.first { $0.isHittable && $0.frame.height > 100 }
-      scroll?.swipeUp()
-    }
-    use.tap()
-    XCTAssertTrue(app.buttons["Edit response options"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Design · Engineering"].exists)
-    app.buttons["composer.create"].tap()
-    XCTAssertTrue(app.staticTexts["composer.error"].waitForExistence(timeout: 10))
-    XCTAssertEqual(app.textViews["composer.writing"].value as? String, "Who wants to build something together?")
-    XCTAssertTrue(app.buttons["composer.create"].isEnabled)
-    snapshot(app, "composer-publish-failure")
-  }
-  func testAuthorizedObjectReturnsToOriginalWriting() {
-    let app = launch(["--captro-composer-authorized"])
-    app.textViews["composer.writing"].tap()
-    app.textViews["composer.writing"].typeText("Join us on the rooftop.")
-    dismissKeyboard(app)
-    select(app, "Event")
-    XCTAssertTrue(app.textFields["Event name"].waitForExistence(timeout: 5))
-    app.textFields["Event name"].tap(); app.textFields["Event name"].typeText("Rooftop evening")
-    app.buttons["Done"].tap()
-    XCTAssertTrue(app.buttons["composer.object"].waitForExistence(timeout: 5))
-    XCTAssertEqual(app.textViews["composer.writing"].value as? String, "Join us on the rooftop.")
-    snapshot(app, "composer-structured-summary")
-  }
-  func testLargeTextDarkAndCharacterLimit() {
-    let app = launch(["--captro-quality-large-text", "--captro-quality-dark"])
-    let editor = app.textViews["composer.writing"]
-    editor.tap(); editor.typeText(String(repeating: "a", count: 501))
-    XCTAssertEqual((editor.value as? String)?.count, 500)
-    XCTAssertTrue(app.staticTexts["500/500"].exists)
-    dismissKeyboard(app)
-    snapshot(app, "composer-large-text-dark-limit")
-    XCTAssertTrue(app.buttons["composer.create"].isHittable)
-    XCTAssertGreaterThanOrEqual(app.buttons["composer.intent"].frame.height, 44)
-  }
-
-  func testCompactSelectorsAndDirectTimeEditorPreserveDraft() {
-    let app = launch(["--captro-composer-authorized"])
-    app.textViews["composer.writing"].typeText("Let’s meet this week.")
-    app.buttons["composer.intent"].tap()
-    XCTAssertTrue(app.staticTexts["START WITH"].waitForExistence(timeout: 5))
-    XCTAssertFalse(app.buttons["composer.keyboardDone"].exists)
-    XCTAssertFalse(app.buttons["Event"].exists)
-    XCTAssertTrue(app.buttons["Concern"].isHittable)
-    XCTAssertTrue(app.buttons["More ways to create"].isHittable)
-    snapshot(app, "composer-start-with")
     app.buttons["More ways to create"].tap()
-    XCTAssertTrue(app.buttons["Club"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Deal"].isHittable)
-    snapshot(app, "composer-more-ways")
-    app.buttons["Back"].tap()
-    app.buttons["Looking for"].tap()
-    XCTAssertEqual(app.textViews["composer.writing"].value as? String, "Let’s meet this week.")
-    app.buttons["composer.audience"].tap()
-    XCTAssertTrue(app.staticTexts["AUDIENCE"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Only me'")).firstMatch.isHittable)
-    snapshot(app, "composer-audience")
-    app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Friends'")).firstMatch.tap()
-    app.buttons["Add time"].tap()
-    XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 5))
-    XCTAssertGreaterThanOrEqual(app.pickerWheels.count, 2)
-    snapshot(app, "composer-time-direct")
-    app.navigationBars["Time"].buttons["Cancel"].tap()
-    XCTAssertTrue(app.buttons["Add time"].exists)
-    app.buttons["composer.add"].tap()
-    XCTAssertTrue(app.buttons["Photos & videos"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Responses"].isHittable)
-    snapshot(app, "composer-add")
-  }
-
-  func testLocationUsesLiveMapsSearchAndKeyboard() {
-    let app = launch()
-    dismissKeyboard(app)
-    app.buttons["Add location"].tap()
-    XCTAssertTrue(app.navigationBars["Location"].waitForExistence(timeout: 5))
-    let search = app.textFields["composer.location.search"]
-    XCTAssertTrue(search.waitForExistence(timeout: 5))
-    search.tap(); search.typeText("Central Park New York")
-    // Actual MapKit search, not fixture rows or a fake production API response.
-    let result = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Central Park'")).firstMatch
-    XCTAssertTrue(result.waitForExistence(timeout: 25), app.debugDescription)
-    XCTAssertTrue(app.keyboards.firstMatch.exists)
-    snapshot(app, "composer-location-results-keyboard")
-    result.tap()
-    XCTAssertTrue(app.buttons["composer.create"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Central Park'")).firstMatch.exists)
-    XCTAssertTrue(app.buttons["composer.audience"].label.contains("Public"))
+    for name in ["Club", "Event", "Meetup", "Deal"] {
+      XCTAssertTrue(app.buttons[name].waitForExistence(timeout: 5))
+    }
   }
 }
 

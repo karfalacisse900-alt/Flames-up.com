@@ -16,7 +16,7 @@ on:
         type: string
         default: ''
       validation_run:
-        description: Native stamps validation run that must pass for the identical iOS source before upload
+        description: Required successful native validation run for identical IPA source (also required for retry)
         type: string
         default: ''
   push:
@@ -46,7 +46,7 @@ jobs:
           APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
         run: node scripts/app-store/testflight-status.mjs
   retry-upload:
-    if: ${{ inputs.read_testflight_status != true && inputs.retry_upload_run != '' && inputs.retry_upload_run != null }}
+    if: ${{ inputs.read_testflight_status != true && inputs.configure_only != true && inputs.retry_upload_run != '' && inputs.retry_upload_run != null }}
     name: Retry preserved TestFlight IPA upload
     runs-on: macos-26
     timeout-minutes: 15
@@ -70,9 +70,15 @@ jobs:
           test "$(gh api "$SOURCE_PATH" --jq '.event')" = 'workflow_dispatch'
           SOURCE_SHA="$(gh api "$SOURCE_PATH" --jq '.head_sha')"
           git merge-base --is-ancestor "$SOURCE_SHA" HEAD
+          echo "IPA_SOURCE_SHA=$SOURCE_SHA" >> "$GITHUB_ENV"
           PASSED_STEPS="$(gh api "$SOURCE_PATH/jobs" --jq '[.jobs[].steps[] | select((.name == "Archive native iOS app" or .name == "Validate Release authentication configuration" or .name == "Export IPA") and .conclusion == "success")] | length')"
           test "$PASSED_STEPS" = 3
           gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --name Captro-native-ios-ipa --dir "$RUNNER_TEMP/retry-ipa"
+      - name: Require matching native verification for the preserved IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_RUN: ${{ inputs.validation_run }}
+        run: node scripts/app-store/verify-native-validation.mjs
       - name: Upload the preserved IPA to TestFlight
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
@@ -101,6 +107,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Require matching native runtime verification before building
+        if: ${{ !inputs.configure_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_RUN: ${{ inputs.validation_run }}
+        run: node scripts/app-store/verify-native-validation.mjs
 
       - name: Show Xcode version
         if: ${{ !inputs.configure_only }}
@@ -333,31 +346,6 @@ jobs:
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
 
-      - name: Require matching native runtime verification before upload
-        if: ${{ !inputs.configure_only && inputs.validation_run != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VALIDATION_RUN: ${{ inputs.validation_run }}
-        run: |
-          set -euo pipefail
-          [[ "$VALIDATION_RUN" =~ ^[0-9]+$ ]]
-          run_path="repos/$GITHUB_REPOSITORY/actions/runs/$VALIDATION_RUN"
-          test "$(gh api "$run_path" --jq '.path')" = '.github/workflows/native-stamps-validation.yml'
-          test "$(gh api "$run_path" --jq '.head_branch')" = "$GITHUB_REF_NAME"
-          validated_sha="$(gh api "$run_path" --jq '.head_sha')"
-          git fetch --depth=1 origin "$validated_sha"
-          test "$(git rev-parse "$validated_sha:ios_native/MIRA")" = "$(git rev-parse HEAD:ios_native/MIRA)"
-          for attempt in {1..80}; do
-            state="$(gh api "$run_path" --jq '.status')"
-            if [ "$state" = completed ]; then
-              test "$(gh api "$run_path" --jq '.conclusion')" = success
-              echo 'Matching native source passed runtime verification.'
-              exit 0
-            fi
-            sleep 15
-          done
-          echo 'Native verification did not complete; preserving the IPA without uploading.'
-          exit 1
       - name: Upload to TestFlight
         if: ${{ !inputs.configure_only }}
         env:

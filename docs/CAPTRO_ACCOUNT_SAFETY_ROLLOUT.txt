@@ -1,0 +1,91 @@
+CAPTRO ACCOUNT SAFETY / FEATURE CLEANUP — REVIEW BEFORE PRODUCTION
+Prepared 2026-10-13. Base: 877e2ea0; installed TestFlight source: 990ce2cb (616.1).
+
+LIVE READ-ONLY FINDINGS
+The 20261006012846_security_backend_write_boundary migration is absent from
+supabase_migrations.schema_migrations. Catalog checks (no private rows read)
+confirmed authenticated INSERT/UPDATE grants on app_users, app_messages,
+app_group_chat_members and app_media_assets. Existing policies permit reads of
+active profiles including private columns, recipient edits of whole messages,
+self-enrollment, and owner changes to media approval. No explicit client column
+grants were found on these tables. app_push_tokens also allows direct owner writes.
+This verifies an authorization defect, NOT evidence of actual misuse.
+
+LOCAL CHANGES / ROLLOUT UNITS
+1. Existing October 6 migration: client writes for profiles/posts/comments/chats
+   become server-only, private profile SELECT is revoked, membership reads use
+   nonrecursive private helpers, direct client group enrollment is removed.
+2. 20261013154326_security_media_approval_boundary.sql: revoke media mutation
+   privileges (including explicit column grants), remove owner write policies.
+   Preserve owner reads, all media rows and originals. The Worker alone sets
+   upload/moderation status, URLs, metadata and crop fields after authorization.
+3. 20261013154328_single_owner_push_registration.sql + Worker endpoint: retain
+   push rows, deactivate all ambiguous duplicate active bindings until registration,
+   enforce one active owner per token hash and transfer ownership atomically in
+   a service-only SECURITY INVOKER RPC. Direct client token access is revoked.
+4. Native client: reject stale session results/retries, pin old-account push
+   unregister requests, serialize account transitions, retain scoped drafts.
+5. Worker feature retirement: reject new ordinary posts without media, new poll
+   configuration/votes, new voice uploads/assistant sessions/voice attachments.
+   Existing records, authorized legacy reads/deletion and moderation jobs remain.
+
+COMPATIBILITY
+Current native code uses authenticated Worker endpoints for these writes and
+profile projections, not Supabase table writes. Upload uses /media/upload-intent
+and /media/complete. Poll/voice request fields are no longer sent by the revised
+client. Structured post, RSVP, membership, ticket, reward and payment routes are
+not retired. Server access checks remain in those routes.
+
+Older 616.1 clients retain media publishing, comments, messages and notification
+endpoint shapes. After retirement deployment, old text-only/poll/voice attempts
+receive an explicit 400/410; drafts/data are not deleted. Older direct-Data-API
+clients, if any exist outside this repository, must be audited before rollout.
+Push registration's RPC requires its migration FIRST. An older Worker can fail
+registration on conflicting ownership between migration and Worker deployment;
+it fails closed rather than creating two active owners. Plan a short coordinated
+rollout, not an unbounded gap. Do not suppress or silently fall back on failures.
+Ambiguous devices will temporarily miss notifications until re-registration.
+SQL cannot infer the active account on an old token-only client; verify device
+re-registration with the corrected app rather than treating this migration as
+proof that every old device now belongs to the right account.
+
+APPROVAL REQUEST / EXECUTION PLAN
+Do not run a blanket `supabase db push`: unrelated pending migrations may exist.
+After approval:
+1. Confirm app/source/test identities and capture current grants/policies/function
+   definitions and migration history into a protected operations artifact. Verify
+   restore capability before change; never include credentials or private rows.
+2. Run these exact three migrations in the listed order on an isolated staging
+   copy and check allowed + denied flows with two disposable accounts. Test
+   current and revised app API payloads, media upload/moderation, messages, group
+   membership, blocking, favorites, login/logout and push account switching.
+3. Apply only the reviewed migrations to production, then deploy matching Worker.
+   Check grants/functions/history, then run disposable-account smoke tests. Never
+   test authorization bypass by modifying a real user's rows.
+4. Monitor permission/registration errors and upload/moderation completion. Verify
+   APNs account A -> logout -> B on a physical phone (including offline logout).
+5. Distribute native build only after approval and matching-source native validation.
+   The release workflow now refuses absent/mismatched validation for both upload
+   and preserved-IPA retry paths. Passing CI is not physical-device performance proof.
+
+ROLLBACK / STOP CONDITIONS
+Stop if legitimate Worker writes or user authorization fail in staging. Each
+migration is transactional; a failed migration rolls back its own statements.
+If production compatibility fails, pause rollout and roll back the Worker only
+when compatible with the retained RPC/boundary. Keep the server-only security
+boundary. Do NOT restore broad client grants, re-enable client media approval,
+or activate multiple push owners as a convenience rollback. Repair the specific
+server flow or narrowly reviewed grant. Preserve all posts/votes/media/drafts.
+The push RPC and index are additive: retain them when rolling the app back.
+
+VERIFICATION STATUS
+Local PGlite tests execute the real SQL (including reruns), deny forged media
+approval and enrollment, preserve message history, test push handoff/duplicate
+registration/late old-account logout and client RPC denial. Worker route tests
+verify authenticated ownership. These are isolated tests, not live mutations.
+Native delayed-response, prewarm and UI checks require macOS CI. Physical iPhone
+scrolling, APNs delivery, Instruments measurements and real hang reproduction
+remain unverified until separately recorded. See final turn report for actual
+test counts, source commit and CI result; this document does not assert completion.
+
+PRODUCTION STATUS: unchanged during this task. Rollout and distribution await approval.

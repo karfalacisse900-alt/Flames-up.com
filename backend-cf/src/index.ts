@@ -27,6 +27,7 @@ import {
   stripeV2RecipientTransfersEnabled,
 } from './stripe-connect-v2';
 import { bindVoiceAttachment, classifyOpenAIServiceFailure, createVoiceRoutes, inspectVoiceAudio, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
+import { retiredPostInputError, retiredFeatureCode } from './retired-posting';
 import { rankVisibleFeedWindow } from './feed-relevance';
 
 type MediaModerationJobMessage = {
@@ -169,6 +170,15 @@ const WORKER_NAME = 'captro-api';
 app.get('/', (c) => c.json({ name: 'Captro API', version: API_VERSION, status: 'live', docs: '/api/health' }));
 
 const api = new Hono<HonoApp>();
+// Older clients get an explicit retirement response, never a fake success.
+// Historic voice access/deletion and moderation jobs remain authorized normally.
+api.use('*', async (c, next) => {
+  const code = retiredFeatureCode(c.req.method, c.req.path);
+  if (code) return c.json({ code, detail: code === 'VOICE_RETIRED'
+    ? 'Voice features are no longer available. Your saved data has not been deleted.'
+    : 'Poll responses are no longer available. Use comments to reply.' }, 410);
+  await next();
+});
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -16826,6 +16836,8 @@ api.post('/posts', authMiddleware, async (c) => {
     const existing = await supabaseExistingPostByClientRequest(c, userId, clientRequestId, supabaseAuthorRow);
     if (existing) return c.json({ ...postPayload(existing, [], c.env), idempotent_replay: true });
   }
+  const retiredInput = retiredPostInputError(b, sanitizeMediaReferences(b.images, b.image).length);
+  if (retiredInput) return c.json(retiredInput, 400);
   const id = uuid();
   let postType = cleanText(b.post_type || b.postType || b.type || b.category || 'general', 50).toLowerCase() || 'general';
   if (postType === 'media') postType = 'general';
@@ -17675,6 +17687,7 @@ api.post('/posts/:postId/comments', authMiddleware, async (c) => {
     const body: any = await c.req.json().catch(() => ({}));
     const content = cleanMultilineText(body.content, 1200);
     const voiceAudioId = cleanText(body.voice_audio_id || body.voiceAudioId, 160);
+    if (voiceAudioId) return c.json({ detail: 'Voice replies are no longer available. Write a comment instead.', code: 'VOICE_RETIRED' }, 410);
     const parentId = body.parent_id ? publicId(body.parent_id, 120) : null;
     const clientRequestId = getClientRequestId(c, body);
     if (!content && !voiceAudioId) return c.json({ detail: 'Comment cannot be empty.' }, 400);
@@ -18691,6 +18704,7 @@ api.post('/messages', authMiddleware, async (c) => {
   const mediaUrl = normalizedMediaReferenceForStorage(c, safeMediaReference(b.media_url || b.mediaUrl));
   if (!await messageMediaOwnedBy(c, mediaUrl, userId)) return c.json({ detail: 'Attachment is unavailable. Please upload it again.' }, 403);
   const requestedMediaType = String(b.media_type || b.mediaType || '').toLowerCase();
+  if (/voice|audio/.test(requestedMediaType)) return c.json({ detail: 'Voice messages are no longer available.', code: 'VOICE_RETIRED' }, 410);
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
     : requestedMediaType.includes('voice') || requestedMediaType.includes('audio')
@@ -18972,6 +18986,7 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const mediaUrl = normalizedMediaReferenceForStorage(c, safeMediaReference(body.media_url || body.mediaUrl));
   if (!await messageMediaOwnedBy(c, mediaUrl, userId)) return c.json({ detail: 'Attachment is unavailable. Please upload it again.' }, 403);
   const requestedMediaType = String(body.media_type || body.mediaType || '').toLowerCase();
+  if (/voice|audio/.test(requestedMediaType)) return c.json({ detail: 'Voice messages are no longer available.', code: 'VOICE_RETIRED' }, 410);
   const mediaType = requestedMediaType.includes('video')
     ? 'video'
     : requestedMediaType.includes('voice') || requestedMediaType.includes('audio')
@@ -19075,22 +19090,17 @@ api.post('/notifications/device-token', authMiddleware, async (c) => {
   const body: any = await c.req.json().catch(() => ({}));
   const token = String(body.token || '').trim().replace(/[^a-fA-F0-9]/g, '');
   if (token.length < 32 || token.length > 512) return c.json({ detail: 'Invalid device token.' }, 400);
-  const timestamp = now();
   const normalizedToken = token.toLowerCase();
   const tokenHash = await sha256Hex(normalizedToken);
-  await supabaseAdminUpsert(c, 'app_push_tokens', [{
-    id: await sha256Hex(`${userId}:${tokenHash}`),
-    user_id: userId,
-    token_hash: tokenHash,
-    token: normalizedToken,
-    device_id: cleanText(body.device_id || body.deviceId || '', 160),
-    bundle_id: cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
-    environment: cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
-    platform: 'ios',
-    is_active: true,
-    last_seen_at: timestamp,
-    updated_at: timestamp,
-  }], 'user_id,token_hash');
+  await supabaseAdminRpc(c, 'captro_register_push_token', {
+    p_id: await sha256Hex(`${userId}:${tokenHash}`),
+    p_user_id: userId,
+    p_token_hash: tokenHash,
+    p_token: normalizedToken,
+    p_device_id: cleanText(body.device_id || body.deviceId || '', 160),
+    p_bundle_id: cleanText(body.bundle_id || body.bundleId || c.env.APNS_BUNDLE_ID || '', 160),
+    p_environment: cleanText(body.environment || c.env.APNS_ENVIRONMENT || 'production', 32),
+  });
   return c.json({ ok: true });
 });
 

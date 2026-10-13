@@ -385,7 +385,8 @@ test('buyer checkout never runs seller verification or payout setup', () => {
 });
 
 test('stamp has one detail target while saving remains available in the detail header', () => {
-  assert.match(details, /reactionRow \{ isCommentFocused = true \}/);
+  assert.doesNotMatch(details, /reactionRow|reactionLabel/);
+  assert.match(details, /private var commentsSection/);
   assert.match(details, /detailHeader/);
   assert.match(details, /Menu \{[\s\S]*?model\.toggleSave\(\)/);
   assert.doesNotMatch(overlayCard, /Button\(action: onSave\)/);

@@ -121,7 +121,7 @@ private struct CaptroStructuredFeedCard: View {
       .buttonStyle(.plain)
       .accessibilityHint("Opens full post")
 
-      if post.detail?.voice != nil || post.hasAudio {
+      if post.hasAudio {
         CaptroStampAudio(post: post, api: api, isActive: isActive).padding(.top, 14)
       }
 

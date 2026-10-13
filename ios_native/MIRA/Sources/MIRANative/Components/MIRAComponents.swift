@@ -1369,7 +1369,7 @@ private struct MIRAResolvedVideoPlayer: View {
     }
     // Read live state, not the `shouldPlay` value captured by an older async
     // readiness/retry task before another carousel item took ownership.
-    if wantsPlayback && isOnScreen && !globallyPaused && !MIRAPlaybackCoordinator.isLiveVoiceActive {
+    if wantsPlayback && isOnScreen && !globallyPaused {
       let alreadyOwnsAudio = MIRAPlaybackCoordinator.ownsVideo(player)
       MIRAPlaybackCoordinator.activateVideo(player, id: url)
       if !alreadyOwnsAudio { configureAudioSession() }
@@ -1407,7 +1407,6 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func configureAudioSession() {
-    guard !MIRAPlaybackCoordinator.isLiveVoiceActive else { return }
     do {
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playback, mode: .moviePlayback)

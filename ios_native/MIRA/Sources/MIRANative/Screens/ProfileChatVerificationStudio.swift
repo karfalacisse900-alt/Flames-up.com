@@ -411,11 +411,12 @@ public struct ProfileNativeView: View {
             ProfileGridSkeleton()
           } else {
             LazyVGrid(columns: postGridColumns, spacing: 1) {
-              ForEach(model.posts) { post in
+              ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost }) { post in
                 profilePostTile(post)
               }
             }
             .frame(maxWidth: .infinity, alignment: .center)
+            CaptroLegacyPostArchive(posts: model.posts, api: model.api)
           }
           if let profileError = model.profileError {
             Text(profileError)
@@ -1168,11 +1169,12 @@ public struct UserProfileNativeView: View {
             .padding(.horizontal, MIRATheme.Space.md)
         } else {
           LazyVGrid(columns: postGridColumns, spacing: 1) {
-            ForEach(model.posts) { post in
+            ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost }) { post in
               userProfilePostTile(post)
             }
           }
           .frame(maxWidth: .infinity, alignment: .center)
+          CaptroLegacyPostArchive(posts: model.posts, api: model.api)
         }
       }
       .padding(.top, MIRATheme.Space.md)
@@ -1583,6 +1585,29 @@ private struct UserProfileOptionRow: View {
     .padding(.horizontal, MIRATheme.Space.lg)
     .frame(minHeight: 58)
     .contentShape(Rectangle())
+  }
+}
+
+/// Prior text-only records remain deliberately accessible without empty media
+/// grid tiles or reviving their retired Home card/creation presentation.
+private struct CaptroLegacyPostArchive: View {
+  let posts: [MIRAPost]
+  let api: MIRAAPIClient
+  private var archived: [MIRAPost] { posts.filter(\.isLegacyOrdinaryTextPost) }
+  var body: some View {
+    if !archived.isEmpty {
+      DisclosureGroup("Earlier posts (\(archived.count))") {
+        ForEach(archived) { post in
+          NavigationLink(destination: PostDetailNativeView(post: post, api: api).miraHideTabBarOnAppear()) {
+            Text(post.captroCleanTitle ?? (post.detailCaption.isEmpty ? "Earlier post" : post.detailCaption))
+              .font(.body).lineLimit(2)
+              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          }
+        }
+      }
+      .padding(.horizontal, MIRATheme.Space.md)
+      .accessibilityIdentifier("profile.earlierPosts")
+    }
   }
 }
 

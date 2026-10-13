@@ -46,6 +46,7 @@ final class MainFeedModel: ObservableObject {
   @Published var isLoading = true
   @Published var isLoadingMore = false
   @Published var errorMessage: String?
+  @Published private(set) var paginationError: String?
   @Published var currentUserId: String?
   @Published var currentUsername: String?
 
@@ -99,6 +100,7 @@ final class MainFeedModel: ObservableObject {
     currentUserId = nil
     currentUsername = nil
     errorMessage = nil
+    paginationError = nil
     hasLoadedFreshFeed = false
     isLoadingFreshFeed = false
     refreshRequested = false
@@ -158,6 +160,7 @@ final class MainFeedModel: ObservableObject {
     }
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
     isLoadingFreshFeed = true
+    if userInitiated { paginationError = nil }
     requestGeneration += 1
     let request = requestGeneration
     let section = feedSection
@@ -286,17 +289,25 @@ final class MainFeedModel: ObservableObject {
     await loadNextPage(reason: "legacy_text_page")
   }
 
+  func retryPagination() async {
+    // Retry the same server cursor without clearing existing posts, reranking,
+    // or issuing a scroll command. Equivalent requests still coalesce below.
+    paginationError = nil
+    await loadNextPage(reason: "user_retry")
+  }
+
   func prefetchMedia(around post: MIRAPost) {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
     let plan = makeMediaPreloadPlan(focusIndex: index)
-    guard !plan.isEmpty else { return }
-
-    if !plan.videoPrewarmURLs.isEmpty {
-      MIRAVideoPrewarmManager.shared.prewarm(
-        urls: plan.videoPrewarmURLs,
-        keepOnly: Set(plan.videoKeepAliveURLs)
-      )
+    guard !plan.isEmpty else {
+      mediaPrefetchTask?.cancel()
+      MIRAVideoPrewarmManager.shared.cancelPendingPrewarm()
+      return
     }
+    MIRAVideoPrewarmManager.shared.prewarm(
+      urls: plan.videoPrewarmURLs,
+      keepOnly: Set(plan.videoKeepAliveURLs)
+    )
 
     mediaPrefetchTask?.cancel()
     mediaPrefetchTask = Task.detached(priority: .utility) {
@@ -376,7 +387,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func loadNextPage(reason: String) async {
-    guard canLoadMore, !isLoadingMore, !isLoadingFreshFeed else { return }
+    guard canLoadMore, !isLoadingMore, !isLoadingFreshFeed, paginationError == nil else { return }
     isLoadingMore = true
     let generation = accountGeneration
     let contentVersion = localContentVersion
@@ -390,6 +401,9 @@ final class MainFeedModel: ObservableObject {
     do {
       loaded = try await fetchFeedPage(skip: skip)
     } catch {
+      guard accountGeneration == generation, requestGeneration == request,
+            feedSection == section else { return }
+      paginationError = "Couldn't load more posts. Check your connection and try again."
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "skip=\(skip)")
       return
     }
@@ -814,6 +828,7 @@ final class MainFeedModel: ObservableObject {
     feedSection = section
     posts = sectionSnapshots[section] ?? []
     errorMessage = nil
+    paginationError = nil
     isLoading = posts.isEmpty
     isLoadingMore = false
     isLoadingFreshFeed = false
@@ -938,7 +953,6 @@ public struct MainFeedView: View {
   private let isGuest: Bool
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @ScaledMetric(relativeTo: .body) private var homeTabClearance: CGFloat = 80
   @Environment(\.scenePhase) private var scenePhase
   @State private var activeVideoPostID: String?
   @State private var selectedPostID: String?
@@ -1329,7 +1343,10 @@ public struct MainFeedView: View {
         systemImage: selectedFeedSection == .following ? "person.2" : selectedFeedSection == .around ? "mappin" : "sparkles"
       )
         if model.canLoadMore {
-          Button("Load more posts") { Task { await model.loadPastLegacyTextPage() } }
+          if let error = model.paginationError {
+            Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+          }
+          Button(model.paginationError == nil ? "Load more posts" : "Try again") { Task { await model.retryPagination() } }
             .frame(minHeight: 44)
             .disabled(model.isLoadingMore)
         }
@@ -1354,13 +1371,32 @@ public struct MainFeedView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.post.page.\(post.id)")
         }
+        if model.canLoadMore {
+          HStack(spacing: 12) {
+            if model.isLoadingMore {
+              ProgressView("Loading more posts")
+            } else if let error = model.paginationError {
+              Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+              Spacer(minLength: 0)
+              Button("Try again") { Task { await model.retryPagination() } }
+                .frame(minHeight: 44).accessibilityIdentifier("home.pagination.retry")
+            } else {
+              Button("Load more posts") { Task { await model.retryPagination() } }
+                .frame(minHeight: 44)
+            }
+          }
+          .frame(maxWidth: .infinity, minHeight: 60)
+          .padding(.horizontal, 20)
+          .accessibilityIdentifier("home.pagination")
+        }
       }
       .scrollTargetLayout()
     }
-    // Extend beneath Captro's existing tab bar, but reserve its measured safe
-    // region ONCE, on the scroll content. Never add this space to each post.
-    .safeAreaPadding(.bottom, bottomInset + homeTabClearance)
-    .ignoresSafeArea(.container, edges: .bottom)
+    // Respect the native TabView's safe region. Extending this scroll viewport
+    // under the floating bar let authored captions and controls sit behind it;
+    // a trailing content spacer only protected the final item, not the viewport.
+    .contentMargins(.bottom, 12, for: .scrollContent)
     .background(MIRATheme.Color.appBackground)
     .scrollIndicators(.hidden)
     .refreshable { await model.load(forceRefresh: true, userInitiated: true) }

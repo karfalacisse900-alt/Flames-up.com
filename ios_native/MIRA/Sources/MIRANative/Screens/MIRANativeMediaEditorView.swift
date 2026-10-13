@@ -11,7 +11,6 @@ public enum MIRANativeMediaEditorMode {
 public struct MIRANativeMediaEditorView: View {
   private let media: MIRAPickedMedia
   private let mode: MIRANativeMediaEditorMode
-  private let suggestedPlan: CaptroAssistantEditPlan?
   private let onClose: (() -> Void)?
   private let onComplete: (MIRAPickedMedia) -> Void
 
@@ -33,13 +32,11 @@ public struct MIRANativeMediaEditorView: View {
   public init(
     media: MIRAPickedMedia,
     mode: MIRANativeMediaEditorMode,
-    suggestedPlan: CaptroAssistantEditPlan? = nil,
     onClose: (() -> Void)? = nil,
     onComplete: @escaping (MIRAPickedMedia) -> Void
   ) {
     self.media = media
     self.mode = mode
-    self.suggestedPlan = suggestedPlan
     self.onClose = onClose
     self.onComplete = onComplete
     let mediaType: MIRANativeEditorMediaType = media.kind == .video ? .video : .photo
@@ -576,12 +573,6 @@ public struct MIRANativeMediaEditorView: View {
       let duration = try await asset.load(.duration)
       let seconds = max(0, CMTimeGetSeconds(duration))
       videoDurationSeconds = seconds
-      if let suggestedPlan, seconds > 0.4 {
-        let start = min(max(0, suggestedPlan.trimStartSeconds ?? 0), seconds - 0.4)
-        let requestedDuration = suggestedPlan.trimDurationSeconds ?? (seconds - start)
-        recipe.trimStartSeconds = start
-        recipe.trimEndSeconds = min(seconds, start + max(0.4, requestedDuration))
-      }
       if mode == .post,
          !didManuallySelectAspectRatio,
          let track = try await asset.loadTracks(withMediaType: .video).first {

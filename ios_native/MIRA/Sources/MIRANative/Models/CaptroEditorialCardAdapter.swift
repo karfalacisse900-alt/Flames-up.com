@@ -2,7 +2,7 @@ import Foundation
 
 extension MIRAPost {
   /// Home selects useful facts without changing the underlying post or the
-  /// separate Details/text-only adapters. Rendering, not this adapter, bounds copy.
+  /// separate Details presentation. Rendering, not this adapter, bounds copy.
   var captroMediaFeedCardContent: CaptroEditorialCardContent {
     let source = captroEditorialCardContent
     let commerce = detail?.commerce
@@ -54,21 +54,6 @@ extension MIRAPost {
     return card
   }
 
-  /// Image-free posts have no separate caption below the card. Keep their
-  /// caption in the same surface, without repeating a title or offer terms.
-  var captroTextOnlyCardContent: CaptroEditorialCardContent {
-    var content = captroEditorialCardContent
-    let caption = captroFeedCaptionText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    if !caption.isEmpty && caption != content.title {
-      if [.event, .meetup, .deal].contains(content.type) && content.summaryText == nil {
-        content.summaryText = caption
-      } else if content.description == nil {
-        content.description = caption
-      }
-    }
-    return content
-  }
-
   /// Live feed data only. Example content belongs in the DEBUG visual fixture, not here.
   var captroEditorialCardContent: CaptroEditorialCardContent {
     let type = CaptroEditorialCardType(stampKind: captroStampKind)
@@ -76,7 +61,7 @@ extension MIRAPost {
     let event = detail?.event
     let unavailable = CaptroStampAdapter.availability(commerce)
     let title = cleanEditorialText(type == .place ? placeDisplayName : commerce?.title)
-      ?? captroCleanTitle ?? (type == .moment && detail?.voice != nil ? "Voice post" : type.rawValue.capitalized)
+      ?? captroCleanTitle ?? (type == .moment ? "" : type.rawValue.capitalized)
     let area = cleanEditorialText(type == .place
       ? (displayLocationText ?? placeCity)
       : (commerce?.city ?? event?.city ?? commerce?.locationName ?? captroFeedLocationText))

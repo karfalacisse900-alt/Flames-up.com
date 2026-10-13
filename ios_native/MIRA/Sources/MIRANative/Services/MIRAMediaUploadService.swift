@@ -210,19 +210,6 @@ public final class MIRAMediaUploadService {
     }
   }
 
-  public func uploadAudio(data: Data, fileName: String, mimeType: String = "audio/m4a") async throws -> String {
-    try await performUpload(kind: "audio", bytes: data.count) {
-      let response: MIRAMediaUploadResponse = try await api.uploadMultipart(
-        "/upload/audio",
-        fileName: fileName,
-        mimeType: mimeType,
-        data: data
-      )
-      guard let url = response.url, !url.isEmpty else { throw MIRAAPIError.emptyResponse }
-      return url
-    }
-  }
-
   public func uploadFile(data: Data, fileName: String, mimeType: String) async throws -> String {
     try await performUpload(kind: "file", bytes: data.count) {
       let response: MIRAMediaUploadResponse = try await api.uploadMultipart(

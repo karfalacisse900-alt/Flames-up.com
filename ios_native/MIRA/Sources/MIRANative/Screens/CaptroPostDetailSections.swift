@@ -14,7 +14,6 @@ struct CaptroPostDetailSections: View {
   let onReply: () -> Void
 
   private var post: MIRAPost { model.post }
-  @State private var transcriptVoiceId: String?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -46,14 +45,8 @@ struct CaptroPostDetailSections: View {
           }
         }
       }
-      voicePlayer
-        .padding(.horizontal, 16)
-        .padding(.vertical, post.detail?.voice == nil ? 0 : 12)
     }
     .foregroundStyle(CaptroDetailStyle.ink)
-    .sheet(isPresented: Binding(get: { transcriptVoiceId != nil }, set: { if !$0 { transcriptVoiceId = nil } })) {
-      if let transcriptVoiceId { CaptroVoiceTranscriptSheet(voiceId: transcriptVoiceId) }
-    }
   }
 
   private var placeReview: some View {
@@ -225,15 +218,6 @@ struct CaptroPostDetailSections: View {
         .lineSpacing(4)
         .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
-    }
-  }
-
-  @ViewBuilder
-  private var voicePlayer: some View {
-    if let voice = post.detail?.voice {
-      CaptroCompactVoicePlayer(voiceId: voice.id, durationMs: voice.durationMs, waveform: voice.waveform) {
-        transcriptVoiceId = voice.id
-      }
     }
   }
 

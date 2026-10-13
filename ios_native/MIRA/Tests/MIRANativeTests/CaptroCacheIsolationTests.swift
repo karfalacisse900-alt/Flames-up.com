@@ -44,6 +44,25 @@ final class CaptroCacheIsolationTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: photo.path))
   }
 
+  func testRetiredVoiceDraftRemainsDecodedAndArchivedWithoutRecordingDeletion() async throws {
+    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let directory = try XCTUnwrap(postDraftMediaDirectory())
+    let voiceURL = directory.appendingPathComponent("captro-voice-\(UUID().uuidString).m4a")
+    try Data([1, 2, 3]).write(to: voiceURL, options: .atomic)
+    defer { try? FileManager.default.removeItem(at: voiceURL) }
+    let snapshot = MIRAVoiceDraftSnapshot(localFilePath: voiceURL.path, duration: 1,
+      levels: [0.1], disclosureVersion: "legacy", disclosureAcceptedAt: Date())
+    var draft = try JSONDecoder().decode(MIRAPostDraftSnapshot.self, from: Data(#"{"title":"","bodyText":"Keep writing","hashtags":[],"uploadStatus":"draft","showBroadLocation":false,"isEditingPostDetails":false,"media":[],"savedAt":"2026-10-13T00:00:00Z"}"#.utf8))
+    draft.voiceDraft = snapshot
+    await MIRAAppCacheStore.shared.savePostDraft(draft)
+    await MIRAAppCacheStore.shared.clearPostDraft()
+    let archived = await MIRALocalJSONCache.load(MIRAVoiceDraftSnapshot.self, key: "native.retired_voice_draft.v1")
+    XCTAssertEqual(archived, snapshot)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: voiceURL.path))
+    await MIRALocalJSONCache.remove(key: "native.retired_voice_draft.v1")
+  }
+
   func testRecentChatReconciliationRemovesDeletedRowsButKeepsPendingSend() async {
     let store = MIRAChatLocalStore.shared
     let old = MIRAMessage(id: "old", createdAt: "2026-09-24T10:00:00Z")

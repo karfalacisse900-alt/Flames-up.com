@@ -48,24 +48,8 @@ struct MIRAVoiceDraftSnapshot: Codable, Hashable {
   let disclosureVersion: String
   let disclosureAcceptedAt: Date
 
-  init(_ draft: CaptroVoiceDraft) {
-    localFilePath = draft.fileURL.path
-    duration = draft.duration
-    levels = draft.levels
-    disclosureVersion = draft.disclosureVersion
-    disclosureAcceptedAt = draft.disclosureAcceptedAt
-  }
-
-  func restore() -> CaptroVoiceDraft? {
-    guard let directory = postDraftMediaDirectory() else { return nil }
-    let url = URL(fileURLWithPath: localFilePath).standardizedFileURL
-    guard url.deletingLastPathComponent() == directory.standardizedFileURL,
-          FileManager.default.fileExists(atPath: url.path) else { return nil }
-    return CaptroVoiceDraft(
-      fileURL: url, duration: duration, levels: levels,
-      disclosureVersion: disclosureVersion, disclosureAcceptedAt: disclosureAcceptedAt
-    )
-  }
+  // Decoding-only compatibility record. Retiring voice never launches a recorder
+  // or turns an old local file back into a submit-ready attachment.
 }
 
 struct MIRAPostDraftSnapshot: Codable, Hashable {
@@ -263,7 +247,7 @@ actor MIRAAppCacheStore {
   }
 
   func saveCurrentProfile(_ user: MIRAUser) async {
-    await MIRALocalJSONCache.save(user, key: CacheKey.currentProfile)
+    await MIRALocalJSONCache.save(user, key: CacheKey.currentProfile, accountUserID: user.id)
   }
 
   func loadProfilePosts(userId: String) async -> [MIRAPost]? {
@@ -390,14 +374,14 @@ actor MIRAAppCacheStore {
 
   func clearPostDraft() async {
     let draft = await loadPostDraft()
+    if let voice = draft?.voiceDraft {
+      // Preserve the old attachment metadata and file when the revised composer
+      // publishes media or closes. It must not silently discard retired content.
+      await MIRALocalJSONCache.save(voice, key: CacheKey.retiredVoiceDraft)
+    }
     await MIRALocalJSONCache.remove(key: CacheKey.postDraft)
     guard let directory = postDraftMediaDirectory() else { return }
-    pruneStoredPostDraftMedia(in: directory, keeping: [])
-    // Comment recordings use the same durable directory. Delete only the
-    // recording attached to this post draft, never another composer’s audio.
-    if let voice = draft?.voiceDraft?.restore() {
-      try? FileManager.default.removeItem(at: voice.fileURL)
-    }
+    pruneStoredPostDraftMedia(in: directory, keeping: Set([draft?.voiceDraft?.localFilePath].compactMap { $0 }))
   }
 
   func cleanup() async {
@@ -461,6 +445,7 @@ private enum CacheKey {
   static let notifications = "native.notifications.v4.cache_first"
   static let settings = "native.settings.v1.cache_first"
   static let postDraft = "native.post_draft.v1.cache_first"
+  static let retiredVoiceDraft = "native.retired_voice_draft.v1"
   static let discoverCategoryIds = [
     "all",
     "photography",

@@ -15,7 +15,7 @@ public struct CaptroStampVisualTestView: View {
   private var content: CaptroEditorialCardContent {
     switch kind {
     case .moment:
-      return CaptroEditorialCardContent(type: .moment, title: "Voice post", subtitle: "New York",
+      return CaptroEditorialCardContent(type: .moment, title: "Walking home", subtitle: "New York",
         description: "A short story from the city.", username: "@captro")
     case .place:
       return CaptroEditorialCardContent(type: .place, title: "Ruffian", subtitle: "East Village",

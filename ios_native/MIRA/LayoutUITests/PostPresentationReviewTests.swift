@@ -18,31 +18,17 @@ final class PostPresentationReviewTests: XCTestCase {
   }
   func testComposerRequiresMediaAndHasNoResponses() {
     let app = launch(["--captro-quality-composer", "--captro-composer-authorized"])
-    let editor = app.textViews["composer.writing"]
-    XCTAssertTrue(editor.waitForExistence(timeout: 20))
-    editor.tap()
-    // Fresh CI simulators can show Apple's first-keyboard QuickPath tutorial.
-    if app.buttons["Continue"].waitForExistence(timeout: 2) { app.buttons["Continue"].tap() }
-    editor.typeText("Keep my caption.")
+    XCTAssertTrue(app.buttons["composer.addRequiredMedia"].waitForExistence(timeout: 20))
+    XCTAssertFalse(app.textViews["composer.writing"].exists, "No ordinary text-only entry surface")
     XCTAssertFalse(app.buttons["composer.create"].isEnabled)
     XCTAssertTrue(app.staticTexts["composer.mediaRequired"].exists)
-    capture(app, "composer-media-required")
-    // On short screens Add is only partly visible behind the keyboard accessory.
-    // Scroll the actual composer to reveal it, as a user would; do not synthesize
-    // a tap through the accessory's transparent region.
-    let keyboardDone = app.buttons["composer.keyboardDone"]
-    if keyboardDone.exists,
-       app.buttons["composer.add"].frame.maxY > keyboardDone.frame.minY {
-      let hint = app.staticTexts["composer.mediaRequired"]
-      hint.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        .press(forDuration: 0.05, thenDragTo: editor.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)))
-      XCTAssertEqual(editor.value as? String, "Keep my caption.")
-    }
+    XCTAssertFalse(app.buttons["Record voice attachment"].exists)
+    capture(app, "composer-media-first-no-voice")
     app.buttons["composer.add"].tap()
     XCTAssertTrue(app.buttons["Photos & videos"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Responses"].exists)
     XCTAssertFalse(app.buttons["Yes / No"].exists)
-    capture(app, "attachments-no-poll")
+    capture(app, "attachments-no-poll-or-voice")
   }
   func testOrdinaryDetailsHasCaptionAndNoPollOrTransaction() {
     let app = launch(["--captro-presentation-review"])
@@ -56,6 +42,8 @@ final class PostPresentationReviewTests: XCTestCase {
     capture(app, "ordinary-photo-details")
     app.swipeUp()
     XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'An afternoon'")).firstMatch.exists)
+    XCTAssertFalse(app.buttons["Like post"].exists)
+    XCTAssertFalse(app.buttons["Record voice reply"].exists)
     capture(app, "ordinary-caption-comments")
   }
   func testStoriesInventoryAndStampTapDoesNotAdvance() {

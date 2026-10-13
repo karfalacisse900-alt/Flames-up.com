@@ -281,26 +281,6 @@ final class ConversationNativeModel: ObservableObject {
     }
   }
 
-  func sendVoiceRecording(_ file: URL) async {
-    guard !isUploading, !isSending else { return }
-    isUploading = true
-    defer { isUploading = false }
-    guard let data = await loadLocalRetryData(from: file) else {
-      errorMessage = "Couldn't read this recording. Your recording has not been sent."; return
-    }
-    let local = await localStore.storeOutgoingMedia(data: data, fileName: "voice.m4a")
-    let id = appendLocalOutgoingMessage(content: "", mediaUrl: (local ?? file).absoluteString,
-      mediaType: "voice", uploadStatus: "uploading")
-    do {
-      // Human voice messages use the existing attachment route, never AI.
-      let url = try await uploadService.uploadAudio(data: data, fileName: "voice.m4a")
-      await send(content: "", mediaUrl: url, mediaType: "voice", replacingLocalId: id)
-    } catch {
-      updateLocalMessage(id, status: "failed", uploadStatus: "failed")
-      errorMessage = "Couldn't send this recording. Long press it to retry."
-    }
-  }
-
   func updateTyping(_ typing: Bool) {
     guard case let .direct(peerId) = kind else { return }
     Task {
@@ -375,6 +355,10 @@ final class ConversationNativeModel: ObservableObject {
 
   func retry(_ message: MIRAMessage) async {
     guard !isSending, !isUploading, message.status?.lowercased() == "failed" else { return }
+    guard !["voice", "audio"].contains(message.mediaType?.lowercased() ?? "") else {
+      errorMessage = "Voice messages are no longer supported. Your saved recording has not been deleted."
+      return
+    }
     messages.removeAll { $0.id == message.id }
     await persistThread()
     let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -382,10 +366,6 @@ final class ConversationNativeModel: ObservableObject {
        let url = URL(string: mediaUrl),
        url.isFileURL,
        let data = await loadLocalRetryData(from: url) {
-      if ["voice", "audio"].contains(message.mediaType?.lowercased() ?? "") {
-        await sendVoiceRecording(url)
-        return
-      }
       let type = message.mediaType?.lowercased() == "video" ? UTType.movie : UTType.image
       await sendPickedMedia(data: data, contentTypes: [type])
       return
@@ -517,7 +497,6 @@ public struct ConversationNativeView: View {
   @State private var isReportSheetPresented = false
   @State private var isViewingLatestMessage = true
   @State private var hasNewMessages = false
-  @State private var showVoiceRecorder = false
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -672,12 +651,6 @@ public struct ConversationNativeView: View {
       ClubPostShareSheet(api: model.api, userId: model.currentUserId) { post in
         showSharePostPicker = false
         Task { await model.sendSharedPost(post) }
-      }
-    }
-    .sheet(isPresented: $showVoiceRecorder) {
-      CaptroChatVoiceRecorderSheet { file in
-        showVoiceRecorder = false
-        Task { await model.sendVoiceRecording(file) }
       }
     }
     .sheet(isPresented: $showGroupMembers) {
@@ -1159,15 +1132,9 @@ public struct ConversationNativeView: View {
     let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     return Button {
       CaptroHaptics.light()
-      Task {
-        if hasDraft {
-          await model.sendText()
-        } else {
-          showVoiceRecorder = true
-        }
-      }
+      Task { await model.sendText() }
     } label: {
-      Image(systemName: hasDraft ? "arrow.up" : "mic")
+      Image(systemName: "arrow.up")
         .font(.system(size: 15, weight: .bold))
         .foregroundStyle(MIRATheme.Color.onPrimary)
         .frame(width: 44, height: 44)
@@ -1175,8 +1142,8 @@ public struct ConversationNativeView: View {
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
-    .disabled(model.isSending || model.isUploading)
-    .accessibilityLabel(model.isSending ? "Sending message" : (hasDraft ? "Send message" : "Record voice message"))
+    .disabled(!hasDraft || model.isSending || model.isUploading)
+    .accessibilityLabel(model.isSending ? "Sending message" : "Send message")
   }
 
   private func trayButton(_ systemImage: String, _ title: String, tint: Color = MIRATheme.Color.textMuted) -> some View {
@@ -1400,7 +1367,9 @@ private struct MessageBubbleContent: View {
     if type == "file" {
       fileCard
     } else if type == "voice" || type == "audio" {
-      CaptroChatAudioMessage(url: url, identifier: message.id)
+      Text("Legacy voice message")
+        .font(.footnote).foregroundStyle(bubbleTextColor)
+        .padding(12)
     } else {
       ZStack {
         RemoteMediaView(

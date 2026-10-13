@@ -14,7 +14,6 @@ final class PostDetailModel: ObservableObject {
   @Published var isUpdatingAttendance = false
   @Published var actionError: String?
   @Published var commentsError: String?
-  @Published var pendingVoiceReplies: [CaptroVoiceSubmission] = []
   @Published var privateObject: CaptroPrivatePostObject?
   @Published var isLoadingObject = false
   @Published var objectError: String?
@@ -306,24 +305,11 @@ final class PostDetailModel: ObservableObject {
   }
 
   @discardableResult
-  func sendComment(_ text: String, parentId: String? = nil, voiceDraft: CaptroVoiceDraft? = nil) async -> Bool {
+  func sendComment(_ text: String, parentId: String? = nil) async -> Bool {
     let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !clean.isEmpty || voiceDraft != nil else { return false }
+    guard !clean.isEmpty else { return false }
     do {
-      var voiceId: String?
-      var voiceSubmission: CaptroVoiceSubmission?
-      if let voiceDraft {
-        let submission = try await CaptroVoiceUploadService(api: api).submit(
-          voiceDraft, targetType: "reply", parentPostId: post.id, parentCommentId: parentId, caption: clean
-        )
-        voiceId = submission.id
-        voiceSubmission = submission
-      }
-      let comment: MIRAComment = try await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean, parentId: parentId, voiceAudioId: voiceId))
-      if let voiceSubmission {
-        pendingVoiceReplies.append(voiceSubmission)
-        return true
-      }
+      let comment: MIRAComment = try await api.post("/posts/\(post.id)/comments", body: PostCommentBody(content: clean, parentId: parentId, voiceAudioId: nil))
       comments.append(comment)
       await MIRAAppCacheStore.shared.saveComments(comments, postId: post.id)
       post = post.updating(commentsCount: max(comments.count, (post.commentsCount ?? 0) + 1))
@@ -603,8 +589,6 @@ public struct PostDetailNativeView: View {
   @State private var isPostOptionsPresented = false
   @State private var isEditingEvent = false
   @State private var isOrganizingFavorite = false
-  @State private var voiceDraft: CaptroVoiceDraft?
-  @State private var showVoiceRecorder = false
   @FocusState private var isCommentFocused: Bool
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
@@ -649,7 +633,6 @@ public struct PostDetailNativeView: View {
                   .padding(.bottom, 16)
               }
 
-              reactionRow { isCommentFocused = true }
               commentsSection
                 .id("post-comments")
             }
@@ -677,9 +660,6 @@ public struct PostDetailNativeView: View {
       Button("Cancel", role: .cancel) {}
     }
     .sheet(isPresented: $isEditingEvent) { CaptroEventEditSheet(model: model) }
-    .fullScreenCover(isPresented: $showVoiceRecorder) {
-      CaptroVoiceRecorderSheet(limit: 30) { voiceDraft = $0 }
-    }
     .sheet(item: $model.paymentConfiguration, onDismiss: {
       Task { await model.refreshCommerceAfterCheckout() }
     }) { configuration in
@@ -766,36 +746,6 @@ public struct PostDetailNativeView: View {
     }
   }
 
-  private func reactionRow(onComment: @escaping () -> Void) -> some View {
-    HStack(spacing: 0) {
-      Button {
-        Task { await model.toggleLike() }
-      } label: {
-        reactionLabel(model.post.viewerLiked ? "heart.fill" : "heart", text: compact(model.post.likesCount ?? 0))
-          .foregroundStyle(model.post.viewerLiked ? CaptroDetailStyle.accent : CaptroDetailStyle.ink)
-      }
-      .accessibilityLabel(model.post.viewerLiked ? "Unlike post" : "Like post")
-      Button(action: onComment) {
-        reactionLabel("bubble.right", text: compact(model.post.commentsCount ?? model.comments.count))
-      }
-      .accessibilityLabel("Comments")
-      Spacer(minLength: 0)
-    }
-    .buttonStyle(.plain)
-    .foregroundStyle(CaptroDetailStyle.ink)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
-  }
-
-  private func reactionLabel(_ icon: String, text: String) -> some View {
-    HStack(spacing: 6) {
-      Image(systemName: icon).font(.system(size: 18))
-      Text(text).font(.system(size: 12, weight: .medium)).lineLimit(1)
-    }
-    .frame(maxWidth: .infinity, minHeight: 44)
-    .contentShape(Rectangle())
-  }
-
   private var commentsSection: some View {
     VStack(alignment: .leading, spacing: 18) {
       Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
@@ -820,20 +770,6 @@ public struct PostDetailNativeView: View {
       }
 
       LazyVStack(spacing: 20) {
-        ForEach(model.pendingVoiceReplies, id: \.id) { pending in
-          HStack(spacing: 10) {
-            ProgressView()
-            VStack(alignment: .leading, spacing: 3) {
-              Text("Checking your recording…").font(.system(size: 14, weight: .semibold))
-              Text("Only you can see this while Captro checks it.").font(.system(size: 12)).foregroundStyle(CaptroDetailStyle.secondary)
-            }
-            Spacer(minLength: 0)
-          }
-          .padding(12)
-          .background(MIRATheme.Color.surfaceSoft)
-          .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
-          .accessibilityElement(children: .combine)
-        }
         ForEach(model.comments) { comment in
           CommentRow(
             comment: comment,
@@ -869,26 +805,7 @@ public struct PostDetailNativeView: View {
         }
         .foregroundStyle(CaptroDetailStyle.secondary)
       }
-      if let voiceDraft {
-        HStack(spacing: 8) {
-          Image(systemName: "waveform")
-          Text("Voice reply · \(Int(voiceDraft.duration))s").font(.footnote.weight(.semibold))
-          Spacer(minLength: 0)
-          Button("Remove") { self.voiceDraft = nil }.font(.footnote)
-        }
-        .foregroundStyle(CaptroDetailStyle.secondary)
-      }
       HStack(alignment: .bottom, spacing: 8) {
-        Button { showVoiceRecorder = true } label: {
-          Image(systemName: voiceDraft == nil ? "mic" : "mic.fill")
-            .font(.system(size: 18, weight: .semibold))
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(CaptroDetailStyle.accent)
-        .disabled(isSendingComment)
-        .accessibilityLabel(voiceDraft == nil ? "Record voice reply" : "Replace voice reply")
         TextField("Add a comment...", text: $draft, axis: .vertical)
           .font(.body)
           .textInputAutocapitalization(.sentences)
@@ -928,20 +845,18 @@ public struct PostDetailNativeView: View {
   }
 
   private var canSendComment: Bool {
-    (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voiceDraft != nil) && !isSendingComment
+    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSendingComment
   }
 
   private func sendDraftComment() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard canSendComment else { return }
     let parentId = replyingTo?.id
-    let recording = voiceDraft
     isSendingComment = true
     Task {
-      let didSend = await model.sendComment(text, parentId: parentId, voiceDraft: recording)
+      let didSend = await model.sendComment(text, parentId: parentId)
       if didSend {
         if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
-        if voiceDraft == recording { voiceDraft = nil }
         replyingTo = nil
       }
       isSendingComment = false
@@ -1174,8 +1089,6 @@ struct DiscoverDetailCommentsSheet: View {
   @State private var draft = ""
   @State private var isSending = false
   @State private var replyingTo: MIRAComment?
-  @State private var voiceDraft: CaptroVoiceDraft?
-  @State private var showVoiceRecorder = false
   @FocusState private var isReplyFocused: Bool
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1237,9 +1150,6 @@ struct DiscoverDetailCommentsSheet: View {
       .scrollDismissesKeyboard(.interactively)
       .miraScrollFeel(.sheet)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    .fullScreenCover(isPresented: $showVoiceRecorder) {
-      CaptroVoiceRecorderSheet(limit: 30) { voiceDraft = $0 }
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       commentComposer
@@ -1316,17 +1226,6 @@ struct DiscoverDetailCommentsSheet: View {
         .padding(.top, MIRATheme.Space.sm)
       }
 
-      if let voiceDraft {
-        HStack {
-          Image(systemName: "waveform").foregroundStyle(MIRATheme.Color.forest)
-          Text("Voice reply · \(Int(voiceDraft.duration))s").font(.footnote.weight(.semibold))
-          Spacer()
-          Button("Remove") { self.voiceDraft = nil }.font(.footnote)
-        }
-        .padding(.horizontal, MIRATheme.Space.md)
-        .padding(.top, MIRATheme.Space.sm)
-      }
-
       HStack(alignment: .bottom, spacing: MIRATheme.Space.sm) {
         TextField(replyingTo == nil ? localization.string("comments.add_placeholder") : localization.string("comments.reply_placeholder"), text: $draft, axis: .vertical)
           .font(.system(size: 15, weight: .regular))
@@ -1344,18 +1243,6 @@ struct DiscoverDetailCommentsSheet: View {
           }
           .onSubmit(sendComment)
           .animation(CaptroMotion.feedChromeAnimation(reduceMotion: reduceMotion), value: isReplyFocused)
-
-        Button {
-          isReplyFocused = false
-          showVoiceRecorder = true
-        } label: {
-          Image(systemName: voiceDraft == nil ? "mic" : "mic.fill")
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.forest)
-            .frame(width: 40, height: 40)
-        }
-        .buttonStyle(.miraPress)
-        .accessibilityLabel(voiceDraft == nil ? "Record voice reply" : "Replace voice reply")
 
         Button(action: sendComment) {
           Group {
@@ -1387,23 +1274,22 @@ struct DiscoverDetailCommentsSheet: View {
   }
 
   private var canSend: Bool {
-    (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || voiceDraft != nil) && !isSending
+    !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
   }
 
   private func sendComment() {
     let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard (!text.isEmpty || voiceDraft != nil), !isSending else { return }
+    guard !text.isEmpty, !isSending else { return }
     CaptroHaptics.light()
     isSending = true
     draft = ""
     Task {
       let parentId = replyingTo?.id
-      let didSend = await model.sendComment(text, parentId: parentId, voiceDraft: voiceDraft)
+      let didSend = await model.sendComment(text, parentId: parentId)
       if !didSend {
         draft = text
       } else {
         replyingTo = nil
-        voiceDraft = nil
       }
       isSending = false
     }
@@ -1422,7 +1308,6 @@ private struct CommentRow: View {
   let onDelete: () -> Void
   let onHide: () -> Void
   var editorial = false
-  @State private var showsTranscript = false
 
   private var isOwnComment: Bool {
     guard let currentUserId, let userId = comment.userId else { return false }
@@ -1466,11 +1351,8 @@ private struct CommentRow: View {
             .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
-          if let voice = comment.voice {
-            CaptroCompactVoicePlayer(voiceId: voice.id, durationMs: voice.durationMs, waveform: voice.waveform) {
-              showsTranscript = true
-            }
-            .padding(.top, 4)
+          if comment.voice != nil && comment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text("Legacy voice reply").font(.footnote).foregroundStyle(CaptroDetailStyle.secondary)
           }
         }
         .padding(.horizontal, editorial ? 0 : MIRATheme.Space.md)
@@ -1490,9 +1372,8 @@ private struct CommentRow: View {
             onLike()
           } label: {
             HStack(spacing: 4) {
-              Image(systemName: comment.viewerLiked ? "heart.fill" : "heart")
-                .font(.system(size: 12, weight: .semibold))
-              Text(compact(comment.likesCount ?? 0))
+              Text(comment.viewerLiked ? "Liked" : "Like")
+              if (comment.likesCount ?? 0) > 0 { Text(compact(comment.likesCount ?? 0)) }
             }
           }
           .buttonStyle(.plain)
@@ -1536,9 +1417,6 @@ private struct CommentRow: View {
           Label("Report comment", systemImage: "flag")
         }
       }
-    }
-    .sheet(isPresented: $showsTranscript) {
-      if let voice = comment.voice { CaptroVoiceTranscriptSheet(voiceId: voice.id) }
     }
   }
 }

@@ -62,6 +62,103 @@ public struct MIRAApplePerformanceInterval {
   }
 }
 
+/// Local, bounded Apple diagnostics. No account identifiers or custom signpost
+/// payloads are retained, and nothing is uploaded automatically. The container
+/// can be retrieved with Xcode for an explicitly authorized device investigation.
+final class MIRAPerformanceDiagnosticArchive: @unchecked Sendable {
+  static let shared = MIRAPerformanceDiagnosticArchive()
+  private let queue = DispatchQueue(label: "com.captro.diagnostic-archive", qos: .utility)
+  private let directory: URL?
+  private let maxFiles: Int
+  private let maxBytes: Int
+  private let maxAge: TimeInterval
+
+  init(directory: URL? = nil, maxFiles: Int = 24, maxBytes: Int = 8 * 1024 * 1024, maxAge: TimeInterval = 14 * 86_400) {
+    self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+      .first?.appendingPathComponent("CaptroDiagnostics", isDirectory: true)
+    self.maxFiles = maxFiles
+    self.maxBytes = maxBytes
+    self.maxAge = maxAge
+  }
+
+  func enqueue(_ data: Data, kind: String) {
+    queue.async { self.store(data, kind: kind) }
+  }
+
+  // Called only on the archive's serial utility queue (or synchronously in tests).
+  func store(_ data: Data, kind: String, now: Date = Date()) {
+    guard let directory, let clean = Self.sanitizedPayload(data), clean.count <= min(maxBytes, 4 * 1024 * 1024) else {
+      MIRAApplePerformanceLogger.event("metrickit_archive_rejected")
+      return
+    }
+    do {
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+        attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+      var protectedDirectory = directory
+      var values = URLResourceValues()
+      values.isExcludedFromBackup = true
+      try protectedDirectory.setResourceValues(values)
+      let digest = SHA256.hash(data: clean).map { String(format: "%02x", $0) }.joined()
+      let prefix = kind == "diagnostics" ? "diagnostics" : "metrics"
+      let target = directory.appendingPathComponent("\(prefix)-\(digest).json")
+      if !FileManager.default.fileExists(atPath: target.path) {
+        try clean.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      }
+      let files = try FileManager.default.contentsOfDirectory(at: directory,
+        includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey], options: [.skipsHiddenFiles])
+        .filter { $0.pathExtension == "json" }
+        .map { url -> (url: URL, date: Date, bytes: Int) in
+          let info = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+          return (url, info.contentModificationDate ?? .distantPast, info.fileSize ?? 0)
+        }.sorted { $0.date > $1.date }
+      var retainedBytes = 0
+      var retainedCount = 0
+      for file in files {
+        if now.timeIntervalSince(file.date) > maxAge || retainedCount >= maxFiles || retainedBytes + file.bytes > maxBytes {
+          try FileManager.default.removeItem(at: file.url)
+        } else {
+          retainedCount += 1
+          retainedBytes += file.bytes
+        }
+      }
+      MIRAApplePerformanceLogger.event("metrickit_archive_saved", detail: "kind=\(prefix) files=\(retainedCount)")
+    } catch {
+      // File errors may contain a user/device path. Report only the category.
+      MIRAApplePerformanceLogger.event("metrickit_archive_write_failed")
+    }
+  }
+
+  static func sanitizedPayload(_ data: Data) -> Data? {
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+    let allowedRoots: Set<String> = ["version", "timeStampBegin", "timeStampEnd", "metaData", "appVersion",
+      "includesMultipleApplicationVersions", "cpuExceptionDiagnostics", "hangDiagnostics", "crashDiagnostics",
+      "diskWriteExceptionDiagnostics", "appLaunchDiagnostics", "cpuMetrics", "memoryMetrics", "diskIOMetrics",
+      "applicationLaunchMetrics", "applicationResponsivenessMetrics", "applicationExitMetrics",
+      "applicationTimeMetrics", "animationMetrics", "displayMetrics", "networkTransferMetrics"]
+    let omittedKeys: Set<String> = ["signpostmetrics", "applicationspecificinformation", "exceptionreason",
+      "terminationreason", "virtualmemoryregioninfo", "userinfo", "userdata", "logs", "log", "customdata"]
+    func clean(_ value: Any) -> Any {
+      if let fields = value as? [String: Any] {
+        return fields.reduce(into: [String: Any]()) { result, field in
+          let key = field.key.lowercased()
+          guard !omittedKeys.contains(key), !["token", "password", "secret", "authorization", "cookie", "email",
+            "userid", "caption", "message", "url", "path"].contains(where: { key.contains($0) }) else { return }
+          result[field.key] = clean(field.value)
+        }
+      }
+      if let array = value as? [Any] { return array.map(clean) }
+      if let string = value as? String,
+         ["https://", "http://", "file://", "/Users/", "/private/"].contains(where: { string.contains($0) }) {
+        return "redacted"
+      }
+      return value
+    }
+    let retained = root.filter { allowedRoots.contains($0.key) }
+    guard !retained.isEmpty else { return nil }
+    return try? JSONSerialization.data(withJSONObject: clean(retained), options: [.sortedKeys])
+  }
+}
+
 #if canImport(MetricKit)
 public final class MIRAMetricKitSubscriber: NSObject, MXMetricManagerSubscriber {
   public static let shared = MIRAMetricKitSubscriber()
@@ -78,10 +175,16 @@ public final class MIRAMetricKitSubscriber: NSObject, MXMetricManagerSubscriber 
 
   public func didReceive(_ payloads: [MXMetricPayload]) {
     MIRAApplePerformanceLogger.event("metrickit_metrics_received", detail: "count=\(payloads.count)")
+    for payload in payloads {
+      MIRAPerformanceDiagnosticArchive.shared.enqueue(payload.jsonRepresentation(), kind: "metrics")
+    }
   }
 
   public func didReceive(_ payloads: [MXDiagnosticPayload]) {
     MIRAApplePerformanceLogger.event("metrickit_diagnostics_received", detail: "count=\(payloads.count)")
+    for payload in payloads {
+      MIRAPerformanceDiagnosticArchive.shared.enqueue(payload.jsonRepresentation(), kind: "diagnostics")
+    }
   }
 }
 #endif
@@ -286,6 +389,16 @@ public enum MIRALocalJSONCache {
 
   public static func save<T: Encodable>(_ value: T, key: String) async {
     let scope = accountScope
+    await save(value, key: key, scope: scope)
+  }
+
+  /// Pin a known owner's namespace before asynchronous persistence. Auth
+  /// results must never inherit a different account's current cache scope.
+  public static func save<T: Encodable>(_ value: T, key: String, accountUserID: String) async {
+    await save(value, key: key, scope: "user:\(accountUserID)")
+  }
+
+  private static func save<T: Encodable>(_ value: T, key: String, scope: String) async {
     await Task.detached(priority: .utility) {
       guard let fileURL = cacheFileURL(for: key, scope: scope) else { return }
       guard let data = try? JSONEncoder().encode(value) else { return }

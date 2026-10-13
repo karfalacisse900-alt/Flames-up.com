@@ -47,44 +47,15 @@ final class AppSystemUITests: XCTestCase {
     XCTAssertFalse(app.tabBars.firstMatch.isHittable)
     capture(app, "profile-settings-dark-accessibility")
   }
-  func testTextOnlyFeedKeepsNaturalCardHeightAndFullBodyInDetails() {
-    let app = launch(["--captro-home-feed-visual-test", "--captro-visual-text", "--captro-quality-dark"])
-    // SwiftUI exposes the independently tappable content and creator rows,
-    // rather than inventing an additional accessible container around them.
-    let card = app.buttons.matching(NSPredicate(format: "label CONTAINS 'A walk around the neighborhood'")).firstMatch
-    XCTAssertTrue(card.waitForExistence(timeout: 15))
-    XCTAssertTrue(app.staticTexts["Anyone up for a walk?"].exists)
-    // The pager keeps the neighboring page in the accessibility tree.
-    // Verify the visible page, not existence anywhere in the scroll view.
-    XCTAssertFalse(card.staticTexts["More. Open full post"].isHittable)
-    capture(app, "home-text-short-dark")
-    let shortHeight = card.frame.height
-    app.scrollViews["home.post.stream"].swipeUp()
-    let longTitle = app.staticTexts["Looking for people to build with"]
-    XCTAssertTrue(longTitle.waitForExistence(timeout: 5))
-    XCTAssertTrue(longTitle.isHittable)
-    let longCard = app.buttons.matching(NSPredicate(format: "label CONTAINS 'Looking for people to build with'")).firstMatch
-    XCTAssertTrue(longCard.isHittable)
-    XCTAssertGreaterThan(longCard.frame.height, shortHeight)
-    capture(app, "home-text-long-dark")
-    // Home copy is finished/bounded without a reading CTA. Details remains
-    // available through the post itself and retains the complete source text.
-    XCTAssertFalse(app.staticTexts["More. Open full post"].isHittable)
-    longTitle.tap()
-    XCTAssertTrue(app.buttons["Back"].waitForExistence(timeout: 5))
-    capture(app, "text-post-details")
+  func testRetiredTextAndVoiceHaveNoHomeCardsOrPlaybackControls() {
+    let app = launch(["--captro-home-feed-visual-test", "--captro-visual-text", "--captro-visual-audio"])
+    XCTAssertTrue(app.tabBars.buttons["Home"].waitForExistence(timeout: 15))
+    XCTAssertFalse(app.staticTexts["Anyone up for a walk?"].exists)
+    XCTAssertFalse(app.staticTexts["Looking for people to build with"].exists)
+    XCTAssertFalse(app.buttons["Play recording"].exists)
+    capture(app, "home-without-retired-text-voice")
   }
 
-  func testAudioControlsAppearInsideTextStamp() {
-    let app = launch(["--captro-home-feed-visual-test", "--captro-visual-text", "--captro-visual-audio"])
-    let play = app.buttons["Play recording"]
-    XCTAssertTrue(play.waitForExistence(timeout: 15))
-    XCTAssertTrue(app.buttons["Play attached music"].exists)
-    let creator = app.buttons.matching(NSPredicate(format: "label CONTAINS '@test_creator'")).firstMatch
-    XCTAssertTrue(creator.exists)
-    XCTAssertLessThan(play.frame.maxY, creator.frame.minY)
-    capture(app, "home-stamp-voice-and-music")
-  }
 
   func testStoryNativeOpenCloseAndChatRoute() {
     let app = launch(["--captro-design-quality-test", "--captro-quality-story"])

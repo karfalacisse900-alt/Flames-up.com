@@ -73,39 +73,29 @@ test('source keeps Cloudflare R2 storage private and publishing version-bound', 
   assert.doesNotMatch(source, /moderation_state\s*:\s*clean\(form/);
 });
 
-test('native recording is explicit, interruption-safe, and disclosed before use', () => {
-  const recorder = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Components/CaptroVoiceComponents.swift', 'utf8');
-  assert.match(recorder, /requestRecordPermission/);
-  assert.match(recorder, /AVAudioSession\.interruptionNotification/);
-  assert.match(recorder, /AVAudioSession\.routeChangeNotification/);
-  assert.match(recorder, /case \.oldDeviceUnavailable, \.noSuitableRouteForCategory/);
-  assert.match(recorder, /let finalDuration = activeRecorder\?\.currentTime/);
-  assert.match(recorder, /UIApplication\.didEnterBackgroundNotification/);
-  assert.match(recorder, /interactiveDismissDisabled\(recorder\.isRecording\)/);
-  assert.match(recorder, /disclosureAccepted/);
-  assert.match(recorder, /CaptroVoicePlaybackCenter\.shared\.stop\(\)/);
-  assert.doesNotMatch(recorder, /guard !session\.currentRoute\.inputs\.isEmpty/);
-  assert.match(recorder, /CaptroVoiceUploadError\.serviceUnavailable/);
+test('native voice recording and assistant implementations are retired', () => {
+  for (const file of ['Components/CaptroVoiceComponents.swift', 'Components/CaptroChatVoiceComponents.swift',
+    'Screens/CaptroCaptureAssistantView.swift', 'Services/CaptroRealtimeVoiceSession.swift']) {
+    assert.equal(fs.existsSync('../ios_native/MIRA/Sources/MIRANative/' + file), false, file);
+  }
 });
 
-test('composer and comments submit private voice IDs instead of fake audio', () => {
-  const composer = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift', 'utf8');
-  const comments = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift', 'utf8');
-  assert.match(composer, /CaptroVoiceRecorderSheet\(limit: 60\)/);
-  assert.match(composer, /CaptroVoiceUploadService\(api: api\)\.submit/);
-  assert.match(composer, /voiceAudioId: voiceSubmissionId/);
-  assert.match(composer, /Checking your recording…/);
-  assert.match(comments, /CaptroVoiceRecorderSheet\(limit: 30\)/);
-  assert.match(comments, /voiceAudioId: voiceId/);
-  assert.match(comments, /pendingVoiceReplies/);
-  assert.ok(comments.indexOf('pendingVoiceReplies.append(voiceSubmission)') > comments.indexOf('let comment: MIRAComment = try await api.post'));
+test('composer and comments cannot record or upload retired voice attachments', () => {
+  for (const file of ['NotificationLibrarySearchCreateViews.swift', 'PostDetailNativeView.swift']) {
+    const source = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/' + file, 'utf8');
+    assert.doesNotMatch(source, /CaptroVoiceRecorderSheet|CaptroVoiceUploadService|voiceSubmissionId|pendingVoiceReplies/);
+    assert.match(source, /voiceAudioId: nil/);
+  }
+  const cache = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Services/MIRAAppCacheStore.swift', 'utf8');
+  assert.match(cache, /retiredVoiceDraft/);
+  assert.doesNotMatch(cache, /removeItem\(at: voice\.fileURL\)/);
 });
 
-test('a stamped voice post keeps its selected type and stays pending until moderation', () => {
+test('stored stamped voice records retain historical moderation boundaries', () => {
   const composer = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift', 'utf8');
   const backend = fs.readFileSync('../backend-cf/src/index.ts', 'utf8');
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
-  assert.match(composer, /voiceAudioId: voiceSubmissionId/);
+  assert.match(composer, /voiceAudioId: nil/);
   assert.match(backend, /await validateVoiceAttachment\(c\.env, voiceAudioId, userId, 'post'\)/);
   assert.match(backend, /await bindVoiceAttachment\(c\.env, \{[\s\S]*?targetType: 'post', targetId: id/);
   assert.match(backend, /status: input\.voiceAudioId \? 'pending_voice' : 'active'/);
@@ -130,19 +120,6 @@ test('migration permits private voice posts and voice-only replies without openi
   await db.close();
 });
 
-test('Capture Voice streams a single Realtime conversation without a manual send control', () => {
-  const native = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Screens/CaptroCaptureAssistantView.swift', 'utf8');
-  const realtime = fs.readFileSync('../ios_native/MIRA/Sources/MIRANative/Services/CaptroRealtimeVoiceSession.swift', 'utf8');
-  const backend = fs.readFileSync('../backend-cf/src/index.ts', 'utf8');
-  assert.doesNotMatch(native, /Send to Captro|Record again|AVAudioRecorder/);
-  assert.doesNotMatch(native, /supportsOnDeviceRecognition|SFSpeechRecognizer/);
-  assert.match(realtime, /URLSessionWebSocketTask/);
-  assert.match(realtime, /input_audio_buffer\.append/);
-  assert.match(realtime, /conversation\.item\.truncate/);
-  assert.match(backend, /api\.post\('\/ai\/realtime\/session', authMiddleware/);
-  assert.match(backend, /'OpenAI-Safety-Identifier'/);
-  assert.match(fs.readFileSync('../backend-cf/src/realtime-session.ts', 'utf8'), /interrupt_response: true/);
-});
 
 test('voice reply creation binds after a focused comment count, not a full engagement refresh', () => {
   const backend = fs.readFileSync('../backend-cf/src/index.ts', 'utf8');

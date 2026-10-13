@@ -7,14 +7,9 @@ struct CaptroStampAudio: View {
   let post: MIRAPost
   let api: MIRAAPIClient
   var isActive = true
-  @State private var transcript = false
   @StateObject private var music = CaptroStampMusicPlayback()
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      if let voice = post.detail?.voice {
-        CaptroCompactVoicePlayer(voiceId: voice.id, durationMs: voice.durationMs, waveform: voice.waveform) { transcript = true }
-          .accessibilityIdentifier("stamp.voice")
-      }
       if post.hasAudio {
         HStack(spacing: 8) {
           Button { Task { await music.toggle(post: post, api: api) } } label: {
@@ -34,9 +29,6 @@ struct CaptroStampAudio: View {
       }
     }
     .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.textPrimary)
-    .sheet(isPresented: $transcript) {
-      if let voice = post.detail?.voice { CaptroVoiceTranscriptSheet(voiceId: voice.id) }
-    }
     .onDisappear { stopOwnedPlayback() }
     .onChange(of: isActive) { _, active in if !active { stopOwnedPlayback() } }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { note in
@@ -51,9 +43,6 @@ struct CaptroStampAudio: View {
   }
   private func stopOwnedPlayback() {
     music.stop()
-    if let voice = post.detail?.voice, CaptroVoicePlaybackCenter.shared.activeId == voice.id {
-      CaptroVoicePlaybackCenter.shared.stop()
-    }
   }
 }
 
@@ -66,7 +55,6 @@ struct CaptroStampAudio: View {
   private var statusObservation: NSKeyValueObservation?
   private var generation = 0
   func toggle(post: MIRAPost, api: MIRAAPIClient) async {
-    guard !MIRAPlaybackCoordinator.isLiveVoiceActive else { return }
     if let player {
       if playing { player.pause(); playing = false }
       else { MIRAPlaybackCoordinator.pauseAll(reason: "stamp_music_started:\(post.id)"); player.play() }
@@ -81,7 +69,6 @@ struct CaptroStampAudio: View {
         stream = track.streamUrl
       }
       guard current == generation, !Task.isCancelled else { return }
-      guard !MIRAPlaybackCoordinator.isLiveVoiceActive else { stop(); return }
       guard let stream, let url = URL(string: stream), url.scheme == "https" else { throw MIRAAPIError.emptyResponse }
       MIRAPlaybackCoordinator.pauseAll(reason: "stamp_music_started:\(post.id)")
       try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
@@ -105,8 +92,7 @@ struct CaptroStampAudio: View {
       }
       if let start = post.audioStartTime, start > 0 {
         await next.seek(to: CMTime(seconds: Double(start), preferredTimescale: 600))
-        guard current == generation, !Task.isCancelled,
-              !MIRAPlaybackCoordinator.isLiveVoiceActive else { return }
+        guard current == generation, !Task.isCancelled else { return }
       }
       if let duration = post.audioDuration, duration > 0 {
         next.currentItem?.forwardPlaybackEndTime = CMTime(seconds: Double((post.audioStartTime ?? 0) + duration), preferredTimescale: 600)

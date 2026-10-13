@@ -54,7 +54,6 @@ struct CaptroCompositionDraft {
   var commerceDraft = CaptroCommerceDraft()
   var postResponse: CaptroPostResponseDraft?
   var selectedPlace: MIRAExactPostPlace?
-  var voiceDraft: CaptroVoiceDraft?
   var requestID = UUID().uuidString
   var structured: Bool { [.club, .event, .meetup, .deal].contains(selectedStampKind) }
   var isCover: Bool { intent == .cover }

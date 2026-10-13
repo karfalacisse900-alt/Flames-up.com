@@ -111,7 +111,7 @@ test('Moment details keep full writing below clean media without duplicating Cov
   const homeTextCard = postView.slice(postView.indexOf('private struct CaptroStructuredFeedCard'), postView.indexOf('private struct CaptroAuthorHeader'));
   assert.doesNotMatch(homeTextCard, /Text\(content\.type\.rawValue|CaptroMeasuredCaption/);
   assert.doesNotMatch(textOnly, /Text\(caption\)/);
-  assert.match(adapter, /var captroTextOnlyCardContent:[\s\S]*?content\.description = caption/);
+  assert.doesNotMatch(adapter, /captroTextOnlyCardContent/);
 });
 
 test('Moment writing and real audio controls stay inside the Stamp surface', () => {
@@ -120,7 +120,7 @@ test('Moment writing and real audio controls stay inside the Stamp surface', () 
   assert.match(postView, /CaptroStampAudio\(post: post, api: api, isActive:/);
   assert.match(mediaPager, /CaptroStampAudio\(post: post, api: api, isActive:/);
   const audio = readIOS('Components/CaptroStampAudio.swift');
-  assert.match(audio, /CaptroCompactVoicePlayer/);
+  assert.doesNotMatch(audio, /CaptroCompactVoicePlayer|CaptroVoicePlaybackCenter/);
   assert.match(audio, /music\/audius\/stream/);
   const profile = readIOS('Screens/ProfileChatVerificationStudio.swift');
   assert.doesNotMatch(profile, /ProfileToolbarDestinationButton\(destination: \.bookmarks/);
@@ -149,7 +149,8 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.match(mainFeed, /CaptroFeedViewportMarker/);
   assert.match(postView, /showsCoverMediaOnly: false/);
   assert.match(mainFeed, /LazyVStack\(spacing: 12\)/);
-  assert.match(mainFeed, /safeAreaPadding\(\.bottom, bottomInset \+ homeTabClearance\)/);
+  assert.match(mainFeed, /contentMargins\(\.bottom, 12, for: \.scrollContent\)/);
+  assert.doesNotMatch(mainFeed, /ignoresSafeArea\(\.container, edges: \.bottom\)/);
 });
 
 test('Home uses a stable supported fill preview while Details preserves originals', () => {
@@ -333,7 +334,8 @@ test('single-card creation preserves native mixed-media picking and original pro
 test('composer exposes quiet tools, native actions, and no Post category', () => {
   const canvas = composer.slice(composer.indexOf('private var mediaFirstPage:'), composer.indexOf('private var stampDetailsPage:'));
   assert.match(canvas, /Label\("Add", systemImage: "plus.circle"\)/);
-  assert.match(canvas, /accessibilityLabel\("Record voice attachment"\)/);
+  assert.doesNotMatch(canvas, /Record voice attachment|CaptroVoiceRecorderSheet/);
+  assert.match(canvas, /composer.addRequiredMedia/);
   assert.match(composer, /ToolbarItem\(placement: \.confirmationAction\)/);
   assert.match(composer, /navigationTitle\("Create"\)/);
   assert.match(composer, /Text\("Done"\)/);
@@ -393,5 +395,6 @@ test('Stamp audio belongs to the visible post, not only to video activation', ()
   assert.match(mediaPager, /CaptroStampAudio\(post: post, api: api, isActive: isAudioActive\)/);
   const audio = readIOS('Components/CaptroStampAudio.swift');
   assert.match(audio, /onChange\(of: isActive\)/);
-  assert.match(audio, /activeId == voice.id/);
+  assert.match(audio, /stopOwnedPlayback\(\)/);
+  assert.doesNotMatch(audio, /CaptroVoicePlaybackCenter/);
 });

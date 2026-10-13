@@ -298,6 +298,57 @@ final class CaptroFeedStabilityTests: XCTestCase {
     XCTAssertEqual(model.posts.count, 14, "Home presentation must not delete legacy content")
   }
 
+  func testPaginationFailureKeepsRecordsAndRequiresExplicitSameCursorRetry() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.configureGuestMode(true)
+    let initial = try (0..<12).map { try post("retry-\($0)") }
+    let next = try post("next-page")
+    var offsets: [Int] = []
+    var failed = false
+    model.testPageLoader = { _, skip in
+      offsets.append(skip)
+      if skip == 0 { return initial }
+      if !failed { failed = true; throw URLError(.notConnectedToInternet) }
+      return [next]
+    }
+    await model.load()
+    let before = model.posts.map(\.id)
+    await model.loadMoreIfNeeded(after: try XCTUnwrap(model.posts.last))
+    XCTAssertNotNil(model.paginationError)
+    XCTAssertEqual(model.posts.map(\.id), before)
+    XCTAssertFalse(model.isLoadingMore)
+    await model.loadMoreIfNeeded(after: try XCTUnwrap(model.posts.last))
+    XCTAssertEqual(offsets, [0, 12], "Visibility callbacks must not hammer a failed cursor")
+    await model.retryPagination()
+    XCTAssertNil(model.paginationError)
+    XCTAssertEqual(offsets, [0, 12, 12])
+    XCTAssertEqual(Array(model.posts.prefix(before.count)).map(\.id), before)
+    XCTAssertEqual(model.posts.last?.id, "next-page")
+  }
+
+  func testObsoletePaginationFailureCannotShowRetryInNewFeed() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.configureGuestMode(true)
+    let initial = try (0..<12).map { try post("before-\($0)") }
+    var delayed: CheckedContinuation<[MIRAPost], Error>?
+    let requested = expectation(description: "pagination started")
+    model.testPageLoader = { scope, skip in
+      if scope == "following" { return [] }
+      if skip == 0 { return initial }
+      return try await withCheckedThrowingContinuation { continuation in
+        delayed = continuation; requested.fulfill()
+      }
+    }
+    await model.load()
+    let last = try XCTUnwrap(model.posts.last)
+    let pending = Task { await model.loadMoreIfNeeded(after: last) }
+    await fulfillment(of: [requested], timeout: 3)
+    model.selectFeedSection(.following)
+    delayed?.resume(throwing: URLError(.timedOut))
+    await pending.value
+    XCTAssertNil(model.paginationError)
+  }
+
   func testSupportedHomeFramesAndUnknownMetadataAreDeterministic() {
     for ratio: CGFloat in [1, 1.25, 4.0 / 3, 9.0 / 16] {
       XCTAssertEqual(MIRAMediaSizing.homeDisplayRatio(ratio), ratio, accuracy: 0.001)

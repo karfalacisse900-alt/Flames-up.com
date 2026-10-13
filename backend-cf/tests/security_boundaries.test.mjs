@@ -217,6 +217,8 @@ test('optional viewer authorization cannot reuse a server-revoked session', asyn
 
 const migration = readFileSync(new URL('../../supabase/migrations/20261006012846_security_backend_write_boundary.sql', import.meta.url), 'utf8');
 const baseline = readFileSync(new URL('../../supabase/migrations/20260612090211_captro_rls_policies.sql', import.meta.url), 'utf8');
+const mediaBoundary = readFileSync(new URL('../../supabase/migrations/20261013154326_security_media_approval_boundary.sql', import.meta.url), 'utf8');
+const pushBoundary = readFileSync(new URL('../../supabase/migrations/20261013154328_single_owner_push_registration.sql', import.meta.url), 'utf8');
 test('SQL: unrelated accounts, self-enrollment, forged roles and message rewriting are denied; revocation preserves history', async () => {
   const db = new PGlite();
   try {
@@ -232,7 +234,11 @@ test('SQL: unrelated accounts, self-enrollment, forged roles and message rewriti
       create table app_group_chats(id text, created_by text);
       create table app_group_chat_members(id text, group_id text, user_id text, role text);
       create table app_group_messages(id text, group_id text, sender_id text, body text);
+      create table app_media_assets(id text, user_id text, moderation_status text, upload_status text, metadata jsonb);
       grant all on all tables in schema public to anon, authenticated, service_role;
+      grant update (moderation_status, metadata) on app_media_assets to authenticated;
+      grant insert (id, user_id, moderation_status) on app_media_assets to authenticated;
+      insert into app_media_assets values ('asset', 'alice', 'pending_moderation', 'uploaded', '{}');
       insert into app_users values ('alice','00000000-0000-0000-0000-000000000001','{}'),
         ('bob','00000000-0000-0000-0000-000000000002','{}'), ('mallory','00000000-0000-0000-0000-000000000003','{}');
       insert into app_messages values ('dm','alice','bob','preserved history');
@@ -246,6 +252,8 @@ test('SQL: unrelated accounts, self-enrollment, forged roles and message rewriti
     // Use the repository's real existing DM read policy and helper, not an
     // equivalent policy invented just for this test.
     await db.exec(migration);
+    await db.exec(mediaBoundary);
+    await db.exec(mediaBoundary); // Safe to retry after an unknown rollout outcome.
     const helper = baseline.match(/create or replace function private\.captro_users_not_blocked[\s\S]*?\$\$;/)[0];
     await db.exec(helper);
     await db.exec(baseline.slice(baseline.indexOf('drop policy if exists "users can read own direct messages"'), baseline.indexOf('drop policy if exists "users can create own direct messages"')));
@@ -268,6 +276,9 @@ test('SQL: unrelated accounts, self-enrollment, forged roles and message rewriti
     for (const table of ['app_users','app_messages','app_group_chat_members','app_posts','post_comments'])
       await assert.rejects(db.exec(`truncate ${table}`), /permission denied/);
     await asUser(1);
+    await assert.rejects(db.exec("update app_media_assets set moderation_status='approved' where id='asset'"), /permission denied/);
+    await assert.rejects(db.exec("update app_media_assets set metadata='{\"approved\":true}' where id='asset'"), /permission denied/);
+    await assert.rejects(db.exec("insert into app_media_assets (id,user_id,moderation_status) values ('forged','alice','approved')"), /permission denied/);
     assert.equal((await db.query('select * from app_group_messages')).rows.length, 1);
     assert.equal((await db.query('select * from app_group_chat_members')).rows.length, 1);
     // Same database connection remains open through server-side revocation.
@@ -278,9 +289,54 @@ test('SQL: unrelated accounts, self-enrollment, forged roles and message rewriti
     await db.exec("reset role; delete from app_blocks; update app_users set metadata='{\"status\":\"banned\"}' where id='alice'; set role authenticated;");
     assert.equal((await db.query('select * from app_messages')).rows.length, 0);
     await db.exec('reset role; set role service_role');
+    await db.exec("update app_media_assets set moderation_status='approved' where id='asset'");
+    assert.equal((await db.query('select moderation_status from app_media_assets')).rows[0].moderation_status, 'approved');
     assert.equal((await db.query('select body from app_messages')).rows[0].body, 'preserved history');
     assert.equal((await db.query('select body from app_group_messages')).rows[0].body, 'preserved group history');
     await db.exec('reset role; set role anon');
     await assert.rejects(db.exec("update app_messages set body='anonymous'"), /permission denied/);
+  } finally { await db.close(); }
+});
+
+test('push registration uses authenticated identity and one atomic server operation', async () => {
+  let request;
+  const route = run(handler('post', '/notifications/device-token'), {
+    getUserId: () => 'current-account', requireSupabasePrimaryDatabase: () => null,
+    enforceRateLimit: async () => null, rejectLargeRequest: () => null,
+    sha256Hex: async value => `hash-${value}`, supabaseAdminRpc: async (_, name, body) => {
+      assert.equal(name, 'captro_register_push_token'); request = body;
+    },
+  });
+  const result = await route({ env: {}, req: { json: async () => ({ token: 'a'.repeat(64), user_id: 'forged' }) }, json: value => value });
+  assert.equal(result.ok, true);
+  assert.equal(request.p_user_id, 'current-account');
+});
+
+test('SQL: push takeover, delayed old logout, duplicate registration and client denial', async () => {
+  const db = new PGlite();
+  try {
+    await db.exec(`create role anon; create role authenticated; create role service_role bypassrls;
+      create table app_push_tokens(id text primary key, user_id text, token_hash text, token text,
+        device_id text, bundle_id text, environment text, platform text, is_active boolean,
+        last_seen_at timestamptz, updated_at timestamptz, unique(user_id, token_hash));
+      grant all on app_push_tokens to anon, authenticated, service_role;
+      insert into app_push_tokens(id,user_id,token_hash,is_active,last_seen_at) values
+        ('old','alice','hash',true,'2026-10-01'),('new','bob','hash',true,'2026-10-02');`);
+    await db.exec(pushBoundary);
+    await db.exec(pushBoundary);
+    assert.equal((await db.query('select count(*)::int as n from app_push_tokens where is_active')).rows[0].n, 0);
+    await db.exec('set role authenticated');
+    await assert.rejects(db.exec("select * from app_push_tokens"), /permission denied/);
+    await assert.rejects(db.exec("select captro_register_push_token('mallory','attack','hash','test-only','','','production')"), /permission denied/);
+    await db.exec('reset role; set role service_role');
+    const register = user => db.query('select captro_register_push_token($1,$2,$3,$4,$5,$6,$7)',
+      [user, `${user}-id`, 'hash', 'test-only', 'device', 'app', 'production']);
+    await register('alice'); await register('bob'); await register('bob');
+    // Logout from A must not unregister B after ownership has changed.
+    await db.exec("update app_push_tokens set is_active=false where user_id='alice' and token_hash='hash'");
+    assert.deepEqual((await db.query('select user_id from app_push_tokens where is_active')).rows, [{ user_id: 'bob' }]);
+    assert.equal((await db.query('select count(*)::int as n from app_push_tokens')).rows[0].n, 2);
+    // Unique constraint is defense in depth for any older server direct writer.
+    await assert.rejects(db.exec("update app_push_tokens set is_active=true where user_id='alice'"), /duplicate key/);
   } finally { await db.close(); }
 });

@@ -22,12 +22,33 @@ test('poll presentation is removed without touching server-authorized membership
   assert.match(read('Screens/CaptroCommerceDetailViews.swift'), /commerce\.isActiveForViewer/);
   assert.match(read('Screens/CaptroCommerceDetailViews.swift'), /model\.loadCommercePass/);
 });
-test('legacy visibility is Home-only and pagination retains raw server offsets', () => {
+test('legacy text has no Home card or empty Profile tile; stored records remain accessible in an archive', () => {
   const feed = read('Screens/MainFeedView.swift');
   assert.match(feed, /model\.posts\.filter \{ !\$0\.isLegacyOrdinaryTextPost \}/);
   assert.match(feed, /pageOffsets\[section\] = skip \+ loaded\.count/);
   assert.match(feed, /isLastVisible/);
-  assert.doesNotMatch(read('Screens/ProfileChatVerificationStudio.swift'), /isLegacyOrdinaryTextPost/);
+  const profile = read('Screens/ProfileChatVerificationStudio.swift');
+  assert.match(profile, /ForEach\(model.posts.filter \{ !\$0.isLegacyOrdinaryTextPost \}\)/);
+  assert.match(profile, /CaptroLegacyPostArchive\(posts: model.posts, api: model.api\)/);
+  assert.match(profile, /DisclosureGroup\("Earlier posts/);
+  assert.match(profile, /PostDetailNativeView\(post: post, api: api\)/);
+});
+
+test('media-first composer, Details chrome, and lower Favorites placement do not reintroduce voice or feed scrolling', () => {
+  const composer = read('Screens/NotificationLibrarySearchCreateViews.swift');
+  assert.match(composer, /composer.addRequiredMedia/);
+  assert.match(composer, /if !mediaItems.isEmpty \|\| draft.structured \|\| draft.hasWriting/);
+  assert.doesNotMatch(composer, /Record voice attachment|CaptroVoiceRecorder/);
+  const detail = read('Screens/PostDetailNativeView.swift');
+  assert.doesNotMatch(detail, /reactionRow|reactionLabel|Record voice reply/);
+  assert.match(detail, /private var commentsSection/);
+  const feed = read('Screens/MainFeedView.swift');
+  assert.match(feed, /home.pagination.retry/);
+  assert.doesNotMatch(feed, /ignoresSafeArea\(\.container, edges: \.bottom\)/);
+  assert.match(read('Screens/CaptroFeedMediaPager.swift'), /60 : 38/);
+  const root = read('App/MIRANativeRootView.swift');
+  assert.match(root, /configureWithOpaqueBackground/);
+  assert.match(root, /tint\(MIRATheme.Color.textPrimary\)/);
 });
 test('Story asynchronous results and playback are owned by the selected stable identity', () => {
   const story = read('Screens/DiscoverNativeView.swift');

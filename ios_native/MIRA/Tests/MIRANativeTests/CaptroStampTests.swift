@@ -199,11 +199,13 @@ final class CaptroStampTests: XCTestCase {
     XCTAssertEqual(cautious.priceText, "View offer")
     XCTAssertEqual(cautious.summaryText, "Full qualifying conditions in details")
   }
-  func testVoiceMomentAndStampedVoicePostsUseTheSameCard() throws {
+  func testLegacyVoiceRecordsStayDecodableWithoutVoicePresentation() throws {
     let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
     let moment = try decoder.decode(MIRAPost.self, from: Data(#"{"id":"voice","post_type":"general","caption":"Walking home","detail":{"voice":{"id":"audio-1","duration_ms":42000}}}"#.utf8))
     XCTAssertEqual(moment.captroEditorialCardContent.type, .moment)
-    XCTAssertEqual(moment.captroEditorialCardContent.title, "Voice post")
+    XCTAssertEqual(moment.captroEditorialCardContent.title, "")
+    XCTAssertEqual(moment.detail?.voice?.id, "audio-1")
+    XCTAssertTrue(moment.isLegacyOrdinaryTextPost)
     XCTAssertEqual(moment.captroEditorialCardContent.description, "Walking home")
 
     for kind in CaptroStampKind.creationCases {

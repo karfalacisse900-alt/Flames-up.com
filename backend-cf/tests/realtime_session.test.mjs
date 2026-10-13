@@ -30,38 +30,10 @@ test('permanent credentials/model/billing/config failures do not enter transient
 });
 
 const read = file => readFileSync(new URL(`../../ios_native/MIRA/Sources/MIRANative/${file}`, import.meta.url), 'utf8');
-test('native session owns streaming, epoch guards, and actual playback rather than a manual reply queue', () => {
-  const source = read('Services/CaptroRealtimeVoiceSession.swift');
-  assert.doesNotMatch(source, /"type": "response\.create"|pendingReplyItemIDs|requestNextReply/);
-  assert.match(source, /turnDetection\?\["create_response"\] as\? Bool == true/);
-  assert.match(source, /completionCallbackType: \.dataPlayedBack/);
-  assert.match(source, /player\.installTap/);
-  assert.match(source, /"conversation\.item\.truncate"/);
-  const route = source.split('func handleRouteChange')[1].split('func suspendForBackground')[0];
-  assert.doesNotMatch(route, /recoverTransport|connect\(api:/);
-  assert.match(route, /stopAudio\(\)/);
-  assert.match(source, /self\.audioEpoch == captureEpoch/);
-});
-test('reference character mouth uses playback signal, with independent eye/body layers', () => {
-  const source = read('Components/CaptroVoiceCharacterView.swift');
-  const bridge = read('Components/CaptroVoiceVisualState.swift');
-  assert.match(source, /state\.isSpeaking.*state\.playbackAmplitude/);
-  const face = source.split('private var face: some View')[1].split('private var eye: some View')[0];
-  assert.doesNotMatch(face, /microphoneAmplitude|transcript|speakingLevel.*Date/);
-  assert.match(bridge, /playbackAmplitude = isSpeaking \? session\.playbackLevel : 0/);
-  assert.match(source, /reduceMotion/);
-  assert.match(source, /Task\.isCancelled/);
-  assert.match(source, /CaptroCharacterBody/);
-});
-test('human chat microphone has a distinct deliberate recording and preview flow, never AI', () => {
-  const source = read('Components/CaptroChatVoiceComponents.swift');
+test('retired voice has no chat recorder, player, retry upload, or AI route', () => {
   const room = read('Screens/ConversationNativeView.swift');
-  assert.match(source, /CaptroVoiceRecorder\(limit: 60\)/);
-  assert.match(source, /Button\("Send"\)/);
-  assert.match(source, /startTask\?\.cancel\(\)/);
-  assert.doesNotMatch(source, /CaptroRealtimeVoiceSession|\/ai\/|transcrib/);
-  assert.match(room, /CaptroChatAudioMessage\(url: url/);
-  assert.match(room, /sendVoiceRecording/);
+  assert.doesNotMatch(room, /CaptroChatAudioMessage|sendVoiceRecording|showVoiceRecorder|Record voice message/);
+  assert.match(room, /Voice messages are no longer supported/);
   assert.match(room, /hasNewMessages/);
-  assert.doesNotMatch(read('Screens/ProfileChatVerificationStudio.swift'), /fullScreenCover\(isPresented: \$showsCaptroAI\)/);
+  assert.match(room, /Send message/);
 });

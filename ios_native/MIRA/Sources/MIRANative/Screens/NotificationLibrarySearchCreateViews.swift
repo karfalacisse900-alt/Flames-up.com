@@ -964,7 +964,6 @@ public struct CreatePostNativeView: View {
   private let onClose: (() -> Void)?
   private let initialMedia: MIRAPickedMedia?
   private let initialAdditionalMedia: [MIRAPickedMedia]
-  private let initialVoiceDraft: CaptroVoiceDraft?
   private let initialCaption: String?
   @Environment(\.dismiss) private var dismiss
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -973,7 +972,7 @@ public struct CreatePostNativeView: View {
   @ScaledMetric(relativeTo: .body) private var writingSize: CGFloat = 18
   @State private var writingFocused = false
   private enum Presentation: Equatable, Identifiable {
-    case startWith, audience, time, add, media, camera, voice, structured, mediaWriting, writingSource, framing
+    case startWith, audience, time, add, media, camera, structured, mediaWriting, writingSource, framing
     case detail(PostDetailSheet)
     var id: String {
       switch self {
@@ -1069,12 +1068,9 @@ public struct CreatePostNativeView: View {
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
   @State private var selectedAudioTrack: MIRAAudiusTrack?
-  private var voiceDraft: CaptroVoiceDraft? {
-    get { draft.voiceDraft }
-    nonmutating set { draft.voiceDraft = newValue }
-  }
-  @State private var voiceSubmissionId: String?
-  @State private var showVoicePendingConfirmation = false
+  // Compatibility data only: older drafts keep their recording without exposing
+  // a recorder, player, or upload route in the retired voice feature.
+  @State private var legacyVoiceDraft: MIRAVoiceDraftSnapshot?
   @State private var selectedDiscoverCategory: String?
   @State private var postAssistResponse: MIRAPostAssistResponse?
   @State private var isGeneratingPostAssist = false
@@ -1089,11 +1085,10 @@ public struct CreatePostNativeView: View {
   @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
-  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialAdditionalMedia: [MIRAPickedMedia] = [], initialVoiceDraft: CaptroVoiceDraft? = nil, initialCaption: String? = nil, onClose: (() -> Void)? = nil) {
+  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialAdditionalMedia: [MIRAPickedMedia] = [], initialCaption: String? = nil, onClose: (() -> Void)? = nil) {
     self.api = api
     self.initialMedia = initialMedia
     self.initialAdditionalMedia = initialAdditionalMedia
-    self.initialVoiceDraft = initialVoiceDraft
     self.initialCaption = initialCaption
     self.onClose = onClose
   }
@@ -1113,11 +1108,6 @@ public struct CreatePostNativeView: View {
       Button("Keep editing", role: .cancel) { writingFocused = true }
     } message: {
       Text("Your text and selected media will be removed from this draft.")
-    }
-    .alert("Checking your recording…", isPresented: $showVoicePendingConfirmation) {
-      Button("Done") { close() }
-    } message: {
-      Text("Your post is private while Captro transcribes and checks the recording. It will appear only after the exact recording and post text are approved.")
     }
     .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
       MIRANativeMediaEditorView(media: item.media, mode: .post, onClose: closeEditor) { edited in
@@ -1140,15 +1130,6 @@ public struct CreatePostNativeView: View {
     }
     .onChange(of: editingMedia == nil) { _, closed in
       if closed && !pendingFramingItems.isEmpty && presentation != .camera { openPresentation(.framing) }
-    }
-    .fullScreenCover(isPresented: presentationBinding(.voice)) {
-      CaptroVoiceRecorderSheet(limit: 60) { draft in
-        if let previous = voiceDraft, previous.fileURL != draft.fileURL {
-          try? FileManager.default.removeItem(at: previous.fileURL)
-        }
-        voiceDraft = draft
-        voiceSubmissionId = nil
-      }
     }
   }
 
@@ -1215,9 +1196,8 @@ public struct CreatePostNativeView: View {
   private var composerPrimaryDraftObservedPage: some View {
     composerLifecyclePage
     .onChange(of: title) { _, _ in cacheComposerDraft() }
-    .onChange(of: bodyText) { _, _ in voiceSubmissionId = nil; cacheComposerDraft() }
+    .onChange(of: bodyText) { _, _ in cacheComposerDraft() }
     .onChange(of: mediaItems) { _, _ in cacheComposerDraft(includeMedia: true) }
-    .onChange(of: voiceDraft) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedPlace) { _, _ in cacheComposerDraft() }
     .onChange(of: selectedStampKind) { _, kind in
       if kind.commerceContentType != nil {
@@ -1452,7 +1432,20 @@ public struct CreatePostNativeView: View {
         }
         Spacer(minLength: 0)
       }
-      if draft.isCover && !mediaItems.isEmpty { compositionAttachments }
+      if !mediaItems.isEmpty { compositionAttachments }
+      if !draft.structured && mediaItems.isEmpty {
+        Button { openPresentation(.media) } label: {
+          Label("Add a photo or video", systemImage: "photo.on.rectangle")
+            .font(.body.weight(.medium))
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("composer.addRequiredMedia")
+      }
+      // No blank writing-only composer. Preserve text from an older saved draft
+      // so it can become a caption after the user adds required media.
+      if !mediaItems.isEmpty || draft.structured || draft.hasWriting {
       ZStack(alignment: .topLeading) {
         if bodyText.isEmpty {
           Text(draft.structured ? "Add a message…" : draft.intent.placeholder)
@@ -1464,9 +1457,12 @@ public struct CreatePostNativeView: View {
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("composer.writing")
       }
+      }
       if isLoadingMedia { ProgressView("Preparing media…").font(.footnote) }
-      if !draft.isCover && !mediaItems.isEmpty { compositionAttachments }
-      if let voiceDraft { composerVoiceAttachment(voiceDraft) }
+      if legacyVoiceDraft != nil {
+        Text("Voice attachments are no longer supported. The saved recording has not been deleted and will not be published.")
+          .font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+      }
       if draft.structured {
         Button { isEditingPostDetails = true } label: {
           HStack(spacing: 8) {
@@ -1607,11 +1603,6 @@ public struct CreatePostNativeView: View {
           }.onDisappear(perform: resumeQueuedPresentation)
         }
       Spacer()
-      Button {
-        openPresentation(.voice)
-      } label: {
-        Image(systemName: "mic").font(.title3).frame(width: 44, height: 44).contentShape(Rectangle())
-      }.accessibilityLabel("Record voice attachment")
     }
     .buttonStyle(.plain).foregroundStyle(MIRATheme.Color.textSecondary)
   }
@@ -1690,15 +1681,6 @@ public struct CreatePostNativeView: View {
       }
     }.scrollIndicators(.hidden)
     }
-  }
-
-  private func composerVoiceAttachment(_ recording: CaptroVoiceDraft) -> some View {
-    CaptroCompositionVoiceAttachment(recording: recording,
-      onReplace: { openPresentation(.voice) },
-      onRemove: {
-        try? FileManager.default.removeItem(at: recording.fileURL)
-        voiceDraft = nil; voiceSubmissionId = nil
-      })
   }
 
   private var audiencePicker: some View {
@@ -1940,7 +1922,7 @@ public struct CreatePostNativeView: View {
   private var composerStampContent: CaptroStampContent {
     CaptroStampContent(kind: selectedStampKind,
       title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? (selectedStampKind == .social && voiceDraft != nil ? "Voice post" : selectedStampKind.displayName) : title,
+        ? selectedStampKind.displayName : title,
       metadata: isEventStamp && !eventDraft.venueName.isEmpty ? eventDraft.venueName : selectedPlace?.displayName,
       description: bodyText.isEmpty ? nil : bodyText,
       footer: nil, actionTitle: selectedStampKind.actionTitle, contributors: [],
@@ -2255,20 +2237,6 @@ public struct CreatePostNativeView: View {
       let postContent = [bodyText.trimmingCharacters(in: .whitespacesAndNewlines), draft.structured ? tagLine : ""]
         .filter { !$0.isEmpty }
         .joined(separator: "\n\n")
-      if voiceSubmissionId == nil, let voiceDraft {
-        postStage = "Uploading voice"
-        let submission = try await CaptroVoiceUploadService(api: api).submit(
-          voiceDraft, targetType: "post", caption: [resolvedPublishTitle, postContent].filter { !$0.isEmpty }.joined(separator: "\n\n"),
-          onUploadProgress: { fraction in
-            Task { @MainActor in
-              guard isPosting, postStage == "Uploading voice" else { return }
-              postUploadFraction = fraction
-            }
-          }
-        )
-        postUploadFraction = nil
-        voiceSubmissionId = submission.id
-      }
       let categorySignals = await autoCategorySignals
       let taggedPayload = taggedUsers.map {
         MIRATaggedUserPayload(id: $0.id, username: $0.username, fullName: $0.fullName, profileImage: $0.profileImage)
@@ -2336,7 +2304,7 @@ public struct CreatePostNativeView: View {
         audioStreamUrl: nil,
         audioStartTime: nil,
         audioDuration: nil,
-        voiceAudioId: voiceSubmissionId,
+        voiceAudioId: nil,
         visibility: draft.audience.rawValue,
         clientRequestId: postRequestID,
         creationIntent: draft.submittedIntent,
@@ -2346,17 +2314,12 @@ public struct CreatePostNativeView: View {
       // still decoded for older posts but is not selectable or rendered.
       postStage = "Publishing post"
       let _: MIRAPost = try await api.post("/posts", body: body)
-      // This requests authoritative refreshes; it never renders an unapproved
-      // voice attachment as a publicly published post.
+      // Refresh authoritative post state after publishing the media post.
       NotificationCenter.default.post(name: .captroPostSubmissionCompleted, object: nil)
       draftSaveTask?.cancel()
       await MIRAAppCacheStore.shared.clearPostDraft()
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
-      if voiceSubmissionId != nil {
-        showVoicePendingConfirmation = true
-      } else {
-        close()
-      }
+      close()
     } catch {
       MIRAPerformanceTimeline.mark("post_upload_failed", detail: "post")
       let message = (error as? MIRAAPIError)?.errorDescription ?? "Post could not be created."
@@ -2370,9 +2333,6 @@ public struct CreatePostNativeView: View {
     draftSaveTask?.cancel()
     writingFocused = false
     Task { await MIRAAppCacheStore.shared.clearPostDraft() }
-    if let voiceDraft { try? FileManager.default.removeItem(at: voiceDraft.fileURL) }
-    voiceDraft = nil
-    voiceSubmissionId = nil
     if let onClose {
       onClose()
     } else {
@@ -2403,9 +2363,6 @@ public struct CreatePostNativeView: View {
       for additional in initialAdditionalMedia where mediaItems.count < 10 && !mediaItems.contains(where: { $0.fileName == additional.fileName }) {
         mediaItems.append(additional)
       }
-      if let initialVoiceDraft, voiceDraft == nil {
-        voiceDraft = initialVoiceDraft
-      }
       if let initialCaption, !initialCaption.isEmpty {
         bodyText = bodyText.isEmpty ? initialCaption : bodyText + "\n\n" + initialCaption
       }
@@ -2416,7 +2373,7 @@ public struct CreatePostNativeView: View {
       writingMediaIndex = 0
       errorMessage = "Review media framing before publishing. Your originals stay unchanged."
       openPresentation(.framing)
-    } else if !draft.hasWriting && !draft.isCover { writingFocused = true }
+    } else if !mediaItems.isEmpty && !draft.hasWriting && !draft.isCover { writingFocused = true }
     await loadBroadLocationDefaultIfNeeded()
   }
 
@@ -2529,7 +2486,7 @@ public struct CreatePostNativeView: View {
     mediaItems = restoredMedia
     self.draft.originalMediaItems = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft, snapshots: draft.originalMedia ?? [])
     draftOriginalMediaSnapshots = draft.originalMedia ?? []
-    voiceDraft = draft.voiceDraft?.restore()
+    legacyVoiceDraft = draft.voiceDraft
     draftMediaSnapshots = draft.media
     isEditingPostDetails = false
     if let message = draft.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
@@ -2593,7 +2550,7 @@ public struct CreatePostNativeView: View {
       isEditingPostDetails: isEditingPostDetails,
       media: mediaSnapshots,
       originalMedia: draftOriginalMediaSnapshots,
-      voiceDraft: voiceDraft.map(MIRAVoiceDraftSnapshot.init),
+      voiceDraft: legacyVoiceDraft,
       uploadStatus: uploadStatus,
       errorMessage: errorMessage,
       savedAt: ISO8601DateFormatter.miraPostDraft.string(from: Date())
@@ -2640,7 +2597,7 @@ public struct CreatePostNativeView: View {
     !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
       !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
       !mediaItems.isEmpty ||
-      voiceDraft != nil ||
+      legacyVoiceDraft != nil ||
       !hashtags.isEmpty ||
       selectedPlace != nil ||
       shouldPublishBroadLocation ||

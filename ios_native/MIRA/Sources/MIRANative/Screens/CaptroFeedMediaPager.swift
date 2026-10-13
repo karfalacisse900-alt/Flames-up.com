@@ -88,13 +88,12 @@ struct CaptroMediaPager: View {
     } else if let frameSize, post.mediaWriting(at: 0)?.showsStamp == false {
       mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         .overlay(alignment: .bottomLeading) {
-          if post.detail?.voice != nil || post.hasAudio {
+          if post.hasAudio {
             CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
               .padding(8).background(MIRATheme.Color.surface).padding(.leading, 20).padding(.bottom, 64)
           }
         }
-    } else if let frameSize, post.captroMediaFeedCardContent.hasHomeStampContent == false,
-              post.detail?.voice == nil, !post.hasAudio {
+    } else if let frameSize, post.captroMediaFeedCardContent.hasHomeStampContent == false, !post.hasAudio {
       mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
         .overlay(alignment: .bottomLeading) {
           Button(action: onOpenPost) {
@@ -177,7 +176,9 @@ struct CaptroMediaPager: View {
         if !showsCoverMediaOnly {
           CaptroFavoriteButton(post: post, api: api)
             .padding(.trailing, 14)
-            .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 0 : 68)
+            // Photo save sits lower, clear of the centered carousel dots. Video
+            // controls keep their own bottom-right row and need one-row clearance.
+            .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 0 : (currentMediaIsVideo && !post.isCoverPost && !needsTopVideoControls ? 60 : 38))
             .padding(.top, dynamicTypeSize.isAccessibilitySize ? 68 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity,
               alignment: dynamicTypeSize.isAccessibilitySize ? .topTrailing : .bottomTrailing)
@@ -238,7 +239,7 @@ struct CaptroMediaPager: View {
         readingBudget: max(90, readingBudget - stampAudioHeight), stampWidth: stampWidth,
         maxCaptionLines: [.club, .event, .meetup, .deal].contains(post.captroMediaFeedCardContent.type) ? 3 : 5,
         onOpen: openPostUnlessPeeking)
-      if post.detail?.voice != nil || post.hasAudio {
+      if post.hasAudio {
         CaptroStampAudio(post: post, api: api, isActive: isAudioActive)
           .padding(.horizontal, 14).padding(.bottom, 10)
       }
@@ -263,7 +264,7 @@ struct CaptroMediaPager: View {
   }
 
   private var stampAudioHeight: CGFloat {
-    (post.detail?.voice == nil ? 0 : 54) + (post.hasAudio ? 54 : 0)
+    post.hasAudio ? 54 : 0
   }
 
   private var stampPeekAnimation: Animation? {

@@ -62,8 +62,11 @@ test('native OAuth preserves provider requirements before calling Captro', () =>
   assert.match(authDiagnostics, /case credentialExchangeFailure/);
   assert.match(authDiagnostics, /case sessionFailure/);
   assert.match(apiClient, /!isCredentialRequest,[\s\S]*status == 401 \|\| status == 403/);
-  assert.match(authSession, /private actor MIRAAuthRefreshCoordinator/);
+  assert.match(authSession, /@MainActor private final class MIRAAuthRefreshCoordinator/);
   assert.match(authSession, /if let inFlight/);
+  assert.match(authSession, /inFlight\.token == refreshToken/);
+  assert.match(authSession, /guard generation == sessionGeneration/);
+  assert.match(apiClient, /validateSessionGeneration\(generation\)/);
   assert.doesNotMatch(authSession, /refreshAccessTokenIfNeeded[\s\S]{0,120}if isWorking \{ return false \}/);
   assert.match(keychain, /else \{[\s\S]*clearRefreshToken\(\)/);
 });

@@ -76,6 +76,10 @@ jobs:
         run: |
           git fetch origin "$GITHUB_SHA"
           git checkout "$GITHUB_SHA" -- ios_native/MIRA/LayoutUITests/StampRefinementTests.swift
+      - name: Record actual source for release validation
+        id: native_source
+        if: ${{ !inputs.baseline && !inputs.profile_only && !inputs.stream_only }}
+        run: node scripts/app-store/native-validation-source.mjs
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
@@ -363,6 +367,14 @@ jobs:
           if [ -d "$RUNNER_TEMP/CoverRuntime.xcresult" ]; then
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/CoverRuntime.xcresult" --output-path "$RUNNER_TEMP/cover-screenshots"
           fi
+      - name: Attest successful native runtime validation source
+        if: ${{ success() && steps.native_source.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-validation-source
+          path: ${{ runner.temp }}/native-validation-source/source.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Collect DEBUG fixture startup timings
         if: always()
         run: |

@@ -218,6 +218,17 @@ public final class MIRAAPIClient {
     try await request(path, method: "DELETE", body: Optional<Data>.none)
   }
 
+  public func delete<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
+    try await request(path, method: "DELETE", body: encoder.encode(body))
+  }
+
+  /// For account-bound cleanup (for example unregistering the previous APNs
+  /// binding), never consult a mutable session or refresh as the next user.
+  func pinned(to accessToken: String) -> MIRAAPIClient {
+    MIRAAPIClient(baseURL: baseURL, sessionProvider: StaticSessionProvider(token: accessToken),
+                  session: session, directUploadSession: directUploadSession)
+  }
+
   public func uploadMultipart<T: Decodable>(
     _ path: String,
     fieldName: String = "file",
@@ -392,6 +403,7 @@ public final class MIRAAPIClient {
   }
 
   private func request<T: Decodable>(_ path: String, method: String, body: Data?) async throws -> T {
+    let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
     let url = try makeURL(path)
     var request = URLRequest(url: url)
     request.httpMethod = method
@@ -401,6 +413,7 @@ public final class MIRAAPIClient {
     request.setValue(MIRALanguageResolver.acceptLanguageHeader(), forHTTPHeaderField: "Accept-Language")
     request.setValue(UUID().uuidString, forHTTPHeaderField: "X-Request-ID")
     let token = await sessionProvider?.accessToken()
+    try await validateSessionGeneration(generation)
     if let body {
       request.httpBody = body
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -410,16 +423,18 @@ public final class MIRAAPIClient {
     }
     let trustHeaders = await MIRADeviceTrustService.shared.headers(for: method, path: url.path)
     trustHeaders.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+    try await validateSessionGeneration(generation)
 
     let data: Data
     if method == "GET", body == nil {
       let key = "\(method) \(url.absoluteString) \(tokenFingerprint(token))"
       data = try await MIRAAPIRequestDeduplicator.shared.data(for: key) {
-        try await self.responseData(for: request, metricLabel: "\(method) \(url.path)")
+        try await self.responseData(for: request, metricLabel: "\(method) \(url.path)", generation: generation)
       }
     } else {
-      data = try await responseData(for: request, metricLabel: "\(method) \(url.path)")
+      data = try await responseData(for: request, metricLabel: "\(method) \(url.path)", generation: generation)
     }
+    try await validateSessionGeneration(generation)
 
     do {
       return try decoder.decode(T.self, from: data)
@@ -453,7 +468,15 @@ public final class MIRAAPIClient {
     Logger(subsystem: "com.captro.app", category: "CheckoutAPI").notice("endpoint=\(path, privacy: .public) status=\(status) request=\(requestId, privacy: .public) code=\(code, privacy: .public)")
   }
 
-  private func responseData(for request: URLRequest, metricLabel: String) async throws -> Data {
+  private func validateSessionGeneration(_ expected: UInt64?) async throws {
+    try Task.checkCancellation()
+    if let expected, let auth = sessionProvider as? MIRAAuthSession,
+       await auth.sessionGeneration != expected {
+      throw CancellationError()
+    }
+  }
+
+  private func responseData(for request: URLRequest, metricLabel: String, generation: UInt64?) async throws -> Data {
     let metric = await MIRAPerformanceMetric.begin(category: "network", label: metricLabel)
     let response: URLResponse
     let data: Data
@@ -466,6 +489,9 @@ public final class MIRAAPIClient {
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await metric.finish(status: "\(status)", bytes: data.count)
     logCheckoutResponse(request, response: response, data: data)
+    // In particular, an A request must not receive a late 401 and replay a
+    // mutation with B's credentials after the user has switched accounts.
+    try await validateSessionGeneration(generation)
     let requestPath = request.url?.path ?? ""
     let isRefreshRequest = requestPath.hasSuffix("/auth/refresh")
     let isCredentialRequest = requestPath.hasSuffix("/auth/login")
@@ -478,10 +504,12 @@ public final class MIRAAPIClient {
        (status == 401 || status == 403),
        let refreshable = sessionProvider as? MIRARefreshableSessionProviding,
        await refreshable.refreshAccessTokenIfNeeded(api: self) {
+      try await validateSessionGeneration(generation)
       var retry = request
       if let refreshedToken = await sessionProvider?.accessToken(), !refreshedToken.isEmpty {
         retry.setValue("Bearer \(refreshedToken)", forHTTPHeaderField: "Authorization")
       }
+      try await validateSessionGeneration(generation)
       let retryMetric = await MIRAPerformanceMetric.begin(category: "network", label: "\(metricLabel) retry")
       let retryResponse: URLResponse
       let retryData: Data
@@ -492,6 +520,7 @@ public final class MIRAAPIClient {
         throw error
       }
       logCheckoutResponse(retry, response: retryResponse, data: retryData)
+      try await validateSessionGeneration(generation)
       let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
       await retryMetric.finish(status: "\(retryStatus)", bytes: retryData.count)
       guard (200..<300).contains(retryStatus) else { throw apiError(status: retryStatus, data: retryData) }

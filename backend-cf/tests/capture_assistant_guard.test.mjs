@@ -8,8 +8,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
 const capture = read('ios_native/MIRA/Sources/MIRANative/Screens/CaptroScanView.swift');
 const camera = read('ios_native/MIRA/Sources/MIRANative/Components/MIRACameraCaptureView.swift');
-const assistant = read('ios_native/MIRA/Sources/MIRANative/Screens/CaptroCaptureAssistantView.swift');
-const realtime = read('ios_native/MIRA/Sources/MIRANative/Services/CaptroRealtimeVoiceSession.swift');
 const backend = read('backend-cf/src/index.ts');
 const realtimeConfig = read('backend-cf/src/realtime-session.ts');
 const editorial = read('ios_native/MIRA/Sources/MIRANative/Components/CaptroEditorialOverlayCard.swift');
@@ -48,11 +46,11 @@ test('Story viewer and default editor preserve the entire original frame', () =>
   assert.match(editor, /return \[\.original, \.story9x16/);
 });
 
-test('ordinary post camera and voice comments remain separate from receipt Capture', () => {
+test('ordinary post camera stays separate from receipt Capture; voice recording is retired', () => {
   assert.doesNotMatch(capture, /MIRACameraCaptureView|CaptroVoiceRecorderSheet/);
   assert.match(camera, /galleryButton\.isHidden = simpleCaptureUI/);
   assert.match(camera, /guard !simpleCaptureUI else \{ return \}/);
-  assert.match(read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift'), /CaptroVoiceRecorderSheet\(limit: 60\)/);
+  assert.doesNotMatch(read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift'), /CaptroVoiceRecorderSheet|Record voice attachment|CaptroVoiceUploadService/);
 });
 
 test('feed caption overflow uses rendered height instead of character count', () => {
