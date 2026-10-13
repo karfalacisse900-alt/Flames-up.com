@@ -277,6 +277,112 @@ final class CaptroFeedStabilityTests: XCTestCase {
     XCTAssertEqual(model.posts.count, 22)
   }
 
+  func testLocalPostUpdateDuringRankingDoesNotConsumeUnacceptedPage() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.testAutomaticPagination = false
+    model.configureGuestMode(true)
+    let initial = try (0..<12).map { try post("rank-initial-\($0)") }
+    let next = try [post("rank-next-a"), post("rank-next-b")]
+    var offsets: [Int] = []
+    model.testPageLoader = { _, skip in
+      offsets.append(skip)
+      return skip == 0 ? initial : next
+    }
+    let rankingStarted = expectation(description: "page two ranking suspended")
+    var ranking: CheckedContinuation<[MIRAPost], Never>?
+    var pauseNextRank = true
+    model.testPageSorter = { records in
+      guard records.first?.id.hasPrefix("rank-next-") == true, pauseNextRank else { return records }
+      pauseNextRank = false
+      return await withCheckedContinuation { continuation in
+        ranking = continuation
+        rankingStarted.fulfill()
+      }
+    }
+    await model.load()
+    let before = model.posts.map(\.id)
+    let last = try XCTUnwrap(model.posts.last)
+    let page = Task { await model.loadMoreIfNeeded(after: last) }
+    await fulfillment(of: [rankingStarted], timeout: 3)
+    model.applyPostRecord(try post("rank-initial-0", likes: 99))
+    ranking?.resume(returning: next)
+    await page.value
+
+    XCTAssertEqual(model.posts.map(\.id), before)
+    XCTAssertEqual(model.paginationOffsetForTesting(.forYou), 12)
+    XCTAssertFalse(model.isLoadingMore)
+    await model.loadMoreIfNeeded(after: last)
+    XCTAssertEqual(offsets, [0, 12, 12], "A page rejected after ranking must be requested again, not skipped")
+    XCTAssertEqual(Array(model.posts.prefix(before.count)).map(\.id), before)
+    XCTAssertEqual(model.posts.suffix(2).map(\.id), next.map(\.id))
+    XCTAssertEqual(model.posts.first { $0.id == "rank-initial-0" }?.likesCount, 99)
+    XCTAssertEqual(model.paginationOffsetForTesting(.forYou), 14)
+  }
+
+  func testFeedSwitchDuringRankingDoesNotAdvancePreviousFeedCursor() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.testAutomaticPagination = false
+    model.configureGuestMode(true)
+    let initial = try (0..<12).map { try post("switch-initial-\($0)") }
+    let next = try [post("switch-next")]
+    let following = try post("following-only")
+    model.testPageLoader = { scope, skip in
+      if scope == "following" { return [following] }
+      return skip == 0 ? initial : next
+    }
+    let rankingStarted = expectation(description: "old feed page ranking suspended")
+    var ranking: CheckedContinuation<[MIRAPost], Never>?
+    model.testPageSorter = { records in
+      guard records.first?.id == "switch-next" else { return records }
+      return await withCheckedContinuation { continuation in
+        ranking = continuation
+        rankingStarted.fulfill()
+      }
+    }
+    await model.load()
+    let last = try XCTUnwrap(model.posts.last)
+    let page = Task { await model.loadMoreIfNeeded(after: last) }
+    await fulfillment(of: [rankingStarted], timeout: 3)
+    let followingAccepted = expectation(description: "new feed accepted")
+    let subscription = model.$posts.filter { $0.map(\.id) == ["following-only"] }
+      .prefix(1).sink { _ in followingAccepted.fulfill() }
+    model.selectFeedSection(.following)
+    await fulfillment(of: [followingAccepted], timeout: 3)
+    ranking?.resume(returning: next)
+    await page.value
+    subscription.cancel()
+
+    XCTAssertEqual(model.posts.map(\.id), ["following-only"])
+    XCTAssertEqual(model.paginationOffsetForTesting(.forYou), 12,
+      "Returning later must not skip the old feed's unaccepted page")
+    XCTAssertEqual(model.paginationOffsetForTesting(.following), 1)
+  }
+
+  func testDuplicateOnlyPageCommitsCursorWithoutRankingAgain() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.testAutomaticPagination = false
+    model.configureGuestMode(true)
+    let initial = try (0..<12).map { try post("duplicates-\($0)") }
+    let lastPage = try [post("after-duplicates")]
+    var offsets: [Int] = []
+    var rankedPages = 0
+    model.testPageLoader = { _, skip in
+      offsets.append(skip)
+      return skip < 24 ? initial : lastPage
+    }
+    model.testPageSorter = { records in rankedPages += 1; return records }
+    await model.load()
+    let last = try XCTUnwrap(model.posts.last)
+    await model.loadMoreIfNeeded(after: last)
+    XCTAssertEqual(model.paginationOffsetForTesting(.forYou), 24)
+    XCTAssertEqual(rankedPages, 1)
+    await model.loadMoreIfNeeded(after: last)
+    XCTAssertEqual(offsets, [0, 12, 24])
+    XCTAssertEqual(rankedPages, 2)
+    XCTAssertEqual(model.posts.last?.id, "after-duplicates")
+    XCTAssertEqual(model.posts.count, 13)
+  }
+
   func testLegacyTextPageDoesNotStrandLaterMediaOrDeleteCachedRecords() async throws {
     let model = MainFeedModel(api: MIRAAPIClient())
     model.configureGuestMode(true)

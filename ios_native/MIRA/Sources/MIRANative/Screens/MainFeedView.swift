@@ -83,6 +83,9 @@ final class MainFeedModel: ObservableObject {
 #if DEBUG
   private var isVisualFixture = false
   var testPageLoader: ((String, Int) async throws -> [MIRAPost])?
+  var testPageSorter: (([MIRAPost]) async -> [MIRAPost])?
+  var testAutomaticPagination = true
+  func paginationOffsetForTesting(_ section: MainFeedSection) -> Int? { pageOffsets[section] }
 
   convenience init(api: MIRAAPIClient, visualPosts: [MIRAPost]) {
     self.init(api: api)
@@ -420,12 +423,15 @@ final class MainFeedModel: ObservableObject {
       MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
       return
     }
-    pageOffsets[section] = skip + loaded.count
     let existing = Set(posts.map(\.id))
     let unique = CaptroFeedReconciliation.unique(loaded).filter { !existing.contains($0.id) }
 
     if unique.isEmpty {
+      // No suspension is needed for duplicate-only pages. Commit the consumed
+      // server rows now so repeated records cannot strand pagination.
+      pageOffsets[section] = skip + loaded.count
       canLoadMore = loaded.count >= firstPageLimit
+      if !canLoadMore { exhaustedSections.insert(section) }
       MIRAPerformanceTimeline.mark("home_load_more_duplicate_page", detail: "skip=\(skip)")
       return
     }
@@ -435,6 +441,10 @@ final class MainFeedModel: ObservableObject {
     guard localContentVersion == contentVersion else {
       return
     }
+    // Ranking suspends MainActor. An edit, removal, or feed change can reject
+    // this result while it runs; consume the cursor only when the page itself
+    // is accepted, without any suspension between the two mutations.
+    pageOffsets[section] = skip + loaded.count
     posts.append(contentsOf: interleavePostFormats(sorted))
     assert(Set(posts.map(\.id)).count == posts.count)
     canLoadMore = loaded.count >= firstPageLimit
@@ -444,6 +454,9 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func prefetchNextPageIfNeeded(afterInitialCount initialCount: Int) {
+#if DEBUG
+    guard testAutomaticPagination else { return }
+#endif
     guard canLoadMore, initialCount <= firstPageLimit else { return }
     let generation = accountGeneration
     Task { [weak self] in
@@ -864,7 +877,10 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {
-    await Task.detached(priority: .userInitiated) {
+#if DEBUG
+    if let testPageSorter { return await testPageSorter(posts) }
+#endif
+    return await Task.detached(priority: .userInitiated) {
       let formatter = ISO8601DateFormatter()
       return posts
         .map { post in
