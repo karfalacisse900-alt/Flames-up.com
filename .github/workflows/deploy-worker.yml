@@ -6,6 +6,10 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      favorites_smoke:
+        description: After the authorized Worker deployment, verify private Favorites using disposable accounts
+        type: boolean
+        default: false
       checkout_readiness_only:
         description: Read deployed Stripe and access routes using a disposable authenticated account, no charges
         type: boolean
@@ -144,6 +148,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy --env production --keep-vars
+      - name: Verify private Favorites end to end
+        if: ${{ inputs.reliability_dry_run != true && inputs.favorites_smoke == true }}
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: node backend-cf/scripts/verify-favorites.mjs
       - name: Refresh Stream upload credential without changing payment settings
         if: ${{ inputs.reliability_dry_run != true && inputs.refresh_stream_token == true }}
         working-directory: backend-cf

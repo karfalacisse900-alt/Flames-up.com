@@ -46,6 +46,18 @@ begin
   -- Serializes writes/initial legacy import and collection deletion for one account,
   -- not the whole database. Transaction lock is always released on rollback.
   perform pg_advisory_xact_lock(hashtextextended('favorites:'||p_owner,0));
+  -- Older clients can delete their canonical save directly under existing RLS.
+  -- Retire memberships and invalidate pickers on the next account operation.
+  for r in select distinct m.post_key from public.app_favorite_memberships m
+    where m.owner_id=p_owner and not exists(select 1 from public.app_post_interactions i
+      where i.kind='save' and coalesce(i.legacy_post_id,i.post_id::text)=m.post_key
+      and (i.app_user_id in(select jsonb_array_elements_text(p_identity->'app_ids'))
+        or i.user_id::text in(select jsonb_array_elements_text(p_identity->'auth_ids'))
+        or i.actor_key in(select jsonb_array_elements_text(p_identity->'actor_keys'))))
+  loop
+    delete from public.app_favorite_memberships where owner_id=p_owner and post_key=r.post_key;
+    update public.app_favorite_revisions set revision=revision+1,last_request=null where owner_id=p_owner and post_key=r.post_key;
+  end loop;
   -- Import each existing save's single legacy collection once, without deleting saves.
   for r in
     select distinct on (coalesce(i.legacy_post_id,i.post_id::text))

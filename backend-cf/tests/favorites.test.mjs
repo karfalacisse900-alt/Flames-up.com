@@ -3,6 +3,55 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
+import vm from 'node:vm';
+import ts from 'typescript';
+
+const source=readFileSync(new URL('../src/index.ts',import.meta.url),'utf8');
+const ast=ts.createSourceFile('index.ts',source,ts.ScriptTarget.Latest,true);
+function route(method,path,bindings={}) {
+  const call=ast.statements.filter(ts.isExpressionStatement).map(x=>x.expression).find(x=>ts.isCallExpression(x)&&x.expression.getText(ast)===`api.${method}`&&x.arguments[0]?.text===path);
+  assert.ok(call);
+  const code=ts.transpileModule(`const handler=${call.arguments.at(-1).getText(ast)}`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  return vm.runInNewContext(code+';handler',{
+    requireSupabasePrimaryDatabase:()=>null,getUserId:()=> 'alice',enforceRateLimit:async()=>null,rejectLargeRequest:()=>null,
+    publicId:x=>String(x||'').trim(),isUuidText:x=>/^[a-f0-9-]{36}$/i.test(x||''),
+    clampNumber:(v,min,max)=>Math.max(min,Math.min(max,Number(v))),
+    favoriteError:(_c,e)=>{throw e},...bindings});
+}
+const context=(body={},query={})=>({req:{json:async()=>body,param:()=> 'post',query:key=>query[key]},json:(body,status=200)=>({body,status})});
+
+test('Favorites route refuses saving inaccessible posts and never trusts client owner',async()=>{
+  let calls=0;
+  const handler=route('put','/favorites/posts/:postId',{
+    supabaseReadVisiblePosts:async()=>[], favoriteRPC:async()=>{calls++;},
+  });
+  const response=await handler(context({saved:true,request_id:randomUUID(),expected_revision:0,collection_ids:[],owner_id:'victim'}));
+  assert.equal(response.status,404); assert.equal(calls,0);
+});
+test('Favorites route uses authenticated identity and permits removing unavailable saves',async()=>{
+  let calls=0;
+  const handler=route('put','/favorites/posts/:postId',{
+    supabaseResolvePostIdentity:async()=>({legacyPostId:'post'}),
+    supabaseReadVisiblePosts:async()=>{throw Error('unsave must not require post access')},
+    favoriteRPC:async(_c,owner,action,input)=>{
+      assert.equal(owner,'alice'); assert.equal(action,'set'); assert.equal(input.saved,false); calls++;
+      assert.equal(input.owner_id,undefined); return {state:{saved:false}};
+    }
+  });
+  assert.equal((await handler(context({saved:false,request_id:randomUUID(),expected_revision:1,collection_ids:[],owner_id:'victim'}))).status,200);
+  assert.equal(calls,1);
+});
+test('Favorites list exposes unavailable rows, not private post contents or unsafe previews',async()=>{
+  const handler=route('get','/favorites',{
+    favoriteRPC:async()=>({post_ids:['visible','private'],collections:[{id:'collection',name:'Mine',count:2,preview_post_ids:['private','visible']}]}),
+    supabaseReadVisiblePosts:async(_c,owner)=>{assert.equal(owner,'alice');return [{id:'visible'}]},
+    feedPostPayload:row=>row,
+  });
+  const c=context(); c.env={}; const result=await handler(c);
+  assert.equal(result.body.entries[1].post,null);
+  assert.equal(result.body.collections[0].previews.length,1);
+  assert.equal(result.body.collections[0].previews[0].id,'visible');
+});
 
 const migration = readFileSync(new URL('../../supabase/migrations/20261013012807_private_favorites.sql',import.meta.url),'utf8');
 async function fixture() {
@@ -67,5 +116,10 @@ test('Favorites migration: legacy collections imported once; old save routes ret
     await rpc('set',{post_key:'old',saved:false});
     assert.deepEqual((await rpc('read',{post_key:'old'})).state.collection_ids,[]);
     assert.deepEqual((await rpc('read')).post_ids,[]);
+    await rpc('set',{post_key:'old',saved:true,legacy_collection:'Travel'});
+    await db.exec("delete from app_post_interactions where kind='save' and app_user_id='alice'");
+    const directDeleted=await rpc('read',{post_key:'old'});
+    assert.equal(directDeleted.state.saved,false);
+    assert.deepEqual(directDeleted.state.collection_ids,[]);
   } finally {await db.close();}
 });

@@ -46,6 +46,7 @@ private struct FavoriteWrite: Encodable {
   private unowned let api: MIRAAPIClient
   private var epoch = UUID()
   private var postVersions: [String: Int] = [:]
+  private var reads: [String: UUID] = [:]
   private var collectionVersion = 0
   private var noticeTask: Task<Void, Never>?
   private var action: (() async -> Void)?
@@ -54,7 +55,7 @@ private struct FavoriteWrite: Encodable {
   func configure(accountID: String) {
     guard self.accountID != accountID else { return }
     epoch = UUID(); self.accountID = accountID
-    states = [:]; collections = []; busy = []; postVersions = [:]; collectionVersion += 1; dismissNotice()
+    states = [:]; collections = []; busy = []; postVersions = [:]; reads = [:]; collectionVersion += 1; dismissNotice()
     changeVersion += 1
   }
   func isSaved(_ post: MIRAPost) -> Bool { states[post.id]?.saved ?? post.viewerSaved }
@@ -68,9 +69,11 @@ private struct FavoriteWrite: Encodable {
   func loadState(postID: String) async throws -> CaptroFavoriteState {
     let generation = epoch
     let version = postVersions[postID, default: 0]
+    let read = UUID(); reads[postID] = read
     guard requireAccount() else { throw CancellationError() }
     let response: FavoriteResponse = try await api.get(path(postID))
-    guard generation == epoch, version == postVersions[postID, default: 0], let state = response.state else { throw CancellationError() }
+    guard generation == epoch, reads[postID] == read, version == postVersions[postID, default: 0],
+          let state = response.state, state.postId == postID else { throw CancellationError() }
     if !busy.contains(postID) { states[postID] = state }
     return state
   }
@@ -126,7 +129,7 @@ private struct FavoriteWrite: Encodable {
       let result: FavoriteResponse = try await api.put(path(postID), body: FavoriteWrite(saved: saved,
         collectionIds: ids, expectedRevision: previous.revision, requestId: requestID))
       guard generation == epoch else { return false }
-      guard let confirmed = result.state else { throw MIRAAPIError.badStatus(502) }
+      guard let confirmed = result.state, confirmed.postId == postID else { throw MIRAAPIError.badStatus(502) }
       states[postID] = confirmed
       if collectionsAtStart == collectionVersion { collections = result.collections }
       busy.remove(postID); changeVersion += 1

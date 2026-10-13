@@ -8164,7 +8164,7 @@ async function favoriteRPC(c: any, userId: string, action: string, input: Record
 function favoriteError(c: any, error: any) {
   const code = `${getErrorCode(error)} ${String(error?.message || '')}`;
   if (code.includes('FAVORITES_CONFLICT')) return c.json({ detail: 'Favorites changed on another screen or device. Refresh and try again.' }, 409);
-  if (code.includes('23505')) return c.json({ detail: 'A collection with that name already exists.' }, 409);
+  if (code.includes('23505') || code.includes('app_favorite_collection_name')) return c.json({ detail: 'A collection with that name already exists.' }, 409);
   if (code.includes('FAVORITES_COLLECTION_NOT_FOUND')) return c.json({ detail: 'This collection is no longer available.' }, 404);
   if (code.includes('FAVORITES_') || code.includes('22P02')) return c.json({ detail: 'Check the collection name and selections, then try again.' }, 400);
   console.warn(JSON.stringify({ event: 'favorites_request_failed' }));
@@ -19168,6 +19168,8 @@ api.get('/favorites', authMiddleware, async c => {
 });
 api.get('/favorites/posts/:postId', authMiddleware, async c => {
   const required = requireSupabasePrimaryDatabase(c, 'favorites'); if(required) return required;
+  const limited=await enforceRateLimit(c,'favorite_state',getUserId(c),240,60); if(limited) return limited;
+  if(!publicId(c.req.param('postId'),120)) return c.json({detail:'Invalid post.'},400);
   try {
     const userId=getUserId(c),identity=await supabaseResolvePostIdentity(c,c.req.param('postId'));
     const result=await favoriteRPC(c,userId,'read',{post_key:identity.legacyPostId||identity.postUuid||identity.requestedPostId,post_uuid:identity.postUuid||null});

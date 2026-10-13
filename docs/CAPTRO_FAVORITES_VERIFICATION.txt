@@ -1,0 +1,60 @@
+PRIVATE FAVORITES — implementation / release verification
+
+Scope
+Small frosted star on Home media; tap saves the entire post. Long press opens
+the real collection picker and cannot also trigger the tap recognizer.
+Me has a Favorites destination. Details reuses the same account-scoped store.
+Likes, media geometry, stamps, navigation and CaptroFeedViewport are unchanged.
+This does not claim to resolve the previously reported device shaking/freezes.
+
+Storage / authorization
+app_post_interactions(kind=save) remains the canonical save record. Three
+additive private tables hold collections, memberships and mutation revisions.
+No original posts, votes, media or existing saves are migrated destructively.
+The Worker derives owner identity from authentication. New tables and RPC have
+no anon/authenticated grants, RLS enabled, and service-role-only access through
+authenticated Worker routes. Existing post visibility filtering gates content
+and preview reads; saving does not issue memberships/tickets or change access.
+Transactions serialize changes per account. Revision checks reject stale edits;
+request IDs avoid duplicate writes on uncertain retries. Unsave clears all
+memberships; Undo restores their previous IDs. Deleting a collection preserves
+canonical saves. Existing bookmark/library routes use the same transaction.
+
+Native behavior
+Optimistic star state, light haptic, non-layout-changing confirmation overlay.
+One shared account-scoped store rejects obsolete reads/writes after mutations
+or account changes, rolls back failed writes, and exposes Retry/Reload.
+Opening/canceling a picker makes no save mutation. Collection selections commit
+on Done. Empty selections still keep the post in main Favorites. The collection
+list supports create/rename/delete and unavailable saved posts can be removed.
+No private Favorites cache persists across logout. The server keeps saves.
+
+Key files
+backend-cf/src/index.ts — canonical compatibility adapter and Favorites routes
+supabase/migrations/*_private_favorites.sql — private schema and atomic RPC
+Services/CaptroFavoritesStore.swift — shared state, rollback, Undo, account guard
+Components/CaptroFavoriteButton.swift — recognizers, accessibility, confirmations
+Screens/CaptroFavoritesView.swift — picker, collections and saved-post list
+Screens/CaptroFeedMediaPager.swift — sibling star overlay, no geometry changes
+Screens/ProfileChatVerificationStudio.swift — Me entry
+Screens/PostDetailNativeView.swift — shared save/organize destination
+App/MIRANativeRootView.swift — account lifecycle
+
+Verification status (update with final evidence before release)
+- Local TypeScript check passed.
+- Initial complete backend suite: 256 passed; additional route/privacy tests added.
+- Actual SQL migration executed in isolated PGlite/Postgres-compatible tests:
+  multiple memberships, atomic unsave/Undo, ownership, no direct API privileges,
+  idempotency, stale-write rejection, rollback, legacy import/unsave, likes intact.
+- Native runtime and unit tests pending CI. Screenshots are actual SwiftUI views
+  with isolated fixture transport, not mockups and not proof of live-device FPS.
+- Live deployment acceptance script uses only newly-created disposable accounts
+  and a private post, with exact-ID cleanup; no customer data or media changes.
+- Physical iPhone, manual VoiceOver, real network interruptions and long mixed
+  video scrolling remain device-only verification. Do not infer these passed
+  from a build, simulator screenshot, or successful TestFlight upload.
+
+Authority
+User explicitly approved tested Favorites backend deployment and TestFlight.
+No merge is authorized. Production settings/permissions outside this feature
+must not change.
