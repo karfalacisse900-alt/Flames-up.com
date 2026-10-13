@@ -88,4 +88,165 @@ scrolling, APNs delivery, Instruments measurements and real hang reproduction
 remain unverified until separately recorded. See final turn report for actual
 test counts, source commit and CI result; this document does not assert completion.
 
-PRODUCTION STATUS: unchanged during this task. Rollout and distribution await approval.
+PRODUCTION STATUS: unchanged during this task. Security/backend rollout still
+awaits separate approval. On October 13 the user explicitly authorized TestFlight
+upload ("update tesflight and keep working on the rest"). Native distribution may
+proceed after matching-source validation; this does not authorize database changes.
+
+APP IMPLEMENTATION REFERENCES
+- Services/MIRAAuthSession.swift: MainActor session owner; cancel refresh/cache
+  tasks and reject old generations before changing user/keychain state.
+- Services/MIRAAPIClient.swift: reject old-account responses and prevent a late
+  unauthorized mutation from replaying with the next account's credentials.
+- Services/MIRAPushNotificationService.swift: account + token identity, serialized
+  takeover/logout, pinned cleanup credentials including in-flight token refresh.
+- Services/MIRAAppCacheStore.swift: explicitly owner-scoped profile writes;
+  preserve legacy draft text/recording data rather than deleting during cleanup.
+- Screens/NotificationLibrarySearchCreateViews.swift: media-first ordinary
+  composer; required-media publishing guard; no microphone or poll entry points.
+- Screens/PostDetailNativeView.swift and CaptroPostDetailSections.swift: remove
+  reaction icon row/voice replies, retain readable comments/captions and actual
+  stamp actions; post likes remain a text action in the existing options menu.
+- Screens/ConversationNativeView.swift: no recorder/player; older voice messages
+  are labelled as legacy records rather than showing a broken player.
+- Screens/ProfileChatVerificationStudio.swift: no ordinary text tiles; preserved
+  older records open Details from a compact Earlier posts disclosure.
+- Screens/CaptroFeedMediaPager.swift: photo/Cover star lower by 30 points; video
+  control clearance retained. Media/stamp sizing policy is unchanged.
+- Screens/MainFeedView.swift: respect tab safe area; inline pagination Retry
+  keeps existing posts/cursor, rejects stale errors; image-only neighborhoods
+  now cancel obsolete video prewarm work too. Cursor advancement now commits
+  with accepted ranked pages. Previously it happened before async ranking;
+  a post update or feed switch could then discard the page but leave the cursor
+  advanced, skipping those posts. Three deterministic tests cover local changes,
+  feed switches during ranking, and duplicate-only pagination. This is a
+  confirmed code-level missing-page cause, NOT a reproduced cause of shaking.
+- App/MIRANativeRootView.swift: high-contrast opaque tab material without changing
+  tabs/navigation; account-safe push registration integration.
+- Services/MIRAPlaybackCoordinator.swift: retained cancellable prewarm tasks,
+  per-request identity and neighborhood checks, bounded metadata/player caches.
+- Services/MIRAPerformance.swift: bounded protected local MetricKit archive,
+  privacy filtering, no automatic upload. No claims of measured FPS improvement.
+- AppTarget/Info.plist: remove speech permission; keep microphone only for camera
+  video audio. Removed obsolete voice/assistant implementation files are recoverable
+  from Git. No server or user recording was deleted.
+- scripts/app-store/*validation*.mjs and both native workflows: all upload paths
+  require successful matching actual-source verification, including IPA retries.
+
+RESTORATION: CaptroFeedViewport.swift is byte-for-byte unchanged from 2e79701b.
+
+LOCAL VERIFICATION AT NATIVE SOURCE 2f5f56fa
+- Full backend/contract suite: 266 passed, 0 failed.
+- TypeScript no-emit check: passed.
+- git diff --check: passed.
+- New native tests: session/account/push races, obsolete video results, bounded
+  diagnostic retention, pagination same-cursor retry/stale errors, preserved
+  legacy recording drafts and media-only/no-voice UI.
+- Initial native CI 38427966793 compiled successfully; 103 logic tests ran with
+  four assertions failing across three auth tests. Seven UI tests ran; one failed.
+  Auth fixtures did not seed Keychain in the hostless test target (the log shows
+  auth_bootstrap_no_token), so no delayed request started. The corrected fixtures
+  inject verifiably seeded session storage while production still uses Keychain;
+  no race assertion was removed and no timeout was increased.
+  The UI failure confirmed a REAL route bug: Add -> More ways to create targeted
+  an intent-selector popover absent from ordinary composition. The corrected
+  submenu stays on Add's mounted anchor; the test now opens all four editors.
+  The orphan character counter is hidden until the writing surface exists.
+- Superseded native CI 38432544997 was cancelled when the cursor race was found;
+  it is not counted as a passing validation.
+- Native CI 38444077613 ran on iPhone 13 mini simulator, iOS 26.4, including
+  account races, pagination ranking races, mixed-carousel geometry and lazy Home
+  tab-return regression checks.
+  All 106 logic tests passed. Eight of nine UI tests passed, including lazy Home
+  tab return and stable mixed-carousel geometry. The remaining composer test
+  opened Club but could not reopen Event: XCUI found More ways to create with an
+  invalid hit point. This run is FAILED and cannot authorize the upload. The
+  active Add popup placement is under investigation; no assertion is waived.
+  Runtime screenshots confirm media-first/no-voice composition and Details
+  without the reaction icon row, with complete caption and text comments.
+- Source-contract review against deployed Worker 990ce2cb found no native
+  compatibility blocker: auth routes, push POST/DELETE, media upload/publish,
+  overlays and Favorites remain compatible. Native does not call the pending
+  push RPC directly. This is not live APNs/account-switch testing.
+- Supabase preview-branch listing returned no staging branches. PGlite SQL and
+  route tests do not substitute for the planned isolated hosted compatibility
+  check. No production migration, settings change or Worker deploy was performed.
+- No physical iPhone, APNs delivery, CPU trace or shake/freeze reproduction in
+  this task. A successful simulator run will not change that limitation.
+- Device Keychain entitlement/persistence is not verified by the injected-storage
+  race tests and remains a separate device integration check.
+
+FINAL POPUP CORRECTION / NATIVE RECHECK
+Commit d615f909 fixes a second confirmed popup defect. The previous CI recording
+at 41 seconds shows Add forced below its anchor after Club made the composer
+taller: More ways to create was offscreen. The popup now lets iOS choose its edge
+from the button bounds. The regression test additionally requires each reopened
+choice to be hittable and inside the viewport; none of its four destinations was
+removed. Native recheck 38448182463 PASSED on iPhone 13 mini simulator, iOS 26.4:
+106 logic tests and 9 UI tests, zero failures. The all-four-editor test passed;
+captured reopened Add menus visibly retain the last row within the viewport.
+Source attestation: d615f9096d7a35266198fb36077722096454fbb7, native tree
+ea8f4dfab0853cbd11dc9f86ce85b296f7dd02cc. Actual native runtime screenshots are
+in ../feed-restoration-evidence/account-safety-d615f909/stamp-screenshots, with
+manifest.json mapping images to tests. These use isolated simulator fixtures,
+not generated mockups and not proof of physical-iPhone performance.
+Local backend suite was rerun: 266 passed; TypeScript no-emit check passed.
+
+APPROVED TESTFLIGHT RELEASE
+Native release workflow 38452115543 was dispatched on October 13 from the
+feature branch, using successful validation 38448182463. No merge. The workflow
+must confirm source identity, archive, export and upload; Apple processing and
+internal tester availability must then be checked for the exact build. Its final
+result: PASSED. Version 1.0.1 build 619.1 was archived, release-auth checked,
+exported and uploaded successfully. Apple read-only status run 38455919573 at
+2026-10-13 19:34:42 UTC confirmed build 619.1: processing VALID, expired false,
+internalBuildState IN_BETA_TESTING, groups Captro private and Captro private2.
+The previous read-only check 38455554417 ran before the new build appeared; it
+was not mistaken for proof of 619.1 availability. External beta state remains
+READY_FOR_BETA_SUBMISSION; no external review/public release was submitted.
+No payment/IAP configuration workflow was invoked. No backend deployment,
+database permission change, credentials rotation or branch merge occurred.
+
+Final source: d615f9096d7a35266198fb36077722096454fbb7.
+Native validation: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38448182463
+App upload: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38452115543
+Apple availability: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38455919573
+Native screenshots: media-first Create A0A8485A-212A-4871-9B94-672D4B4A5CD2.png;
+ordinary Details 09029420-11C4-41E0-88B3-7F00087B3A93.png; corrected reopened Add
+7F929BFC-DED0-4EAB-9C3F-3D1E845AA8D7.png (in the artifact directory above).
+Home regression fixtures use a test harness: the production root tab-bar
+appearance and physical-device contrast/APNs/Keychain still require device
+verification. No claim that the observed physical-iPhone shaking is resolved.
+
+PERFORMANCE EVIDENCE LIMITS
+Historical run 38301267653 timed out waiting for home.post.stream before reaching
+restoration assertions. Later stage-instrumented runs reached posts-assigned in
+roughly 1.7-4.3 seconds and show fixture video writing off the main thread. The
+failing PID had no stage logs, so its specific startup stall remains unassigned.
+The profiler found PIDs 44168 and 34977 but xctrace reported Cannot find process
+for provided pid, including the attempt targeting the explicit simulator UUID.
+Earlier collector script/target mistakes were corrected, but attachment still
+failed. There are no usable CPU samples or measured FPS improvements. Passing
+lazy-feed and carousel tests does not establish that physical-device shaking or
+freezes are fixed. Those remain unverified.
+
+NOTIFICATION ROLLOUT LIMIT
+If old-account unregister fails offline or with an expired JWT, the current
+production Worker can still hold both accounts' token bindings. The revised
+client serializes operations and rejects stale account work, but full server
+single-owner enforcement requires the separately approved migration/Worker
+rollout and real APNs account-switch tests. Do not report that production risk
+as fully fixed by the native upload alone.
+
+READ-ONLY DEPENDENCY FOLLOW-UP
+GitHub's 28 open alerts (9 high, 15 medium, 4 low) refer to the older default main
+branch af5bdc3e. The current release and deployed Worker source 990ce2cb have
+identical newer locks replacing those affected versions. Fresh npm audit:
+backend production-only 0; admin-web all dependencies 0; backend including dev
+tools 3 high entries tracing to ONE newer Sharp advisory, GHSA-wq5f-xc86-pv6w.
+Sharp 0.35.4 is brought in by Wrangler/Miniflare, not the iOS app or Worker runtime;
+0.35.5 fixes the affected librsvg decoder. No direct decoding/import was found
+in Worker source/tests. Certain hostile SVG/Linux toolchain use remains a risk,
+not a demonstrated production exploit. Prepare a separately tested dev-toolchain
+update; no package upgrade or production setting was changed in this review.
+Advisory: https://github.com/advisories/GHSA-wq5f-xc86-pv6w
