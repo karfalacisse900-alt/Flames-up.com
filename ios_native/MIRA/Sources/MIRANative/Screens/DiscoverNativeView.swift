@@ -1357,8 +1357,9 @@ struct StoryViewerNativeView: View {
           shouldPlay: shouldPlayCurrentStory,
           videoMuted: currentStory?.hasAudio == true,
           maxPixelSize: 1920,
-          placeholderColor: .black,
-          placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68)
+          placeholderColor: MIRATheme.Color.mediaPlaceholder,
+          placeholderTint: MIRATheme.Color.textSecondary.opacity(0.68),
+          plainBackground: true
         )
         .id(storyPlaybackIdentity(for: mediaURL))
       } else {

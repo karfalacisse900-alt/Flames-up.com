@@ -8,6 +8,9 @@ final class PostPresentationReviewTests: XCTestCase {
     return app
   }
   private func capture(_ app: XCUIApplication, _ name: String) {
+    // Screenshot-only settling time for native sheet/navigation transitions.
+    // No application delay or scrolling/playback behavior is changed.
+    Thread.sleep(forTimeInterval: 1)
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = name + "-native-fixture"
     attachment.lifetime = .keepAlways
@@ -17,7 +20,10 @@ final class PostPresentationReviewTests: XCTestCase {
     let app = launch(["--captro-quality-composer", "--captro-composer-authorized"])
     let editor = app.textViews["composer.writing"]
     XCTAssertTrue(editor.waitForExistence(timeout: 20))
-    editor.tap(); editor.typeText("Keep my caption.")
+    editor.tap()
+    // Fresh CI simulators can show Apple's first-keyboard QuickPath tutorial.
+    if app.buttons["Continue"].waitForExistence(timeout: 2) { app.buttons["Continue"].tap() }
+    editor.typeText("Keep my caption.")
     XCTAssertFalse(app.buttons["composer.create"].isEnabled)
     XCTAssertTrue(app.staticTexts["composer.mediaRequired"].exists)
     capture(app, "composer-media-required")
@@ -31,7 +37,7 @@ final class PostPresentationReviewTests: XCTestCase {
     let app = launch(["--captro-presentation-review"])
     XCTAssertTrue(app.buttons["Open Details"].waitForExistence(timeout: 20))
     app.buttons["Open Details"].tap()
-    XCTAssertTrue(app.otherElements["post.detail.media"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "post.detail.media").firstMatch.waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["post.detail.options"].exists)
     XCTAssertFalse(app.buttons["Yes"].exists)
     XCTAssertFalse(app.buttons["No"].exists)
@@ -59,7 +65,7 @@ final class PostPresentationReviewTests: XCTestCase {
     for kind in ["club", "event", "meetup", "deal"] {
       let app = launch(["--captro-presentation-review", "--review-kind=" + kind])
       app.buttons["Open Details"].tap()
-      XCTAssertTrue(app.otherElements["post.detail.media"].waitForExistence(timeout: 15))
+      XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "post.detail.media").firstMatch.waitForExistence(timeout: 15))
       app.swipeUp()
       capture(app, "details-" + kind)
       XCTAssertFalse(app.buttons["Yes"].exists)
@@ -86,7 +92,7 @@ final class PostPresentationReviewTests: XCTestCase {
       let app = launch(["--captro-presentation-review", "--review-kind=club", flag])
       XCTAssertTrue(app.buttons["Open Details"].waitForExistence(timeout: 15))
       app.buttons["Open Details"].tap()
-      XCTAssertTrue(app.otherElements["post.detail.media"].waitForExistence(timeout: 15))
+      XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "post.detail.media").firstMatch.waitForExistence(timeout: 15))
       app.swipeUp()
       let action = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
       XCTAssertTrue(action.waitForExistence(timeout: 5))

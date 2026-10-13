@@ -1166,7 +1166,8 @@ private struct PostDetailOptimizedMediaCarousel: View {
       placeholderURL: isVideo(at: index, url: url) ? placeholderURL(at: index, mediaURL: url) : nil,
       contentMode: .fit,
       shouldPlay: isVisible && scenePhase == .active && selectedIndex == index && !isVideoPaused,
-      videoMuted: isMuted
+      videoMuted: isMuted,
+      plainBackground: true
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .contentShape(Rectangle())

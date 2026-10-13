@@ -19,7 +19,7 @@ private final class CaptroComposerTestProtocol: URLProtocol {
     let body: String
     let status: Int
     if ProcessInfo.processInfo.arguments.contains("--captro-presentation-review"),
-       request.httpMethod == "GET", path.hasSuffix("/posts/review-post") {
+       request.httpMethod == "GET", path == "/api/posts/review-post" {
       body = String(data: try! JSONSerialization.data(withJSONObject: CaptroPresentationReviewFixture.postRecord), encoding: .utf8)!
       status = 200
     } else if ProcessInfo.processInfo.arguments.contains("--captro-presentation-review"),
