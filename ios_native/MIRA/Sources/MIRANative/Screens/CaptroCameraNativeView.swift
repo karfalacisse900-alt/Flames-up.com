@@ -73,7 +73,7 @@ struct CaptroCameraNativeView: View {
                   .frame(maxWidth: 230)
               }
               HStack(spacing: 8) {
-                ForEach(camera.lensZooms, id: \.self) { factor in
+                ForEach(camera.lensZooms.count > 1 ? camera.lensZooms : [], id: \.self) { factor in
                   Button { camera.setZoom(factor) } label: {
                     Text(String(format: "%.1f×", factor)).font(.caption.monospacedDigit())
                       .frame(minWidth: 44, minHeight: 44)
