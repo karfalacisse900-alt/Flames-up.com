@@ -972,7 +972,7 @@ public struct CreatePostNativeView: View {
   @ScaledMetric(relativeTo: .body) private var writingSize: CGFloat = 18
   @State private var writingFocused = false
   private enum Presentation: Equatable, Identifiable {
-    case startWith, audience, time, add, media, camera, structured, mediaWriting, writingSource, framing
+    case startWith, audience, time, add, stampChoices, media, camera, structured, mediaWriting, writingSource, framing
     case detail(PostDetailSheet)
     var id: String {
       switch self {
@@ -1333,9 +1333,9 @@ public struct CreatePostNativeView: View {
     })
   }
   private var addPopoverBinding: Binding<Bool> {
-    Binding(get: { presentation == .add || presentation == .writingSource }, set: { shown in
+    Binding(get: { presentation == .add || presentation == .writingSource || presentation == .stampChoices }, set: { shown in
       if shown { openPresentation(.add) }
-      else if presentation == .add || presentation == .writingSource { presentation = nil }
+      else if presentation == .add || presentation == .writingSource || presentation == .stampChoices { presentation = nil }
     })
   }
   private func openPresentation(_ target: Presentation) {
@@ -1392,11 +1392,13 @@ public struct CreatePostNativeView: View {
 
         compositionCard
         composerToolBar
-        Text("\(bodyText.count)/\(draft.bodyCharacterLimit)")
-          .font(.caption).monospacedDigit()
-          .foregroundStyle(bodyText.count > draft.bodyCharacterLimit ? Color.red : MIRATheme.Color.textMuted)
-          .frame(maxWidth: .infinity, alignment: .trailing)
-          .accessibilityIdentifier("composer.count")
+        if !mediaItems.isEmpty || draft.structured || draft.hasWriting {
+          Text("\(bodyText.count)/\(draft.bodyCharacterLimit)")
+            .font(.caption).monospacedDigit()
+            .foregroundStyle(bodyText.count > draft.bodyCharacterLimit ? Color.red : MIRATheme.Color.textMuted)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityIdentifier("composer.count")
+        }
         if let validation = draft.writingValidationMessage {
           Text(validation).font(.footnote).foregroundStyle(.red)
             .accessibilityIdentifier("composer.writingLimit")
@@ -1543,14 +1545,7 @@ public struct CreatePostNativeView: View {
     CaptroEditorialMenu(title: showsMoreCreationWays ? "More ways to create" : "Start with") {
       if showsMoreCreationWays {
         CaptroEditorialMenuRow(title: "Back", disclosure: false) { showsMoreCreationWays = false }
-        ForEach(stampPickerKinds) { kind in
-          CaptroEditorialMenuRow(title: kind.displayName, disclosure: true) {
-            selectedStampKind = kind
-            hasSelectedStamp = true
-            if [.event, .meetup].contains(kind) { eventDraft.hasSchedule = true }
-            transitionFromSelection(to: .structured)
-          }
-        }
+        stampChoiceRows
       } else {
         ForEach([CaptroWritingIntent.free, .cover]) { intent in
           CaptroEditorialMenuRow(title: intent.title, selected: draft.intent == intent && !draft.structured) {
@@ -1568,6 +1563,17 @@ public struct CreatePostNativeView: View {
           Rectangle().fill(MIRATheme.Color.editorialMenuText.opacity(0.28)).frame(height: 0.5).padding(.vertical, 3)
           CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) { showsMoreCreationWays = true }
         }
+      }
+    }
+  }
+
+  private var stampChoiceRows: some View {
+    ForEach(stampPickerKinds) { kind in
+      CaptroEditorialMenuRow(title: kind.displayName, disclosure: true) {
+        selectedStampKind = kind
+        hasSelectedStamp = true
+        if [.event, .meetup].contains(kind) { eventDraft.hasSchedule = true }
+        transitionFromSelection(to: .structured)
       }
     }
   }
@@ -1598,6 +1604,11 @@ public struct CreatePostNativeView: View {
                 CaptroEditorialMenuRow(title: "Back") { presentation = .add }
                 CaptroEditorialMenuRow(title: "Photos & videos") { transitionFromSelection(to: .media) }
                 CaptroEditorialMenuRow(title: "Camera") { transitionFromSelection(to: .camera) }
+              }
+            } else if presentation == .stampChoices {
+              CaptroEditorialMenu(title: "More ways to create") {
+                CaptroEditorialMenuRow(title: "Back") { presentation = .add }
+                stampChoiceRows
               }
             } else { addPicker }
           }.onDisappear(perform: resumeQueuedPresentation)
@@ -1631,8 +1642,9 @@ public struct CreatePostNativeView: View {
       }
       if creationCapabilities?.structuredTypes.isEmpty == false {
         CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) {
-          presentation = .startWith
-          showsMoreCreationWays = true
+          // Ordinary posts have no intent-selector anchor. Keep this submenu
+          // inside the mounted Add popover rather than dismissing into nowhere.
+          presentation = .stampChoices
         }
       }
     }

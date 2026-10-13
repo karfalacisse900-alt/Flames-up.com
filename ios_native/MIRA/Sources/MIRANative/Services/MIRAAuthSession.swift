@@ -32,6 +32,16 @@ public struct MIRAPasswordResetContext: Equatable {
   public let email: String?
 }
 
+/// Keep session lifecycle tests independent of the app's Keychain entitlement.
+/// Production continues to use the same Keychain implementation by default.
+public protocol MIRAAuthSessionStorage: MIRASessionProviding {
+  func refreshToken() async -> String?
+  func saveSession(accessToken: String, refreshToken: String?)
+  func clearSession()
+}
+
+extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
+
 @MainActor public final class MIRAAuthSession: ObservableObject, MIRARefreshableSessionProviding {
   @Published public private(set) var user: MIRAUser?
   @Published public private(set) var isGuest: Bool
@@ -40,7 +50,7 @@ public struct MIRAPasswordResetContext: Equatable {
   @Published public var errorMessage: String?
   @Published public var passwordResetContext: MIRAPasswordResetContext?
 
-  private let keychain: MIRAKeychainSessionProvider
+  private let keychain: MIRAAuthSessionStorage
   private let defaults: UserDefaults
   private var token: String?
   private var refreshToken: String?
@@ -53,7 +63,7 @@ public struct MIRAPasswordResetContext: Equatable {
   private static let guestModeKey = "native.auth.guest.v1"
 
   public init(
-    keychain: MIRAKeychainSessionProvider = MIRAKeychainSessionProvider(),
+    keychain: MIRAAuthSessionStorage = MIRAKeychainSessionProvider(),
     defaults: UserDefaults = .standard
   ) {
     self.keychain = keychain

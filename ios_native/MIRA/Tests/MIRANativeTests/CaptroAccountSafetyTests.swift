@@ -2,10 +2,17 @@ import XCTest
 @testable import MIRANative
 
 @MainActor final class CaptroAccountSafetyTests: XCTestCase {
-  private func fixture() -> (MIRAAuthSession, MIRAAPIClient, MIRAKeychainSessionProvider) {
+  private func fixture() async -> (MIRAAuthSession, MIRAAPIClient, AccountSafetySessionStorage) {
     let id = UUID().uuidString
-    let keychain = MIRAKeychainSessionProvider(service: "captro.test.auth.\(id)", legacyService: nil)
+    // This is a hostless logic-test bundle. System Keychain writes are not a
+    // reliable fixture here; they returned nil before requests in CI. Exercise
+    // the real auth/request code using an explicit, verifiably seeded store.
+    let keychain = AccountSafetySessionStorage()
     keychain.saveSession(accessToken: "fixture-a", refreshToken: "refresh-a")
+    let seededAccess = await keychain.accessToken()
+    let seededRefresh = await keychain.refreshToken()
+    XCTAssertEqual(seededAccess, "fixture-a")
+    XCTAssertEqual(seededRefresh, "refresh-a")
     let auth = MIRAAuthSession(keychain: keychain, defaults: UserDefaults(suiteName: "captro.test.auth.\(id)")!)
     return (auth, client(session: auth), keychain)
   }
@@ -22,7 +29,7 @@ import XCTest
   }
 
   func testDelayedRefreshCannotRestoreLoggedOutCredentials() async throws {
-    let (auth, api, keychain) = fixture()
+    let (auth, api, keychain) = await fixture()
     defer { keychain.clearSession(); MIRALocalJSONCache.setAccountScope(userId: nil) }
     let started = expectation(description: "Refresh A started")
     let gate = AccountSafetyGate()
@@ -39,7 +46,7 @@ import XCTest
   }
 
   func testDelayedRefreshFailureCannotSignOutNewAccount() async throws {
-    let (auth, api, keychain) = fixture()
+    let (auth, api, keychain) = await fixture()
     defer { keychain.clearSession(); MIRALocalJSONCache.setAccountScope(userId: nil) }
     let started = expectation(description: "Refresh A started")
     let gate = AccountSafetyGate()
@@ -60,7 +67,7 @@ import XCTest
   }
 
   func testLateUnauthorizedMutationIsNotReplayedAsNewAccount() async throws {
-    let (auth, api, keychain) = fixture()
+    let (auth, api, keychain) = await fixture()
     defer { keychain.clearSession(); MIRALocalJSONCache.setAccountScope(userId: nil) }
     let started = expectation(description: "Account A mutation started")
     let gate = AccountSafetyGate()
@@ -88,7 +95,7 @@ import XCTest
   }
 
   func testDelayedBootstrapDoesNotReplaceNewAccount() async throws {
-    let (auth, api, keychain) = fixture()
+    let (auth, api, keychain) = await fixture()
     // A never-before-used namespace guarantees the real uncached bootstrap path.
     MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
     defer { keychain.clearSession(); MIRALocalJSONCache.setAccountScope(userId: nil) }
@@ -195,6 +202,18 @@ import XCTest
     XCTAssertEqual(requests.values.map(\.httpMethod), ["POST", "DELETE"])
     XCTAssertEqual(requests.values.last?.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-refreshed")
   }
+}
+
+private final class AccountSafetySessionStorage: MIRAAuthSessionStorage, @unchecked Sendable {
+  private let lock = NSLock()
+  private var access: String?
+  private var refresh: String?
+  func accessToken() async -> String? { lock.withLock { access } }
+  func refreshToken() async -> String? { lock.withLock { refresh } }
+  func saveSession(accessToken: String, refreshToken: String?) {
+    lock.withLock { access = accessToken; refresh = refreshToken }
+  }
+  func clearSession() { lock.withLock { access = nil; refresh = nil } }
 }
 
 private final class AccountSafetyRequests: @unchecked Sendable {

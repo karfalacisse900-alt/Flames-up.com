@@ -164,6 +164,8 @@ jobs:
                 -only-testing:CaptroLayoutUITests/PostPresentationReviewTests/testComposerRequiresMediaAndHasNoResponses
                 -only-testing:CaptroLayoutUITests/ComposerCreationTests
                 -only-testing:CaptroLayoutUITests/VoiceEntryTests
+                  -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
+                  -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
                 -only-testing:CaptroLayoutUITests/PostPresentationReviewTests/testOrdinaryDetailsHasCaptionAndNoPollOrTransaction
                 -only-testing:CaptroLayoutUITests/PostPresentationReviewTests/testLargeTextStoryAndDetails)
             fi
