@@ -52,7 +52,8 @@ Verification status (update with final evidence before release)
   star position on save, All saved, lazy-feed tab return and stable carousel.
   Unit tests verify rollback/retry, stale-read rejection and account isolation.
   Source de54a4c9; final source adds only safe image-only collection previews.
-  Final iPhone 13 mini verification: run 38336375736 (pending at this update).
+  Final iPhone 13 mini / iOS 26.4: run 38336375736 passed the same 90 unit
+  and 3 UI tests against final source 990ce2cb.
   Screenshots are actual SwiftUI views with isolated fixture transport, not
   mockups, not a live customer session and not proof of live-device FPS.
 - Live deployment acceptance script uses only newly-created disposable accounts
@@ -74,8 +75,10 @@ Production deployment
   old-client unsave clearing memberships and unchanged likes.
   The two disposable accounts and private fixture were removed; no customer
   records or uploaded media were changed.
-- TestFlight run 38336551432 started on 990ce2cb; upload waits for matching
-  native source validation. Apple processing not yet verified at this update.
+- TestFlight run 38336551432 on 990ce2cb succeeded. Build 1.0.1 (616.1).
+  Matching-source native verification passed before upload. Apple accepted
+  the IPA at 2026-10-13 02:47 UTC with no upload errors.
+  Apple processing is being checked in read-only run 38338686823.
 
 Inspected implementation screenshots (iPhone 17, native fixtures)
   ../../feed-restoration-evidence/favorites-iphone17/stamp-screenshots/
@@ -84,6 +87,21 @@ Inspected implementation screenshots (iPhone 17, native fixtures)
   E954B34B-553A-49F1-83F5-394D00255BFF.png — All saved and collections
 The review-only header/fixture launcher is excluded from Release. Home's real
 header/navigation were not replaced by that test harness.
+
+Inspected final implementation screenshots (iPhone 13 mini, native fixtures)
+  ../../feed-restoration-evidence/favorites-iphone13mini/stamp-screenshots/
+  D7D8A3E9-0CC6-413A-9C63-E1625A381209.png — star and saved confirmation
+  44094522-1709-476C-B7C0-035BF250F33D.png — collection picker
+  43098BD1-D210-4F3A-BB8E-A2443483019B.png — Favorites list
+
+Limits of this acceptance
+The tests do not certify every drag initiated directly on the star, physical
+VoiceOver operation, collection-management alerts under every keyboard size,
+or simultaneous multi-device writes through the UI. SQL/route tests cover
+ownership and stale revisions; device interaction checks remain outstanding.
+The first native attempt (38333739200) was canceled after a test-only hostname
+was found incompatible with the existing allowlist. Loopback fixtures replaced
+that hostname; production network protections were not loosened.
 
 Authority
 User explicitly approved tested Favorites backend deployment and TestFlight.
