@@ -55,6 +55,36 @@ final class CaptroCaptureReviewTests: XCTestCase {
     XCTAssertEqual(original.data, bytes as Data)
   }
 
+  func testExplicitGrayscaleInputEnhancesIntoRGBWithoutChangingOriginal() async throws {
+    let context = try XCTUnwrap(CGContext(data: nil, width: 32, height: 24, bitsPerComponent: 8,
+      bytesPerRow: 32, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+    context.setFillColor(gray: 0.5, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: 32, height: 24))
+    let image = try XCTUnwrap(context.makeImage())
+    XCTAssertEqual(image.colorSpace?.model, .monochrome)
+    let bytes = NSMutableData()
+    let destination = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, UTType.png.identifier as CFString, 1, nil))
+    CGImageDestinationAddImage(destination, image, nil)
+    XCTAssertTrue(CGImageDestinationFinalize(destination))
+    let original = MIRAPickedMedia(data: bytes as Data, kind: .image, fileName: "gray.png", mimeType: "image/png")
+    let enhanced = try await CaptroCaptureReview.enhanced(original)
+    let source = try XCTUnwrap(CGImageSourceCreateWithData(enhanced.data as CFData, nil))
+    let result = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    XCTAssertEqual(result.colorSpace?.model, .rgb)
+    XCTAssertEqual(result.width, 32)
+    XCTAssertEqual(result.height, 24)
+    XCTAssertEqual(original.data, bytes as Data)
+  }
+
+  func testEnhancementOutputSpacePreservesSupportedWideColor() throws {
+    let p3 = try XCTUnwrap(CGColorSpace(name: CGColorSpace.displayP3))
+    let output = CaptroCaptureReview.enhancementColorSpace(for: p3)
+    XCTAssertEqual(output.model, .rgb)
+    XCTAssertEqual(output.name as String?, p3.name as String?)
+    let grayscaleOutput = CaptroCaptureReview.enhancementColorSpace(for: CGColorSpaceCreateDeviceGray())
+    XCTAssertEqual(grayscaleOutput.name as String?, CGColorSpace.sRGB as String)
+  }
+
   func testCancelledEnhancementDoesNotProcessOrReturnADerivative() async {
     let processing = Task {
       withUnsafeCurrentTask { $0?.cancel() }

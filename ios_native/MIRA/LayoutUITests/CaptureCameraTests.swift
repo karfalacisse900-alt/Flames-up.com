@@ -17,7 +17,14 @@ final class CaptureCameraTests: XCTestCase {
     let app = launch(review: false)
     XCTAssertTrue(app.buttons["capture.mode.photo"].waitForExistence(timeout: 15))
     XCTAssertTrue(app.buttons["capture.mode.video"].exists)
-    XCTAssertTrue(app.otherElements["capture.unavailable"].waitForExistence(timeout: 10))
+    // Deal with the real first-launch permission alert rather than allowing
+    // XCTest's failure cleanup to dismiss it after the assertion has timed out.
+    let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    let deny = springboard.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Don’t Allow", "Don't Allow")).firstMatch
+    if deny.waitForExistence(timeout: 5) { deny.tap() }
+    // SwiftUI exposes this stack's identifier on its children, not an Other.
+    XCTAssertTrue(app.staticTexts["capture.unavailable"].firstMatch.waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["capture.shutter"].isEnabled)
     XCTAssertFalse(app.buttons["Scan a receipt"].exists)
     XCTAssertFalse(app.buttons["Choose photo"].exists)
     XCTAssertFalse(app.buttons["Import document"].exists)

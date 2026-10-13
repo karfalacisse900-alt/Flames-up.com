@@ -63,7 +63,7 @@ enum CaptroCaptureReview {
         .applyingFilter("CIExposureAdjust", parameters: [kCIInputEVKey: 0.10])
         .applyingFilter("CINoiseReduction", parameters: ["inputNoiseLevel": 0.015, "inputSharpness": 0.20])
         .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.18])
-      let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+      let colorSpace = enhancementColorSpace(for: image.colorSpace)
       guard let output = context.createCGImage(adjusted, from: image.extent, format: .RGBA8, colorSpace: colorSpace) else {
         throw ReviewError.unreadable
       }
@@ -98,6 +98,14 @@ enum CaptroCaptureReview {
       try Task.checkCancellation()
       return result
     } onCancel: { processing.cancel() }
+  }
+
+  static func enhancementColorSpace(for source: CGColorSpace?) -> CGColorSpace {
+    // RGBA8 output requires an RGB destination, even when the source is a valid
+    // grayscale image. Core Image color-matches the input into this output space.
+    // Keep supported wide-gamut RGB profiles instead of flattening every photo.
+    if let source, source.model == .rgb, source.supportsOutput { return source }
+    return CGColorSpace(name: CGColorSpace.sRGB)!
   }
 
   /// The existing server accepts these Story duration buckets. Never cut a 60s capture to 15s.

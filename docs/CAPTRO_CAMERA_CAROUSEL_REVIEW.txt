@@ -124,6 +124,43 @@ redemption and Veryfi account/subscription are not changed. Retirement requires 
 separate supported-version/pending-claim review and explicit approval.
 No database migration or new backend endpoint is required for this camera UI.
 
+Changed-file inventory (relative to repository root)
+---------------------------------------------------
+Native source root: ios_native/MIRA/Sources/MIRANative/
+  App/MIRANativeRootView.swift — Capture route and account-scoped ownership
+  Components/MIRACameraCaptureView.swift — existing camera adapter uses service
+  Components/CaptroCarouselDiagnostics.swift — opt-in DEBUG passive tracing
+  Models/CaptroCompositionDraft.swift — bounded camera-to-draft handoff
+  Screens/CaptroCameraNativeView.swift — native camera/review/composer flow
+  Screens/CaptroLocalDocumentViewer.swift — retained historic receipt viewing
+  Screens/CaptroFeedMediaPager.swift — shared media and local image prefetch
+  Screens/CaptroFeedPostView.swift — per-post observed state and selection hook
+  Screens/MainFeedView.swift — retained row store, sole Home video prefetch owner
+  Screens/PostDetailNativeView.swift — existing pager, shared media framing
+  Screens/NotificationLibrarySearchCreateViews.swift — handoff/duration handling
+  Screens/CaptroDesignQualityTestView.swift — camera/tab test fixture only
+  Screens/CaptroFavoritesReviewHost.swift — row-state initializer adaptation only
+  Services/CaptroCameraCaptureService.swift — serialized AVFoundation foundation
+  Services/CaptroCaptureReview.swift — bounded previews/reversible enhancement
+  Services/MIRAMediaUploadService.swift — original image bytes/MIME/quality
+  Deleted source: Components/CaptroReceiptCameraView.swift,
+    Screens/CaptroDocumentScannerView.swift, Screens/CaptroScanView.swift
+Tests/configuration:
+  ios_native/MIRA/Tests/MIRANativeTests/CaptroCameraCaptureTests.swift
+  ios_native/MIRA/Tests/MIRANativeTests/CaptroCaptureReviewTests.swift
+  ios_native/MIRA/Tests/MIRANativeTests/CaptroCompositionTests.swift
+  ios_native/MIRA/Tests/MIRANativeTests/CaptroFeedStabilityTests.swift
+  ios_native/MIRA/Tests/MIRANativeTests/CaptroImageUploadPreparationTests.swift
+  ios_native/MIRA/Tests/MIRANativeTests/CaptroMediaGeometryTests.swift
+  ios_native/MIRA/LayoutUITests/CaptureCameraTests.swift
+  ios_native/MIRA/LayoutUITests/HomeFullBleedTests.swift
+  ios_native/MIRA/project.yml — registers new unit tests
+  ios_native/MIRA/AppTarget/Info.plist — camera permission wording
+  .github/workflows/native-camera-carousel-validation.yml — unsigned review
+  .github/workflows/native-stamps-validation.yml — existing dispatch entry
+  scripts/captro-carousel-baseline.patch — passive released-source comparison
+  docs/CAPTRO_CAMERA_CAROUSEL_REVIEW.txt — this implementation/evidence report
+
 Verification status
 -------------------
 Local: git diff --check; exact baseline patch applicability; unchanged viewport

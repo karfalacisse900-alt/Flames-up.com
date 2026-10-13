@@ -394,6 +394,7 @@ private struct CaptroCameraResultView: View {
   @State private var file: URL?
   @State private var playing = false
   @State private var error: String?
+  @State private var audioNotice: String?
   @State private var loadGeneration = UUID()
   @State private var endObserver: NSObjectProtocol?
   var body: some View {
@@ -408,6 +409,16 @@ private struct CaptroCameraResultView: View {
             if let duration = player.currentItem?.duration.seconds, duration.isFinite,
                player.currentTime().seconds >= duration - 0.05 { player.seek(to: .zero) }
             MIRAPlaybackCoordinator.activateVideo(player, id: media.localID.uuidString)
+            do {
+              // Capture configures a recording session. Review intentionally
+              // switches back to playback only after capture has finalized.
+              let session = AVAudioSession.sharedInstance()
+              try session.setCategory(.playback, mode: .moviePlayback)
+              try session.setActive(true)
+              audioNotice = nil
+            } catch {
+              audioNotice = "Sound is temporarily unavailable. You can still review the video."
+            }
             player.isMuted = false; player.play()
           }
           playing.toggle()
@@ -417,6 +428,12 @@ private struct CaptroCameraResultView: View {
         }.accessibilityLabel(playing ? "Pause captured video" : "Play captured video")
       } else if let error { Text(error).padding() }
       else { ProgressView().tint(.white) }
+    }
+    .overlay(alignment: .bottom) {
+      if let audioNotice {
+        Text(audioNotice).font(.caption).padding(10)
+          .background(.black.opacity(0.65)).padding(12)
+      }
     }
     .task(id: media.localID) {
       cleanup(); image = nil; error = nil
@@ -456,6 +473,9 @@ private struct CaptroCameraResultView: View {
     }
     .onChange(of: isActive) { _, active in if !active { player?.pause(); playing = false } }
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackShouldPause)) { _ in player?.pause(); playing = false }
+    .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { _ in
+      player?.pause(); playing = false // Resume only after a deliberate tap.
+    }
     .onDisappear { cleanup() }
   }
   private func cleanup() {
