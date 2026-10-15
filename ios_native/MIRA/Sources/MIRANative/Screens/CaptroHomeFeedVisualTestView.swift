@@ -9,13 +9,23 @@ public struct CaptroHomeFeedVisualTestView: View {
   @State private var selectedTab = 0
   @StateObject private var model: MainFeedModel
   @StateObject private var verticalFixture: CaptroVerticalFeedFixture
+  @StateObject private var publicationFixture: CaptroPublicationFeedFixture
   @State private var videoPrepared = !ProcessInfo.processInfo.arguments.contains("--captro-visual-video")
     && !ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel")
 
   public init() {
     let fixture = CaptroVerticalFeedFixture()
     _verticalFixture = StateObject(wrappedValue: fixture)
-    if ProcessInfo.processInfo.arguments.contains("--captro-vertical-feed-test") {
+    let publication = CaptroPublicationFeedFixture(enabled: ProcessInfo.processInfo.arguments.contains("--captro-publication-feed-test"))
+    _publicationFixture = StateObject(wrappedValue: publication)
+    if ProcessInfo.processInfo.arguments.contains("--captro-publication-feed-test") {
+      let model = MainFeedModel(api: publication.api)
+      model.currentUserId = "publication-fixture-author"
+      model.currentUsername = "receipt_fixture"
+      model.testPageSorter = { $0 }
+      model.testAutomaticPagination = false
+      _model = StateObject(wrappedValue: model)
+    } else if ProcessInfo.processInfo.arguments.contains("--captro-vertical-feed-test") {
       // Explicit offline API: Stories/auth requests cannot touch production.
       let model = MainFeedModel(api: CaptroComposerTestAPI.make())
       model.currentUserId = "composer-ui-test"
@@ -70,6 +80,23 @@ public struct CaptroHomeFeedVisualTestView: View {
         }
       }
     }
+    .overlay(alignment: .bottomTrailing) {
+      if ProcessInfo.processInfo.arguments.contains("--captro-publication-feed-test") {
+        VStack(spacing: 0) {
+          Button("Test receipt") { publicationFixture.recordReceipt() }
+            .font(.caption2).frame(width: 84, height: 44)
+            .background(.regularMaterial)
+            .disabled(publicationFixture.didRecord || model.posts.isEmpty)
+            .accessibilityIdentifier("publication.fixture.record")
+          Text(publicationFixture.summary(posts: model.posts))
+            .font(.system(size: 1)).frame(width: 2, height: 2).clipped()
+            .accessibilityIdentifier("publication.fixture.state")
+            .accessibilityLabel("Offline publication receipt fixture, not a real upload")
+            .accessibilityValue(publicationFixture.summary(posts: model.posts))
+        }
+        .padding(.bottom, 60)
+      }
+    }
     .task {
       guard ProcessInfo.processInfo.arguments.contains("--captro-stability-updates") else { return }
       // Deterministic DEBUG traffic through the same reconciliation used by
@@ -83,6 +110,7 @@ public struct CaptroHomeFeedVisualTestView: View {
     }
     .task {
       guard !ProcessInfo.processInfo.arguments.contains("--captro-vertical-feed-test") else { return }
+      guard !ProcessInfo.processInfo.arguments.contains("--captro-publication-feed-test") else { return }
       if ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") {
         do {
           var posts: [MIRAPost] = try await model.api.get("/posts/world-board?limit=50&skip=0")
@@ -124,6 +152,166 @@ public struct CaptroHomeFeedVisualTestView: View {
         CaptroHomeFeedVisualFixtures.recordStartup("video-failed")
         assertionFailure("Video fixture failed: \(error)")
       }
+    }
+  }
+}
+
+/// Runtime integration seam: a simulated *confirmed receipt*, not a simulated
+/// upload. Production Home subscription, URLSession transport, eligibility
+/// reconciliation, notice and Details navigation are all exercised unchanged.
+@MainActor
+private final class CaptroPublicationFeedFixture: ObservableObject {
+  @Published private(set) var didRecord = false
+  private var newPost: MIRAPost?
+  private var scope = ""
+  lazy var api: MIRAAPIClient = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [CaptroPublicationFeedProtocol.self]
+    return MIRAAPIClient(baseURL: URL(string: "https://localhost:9451/api")!,
+      session: URLSession(configuration: configuration))
+  }()
+
+  init(enabled: Bool) {
+    guard enabled else { return }
+    // A fresh namespace prevents cached UI-test or real-account feeds from
+    // hydrating this fixture. No existing account files are removed.
+    MIRALocalJSONCache.setAccountScope(userId: "publication-fixture-\(UUID().uuidString)")
+    scope = MIRALocalJSONCache.currentScopeIdentifier
+    do {
+      let posts = try Self.makePosts()
+      newPost = posts.first
+      CaptroPublicationFeedProtocol.state.configure(initial: Array(posts.dropFirst()), published: posts[0])
+    } catch { assertionFailure("Offline publication fixture could not be prepared: \(error)") }
+  }
+
+  func recordReceipt() {
+    guard !didRecord, let newPost else { return }
+    // This test server accepts the post in the current scoped feed before the
+    // receipt is delivered. Home must still perform its fresh eligibility read.
+    CaptroPublicationFeedProtocol.state.publish()
+    didRecord = api.publications.record(newPost, expectedScope: scope)
+  }
+
+  func summary(posts: [MIRAPost]) -> String {
+    var state = CaptroPublicationFeedProtocol.state.summary()
+    state["orderedIDs"] = posts.map(\.id)
+    state["receiptRecorded"] = didRecord
+    return (try? JSONSerialization.data(withJSONObject: state, options: .sortedKeys))
+      .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+  }
+
+  private static func makePosts() throws -> [MIRAPost] {
+    let imageURL = FileManager.default.temporaryDirectory.appendingPathComponent("publication-receipt-test.png")
+    let size = CGSize(width: 480, height: 480)
+    let format = UIGraphicsImageRendererFormat(); format.scale = 1
+    let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+      UIColor(red: 0.22, green: 0.48, blue: 0.55, alpha: 1).setFill()
+      context.fill(CGRect(origin: .zero, size: size))
+      UIColor.white.setStroke(); context.cgContext.setLineWidth(6)
+      context.cgContext.stroke(CGRect(origin: .zero, size: size).insetBy(dx: 3, dy: 3))
+      "OFFLINE RECEIPT TEST\nNOT A REAL UPLOAD".draw(in: CGRect(x: 20, y: 24, width: 440, height: 100),
+        withAttributes: [.font: UIFont.systemFont(ofSize: 23), .foregroundColor: UIColor.white])
+    }
+    guard let data = image.pngData() else { throw MIRAAPIError.emptyResponse }
+    try data.write(to: imageURL, options: .atomic)
+    return try (-1..<8).map { index in
+      let value: [String: Any] = [
+        "id": index == -1 ? "publication-new" : "publication-old-\(index)",
+        "userId": "publication-fixture-author", "userFullName": "Receipt Test Creator", "userUsername": "receipt_fixture",
+        "title": index == -1 ? "Canonical receipt test post" : "Existing post \(index + 1)",
+        "caption": index == -1 ? "PUBLICATION RECEIPT FIXTURE — NOT A REAL UPLOAD" : "Existing saved feed item \(index + 1).",
+        "images": [imageURL.absoluteString], "feedMediaUrls": [imageURL.absoluteString],
+        "mediaDimensions": [["width": 480, "height": 480]], "postType": "general",
+        "createdAt": index == -1 ? "2026-10-14T09:42:00Z" : "2026-10-14T09:41:00Z"
+      ]
+      return try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+  }
+}
+
+private final class CaptroPublicationFeedProtocol: URLProtocol {
+  static let state = State()
+  override class func canInit(with request: URLRequest) -> Bool {
+    // This protocol is installed only on the fixture session. Intercept every
+    // request on it, including unexpected URLs, so no request can escape online.
+    true
+  }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func startLoading() {
+    let result = Self.state.response(to: request)
+    let response = HTTPURLResponse(url: request.url!, statusCode: result.status, httpVersion: nil,
+      headerFields: ["Content-Type": "application/json"])!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: result.data)
+    client?.urlProtocolDidFinishLoading(self)
+  }
+  override func stopLoading() {}
+
+  final class State: @unchecked Sendable {
+    private let lock = NSLock()
+    private var initial: [MIRAPost] = []
+    private var published: MIRAPost?
+    private var isPublished = false
+    private var freshFeedReads = 0
+    private var feedReads = 0
+    private var feedScopes: [String] = []
+    private var rejectedRequests = 0
+
+    func configure(initial: [MIRAPost], published: MIRAPost) {
+      lock.lock(); defer { lock.unlock() }
+      self.initial = initial; self.published = published; isPublished = false
+      freshFeedReads = 0; feedReads = 0; feedScopes = []; rejectedRequests = 0
+    }
+    func publish() { lock.lock(); isPublished = true; lock.unlock() }
+    func summary() -> [String: Any] {
+      lock.lock(); defer { lock.unlock() }
+      return ["feedReads": feedReads, "freshFeedReads": freshFeedReads, "feedScopes": feedScopes,
+        "rejectedRequests": rejectedRequests]
+    }
+    func response(to request: URLRequest) -> (status: Int, data: Data) {
+      lock.lock(); defer { lock.unlock() }
+      let path = request.url?.path ?? ""
+      let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+      guard request.url?.host == "localhost", request.url?.port == 9451, request.httpMethod == "GET" else {
+        rejectedRequests += 1
+        return (403, Data(#"{"code":"OFFLINE_FIXTURE_ONLY","detail":"No real writes or network are allowed."}"#.utf8))
+      }
+      if path == "/api/posts/feed" {
+        feedReads += 1
+        if request.cachePolicy == .reloadIgnoringLocalCacheData { freshFeedReads += 1 }
+        let scope = query.first { $0.name == "scope" }?.value ?? "missing"
+        feedScopes.append(scope)
+        guard scope == "for_you", query.first(where: { $0.name == "pagination" })?.value == "v2" else {
+          rejectedRequests += 1
+          return (400, Data(#"{"code":"FIXTURE_SCOPE","detail":"Unexpected fixture feed scope."}"#.utf8))
+        }
+        let posts = isPublished ? [published].compactMap { $0 } + initial : initial
+        let envelope = Page(posts: posts, nextCursor: nil, hasMore: false)
+        return encoded(envelope)
+      }
+      if let post = ([published].compactMap { $0 } + initial).first(where: { path == "/api/posts/\($0.id)" }) {
+        return encoded(post)
+      }
+      if path == "/api/auth/me" {
+        return (200, Data(#"{"id":"publication-fixture-author","full_name":"Receipt Test Creator","username":"receipt_fixture","is_private":false}"#.utf8))
+      }
+      if path.hasSuffix("/statuses") || path.hasSuffix("/comments") || path.hasSuffix("/conversations") {
+        return (200, Data("[]".utf8))
+      }
+      if path.hasSuffix("/object") { return (200, Data("{}".utf8)) }
+      // Unknown requests fail visibly rather than contacting production or
+      // inventing a successful purchase/upload/authorization response.
+      rejectedRequests += 1
+      return (404, Data(#"{"code":"FIXTURE_ROUTE","detail":"Offline fixture route unavailable."}"#.utf8))
+    }
+    private func encoded<T: Encodable>(_ value: T) -> (status: Int, data: Data) {
+      do { return (200, try JSONEncoder().encode(value)) }
+      catch { return (500, Data(#"{"detail":"Fixture encoding failed."}"#.utf8)) }
+    }
+    private struct Page: Encodable {
+      let posts: [MIRAPost]
+      let nextCursor: String?
+      let hasMore: Bool
     }
   }
 }

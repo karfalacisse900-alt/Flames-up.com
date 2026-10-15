@@ -393,36 +393,30 @@ test('consumer verdict vocabulary excludes accusation and score labels', async (
   assert.match(source, /https:\/\/api\.storekit-sandbox\.apple\.com/);
 });
 
-test('iOS Scan uses centered review, adaptive feedback, and a private reward balance', async () => {
+test('retired receipt Capture has no new reward entry point while private historical balances and receipts remain accessible', async () => {
   const root = await readFile(path.join(repositoryRoot, 'ios_native', 'MIRA', 'Sources', 'MIRANative', 'App', 'MIRANativeRootView.swift'), 'utf8');
-  const screen = await readFile(path.join(repositoryRoot, 'ios_native', 'MIRA', 'Sources', 'MIRANative', 'Screens', 'CaptroScanView.swift'), 'utf8');
-  const camera = await readFile(path.join(repositoryRoot, 'ios_native', 'MIRA', 'Sources', 'MIRANative', 'Components', 'CaptroReceiptCameraView.swift'), 'utf8');
+  const screen = await readFile(path.join(repositoryRoot, 'ios_native', 'MIRA', 'Sources', 'MIRANative', 'Screens', 'CaptroCameraNativeView.swift'), 'utf8');
+  const camera = await readFile(path.join(repositoryRoot, 'ios_native', 'MIRA', 'Sources', 'MIRANative', 'Services', 'CaptroCameraCaptureService.swift'), 'utf8');
   const models = await readFile(path.join(repositoryRoot, 'ios_native', 'MIRA', 'Sources', 'MIRANative', 'Services', 'CaptroScanModels.swift'), 'utf8');
   const profile = await readFile(path.join(repositoryRoot, 'ios_native', 'MIRA', 'Sources', 'MIRANative', 'Screens', 'ProfileChatVerificationStudio.swift'), 'utf8');
   const scanSources = `${screen}\n${camera}\n${models}\n${profile}`;
 
   assert.match(root, /lazyTab\(\.scan\)/);
   assert.match(root, /Label\("Capture", systemImage: "viewfinder"\)/);
-  assert.match(root, /CaptroScanView\(api: api\) \{\s*selectedTab = \.main/);
+  assert.match(root, /CaptroCameraNativeView\(api: api, isActive: selectedTab == \.scan\)/);
+  assert.doesNotMatch(root, /CaptroScanView|CaptroReceiptCameraView/);
   assert.doesNotMatch(root, /lazyTab\(\.discover\)/);
-  assert.match(screen, /CaptroReceiptCameraView\(/);
+  assert.match(screen, /CaptroLiveCameraPreview\(/);
   assert.match(camera, /AVCaptureSession\(\)/);
-  assert.match(camera, /VNDetectRectanglesRequest\(/);
-  assert.match(camera, /CIPerspectiveCorrection/);
+  assert.match(camera, /AVCapturePhotoOutput\(\)/);
+  assert.match(camera, /AVCaptureMovieFileOutput\(\)/);
   assert.doesNotMatch(screen, /cameraImportControl|PhotosPicker|fileImporter/);
   assert.match(screen, /Text\("Review"\)/);
-  assert.match(screen, /statusLine\("Processing your document\.\.\."/);
-  assert.match(screen, /Text\("Next"\)/);
-  assert.match(screen, /Label\("View original"/);
-  assert.match(screen, /Text\("Purchase feedback"\)/);
-  assert.match(screen, /How clean was the location\?/);
-  assert.match(screen, /How fresh were the products\?/);
-  assert.match(screen, /How professional was the service\?/);
-  assert.match(screen, /Text\(isSubmittingFeedback \? "Submitting" : "Submit"\)/);
-  assert.match(screen, /You earned/);
-  assert.match(screen, /receipt-review:\\?\(document\.sha256Hex\):\\?\(UUID\(\)\.uuidString\)/);
-  assert.match(screen, /api\.reviewCaptroReceipt\(document, idempotencyKey:/);
-  assert.doesNotMatch(screen, /detectedType:/);
+  assert.match(screen, /Button\("Retake"\)/);
+  assert.match(screen, /Button\(media.kind == \.image \? "Use photo" : "Use video"\)/);
+  assert.doesNotMatch(screen, /Purchase feedback|You earned|reviewCaptroReceipt|submitCaptroReceiptFeedback|CaptroReceiptCameraView/);
+  // Retain server compatibility and private history. Removing the current
+  // scanner UI must not destroy previously earned balances or pending records.
   assert.match(models, /\/scan\/receipts\/review/);
   assert.match(models, /"source": document\.source\.apiValue/);
   assert.match(models, /\/scan\/receipts\/\\\(receiptId\)\/feedback/);

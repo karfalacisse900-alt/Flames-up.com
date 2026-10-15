@@ -43,7 +43,8 @@ test('media-first composer, Details chrome, and lower Favorites placement do not
   assert.doesNotMatch(detail, /reactionRow|reactionLabel|Record voice reply/);
   assert.match(detail, /private var commentsSection/);
   const feed = read('Screens/MainFeedView.swift');
-  assert.match(feed, /home.pagination.retry/);
+  assert.match(feed, /CaptroFeedPaginationFooter\(/);
+  assert.match(read('Components/CaptroFeedPaginationFooter.swift'), /home.pagination.retry/);
   assert.doesNotMatch(feed, /ignoresSafeArea\(\.container, edges: \.bottom\)/);
   assert.match(read('Screens/CaptroFeedMediaPager.swift'), /60 : 38/);
   const root = read('App/MIRANativeRootView.swift');

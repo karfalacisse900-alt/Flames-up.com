@@ -392,6 +392,13 @@ public enum MIRALocalJSONCache {
     await save(value, key: key, scope: scope)
   }
 
+  public static func save<T: Encodable>(_ value: T, key: String, expectedScopeIdentifier: String) async {
+    let scope = accountScope
+    let identifier = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
+    guard identifier == expectedScopeIdentifier else { return }
+    await save(value, key: key, scope: scope)
+  }
+
   /// Pin a known owner's namespace before asynchronous persistence. Auth
   /// results must never inherit a different account's current cache scope.
   public static func save<T: Encodable>(_ value: T, key: String, accountUserID: String) async {

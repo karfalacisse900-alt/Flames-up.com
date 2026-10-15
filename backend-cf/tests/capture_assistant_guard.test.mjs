@@ -6,7 +6,9 @@ import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
-const capture = read('ios_native/MIRA/Sources/MIRANative/Screens/CaptroScanView.swift');
+const capture = read('ios_native/MIRA/Sources/MIRANative/Screens/CaptroCameraNativeView.swift');
+const captureService = read('ios_native/MIRA/Sources/MIRANative/Services/CaptroCameraCaptureService.swift');
+const rootView = read('ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift');
 const camera = read('ios_native/MIRA/Sources/MIRANative/Components/MIRACameraCaptureView.swift');
 const backend = read('backend-cf/src/index.ts');
 const realtimeConfig = read('backend-cf/src/realtime-session.ts');
@@ -14,10 +16,13 @@ const editorial = read('ios_native/MIRA/Sources/MIRANative/Components/CaptroEdit
 const viewer = read('ios_native/MIRA/Sources/MIRANative/Screens/DiscoverNativeView.swift');
 const editor = read('ios_native/MIRA/Sources/MIRANative/Screens/MIRANativeMediaEditorView.swift');
 
-test('Capture opens only the live receipt camera', () => {
-  assert.match(capture, /@State private var stage: CaptroReceiptStage = \.capture/);
-  assert.match(capture, /CaptroReceiptCameraView\(/);
-  assert.doesNotMatch(capture, /CaptroCaptureAssistantView|PhotosPicker|fileImporter|hubMode\(|captureMode: \.videoOnly/);
+test('Capture opens the live native camera and does not reintroduce receipt or voice entry points', () => {
+  assert.match(rootView, /CaptroCameraNativeView\(api: api, isActive: selectedTab == \.scan\)/);
+  assert.match(capture, /@StateObject private var camera = CaptroCameraCaptureService\(\)/);
+  assert.match(capture, /CaptroLiveCameraPreview\(session: camera.session/);
+  assert.match(captureService, /AVCapturePhotoOutput\(\)/);
+  assert.match(captureService, /AVCaptureMovieFileOutput\(\)/);
+  assert.doesNotMatch(capture, /CaptroScanView|CaptroReceiptCameraView|CaptroCaptureAssistantView|PhotosPicker|fileImporter|hubMode\(/);
   assert.doesNotMatch(capture, /Looking for documents|Choose photo|Import document|Upload receipt/);
 });
 
@@ -46,8 +51,12 @@ test('Story viewer and default editor preserve the entire original frame', () =>
   assert.match(editor, /return \[\.original, \.story9x16/);
 });
 
-test('ordinary post camera stays separate from receipt Capture; voice recording is retired', () => {
+test('Capture hands reviewed media to existing composers and voice recording remains retired', () => {
   assert.doesNotMatch(capture, /MIRACameraCaptureView|CaptroVoiceRecorderSheet/);
+  assert.match(capture, /CreatePostNativeView\(api: api, initialMedia: media/);
+  assert.match(capture, /CreateStoryNativeView\(api: api, initialMedia: media/);
+  assert.match(capture, /Button\("Retake"\)/);
+  assert.match(capture, /Button\(media.kind == \.image \? "Use photo" : "Use video"\)/);
   assert.match(camera, /galleryButton\.isHidden = simpleCaptureUI/);
   assert.match(camera, /guard !simpleCaptureUI else \{ return \}/);
   assert.doesNotMatch(read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift'), /CaptroVoiceRecorderSheet|Record voice attachment|CaptroVoiceUploadService/);

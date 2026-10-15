@@ -2185,6 +2185,7 @@ public struct CreatePostNativeView: View {
       return
     }
     isPosting = true
+    let submissionScope = MIRALocalJSONCache.currentScopeIdentifier
     errorMessage = nil
     postStage = "Preparing post"
     postUploadFraction = nil
@@ -2227,6 +2228,7 @@ public struct CreatePostNativeView: View {
       var mediaDimensions: [MIRAMediaDimension] = []
       let mediaCount = mediaItems.count
       for (index, item) in mediaItems.enumerated() {
+        guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
         activeUploadIndex = index
         postStage = "Preparing media \(index + 1) of \(mediaCount)"
         postUploadFraction = nil
@@ -2339,14 +2341,19 @@ public struct CreatePostNativeView: View {
       // New posts use one editorial presentation; legacy variant metadata is
       // still decoded for older posts but is not selectable or rendered.
       postStage = "Publishing post"
-      let _: MIRAPost = try await api.post("/posts", body: body)
-      // Refresh authoritative post state after publishing the media post.
-      NotificationCenter.default.post(name: .captroPostSubmissionCompleted, object: nil)
+      guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+      let published: MIRAPost = try await api.post("/posts", body: body)
+      guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+      guard api.publications.record(published, expectedScope: submissionScope) else {
+        throw MIRAAPIError.emptyResponse
+      }
+      postStage = "Published"
       draftSaveTask?.cancel()
       await MIRAAppCacheStore.shared.clearPostDraft()
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
       close()
     } catch {
+      guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       MIRAPerformanceTimeline.mark("post_upload_failed", detail: "post")
       let message = (error as? MIRAAPIError)?.errorDescription ?? "Post could not be created."
       errorMessage = message

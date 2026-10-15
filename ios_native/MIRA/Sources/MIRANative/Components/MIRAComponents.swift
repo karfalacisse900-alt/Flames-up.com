@@ -325,25 +325,39 @@ public enum MIRAMediaCacheMaintenance {
   }
 }
 
-private enum MIRAImageLoadSource: Equatable {
+enum MIRAImageLoadSource: Equatable {
   case memory
   case disk
   case network
 }
 
-private struct MIRAImageLoadResult {
+struct MIRAImageLoadResult {
   let image: UIImage
   let source: MIRAImageLoadSource
 }
 
-private actor MIRAImageLoadPipeline {
+actor MIRAImageLoadPipeline {
   static let shared = MIRAImageLoadPipeline()
   private struct Load {
-    let id = UUID()
+    let id: UUID
     let task: Task<MIRAImageLoadResult?, Never>
     var readers: Set<UUID>
   }
   private var inFlight: [String: Load] = [:]
+  private let admission: MIRAImageLoadAdmission
+#if DEBUG
+  private var testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)?
+  private static let tracesLoads = ProcessInfo.processInfo.arguments.contains("--captro-vertical-diagnostics")
+
+  init(admission: MIRAImageLoadAdmission = MIRAImageLoadAdmission(),
+       testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)? = nil) {
+    self.admission = admission
+    self.testLoader = testLoader
+  }
+  nonisolated var diagnosticSnapshot: MIRAImageLoadAdmission.Snapshot { admission.snapshot }
+#else
+  private init() { admission = MIRAImageLoadAdmission() }
+#endif
 
   private func release(_ reader: UUID, key: String, generation: UUID) {
     guard var load = inFlight[key], load.id == generation else { return }
@@ -366,7 +380,8 @@ private actor MIRAImageLoadPipeline {
 
   func image(
     for remoteURL: URL, maxPixelSize: CGFloat,
-    expectedScope: String? = nil
+    expectedScope: String? = nil,
+    priority: MIRAImageLoadAdmission.Priority = .visible
   ) async -> MIRAImageLoadResult? {
     let scope = expectedScope ?? MIRALocalJSONCache.currentScopeIdentifier
     guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
@@ -383,26 +398,44 @@ private actor MIRAImageLoadPipeline {
     if var existing = inFlight[key] {
       existing.readers.insert(reader)
       inFlight[key] = existing
+      if priority == .visible { admission.promote(existing.id) }
       return await wait(for: existing, reader: reader, key: key)
     }
 
-    let task = Task.detached(priority: .userInitiated) { () -> MIRAImageLoadResult? in
+    let requestID = UUID()
+    let admission = admission
+    admission.register(requestID, priority: priority)
+#if DEBUG
+    let testLoader = testLoader
+#endif
+    let task = Task.detached(priority: priority == .visible ? .userInitiated : .utility) { () -> MIRAImageLoadResult? in
+      guard await admission.waitForSlot(requestID) else { return nil }
+      defer { admission.release(requestID) }
+      guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+#if DEBUG
+      if Self.tracesLoads {
+        let state = admission.snapshot
+        print("[CaptroImageLoad] active=\(state.active) prefetch=\(state.activePrefetch) waiting=\(state.waiting) peak=\(state.peakActive)")
+      }
+      if let testLoader { return await testLoader(remoteURL) }
+#endif
       if remoteURL.isFileURL,
          let data = try? Data(contentsOf: remoteURL),
          let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) {
-        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
         MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost, scope: scope)
         return MIRAImageLoadResult(image: decoded, source: .disk)
       }
 
       if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
-        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
         MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost, scope: scope)
         MIRAApplePerformanceLogger.event("media_cache_hit", detail: "disk")
         return MIRAImageLoadResult(image: diskCached, source: .disk)
       }
 
       do {
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
         MIRAApplePerformanceLogger.event("media_cache_miss", detail: "network")
         var request = URLRequest(url: remoteURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -422,7 +455,7 @@ private actor MIRAImageLoadPipeline {
         await metric.finish(status: String(status), bytes: data.count)
         guard !Task.isCancelled, (200..<300).contains(status), data.count <= 24 * 1024 * 1024 else { return nil }
         guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return nil }
-        guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
 
         MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost, scope: scope)
         await MIRAImageDiskCache.store(data: data, for: remoteURL, scope: scope)
@@ -432,7 +465,7 @@ private actor MIRAImageLoadPipeline {
       }
     }
 
-    let load = Load(task: task, readers: [reader])
+    let load = Load(id: requestID, task: task, readers: [reader])
     inFlight[key] = load
     return await wait(for: load, reader: reader, key: key)
   }
@@ -609,15 +642,18 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     // variant available. Keep retrying inside the same task so fresh posts do not
     // remain stuck on the placeholder until the feed is rebuilt.
     for attempt in 1...18 {
-      guard !Task.isCancelled else { return }
+      guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       let delay = min(UInt64(attempt) * 550_000_000, UInt64(2_400_000_000))
       try? await Task.sleep(nanoseconds: delay)
       for remoteURL in remoteURLs {
-        if let result = await MIRAImageLoadPipeline.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize) {
-          guard !Task.isCancelled else { return }
+        if let result = await MIRAImageLoadPipeline.shared.image(
+          for: remoteURL, maxPixelSize: resolvedMaxPixelSize, expectedScope: scope
+        ) {
+          guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
           await MainActor.run {
             uiImage = result.image
             loadedURL = remoteURL
+            loadedScope = scope
             if result.source == .network, animatesNetworkLoad {
               withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
                 isImageVisible = true
@@ -675,19 +711,6 @@ private extension UIImage {
   }
 }
 
-private actor MIRAImagePrefetchState {
-  static let shared = MIRAImagePrefetchState()
-  private var inFlight = Set<String>()
-
-  func begin(_ key: String) -> Bool {
-    inFlight.insert(key).inserted
-  }
-
-  func finish(_ key: String) {
-    inFlight.remove(key)
-  }
-}
-
 public enum MIRAImagePrefetcher {
   public static func prefetch(
     urls: [String],
@@ -730,13 +753,11 @@ public enum MIRAImagePrefetcher {
     guard MIRANetworkSecurityPolicy.isSecureMediaURL(remoteURL) else { return }
 
     let resolvedMaxPixelSize = max(64, maxPixelSize)
-    let key = "\(scope):\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
-    guard await MIRAImagePrefetchState.shared.begin(key) else { return }
-    defer { Task { await MIRAImagePrefetchState.shared.finish(key) } }
-
+    // The shared pipeline owns deduplication and one reader per caller. A second
+    // row must retain its interest if the first prefetching row disappears.
     guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
     _ = await MIRAImageLoadPipeline.shared.image(
-      for: remoteURL, maxPixelSize: resolvedMaxPixelSize, expectedScope: scope
+      for: remoteURL, maxPixelSize: resolvedMaxPixelSize, expectedScope: scope, priority: .prefetch
     )
   }
 

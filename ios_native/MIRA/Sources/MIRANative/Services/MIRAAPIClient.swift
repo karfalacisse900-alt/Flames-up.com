@@ -152,6 +152,7 @@ private actor MIRAAPIRequestDeduplicator {
 
 public final class MIRAAPIClient {
   @MainActor lazy var favorites = CaptroFavoritesStore(api: self)
+  @MainActor lazy var publications = CaptroPublicationStore()
   public static let productionSession: URLSession = {
     let configuration = URLSessionConfiguration.default
     configuration.requestCachePolicy = .useProtocolCachePolicy
@@ -202,6 +203,12 @@ public final class MIRAAPIClient {
 
   public func get<T: Decodable>(_ path: String) async throws -> T {
     try await request(path, method: "GET", body: Optional<Data>.none)
+  }
+
+  /// Read-after-write: never join an older in-flight GET or cached response.
+  /// Authorization, session-generation checks and decoding remain identical.
+  public func getFresh<T: Decodable>(_ path: String) async throws -> T {
+    try await request(path, method: "GET", body: nil, freshRead: true)
   }
 
   public func post<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
@@ -402,10 +409,11 @@ public final class MIRAAPIClient {
     }
   }
 
-  private func request<T: Decodable>(_ path: String, method: String, body: Data?) async throws -> T {
+  private func request<T: Decodable>(_ path: String, method: String, body: Data?, freshRead: Bool = false) async throws -> T {
     let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
     let url = try makeURL(path)
     var request = URLRequest(url: url)
+    if freshRead { request.cachePolicy = .reloadIgnoringLocalCacheData }
     request.httpMethod = method
     request.timeoutInterval = 25
     try MIRANetworkSecurityPolicy.validateAPIURL(url)
@@ -426,7 +434,7 @@ public final class MIRAAPIClient {
     try await validateSessionGeneration(generation)
 
     let data: Data
-    if method == "GET", body == nil {
+    if method == "GET", body == nil, !freshRead {
       let key = "\(method) \(url.absoluteString) \(tokenFingerprint(token))"
       data = try await MIRAAPIRequestDeduplicator.shared.data(for: key) {
         try await self.responseData(for: request, metricLabel: "\(method) \(url.path)", generation: generation)

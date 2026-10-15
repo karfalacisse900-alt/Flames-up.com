@@ -16,11 +16,80 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
   private var pending: Restoration?
   private var scheduled = false
   private var order: [String] = []
+  // Built only when the feed order changes. Scroll ticks inspect mounted
+  // markers, not every ID fetched by pagination.
+  private var orderIndex: [String: Int] = [:]
   private var scope = "forYou"
   private var activeID: String?
   private var isActive = true
   var onVisible: ((String?) -> Void)?
+
+  /// A read-only publication hint. An absent/hidden scroll view, pending
+  /// navigation, rubber-banding or user motion is not an invitation to insert
+  /// content above the reader. This never changes the native content offset.
+  var isAtTopAndIdle: Bool {
+    guard isActive, pending == nil, let scroll, scroll.window != nil,
+          scroll.bounds.height > 0, !scroll.isTracking, !scroll.isDragging,
+          !scroll.isDecelerating else { return false }
+    return abs(scroll.contentOffset.y + scroll.adjustedContentInset.top) <= 1
+  }
 #if DEBUG
+  struct FrameCadenceMetrics {
+    private(set) var intervals = 0
+    private(set) var totalMilliseconds: Double = 0
+    private(set) var maximumGapMilliseconds: Double = 0
+    private(set) var overOneAndHalfBudget = 0
+    private(set) var overTwoBudgets = 0
+    private(set) var over50Milliseconds = 0
+    private(set) var over100Milliseconds = 0
+    private var previousTimestamp: Double?
+
+    mutating func pause() { previousTimestamp = nil }
+    mutating func record(timestamp: Double, budget: Double) {
+      defer { previousTimestamp = timestamp }
+      guard let previousTimestamp, timestamp > previousTimestamp, budget > 0 else { return }
+      let interval = timestamp - previousTimestamp
+      let milliseconds = interval * 1000
+      intervals += 1
+      totalMilliseconds += milliseconds
+      maximumGapMilliseconds = max(maximumGapMilliseconds, milliseconds)
+      if interval > budget * 1.5 { overOneAndHalfBudget += 1 }
+      if interval > budget * 2 { overTwoBudgets += 1 }
+      if milliseconds > 50 { over50Milliseconds += 1 }
+      if milliseconds > 100 { over100Milliseconds += 1 }
+    }
+  }
+  @MainActor
+  private final class FrameCadenceTarget: NSObject {
+    weak var owner: CaptroFeedViewport?
+    init(owner: CaptroFeedViewport) { self.owner = owner }
+    @objc func tick(_ link: CADisplayLink) {
+      guard let owner else { link.invalidate(); return }
+      owner.sampleFrameCadence(link)
+    }
+  }
+  struct SampleMetrics: Codable {
+    struct Row: Codable {
+      let id: String
+      let contentY: Double
+      let height: Double
+    }
+    let time: Double
+    let milliseconds: Double
+    let geometryMilliseconds: Double
+    let visibleCallbackMilliseconds: Double
+    let loadedIDs: Int
+    let visitedMarkers: Int
+    let frameCount: Int
+    let offsetY: Double
+    let contentHeight: Double
+    let viewportHeight: Double
+    let activeID: String?
+    let tracking: Bool
+    let dragging: Bool
+    let decelerating: Bool
+    let rows: [Row]
+  }
   struct ScrollCommand {
     let before: CGFloat
     let after: CGFloat
@@ -29,15 +98,67 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
   }
   private(set) var debugCommands: [ScrollCommand] = []
   private(set) var debugSampleCount = 0
+  private(set) var debugSampleMilliseconds: Double = 0
   private(set) var debugMaxSampleMilliseconds: Double = 0
+  private(set) var debugLastVisitedMarkerCount = 0
+  private(set) var debugLastFrameCount = 0
+  private(set) var debugVisiblePublicationCount = 0
+  private(set) var debugLastVisibleIDs: [String] = []
+  var debugRecordsSamples = ProcessInfo.processInfo.arguments.contains("--captro-vertical-diagnostics")
+  private var debugSampleHistory: [SampleMetrics] = []
+  private var debugHistoryCursor = 0
+  private var debugFrameLink: CADisplayLink?
+  private(set) var debugFrameCadence = FrameCadenceMetrics()
   var debugSummary: String {
-    "commands=\(debugCommands.count);samples=\(debugSampleCount);maxSampleMs=\(debugMaxSampleMilliseconds);offset=\(scroll?.contentOffset.y ?? 0);mounted=\(cells.count)"
+    "commands=\(debugCommands.count);samples=\(debugSampleCount);maxSampleMs=\(debugMaxSampleMilliseconds);offset=\(scroll?.contentOffset.y ?? 0);mounted=\(cells.count);loaded=\(order.count);visited=\(debugLastVisitedMarkerCount);visibleChanges=\(debugVisiblePublicationCount);totalSampleMs=\(debugSampleMilliseconds);frameIntervals=\(debugFrameCadence.intervals);totalFrameMs=\(debugFrameCadence.totalMilliseconds);maxFrameGapMs=\(debugFrameCadence.maximumGapMilliseconds);frameOver1_5Budget=\(debugFrameCadence.overOneAndHalfBudget);frameOver2Budget=\(debugFrameCadence.overTwoBudgets);frameOver50Ms=\(debugFrameCadence.over50Milliseconds);frameOver100Ms=\(debugFrameCadence.over100Milliseconds)"
+  }
+  var debugTrace: String {
+    // Serialize only on an explicit test/diagnostic read, never per frame.
+    let samples = debugSampleHistory.count < 256 ? debugSampleHistory :
+      Array(debugSampleHistory[debugHistoryCursor...]) + Array(debugSampleHistory[..<debugHistoryCursor])
+    guard let data = try? JSONEncoder().encode(samples) else { return "[]" }
+    return String(data: data, encoding: .utf8) ?? "[]"
+  }
+  private func record(_ metrics: SampleMetrics) {
+    guard debugRecordsSamples else { return }
+    if debugSampleHistory.count < 256 { debugSampleHistory.append(metrics) }
+    else { debugSampleHistory[debugHistoryCursor] = metrics }
+    debugHistoryCursor = (debugHistoryCursor + 1) % 256
   }
   private func traceCommand(from: CGFloat, to: CGFloat, mounted: Bool, reason: String) {
     debugCommands.append(ScrollCommand(before: from, after: to, targetMounted: mounted, reason: reason))
     if debugCommands.count > 128 { debugCommands.removeFirst() }
     CaptroFeedDiagnostics.event("offset_write", feed: scope,
       reason: "\(reason),from=\(from),to=\(to),mounted=\(mounted)", post: pending?.anchor.id)
+  }
+
+  private func stopFrameCadence() {
+    debugFrameLink?.invalidate()
+    debugFrameLink = nil
+    debugFrameCadence.pause()
+  }
+  private func updateFrameCadenceObservation() {
+    guard debugRecordsSamples, isActive, let scroll, scroll.window != nil,
+          scroll.isTracking || scroll.isDragging || scroll.isDecelerating else {
+      stopFrameCadence()
+      return
+    }
+    guard debugFrameLink == nil else { return }
+    let target = FrameCadenceTarget(owner: self)
+    let link = CADisplayLink(target: target, selector: #selector(FrameCadenceTarget.tick(_:)))
+    link.add(to: .main, forMode: .common)
+    debugFrameLink = link
+  }
+  private func sampleFrameCadence(_ link: CADisplayLink) {
+    guard debugRecordsSamples, isActive, let scroll, scroll.window != nil,
+          scroll.isTracking || scroll.isDragging || scroll.isDecelerating else {
+      stopFrameCadence()
+      return
+    }
+    // Fixed counters only: no logging, allocation, JSON, SwiftUI publication,
+    // geometry walk or scroll command from this display-link callback.
+    let budget = link.targetTimestamp > link.timestamp ? link.targetTimestamp - link.timestamp : link.duration
+    debugFrameCadence.record(timestamp: link.timestamp, budget: budget)
   }
 #endif
 
@@ -46,6 +167,9 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     if !active {
       sample() // Capture before navigation/tab-bar layout starts changing.
       isActive = false
+#if DEBUG
+      stopFrameCadence()
+#endif
     } else {
       isActive = true
       // A surviving UIScrollView owns its native offset, including deceleration.
@@ -72,12 +196,14 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     pending = nil
     cells.removeAll()
     order = [] // Old feed markers cannot satisfy the new feed's restoration.
+    orderIndex.removeAll()
     requestRestoration(snapshots[scope] ?? Anchor(id: "", y: 0, offset: 0), reason: "feed_selection")
     activeID = nil
     schedule()
   }
 
   func updateOrder(_ ids: [String]) {
+    guard ids != order else { return }
     let validIDs = Set(ids)
     assert(validIDs.count == ids.count, "Duplicate Home post identity")
     if let anchor = snapshots[scope], !order.isEmpty, pending == nil,
@@ -89,12 +215,13 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
       }
     }
     order = ids
+    orderIndex = Dictionary(ids.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
     schedule()
   }
 
   func register(_ view: UIView, id: String, feed: String? = nil) {
     guard feed == nil || feed == scope else { return }
-    cells[id] = WeakView(view)
+    if cells[id]?.value !== view { cells[id] = WeakView(view) }
     attach(from: view)
     schedule()
   }
@@ -104,6 +231,9 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     while let candidate = ancestor {
       if let target = candidate as? UIScrollView, !target.isPagingEnabled {
         guard scroll !== target else { return }
+#if DEBUG
+        stopFrameCadence()
+#endif
         scroll?.panGestureRecognizer.removeTarget(self, action: #selector(dragChanged))
         let recreating = scroll != nil || snapshots[scope] != nil
         scroll = target
@@ -138,22 +268,60 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
   }
 
   func sample() {
-    guard isActive, let scroll, scroll.window != nil, scroll.bounds.height > 0 else { return }
+    guard isActive, let scroll, scroll.window != nil, scroll.bounds.height > 0 else {
+#if DEBUG
+      stopFrameCadence()
+#endif
+      return
+    }
 #if DEBUG
     let sampleStart = ProcessInfo.processInfo.systemUptime
+    updateFrameCadenceObservation()
+    var geometryMilliseconds: Double = 0
+    var callbackMilliseconds: Double = 0
+    var visibleRows: [SampleMetrics.Row] = []
     defer {
+      let duration = (ProcessInfo.processInfo.systemUptime - sampleStart) * 1000
       debugSampleCount += 1
-      debugMaxSampleMilliseconds = max(debugMaxSampleMilliseconds, (ProcessInfo.processInfo.systemUptime - sampleStart) * 1000)
+      debugSampleMilliseconds += duration
+      debugMaxSampleMilliseconds = max(debugMaxSampleMilliseconds, duration)
+      if debugRecordsSamples {
+        record(SampleMetrics(time: sampleStart, milliseconds: duration,
+          geometryMilliseconds: geometryMilliseconds, visibleCallbackMilliseconds: callbackMilliseconds,
+          loadedIDs: order.count, visitedMarkers: debugLastVisitedMarkerCount, frameCount: debugLastFrameCount,
+          offsetY: Double(scroll.contentOffset.y), contentHeight: Double(scroll.contentSize.height),
+          viewportHeight: Double(scroll.bounds.height), activeID: activeID,
+          tracking: scroll.isTracking, dragging: scroll.isDragging, decelerating: scroll.isDecelerating,
+          rows: visibleRows))
+      }
     }
 #endif
     if scroll.isTracking || scroll.isDragging || scroll.isDecelerating {
       cancelRestorationForUserInteraction()
     }
-    cells = cells.filter { $0.value.value.map { $0.window != nil && $0.isDescendant(of: scroll) } ?? false }
-    let frames = order.compactMap { id -> (String, CGRect)? in
-      guard let view = cells[id]?.value else { return nil }
-      return (id, view.convert(view.bounds, to: scroll))
+    var detached: [String] = []
+    var mounted: [(id: String, index: Int, frame: CGRect)] = []
+#if DEBUG
+    debugLastVisitedMarkerCount = cells.count
+#endif
+    for (id, marker) in cells {
+      guard let view = marker.value, view.window != nil, view.isDescendant(of: scroll) else {
+        detached.append(id)
+        continue
+      }
+      guard let index = orderIndex[id] else { continue }
+      mounted.append((id, index, view.convert(view.bounds, to: scroll)))
     }
+    for id in detached { cells.removeValue(forKey: id) }
+    // Preserve feed-order tie breaking and first-visible anchoring regardless
+    // of dictionary/registration order. Only the mounted subset is sorted.
+    mounted.sort { $0.index < $1.index }
+    let frames = mounted.map { ($0.id, $0.frame) }
+#if DEBUG
+    debugLastFrameCount = frames.count
+    debugLastVisibleIDs = []
+    geometryMilliseconds = (ProcessInfo.processInfo.systemUptime - sampleStart) * 1000
+#endif
     // Do not clamp a saved offset against the previous feed's layout while
     // SwiftUI is still replacing its lazy targets.
     guard !frames.isEmpty else { return }
@@ -184,6 +352,12 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     let viewport = scroll.bounds.inset(by: UIEdgeInsets(top: scroll.adjustedContentInset.top, left: 0,
       bottom: scroll.adjustedContentInset.bottom, right: 0))
     let visible = frames.filter { $0.1.intersects(viewport) && $0.1.height > 0 }
+#if DEBUG
+    debugLastVisibleIDs = visible.map(\.0)
+    if debugRecordsSamples {
+      visibleRows = visible.map { SampleMetrics.Row(id: $0.0, contentY: Double($0.1.minY), height: Double($0.1.height)) }
+    }
+#endif
     if let first = visible.first {
       snapshots[scope] = Anchor(id: first.0, y: first.1.minY - scroll.contentOffset.y,
         offset: scroll.contentOffset.y, contentHeight: scroll.contentSize.height)
@@ -199,7 +373,14 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     }
     if next != activeID {
       activeID = next
+#if DEBUG
+      debugVisiblePublicationCount += 1
+      let callbackStart = ProcessInfo.processInfo.systemUptime
+#endif
       onVisible?(next)
+#if DEBUG
+      callbackMilliseconds = (ProcessInfo.processInfo.systemUptime - callbackStart) * 1000
+#endif
     }
   }
 }
@@ -219,7 +400,32 @@ struct CaptroFeedViewportDiagnostics: UIViewRepresentable {
   final class Probe: UIView {
     weak var owner: CaptroFeedViewport?
     override var accessibilityValue: String? {
-      get { owner?.debugSummary }
+      get {
+        guard let owner else { return nil }
+        let loads = MIRAImageLoadPipeline.shared.diagnosticSnapshot
+        return owner.debugSummary + ";imageActive=\(loads.active);imageWaiting=\(loads.waiting);imagePeak=\(loads.peakActive);prefetchPeak=\(loads.peakPrefetch);imageAdmitted=\(loads.admitted);imageCancelledWaiting=\(loads.cancelledWaiting)"
+      }
+      set { }
+    }
+  }
+}
+
+/// Optional bounded timing/geometry history, without any production observer
+/// or recurring logger. Enable with --captro-vertical-diagnostics.
+struct CaptroFeedViewportTraceDiagnostics: UIViewRepresentable {
+  let owner: CaptroFeedViewport
+  func makeUIView(context: Context) -> Probe { Probe() }
+  func updateUIView(_ view: Probe, context: Context) {
+    view.owner = owner
+    view.isAccessibilityElement = true
+    view.accessibilityIdentifier = "home.viewport.trace"
+    view.accessibilityLabel = "Vertical viewport trace"
+    view.isUserInteractionEnabled = false
+  }
+  final class Probe: UIView {
+    weak var owner: CaptroFeedViewport?
+    override var accessibilityValue: String? {
+      get { owner?.debugTrace }
       set { }
     }
   }

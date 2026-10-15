@@ -29,7 +29,7 @@ enum CaptroFeedReconciliation {
   }
 }
 
-private struct MainFeedMediaPreloadPlan: Sendable {
+private struct MainFeedMediaPreloadPlan: Sendable, Equatable {
   var previewURLs: [String] = []
   var feedImageURLs: [String] = []
   var videoPrewarmURLs: [String] = []
@@ -47,6 +47,8 @@ final class MainFeedModel: ObservableObject {
   @Published var isLoadingMore = false
   @Published var errorMessage: String?
   @Published private(set) var paginationError: String?
+  private(set) var paginationNeedsRefresh = false
+  @Published private(set) var publicationNotice: CaptroPublicationNotice?
   @Published var currentUserId: String?
   @Published var currentUsername: String?
 
@@ -64,10 +66,14 @@ final class MainFeedModel: ObservableObject {
   private var lastRevalidationAttemptAt: Date?
   private var hasPreparedStartup = false
   private var mediaPrefetchTask: Task<Void, Never>?
+  private var lastMediaPreloadPlan: MainFeedMediaPreloadPlan?
+  private var publicationGeneration = 0
+  private var eligiblePublishedPost: MIRAPost?
   private var followingAuthorIds = Set<String>()
   private var feedSection: MainFeedSection = .forYou
   private var sectionSnapshots: [MainFeedSection: [MIRAPost]] = [:]
   private var pageOffsets: [MainFeedSection: Int] = [:]
+  private var pageCursors: [MainFeedSection: String] = [:]
   private var exhaustedSections = Set<MainFeedSection>()
   private var requestGeneration = 0
   private var pendingPosts: [MIRAPost] = []
@@ -102,7 +108,11 @@ final class MainFeedModel: ObservableObject {
 
   func resetForAccountChange() {
     accountGeneration += 1
-    mediaPrefetchTask?.cancel()
+    cancelMediaPrefetch()
+    publicationGeneration += 1
+    publicationNotice = nil
+    eligiblePublishedPost = nil
+    api.publications.clear()
     posts = []
     currentUserId = nil
     currentUsername = nil
@@ -120,6 +130,8 @@ final class MainFeedModel: ObservableObject {
     followingAuthorIds.removeAll()
     sectionSnapshots.removeAll()
     pageOffsets.removeAll()
+    pageCursors.removeAll()
+    paginationNeedsRefresh = false
     exhaustedSections.removeAll()
     pendingPosts.removeAll()
     requestGeneration += 1
@@ -167,7 +179,7 @@ final class MainFeedModel: ObservableObject {
     }
     if !forceRefresh && hasLoadedFreshFeed && !posts.isEmpty { return }
     isLoadingFreshFeed = true
-    if userInitiated { paginationError = nil }
+    if userInitiated { paginationError = nil; paginationNeedsRefresh = false }
     requestGeneration += 1
     let request = requestGeneration
     let section = feedSection
@@ -176,7 +188,7 @@ final class MainFeedModel: ObservableObject {
     let generation = accountGeneration
     let contentVersion = localContentVersion
     defer {
-      if accountGeneration == generation {
+      if accountGeneration == generation, requestGeneration == request {
         isLoading = false
         isLoadingFreshFeed = false
         if refreshRequested {
@@ -191,11 +203,11 @@ final class MainFeedModel: ObservableObject {
     guard accountGeneration == generation, requestGeneration == request else { return }
 
     if posts.isEmpty { isLoading = true }
-    let loaded: [MIRAPost]
+    let page: CaptroFeedPage
     do {
-      loaded = try await fetchFeedPage(skip: 0)
+      page = try await fetchFeedPage(skip: 0)
     } catch {
-      guard accountGeneration == generation else { return }
+      guard accountGeneration == generation, requestGeneration == request else { return }
       hasLoadedFreshFeed = false
       if posts.isEmpty { errorMessage = "Check your connection and try again." }
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "first_page")
@@ -206,9 +218,11 @@ final class MainFeedModel: ObservableObject {
       return
     }
     hasLoadedFreshFeed = true
+    let loaded = page.posts
     if posts.isEmpty || userInitiated {
       pageOffsets[section] = loaded.count
-      canLoadMore = loaded.count >= firstPageLimit
+      pageCursors[section] = page.nextCursor
+      canLoadMore = page.hasMore
       if canLoadMore { exhaustedSections.remove(section) } else { exhaustedSections.insert(section) }
     }
     if loaded.isEmpty {
@@ -301,6 +315,10 @@ final class MainFeedModel: ObservableObject {
   func retryPagination() async {
     // Retry the same server cursor without clearing existing posts, reranking,
     // or issuing a scroll command. Equivalent requests still coalesce below.
+    if paginationNeedsRefresh {
+      await load(forceRefresh: true, userInitiated: true)
+      return
+    }
     paginationError = nil
     await loadNextPage(reason: "user_retry")
   }
@@ -308,6 +326,8 @@ final class MainFeedModel: ObservableObject {
   func prefetchMedia(around post: MIRAPost, selectedMediaID: String? = nil) {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
     let plan = makeMediaPreloadPlan(focusIndex: index, selectedMediaID: selectedMediaID)
+    guard lastMediaPreloadPlan != plan else { return }
+    lastMediaPreloadPlan = plan
     guard !plan.isEmpty else {
       mediaPrefetchTask?.cancel()
       MIRAVideoPrewarmManager.shared.cancelPendingPrewarm()
@@ -335,6 +355,93 @@ final class MainFeedModel: ObservableObject {
         MIRAApplePerformanceLogger.event("media_prefetch_completed", detail: "feed_full")
       }
     }
+  }
+
+  func cancelMediaPrefetch() {
+    mediaPrefetchTask?.cancel()
+    mediaPrefetchTask = nil
+    lastMediaPreloadPlan = nil
+    MIRAVideoPrewarmManager.shared.cancelPendingPrewarm()
+  }
+
+  func reconcilePublication(_ receipt: CaptroPublishedPost, canInsertNow: () -> Bool) async {
+    guard !isGuestFeedMode, receipt.accountScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    publicationGeneration += 1
+    let publication = publicationGeneration
+    let generation = accountGeneration
+    let section = feedSection
+    // A response started before publishing must not overwrite this new state.
+    requestGeneration += 1
+    let request = requestGeneration
+    localContentVersion += 1
+    isLoadingFreshFeed = true
+    isLoadingMore = false
+    publicationNotice = CaptroPublicationNotice(receipt: receipt, state: .checking)
+    eligiblePublishedPost = nil
+    defer {
+      if accountGeneration == generation, requestGeneration == request {
+        isLoadingFreshFeed = false
+        if refreshRequested {
+          refreshRequested = false
+          Task { await load(forceRefresh: true, userInitiated: true) }
+        }
+      }
+    }
+    do {
+      let page = try await fetchFeedPage(skip: 0, freshRead: true)
+      let fresh = page.posts
+      guard publicationGeneration == publication, accountGeneration == generation,
+            requestGeneration == request, feedSection == section,
+            receipt.accountScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+      // The scoped API is the authority for privacy, moderation and rank/scope
+      // eligibility. A successful POST alone never bypasses those rules.
+      let eligible = fresh.first { $0.id == receipt.post.id && !$0.isLegacyOrdinaryTextPost }
+      eligiblePublishedPost = eligible?.bindingWritingIdentities()
+      publicationNotice = CaptroPublicationNotice(receipt: receipt,
+        state: eligible == nil ? .outsideFeed : .available)
+      if posts.isEmpty {
+        posts = CaptroFeedReconciliation.unique(interleavePostFormats(fresh))
+        pageOffsets[section] = fresh.count
+        pageCursors[section] = page.nextCursor
+        canLoadMore = page.hasMore
+        if canLoadMore { exhaustedSections.remove(section) } else { exhaustedSections.insert(section) }
+      } else if canInsertNow() {
+        insertEligiblePublication()
+      }
+      isLoading = false
+      hasLoadedFreshFeed = true
+      errorMessage = nil
+      await persistCurrentFeed()
+      CaptroFeedDiagnostics.event("publication_reconcile", feed: section.rawValue, generation: request,
+        reason: eligible == nil ? "not_in_scoped_first_page" : "eligible", post: receipt.post.id)
+    } catch {
+      guard publicationGeneration == publication, accountGeneration == generation,
+            requestGeneration == request, receipt.accountScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+      isLoading = false
+      publicationNotice = CaptroPublicationNotice(receipt: receipt, state: .retry)
+    }
+  }
+
+  func applyPublicationIfAtTop(_ isAtTopAndIdle: Bool) {
+    guard isAtTopAndIdle else { return }
+    insertEligiblePublication()
+  }
+
+  private func insertEligiblePublication() {
+    guard let post = eligiblePublishedPost,
+          publicationNotice?.receipt.accountScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    eligiblePublishedPost = nil
+    guard !posts.contains(where: { $0.id == post.id }) else { return }
+    localContentVersion += 1
+    posts.insert(post, at: 0)
+    sectionSnapshots[feedSection] = posts
+    // The server's offset is not the UI item count. Do not advance it here.
+    cacheCurrentPosts()
+  }
+
+  func dismissPublicationNotice() {
+    publicationNotice = nil
+    eligiblePublishedPost = nil
   }
 
   private func prefetchInitialMediaWindow() {
@@ -417,13 +524,18 @@ final class MainFeedModel: ObservableObject {
 
     let skip = pageOffsets[section] ?? posts.count
     MIRAPerformanceTimeline.mark("home_load_more_start", detail: "\(reason) skip=\(skip)")
-    let loaded: [MIRAPost]
+    let page: CaptroFeedPage
     do {
-      loaded = try await fetchFeedPage(skip: skip)
+      page = try await fetchFeedPage(skip: skip, continuing: true)
     } catch {
       guard accountGeneration == generation, requestGeneration == request,
             feedSection == section else { return }
-      paginationError = "Couldn't load more posts. Check your connection and try again."
+      if case let MIRAAPIError.server(_, code, _) = error, code == "FEED_CURSOR_INVALID" {
+        paginationNeedsRefresh = true
+        paginationError = "This feed has expired. Refresh to continue."
+      } else {
+        paginationError = "Couldn't load more posts. Check your connection and try again."
+      }
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "skip=\(skip)")
       return
     }
@@ -434,9 +546,11 @@ final class MainFeedModel: ObservableObject {
     guard localContentVersion == contentVersion else {
       return
     }
+    let loaded = page.posts
     guard !loaded.isEmpty else {
-      canLoadMore = false
-      exhaustedSections.insert(section)
+      pageCursors[section] = page.nextCursor
+      canLoadMore = page.hasMore
+      if !canLoadMore { exhaustedSections.insert(section) }
       MIRAPerformanceTimeline.mark("home_load_more_empty", detail: "skip=\(skip)")
       return
     }
@@ -447,7 +561,8 @@ final class MainFeedModel: ObservableObject {
       // No suspension is needed for duplicate-only pages. Commit the consumed
       // server rows now so repeated records cannot strand pagination.
       pageOffsets[section] = skip + loaded.count
-      canLoadMore = loaded.count >= firstPageLimit
+      pageCursors[section] = page.nextCursor
+      canLoadMore = page.hasMore
       if !canLoadMore { exhaustedSections.insert(section) }
       MIRAPerformanceTimeline.mark("home_load_more_duplicate_page", detail: "skip=\(skip)")
       return
@@ -464,7 +579,8 @@ final class MainFeedModel: ObservableObject {
     pageOffsets[section] = skip + loaded.count
     posts.append(contentsOf: interleavePostFormats(sorted))
     assert(Set(posts.map(\.id)).count == posts.count)
-    canLoadMore = loaded.count >= firstPageLimit
+    pageCursors[section] = page.nextCursor
+    canLoadMore = page.hasMore
     if !canLoadMore { exhaustedSections.insert(section) }
     MIRAPerformanceTimeline.mark("home_load_more_done", detail: "added=\(unique.count) total=\(posts.count)")
     cacheCurrentPosts()
@@ -784,21 +900,23 @@ final class MainFeedModel: ObservableObject {
     let snapshot = posts
     let isGuest = isGuestFeedMode
     let publicCacheKey = publicFeedCacheKey
+    let expectedScope = MIRALocalJSONCache.currentScopeIdentifier
     Task {
       if isGuest {
-        await MIRALocalJSONCache.save(Array(snapshot.prefix(120)), key: publicCacheKey)
+        await MIRALocalJSONCache.save(Array(snapshot.prefix(120)), key: publicCacheKey, expectedScopeIdentifier: expectedScope)
       } else {
-        await MIRAAppCacheStore.shared.saveFeed(snapshot)
+        await MIRAAppCacheStore.shared.saveFeed(snapshot, expectedScope: expectedScope)
       }
     }
   }
 
   private func persistCurrentFeed() async {
     guard feedSection == .forYou else { return }
+    let expectedScope = MIRALocalJSONCache.currentScopeIdentifier
     if isGuestFeedMode {
-      await MIRALocalJSONCache.save(Array(posts.prefix(120)), key: publicFeedCacheKey)
+      await MIRALocalJSONCache.save(Array(posts.prefix(120)), key: publicFeedCacheKey, expectedScopeIdentifier: expectedScope)
     } else {
-      await MIRAAppCacheStore.shared.saveFeed(posts)
+      await MIRAAppCacheStore.shared.saveFeed(posts, expectedScope: expectedScope)
     }
   }
 
@@ -829,18 +947,22 @@ final class MainFeedModel: ObservableObject {
     )
   }
 
-  private func fetchFeedPage(skip: Int) async throws -> [MIRAPost] {
+  private func fetchFeedPage(skip: Int, freshRead: Bool = false, continuing: Bool = false) async throws -> CaptroFeedPage {
 #if DEBUG
-    if let testPageLoader { return try await testPageLoader(feedSection.apiScope, skip) }
+    if let testPageLoader { return CaptroFeedPage(legacy: try await testPageLoader(feedSection.apiScope, skip), limit: firstPageLimit) }
 #endif
-    if isGuestFeedMode {
-      let publicPosts: [MIRAPost] = try await api.get("/posts/world-board?limit=\(firstPageLimit)&skip=\(skip)")
-      MIRAPerformanceTimeline.mark("home_feed_public", detail: "guest skip=\(skip)")
-      return publicPosts
+    let endpoint = isGuestFeedMode ? "/posts/world-board" : "/posts/feed"
+    var query = "pagination=v2&limit=\(firstPageLimit)&skip=\(skip)&scope=\(feedSection.apiScope)"
+    if continuing, let cursor = pageCursors[feedSection] {
+      var allowed = CharacterSet.urlQueryAllowed
+      allowed.remove(charactersIn: "+&=?#")
+      if let encoded = cursor.addingPercentEncoding(withAllowedCharacters: allowed) { query += "&cursor=\(encoded)" }
     }
     // A failed or legitimately empty personalized feed must not silently turn
     // into a different public feed while retaining the signed-in UI state.
-    return try await api.get("/posts/feed?limit=\(firstPageLimit)&skip=\(skip)&scope=\(feedSection.apiScope)")
+    let path = "\(endpoint)?\(query)"
+    if freshRead { return try await api.getFresh(path) }
+    return try await api.get(path)
   }
 
   func selectFeedSection(_ section: MainFeedSection) {
@@ -854,11 +976,15 @@ final class MainFeedModel: ObservableObject {
     sectionSnapshots[feedSection] = posts
     accountGeneration += 1 // Late page responses cannot replace the newly selected source.
     requestGeneration += 1
-    mediaPrefetchTask?.cancel()
+    cancelMediaPrefetch()
     feedSection = section
+    publicationGeneration += 1
+    publicationNotice = nil
+    eligiblePublishedPost = nil
     posts = sectionSnapshots[section] ?? []
     errorMessage = nil
     paginationError = nil
+    paginationNeedsRefresh = false
     isLoading = posts.isEmpty
     isLoadingMore = false
     isLoadingFreshFeed = false
@@ -1130,8 +1256,14 @@ public struct MainFeedView: View {
         guard let update = MIRAPostEngagementSync.update(from: notification) else { return }
         model.applyEngagementUpdate(update)
       }
-      .onReceive(NotificationCenter.default.publisher(for: .captroPostSubmissionCompleted)) { _ in
-        Task { await model.load(forceRefresh: true) }
+      .onReceive(model.api.publications.$latest) { receipt in
+        guard let receipt else { return }
+        Task {
+          // @Published emits before its setter completes. Consume after that
+          // callback returns, and never clear a newer publication's receipt.
+          guard model.api.publications.consume(receipt) else { return }
+          await model.reconcilePublication(receipt, canInsertNow: { viewport.isAtTopAndIdle })
+        }
       }
       .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { notification in
         guard let post = notification.object as? MIRAPost else { return }
@@ -1163,6 +1295,7 @@ public struct MainFeedView: View {
       }
       .onChange(of: isMediaPlaybackSuppressed) { _, suppressed in
         if suppressed {
+          model.cancelMediaPrefetch()
           MIRAPlaybackCoordinator.pauseAll(reason: "home_feed_overlay")
         } else {
           activateCurrentPost(reason: "home_feed_overlay_closed")
@@ -1171,6 +1304,7 @@ public struct MainFeedView: View {
       }
       .onChange(of: isViewportSuspended) { _, suspended in
         viewport.setActive(!suspended)
+        if !suspended { model.applyPublicationIfAtTop(viewport.isAtTopAndIdle) }
       }
       .onChange(of: displayedPosts.map(\.id)) { _, _ in
         viewport.updateOrder(displayedPosts.map(\.id))
@@ -1192,12 +1326,48 @@ public struct MainFeedView: View {
   public var body: some View {
     NavigationStack {
       activeFeed.onAppear(perform: feedDidAppear)
-      .overlay(alignment: .top) { CaptroFavoriteNotice(store: model.api.favorites) }
+      .overlay(alignment: .top) {
+        VStack(spacing: 4) {
+          CaptroFavoriteNotice(store: model.api.favorites)
+          publicationBanner
+        }
+      }
       .onDisappear {
         viewport.setActive(false)
         postActivationTask?.cancel()
+        model.cancelMediaPrefetch()
         pauseVisibleMedia(reason: "home_feed_disappeared")
       }
+    }
+  }
+
+  @ViewBuilder
+  private var publicationBanner: some View {
+    if let notice = model.publicationNotice,
+       notice.receipt.accountScope == MIRALocalJSONCache.currentScopeIdentifier {
+      HStack(spacing: 12) {
+        Text(notice.message).font(.footnote)
+        Spacer(minLength: 0)
+        if notice.state == .retry {
+          Button("Retry") {
+            Task { await model.reconcilePublication(notice.receipt, canInsertNow: { viewport.isAtTopAndIdle }) }
+          }.frame(minWidth: 44, minHeight: 44)
+        }
+        Button("View post") {
+          viewport.setActive(false)
+          detailPost = notice.receipt.post
+          model.dismissPublicationNotice()
+        }.frame(minHeight: 44).accessibilityIdentifier("home.publication.view")
+        Button { model.dismissPublicationNotice() } label: {
+          Image(systemName: "xmark").frame(width: 44, height: 44)
+        }.accessibilityLabel("Dismiss publication confirmation")
+      }
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+      .padding(.leading, 12)
+      .background(MIRATheme.Color.surface)
+      .overlay(Rectangle().stroke(MIRATheme.Color.hairline, lineWidth: 1))
+      .padding(.horizontal, 12)
+      .accessibilityIdentifier("home.publication.notice")
     }
   }
 
@@ -1378,14 +1548,14 @@ public struct MainFeedView: View {
           if let error = model.paginationError {
             Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
           }
-          Button(model.paginationError == nil ? "Load more posts" : "Try again") { Task { await model.retryPagination() } }
+          Button(model.paginationNeedsRefresh ? "Refresh feed" : model.paginationError == nil ? "Load more posts" : "Try again") { Task { await model.retryPagination() } }
             .frame(minHeight: 44)
             .disabled(model.isLoadingMore)
         }
       }
       .frame(width: size.width, height: size.height)
       .task(id: model.posts.last?.id) {
-        guard !model.posts.isEmpty else { return }
+        guard model.canLoadMore else { return }
         await model.loadPastLegacyTextPage()
       }
     } else {
@@ -1406,25 +1576,10 @@ public struct MainFeedView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.post.page.\(post.id)")
         }
-        if model.canLoadMore {
-          HStack(spacing: 12) {
-            if model.isLoadingMore {
-              ProgressView("Loading more posts")
-            } else if let error = model.paginationError {
-              Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-              Spacer(minLength: 0)
-              Button("Try again") { Task { await model.retryPagination() } }
-                .frame(minHeight: 44).accessibilityIdentifier("home.pagination.retry")
-            } else {
-              Button("Load more posts") { Task { await model.retryPagination() } }
-                .frame(minHeight: 44)
-            }
-          }
-          .frame(maxWidth: .infinity, minHeight: 60)
-          .padding(.horizontal, 20)
-          .accessibilityIdentifier("home.pagination")
-        }
+        CaptroFeedPaginationFooter(canLoadMore: model.canLoadMore,
+          isLoading: model.isLoadingMore, error: model.paginationError,
+          needsRefresh: model.paginationNeedsRefresh,
+          retry: { Task { await model.retryPagination() } })
       }
       .scrollTargetLayout()
     }
@@ -1442,6 +1597,7 @@ public struct MainFeedView: View {
     .overlay(alignment: .topLeading) {
       if ProcessInfo.processInfo.arguments.contains("--captro-restore-audit") {
         CaptroFeedViewportDiagnostics(owner: viewport).frame(width: 2, height: 2).allowsHitTesting(false)
+        CaptroFeedViewportTraceDiagnostics(owner: viewport).frame(width: 2, height: 2).allowsHitTesting(false)
       }
     }
 #endif

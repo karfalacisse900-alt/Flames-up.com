@@ -151,8 +151,12 @@ actor MIRAAppCacheStore {
     return await MIRAPostEngagementSync.apply(to: posts)
   }
 
-  func saveFeed(_ posts: [MIRAPost]) async {
-    await MIRALocalJSONCache.save(Array(posts.prefix(maxFeedPosts)), key: CacheKey.feed)
+  func saveFeed(_ posts: [MIRAPost], expectedScope: String? = nil) async {
+    if let expectedScope {
+      await MIRALocalJSONCache.save(Array(posts.prefix(maxFeedPosts)), key: CacheKey.feed, expectedScopeIdentifier: expectedScope)
+    } else {
+      await MIRALocalJSONCache.save(Array(posts.prefix(maxFeedPosts)), key: CacheKey.feed)
+    }
   }
 
   func mergePostsPreservingVisibleState(existing: [MIRAPost], fresh: [MIRAPost], preferFreshOrderWhenEmpty: Bool = true) -> [MIRAPost] {

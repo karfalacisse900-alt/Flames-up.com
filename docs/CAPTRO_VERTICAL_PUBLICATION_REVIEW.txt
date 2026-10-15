@@ -1,0 +1,98 @@
+CAPTRO — VERTICAL FEED / PUBLICATION REVIEW — 2026-10-14
+
+Scope
+Preserve the working horizontal carousel, row-local selection, stable identities,
+media ratios, native physics and restoration safeguards. Changes below target
+vertical work, footer extent, shared preload ownership and publication delivery.
+This document is an implementation/evidence record, not a claim that the reported
+physical-iPhone shaking/freezes have been reproduced or resolved.
+
+Baseline
+App source: b3bdebf62bcd5eaf80cfbb0f12f9cafdff457c6f (native source of the latest
+623.1 release plus release-gate work). Paired DEBUG driver: ccc59254.
+Baseline CI: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38659009989
+Windows workspace has no attached physical iPhone or local Xcode/Instruments.
+
+Confirmed code / isolated reproductions
+1. Publish callback ignored the canonical POST result. Home performed background
+   reconciliation, which intentionally preserves existing order and excludes new
+   IDs into an unused pending list. New eligible publications therefore did not
+   appear in an already-loaded Home session. A background refresh was not an
+   appropriate publication integration path.
+   Files: NotificationLibrarySearchCreateViews.swift, MainFeedView.swift.
+   Fix: one account-scoped server receipt; fresh scoped eligibility read; insert
+   only at idle top; elsewhere keep current order and offer View post. No fake
+   post, access bypass, one-item feed replacement or scroll command. Older reads
+   cannot overwrite publication state; API read-after-write bypasses both cached
+   responses and an older in-flight GET. Preserve server cursor on local insert.
+
+2. Backend offset applied to raw rows while clients advanced by visible rows.
+   Visibility filtering repeated IDs and could return an empty page before later
+   eligible records. Isolated actual-handler tests reproduced both outcomes.
+   Files: backend-cf/src/index.ts, backend-cf/src/feed-pagination.ts.
+   Fix: opt-in encrypted account/feed/city-bound keyset cursor with snapshot and
+   expiry. Authorization still applies to every page. Empty-with-continuation is
+   not exhaustion. Old array clients are unchanged. No schema/data migration.
+   Expired cursor requires explicit Refresh feed; no automatic reading reset.
+   Real create mapping sets both timestamps; newly published posts sort ahead
+   of older migrated posts. A null legacy timestamp is a compatibility edge and
+   sorts last under the unchanged ordering; it is not the normal publish path.
+
+3. Viewport sample traversed every loaded ID on scroll/content-size callbacks.
+   Fix: cache order indices when order changes; inspect registered mounted cells
+   on scroll. Preserve active-post hysteresis and all restoration guards.
+   File: CaptroFeedViewport.swift. This removes loaded-count-dependent work but
+   alone does not establish the cause of visible physical-device shaking.
+
+4. Four-image prefetch limit was per invocation, not shared across rows/feed.
+   A separate prefetch set also dropped secondary ownership of shared work.
+   Fix: shared six-job budget, maximum two speculative jobs; visible promotion;
+   permit held through real completion; per-reader cancellation and deduplication.
+   Existing off-main decoding and bounded caches remain. No claim that decoding
+   was previously on-main. Files: MIRAComponents.swift, MIRAImageLoadAdmission.swift.
+   A successful delayed image retry failed to set loadedScope, leaving its
+   successfully loaded image behind the placeholder; retry now retains identity.
+
+5. Conditional footer disappeared on exhaustion, shrinking native content extent.
+   Fix: stable measured footer across loading/retry/end states, including Dynamic
+   Type. No repeated content-offset corrections. Runtime comparison must decide
+   whether this reproduced a bottom-of-feed clamp in the exercised interaction.
+   File: CaptroFeedPaginationFooter.swift, MainFeedView.swift.
+
+6. Delayed cache writes could acquire the next account's cache namespace.
+   Feed writes now pin expected account scope before suspension; old work is
+   rejected rather than persisted under another account.
+   Files: MIRAAppCacheStore.swift, MIRAPerformance.swift, MainFeedView.swift.
+
+Verification so far
+- Full backend suite: 284/284 pass; TypeScript check passes.
+- Unchanged b3bdebf6 backend suite: 257/262 pass. Five stale source guards already
+  failed; four additional guards referenced moved pagination/transport code.
+  Updated guards retain current camera, original-byte media, geometry, retirement
+  and retry intent; no application changes were made to satisfy obsolete tests.
+- Publication tests call actual POST/feed/details handlers in isolated memory,
+  including 14 supported types/aliases x photo/video/carousel, same-ID replay,
+  pending/rejected moderation, private/blocked records, and scoped-feed exclusion.
+  Example fixture-only canonical ID: 00000000-0000-4000-8000-000000000010.
+  These are NOT live Cloudflare uploads, real purchases or production-account posts.
+- Swift regressions cover admission/cancellation, viewport sampling, stale reads,
+  scoped caches, empty cursor pages, legacy arrays, pending publication, expiry,
+  account changes and receipt consumption. Execution results pending CI.
+- Paired runtime fixture uses 48 mixed posts, delayed pages, one failed page/retry,
+  a gated final response, missing local media, lower visible carousel and warm
+  repeat passes. It is the actual app running isolated fixture data, not a mockup.
+
+Limits / deployment scope
+- No physical-iPhone run, usable CPU Instruments trace, thermal/battery/real-network
+  performance result, or reliable 60/120 FPS claim. XCTest waits for quiescence,
+  so its gestures do not prove interrupted finger-down deceleration behavior.
+- Synthetic PGlite 100k-row EXPLAIN at a 50k boundary examined about 50k index rows
+  to return 24 (29.779 ms in that synthetic run). Cursor correctness is fixed;
+  the nested predicate does not promise constant-time deep database pagination.
+  Production plan/latency verification and any index change remain separate.
+- User authorized tested pagination deployment and TestFlight. Worker release must
+  be based on last deployed 990ce2cba993d1d7ac9465d9ec5c1e0aafc30c60 plus ONLY this
+  pagination change; do not accidentally deploy unrelated pending retirement or
+  push-registration RPC changes. Rollback is prior Worker code, no data reversal.
+
+Final runtime/build/deployment results will be appended after verification.

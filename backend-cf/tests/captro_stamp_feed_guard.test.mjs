@@ -26,7 +26,8 @@ test('guest Home reads only the public feed and keeps an isolated cache', () => 
   assert.match(rootView, /isGuest: authSession\.isGuest/);
   assert.match(mainFeed, /private let publicFeedCacheKey = "native\.main\.public\.feed\.v1"/);
   assert.match(mainFeed, /func configureGuestMode\(_ isGuest: Bool\)/);
-  assert.match(mainFeed, /if isGuestFeedMode \{[\s\S]*?\/posts\/world-board\?limit=/);
+  assert.match(mainFeed, /let endpoint = isGuestFeedMode \? "\/posts\/world-board" : "\/posts\/feed"/);
+  assert.match(mainFeed, /pagination=v2&limit=/);
   assert.match(mainFeed, /showsFeedControls: false/);
   assert.match(mainFeed, /canFollowAuthor: !isGuest/);
 });
@@ -48,7 +49,8 @@ test('Home hides ordinary legacy text but retains media and structured posts wit
   assert.match(mainFeed, /CaptroFeedReconciliation\.background\(existing: posts, fresh: loaded\)/);
   assert.match(mainFeed, /CaptroFeedFormatMixer\.mix\(rankedPosts\)/);
   assert.match(mainFeed, /if post\.feedMediaURLs\.isEmpty \{ return 2 \}/);
-  assert.match(mainFeed, /loaded = try await fetchFeedPage\(skip: skip\)/);
+  assert.match(mainFeed, /page = try await fetchFeedPage\(skip: skip, continuing: true\)/);
+  assert.match(mainFeed, /let loaded = page\.posts/);
   assert.match(mainFeed, /ForEach\(displayedPosts, id: \\.id\)/);
   assert.match(
     postView,
@@ -153,7 +155,7 @@ test('Home post is a full-width feed section without an outer card', () => {
   assert.doesNotMatch(mainFeed, /ignoresSafeArea\(\.container, edges: \.bottom\)/);
 });
 
-test('Home uses a stable supported fill preview while Details preserves originals', () => {
+test('Home and Details share a stable crop transform; fullscreen preserves originals', () => {
   assert.match(mediaPager, /post\.feedFrameHeightToWidthRatio/);
   assert.doesNotMatch(mediaPager, /measuredCoverHeightToWidthRatio|onMeasuredRatio:/);
   assert.match(mediaPager, /\.aspectRatio\(CGSize\(width: 1, height: mediaHeightToWidthRatio\), contentMode: \.fit\)/);
@@ -161,14 +163,17 @@ test('Home uses a stable supported fill preview while Details preserves original
   assert.doesNotMatch(mediaPager, /\.aspectRatio\(4\.0 \/ 5\.0/);
   assert.match(mediaPager, /contentMode: \.fit/);
   // Fill moved into the shared source/crop renderer; do not require a second
-  // independent crop policy in the pager. Details deliberately fits originals.
+  // independent crop policy in the pager. Details uses the same stored framing;
+  // only deliberate full-screen viewing fits the complete original.
   assert.match(mediaPager, /CaptroPostMediaView\(url: url, geometry: post\.mediaGeometry\(at: index\)/);
   const sharedMedia = readIOS('Components/CaptroPostMediaView.swift');
   assert.match(sharedMedia, /geometry\.sourceRect\(in: size\)/);
   assert.match(sharedMedia, /contentMode: \.fill/);
   assert.match(sharedMedia, /\.offset\(x: source\.minX, y: source\.minY\)/);
   const details = readIOS('Screens/PostDetailNativeView.swift');
-  assert.match(details, /RemoteMediaView\(url: url[\s\S]*?contentMode: \.fit/);
+  assert.match(details, /CaptroPostMediaView\(url: url, geometry: mediaSnapshot\.geometry\(post: post, index: index\)/);
+  assert.match(details, /CaptroFullscreenMediaViewer\(urls: urls, post: post, initialIndex: selectedIndex\)/);
+  assert.match(readIOS('Screens/CaptroFullscreenMediaViewer.swift'), /contentMode: \.fit/);
   assert.doesNotMatch(mediaPager, /min\(max\(ratio/);
   const mediaBranchStart = postView.indexOf('if !post.feedMediaURLs.isEmpty');
   const mediaBranchEnd = postView.indexOf('} else if !post.isLegacyOrdinaryTextPost', mediaBranchStart);
@@ -253,7 +258,9 @@ test('Captro uses a purpose-built family of stamp types and actions', () => {
   assert.match(mediaStamp, /CaptroHomeStampTextBudget.captionLines/);
   assert.doesNotMatch(mediaStamp, /"Read more"|"Show less"|"More"|reading\.expanded\.toggle/);
   assert.match(mediaStamp, /stamp\.y \+ stamp\.size\.height \+ 12/);
-  assert.match(mainFeed, /stampReadingStates\[post.id\]/);
+  assert.match(mainFeed, /rowState: rowStates\.state\(for: post.id\)/);
+  assert.match(postView, /stampReading: \$rowState\.stampReading/);
+  assert.doesNotMatch(mainFeed, /@State[^\n]*stampReadingStates/);
   assert.match(editorialCard, /mediaWidth \* 0\.73/);
   assert.doesNotMatch(composer, /Picker\("Paper style"/);
 });
@@ -346,9 +353,14 @@ test('composer exposes quiet tools, native actions, and no Post category', () =>
 });
 
 test('feed image upload preserves composition and stays within the hosted-image limit', () => {
-  assert.match(mediaUpload, /let scale = min\(1, maxSide \/ max\(image\.size\.width, image\.size\.height\)\)/);
-  assert.match(mediaUpload, /image\.draw\(in: CGRect\(origin: \.zero, size: targetSize\)\)/);
-  assert.match(mediaUpload, /\.first \{ \$0\.count <= 9_500_000 \}/);
+  const preparation = mediaUpload.slice(mediaUpload.indexOf('func prepareImageUpload('), mediaUpload.indexOf('private static func detectedImageMimeType'));
+  assert.match(preparation, /detectedImageMimeType\(media.data\)[\s\S]*?media.data.count <= 10_000_000[\s\S]*?data: media.data/);
+  assert.match(preparation, /Task\.detached\(priority: \.utility\)/);
+  assert.match(preparation, /CGImageDestinationAddImageFromSource\(destination, source, 0/);
+  assert.match(preparation, /candidate.count <= 9_500_000/);
+  assert.match(preparation, /throw CaptroImagePreparationError.sourceTooLarge/);
+  assert.match(preparation, /preparation.cancel\(\)/);
+  assert.doesNotMatch(preparation, /image\.draw\(|UIGraphicsImageRenderer|CGImageSourceCreateThumbnailAtIndex/);
   assert.match(mediaUpload, /width: actualWidth,[\s\S]*?height: actualHeight/);
   assert.doesNotMatch(mediaUpload, /let drawOrigin = CGPoint/);
 });
