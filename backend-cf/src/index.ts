@@ -28,6 +28,7 @@ import {
 } from './stripe-connect-v2';
 import { bindVoiceAttachment, classifyOpenAIServiceFailure, createVoiceRoutes, inspectVoiceAudio, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
 import { rankVisibleFeedWindow } from './feed-relevance';
+import { FeedCursorError, readFeedCursor, writeFeedCursor, feedBoundary, feedKeysetFilters, feedKeysetOrder } from './feed-pagination';
 
 type MediaModerationJobMessage = {
   jobId: string;
@@ -5682,6 +5683,9 @@ const SUPABASE_APP_POST_SELECT = [
 ].join(',');
 
 type SupabasePostReadOptions = {
+  // Internal bounded keyset scan only; never accepted from an HTTP body.
+  // Reuse identical authorization and payload hydration for v1 and v2 reads.
+  prefetchedRows?: any[];
   // Checkout needs visibility authorization, not comments, reactions or media hydration.
   hydration?: 'full' | 'access';
   postId?: string;
@@ -7215,7 +7219,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
     : postId
       ? 1
     : Math.min(300, Math.max(limit + offset + 20, options.category && options.category !== 'all' ? (limit + offset) * 4 : limit + offset));
-  const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+  const rows = options.prefetchedRows ?? await supabaseAdminQueryRows(c, 'app_posts', {
     select: SUPABASE_APP_POST_SELECT,
     filters,
     order: options.order === 'trending'
@@ -7274,6 +7278,48 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   await attachPublicPostObjects(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   await attachPublicCommerce(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   return overlaySupabaseViewerEngagement(c, photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
+}
+
+async function supabaseReadFeedPageV2(c: any, viewerId: string, options: {
+  limit: number; scope: string; cursor?: string; feedAuthorIds?: string[]; feedDisplayCity?: string;
+}) {
+  let cursor = await readFeedCursor(c.env.JWT_SECRET, options.cursor, {
+    viewer: viewerId, scope: options.scope, city: options.feedDisplayCity,
+  });
+  const posts: any[] = [];
+  let hasMore = true;
+  // A sparse/blocked window is not end-of-feed. Bound server work, then return
+  // an advancing continuation even if this particular response is empty.
+  for (let batch = 0; batch < 4 && posts.length < options.limit && hasMore; batch += 1) {
+    const batchSize = Math.min(100, Math.max(24, (options.limit - posts.length) * 2));
+    const filters = feedKeysetFilters(cursor);
+    if (options.feedAuthorIds?.length) filters.app_user_id = postgrestInFilter(options.feedAuthorIds);
+    if (options.feedDisplayCity) {
+      filters['metadata->>display_city'] = `ilike.${options.feedDisplayCity}`;
+      filters['metadata->>display_location_visibility'] = postgrestEqFilter('public');
+    }
+    const rows = await supabaseAdminQueryRows(c, 'app_posts', {
+      select: SUPABASE_APP_POST_SELECT, filters, order: feedKeysetOrder, limit: batchSize,
+    });
+    if (!rows.length) { hasMore = false; break; }
+    const visible = await supabaseReadVisiblePosts(c, viewerId, { limit: rows.length, prefetchedRows: rows });
+    const visibleByID = new Map(visible.map(post => [publicId(post.id, 120), post]));
+    let consumed = 0;
+    for (const row of rows) {
+      const nextBoundary = feedBoundary(row);
+      if (cursor.boundary?.id === nextBoundary.id) throw Error('FEED_CURSOR_DID_NOT_ADVANCE');
+      cursor = { ...cursor, boundary: nextBoundary };
+      consumed += 1;
+      const post = visibleByID.get(publicId(row.legacy_post_id || row.id, 120));
+      if (post) posts.push(post);
+      if (posts.length === options.limit) break;
+    }
+    hasMore = consumed < rows.length || rows.length === batchSize;
+  }
+  return {
+    posts, hasMore,
+    nextCursor: hasMore ? await writeFeedCursor(c.env.JWT_SECRET, cursor) : null,
+  };
 }
 
 function postgrestInFilter(values: string[]): string {
@@ -17227,11 +17273,14 @@ api.get('/posts/feed', authMiddleware, async (c) => {
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '20', 1, 50, 20);
   const scope = c.req.query('scope') || 'for_you';
+  const cursorPagination = c.req.query('pagination') === 'v2';
+  const cursor = c.req.query('cursor');
+  const firstPage = cursorPagination ? !cursor : skip === 0;
   if (!['for_you', 'following', 'around'].includes(scope)) {
     return c.json({ detail: 'Unknown feed selection.' }, 400);
   }
   try {
-    const viewer = scope === 'around' || skip === 0
+    const viewer = scope === 'around' || firstPage
       ? await getSupabaseAppUserRowByAnyId(c, userId) : null;
     let feedAuthorIds: string[] | undefined;
     let feedDisplayCity: string | undefined;
@@ -17245,11 +17294,19 @@ api.get('/posts/feed', authMiddleware, async (c) => {
       feedAuthorIds = Array.from(new Set(relationships
         .filter((row: any) => cleanText(row?.status || 'active', 40) === 'active')
         .map((row: any) => publicId(row?.app_following_id, 120)).filter(Boolean)));
-      if (!feedAuthorIds.length) return c.json([]);
+      if (!feedAuthorIds.length) return c.json(cursorPagination ? { posts: [], nextCursor: null, hasMore: false } : []);
     }
     if (scope === 'around') {
       feedDisplayCity = cleanText(viewer?.city, 80).replace(/[%*_(),]/g, '').trim();
-      if (!feedDisplayCity) return c.json([]);
+      if (!feedDisplayCity) return c.json(cursorPagination ? { posts: [], nextCursor: null, hasMore: false } : []);
+    }
+    if (cursorPagination) {
+      const page = await supabaseReadFeedPageV2(c, userId, { limit, scope, cursor, feedAuthorIds, feedDisplayCity });
+      const ordered = scope === 'for_you' && firstPage
+        ? rankVisibleFeedWindow(page.posts, parseJsonObject(viewer?.profile).interests) : page.posts;
+      const response = c.json({ ...page, posts: ordered.map(post => feedPostPayload(post, [], c.env)) });
+      response.headers.set('cache-control', 'no-store');
+      return response;
     }
     const feedRows = await supabaseReadVisiblePosts(c, userId, {
       limit, offset: skip, order: 'newest', feedAuthorIds, feedDisplayCity,
@@ -17263,6 +17320,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
     response.headers.set('cache-control', 'no-store');
     return response;
   } catch (error: any) {
+    if (error instanceof FeedCursorError) return c.json({ detail: 'Refresh this feed to continue.', code: 'FEED_CURSOR_INVALID' }, 400);
     console.warn(JSON.stringify({ event: 'supabase_feed_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load feed.' }, 500);
   }
@@ -17285,11 +17343,20 @@ api.get('/posts/world-board', async (c) => {
     const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
     const limit = clampNumber(c.req.query('limit') || '40', 1, 50, 40);
     const viewerId = await getOptionalUserId(c);
+    if (c.req.query('pagination') === 'v2') {
+      const page = await supabaseReadFeedPageV2(c, viewerId, {
+        limit, scope: 'world_board', cursor: c.req.query('cursor'),
+      });
+      const response = c.json({ ...page, posts: page.posts.map(post => feedPostPayload(post, [], c.env)) });
+      response.headers.set('cache-control', 'no-store');
+      return response;
+    }
     const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest' });
     const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;
   } catch (error: any) {
+    if (error instanceof FeedCursorError) return c.json({ detail: 'Refresh this feed to continue.', code: 'FEED_CURSOR_INVALID' }, 400);
     console.warn(JSON.stringify({ event: 'supabase_world_board_read_failed', code: getErrorCode(error).slice(0, 180) }));
     return c.json({ detail: 'Could not load world board.' }, 500);
   }
