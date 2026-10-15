@@ -1,0 +1,131 @@
+CAPTRO: weak-network media delivery and unresolved scrolling investigation
+Date: 2026-10-15
+
+STATUS
+The physical-device shaking/freezes remain UNRESOLVED / not reproduced on an
+accessible physical device. The user reports both Wi-Fi and cellular and more
+than one phone. Installed build and iOS version remain unconfirmed. Do not infer
+that the user is running 626.1, and do not call this a completed performance fix.
+
+CONFIRMED OBSERVATIONS AND TARGETED CHANGES
+1. Cloudflare delivery fields were identical for 29 photos in a 12-post public
+   sample. Further measurement showed that the existing public variant already
+   uses scale-down, width 1366, height 768, metadata none. It is NOT correct to
+   claim every current feed photo downloads the full stored original.
+   Added two versioned uncropped variants: captroPreviewV1 (480x854 bound),
+   captroFeedV1 (1080x1920 bound). Both honor requireSignedURLs. Kept existing
+   normal feed URLs because activating 1080 on these portraits would INCREASE
+   bytes. The deployed API supplies the smaller thumbnail/preview URL. The
+   1080 variant is configured/tested but is not the default delivery override.
+   backend-cf/src/image-delivery.ts, src/index.ts,
+   tests/image-delivery.test.mjs, scripts/configure-image-variants.mjs.
+
+2. The native renderer previously declined hosted-image derivatives because
+   their crop policy was not verified. It now accepts only the exact source or
+   verified uncropped derivatives of the same asset/account, including the two
+   versioned variants above. It never removes a signature or invents an unsigned
+   URL. Partial derivative arrays cannot shift onto a different carousel slide.
+   Original geometry, stable media identity, and originals remain unchanged.
+   Services/MIRAMediaNetworkPolicy.swift; Components/CaptroPostMediaView.swift;
+   Screens/CaptroFeedMediaPager.swift; Screens/MainFeedView.swift;
+   Screens/PostDetailNativeView.swift.
+
+3. Existing video readiness code waited about eight seconds, then discarded and
+   retried a still-preparing AVPlayer item. This is a concrete slow-startup defect,
+   not proof of the reported vertical-scroll cause. Replaced the deadline with
+   cancellable readiness observation scoped to the current item/view. Native
+   stall avoidance is enabled; removed forced immediate playback and forced
+   sub-second buffering. Stale offscreen remote poster extraction is not started
+   per mounted idle video. Existing supplied video posters remain supported.
+   Components/MIRAComponents.swift; Services/MIRAPlaybackCoordinator.swift.
+
+4. Added a small Data Saver preference and respect actual NWPath.isConstrained,
+   without assuming cellular is slow or Wi-Fi is fast. Reduced mode uses the
+   smaller preview when safe, bounded image admission (3), no speculative image
+   prefetch or prepared players, and lower AVPlayer preferred bitrate/resolution.
+   Normal mode retains the global 6-image/2-prefetch budget. Memory pressure
+   stops speculation. Shared visible readers retain ownership of a shared load.
+   Image decoding was already off-main; it was not reintroduced as a new fix.
+   Reduced 18 automatic image retries to two and added a local retry affordance.
+   Existing account-scoped memory/disk caching retained. No Nuke dependency added.
+   Services/MIRAMediaNetworkPolicy.swift; Services/MIRAImageLoadAdmission.swift;
+   Components/MIRAComponents.swift; Screens/SettingsNativeView.swift.
+
+5. HLS already exists. Two public live manifests returned four resolutions from
+   320x240 to 960x720, average bitrate approximately 455kbps to 1.16Mbps. No new
+   streaming service or transcoding configuration was installed. These samples
+   do not prove every historical video has an adaptive ladder. Startup/rebuffer
+   improvements are not yet measured on a physical phone.
+
+PRODUCTION ROLLOUT (AUTHORIZED BY USER)
+Release branch: release/captro-media-delivery-20261015, source 130bdc53.
+Deployed Worker version: 54cb6650-e0dc-43df-9a4c-7a2ea5a4b00b.
+Successful workflow: 38810919254.
+279 backend tests and TypeScript checking passed before deployment.
+Two disposable private fixtures were successfully verified and removed across
+the successful validation attempts. Both new unsigned variant URLs were denied.
+An earlier invalid fixture was rejected before upload; that blocked deployment.
+No user content, database rows, financial data, privacy policies, secrets,
+subscriptions, or plan upgrades were changed.
+An initial deploy was refused by Cloudflare's 64-variable limit. Removed the two
+proposed new bindings and used the narrowly scoped preview default instead.
+The failed deploy did not replace the previous Worker.
+
+Actual public sample bytes (same Accept header; original here means EXISTING
+DELIVERY, not the full Cloudflare stored original):
+  Existing 576x768  92279 bytes -> preview 480x640  72269 bytes (21.7% fewer)
+  Existing 576x768 139568 bytes -> preview 480x640 101139 bytes (27.5% fewer)
+  Existing 576x768  71310 bytes -> preview 480x640  51898 bytes (27.2% fewer)
+The configured 1080x1440 samples used 315550/412191/268641 bytes, so they were
+not forced into ordinary delivery. Full-quality source references remain intact.
+Post-deploy public pagination checked five pages: 12/12/12/12/8 = 56 unique posts,
+no duplicates, final hasMore=false, old array response still supported.
+Rollback: redeploy the prior reviewed Worker source 73fc73a5 without changing
+secrets/settings. No database rollback is required. Unused versioned variants
+can remain; never alter/delete the existing public variant or originals.
+
+AUTOMATED / SIMULATOR EVIDENCE (NOT PHYSICAL-DEVICE PROOF)
+Run 38807377983, native source e3554603:
+iPhone 17 simulator, iOS 26.4.1 (23E254a), arm64, Xcode debug build.
+189 unit tests + 7 UI regression tests + 1 slow-transport vertical test passed
+(197 total, zero skipped/failed). Favorites, publication, Home/Details carousel,
+background/tab return and stable mixed frames were in the selected regression set.
+48 mixed fixture posts; requested pages [0,12,24,36,36,48], deliberate page failure
+and retry, delayed final response, ten up/down warm-return interactions.
+Controlled URLProtocol image transport: 500ms first-byte delay and 64,000 bytes/s
+PER REQUEST (0.512Mbps). This is NOT aggregate network conditioning, packet loss,
+radio emulation, or a physical network measurement. Videos used local fixtures.
+Horizontal swipes: 60pt/s, four lower-carousel swipes including a diagonal start.
+Two additional 90pt slow vertical drags/reversal were discrete XCTest gestures,
+not a continuous finger-down reversal or real interrupted deceleration test.
+
+Measured results from the attached trace:
+  Four lower-carousel swipes: Y=553.6667, height=536, offset=1815.3333 unchanged.
+  Final empty page: last-row frame (0,480,402,226), offset=21329 unchanged.
+  Programmatic scroll commands: 0.
+  Requests 57; peak simultaneous transport 3; 582815 delivered fixture bytes;
+  5 cancelled requests; 0 fixture transport failures; no extra warm-return requests.
+  Viewport samples 6554, total sampling 886.86ms (~0.135ms/sample), max 3.63ms;
+  end sample visits 4 mounted markers, not all 48 loaded posts.
+  Display-link intervals 6335; maximum gap 941.22ms; 186 over 50ms, 105 over 100ms.
+  These significant gaps mean smoothness is NOT proven. Debug/XCTest/host load
+  and simulator overhead need separation from app main-thread work.
+  Do not compare these directly with earlier different-network/runner runs as a
+  before/after FPS claim. No 60/120 FPS or hardware memory improvement is claimed.
+
+Evidence: feed-restoration-evidence/slow-network-e3554603 (runtime screenshots,
+recording, summaries, viewport/network traces, and actual source manifest).
+
+PENDING / LIMITS
+Final native source including versioned-hosted-image acceptance is under test in
+38810330796 (source a7ec3c7b; later 05f079aa changes backend only).
+That run attempts host all-process Time Profiler collection instead of the prior
+failed short-lived XCTest PID attachment. It is still simulator/host profiling,
+not physical-iPhone Instruments. A trace directory alone is not valid CPU evidence;
+check that it contains Captro process samples before interpreting it.
+Physical iPhone 13 Pro/other-phone testing, installed iOS/build confirmation,
+continuous very-slow finger reversals, 100-post physical sessions, real 0.5-1Mbps
+aggregate conditioning/packet loss, peak device memory, time-to-first-image and
+video rebuffer measurements remain unverified.
+No carousel rewrite, new scroll commands, restoration changes, geometry-policy
+changes, globally disabled animation/bounce, global mute, or cache clearing added.
