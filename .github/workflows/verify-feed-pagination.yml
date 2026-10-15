@@ -1,0 +1,21 @@
+name: Verify deployed feed pagination (read only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Verify existing public feed without publishing or deploying
+        env:
+          CAPTRO_API_BASE: https://flames-up-api.karfalacisse900.workers.dev/api
+        run: node backend-cf/scripts/verify-feed-pagination.mjs

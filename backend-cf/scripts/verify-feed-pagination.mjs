@@ -1,12 +1,30 @@
 // Read-only production smoke. Never prints post contents, identities or cursors.
 import assert from 'node:assert/strict';
 
-const base = process.env.CAPTRO_API_BASE || 'https://api.flames-up.com/api';
+// Match MIRAProductionBackend.apiBaseURL. The custom-domain edge can have
+// independent access rules and is not the native app's feed endpoint.
+const base = process.env.CAPTRO_API_BASE || 'https://flames-up-api.karfalacisse900.workers.dev/api';
 async function get(query) {
   const response = await fetch(`${base}/posts/world-board?${query}`, {
     headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
     signal: AbortSignal.timeout(30000),
   });
+  if (response.status !== 200) {
+    let errorCode;
+    try {
+      const body = await response.json();
+      if (typeof body?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(body.code)) errorCode = body.code;
+    } catch { /* Edge HTML is deliberately not printed. */ }
+    console.error(JSON.stringify({
+      event: 'feed_smoke_http_failure',
+      host: new URL(base).hostname,
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      cfMitigated: response.headers.get('cf-mitigated'),
+      hasApplicationTiming: response.headers.has('x-response-time'),
+      errorCode,
+    }));
+  }
   assert.equal(response.status, 200, `Feed HTTP ${response.status}`);
   return response.json();
 }
