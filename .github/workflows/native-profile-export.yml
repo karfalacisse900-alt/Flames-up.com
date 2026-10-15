@@ -1,0 +1,50 @@
+name: Export existing Captro simulator CPU evidence
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  export:
+    runs-on: macos-26
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify diagnostic source and download existing trace
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE_RUN: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$PROFILE_RUN" =~ ^[0-9]+$ ]]
+          source="repos/$GITHUB_REPOSITORY/actions/runs/$PROFILE_RUN"
+          test "$(gh api "$source" --jq '.path')" = '.github/workflows/native-stamps-validation.yml'
+          test "$(gh api "$source" --jq '.head_branch')" = "$GITHUB_REF_NAME"
+          test "$(gh api "$source" --jq '.status')" = completed
+          gh run download "$PROFILE_RUN" --repo "$GITHUB_REPOSITORY" --name vertical-feed-implementation --dir "$RUNNER_TEMP/profile"
+      - name: Export host Time Profiler samples without claiming device verification
+        run: |
+          set -euo pipefail
+          trace="$RUNNER_TEMP/profile/VerticalCPU.trace"
+          if [ ! -d "$trace" ]; then
+            cat "$RUNNER_TEMP/profile/vertical-cpu.log"
+            echo '::error::No trace was captured. No CPU profiling conclusion is available.'
+            exit 1
+          fi
+          xcrun xctrace export --input "$trace" --toc --output "$RUNNER_TEMP/cpu-toc.xml"
+          xcrun xctrace export --input "$trace" \
+            --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' \
+            --output "$RUNNER_TEMP/cpu-samples.xml"
+          test -s "$RUNNER_TEMP/cpu-samples.xml"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-cpu-export
+          path: |
+            ${{ runner.temp }}/cpu-*.xml
+            ${{ runner.temp }}/profile/vertical-cpu.log
+            ${{ runner.temp }}/profile/source.txt
