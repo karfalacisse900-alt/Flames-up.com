@@ -29,6 +29,7 @@ import {
 import { bindVoiceAttachment, classifyOpenAIServiceFailure, createVoiceRoutes, inspectVoiceAudio, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
 import { retiredPostInputError, retiredFeatureCode } from './retired-posting';
 import { rankVisibleFeedWindow } from './feed-relevance';
+import { uncroppedHostedImageVariant } from './image-delivery';
 import { FeedCursorError, readFeedCursor, writeFeedCursor, feedBoundary, feedKeysetFilters, feedKeysetOrder } from './feed-pagination';
 
 type MediaModerationJobMessage = {
@@ -5415,13 +5416,20 @@ function feedPhotoPostWhere(postAlias = 'p'): string {
 function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
   if (mediaType === 'video') return url;
-  // Retain the stored asset variant. A configured feed variant may be cropped.
+  const hosted = env && !cloudflareImagesRequireSignedUrls(env)
+    ? uncroppedHostedImageVariant(url, variant, cloudflareImagesAccountHash(env)) : null;
+  if (hosted) return hosted;
+  // Unknown/signed variants retain the existing delivery policy.
   return cloudflareTransformedImageUrl(env, url, 'feed');
 }
 
 function posterDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
-  if (mediaType !== 'video') return cloudflareTransformedImageUrl(env, url, 'thumbnail');
+  if (mediaType !== 'video') {
+    const hosted = env && !cloudflareImagesRequireSignedUrls(env)
+      ? uncroppedHostedImageVariant(url, variant, cloudflareImagesAccountHash(env)) : null;
+    return hosted || cloudflareTransformedImageUrl(env, url, 'thumbnail');
+  }
   return streamThumbnailUrl(url);
 }
 
@@ -5537,7 +5545,7 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   while (mediaTypes.length < mediaUrls.length) mediaTypes.push(isVideoMediaUrl(mediaUrls[mediaTypes.length]) ? 'video' : 'image');
   const dimensions = parseJsonArray(post.media_dimensions);
   const feedVariant = env?.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
-  const thumbnailVariant = env?.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const thumbnailVariant = env?.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'captroPreviewV1';
   const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant, env)).filter(Boolean);
   const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
@@ -13975,7 +13983,9 @@ function mediaAssetPublicUrl(env: Env, asset: any): string {
   const provider = cleanText(asset?.storage_provider, 40);
   const key = cleanText(asset?.storage_key, 220);
   if (!key) return '';
-  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_FEED_VARIANT || 'public');
+  // Source publication must not inherit the smaller feed derivative setting.
+  // Keep the existing full-size delivery reference; resize only response fields.
+  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, 'public');
   if (provider === 'stream') return `https://videodelivery.net/${key}/manifest/video.m3u8`;
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
 }
@@ -21898,7 +21908,7 @@ function adminPostPayload(row: any, env: Env) {
   const categorySignals = parseJsonObject(row.category_signals_json);
   const categoryScores = normalizeCategoryScoresPayload(row.category_scores_json || (categorySignals as any).category_scores);
   const secondaryCategories = normalizeSecondaryCategoriesPayload(row.secondary_categories_json, primaryCategory);
-  const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'captroPreviewV1';
   const feedVariant = env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const normalizedTypes = mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image');
   const normalizedDimensions = feedMediaDimensions(mediaUrls, normalizedTypes, dimensions);
