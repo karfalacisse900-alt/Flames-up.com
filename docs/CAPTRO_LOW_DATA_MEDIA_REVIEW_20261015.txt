@@ -78,6 +78,10 @@ DELIVERY, not the full Cloudflare stored original):
   Existing 576x768  71310 bytes -> preview 480x640  51898 bytes (27.2% fewer)
 The configured 1080x1440 samples used 315550/412191/268641 bytes, so they were
 not forced into ordinary delivery. Full-quality source references remain intact.
+Follow-up live check: all 29 sampled photos kept their feed URL and received a
+captroPreviewV1 thumbnail. These preview savings apply to preview/Data Saver
+delivery, not a claim of lower total normal-mode traffic: preview plus full-image
+upgrade can transfer both files on a cold load. Warm caching remains important.
 Post-deploy public pagination checked five pages: 12/12/12/12/8 = 56 unique posts,
 no duplicates, final hasMore=false, old array response still supported.
 Rollback: redeploy the prior reviewed Worker source 73fc73a5 without changing
@@ -117,12 +121,22 @@ Evidence: feed-restoration-evidence/slow-network-e3554603 (runtime screenshots,
 recording, summaries, viewport/network traces, and actual source manifest).
 
 PENDING / LIMITS
-Final native source including versioned-hosted-image acceptance is under test in
-38810330796 (source a7ec3c7b; later 05f079aa changes backend only).
-That run attempts host all-process Time Profiler collection instead of the prior
-failed short-lived XCTest PID attachment. It is still simulator/host profiling,
-not physical-iPhone Instruments. A trace directory alone is not valid CPU evidence;
-check that it contains Captro process samples before interpreting it.
+Final unprofiled verification: run 38814128260, source 83ce424c. Native tree
+ba9cf2887b744e5bd6cfb9bfc6c2e7b21732c0d2 matches the app source in a7ec3c7b;
+later changes are backend/report/workflow only. Active-branch backend checking
+also passed all 287 tests and TypeScript checking after porting the approved fix.
+Profiling run 38810330796 was cancelled after its interaction step exceeded
+15 minutes (unprofiled predecessor took 5.6 minutes). Its always-run regression
+and artifact steps were still running when this report was written. The logs
+must establish whether the test or profiler was stalled; the delay alone is not
+evidence of an app freeze. Future diagnostic helper finalization is bounded.
+This attempted host all-process Time Profiler instead of the prior failed
+short-lived XCTest PID attachment. It is simulator/host profiling, not physical
+iPhone Instruments. A trace directory alone is not valid CPU evidence; check for
+actual Captro process samples. An artifact-only exporter avoids another rebuild.
+No new TestFlight build has been uploaded yet. A bounded follow-up is checking
+the final validation and will use the matching-source release gate before the
+already-authorized upload, then verify Apple's processing/tester availability.
 Physical iPhone 13 Pro/other-phone testing, installed iOS/build confirmation,
 continuous very-slow finger reversals, 100-post physical sessions, real 0.5-1Mbps
 aggregate conditioning/packet loss, peak device memory, time-to-first-image and
