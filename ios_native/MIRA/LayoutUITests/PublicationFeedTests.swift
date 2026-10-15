@@ -15,7 +15,7 @@ final class PublicationFeedTests: XCTestCase {
     XCTAssertTrue(offset(app).isFinite)
     attach(app, "offline-receipt-before-top-insertion")
 
-    app.buttons["publication.fixture.record"].tap()
+    recordReceipt(app)
     waitForIDs(["publication-new"] + existingIDs, app: app)
     let published = app.otherElements["home.post.page.publication-new"]
     XCTAssertTrue(published.waitForExistence(timeout: 10))
@@ -44,7 +44,7 @@ final class PublicationFeedTests: XCTestCase {
     XCTAssertGreaterThan(beforeOffset, 50, "Exercise lower-feed receipt handling, not the top insertion branch")
     attach(app, "offline-receipt-lower-reading-before")
 
-    app.buttons["publication.fixture.record"].tap()
+    recordReceipt(app)
     waitUntil("Fresh scoped read completes", timeout: 10) {
       (self.state(app)["freshFeedReads"] as? Int ?? 0) >= 1 &&
         app.staticTexts["New post"].exists
@@ -96,6 +96,20 @@ final class PublicationFeedTests: XCTestCase {
     let scopes = snapshot["feedScopes"] as? [String] ?? []
     XCTAssertFalse(scopes.isEmpty)
     XCTAssertTrue(scopes.allSatisfy { $0 == "for_you" }, "Publication must revalidate the active scoped feed")
+  }
+
+  private func recordReceipt(_ app: XCUIApplication) {
+    let button = app.buttons["publication.fixture.record"]
+    XCTAssertTrue(button.waitForExistence(timeout: 5))
+    XCTAssertTrue(button.isEnabled)
+    let frame = button.frame
+    app.coordinate(withNormalizedOffset: .zero)
+      .withOffset(CGVector(dx: frame.midX, dy: frame.maxY - 22)).tap()
+    waitUntil("Receipt action must run in its original account scope", timeout: 5) {
+      let snapshot = self.state(app)
+      return snapshot["recordAttempts"] as? Int == 1 && snapshot["receiptRecorded"] as? Bool == true
+    }
+    XCTAssertEqual(state(app)["scopeMatches"] as? Bool, true)
   }
 
   private func waitForIDs(_ expected: [String], app: XCUIApplication) {

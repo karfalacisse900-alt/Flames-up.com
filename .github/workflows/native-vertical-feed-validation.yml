@@ -84,6 +84,13 @@ jobs:
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
+          # Install the explicit photo required by the Favorites review host.
+          xcrun simctl install "$CAPTRO_SIM" "$RUNNER_TEMP/VerticalBuild/Build/Products/Debug-iphonesimulator/Captro.app"
+          container=$(xcrun simctl get_app_container "$CAPTRO_SIM" com.captro.app data)
+          mkdir -p "$container/Documents"
+          curl --fail --retry 2 --max-time 60 \
+            'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?auto=format&fit=max&w=900&q=85&fm=jpg' \
+            -o "$container/Documents/presentation-photo.jpg"
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/VerticalBuild" -resultBundlePath "$RUNNER_TEMP/Regression.xcresult" \

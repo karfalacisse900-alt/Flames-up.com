@@ -80,12 +80,15 @@ public struct CaptroHomeFeedVisualTestView: View {
         }
       }
     }
-    .overlay(alignment: .bottomTrailing) {
+    .overlay(alignment: .topTrailing) {
       if ProcessInfo.processInfo.arguments.contains("--captro-publication-feed-test") {
         VStack(spacing: 0) {
-          Button("Test receipt") { publicationFixture.recordReceipt() }
-            .font(.caption2).frame(width: 84, height: 44)
-            .background(.regularMaterial)
+          Button { publicationFixture.recordReceipt() } label: {
+            Text("Test receipt").font(.caption2)
+              .frame(width: 84, height: 44).contentShape(Rectangle())
+              .background(.regularMaterial)
+          }
+            .buttonStyle(.plain)
             .disabled(publicationFixture.didRecord || model.posts.isEmpty)
             .accessibilityIdentifier("publication.fixture.record")
           Text(publicationFixture.summary(posts: model.posts))
@@ -94,7 +97,7 @@ public struct CaptroHomeFeedVisualTestView: View {
             .accessibilityLabel("Offline publication receipt fixture, not a real upload")
             .accessibilityValue(publicationFixture.summary(posts: model.posts))
         }
-        .padding(.bottom, 60)
+        .padding(.top, 8).padding(.trailing, 8)
       }
     }
     .task {
@@ -162,6 +165,11 @@ public struct CaptroHomeFeedVisualTestView: View {
 @MainActor
 private final class CaptroPublicationFeedFixture: ObservableObject {
   @Published private(set) var didRecord = false
+  @Published private(set) var recordAttempts = 0
+  // Discarded SwiftUI View initializers must not replace the account context
+  // or reset the server used by the retained StateObjects.
+  private static let accountID = "publication-fixture-\(UUID().uuidString)"
+  private static var prepared = false
   private var newPost: MIRAPost?
   private var scope = ""
   lazy var api: MIRAAPIClient = {
@@ -175,16 +183,20 @@ private final class CaptroPublicationFeedFixture: ObservableObject {
     guard enabled else { return }
     // A fresh namespace prevents cached UI-test or real-account feeds from
     // hydrating this fixture. No existing account files are removed.
-    MIRALocalJSONCache.setAccountScope(userId: "publication-fixture-\(UUID().uuidString)")
+    MIRALocalJSONCache.setAccountScope(userId: Self.accountID)
     scope = MIRALocalJSONCache.currentScopeIdentifier
     do {
       let posts = try Self.makePosts()
       newPost = posts.first
-      CaptroPublicationFeedProtocol.state.configure(initial: Array(posts.dropFirst()), published: posts[0])
+      if !Self.prepared {
+        CaptroPublicationFeedProtocol.state.configure(initial: Array(posts.dropFirst()), published: posts[0])
+        Self.prepared = true
+      }
     } catch { assertionFailure("Offline publication fixture could not be prepared: \(error)") }
   }
 
   func recordReceipt() {
+    recordAttempts += 1
     guard !didRecord, let newPost else { return }
     // This test server accepts the post in the current scoped feed before the
     // receipt is delivered. Home must still perform its fresh eligibility read.
@@ -196,6 +208,8 @@ private final class CaptroPublicationFeedFixture: ObservableObject {
     var state = CaptroPublicationFeedProtocol.state.summary()
     state["orderedIDs"] = posts.map(\.id)
     state["receiptRecorded"] = didRecord
+    state["recordAttempts"] = recordAttempts
+    state["scopeMatches"] = scope == MIRALocalJSONCache.currentScopeIdentifier
     return (try? JSONSerialization.data(withJSONObject: state, options: .sortedKeys))
       .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
   }
