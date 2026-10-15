@@ -22,7 +22,7 @@ final class PublicationFeedTests: XCTestCase {
     XCTAssertTrue(published.isHittable, "The eligible post should appear at the idle top")
     XCTAssertEqual(Set(ids(app)).count, 9, "Publication must neither duplicate nor replace existing posts")
     assertFreshScopedRead(app)
-    XCTAssertTrue(app.buttons["home.publication.view"].waitForExistence(timeout: 5))
+    XCTAssertTrue(viewPostButton(app).waitForExistence(timeout: 5))
     attach(app, "offline-receipt-new-post-banner-at-top")
     attachDiagnostics(app, "idle-top-receipt")
     openCanonicalDetails(app)
@@ -80,7 +80,7 @@ final class PublicationFeedTests: XCTestCase {
   }
 
   private func openCanonicalDetails(_ app: XCUIApplication) {
-    app.buttons["home.publication.view"].tap()
+    viewPostButton(app).tap()
     let media = app.descendants(matching: .any)["post.detail.media"].firstMatch
     XCTAssertTrue(media.waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["PUBLICATION RECEIPT FIXTURE — NOT A REAL UPLOAD"].waitForExistence(timeout: 10),
@@ -96,6 +96,14 @@ final class PublicationFeedTests: XCTestCase {
     let scopes = snapshot["feedScopes"] as? [String] ?? []
     XCTAssertFalse(scopes.isEmpty)
     XCTAssertTrue(scopes.allSatisfy { $0 == "for_you" }, "Publication must revalidate the active scoped feed")
+  }
+
+  private func viewPostButton(_ app: XCUIApplication) -> XCUIElement {
+    // SwiftUI propagates the notice container's accessibility identifier to
+    // its buttons. Select its real, unique action label rather than an ID the
+    // runtime replaces. This still exercises the production Details route.
+    app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@",
+      "home.publication.notice", "View post")).firstMatch
   }
 
   private func recordReceipt(_ app: XCUIApplication) {
