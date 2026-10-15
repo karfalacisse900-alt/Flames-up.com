@@ -95,7 +95,10 @@ if (!deliveryOnly) {
     const form = new FormData();
     form.append('requireSignedURLs', 'true');
     form.append('metadata', JSON.stringify({ source: 'captro-variant-privacy-smoke', temporary: true }));
-    form.append('file', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')], { type: 'image/png' }), 'private-fixture.png');
+    const generated = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
+      'testsrc2=size=320x400:rate=1', '-frames:v', '1', '-threads', '1', '-f', 'image2pipe', '-c:v', 'png', 'pipe:1']);
+    assert.equal(generated.status, 0, 'Could not generate private image fixture');
+    form.append('file', new Blob([generated.stdout], { type: 'image/png' }), 'private-fixture.png');
     const fixture = await api('/images/v1', { method: 'POST', body: form });
     fixtureID = fixture.id;
     assert.ok(fixtureID && fixture.requireSignedURLs, 'Fixture must remain private');
