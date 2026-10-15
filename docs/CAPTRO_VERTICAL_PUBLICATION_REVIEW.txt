@@ -95,4 +95,20 @@ Limits / deployment scope
   pagination change; do not accidentally deploy unrelated pending retirement or
   push-registration RPC changes. Rollback is prior Worker code, no data reversal.
 
-Final runtime/build/deployment results will be appended after verification.
+Approved backend deployment and read-only production verification
+- Narrow Worker source 73fc73a56733bcb60f94b0a5b968806d31d9ff8b, based exactly on
+  previously deployed 990ce2cb. Release tree passed 276/276 tests + TypeScript.
+  Deployment run 38660732568 uploaded Worker version
+  0d86e87e-a3de-4d9c-b5e4-f340c188585a. No migrations or unrelated retirement /
+  push RPC / payment settings were deployed. Historical content was untouched.
+- The post-deployment custom-domain smoke received 403 from the hosted runner
+  before reaching the new page check. Cause is not established; original response
+  headers were not retained. Both custom domain and native Worker URL pass locally.
+- Separate read-only CI 38661198330 PASSED against the exact native iOS Worker URL.
+  Legacy array works; v2 returns 12/12/12/12/8 = 56 unique public posts, then ends.
+  No duplicate IDs, repeated cursors or production writes. Verification commits
+  cff32913 / 87972714 change scripts only; Worker source remains 73fc73a5.
+
+Native implementation under verification: f8ead3fe.
+Implementation CI: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38660884812
+Final native runtime/build results will be appended after verification.
