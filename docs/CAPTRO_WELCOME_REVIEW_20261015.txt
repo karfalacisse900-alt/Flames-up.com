@@ -1,0 +1,77 @@
+CAPTRO — Approved welcome screen implementation review
+2026-10-15
+
+Scope and source
+Review branch: fix/approved-welcome-artwork, based on 6bf55b0a.
+Initial implementation: 5e0773ff. No merge, backend deployment, or TestFlight
+upload is authorized for these welcome changes. The prior performance release
+remains on its separate branch. No feed/carousel/restoration code was edited.
+Unrelated modified rollout/review documents and supabase/.temp are preserved.
+
+Artwork
+User-supplied original: 870 x 1808 PNG.
+Hero extraction: x=0, y=0, 870 x 932 PNG. Exact decoded pixel comparison passed.
+Hero file SHA256: F2404D5DB4149A4FEE6443752A42728E9F2B6B654815FF39662720CE9E288ED6
+No redraw, generative art, resampling, upscaling, added stamps, or retouching.
+Captro wordmark and stamp lettering stay in this single decorative image.
+Headline/buttons/guest/legal text below y=932 are not in the app asset.
+Replaceable catalog entry: WelcomeAssets.xcassets/CaptroWelcomeHero.imageset.
+The artwork uses aspect fit with a reserved 1.03x animation envelope. The final
+black-only 1.5% is blended into the native black background, below all paper.
+
+Resolution caveat (OPEN — final artwork approval pending)
+Maximum artwork layout width: 480pt. At 3x and 1.03x zoom the required source is
+ceil(480*3*1.03) x ceil(480*932/870*3*1.03) = 1484 x 1589 pixels.
+At 440pt the required source width is 1360px, not merely 1320px.
+The provided 870px-wide image is insufficient for genuine 3x detail. An exported
+image with more pixels would not recover real detail. The image stays provisional
+until a higher-resolution original is supplied or a new rendition is approved.
+Physical-device sharpness has not been checked on this Windows host.
+
+Native implementation
+CaptroWelcomeView.swift: welcome-only palette/layout, native exact copy, provider
+actions, legal NavigationLinks, dynamic text and scrolling for smaller screens.
+Single artwork reveal: 600ms, then 8s ease-in/out scale from 1 to 1.03, no repeat.
+Only artwork is animated; controls are immediately enabled unless auth is busy.
+Reduce Motion displays a still image immediately. Return from an auth/legal
+presentation settles the same retained artwork state rather than replaying it.
+Collage is decorative/accessibility-hidden. Native text and buttons remain
+accessible. All action/link targets are at least 44pt vertically.
+
+AuthNativeView.swift: uses existing Google and Apple handlers, nonce creation,
+backend exchanges, cancellation handling and error reporting. No success is
+fabricated. Guest uses existing continueAsGuest(), clearing credentials and
+retaining existing authenticated-route restrictions. No permissions were changed.
+Existing age/terms/community-guideline consent is not silently accepted or removed:
+first provider tap opens a compact consent sheet, then the native provider flow.
+Existing email login, registration and password recovery remain accessible via
+'Use email instead' in that sheet and the provider-button context/accessibility
+action. The approved initial screen gets no additional visible button or section.
+Existing legal screens are reused. No changes to legal copy or policies.
+
+Provider branding
+Apple: AuthenticationServices SignInWithAppleButton(.continue), white style.
+Google: native button, unmodified official Google mark, Google Sans Medium,
+published dark fill #131314/border #8E918F/text #E3E3E3, proportionate mark.
+Official sources:
+https://developers.google.com/identity/branding-guidelines
+https://developers.google.com/static/identity/images/g-logo.png
+https://github.com/googlefonts/googlesans/releases/tag/v14.000
+https://developer.apple.com/documentation/authenticationservices/signinwithapplebutton
+Google font is licensed under SIL OFL 1.1; license is bundled. No animation SDK,
+new authentication SDK, remote hero loading, or additional backend was introduced.
+
+Verification status
+Exact artwork pixel preservation: PASS locally (decoded source crop vs export).
+git diff --check: PASS for initial implementation.
+Native CI review 38816965004: pending. Large iPhone 17 Pro Max and small iPhone
+13 mini simulators, iOS 26.4 runtime, unsigned debug native application.
+Focused tests exercise real shipping welcome views with isolated tokenless
+storage and an unreachable localhost API, not production accounts. Tests cover
+consent cancellation, existing email entry, guest-without-credentials, legal
+navigation, error presentation, accessible text, and immediate control use.
+The error fixture checks presentation, not a real provider outage. The consent
+cancel test is NOT a successful Apple/Google provider-cancellation test.
+Live provider success/cancellation/failure, VoiceOver operation, physical image
+sharpness and physical-device motion remain unverified until actually tested.
+Do not claim actual implementation screenshots until the CI artifacts exist.
