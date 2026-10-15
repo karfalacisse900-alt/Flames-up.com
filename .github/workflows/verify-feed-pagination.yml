@@ -2,6 +2,13 @@ name: Verify deployed feed pagination (read only)
 
 on:
   workflow_dispatch:
+  # GitHub cannot dispatch a newly added workflow until it is on the default
+  # branch. This scoped validation trigger requires no merge or deployment.
+  push:
+    branches: [release/captro-feed-pagination-20261014]
+    paths:
+      - .github/workflows/verify-feed-pagination.yml
+      - backend-cf/scripts/verify-feed-pagination.mjs
 
 permissions:
   contents: read
