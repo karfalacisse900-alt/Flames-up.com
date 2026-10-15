@@ -88,6 +88,9 @@ permissions:
 jobs:
   profile-export:
     if: ${{ inputs.profile_archive_run != '' }}
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/native-profile-export.yml
     with:
       run_id: ${{ inputs.profile_archive_run }}
