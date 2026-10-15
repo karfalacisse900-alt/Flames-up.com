@@ -89,6 +89,7 @@ jobs:
       baseline: ${{ inputs.vertical_baseline }}
       small_phone: ${{ inputs.small_review_only }}
       slow_media: ${{ inputs.slow_media }}
+      profile_cpu: ${{ inputs.profile_only }}
   camera-carousel:
     if: ${{ inputs.camera_carousel && !inputs.vertical_feed }}
     uses: ./.github/workflows/native-camera-carousel-validation.yml

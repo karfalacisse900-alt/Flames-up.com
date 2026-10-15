@@ -1079,7 +1079,11 @@ private struct PostDetailOptimizedMediaCarousel: View {
   }
 
   private func prefetchNearbyMedia() async {
-    let neighbors = urls.indices.filter { abs($0 - selectedIndex) <= 1 }.map { urls[$0] }
+    let budget = MIRAMediaNetworkPolicy.shared.current
+    guard budget.permitsPrefetch else { return }
+    let neighbors = urls.indices.filter { abs($0 - selectedIndex) <= 1 }.map {
+      post.imageDelivery(at: $0, dataSaver: budget.reducesData)?.display ?? urls[$0]
+    }
     await MIRAImagePrefetcher.prefetch(urls: neighbors.filter { !$0.isVideoURL }, maxPixelSize: MIRAMediaSizing.feedTargetHeight, limit: 3)
     guard !Task.isCancelled else { return }
     await MainActor.run {

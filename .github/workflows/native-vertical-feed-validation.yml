@@ -3,6 +3,9 @@ run-name: Vertical feed - ${{ inputs.baseline && '623.1 source baseline' || 'imp
 on:
   workflow_call:
     inputs:
+      profile_cpu:
+        type: boolean
+        default: false
       baseline:
         type: boolean
         default: false
@@ -14,6 +17,10 @@ on:
         default: false
   workflow_dispatch:
     inputs:
+      profile_cpu:
+        type: boolean
+        default: false
+        description: Collect a host Time Profiler trace during simulator gestures; diagnostic overhead applies
       baseline:
         type: boolean
         default: false
@@ -82,7 +89,16 @@ jobs:
           if [ '${{ inputs.baseline }}' = 'true' ]; then test=CaptroLayoutUITests/VerticalFeedTests/testBottomFeedBaselineMeasurement; fi
           xcrun simctl io "$CAPTRO_SIM" recordVideo --codec=h264 "$RUNNER_TEMP/vertical-interaction.mp4" > "$RUNNER_TEMP/recording.log" 2>&1 &
           recorder=$!
-          trap 'kill -INT "$recorder" 2>/dev/null || true; wait "$recorder" || true' EXIT
+          profiler=''
+          if [ '${{ inputs.profile_cpu }}' = 'true' ]; then
+            # Prior captures raced XCTest's process lifetime and could not attach
+            # to its PID. Host all-process sampling includes the simulator app
+            # without relying on PID discovery. This is NOT device profiling.
+            xcrun xctrace record --template 'Time Profiler' --all-processes --time-limit 180s \
+              --output "$RUNNER_TEMP/VerticalCPU.trace" > "$RUNNER_TEMP/vertical-cpu.log" 2>&1 &
+            profiler=$!
+          fi
+          trap 'kill -INT "$recorder" 2>/dev/null || true; wait "$recorder" || true; if [ -n "$profiler" ]; then wait "$profiler" || true; fi' EXIT
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/VerticalBuild" -resultBundlePath "$RUNNER_TEMP/Vertical.xcresult" \
@@ -119,6 +135,12 @@ jobs:
               xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/$result.xcresult" > "$RUNNER_TEMP/$result-summary.json"
             fi
           done
+          if [ -d "$RUNNER_TEMP/VerticalCPU.trace" ]; then
+            xcrun xctrace export --input "$RUNNER_TEMP/VerticalCPU.trace" --toc \
+              --output "$RUNNER_TEMP/vertical-cpu-toc.xml" >> "$RUNNER_TEMP/vertical-cpu.log" 2>&1 || true
+          elif [ '${{ inputs.profile_cpu }}' = 'true' ]; then
+            echo '::warning::No CPU trace produced; simulator tests are not a substitute for profiling.'
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -129,6 +151,8 @@ jobs:
             ${{ runner.temp }}/vertical-interaction.mp4
             ${{ runner.temp }}/*-summary.json
             ${{ runner.temp }}/*-evidence/
+            ${{ runner.temp }}/vertical-cpu-toc.xml
+            ${{ runner.temp }}/VerticalCPU.trace/
       - uses: actions/upload-artifact@v4
         if: ${{ success() && !inputs.baseline }}
         with:

@@ -96,6 +96,23 @@ struct CaptroImageDelivery: Equatable {
   static func uncropped(_ candidate: String?, of source: String) -> String? {
     guard let candidate, !candidate.isEmpty else { return nil }
     if candidate == source { return source }
+    if let original = URLComponents(string: source), let variant = URLComponents(string: candidate),
+       original.scheme == "https", variant.scheme == "https",
+       original.host == "imagedelivery.net", variant.host == original.host,
+       original.port == nil, variant.port == nil,
+       original.user == nil, variant.user == nil, original.password == nil, variant.password == nil,
+       original.query == nil, variant.query == nil, original.fragment == nil, variant.fragment == nil {
+      let originalParts = original.percentEncodedPath.split(separator: "/")
+      let variantParts = variant.percentEncodedPath.split(separator: "/")
+      // These versioned server variants are verified scale-down (no crop).
+      // Both the account and complete image ID must match. Signed originals
+      // cannot have their variant changed without server-side re-signing.
+      if originalParts.count >= 3, originalParts.count == variantParts.count,
+         originalParts.dropLast().elementsEqual(variantParts.dropLast()),
+         ["captroPreviewV1", "captroFeedV1"].contains(String(variantParts.last!)) {
+        return candidate
+      }
+    }
     guard let outer = URLComponents(string: candidate), outer.scheme == "https",
           ["api.flames-up.com", "api.captro.app"].contains(outer.host?.lowercased() ?? ""),
           let prefix = candidate.range(of: "/cdn-cgi/image/"),
