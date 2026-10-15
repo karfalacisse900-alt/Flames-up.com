@@ -76,6 +76,7 @@ async function verifyPublicDelivery(requireReturnedVariants) {
 
 if (!deliveryOnly) {
   const before = await api('/images/v1/variants');
+  console.log(JSON.stringify({ existingPublicVariantOptions: before.variants?.public?.options || null }));
   for (const expected of imageDeliveryVariants) {
     const existing = before.variants?.[expected.id];
     if (existing) verifyVariant(existing, expected);
