@@ -81,6 +81,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/VerticalBuild" CODE_SIGNING_ALLOWED=NO build-for-testing \
             2>&1 | tee "$RUNNER_TEMP/build.log"
       - name: Record paired lower-carousel and pagination interactions
+        timeout-minutes: 15
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
@@ -90,6 +91,7 @@ jobs:
           xcrun simctl io "$CAPTRO_SIM" recordVideo --codec=h264 "$RUNNER_TEMP/vertical-interaction.mp4" > "$RUNNER_TEMP/recording.log" 2>&1 &
           recorder=$!
           profiler=''
+          profiler_watchdog=''
           if [ '${{ inputs.profile_cpu }}' = 'true' ]; then
             # Prior captures raced XCTest's process lifetime and could not attach
             # to its PID. Host all-process sampling includes the simulator app
@@ -97,8 +99,13 @@ jobs:
             xcrun xctrace record --template 'Time Profiler' --all-processes --time-limit 180s \
               --output "$RUNNER_TEMP/VerticalCPU.trace" > "$RUNNER_TEMP/vertical-cpu.log" 2>&1 &
             profiler=$!
+            # The time limit bounds recording, not an Instruments permission
+            # prompt or finalization hang. Bound the diagnostic helper itself.
+            ( sleep 240; kill -INT "$profiler" 2>/dev/null || true; sleep 10;
+              kill -TERM "$profiler" 2>/dev/null || true ) &
+            profiler_watchdog=$!
           fi
-          trap 'kill -INT "$recorder" 2>/dev/null || true; wait "$recorder" || true; if [ -n "$profiler" ]; then wait "$profiler" || true; fi' EXIT
+          trap 'kill -INT "$recorder" 2>/dev/null || true; wait "$recorder" || true; if [ -n "$profiler" ]; then kill -INT "$profiler" 2>/dev/null || true; wait "$profiler" || true; fi; if [ -n "$profiler_watchdog" ]; then kill "$profiler_watchdog" 2>/dev/null || true; fi' EXIT
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/VerticalBuild" -resultBundlePath "$RUNNER_TEMP/Vertical.xcresult" \
