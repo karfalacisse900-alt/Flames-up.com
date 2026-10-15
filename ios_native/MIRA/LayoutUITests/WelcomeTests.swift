@@ -6,7 +6,7 @@ final class WelcomeTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-welcome-review"] + flags
     app.launch()
-    XCTAssertTrue(app.staticTexts["welcome.headline"].waitForExistence(timeout: 15))
+    XCTAssertTrue(app.descendants(matching: .any)["welcome.headline"].firstMatch.waitForExistence(timeout: 15))
     return app
   }
   private func capture(_ app: XCUIApplication, _ name: String) {
@@ -32,7 +32,7 @@ final class WelcomeTests: XCTestCase {
     reach(terms, in: app); terms.tap()
     capture(app, "welcome-terms-native")
     app.navigationBars.buttons.firstMatch.tap()
-    XCTAssertTrue(app.staticTexts["welcome.headline"].exists)
+    XCTAssertTrue(app.descendants(matching: .any)["welcome.headline"].firstMatch.exists)
   }
   func testConsentCancelAndExistingEmailRoute() {
     let app = launch(["--welcome-reduce-motion"])
@@ -50,13 +50,18 @@ final class WelcomeTests: XCTestCase {
   func testGuestIsUnauthenticatedAndLargeTextReachable() {
     let app = launch(["--welcome-reduce-motion", "--welcome-large-text"])
     capture(app, "welcome-accessibility-heading")
-    reach(app.buttons["welcome.google"], in: app)
+    let google = app.buttons["welcome.google"]
+    reach(google, in: app)
+    // Reachability alone previously passed with a double-scaled, clipped label.
+    XCTAssertLessThan(google.frame.height, 190, "Google text must scale once and remain a compact readable action")
+    XCTAssertLessThanOrEqual(google.frame.maxX, app.frame.maxX)
+    XCTAssertGreaterThanOrEqual(google.frame.minX, app.frame.minX)
     capture(app, "welcome-accessibility-actions")
     let guest = app.buttons["welcome.guest"]
     reach(guest, in: app); guest.tap()
     XCTAssertTrue(app.staticTexts["welcome.guest.confirmed"].waitForExistence(timeout: 5))
     app.buttons["Back to welcome"].tap()
-    XCTAssertTrue(app.staticTexts["welcome.headline"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.descendants(matching: .any)["welcome.headline"].firstMatch.waitForExistence(timeout: 5))
   }
   func testFailurePresentationAndImmediateInteractionDuringReveal() {
     let app = launch(["--welcome-error"])

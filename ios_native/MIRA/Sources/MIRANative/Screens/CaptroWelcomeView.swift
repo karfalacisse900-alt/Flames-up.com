@@ -55,16 +55,30 @@ struct CaptroWelcomeView<AppleControl: View>: View {
         VStack(spacing: 0) {
           artwork(width: width)
           VStack(spacing: 0) {
-            Text(dynamicType.isAccessibilitySize ? "Turn your moments into memories." : "Turn your\nmoments into\nmemories.")
+            Group {
+              if dynamicType.isAccessibilitySize {
+                Text("Turn your moments into memories.")
+              } else {
+                // Negative Text.lineSpacing is not honored consistently. Native
+                // line views reproduce the approved tight editorial leading.
+                VStack(spacing: -10 * width / 435) {
+                  Text("Turn your")
+                  Text("moments into")
+                  Text("memories.")
+                }
+              }
+            }
               .font(.system(size: headlineSize * width / 435, weight: .bold))
-              .tracking(-1.35).lineSpacing(dynamicType.isAccessibilitySize ? 0 : -6)
+              .tracking(-1.35)
               .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
               .foregroundStyle(.white)
+              .accessibilityElement(children: .ignore)
               .accessibilityLabel("Turn your moments into memories.")
               .accessibilityAddTraits(.isHeader).accessibilityIdentifier("welcome.headline")
               .padding(.horizontal, 30)
+              .padding(.top, dynamicType.isAccessibilitySize ? 0 : -9)
 
-            Text("Capture moments. Discover places. Keep what matters.")
+            Text(dynamicType.isAccessibilitySize ? "Capture moments. Discover places. Keep what matters." : "Capture moments. Discover places.\nKeep what matters.")
               .font(.system(size: subtitleSize)).foregroundStyle(CaptroWelcomePalette.secondary)
               .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
               .padding(.horizontal, 34).padding(.top, 14)
@@ -91,7 +105,7 @@ struct CaptroWelcomeView<AppleControl: View>: View {
 
             Button("Continue as guest", action: onGuest)
               .font(.body.weight(.medium)).foregroundStyle(CaptroWelcomePalette.secondary)
-              .frame(minHeight: 44).padding(.top, 10).disabled(busy)
+              .frame(minHeight: 44).padding(.top, 8).disabled(busy)
               .accessibilityIdentifier("welcome.guest")
 
             ViewThatFits(in: .horizontal) {
@@ -99,7 +113,7 @@ struct CaptroWelcomeView<AppleControl: View>: View {
               VStack(spacing: 0) { termsLink; privacyLink }
             }
             .font(.footnote).foregroundStyle(Color(white: 0.66))
-            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 16)
+            .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
           }
           .background(CaptroWelcomePalette.ink)
         }
@@ -198,14 +212,17 @@ struct CaptroWelcomeGoogleButton: View {
       HStack(spacing: 12) {
         Image("CaptroGoogleMark", bundle: .module).resizable().scaledToFit()
           .frame(width: 24, height: 24).accessibilityHidden(true)
-        Text("Continue with Google").font(.custom("GoogleSans-Medium", size: fontSize))
+        // ScaledMetric already applies Dynamic Type. The custom font's size:
+        // initializer would apply it a second time at accessibility sizes.
+        Text("Continue with Google").font(.custom("GoogleSans-Medium", fixedSize: fontSize))
           .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.center)
       }
       .foregroundStyle(Color(white: 0.89)).padding(.horizontal, 16).padding(.vertical, 11)
       .frame(maxWidth: .infinity, minHeight: 50)
       .background(Color(red: 19 / 255, green: 19 / 255, blue: 20 / 255))
-      .clipShape(Capsule()).overlay(Capsule().strokeBorder(Color(red: 142 / 255, green: 145 / 255, blue: 143 / 255), lineWidth: 1))
-      .contentShape(Capsule())
+      .clipShape(RoundedRectangle(cornerRadius: 25))
+      .overlay(RoundedRectangle(cornerRadius: 25).strokeBorder(Color(red: 142 / 255, green: 145 / 255, blue: 143 / 255), lineWidth: 1))
+      .contentShape(RoundedRectangle(cornerRadius: 25))
     }
     .disabled(!isEnabled).opacity(isEnabled ? 1 : 0.5)
     .accessibilityLabel("Continue with Google")

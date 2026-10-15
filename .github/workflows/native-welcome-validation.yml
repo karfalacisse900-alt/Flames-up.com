@@ -59,6 +59,19 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeSmall.xcresult" \
             -only-testing:CaptroLayoutUITests/WelcomeTests CODE_SIGNING_ALLOWED=NO test-without-building \
             2>&1 | tee "$RUNNER_TEMP/welcome-small.log"
+      - name: Capture the native artwork reveal and settled composition
+        if: success()
+        run: |
+          app="$RUNNER_TEMP/WelcomeBuild/Build/Products/Debug-iphonesimulator/Captro.app"
+          bundle=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Info.plist")
+          xcrun simctl terminate "$WELCOME_SMALL" "$bundle" || true
+          xcrun simctl io "$WELCOME_SMALL" recordVideo --codec=h264 "$RUNNER_TEMP/welcome-native-reveal.mp4" &
+          recording=$!
+          xcrun simctl launch "$WELCOME_SMALL" "$bundle" --captro-welcome-review
+          sleep 11
+          kill -INT "$recording"
+          wait "$recording" || true
+          xcrun simctl io "$WELCOME_SMALL" screenshot "$RUNNER_TEMP/welcome-native-settled.png"
       - name: Export actual implementation screenshots and test results
         if: always()
         run: |
@@ -75,5 +88,7 @@ jobs:
           path: |
             ${{ runner.temp }}/welcome-source.txt
             ${{ runner.temp }}/welcome-*.log
+            ${{ runner.temp }}/welcome-native-reveal.mp4
+            ${{ runner.temp }}/welcome-native-settled.png
             ${{ runner.temp }}/Welcome*-evidence/
             ${{ runner.temp }}/Welcome*-summary.json
