@@ -2,6 +2,14 @@ name: Validate Captro Stamps
 on:
   workflow_dispatch:
     inputs:
+      vertical_feed:
+        description: Measure vertical Home feed, lower carousels and delayed pagination with isolated local fixtures
+        type: boolean
+        default: false
+      vertical_baseline:
+        description: Compare unchanged b3bdebf6 source using the same vertical-feed fixture and gestures
+        type: boolean
+        default: false
       camera_carousel:
         description: Validate native camera review and identical Home/Details carousel gestures without publishing
         type: boolean
@@ -70,14 +78,20 @@ on:
 permissions:
   contents: read
 jobs:
+  vertical-feed:
+    if: ${{ inputs.vertical_feed }}
+    uses: ./.github/workflows/native-vertical-feed-validation.yml
+    with:
+      baseline: ${{ inputs.vertical_baseline }}
+      small_phone: ${{ inputs.small_review_only }}
   camera-carousel:
-    if: ${{ inputs.camera_carousel }}
+    if: ${{ inputs.camera_carousel && !inputs.vertical_feed }}
     uses: ./.github/workflows/native-camera-carousel-validation.yml
     with:
       baseline: ${{ inputs.carousel_baseline }}
       small_phone: ${{ inputs.small_review_only }}
   stamps:
-    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel }}
+    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel && !inputs.vertical_feed }}
     runs-on: macos-26
     environment: captro-payments-live
     timeout-minutes: 65

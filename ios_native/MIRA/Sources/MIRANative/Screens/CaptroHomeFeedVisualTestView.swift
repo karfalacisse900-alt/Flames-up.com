@@ -8,15 +8,29 @@ import AVFoundation
 public struct CaptroHomeFeedVisualTestView: View {
   @State private var selectedTab = 0
   @StateObject private var model: MainFeedModel
+  @StateObject private var verticalFixture: CaptroVerticalFeedFixture
   @State private var videoPrepared = !ProcessInfo.processInfo.arguments.contains("--captro-visual-video")
     && !ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel")
 
   public init() {
-    let api = MIRAAPIClient()
-    _model = StateObject(wrappedValue: MainFeedModel(api: api, visualPosts:
+    let fixture = CaptroVerticalFeedFixture()
+    _verticalFixture = StateObject(wrappedValue: fixture)
+    if ProcessInfo.processInfo.arguments.contains("--captro-vertical-feed-test") {
+      // Explicit offline API: Stories/auth requests cannot touch production.
+      let model = MainFeedModel(api: CaptroComposerTestAPI.make())
+      model.currentUserId = "composer-ui-test"
+      model.currentUsername = "test_creator"
+      model.testPageLoader = { _, offset in try await fixture.page(offset: offset) }
+      model.testPageSorter = { $0 }
+      model.testAutomaticPagination = false
+      _model = StateObject(wrappedValue: model)
+    } else {
+      let api = MIRAAPIClient()
+      _model = StateObject(wrappedValue: MainFeedModel(api: api, visualPosts:
       ProcessInfo.processInfo.arguments.contains("--captro-visual-video")
         || ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel")
         || ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") ? [] : CaptroHomeFeedVisualFixtures.posts()))
+    }
   }
 
   public var body: some View {
@@ -40,6 +54,22 @@ public struct CaptroHomeFeedVisualTestView: View {
     .background(MIRATheme.Color.appBackground)
     .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
+    .overlay(alignment: .topTrailing) {
+      if ProcessInfo.processInfo.arguments.contains("--captro-vertical-feed-test") {
+        VStack(spacing: 0) {
+          Button("Finish page") { verticalFixture.releaseFinalPage() }
+            .font(.caption2).frame(width: 72, height: 44)
+            .background(.regularMaterial)
+            .disabled(!verticalFixture.awaitingFinalPage)
+            .accessibilityIdentifier("vertical.fixture.finish")
+          Text(verticalFixture.summary)
+            .font(.system(size: 1)).frame(width: 2, height: 2).clipped()
+            .accessibilityIdentifier("vertical.fixture.state")
+            .accessibilityLabel("Vertical pagination fixture")
+            .accessibilityValue(verticalFixture.summary)
+        }
+      }
+    }
     .task {
       guard ProcessInfo.processInfo.arguments.contains("--captro-stability-updates") else { return }
       // Deterministic DEBUG traffic through the same reconciliation used by
@@ -52,6 +82,7 @@ public struct CaptroHomeFeedVisualTestView: View {
       }
     }
     .task {
+      guard !ProcessInfo.processInfo.arguments.contains("--captro-vertical-feed-test") else { return }
       if ProcessInfo.processInfo.arguments.contains("--captro-public-feed-test") {
         do {
           var posts: [MIRAPost] = try await model.api.get("/posts/world-board?limit=50&skip=0")
@@ -97,7 +128,88 @@ public struct CaptroHomeFeedVisualTestView: View {
   }
 }
 
+/// Exercises the production loading/acceptance/footer route, not direct array
+/// assignment. The controls are DEBUG-only and never move the native viewport.
+@MainActor
+private final class CaptroVerticalFeedFixture: ObservableObject {
+  @Published private(set) var awaitingFinalPage = false
+  @Published private(set) var summary = "preparing"
+  private var posts: [MIRAPost] = []
+  private var requests: [Int] = []
+  private var didFailPage36 = false
+  private var finalContinuation: CheckedContinuation<Void, Never>?
+
+  func page(offset: Int) async throws -> [MIRAPost] {
+    requests.append(offset)
+    update(stage: "request-\(offset)")
+    if posts.isEmpty {
+      let video = try await CaptroHomeFeedVisualFixtures.video()
+      posts = CaptroHomeFeedVisualFixtures.verticalPosts(videoURL: video)
+      guard posts.count == 48 else { throw MIRAAPIError.emptyResponse }
+    }
+    if offset == 36 && !didFailPage36 {
+      didFailPage36 = true
+      try await Task.sleep(for: .milliseconds(350))
+      update(stage: "failed-36")
+      throw MIRAAPIError.server(status: 503, code: "DEBUG_PAGE_FAILED", detail: "Test page failure")
+    }
+    if offset >= 48 {
+      awaitingFinalPage = true
+      update(stage: "waiting-final")
+      await withCheckedContinuation { finalContinuation = $0 }
+      awaitingFinalPage = false
+      update(stage: "complete")
+      return []
+    }
+    if offset > 0 { try await Task.sleep(for: .milliseconds(350)) }
+    update(stage: "accepted-\(offset)")
+    return Array(posts.dropFirst(offset).prefix(12))
+  }
+
+  func releaseFinalPage() {
+    let continuation = finalContinuation
+    finalContinuation = nil
+    continuation?.resume()
+  }
+
+  private func update(stage: String) {
+    let object: [String: Any] = ["stage": stage, "requests": requests,
+      "fixtureCount": posts.count, "failedPageOnce": didFailPage36]
+    summary = (try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys))
+      .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+  }
+}
+
 private enum CaptroHomeFeedVisualFixtures {
+  static func verticalPosts(videoURL: URL) -> [MIRAPost] {
+    let seed = streamPosts(videoURL: videoURL).filter { !$0.mediaURLs.isEmpty }
+    guard seed.count == 6 else { return [] }
+    return (0..<48).compactMap { index in
+      // A short final landscape post permits exact end-of-feed offset checks
+      // with the entire media and creator/stamp visible above navigation.
+      let source = seed[index == 47 ? 2 : index % seed.count]
+      guard let encoded = try? JSONEncoder().encode(source),
+            var record = (try? JSONSerialization.jsonObject(with: encoded)) as? [String: Any] else { return nil }
+      record["id"] = "vertical-\(index)"
+      // Different URLs exercise first-visit cache misses; repeat passes use
+      // those same URLs. These remain local fixtures, not network timing proof.
+      let urls = source.mediaURLs.enumerated().map { slide, value -> String in
+        guard let original = URL(string: value), original.isFileURL, !value.isVideoURL else { return value }
+        let copy = FileManager.default.temporaryDirectory.appendingPathComponent("vertical-\(index)-\(slide).png")
+        if !FileManager.default.fileExists(atPath: copy.path) {
+          do { try FileManager.default.copyItem(at: original, to: copy) }
+          catch { assertionFailure("Vertical fixture copy failed") }
+        }
+        return copy.absoluteString
+      }
+      record["images"] = urls; record["feedMediaUrls"] = urls
+      if ProcessInfo.processInfo.arguments.contains("--captro-vertical-missing-media"), index == 10 || index == 22 {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("not-created-vertical-\(index).png").absoluteString
+        record["images"] = [missing]; record["feedMediaUrls"] = [missing]
+      }
+      return (try? JSONSerialization.data(withJSONObject: record)).flatMap { try? JSONDecoder().decode(MIRAPost.self, from: $0) }
+    }
+  }
   // DEBUG fixtures only. Persist small stage timings across XCTest relaunches;
   // no account, post text, URL, or credentials enter this diagnostic file.
   static func recordStartup(_ stage: String) {

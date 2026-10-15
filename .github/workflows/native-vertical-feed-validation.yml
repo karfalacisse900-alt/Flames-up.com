@@ -1,0 +1,118 @@
+name: Validate vertical Home feed
+run-name: Vertical feed - ${{ inputs.baseline && '623.1 source baseline' || 'implementation' }}
+on:
+  workflow_call:
+    inputs:
+      baseline:
+        type: boolean
+        default: false
+      small_phone:
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      baseline:
+        type: boolean
+        default: false
+        description: Baseline b3bdebf6 with the identical offline fixture and XCTest driver only
+      small_phone:
+        type: boolean
+        default: false
+        description: Use iPhone 13 mini instead of iPhone 17 simulator
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prepare unchanged production baseline plus test driver
+        if: inputs.baseline
+        run: |
+          git fetch origin b3bdebf62bcd5eaf80cfbb0f12f9cafdff457c6f
+          git checkout --detach b3bdebf62bcd5eaf80cfbb0f12f9cafdff457c6f
+          git checkout "$GITHUB_SHA" -- ios_native/MIRA/Sources/MIRANative/Screens/CaptroHomeFeedVisualTestView.swift ios_native/MIRA/LayoutUITests/VerticalFeedTests.swift
+      - name: Record actual source
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/source.txt"
+          git diff HEAD --stat >> "$RUNNER_TEMP/source.txt"
+          printf '\nDriver: %s\nBaseline: %s\n' "$GITHUB_SHA" '${{ inputs.baseline }}' >> "$RUNNER_TEMP/source.txt"
+          xcodebuild -version
+      - name: Attest exact implementation source for release gate
+        if: ${{ !inputs.baseline }}
+        run: node scripts/app-store/native-validation-source.mjs
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Select simulator
+        run: |
+          runtime=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(r for r in json.load(sys.stdin)["devices"] if r.endswith("iOS-26-4")))')
+          kind=com.apple.CoreSimulator.SimDeviceType.iPhone-17
+          if [ '${{ inputs.small_phone }}' = 'true' ]; then kind=com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini; fi
+          device=$(xcrun simctl create 'Captro vertical feed review' "$kind" "$runtime")
+          echo "CAPTRO_SIM=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl list devices available >> "$RUNNER_TEMP/source.txt"
+      - name: Build for testing without signing
+        id: native_build
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" \
+            -derivedDataPath "$RUNNER_TEMP/VerticalBuild" CODE_SIGNING_ALLOWED=NO build-for-testing \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Record paired lower-carousel and pagination interactions
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          test=CaptroLayoutUITests/VerticalFeedTests/testBottomFeedPaginationAndLowerCarousel
+          if [ '${{ inputs.baseline }}' = 'true' ]; then test=CaptroLayoutUITests/VerticalFeedTests/testBottomFeedBaselineMeasurement; fi
+          xcrun simctl io "$CAPTRO_SIM" recordVideo --codec=h264 "$RUNNER_TEMP/vertical-interaction.mp4" > "$RUNNER_TEMP/recording.log" 2>&1 &
+          recorder=$!
+          trap 'kill -INT "$recorder" 2>/dev/null || true; wait "$recorder" || true' EXIT
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/VerticalBuild" -resultBundlePath "$RUNNER_TEMP/Vertical.xcresult" \
+            "-only-testing:$test" CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/vertical.log"
+      - name: Regression tests
+        if: ${{ always() && steps.native_build.outcome == 'success' && !inputs.baseline }}
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/VerticalBuild" -resultBundlePath "$RUNNER_TEMP/Regression.xcresult" \
+            -only-testing:CaptroStampTests \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testSameCarouselHomeAndDetailsGestureTrace \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedGestureDirectionsAndBackgroundReturn \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
+            -only-testing:CaptroLayoutUITests/FavoritesTests \
+            CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/regression.log"
+      - name: Export actual runtime attachments and result counts
+        if: always()
+        run: |
+          for result in Vertical Regression; do
+            if [ -d "$RUNNER_TEMP/$result.xcresult" ]; then
+              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$result.xcresult" --output-path "$RUNNER_TEMP/$result-evidence"
+              xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/$result.xcresult" > "$RUNNER_TEMP/$result-summary.json"
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vertical-feed-${{ inputs.baseline && 'baseline' || 'implementation' }}
+          path: |
+            ${{ runner.temp }}/source.txt
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/vertical-interaction.mp4
+            ${{ runner.temp }}/*-summary.json
+            ${{ runner.temp }}/*-evidence/
+      - uses: actions/upload-artifact@v4
+        if: ${{ success() && !inputs.baseline }}
+        with:
+          name: native-validation-source
+          path: ${{ runner.temp }}/native-validation-source/source.json
