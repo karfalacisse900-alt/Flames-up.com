@@ -64,6 +64,18 @@ final class CaptroMediaNetworkTests: XCTestCase {
       "mediaDimensions": [["width": 1080, "height": 1350], ["width": 1920, "height": 1080]]]
     return try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: object))
   }
+  func testOnlyVerifiedHostedVariantsForSameUnsignedAssetAreAccepted() {
+    let original = "https://imagedelivery.net/account/image/public"
+    for name in ["captroPreviewV1", "captroFeedV1"] {
+      let variant = "https://imagedelivery.net/account/image/\(name)"
+      XCTAssertEqual(CaptroImageDelivery.uncropped(variant, of: original), variant)
+      XCTAssertNil(CaptroImageDelivery.uncropped(variant, of: original + "?sig=private"))
+      XCTAssertNil(CaptroImageDelivery.uncropped(variant + "?sig=different", of: original))
+      XCTAssertNil(CaptroImageDelivery.uncropped(variant.replacingOccurrences(of: "/image/", with: "/another/"), of: original))
+      XCTAssertNil(CaptroImageDelivery.uncropped(variant.replacingOccurrences(of: "/account/", with: "/other/"), of: original))
+    }
+    XCTAssertNil(CaptroImageDelivery.uncropped("https://imagedelivery.net/account/image/thumbnail", of: original))
+  }
   func testDataSaverChoosesThumbnailWithoutChangingIdentityOrCrop() throws {
     let feed = derivative(1080, source: source), thumb = derivative(480, source: source)
     let post = try post(feeds: [feed, ""], thumbnails: [thumb, ""])
