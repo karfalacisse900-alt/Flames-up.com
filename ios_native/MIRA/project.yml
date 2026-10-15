@@ -87,6 +87,7 @@ targets:
       - path: Tests/MIRANativeTests/CaptroFeedStabilityTests.swift
       - path: Tests/MIRANativeTests/CaptroFeedViewportSamplingTests.swift
       - path: Tests/MIRANativeTests/CaptroImageLoadAdmissionTests.swift
+      - path: Tests/MIRANativeTests/CaptroMediaNetworkTests.swift
       - path: Tests/MIRANativeTests/CaptroPublicationTests.swift
       - path: Tests/MIRANativeTests/CaptroPublicationTransportTests.swift
       - path: Tests/MIRANativeTests/CaptroFeedPageTests.swift

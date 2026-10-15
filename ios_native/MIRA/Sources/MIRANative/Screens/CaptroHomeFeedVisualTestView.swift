@@ -77,6 +77,9 @@ public struct CaptroHomeFeedVisualTestView: View {
             .accessibilityIdentifier("vertical.fixture.state")
             .accessibilityLabel("Vertical pagination fixture")
             .accessibilityValue(verticalFixture.summary)
+          if CaptroSlowMediaFixture.enabled {
+            CaptroSlowMediaDiagnostics().frame(width: 2, height: 2).allowsHitTesting(false)
+          }
         }
       }
     }
@@ -383,6 +386,7 @@ private final class CaptroVerticalFeedFixture: ObservableObject {
 }
 
 private enum CaptroHomeFeedVisualFixtures {
+  private static let mediaRun = UUID().uuidString
   static func verticalPosts(videoURL: URL) -> [MIRAPost] {
     let seed = streamPosts(videoURL: videoURL).filter { !$0.mediaURLs.isEmpty }
     guard seed.count == 6 else { return [] }
@@ -401,6 +405,9 @@ private enum CaptroHomeFeedVisualFixtures {
         if !FileManager.default.fileExists(atPath: copy.path) {
           do { try FileManager.default.copyItem(at: original, to: copy) }
           catch { assertionFailure("Vertical fixture copy failed") }
+        }
+        if CaptroSlowMediaFixture.enabled {
+          return "https://captro-slow-media.invalid/\(copy.lastPathComponent)?run=\(mediaRun)"
         }
         return copy.absoluteString
       }

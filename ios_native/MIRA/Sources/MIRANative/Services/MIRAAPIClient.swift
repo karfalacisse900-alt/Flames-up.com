@@ -155,6 +155,9 @@ public final class MIRAAPIClient {
   @MainActor lazy var publications = CaptroPublicationStore()
   public static let productionSession: URLSession = {
     let configuration = URLSessionConfiguration.default
+#if DEBUG
+    if CaptroSlowMediaFixture.enabled { configuration.protocolClasses = [CaptroSlowMediaFixture.self] }
+#endif
     configuration.requestCachePolicy = .useProtocolCachePolicy
     configuration.timeoutIntervalForRequest = 25
     configuration.timeoutIntervalForResource = 45

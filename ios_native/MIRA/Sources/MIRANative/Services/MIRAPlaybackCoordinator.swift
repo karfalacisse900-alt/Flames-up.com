@@ -79,6 +79,7 @@ public final class MIRAVideoPrewarmManager {
   private let maxPreparedPlayers = 2
   private let resolve: (String) async throws -> MIRAStreamPlaybackInfo
   private var pauseObserver: NSObjectProtocol?
+  private var policyObserver: NSObjectProtocol?
   private let notificationCenter: NotificationCenter
 
   init(
@@ -92,10 +93,16 @@ public final class MIRAVideoPrewarmManager {
     pauseObserver = notificationCenter.addObserver(forName: .miraPlaybackShouldPause, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.cancelPendingPrewarm() }
     }
+    policyObserver = notificationCenter.addObserver(forName: MIRAMediaNetworkPolicy.didChange, object: nil, queue: .main) { [weak self] _ in
+      MainActor.assumeIsolated {
+        if !MIRAMediaNetworkPolicy.shared.current.permitsPrefetch { self?.cancelPendingPrewarm() }
+      }
+    }
   }
 
   deinit {
     if let pauseObserver { notificationCenter.removeObserver(pauseObserver) }
+    if let policyObserver { notificationCenter.removeObserver(policyObserver) }
     for request in pending.values { request.task.cancel() }
   }
 
@@ -117,6 +124,7 @@ public final class MIRAVideoPrewarmManager {
   }
 
   public func prewarm(urls: [String], keepOnly: Set<String> = []) {
+    guard MIRAMediaNetworkPolicy.shared.current.permitsPrefetch else { cancelPendingPrewarm(); return }
     let candidates = Array(orderedUnique(urls).filter(\.isVideoURL).prefix(maxMetadataPreloads))
     let playerCandidates = Set(candidates.prefix(maxPreparedPlayers).map { normalized($0) })
     wantedMetadata = Set(candidates.map { normalized($0) })
@@ -224,15 +232,14 @@ public final class MIRAVideoPrewarmManager {
   }
 
   private func preparePlayer(for key: String, playbackURL: URL) {
-    guard wantedPlayers.contains(key), preparedPlayers[key] == nil else { return }
+    guard MIRAMediaNetworkPolicy.shared.current.permitsPrefetch,
+          wantedPlayers.contains(key), preparedPlayers[key] == nil else { return }
     let item = AVPlayerItem(url: playbackURL)
-    item.preferredForwardBufferDuration = 0.85
-    item.preferredPeakBitRate = 0
-    item.preferredMaximumResolution = CGSize(width: 1080, height: 1920)
+    MIRAVideoBufferingPolicy.apply(to: item, budget: MIRAMediaNetworkPolicy.shared.current)
     let player = AVPlayer(playerItem: item)
     player.isMuted = true
     player.volume = 0
-    player.automaticallyWaitsToMinimizeStalling = false
+    player.automaticallyWaitsToMinimizeStalling = true
     player.pause()
     preparedPlayers[key] = player
     preparedOrder.removeAll { $0 == key }

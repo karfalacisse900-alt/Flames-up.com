@@ -6,6 +6,32 @@ import UIKit
 /// suspended until explicitly released, so concurrency is measured without
 /// network timing or sleep-based work simulation.
 final class CaptroImageLoadAdmissionTests: XCTestCase {
+  func testLowDataBudgetDropsQueuedPrefetchButPreservesPromotedVisibleReader() async {
+    let admission = MIRAImageLoadAdmission(maximumActive: 2, maximumPrefetch: 1)
+    let active = UUID(), discarded = UUID(), promoted = UUID()
+    admission.register(active, priority: .visible)
+    let granted = await admission.waitForSlot(active)
+    XCTAssertTrue(granted)
+    admission.register(discarded, priority: .prefetch)
+    admission.register(promoted, priority: .prefetch)
+    admission.promote(promoted)
+    admission.updateBudget(maximumActive: 1, maximumPrefetch: 0)
+    let dropped = await admission.waitForSlot(discarded)
+    XCTAssertFalse(dropped)
+    XCTAssertEqual(admission.snapshot.active, 1)
+    admission.release(active)
+    let visible = await admission.waitForSlot(promoted)
+    XCTAssertTrue(visible)
+    XCTAssertEqual(admission.snapshot.activePrefetch, 0)
+    admission.release(promoted)
+    admission.updateBudget(maximumActive: 6, maximumPrefetch: 2)
+    let recovered = UUID()
+    admission.register(recovered, priority: .prefetch)
+    let recovery = await admission.waitForSlot(recovered)
+    XCTAssertTrue(recovery)
+    admission.release(recovered)
+  }
+
   private actor Loads {
     var active = Set<String>()
     var started: [String] = []

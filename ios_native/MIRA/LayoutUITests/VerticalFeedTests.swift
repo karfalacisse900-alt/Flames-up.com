@@ -4,12 +4,14 @@ import UIKit
 final class VerticalFeedTests: XCTestCase {
   func testBottomFeedBaselineMeasurement() { runBottomFeed(assertStable: false) }
   func testBottomFeedPaginationAndLowerCarousel() { runBottomFeed(assertStable: true) }
+  func testSlowTransportAndVerySlowLowerCarousel() { runBottomFeed(assertStable: true, slowNetwork: true) }
 
-  private func runBottomFeed(assertStable: Bool) {
+  private func runBottomFeed(assertStable: Bool, slowNetwork: Bool = false) {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-home-feed-visual-test", "--captro-vertical-feed-test",
       "--captro-restore-audit", "--captro-carousel-diagnostics", "--captro-vertical-diagnostics",
       "--captro-vertical-missing-media"]
+    if slowNetwork { app.launchArguments.append("--captro-vertical-slow-network") }
     app.launch()
     let stream = app.scrollViews["home.post.stream"]
     let first = app.otherElements["home.post.page.vertical-0"]
@@ -33,7 +35,9 @@ final class VerticalFeedTests: XCTestCase {
         CGVector(dx: app.frame.width * (forward ? 0.82 : 0.18), dy: visibleY))
       let end = app.coordinate(withNormalizedOffset: .zero).withOffset(
         CGVector(dx: app.frame.width * (forward ? 0.18 : 0.82), dy: visibleY + (index == 2 ? 8 : 0)))
-      start.press(forDuration: 0.06, thenDragTo: end, withVelocity: index % 2 == 0 ? .slow : .fast, thenHoldForDuration: 0.05)
+      start.press(forDuration: 0.06, thenDragTo: end,
+        withVelocity: slowNetwork ? XCUIGestureVelocity(rawValue: 60) : (index % 2 == 0 ? .slow : .fast),
+        thenHoldForDuration: 0.05)
       XCTAssertTrue(lower.staticTexts[forward ? "Photo 2 of 3" : "Photo 1 of 3"].waitForExistence(timeout: 5))
       attachText("swipe=\(index);beforeY=\(beforeLower.minY);afterY=\(lowerMedia.frame.minY);beforeHeight=\(beforeLower.height);afterHeight=\(lowerMedia.frame.height);offsetBefore=\(initialOffset);offsetAfter=\(offset(app))", "lower-carousel-swipe-\(index)-geometry")
       if assertStable {
@@ -43,6 +47,19 @@ final class VerticalFeedTests: XCTestCase {
       }
     }
     attachDiagnostics(app, "lower-carousel")
+    if slowNetwork {
+      // Deliberately slow 60pt/s vertical motion and reversal, on a lower row.
+      // XCTest cannot synthesize a continuous finger-down reversal; don't
+      // present these discrete gestures as that real-device verification.
+      let origin = app.coordinate(withNormalizedOffset: .zero)
+      for sign in [CGFloat(1), CGFloat(-1)] {
+        let begin = origin.withOffset(CGVector(dx: app.frame.width * 0.54, dy: visibleY))
+        let finish = origin.withOffset(CGVector(dx: app.frame.width * 0.54 + 4, dy: visibleY - sign * 90))
+        begin.press(forDuration: 0.05, thenDragTo: finish,
+          withVelocity: XCUIGestureVelocity(rawValue: 60), thenHoldForDuration: 0.05)
+      }
+      attachDiagnostics(app, "very-slow-vertical")
+    }
     let lowerTrace = lower.descendants(matching: .any)["carousel.diagnostics.home"].firstMatch
     if lowerTrace.exists { attachText(lowerTrace.value as? String ?? "", "lower-carousel-selected-row-trace") }
 
@@ -150,7 +167,7 @@ final class VerticalFeedTests: XCTestCase {
   }
 
   private func attachDiagnostics(_ app: XCUIApplication, _ stage: String) {
-    for id in ["home.viewport.diagnostics", "home.viewport.trace", "carousel.diagnostics.home", "vertical.fixture.state", "home.media.diagnostics"] {
+    for id in ["home.viewport.diagnostics", "home.viewport.trace", "carousel.diagnostics.home", "vertical.fixture.state", "home.media.diagnostics", "vertical.network.diagnostics"] {
       let item = app.descendants(matching: .any)[id].firstMatch
       if item.exists { attachText(item.value as? String ?? "", "\(stage)-\(id)") }
     }

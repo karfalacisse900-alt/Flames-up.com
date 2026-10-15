@@ -462,7 +462,7 @@ final class MainFeedModel: ObservableObject {
       let post = posts[index]
       let mediaURLs = post.mediaURLs.isEmpty ? post.feedMediaURLs : post.mediaURLs
       if mediaURLs.first?.isVideoURL == true, let poster = post.posterMediaURLs.first { previewURLs.append(poster) }
-      let imageURLs = orderedMediaURLs(mediaURLs).filter { !$0.isVideoURL }
+      let imageURLs = mediaURLs.indices.compactMap { post.imageDelivery(at: $0, dataSaver: false)?.display }
       let videoURLs = mediaURLs.filter { $0.isVideoURL }
 
       if rank == 0, !mediaURLs.isEmpty {

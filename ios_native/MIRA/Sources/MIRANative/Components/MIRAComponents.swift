@@ -337,7 +337,7 @@ struct MIRAImageLoadResult {
 }
 
 actor MIRAImageLoadPipeline {
-  static let shared = MIRAImageLoadPipeline()
+  static let shared = MIRAImageLoadPipeline(followsNetworkPolicy: true)
   private struct Load {
     let id: UUID
     let task: Task<MIRAImageLoadResult?, Never>
@@ -345,19 +345,32 @@ actor MIRAImageLoadPipeline {
   }
   private var inFlight: [String: Load] = [:]
   private let admission: MIRAImageLoadAdmission
+  private let followsNetworkPolicy: Bool
+  private var policyObserver: NSObjectProtocol?
 #if DEBUG
   private var testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)?
   private static let tracesLoads = ProcessInfo.processInfo.arguments.contains("--captro-vertical-diagnostics")
 
   init(admission: MIRAImageLoadAdmission = MIRAImageLoadAdmission(),
+       followsNetworkPolicy: Bool = false,
        testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)? = nil) {
     self.admission = admission
+    self.followsNetworkPolicy = followsNetworkPolicy
     self.testLoader = testLoader
   }
   nonisolated var diagnosticSnapshot: MIRAImageLoadAdmission.Snapshot { admission.snapshot }
 #else
-  private init() { admission = MIRAImageLoadAdmission() }
+  private init(followsNetworkPolicy: Bool) {
+    admission = MIRAImageLoadAdmission()
+    self.followsNetworkPolicy = followsNetworkPolicy
+  }
 #endif
+
+  private func refreshBudget() {
+    guard followsNetworkPolicy else { return }
+    let budget = MIRAMediaNetworkPolicy.shared.current
+    admission.updateBudget(maximumActive: budget.maximumImageLoads, maximumPrefetch: budget.maximumImagePrefetches)
+  }
 
   private func release(_ reader: UUID, key: String, generation: UUID) {
     guard var load = inFlight[key], load.id == generation else { return }
@@ -385,6 +398,14 @@ actor MIRAImageLoadPipeline {
   ) async -> MIRAImageLoadResult? {
     let scope = expectedScope ?? MIRALocalJSONCache.currentScopeIdentifier
     guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+    if followsNetworkPolicy {
+      if policyObserver == nil {
+        policyObserver = NotificationCenter.default.addObserver(forName: MIRAMediaNetworkPolicy.didChange,
+          object: nil, queue: nil) { [weak self] _ in Task { await self?.refreshBudget() } }
+      }
+      refreshBudget()
+      if priority == .prefetch && !MIRAMediaNetworkPolicy.shared.current.permitsPrefetch { return nil }
+    }
     let resolvedMaxPixelSize = max(64, maxPixelSize)
     let key = "\(scope):\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
 
@@ -440,6 +461,7 @@ actor MIRAImageLoadPipeline {
         var request = URLRequest(url: remoteURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 14
+        request.allowsConstrainedNetworkAccess = priority == .visible
         request.setValue("image/jpeg,image/png,*/*;q=0.2", forHTTPHeaderField: "Accept")
 
         let metric = await MIRAPerformanceMetric.begin(category: "image", label: remoteURL.host ?? remoteURL.path)
@@ -477,6 +499,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   let maxPixelSize: CGFloat
   let animatesNetworkLoad: Bool
   let keepsPreviousImageWhileLoading: Bool
+  let allowsRetry: Bool
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
@@ -485,6 +508,8 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   @State private var loadedURL: URL?
   @State private var loadedScope: String?
   @State private var isImageVisible = false
+  @State private var loadFailed = false
+  @State private var retryGeneration = 0
 
   public init(
     url: String?,
@@ -492,6 +517,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     animatesNetworkLoad: Bool = true,
     keepsPreviousImageWhileLoading: Bool = false,
+    allowsRetry: Bool = false,
     onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
@@ -501,6 +527,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     self.maxPixelSize = maxPixelSize
     self.animatesNetworkLoad = animatesNetworkLoad
     self.keepsPreviousImageWhileLoading = keepsPreviousImageWhileLoading
+    self.allowsRetry = allowsRetry
     self.onImageLoaded = onImageLoaded
     self.content = content
     self.placeholder = placeholder
@@ -518,6 +545,17 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         placeholder()
       }
     }
+    .overlay {
+      if allowsRetry && loadFailed {
+        Button { loadFailed = false; retryGeneration += 1 } label: {
+          Label("Retry image", systemImage: "arrow.clockwise")
+            .font(.caption.weight(.semibold)).padding(.horizontal, 12)
+            .frame(minHeight: 44).background(.regularMaterial)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("media.image.retry")
+      }
+    }
     .task(id: loadTaskID) { await loadImage() }
   }
 
@@ -532,7 +570,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   }
 
   private var loadTaskID: String {
-    "\(MIRALocalJSONCache.currentScopeIdentifier)|\(Int(max(64, maxPixelSize).rounded()))|\(candidateURLStrings.joined(separator: "|"))"
+    "\(MIRALocalJSONCache.currentScopeIdentifier)|\(Int(max(64, maxPixelSize).rounded()))|\(retryGeneration)|\(candidateURLStrings.joined(separator: "|"))"
   }
 
   private var candidateURLStrings: [String] {
@@ -551,6 +589,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   @MainActor
   private func loadImage() async {
+    loadFailed = false
     let scope = MIRALocalJSONCache.currentScopeIdentifier
     let remoteURLs = candidateURLs
     guard !remoteURLs.isEmpty else {
@@ -638,10 +677,9 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       }
     }
 
-    // Cloudflare Images can take a few seconds to make a newly uploaded media
-    // variant available. Keep retrying inside the same task so fresh posts do not
-    // remain stuck on the placeholder until the feed is rebuilt.
-    for attempt in 1...18 {
+    // Brief propagation recovery only. A failed mounted row must not keep
+    // multiplying network work; after two retries expose a deliberate retry.
+    for attempt in 1...2 {
       guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       let delay = min(UInt64(attempt) * 550_000_000, UInt64(2_400_000_000))
       try? await Task.sleep(nanoseconds: delay)
@@ -672,6 +710,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     // A final failed/cancelled A request may return after this cell has loaded
     // B. It must not erase B's image, just as it must not replace B on success.
     guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    loadFailed = true
     let shouldClearAfterFailure = await MainActor.run {
       if let loadedURL {
         return !remoteURLs.contains(loadedURL)
@@ -721,6 +760,7 @@ public enum MIRAImagePrefetcher {
     maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight,
     limit: Int = 10
   ) async {
+    guard MIRAMediaNetworkPolicy.shared.current.permitsPrefetch else { return }
     let scope = MIRALocalJSONCache.currentScopeIdentifier
     let uniqueURLs = Array(orderedUnique(urls)
       .filter { !$0.isVideoURL }
@@ -752,7 +792,8 @@ public enum MIRAImagePrefetcher {
   }
 
   private static func prefetchImage(_ value: String, maxPixelSize: CGFloat, scope: String) async {
-    guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier,
+          MIRAMediaNetworkPolicy.shared.current.permitsPrefetch else { return }
     guard let remoteURL = URL(string: value) else { return }
     guard MIRANetworkSecurityPolicy.isSecureMediaURL(remoteURL) else { return }
 
@@ -835,6 +876,7 @@ public struct MIRAFollowAvatar: View {
 }
 
 public struct RemoteMediaView: View {
+  @State private var networkBudget = MIRAMediaNetworkPolicy.shared.current
   let url: String
   let isVideo: Bool
   let placeholderURL: String?
@@ -847,6 +889,7 @@ public struct RemoteMediaView: View {
   let placeholderColor: Color
   let placeholderTint: Color
   let plainBackground: Bool
+  let prefersPreviewForDataSaver: Bool
   let onMeasuredRatio: (CGFloat) -> Void
 
   public init(
@@ -862,6 +905,7 @@ public struct RemoteMediaView: View {
     placeholderColor: Color = MIRATheme.Color.mediaPlaceholder,
     placeholderTint: Color = MIRATheme.Color.textSecondary.opacity(0.72),
     plainBackground: Bool = false,
+    prefersPreviewForDataSaver: Bool = false,
     onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
   ) {
     self.url = url
@@ -876,6 +920,7 @@ public struct RemoteMediaView: View {
     self.placeholderColor = placeholderColor
     self.placeholderTint = placeholderTint
     self.plainBackground = plainBackground
+    self.prefersPreviewForDataSaver = prefersPreviewForDataSaver
     self.onMeasuredRatio = onMeasuredRatio
   }
 
@@ -898,7 +943,7 @@ public struct RemoteMediaView: View {
       } else {
         ZStack {
           placeholder
-          if let previewURL = resolvedPlaceholderURL {
+          if let previewURL = resolvedPlaceholderURL, !networkBudget.reducesData {
             MIRACachedImage(url: previewURL, maxPixelSize: min(maxPixelSize, 520), onImageLoaded: reportRatio) { image in
               image
                 .resizable()
@@ -910,7 +955,10 @@ public struct RemoteMediaView: View {
               Color.clear
             }
           }
-          MIRACachedImage(url: url, fallbackURLs: resolvedFallbackURLs, maxPixelSize: maxPixelSize, onImageLoaded: reportRatio) { image in
+          MIRACachedImage(url: networkBudget.reducesData && prefersPreviewForDataSaver ? (resolvedPlaceholderURL ?? url) : url,
+            fallbackURLs: resolvedFallbackURLs,
+            maxPixelSize: min(maxPixelSize, networkBudget.imagePixelLimit),
+            allowsRetry: true, onImageLoaded: reportRatio) { image in
             image.resizable().aspectRatio(contentMode: contentMode)
           } placeholder: {
             Color.clear
@@ -920,6 +968,9 @@ public struct RemoteMediaView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .clipped()
+    .onReceive(NotificationCenter.default.publisher(for: MIRAMediaNetworkPolicy.didChange)) { _ in
+      networkBudget = MIRAMediaNetworkPolicy.shared.current
+    }
   }
 
   private var placeholder: some View {
@@ -1066,6 +1117,9 @@ private struct MIRAResolvedVideoPlayer: View {
     .onReceive(NotificationCenter.default.publisher(for: .miraPlaybackMayResume)) { _ in
       resumeAfterGlobalInterruption()
     }
+    .onReceive(NotificationCenter.default.publisher(for: MIRAMediaNetworkPolicy.didChange)) { _ in
+      if let item = player?.currentItem { configurePlayerItemForFastStoryPlayback(item) }
+    }
     .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
       guard let player, let item = notification.object as? AVPlayerItem,
             item === player.currentItem, wantsPlayback, isOnScreen, !globallyPaused,
@@ -1132,7 +1186,11 @@ private struct MIRAResolvedVideoPlayer: View {
     }
 
     let directURL = URL(string: url)
-    if let directURL, directURL.isPlayableFileOrRemoteVideo, generatedThumbnail == nil, currentPosterURL == nil {
+    // A remote poster extraction can download MP4 data independently of the
+    // player and prefetch budget. Never start one for every mounted idle slide.
+    // Stream videos use their supplied poster; local captures can extract safely.
+    if let directURL, directURL.isFileURL, directURL.isPlayableFileOrRemoteVideo,
+       generatedThumbnail == nil, currentPosterURL == nil {
       Task { await loadGeneratedThumbnail(for: directURL, expectedURL: url) }
     }
 
@@ -1140,7 +1198,8 @@ private struct MIRAResolvedVideoPlayer: View {
       if let player {
         player.pause()
       }
-      if thumbnailURL == nil && url.lowercased().hasPrefix("cfstream:") {
+      if currentPosterURL == nil && url.lowercased().hasPrefix("cfstream:")
+          && MIRAMediaNetworkPolicy.shared.current.permitsPrefetch {
         await resolveCloudflareStream(createPlayer: false, expectedURL: url)
       }
       return
@@ -1400,7 +1459,7 @@ private struct MIRAResolvedVideoPlayer: View {
       if !alreadyOwnsAudio { configureAudioSession() }
       player.isMuted = wantsMuted
       player.volume = wantsMuted ? 0 : 1
-      player.playImmediately(atRate: 1)
+      player.play()
     } else {
       MIRAPlaybackCoordinator.releaseVideo(player)
     }
@@ -1409,7 +1468,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func configurePlayback(for player: AVPlayer) {
     player.actionAtItemEnd = .none
-    player.automaticallyWaitsToMinimizeStalling = false
+    player.automaticallyWaitsToMinimizeStalling = true
     player.isMuted = isMuted
     player.volume = isMuted ? 0 : 1
     if let item = player.currentItem {
@@ -1442,9 +1501,7 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 
   private func configurePlayerItemForFastStoryPlayback(_ item: AVPlayerItem) {
-    item.preferredForwardBufferDuration = 0.65
-    item.preferredPeakBitRate = 0
-    item.preferredMaximumResolution = CGSize(width: 1080, height: 1920)
+    MIRAVideoBufferingPolicy.apply(to: item, budget: MIRAMediaNetworkPolicy.shared.current)
   }
 
 }

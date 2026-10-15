@@ -13,14 +13,18 @@ struct CaptroPostMediaView: View {
   var writing: CaptroMediaWriting? = nil
   var caption: String? = nil
   var maxPixelSize: CGFloat = MIRAMediaSizing.feedTargetHeight
+  var imageDelivery: CaptroImageDelivery? = nil
 
   var body: some View {
     let source = geometry.sourceRect(in: size)
     ZStack(alignment: .topLeading) {
-      RemoteMediaView(url: url, isVideo: isVideo, placeholderURL: placeholderURL,
+      RemoteMediaView(url: isVideo ? url : (imageDelivery?.display ?? url), isVideo: isVideo,
+        placeholderURL: isVideo ? placeholderURL : (imageDelivery?.preview ?? placeholderURL),
+        fallbackURL: isVideo ? nil : imageDelivery?.source,
         contentMode: .fill, shouldPlay: shouldPlay, videoMuted: muted,
         maxPixelSize: maxPixelSize,
-        placeholderColor: MIRATheme.Color.mediaPlaceholder, plainBackground: true)
+        placeholderColor: MIRATheme.Color.mediaPlaceholder, plainBackground: true,
+        prefersPreviewForDataSaver: imageDelivery?.preview != nil)
         .frame(width: source.width, height: source.height)
         .offset(x: source.minX, y: source.minY)
       if let writing, !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

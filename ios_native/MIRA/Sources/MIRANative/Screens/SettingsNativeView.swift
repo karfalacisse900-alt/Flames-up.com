@@ -223,6 +223,7 @@ final class SettingsNativeModel: ObservableObject {
 }
 
 public struct SettingsNativeView: View {
+  @AppStorage(MIRAMediaNetworkPolicy.dataSaverKey) private var dataSaver = false
   @StateObject private var model: SettingsNativeModel
   private let profileModel: ProfileNativeModel?
   private let paymentsModel: CaptroPaymentsModel?
@@ -303,6 +304,9 @@ public struct SettingsNativeView: View {
           }
         }
         SettingsCard(title: localization.string("settings.preferences")) {
+          SettingsToggleRow(title: "Data Saver",
+            subtitle: "Smaller media and no speculative downloads. Low Data Mode is also respected.",
+            systemImage: "antenna.radiowaves.left.and.right", isOn: $dataSaver, isLoading: false)
           SettingsNavigationRow(
             title: "Appearance",
             subtitle: "",

@@ -1038,7 +1038,7 @@ private struct PostDetailOptimizedMediaCarousel: View {
       size: CGSize(width: width, height: currentHeight), isVideo: isVideo(at: index, url: url),
       placeholderURL: isVideo(at: index, url: url) ? placeholderURL(at: index, mediaURL: url) : nil,
       shouldPlay: isVisible && scenePhase == .active && selectedIndex == index && !isVideoPaused,
-      muted: isMuted
+      muted: isMuted, imageDelivery: post.imageDelivery(at: index, dataSaver: false)
     )
     .frame(maxWidth: .infinity, maxHeight: .infinity)
 #if DEBUG

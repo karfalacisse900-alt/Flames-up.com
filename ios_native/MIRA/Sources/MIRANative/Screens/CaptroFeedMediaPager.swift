@@ -227,7 +227,8 @@ struct CaptroMediaPager: View {
     CaptroPostMediaView(url: url, geometry: post.mediaGeometry(at: index), size: geometry.size,
       isVideo: url.isVideoURL, placeholderURL: url.isVideoURL ? mediaPlaceholderURL(for: index, mediaURL: url) : nil,
       shouldPlay: isVideoActive && !isVideoPaused && (showsCoverMediaOnly ? index == 0 : (mediaURLs.count == 1 || selectedMediaIndex == index)),
-      muted: isVideoMuted, writing: post.mediaWriting(at: index), caption: post.caption ?? post.content
+      muted: isVideoMuted, writing: post.mediaWriting(at: index), caption: post.caption ?? post.content,
+      imageDelivery: post.imageDelivery(at: index, dataSaver: false)
     )
 #if DEBUG
     .background {
@@ -405,10 +406,9 @@ struct CaptroMediaPager: View {
       if url.isVideoURL, let placeholder = mediaPlaceholderURL(for: index, mediaURL: url) {
         previews.append(placeholder)
       }
-      let fallback = mediaFallbackURL(for: index, mediaURL: url)
       if !url.isVideoURL {
-        priorityImages.append(url)
-        if let fallback { priorityImages.append(fallback) }
+        priorityImages.append(post.imageDelivery(at: index, dataSaver: false)?.display ?? url)
+        // Only the visible loader falls back; don't prefetch both versions.
       }
     }
 

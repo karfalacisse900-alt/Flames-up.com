@@ -21,8 +21,8 @@ final class MIRAImageLoadAdmission: @unchecked Sendable {
   }
   private typealias Resume = (CheckedContinuation<Bool, Never>, Bool)
   private let lock = NSLock()
-  private let maximumActive: Int
-  private let maximumPrefetch: Int
+  private var maximumActive: Int
+  private var maximumPrefetch: Int
   private var entries: [UUID: Entry] = [:]
   private var order: [UUID] = []
   private var peakActive = 0
@@ -31,9 +31,32 @@ final class MIRAImageLoadAdmission: @unchecked Sendable {
   private var cancelledWaiting = 0
 
   init(maximumActive: Int = 6, maximumPrefetch: Int = 2) {
-    precondition(maximumActive > 0 && maximumPrefetch > 0 && maximumPrefetch <= maximumActive)
+    precondition(maximumActive > 0 && maximumPrefetch >= 0 && maximumPrefetch <= maximumActive)
     self.maximumActive = maximumActive
     self.maximumPrefetch = maximumPrefetch
+  }
+
+  func updateBudget(maximumActive: Int, maximumPrefetch: Int) {
+    precondition(maximumActive > 0 && maximumPrefetch >= 0 && maximumPrefetch <= maximumActive)
+    let resumptions: [Resume] = lock.withLock {
+      self.maximumActive = maximumActive
+      self.maximumPrefetch = maximumPrefetch
+      var result: [Resume] = []
+      if maximumPrefetch == 0 {
+        let cancelled = order.filter { entries[$0]?.active == false && entries[$0]?.priority == .prefetch }
+        for id in cancelled {
+          if let continuation = entries.removeValue(forKey: id)?.continuation { result.append((continuation, false)) }
+          cancelledWaiting += 1
+        }
+        let removed = Set(cancelled)
+        order.removeAll { removed.contains($0) }
+      }
+      // Already-running work retains its permit until completion; lowering a
+      // budget cannot cancel a shared download needed by a visible reader.
+      result += drainLocked()
+      return result
+    }
+    resume(resumptions)
   }
 
   /// Register before starting the detached load so a visible reader can promote

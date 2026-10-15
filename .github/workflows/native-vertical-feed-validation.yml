@@ -9,6 +9,9 @@ on:
       small_phone:
         type: boolean
         default: false
+      slow_media:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       baseline:
@@ -19,6 +22,10 @@ on:
         type: boolean
         default: false
         description: Use iPhone 13 mini instead of iPhone 17 simulator
+      slow_media:
+        type: boolean
+        default: false
+        description: 500ms latency, 0.512Mbps per image request and 60pt/s gestures; simulator only
 permissions:
   contents: read
 jobs:
@@ -71,6 +78,7 @@ jobs:
         run: |
           set -o pipefail
           test=CaptroLayoutUITests/VerticalFeedTests/testBottomFeedPaginationAndLowerCarousel
+          if [ '${{ inputs.slow_media }}' = 'true' ]; then test=CaptroLayoutUITests/VerticalFeedTests/testSlowTransportAndVerySlowLowerCarousel; fi
           if [ '${{ inputs.baseline }}' = 'true' ]; then test=CaptroLayoutUITests/VerticalFeedTests/testBottomFeedBaselineMeasurement; fi
           xcrun simctl io "$CAPTRO_SIM" recordVideo --codec=h264 "$RUNNER_TEMP/vertical-interaction.mp4" > "$RUNNER_TEMP/recording.log" 2>&1 &
           recorder=$!
