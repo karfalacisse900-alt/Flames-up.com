@@ -42,6 +42,10 @@ on:
         description: Refresh only the Worker Stream upload credential from the existing deployment token
         type: boolean
         default: false
+      configure_image_variants:
+        description: Configure and verify only approved uncropped Captro preview/feed image variants
+        type: boolean
+        default: false
 
 jobs:
   payment-diagnostics:
@@ -97,6 +101,26 @@ jobs:
         working-directory: backend-cf
       - run: npm test
         working-directory: backend-cf
+      - name: Configure and verify approved image variants before Worker deployment
+        if: ${{ inputs.configure_image_variants == true }}
+        working-directory: backend-cf
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_IMAGES_TOKEN: ${{ secrets.CLOUDFLARE_IMAGES_TOKEN }}
+          CLOUDFLARE_MEDIA_API_TOKEN: ${{ secrets.CLOUDFLARE_MEDIA_API_TOKEN }}
+          APPLY_VARIANTS: ${{ inputs.reliability_dry_run != true }}
+        run: |
+          set -euo pipefail
+          if ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          if [ "$APPLY_VARIANTS" = true ]; then
+            node --experimental-strip-types scripts/configure-image-variants.mjs --apply
+          else
+            node --experimental-strip-types scripts/configure-image-variants.mjs
+          fi
       - name: Verify pending migrations are limited to the reviewed Captro changes
         if: ${{ inputs.worker_only != true }}
         env:
@@ -150,7 +174,12 @@ jobs:
         run: npx wrangler deploy --env production --keep-vars
       - name: Verify compatible public-feed cursor pagination without creating content
         if: ${{ inputs.reliability_dry_run != true && inputs.worker_only == true }}
+        env:
+          CAPTRO_API_BASE: https://flames-up-api.karfalacisse900.workers.dev/api
         run: node backend-cf/scripts/verify-feed-pagination.mjs
+      - name: Verify deployed feed returns working image variants
+        if: ${{ inputs.reliability_dry_run != true && inputs.configure_image_variants == true }}
+        run: node --experimental-strip-types backend-cf/scripts/configure-image-variants.mjs --check-delivery
       - name: Verify private Favorites end to end
         if: ${{ inputs.reliability_dry_run != true && inputs.favorites_smoke == true }}
         env:

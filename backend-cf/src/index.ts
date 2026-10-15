@@ -28,6 +28,7 @@ import {
 } from './stripe-connect-v2';
 import { bindVoiceAttachment, classifyOpenAIServiceFailure, createVoiceRoutes, inspectVoiceAudio, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
 import { rankVisibleFeedWindow } from './feed-relevance';
+import { uncroppedHostedImageVariant } from './image-delivery';
 import { FeedCursorError, readFeedCursor, writeFeedCursor, feedBoundary, feedKeysetFilters, feedKeysetOrder } from './feed-pagination';
 
 type MediaModerationJobMessage = {
@@ -5405,13 +5406,20 @@ function feedPhotoPostWhere(postAlias = 'p'): string {
 function feedDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
   if (mediaType === 'video') return url;
-  // Retain the stored asset variant. A configured feed variant may be cropped.
+  const hosted = env && !cloudflareImagesRequireSignedUrls(env)
+    ? uncroppedHostedImageVariant(url, variant, cloudflareImagesAccountHash(env)) : null;
+  if (hosted) return hosted;
+  // Unknown/signed variants retain the existing delivery policy.
   return cloudflareTransformedImageUrl(env, url, 'feed');
 }
 
 function posterDeliveryUrl(url: string, mediaType: string, variant: string, env?: Env): string {
   if (!url) return '';
-  if (mediaType !== 'video') return cloudflareTransformedImageUrl(env, url, 'thumbnail');
+  if (mediaType !== 'video') {
+    const hosted = env && !cloudflareImagesRequireSignedUrls(env)
+      ? uncroppedHostedImageVariant(url, variant, cloudflareImagesAccountHash(env)) : null;
+    return hosted || cloudflareTransformedImageUrl(env, url, 'thumbnail');
+  }
   return streamThumbnailUrl(url);
 }
 
@@ -13965,7 +13973,9 @@ function mediaAssetPublicUrl(env: Env, asset: any): string {
   const provider = cleanText(asset?.storage_provider, 40);
   const key = cleanText(asset?.storage_key, 220);
   if (!key) return '';
-  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, env.CLOUDFLARE_IMAGES_FEED_VARIANT || 'public');
+  // Source publication must not inherit the smaller feed derivative setting.
+  // Keep the existing full-size delivery reference; resize only response fields.
+  if (provider === 'images') return cloudflareImageDeliveryUrl(env, key, 'public');
   if (provider === 'stream') return `https://videodelivery.net/${key}/manifest/video.m3u8`;
   return safeMediaReference(asset?.public_url) || safeMediaReference(asset?.private_url);
 }
