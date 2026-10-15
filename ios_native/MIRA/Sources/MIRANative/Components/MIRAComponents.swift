@@ -669,6 +669,9 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
       }
     }
 
+    // A final failed/cancelled A request may return after this cell has loaded
+    // B. It must not erase B's image, just as it must not replace B on success.
+    guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
     let shouldClearAfterFailure = await MainActor.run {
       if let loadedURL {
         return !remoteURLs.contains(loadedURL)
@@ -677,6 +680,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     }
     if shouldClearAfterFailure {
       await MainActor.run {
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
         if keepsPreviousImageWhileLoading {
           isImageVisible = uiImage != nil
         } else {

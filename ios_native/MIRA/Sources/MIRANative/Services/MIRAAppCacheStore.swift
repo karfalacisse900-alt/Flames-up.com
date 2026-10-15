@@ -94,6 +94,12 @@ actor MIRAAppCacheStore {
   private static let dataGenerationDefaultsKey = "native.app.data_generation.v1"
 
   private var didClearPostDraftFromPreviousProcess = false
+#if DEBUG
+  private var afterDraftCleanupReadForTesting: (@Sendable () async -> Void)?
+  func setAfterDraftCleanupReadForTesting(_ hook: (@Sendable () async -> Void)?) {
+    afterDraftCleanupReadForTesting = hook
+  }
+#endif
 
   private let shortCacheAge: TimeInterval = 60 * 60 * 24 * 7
   private let contentCacheAge: TimeInterval = 60 * 60 * 24 * 30
@@ -376,15 +382,24 @@ actor MIRAAppCacheStore {
     }
   }
 
-  func clearPostDraft() async {
-    let draft = await loadPostDraft()
+  func clearPostDraft(expectedScope: String? = nil) async {
+    let scope = expectedScope ?? MIRALocalJSONCache.currentScopeIdentifier
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    let draft = await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: CacheKey.postDraft,
+      maxAge: profileCacheAge, expectedScopeIdentifier: scope)
+#if DEBUG
+    if let afterDraftCleanupReadForTesting { await afterDraftCleanupReadForTesting() }
+#endif
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
     if let voice = draft?.voiceDraft {
       // Preserve the old attachment metadata and file when the revised composer
       // publishes media or closes. It must not silently discard retired content.
-      await MIRALocalJSONCache.save(voice, key: CacheKey.retiredVoiceDraft)
+      await MIRALocalJSONCache.save(voice, key: CacheKey.retiredVoiceDraft, expectedScopeIdentifier: scope)
     }
-    await MIRALocalJSONCache.remove(key: CacheKey.postDraft)
-    guard let directory = postDraftMediaDirectory() else { return }
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    await MIRALocalJSONCache.remove(key: CacheKey.postDraft, expectedScopeIdentifier: scope)
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier,
+          let directory = postDraftMediaDirectory(scopeIdentifier: scope) else { return }
     pruneStoredPostDraftMedia(in: directory, keeping: Set([draft?.voiceDraft?.localFilePath].compactMap { $0 }))
   }
 
@@ -485,11 +500,11 @@ private extension ISO8601DateFormatter {
   }()
 }
 
-func postDraftMediaDirectory() -> URL? {
+func postDraftMediaDirectory(scopeIdentifier: String = MIRALocalJSONCache.currentScopeIdentifier) -> URL? {
   guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
   var directory = support
     .appendingPathComponent("MIRAPostDraftMedia", isDirectory: true)
-    .appendingPathComponent(MIRALocalJSONCache.currentScopeIdentifier, isDirectory: true)
+    .appendingPathComponent(scopeIdentifier, isDirectory: true)
   if !FileManager.default.fileExists(atPath: directory.path) {
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   }

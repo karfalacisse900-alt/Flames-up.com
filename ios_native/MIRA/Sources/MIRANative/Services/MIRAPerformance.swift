@@ -374,8 +374,13 @@ public enum MIRALocalJSONCache {
     SHA256.hash(data: Data(accountScope.utf8)).map { String(format: "%02x", $0) }.joined()
   }
 
-  public static func load<T: Decodable>(_ type: T.Type, key: String, maxAge: TimeInterval = 60 * 60 * 24) async -> T? {
+  public static func load<T: Decodable>(_ type: T.Type, key: String, maxAge: TimeInterval = 60 * 60 * 24,
+    expectedScopeIdentifier: String? = nil) async -> T? {
     let scope = accountScope
+    if let expectedScopeIdentifier {
+      let identifier = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
+      guard identifier == expectedScopeIdentifier else { return nil }
+    }
     return await Task.detached(priority: .utility) {
       guard let fileURL = cacheFileURL(for: key, scope: scope) else { return nil }
       guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
@@ -413,8 +418,12 @@ public enum MIRALocalJSONCache {
     }.value
   }
 
-  public static func remove(key: String) async {
+  public static func remove(key: String, expectedScopeIdentifier: String? = nil) async {
     let scope = accountScope
+    if let expectedScopeIdentifier {
+      let identifier = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
+      guard identifier == expectedScopeIdentifier else { return }
+    }
     await Task.detached(priority: .utility) {
       guard let fileURL = cacheFileURL(for: key, scope: scope) else { return }
       try? FileManager.default.removeItem(at: fileURL)

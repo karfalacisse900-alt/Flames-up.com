@@ -2349,9 +2349,10 @@ public struct CreatePostNativeView: View {
       }
       postStage = "Published"
       draftSaveTask?.cancel()
-      await MIRAAppCacheStore.shared.clearPostDraft()
+      await MIRAAppCacheStore.shared.clearPostDraft(expectedScope: submissionScope)
+      guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
-      close()
+      close(clearDraft: false)
     } catch {
       guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       MIRAPerformanceTimeline.mark("post_upload_failed", detail: "post")
@@ -2361,11 +2362,14 @@ public struct CreatePostNativeView: View {
     }
   }
 
-  private func close() {
+  private func close(clearDraft: Bool = true) {
     isClosing = true
     draftSaveTask?.cancel()
     writingFocused = false
-    Task { await MIRAAppCacheStore.shared.clearPostDraft() }
+    if clearDraft {
+      let scope = MIRALocalJSONCache.currentScopeIdentifier
+      Task { await MIRAAppCacheStore.shared.clearPostDraft(expectedScope: scope) }
+    }
     if let onClose {
       onClose()
     } else {

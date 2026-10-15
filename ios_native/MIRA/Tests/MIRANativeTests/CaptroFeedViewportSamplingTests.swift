@@ -7,12 +7,12 @@ import UIKit
 @MainActor
 final class CaptroFeedViewportSamplingTests: XCTestCase {
   private final class GestureScroll: UIScrollView {
-    var tracking = false
-    var dragging = false
-    var decelerating = false
-    override var isTracking: Bool { tracking }
-    override var isDragging: Bool { dragging }
-    override var isDecelerating: Bool { decelerating }
+    var simulatedTracking = false
+    var simulatedDragging = false
+    var simulatedDeceleration = false
+    override var isTracking: Bool { simulatedTracking }
+    override var isDragging: Bool { simulatedDragging }
+    override var isDecelerating: Bool { simulatedDeceleration }
   }
 
   @MainActor
@@ -89,14 +89,14 @@ final class CaptroFeedViewportSamplingTests: XCTestCase {
     fixture.mount("next", y: 1_600, height: 600)
     fixture.scroll.contentOffset.y = 1_123
     fixture.owner.sample()
-    fixture.scroll.decelerating = true
+    fixture.scroll.simulatedDeceleration = true
     fixture.owner.updateOrder(["first", "reading", "next"] + (0..<80).map { "page-\($0)" })
     fixture.scroll.contentSize.height += 30_000
     fixture.owner.sample()
     XCTAssertEqual(fixture.scroll.contentOffset.y, 1_123)
     XCTAssertEqual(fixture.owner.debugLastVisitedMarkerCount, 3)
     XCTAssertEqual(fixture.owner.debugLastVisibleIDs.first, "reading")
-    fixture.scroll.decelerating = false
+    fixture.scroll.simulatedDeceleration = false
     fixture.scroll.contentSize.height -= 60 // A footer disappears at end of feed.
     fixture.owner.sample()
     XCTAssertEqual(fixture.scroll.contentOffset.y, 1_123)
@@ -135,15 +135,15 @@ final class CaptroFeedViewportSamplingTests: XCTestCase {
     fixture.scroll.contentOffset.y = -40
     XCTAssertFalse(fixture.owner.isAtTopAndIdle, "Rubber-banding is not a stable top position")
     fixture.scroll.contentOffset.y = -20
-    fixture.scroll.tracking = true
+    fixture.scroll.simulatedTracking = true
     XCTAssertFalse(fixture.owner.isAtTopAndIdle)
-    fixture.scroll.tracking = false
-    fixture.scroll.dragging = true
+    fixture.scroll.simulatedTracking = false
+    fixture.scroll.simulatedDragging = true
     XCTAssertFalse(fixture.owner.isAtTopAndIdle)
-    fixture.scroll.dragging = false
-    fixture.scroll.decelerating = true
+    fixture.scroll.simulatedDragging = false
+    fixture.scroll.simulatedDeceleration = true
     XCTAssertFalse(fixture.owner.isAtTopAndIdle)
-    fixture.scroll.decelerating = false
+    fixture.scroll.simulatedDeceleration = false
     fixture.owner.setActive(false)
     XCTAssertFalse(fixture.owner.isAtTopAndIdle)
     fixture.owner.setActive(true)
