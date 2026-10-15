@@ -126,10 +126,14 @@ ba9cf2887b744e5bd6cfb9bfc6c2e7b21732c0d2 matches the app source in a7ec3c7b;
 later changes are backend/report/workflow only. Active-branch backend checking
 also passed all 287 tests and TypeScript checking after porting the approved fix.
 Profiling run 38810330796 was cancelled after its interaction step exceeded
-15 minutes (unprofiled predecessor took 5.6 minutes). Its always-run regression
-and artifact steps were still running when this report was written. The logs
-must establish whether the test or profiler was stalled; the delay alone is not
-evidence of an app freeze. Future diagnostic helper finalization is bounded.
+15 minutes (unprofiled predecessor took 5.6 minutes). It ended cancelled at
+22:05:52 UTC. The artifact API reports no retained artifacts, and the available
+log ends during build output even though the job API records a successful build.
+No CPU trace or interaction result is available to establish whether XCTest,
+the app, or profiler finalization stalled. The delay is NOT a reproduced app
+freeze or evidence of a particular cause. Future diagnostic helper finalization
+is independently bounded. Do not dispatch the artifact exporter for this run;
+there is no uploaded trace to recover.
 This attempted host all-process Time Profiler instead of the prior failed
 short-lived XCTest PID attachment. It is simulator/host profiling, not physical
 iPhone Instruments. A trace directory alone is not valid CPU evidence; check for
