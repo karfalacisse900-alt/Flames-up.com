@@ -25,6 +25,9 @@ public struct AuthNativeView: View {
   @State private var confirmResetPassword = ""
   @State private var appleSignInNonce: String?
   @State private var isSocialSignInWorking = false
+  @State private var welcomeHasRevealedArtwork = false
+  @State private var welcomeConsentProvider: WelcomeProvider?
+  @State private var openEmailAfterConsent = false
   @AppStorage("captro.terms.accepted.version") private var acceptedTermsVersion = ""
   @AppStorage("captro.terms.accepted.at") private var acceptedTermsAt = ""
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -37,14 +40,49 @@ public struct AuthNativeView: View {
   public var body: some View {
     NavigationStack {
       CaptroWelcomeView(
-        onLogin: { presentAuthPanel(createAccount: false) },
-        onSignup: { presentAuthPanel(createAccount: true) },
-        onGuest: { session.continueAsGuest() }
+        appleControl: {
+          appleSignInButton(style: .white, cornerRadius: 25) {
+            session.errorMessage = nil
+            welcomeConsentProvider = .apple
+          }
+        },
+        onGoogle: {
+          if hasAcceptedCurrentTerms { startGoogleSignIn() }
+          else { session.errorMessage = nil; welcomeConsentProvider = .google }
+        },
+        onGuest: { session.continueAsGuest() },
+        onEmail: { presentAuthPanel(createAccount: false) },
+        busy: session.isWorking || isSocialSignInWorking,
+        error: session.errorMessage,
+        hasRevealedArtwork: $welcomeHasRevealedArtwork
       )
       .toolbar(.hidden, for: .navigationBar)
       .navigationDestination(isPresented: $isAuthPanelVisible) { authPanel }
     }
     .tint(MIRATheme.Color.forest)
+    .sheet(item: $welcomeConsentProvider, onDismiss: {
+      if openEmailAfterConsent { openEmailAfterConsent = false; presentAuthPanel(createAccount: false) }
+    }) { provider in
+      NavigationStack {
+        ScrollView {
+          VStack(spacing: 20) {
+            Text("Before you continue").font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
+            termsAcceptanceBlock.accessibilityIdentifier("welcome.consent")
+            if provider == .apple { appleButton } else { googleButton }
+            if let error = session.errorMessage { Text(error).font(.callout).foregroundStyle(.red) }
+            Button("Use email instead") { openEmailAfterConsent = true; welcomeConsentProvider = nil }
+              .frame(minHeight: 44).accessibilityIdentifier("welcome.email")
+            legalFooter
+          }.padding(24)
+        }
+        .background(MIRATheme.Color.appBackground)
+        .toolbar { ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { welcomeConsentProvider = nil }.disabled(isSocialSignInWorking || session.isWorking)
+        } }
+      }
+      .presentationDetents([.medium, .large])
+      .interactiveDismissDisabled(isSocialSignInWorking || session.isWorking)
+    }
     .sheet(isPresented: Binding(
       get: { session.passwordResetContext != nil },
       set: { if !$0 { session.clearPasswordResetContext() } }
@@ -242,6 +280,11 @@ public struct AuthNativeView: View {
   }
 
   private var appleButton: some View {
+    appleSignInButton(style: .whiteOutline, cornerRadius: MIRATheme.Radius.small)
+  }
+
+  private func appleSignInButton(style: SignInWithAppleButton.Style, cornerRadius: CGFloat,
+                                 onTermsNeeded: (() -> Void)? = nil) -> some View {
     ZStack {
       SignInWithAppleButton(.continue) { request in
         request.requestedScopes = [.fullName, .email]
@@ -255,23 +298,25 @@ public struct AuthNativeView: View {
           finishAppleSignIn(result)
         }
       }
-      .signInWithAppleButtonStyle(.whiteOutline)
+      .signInWithAppleButtonStyle(style)
       .allowsHitTesting(hasAcceptedCurrentTerms && !session.isWorking && !isSocialSignInWorking)
+      .accessibilityHidden(!hasAcceptedCurrentTerms)
+      .disabled(session.isWorking || isSocialSignInWorking)
 
       if !hasAcceptedCurrentTerms {
         Button {
-          session.errorMessage = termsRequiredMessage
-          CaptroHaptics.error()
+          if let onTermsNeeded { onTermsNeeded() }
+          else { session.errorMessage = termsRequiredMessage; CaptroHaptics.error() }
         } label: {
           Color.clear
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Accept Captro's terms before continuing with Apple")
+        .accessibilityLabel(onTermsNeeded == nil ? "Accept Captro's terms before continuing with Apple" : "Continue with Apple")
       }
     }
     .frame(height: 50)
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     .opacity(session.isWorking || isSocialSignInWorking ? 0.56 : 1)
   }
 
@@ -548,69 +593,9 @@ public struct AuthNativeView: View {
 }
 
 
-private struct CaptroWelcomeView: View {
-  let onLogin: () -> Void
-  let onSignup: () -> Void
-  let onGuest: () -> Void
-  @EnvironmentObject private var localization: MIRALocalization
-
-  var body: some View {
-    VStack(spacing: 0) {
-      Text("Captro").font(.title.weight(.bold)).foregroundStyle(MIRATheme.Color.forest)
-        .padding(.top, 32).padding(.bottom, 16)
-      ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-          Text("Find your people.")
-            .font(.largeTitle.weight(.bold)).accessibilityAddTraits(.isHeader)
-          Text("Share moments, discover places, and connect through what matters.")
-            .font(.title3).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: 480, alignment: .leading)
-        .padding(.horizontal, 24).padding(.vertical, 48)
-        .frame(maxWidth: .infinity)
-      }
-      VStack(spacing: 12) {
-        CaptroWelcomeActionButton(title: localization.string("auth.login"), style: .filled, action: onLogin)
-        CaptroWelcomeActionButton(title: localization.string("auth.signup"), style: .light, action: onSignup)
-        Button("Continue as Guest", action: onGuest)
-          .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-      }
-      .frame(maxWidth: 480).padding(.horizontal, 24).padding(.bottom, 16)
-    }
-    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
-  }
-}
-
-
-private enum CaptroWelcomeActionStyle {
-  case filled
-  case light
-}
-
-private struct CaptroWelcomeActionButton: View {
-  let title: String
-  let style: CaptroWelcomeActionStyle
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      Text(title)
-        .font(.body.weight(.semibold))
-        .foregroundStyle(style == .filled ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .frame(minHeight: 50)
-        .background(style == .filled ? MIRATheme.Color.forest : MIRATheme.Color.surfaceSoft)
-        .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
-        .overlay(
-          RoundedRectangle(cornerRadius: MIRATheme.Radius.small)
-            .stroke(MIRATheme.Color.hairline, lineWidth: 1)
-        )
-    }
-    .buttonStyle(.miraPress)
-    .accessibilityLabel(title)
-  }
+private enum WelcomeProvider: String, Identifiable {
+  case apple, google
+  var id: String { rawValue }
 }
 
 private extension UIApplication {

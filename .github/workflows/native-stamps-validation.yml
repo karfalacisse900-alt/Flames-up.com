@@ -2,6 +2,10 @@ name: Validate Captro Stamps
 on:
   workflow_dispatch:
     inputs:
+      welcome_review:
+        description: Render the approved welcome artwork and test native consent/guest/legal routes; no publishing
+        type: boolean
+        default: false
       profile_archive_run:
         description: Export CPU samples from an existing same-branch simulator diagnostic run, without rebuilding
         type: string
@@ -86,6 +90,9 @@ on:
 permissions:
   contents: read
 jobs:
+  welcome:
+    if: ${{ inputs.welcome_review }}
+    uses: ./.github/workflows/native-welcome-validation.yml
   profile-export:
     if: ${{ inputs.profile_archive_run != '' }}
     permissions:
@@ -109,7 +116,7 @@ jobs:
       baseline: ${{ inputs.carousel_baseline }}
       small_phone: ${{ inputs.small_review_only }}
   stamps:
-    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' }}
+    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review }}
     runs-on: macos-26
     environment: captro-payments-live
     timeout-minutes: 65

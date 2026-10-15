@@ -32,7 +32,9 @@ struct MIRAApp: App {
   @ViewBuilder
   private var appRoot: some View {
 #if DEBUG
-    if ProcessInfo.processInfo.arguments.contains("--captro-media-writing-test") {
+    if ProcessInfo.processInfo.arguments.contains("--captro-welcome-review") {
+      CaptroWelcomeReviewHost()
+    } else if ProcessInfo.processInfo.arguments.contains("--captro-media-writing-test") {
       CaptroMediaWritingVisualTestView()
     } else if ProcessInfo.processInfo.arguments.contains("--captro-stamp-visual-test") {
       CaptroStampVisualTestView()

@@ -1,0 +1,79 @@
+name: Review approved native welcome
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v6
+      - name: Record exact source and toolchain
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/welcome-source.txt"
+          xcodebuild -version >> "$RUNNER_TEMP/welcome-source.txt"
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Select small and large iPhones
+        run: |
+          runtime=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(r for r in json.load(sys.stdin)["devices"] if r.endswith("iOS-26-4")))')
+          large=$(xcrun simctl create 'Welcome large review' com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max "$runtime")
+          small=$(xcrun simctl create 'Welcome small review' com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini "$runtime")
+          echo "WELCOME_LARGE=$large" >> "$GITHUB_ENV"
+          echo "WELCOME_SMALL=$small" >> "$GITHUB_ENV"
+          xcrun simctl boot "$large"
+          xcrun simctl bootstatus "$large" -b
+          xcrun simctl status_bar "$large" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+      - name: Build actual native app and tests
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$WELCOME_LARGE" \
+            -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" CODE_SIGNING_ALLOWED=NO build-for-testing \
+            2>&1 | tee "$RUNNER_TEMP/welcome-build.log"
+      - name: Large iPhone welcome and existing safety unit tests
+        timeout-minutes: 12
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$WELCOME_LARGE" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeLarge.xcresult" \
+            -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/WelcomeTests \
+            CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/welcome-large.log"
+      - name: Small iPhone native welcome
+        if: success()
+        timeout-minutes: 10
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcrun simctl shutdown "$WELCOME_LARGE"
+          xcrun simctl boot "$WELCOME_SMALL"
+          xcrun simctl bootstatus "$WELCOME_SMALL" -b
+          xcrun simctl status_bar "$WELCOME_SMALL" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$WELCOME_SMALL" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeSmall.xcresult" \
+            -only-testing:CaptroLayoutUITests/WelcomeTests CODE_SIGNING_ALLOWED=NO test-without-building \
+            2>&1 | tee "$RUNNER_TEMP/welcome-small.log"
+      - name: Export actual implementation screenshots and test results
+        if: always()
+        run: |
+          for name in WelcomeLarge WelcomeSmall; do
+            if [ -d "$RUNNER_TEMP/$name.xcresult" ]; then
+              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$name.xcresult" --output-path "$RUNNER_TEMP/$name-evidence" || true
+              xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/$name.xcresult" > "$RUNNER_TEMP/$name-summary.json" || true
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: approved-welcome-native-review
+          path: |
+            ${{ runner.temp }}/welcome-source.txt
+            ${{ runner.temp }}/welcome-*.log
+            ${{ runner.temp }}/Welcome*-evidence/
+            ${{ runner.temp }}/Welcome*-summary.json

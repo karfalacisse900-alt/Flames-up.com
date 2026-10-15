@@ -1,0 +1,23 @@
+CaptroWelcomeHero (PROVISIONAL: final 3x artwork-quality approval pending)
+Source: user-supplied codex-clipboard-924d0dbb-fed6-44b1-bbb2-7b8ff67c8349.png
+Original pixels: 870 x 1808.
+Export: exact pixel rectangle x=0, y=0, width=870, height=932; PNG 870 x 932.
+No AI redraw, retouching, upscaling, resampling or added detail.
+All approved stamp lettering and the single Captro wordmark remain baked in.
+Native headline, subtitle, sign-in controls, guest and legal links are excluded.
+Replace only CaptroWelcomeHero in WelcomeAssets.xcassets for final art delivery.
+The native mask fades the black-only final 1.5% of the artwork, below the ribbon.
+Maximum hero layout width is 480pt. Maximum zoom 1.03. At 3x, the required
+source dimensions are ceil(480*3*1.03) by ceil(480*932/870*3*1.03),
+1484 x 1589 pixels. Current 870px source is insufficient at that maximum.
+Even at 440pt, 3x plus zoom requires 1360px width. 1320px is not sufficient.
+Do not label the current asset a genuine 3x export or claim physical sharpness.
+
+Google G: unmodified official asset from
+https://developers.google.com/static/identity/images/g-logo.png
+Provider guidelines: https://developers.google.com/identity/branding-guidelines
+Google Sans Medium: unmodified static TTF from official Google Sans v14.000,
+https://github.com/googlefonts/googlesans/releases/tag/v14.000
+License: accompanying GoogleSans-OFL.txt (SIL Open Font License 1.1).
+Only the medium face is bundled, solely for the native Google sign-in button.
+Apple button: native AuthenticationServices SignInWithAppleButton(.continue).
