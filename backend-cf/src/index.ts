@@ -5535,7 +5535,7 @@ function postPayload(post: any, likedBy: string[] = [], env?: Env) {
   while (mediaTypes.length < mediaUrls.length) mediaTypes.push(isVideoMediaUrl(mediaUrls[mediaTypes.length]) ? 'video' : 'image');
   const dimensions = parseJsonArray(post.media_dimensions);
   const feedVariant = env?.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
-  const thumbnailVariant = env?.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const thumbnailVariant = env?.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'captroPreviewV1';
   const feedMediaUrls = mediaUrls.map((url, index) => feedDeliveryUrl(url, mediaTypes[index] || 'image', feedVariant, env)).filter(Boolean);
   const thumbnailUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
   const posterUrls = mediaUrls.map((url, index) => posterDeliveryUrl(url, mediaTypes[index] || 'image', thumbnailVariant, env)).filter(Boolean);
@@ -21898,7 +21898,7 @@ function adminPostPayload(row: any, env: Env) {
   const categorySignals = parseJsonObject(row.category_signals_json);
   const categoryScores = normalizeCategoryScoresPayload(row.category_scores_json || (categorySignals as any).category_scores);
   const secondaryCategories = normalizeSecondaryCategoriesPayload(row.secondary_categories_json, primaryCategory);
-  const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || '';
+  const thumbnailVariant = env.CLOUDFLARE_IMAGES_THUMBNAIL_VARIANT || 'captroPreviewV1';
   const feedVariant = env.CLOUDFLARE_IMAGES_FEED_VARIANT || '';
   const normalizedTypes = mediaTypes.length ? mediaTypes : mediaUrls.map((url) => isVideoMediaUrl(url) ? 'video' : 'image');
   const normalizedDimensions = feedMediaDimensions(mediaUrls, normalizedTypes, dimensions);
