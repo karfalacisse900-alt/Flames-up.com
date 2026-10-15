@@ -1036,6 +1036,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var isOnScreen = false
   @State private var wantsPlayback = false
   @State private var wantsMuted = false
+  @State private var readinessTask: Task<Void, Never>?
 
   var body: some View {
     ZStack {
@@ -1100,6 +1101,8 @@ private struct MIRAResolvedVideoPlayer: View {
     }
     .onDisappear {
       isOnScreen = false
+      readinessTask?.cancel()
+      readinessTask = nil
       wantsPlayback = false
       globallyPaused = true
       streamReadyRetryAttempt += 1
@@ -1168,6 +1171,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @MainActor
   private func configurePlayer() async {
     if loadedVideoURL != url {
+      readinessTask?.cancel()
       if let player { MIRAPlaybackCoordinator.releaseVideo(player) }
       stopVideoMetric(status: "url_changed")
       player = nil
@@ -1222,7 +1226,7 @@ private struct MIRAResolvedVideoPlayer: View {
       isPlayerReady = prewarmedPlayer.currentItem?.status == .readyToPlay
       await startVideoMetric(label: "prewarmed")
       syncPlayback(prewarmedPlayer)
-      Task { await markPlayerReady(prewarmedPlayer, expectedURL: url) }
+      observeReadiness(prewarmedPlayer, expectedURL: url)
       MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "prewarmed")
       return
     }
@@ -1236,7 +1240,7 @@ private struct MIRAResolvedVideoPlayer: View {
       isPlayerReady = false
       await startVideoMetric(label: directURL.host ?? directURL.path)
       syncPlayback(avPlayer)
-      Task { await markPlayerReady(avPlayer, expectedURL: url) }
+      observeReadiness(avPlayer, expectedURL: url)
       MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "direct")
       return
     }
@@ -1297,7 +1301,7 @@ private struct MIRAResolvedVideoPlayer: View {
       isPlayerReady = false
       Task { await startVideoMetric(label: "stream \(info.uid ?? "video")") }
       syncPlayback(avPlayer)
-      Task { await markPlayerReady(avPlayer, expectedURL: url) }
+      observeReadiness(avPlayer, expectedURL: url)
       MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
     } else if createPlayer {
       failed = false
@@ -1341,10 +1345,18 @@ private struct MIRAResolvedVideoPlayer: View {
   }
 
   @MainActor
+  private func observeReadiness(_ expectedPlayer: AVPlayer, expectedURL: String) {
+    readinessTask?.cancel()
+    readinessTask = Task { await markPlayerReady(expectedPlayer, expectedURL: expectedURL) }
+  }
+
+  @MainActor
   private func markPlayerReady(_ expectedPlayer: AVPlayer, expectedURL: String) async {
-    for _ in 0..<80 {
-      guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
-      if expectedPlayer.currentItem?.status == .readyToPlay {
+    guard let item = expectedPlayer.currentItem else { return }
+    for await status in MIRAVideoReadiness.statuses(of: item) {
+      guard !Task.isCancelled, loadedVideoURL == expectedURL, player === expectedPlayer,
+            expectedPlayer.currentItem === item else { return }
+      if status == .readyToPlay {
         withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
           isPlayerReady = true
         }
@@ -1355,7 +1367,7 @@ private struct MIRAResolvedVideoPlayer: View {
         syncPlayback(expectedPlayer)
         return
       }
-      if expectedPlayer.currentItem?.status == .failed {
+      if status == .failed {
         isPlayerReady = false
         stopVideoMetric(status: "failed")
         if canRetryVideo(expectedURL: expectedURL) {
@@ -1366,21 +1378,6 @@ private struct MIRAResolvedVideoPlayer: View {
         }
         return
       }
-      try? await Task.sleep(nanoseconds: 100_000_000)
-    }
-    guard loadedVideoURL == expectedURL, player === expectedPlayer else { return }
-    if expectedPlayer.currentItem?.status == .readyToPlay {
-      withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
-        isPlayerReady = true
-      }
-      failed = false
-      videoRetryAttempt = 0
-      stopVideoMetric(status: "ready_late")
-      syncPlayback(expectedPlayer)
-    } else {
-      isPlayerReady = false
-      stopVideoMetric(status: "ready_timeout")
-      scheduleVideoRetry(expectedURL: expectedURL)
     }
   }
 

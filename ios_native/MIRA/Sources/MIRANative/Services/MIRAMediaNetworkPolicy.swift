@@ -74,6 +74,18 @@ enum MIRAVideoBufferingPolicy {
   }
 }
 
+enum MIRAVideoReadiness {
+  static func statuses(of item: AVPlayerItem) -> AsyncStream<AVPlayerItem.Status> {
+    AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+      let observation = item.observe(\.status, options: [.initial, .new]) { observed, _ in
+        continuation.yield(observed.status)
+        if observed.status != .unknown { continuation.finish() }
+      }
+      continuation.onTermination = { _ in observation.invalidate() }
+    }
+  }
+}
+
 struct CaptroImageDelivery: Equatable {
   let source: String
   let display: String

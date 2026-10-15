@@ -10,6 +10,10 @@ on:
         description: Compare unchanged b3bdebf6 source using the same vertical-feed fixture and gestures
         type: boolean
         default: false
+      slow_media:
+        description: Delayed image transport and very slow gestures; no production traffic
+        type: boolean
+        default: false
       camera_carousel:
         description: Validate native camera review and identical Home/Details carousel gestures without publishing
         type: boolean
@@ -84,6 +88,7 @@ jobs:
     with:
       baseline: ${{ inputs.vertical_baseline }}
       small_phone: ${{ inputs.small_review_only }}
+      slow_media: ${{ inputs.slow_media }}
   camera-carousel:
     if: ${{ inputs.camera_carousel && !inputs.vertical_feed }}
     uses: ./.github/workflows/native-camera-carousel-validation.yml

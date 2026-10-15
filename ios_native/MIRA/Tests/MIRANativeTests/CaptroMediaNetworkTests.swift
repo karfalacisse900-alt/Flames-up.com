@@ -3,6 +3,25 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroMediaNetworkTests: XCTestCase {
+  func testReadinessWaitCanBeCancelledWithoutReplacingItem() async {
+    let item = AVPlayerItem(asset: AVMutableComposition())
+    let player = AVPlayer()
+    // An unassociated unknown item does not start network work or a deadline.
+    let waiting = Task {
+      var count = 0
+      for await status in MIRAVideoReadiness.statuses(of: item) {
+        XCTAssertEqual(status, .unknown)
+        count += 1
+      }
+      return count
+    }
+    await Task.yield()
+    waiting.cancel()
+    let count = await waiting.value
+    XCTAssertLessThanOrEqual(count, 1)
+    XCTAssertNil(player.currentItem)
+    XCTAssertEqual(item.status, .unknown)
+  }
   private let source = "https://media.captro.app/source.jpg?token=kept"
   private func derivative(_ width: Int, source: String) -> String {
     "https://api.flames-up.com/cdn-cgi/image/width=\(width),fit=scale-down,quality=84/\(source)"
