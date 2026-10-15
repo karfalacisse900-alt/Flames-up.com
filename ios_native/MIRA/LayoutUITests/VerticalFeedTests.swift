@@ -78,7 +78,13 @@ final class VerticalFeedTests: XCTestCase {
     let footerBefore = app.descendants(matching: .any)["home.pagination"].firstMatch.frame
     attach(app, "pagination-final-before-empty-response")
     attachDiagnostics(app, "before-final-response")
-    app.buttons["vertical.fixture.finish"].tap()
+    let finish = app.buttons["vertical.fixture.finish"]
+    // SwiftUI's top overlay can expose an AX frame extended through the status
+    // bar. Its default center is not the visible 44pt button. Target the actual
+    // lower control interior; do not move Home to make the test action hittable.
+    let finishPoint = CGVector(dx: finish.frame.width / 2, dy: finish.frame.height - 22)
+    attachText("button=\(finish.frame);localTap=\(finishPoint)", "final-response-release-tap")
+    finish.coordinate(withNormalizedOffset: .zero).withOffset(finishPoint).tap()
     let state = app.descendants(matching: .any)["vertical.fixture.state"].firstMatch
     let complete = NSPredicate { _, _ in (state.value as? String ?? "").contains("\"complete\"") }
     XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: complete, object: nil)], timeout: 10), .completed)
