@@ -35,6 +35,7 @@ final class VerticalFeedTests: XCTestCase {
         CGVector(dx: app.frame.width * (forward ? 0.18 : 0.82), dy: visibleY + (index == 2 ? 8 : 0)))
       start.press(forDuration: 0.06, thenDragTo: end, withVelocity: index % 2 == 0 ? .slow : .fast, thenHoldForDuration: 0.05)
       XCTAssertTrue(lower.staticTexts[forward ? "Photo 2 of 3" : "Photo 1 of 3"].waitForExistence(timeout: 5))
+      attachText("swipe=\(index);beforeY=\(beforeLower.minY);afterY=\(lowerMedia.frame.minY);beforeHeight=\(beforeLower.height);afterHeight=\(lowerMedia.frame.height);offsetBefore=\(initialOffset);offsetAfter=\(offset(app))", "lower-carousel-swipe-\(index)-geometry")
       if assertStable {
         XCTAssertEqual(lowerMedia.frame.minY, beforeLower.minY, accuracy: 2, "Horizontal swipe moved the lower row vertically")
         XCTAssertEqual(lowerMedia.frame.height, beforeLower.height, accuracy: 1)
@@ -42,6 +43,8 @@ final class VerticalFeedTests: XCTestCase {
       }
     }
     attachDiagnostics(app, "lower-carousel")
+    let lowerTrace = lower.descendants(matching: .any)["carousel.diagnostics.home"].firstMatch
+    if lowerTrace.exists { attachText(lowerTrace.value as? String ?? "", "lower-carousel-selected-row-trace") }
 
     // Case B: actual production pagination acceptance, a failed page/retry,
     // and an empty final response while the last item is fully on-screen.
@@ -49,7 +52,10 @@ final class VerticalFeedTests: XCTestCase {
     let last = app.otherElements["home.post.page.vertical-47"]
     var retried = false
     for _ in 0..<110 {
-      let retry = app.buttons["home.pagination.retry"]
+      // SwiftUI can propagate the parent pagination identifier to its Button.
+      // Match its unique user-visible label as well as the dedicated identifier.
+      let retry = app.buttons.matching(NSPredicate(format:
+        "identifier == %@ OR label == %@", "home.pagination.retry", "Try again")).firstMatch
       if retry.exists && retry.isHittable {
         attach(app, "pagination-failed-preserves-content")
         retry.tap(); retried = true
@@ -61,6 +67,11 @@ final class VerticalFeedTests: XCTestCase {
     XCTAssertTrue(retried, "The real footer retry must be exercised")
     XCTAssertTrue(last.exists && last.isHittable, "Final post is reachable through ordinary vertical gestures")
     XCTAssertTrue(app.buttons["vertical.fixture.finish"].isEnabled, "Last empty response must remain gated")
+    guard last.exists, app.buttons["vertical.fixture.finish"].isEnabled else {
+      attach(app, "pagination-incomplete-driver-evidence")
+      attachDiagnostics(app, "pagination-incomplete")
+      return
+    }
     XCTAssertLessThanOrEqual(last.frame.maxY, app.tabBars.firstMatch.frame.minY + 1, "Final post must be completely reachable")
     let before = last.frame
     let beforeOffset = offset(app)

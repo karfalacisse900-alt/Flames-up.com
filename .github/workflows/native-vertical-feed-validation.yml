@@ -33,7 +33,8 @@ jobs:
           git fetch origin b3bdebf62bcd5eaf80cfbb0f12f9cafdff457c6f
           git checkout --detach b3bdebf62bcd5eaf80cfbb0f12f9cafdff457c6f
           git fetch origin ccc5925414d129ce33d1e35aba11f25da7ab1ef8
-          git checkout FETCH_HEAD -- ios_native/MIRA/Sources/MIRANative/Screens/CaptroHomeFeedVisualTestView.swift ios_native/MIRA/LayoutUITests/VerticalFeedTests.swift
+          git checkout FETCH_HEAD -- ios_native/MIRA/Sources/MIRANative/Screens/CaptroHomeFeedVisualTestView.swift
+          git checkout "$GITHUB_SHA" -- ios_native/MIRA/LayoutUITests/VerticalFeedTests.swift
       - name: Record actual source
         run: |
           git rev-parse HEAD > "$RUNNER_TEMP/source.txt"
