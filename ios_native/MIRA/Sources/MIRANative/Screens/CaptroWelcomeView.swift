@@ -30,12 +30,23 @@ struct CaptroWelcomeView<AppleControl: View>: View {
   let busy: Bool
   let error: String?
   @Binding var hasRevealedArtwork: Bool
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+#if DEBUG
+  @Environment(\.captroWelcomeReducedMotion) private var reviewReducedMotion
+#endif
   @Environment(\.dynamicTypeSize) private var dynamicType
   @ScaledMetric(relativeTo: .largeTitle) private var headlineSize: CGFloat = 43
   @ScaledMetric(relativeTo: .body) private var subtitleSize: CGFloat = 17
   @State private var revealed = false
   @State private var zoomed = false
+
+  private var reduceMotion: Bool {
+#if DEBUG
+    reviewReducedMotion ?? systemReduceMotion
+#else
+    systemReduceMotion
+#endif
+  }
 
   var body: some View {
     GeometryReader { geometry in
@@ -113,7 +124,7 @@ struct CaptroWelcomeView<AppleControl: View>: View {
   }
 
   private var emailOption: some View {
-    Button("Use email instead", action: onEmail)
+    Button("Use email instead", action: onEmail).disabled(busy)
   }
   private var termsLink: some View {
     NavigationLink { TermsOfServiceView().toolbar(.visible, for: .navigationBar) } label: {
@@ -158,6 +169,18 @@ struct CaptroWelcomeView<AppleControl: View>: View {
     withTransaction(transaction) { revealed = true; zoomed = !reduceMotion; hasRevealedArtwork = true }
   }
 }
+
+#if DEBUG
+private struct CaptroWelcomeReducedMotionKey: EnvironmentKey {
+  static let defaultValue: Bool? = nil
+}
+extension EnvironmentValues {
+  var captroWelcomeReducedMotion: Bool? {
+    get { self[CaptroWelcomeReducedMotionKey.self] }
+    set { self[CaptroWelcomeReducedMotionKey.self] = newValue }
+  }
+}
+#endif
 
 /// Uses the unmodified provider mark and Google's published dark button colors.
 /// Text is native and grows for accessibility; no flattened authentication UI.

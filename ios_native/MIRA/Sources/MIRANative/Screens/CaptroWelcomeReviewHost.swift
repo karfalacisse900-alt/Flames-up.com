@@ -29,7 +29,7 @@ public struct CaptroWelcomeReviewHost: View {
     }
     .defaultAppStorage(defaults)
     .environmentObject(MIRALocalization.shared)
-    .environment(\.accessibilityReduceMotion, ProcessInfo.processInfo.arguments.contains("--welcome-reduce-motion"))
+    .environment(\.captroWelcomeReducedMotion, ProcessInfo.processInfo.arguments.contains("--welcome-reduce-motion") ? true : nil)
     .environment(\.dynamicTypeSize, ProcessInfo.processInfo.arguments.contains("--welcome-large-text") ? .accessibility3 : .large)
   }
 }

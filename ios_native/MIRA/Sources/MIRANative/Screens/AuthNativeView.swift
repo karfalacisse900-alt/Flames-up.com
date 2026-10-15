@@ -68,10 +68,12 @@ public struct AuthNativeView: View {
           VStack(spacing: 20) {
             Text("Before you continue").font(.title2.bold()).frame(maxWidth: .infinity, alignment: .leading)
             termsAcceptanceBlock.accessibilityIdentifier("welcome.consent")
+              .disabled(isSocialSignInWorking || session.isWorking)
             if provider == .apple { appleButton } else { googleButton }
             if let error = session.errorMessage { Text(error).font(.callout).foregroundStyle(.red) }
             Button("Use email instead") { openEmailAfterConsent = true; welcomeConsentProvider = nil }
               .frame(minHeight: 44).accessibilityIdentifier("welcome.email")
+              .disabled(isSocialSignInWorking || session.isWorking)
             legalFooter
           }.padding(24)
         }
