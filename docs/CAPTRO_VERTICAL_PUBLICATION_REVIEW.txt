@@ -64,6 +64,20 @@ Confirmed code / isolated reproductions
    rejected rather than persisted under another account.
    Files: MIRAAppCacheStore.swift, MIRAPerformance.swift, MainFeedView.swift.
 
+7. Final failed image cleanup lacked the cancellation/account checks used by
+   successful loads. An obsolete request could erase a newer image after reuse.
+   Terminal cleanup now rejects cancelled and wrong-account work immediately
+   before mutation. File: MIRAComponents.swift. This code path is confirmed;
+   a physical-device reproduction of the resulting blank flash is not available.
+
+8. Publish-success draft cleanup could resume after an account switch and remove
+   the next account's draft/media. Cleanup now pins its account for every cache
+   operation and media-directory lookup, checks after suspension, and is invoked
+   once rather than once before closing and again while closing. Two tests
+   suspend cleanup across A-to-B switching and verify draft/media isolation.
+   Files: MIRAAppCacheStore.swift, MIRAPerformance.swift,
+   NotificationLibrarySearchCreateViews.swift, CaptroCacheIsolationTests.swift.
+
 Verification so far
 - Full backend suite: 284/284 pass; TypeScript check passes.
 - Unchanged b3bdebf6 backend suite: 257/262 pass. Five stale source guards already
@@ -109,6 +123,30 @@ Approved backend deployment and read-only production verification
   No duplicate IDs, repeated cursors or production writes. Verification commits
   cff32913 / 87972714 change scripts only; Worker source remains 73fc73a5.
 
-Native implementation under verification: f8ead3fe.
-Implementation CI: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38660884812
+Native implementation: f8ead3fe plus final race guards 4ff7a83e.
+Final paired driver: b5955a8e.
+Final implementation CI: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38664897080
+Final baseline CI: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38664902616
+Earlier baseline reached 36 posts but its driver searched the wrong accessibility
+identifier and never tapped the visible Try again action. Corrected driver matches
+the dedicated identifier or unique visible label and scopes carousel diagnostics
+to the selected row. This was a test-driver failure, not evidence of a frozen app.
+Run 38662176136 compiled app code but failed the new test target: three fake-scroll
+property names collided with UIKit's Objective-C properties. Test names corrected
+in 4ff7a83e. Run 38660884812 was cancelled before that known-old driver ran.
+Run 38663621467 compiled both app and test targets, then was cancelled because
+its known-obsolete final-response tap would repeat a test-driver failure.
+Baseline 38662178406 reached 48 posts, retried page 36, then completed ten up/down
+warm passes. All four lower-carousel swipe endpoints retained Y=553.6667,
+height=536, offset=1815.3333; row-scoped gesture samples also remained constant.
+There were zero programmatic scroll commands and maximum viewport sample time
+5.851 ms across 6511 samples. These are simulator observations, not device FPS.
+That run did NOT release the gated final response: the fixture stayed waiting-final.
+Synthesized event evidence put the tap at (337.2,95.4), near the test control edge,
+not in the status bar as initially suspected. Driver b5955a8e targets the actual
+visible button center (366,84). Unchanged final-row geometry from the earlier run
+therefore does not verify exhaustion/footer behavior and is not presented as such.
+Evidence: feed-restoration-evidence/vertical-feed-baseline-corrected, including
+baseline-lower-carousel.png, baseline-final-waiting-before-tap.png,
+baseline-final-still-waiting-after-tap.png, and vertical-interaction.mp4.
 Final native runtime/build results will be appended after verification.
