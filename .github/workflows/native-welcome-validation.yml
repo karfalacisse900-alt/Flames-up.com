@@ -9,6 +9,11 @@ jobs:
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Attest the exact native sources before generation
+        run: node scripts/app-store/native-validation-source.mjs
       - name: Record exact source and toolchain
         run: |
           git rev-parse HEAD > "$RUNNER_TEMP/welcome-source.txt"
@@ -83,6 +88,12 @@ jobs:
               xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/$name.xcresult" > "$RUNNER_TEMP/$name-summary.json" || true
             fi
           done
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: native-validation-source
+          path: ${{ runner.temp }}/native-validation-source/source.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
