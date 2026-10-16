@@ -67,6 +67,55 @@ import XCTest
     XCTAssertTrue(store.states.isEmpty); XCTAssertTrue(store.collections.isEmpty)
     store.configure(accountID:""); XCTAssertFalse(store.requireAccount())
   }
+  func testDirectTapToggleSerializesRapidTapsAndKeepsOneCanonicalSave() async throws {
+    let api = client(), store = api.favorites
+    let post = try JSONDecoder().decode(MIRAPost.self, from: Data("{\"id\":\"post\"}".utf8))
+    var saved = false, revision = 0, writes = 0
+    FavoritesTestProtocol.reply = { request in
+      if request.httpMethod == "PUT" {
+        let body = try! JSONSerialization.jsonObject(with: FavoritesTestProtocol.body(request)) as! [String: Any]
+        saved = body["saved"] as! Bool; revision += 1; writes += 1
+      }
+      return (200, self.response(saved, revision), 0.12)
+    }
+    let first = Task { await store.toggle(post) }
+    try await Task.sleep(for: .milliseconds(30))
+    XCTAssertTrue(store.isSaved(post)); XCTAssertTrue(store.busy.contains(post.id))
+    await store.toggle(post) // A rapid second tap cannot create a second request.
+    await first.value
+    XCTAssertEqual(writes, 1); XCTAssertTrue(store.isSaved(post)); XCTAssertTrue(store.busy.isEmpty)
+    await store.toggle(post)
+    XCTAssertEqual(writes, 2); XCTAssertFalse(store.isSaved(post)); XCTAssertFalse(saved)
+  }
+  func testDirectToggleFailureRestoresStateAndRetryDoesNotDuplicateRequestID() async throws {
+    let api = client(), store = api.favorites
+    let post = try JSONDecoder().decode(MIRAPost.self, from: Data("{\"id\":\"post\"}".utf8))
+    var requests: [String] = []
+    FavoritesTestProtocol.reply = { request in
+      if request.httpMethod == "PUT" {
+        let body = try! JSONSerialization.jsonObject(with: FavoritesTestProtocol.body(request)) as! [String: Any]
+        requests.append(body["request_id"] as! String)
+        if requests.count == 1 { return (503, Data("{\"detail\":\"Offline\"}".utf8), 0) }
+        return (200, self.response(true, 1), 0)
+      }
+      return (200, self.response(false, 0), 0)
+    }
+    await store.toggle(post)
+    XCTAssertFalse(store.isSaved(post)); XCTAssertTrue(store.busy.isEmpty)
+    XCTAssertEqual(store.notice, "Couldn’t update Favorites. Try again.")
+    await store.runNoticeAction()
+    XCTAssertTrue(store.isSaved(post)); XCTAssertEqual(requests.count, 2)
+    XCTAssertEqual(requests[0], requests[1])
+  }
+  func testBlankMediaHasNoHomeStampButKeepsDetailsCreator() throws {
+    for caption in ["", "  \n "] {
+      let data = try JSONSerialization.data(withJSONObject: ["id": "bare", "postType": "general",
+        "caption": caption, "title": "", "userUsername": "creator", "image": "https://example.com/photo.jpg"])
+      let post = try JSONDecoder().decode(MIRAPost.self, from: data)
+      XCTAssertFalse(post.captroMediaFeedCardContent.hasHomeStampContent)
+      XCTAssertTrue(post.detailCreatorHandle.contains("creator"))
+    }
+  }
 }
 private final class FavoritesTestProtocol: URLProtocol {
   static var reply: ((URLRequest)->(Int,Data,Double))!

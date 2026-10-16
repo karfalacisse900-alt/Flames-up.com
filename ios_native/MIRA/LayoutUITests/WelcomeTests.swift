@@ -34,6 +34,21 @@ final class WelcomeTests: XCTestCase {
     app.navigationBars.buttons.firstMatch.tap()
     XCTAssertTrue(app.descendants(matching: .any)["welcome.headline"].firstMatch.exists)
   }
+  func testNormalWelcomeIsFixedAndEveryActionFitsWithoutScrolling() {
+    let app = launch(["--welcome-reduce-motion"])
+    XCTAssertEqual(app.scrollViews.count, 0, "Normal welcome must have no vertical scroll/bounce container")
+    let google = app.buttons["welcome.google"]
+    let original = google.frame
+    for id in ["welcome.google", "welcome.guest", "welcome.terms", "welcome.privacy"] {
+      let action = app.buttons[id]
+      XCTAssertTrue(action.isHittable, "\(id) must fit immediately")
+      XCTAssertGreaterThanOrEqual(action.frame.minY, 0)
+      XCTAssertLessThanOrEqual(action.frame.maxY, app.frame.maxY - 10)
+    }
+    app.swipeUp(); XCTAssertEqual(google.frame.minY, original.minY, accuracy: 1)
+    app.swipeDown(); XCTAssertEqual(google.frame.minY, original.minY, accuracy: 1)
+    capture(app, "welcome-fixed-all-actions")
+  }
   func testConsentCancelAndExistingEmailRoute() {
     let app = launch(["--welcome-reduce-motion"])
     let google = app.buttons["welcome.google"]

@@ -142,6 +142,7 @@ struct CaptroFavoritesView: View {
                 }
               }
             }
+            .accessibilityIdentifier("favorites.post.\(entry.id)")
           } else {
             HStack { Text("Post unavailable").foregroundStyle(.secondary); Spacer()
               Button("Remove") { Task {

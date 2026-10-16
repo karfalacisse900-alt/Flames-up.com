@@ -1,4 +1,4 @@
-name: Review approved native welcome
+name: Review native welcome and post controls
 on:
   workflow_call:
 permissions:
@@ -6,7 +6,7 @@ permissions:
 jobs:
   review:
     runs-on: macos-26
-    timeout-minutes: 50
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
@@ -40,29 +40,54 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" CODE_SIGNING_ALLOWED=NO build-for-testing \
             2>&1 | tee "$RUNNER_TEMP/welcome-build.log"
       - name: Large iPhone welcome and existing safety unit tests
-        timeout-minutes: 12
+        timeout-minutes: 20
         working-directory: ios_native/MIRA
         run: |
-          set -o pipefail
+          set -euo pipefail
+          xcrun simctl install "$WELCOME_LARGE" "$RUNNER_TEMP/WelcomeBuild/Build/Products/Debug-iphonesimulator/Captro.app"
+          container=$(xcrun simctl get_app_container "$WELCOME_LARGE" com.captro.app data)
+          mkdir -p "$container/Documents"
+          curl --fail --retry 2 --max-time 60 \
+            'https://images.unsplash.com/photo-1496442226666-8d4d0e62e6e9?auto=format&fit=max&w=900&q=85&fm=jpg' \
+            -o "$RUNNER_TEMP/presentation-photo.jpg"
+          brew install ffmpeg
+          # Synthetic, explicitly labeled local playback fixture, not camera evidence.
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=480x640:rate=30 \
+            -f lavfi -i sine=frequency=440:sample_rate=48000 -t 3 -c:v libx264 -pix_fmt yuv420p \
+            -c:a aac "$RUNNER_TEMP/presentation-video.mp4"
+          cp "$RUNNER_TEMP/presentation-photo.jpg" "$container/Documents/presentation-photo.jpg"
+          cp "$RUNNER_TEMP/presentation-photo.jpg" "$container/Documents/presentation-photo-2.jpg"
+          cp "$RUNNER_TEMP/presentation-video.mp4" "$container/Documents/presentation-video.mp4"
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$WELCOME_LARGE" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeLarge.xcresult" \
             -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/WelcomeTests \
+            -only-testing:CaptroLayoutUITests/FavoritesTests \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/welcome-large.log"
       - name: Small iPhone native welcome
         if: success()
-        timeout-minutes: 10
+        timeout-minutes: 20
         working-directory: ios_native/MIRA
         run: |
-          set -o pipefail
+          set -euo pipefail
           xcrun simctl shutdown "$WELCOME_LARGE"
           xcrun simctl boot "$WELCOME_SMALL"
           xcrun simctl bootstatus "$WELCOME_SMALL" -b
           xcrun simctl status_bar "$WELCOME_SMALL" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+          xcrun simctl install "$WELCOME_SMALL" "$RUNNER_TEMP/WelcomeBuild/Build/Products/Debug-iphonesimulator/Captro.app"
+          container=$(xcrun simctl get_app_container "$WELCOME_SMALL" com.captro.app data)
+          mkdir -p "$container/Documents"
+          cp "$RUNNER_TEMP/presentation-photo.jpg" "$container/Documents/presentation-photo.jpg"
+          cp "$RUNNER_TEMP/presentation-photo.jpg" "$container/Documents/presentation-photo-2.jpg"
+          cp "$RUNNER_TEMP/presentation-video.mp4" "$container/Documents/presentation-video.mp4"
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$WELCOME_SMALL" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeSmall.xcresult" \
-            -only-testing:CaptroLayoutUITests/WelcomeTests CODE_SIGNING_ALLOWED=NO test-without-building \
+            -only-testing:CaptroLayoutUITests/WelcomeTests -only-testing:CaptroLayoutUITests/FavoritesTests \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
+            CODE_SIGNING_ALLOWED=NO test-without-building \
             2>&1 | tee "$RUNNER_TEMP/welcome-small.log"
       - name: Capture the native artwork reveal and settled composition
         if: success()

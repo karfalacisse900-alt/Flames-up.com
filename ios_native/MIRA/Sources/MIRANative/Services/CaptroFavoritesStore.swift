@@ -102,8 +102,10 @@ private struct FavoriteWrite: Encodable {
       // Fetch memberships before unsaving, so Undo restores the complete server state.
       let previous = try await loadState(postID: post.id)
       guard generation == epoch else { return }
-      busy.remove(post.id)
-      _ = await write(previous: previous, saved: desired, ids: desired ? previous.collectionIds : [], requestID: UUID().uuidString)
+      // Hold the same lock across the read and write, including the async call
+      // boundary. No rapid tap may start a second operation between them.
+      _ = await write(previous: previous, saved: desired, ids: desired ? previous.collectionIds : [],
+        requestID: UUID().uuidString, ownsBusy: true)
     } catch {
       guard generation == epoch else { return }
       states[post.id] = shown; busy.remove(post.id)
@@ -117,13 +119,14 @@ private struct FavoriteWrite: Encodable {
   func remove(state: CaptroFavoriteState) async {
     _ = await write(previous: state, saved: false, ids: [], requestID: UUID().uuidString)
   }
-  private func write(previous: CaptroFavoriteState, saved: Bool, ids: [String], requestID: String) async -> Bool {
-    guard requireAccount(), !busy.contains(previous.postId) else { return false }
+  private func write(previous: CaptroFavoriteState, saved: Bool, ids: [String], requestID: String,
+    ownsBusy: Bool = false) async -> Bool {
+    guard requireAccount(), ownsBusy || !busy.contains(previous.postId) else { return false }
     let generation = epoch, postID = previous.postId
     postVersions[postID, default: 0] += 1
     collectionVersion += 1
     let collectionsAtStart = collectionVersion
-    busy.insert(postID)
+    if !ownsBusy { busy.insert(postID) }
     states[postID] = CaptroFavoriteState(postId: postID, saved: saved, revision: previous.revision, collectionIds: ids)
     do {
       let result: FavoriteResponse = try await api.put(path(postID), body: FavoriteWrite(saved: saved,
@@ -156,7 +159,7 @@ private struct FavoriteWrite: Encodable {
         return false
       }
       // Reuse the operation ID on retry: a lost response must not duplicate a write.
-      show("Couldn’t update Favorites. \(error.localizedDescription)", actionTitle: "Retry") { [weak self] in
+      show("Couldn’t update Favorites. Try again.", actionTitle: "Retry") { [weak self] in
         guard let self else { return }
         _ = await self.write(previous: previous, saved: saved, ids: ids, requestID: requestID)
       }

@@ -21,6 +21,20 @@ struct CaptroFavoriteButton: View {
   }
 }
 
+/// Details reads the same optimistic/confirmed state as Home, without observing
+/// the Favorites store in the entire media screen or trusting a stale post copy.
+struct CaptroFavoriteMenuAction: View {
+  let post: MIRAPost
+  @ObservedObject var store: CaptroFavoritesStore
+  var body: some View {
+    Button { Task { await store.toggle(post) } } label: {
+      Label(store.isSaved(post) ? "Remove from Favorites" : "Save to Favorites",
+        systemImage: store.isSaved(post) ? "star.fill" : "star")
+    }
+    .disabled(store.busy.contains(post.id))
+  }
+}
+
 /// Independent sibling of the media pager. The tap waits for long-press failure,
 /// and scroll-view pans cancel both recognizers instead of invoking either action.
 private struct FavoritePressControl: UIViewRepresentable {
@@ -32,17 +46,22 @@ private struct FavoritePressControl: UIViewRepresentable {
   func makeUIView(context: Context) -> FavoriteControl { FavoriteControl() }
   func updateUIView(_ view: FavoriteControl, context: Context) {
     view.tapAction = tap; view.organizeAction = organize
-    view.isUserInteractionEnabled = enabled
+    // Keep consuming taps while a write is pending. Disabling hit testing lets
+    // a rapid second tap fall through to the photo/video underneath this button.
+    view.enabled = enabled
     view.accessibilityIdentifier = "favorite.star.\(id)"
     view.accessibilityLabel = saved ? "Remove from Favorites" : "Save to Favorites"
     view.accessibilityHint = "Touch and hold to organize in collections."
-    view.accessibilityTraits = enabled ? [.button] : [.button, .notEnabled]
+    view.accessibilityValue = saved ? "Saved" : "Not saved"
+    view.accessibilityTraits = saved ? [.button, .selected] : [.button]
+    if !enabled { view.accessibilityTraits.insert(.notEnabled) }
     view.icon.image = UIImage(systemName: saved ? "star.fill" : "star",
       withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .regular))
   }
 }
 private final class FavoriteControl: UIView {
   let icon = UIImageView()
+  var enabled = true
   var tapAction: (() -> Void)?
   var organizeAction: (() -> Void)?
   override init(frame: CGRect) {
@@ -69,10 +88,10 @@ private final class FavoriteControl: UIView {
     accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Organize in collection", target: self, selector: #selector(organizeAccessible))]
   }
   required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-  @objc private func tapped() { tapAction?() }
-  @objc private func held(_ gesture: UILongPressGestureRecognizer) { if gesture.state == .began { organizeAction?() } }
-  @objc private func organizeAccessible() -> Bool { guard isUserInteractionEnabled else { return false }; organizeAction?(); return true }
-  override func accessibilityActivate() -> Bool { guard isUserInteractionEnabled else { return false }; tapAction?(); return true }
+  @objc private func tapped() { guard enabled else { return }; tapAction?() }
+  @objc private func held(_ gesture: UILongPressGestureRecognizer) { if enabled && gesture.state == .began { organizeAction?() } }
+  @objc private func organizeAccessible() -> Bool { guard enabled else { return false }; organizeAction?(); return true }
+  override func accessibilityActivate() -> Bool { guard enabled else { return false }; tapAction?(); return true }
 }
 
 struct CaptroFavoriteNotice: View {

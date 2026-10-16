@@ -2,6 +2,18 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroWelcomeTests: XCTestCase {
+  func testFixedPageAllocatesRemainingHeightWithoutChangingArtworkRatio() {
+    for width in [CGFloat(320), 375, 390, 440] {
+      for height in [CGFloat(548), 728, 830, 920] {
+        for controls in [CGFloat(330), 390, 510] {
+          let hero = CaptroWelcomeLayout.fittedArtworkHeight(width: width, availableHeight: height, controlsHeight: controls)
+          XCTAssertGreaterThanOrEqual(hero, 0)
+          XCTAssertLessThanOrEqual(hero + controls, height)
+          XCTAssertLessThanOrEqual(hero, CaptroWelcomeLayout.artworkHeight(width: width))
+        }
+      }
+    }
+  }
   func testSourceGeometryAndZoomDoNotStretchOrClipArtwork() {
     for width in [CGFloat(320), 375, 390, 402, 430, 440, 480, 600] {
       let displayedWidth = min(width, CaptroWelcomeLayout.maximumWidth)

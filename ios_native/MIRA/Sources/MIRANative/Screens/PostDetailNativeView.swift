@@ -588,7 +588,6 @@ public struct PostDetailNativeView: View {
   @State private var isReportSheetPresented = false
   @State private var isPostOptionsPresented = false
   @State private var isEditingEvent = false
-  @State private var isOrganizingFavorite = false
   @FocusState private var isCommentFocused: Bool
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
@@ -648,7 +647,7 @@ public struct PostDetailNativeView: View {
     .foregroundStyle(CaptroDetailStyle.ink)
     .tint(CaptroDetailStyle.accent)
     .miraScreenEnter(.push)
-    .navigationTitle("Post")
+    .navigationTitle("")
     .navigationBarTitleDisplayMode(.inline)
     .navigationBarBackButtonHidden(false)
     .toolbar(.visible, for: .navigationBar)
@@ -719,25 +718,13 @@ public struct PostDetailNativeView: View {
       model.applyEngagementUpdate(update)
     }
     .overlay(alignment: .top) { CaptroFavoriteNotice(store: model.api.favorites) }
-    .sheet(isPresented: $isOrganizingFavorite) {
-      CaptroFavoritePicker(postID: model.post.id, api: model.api)
-        .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
-    }
   }
 
   @ToolbarContentBuilder
   private var detailHeader: some ToolbarContent {
     ToolbarItem(placement: .topBarTrailing) {
       Menu {
-        ShareLink(item: captroDetailShareURL(model.post)) { Label("Share post", systemImage: "square.and.arrow.up") }
-        Button(model.post.viewerLiked ? "Unlike post" : "Like post") {
-          Task { await model.toggleLike() }
-        }
-        Button { Task { await model.toggleSave() } } label: {
-          Label(model.post.viewerSaved ? "Remove from Favorites" : "Save to Favorites",
-            systemImage: model.post.viewerSaved ? "star.fill" : "star")
-        }.disabled(model.isSaving)
-        Button("Organize in collection") { if model.api.favorites.requireAccount() { isOrganizingFavorite = true } }
+        CaptroFavoriteMenuAction(post: model.post, store: model.api.favorites)
         if model.canEditEvent { Button("Edit event") { isEditingEvent = true } }
         Button("Report post", role: .destructive) { presentPostReport() }
       } label: {
@@ -752,9 +739,6 @@ public struct PostDetailNativeView: View {
   private var commentsSection: some View {
     VStack(alignment: .leading, spacing: 18) {
       Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
-      Text("Comments \(model.post.commentsCount ?? model.comments.count)")
-        .font(.system(size: 15, weight: .semibold))
-        .accessibilityAddTraits(.isHeader)
 
       if model.isLoadingComments && model.comments.isEmpty {
         ForEach(0..<3, id: \.self) { _ in PostDetailCommentSkeleton() }
@@ -982,26 +966,10 @@ private struct PostDetailOptimizedMediaCarousel: View {
         .accessibilityHidden(true)
       }
     }
-    .overlay(alignment: .bottomTrailing) {
+    .overlay(alignment: .topLeading) {
       if urls.indices.contains(selectedIndex), isVideo(at: selectedIndex, url: urls[selectedIndex]) {
-        HStack(spacing: 4) {
-          Button { isVideoPaused.toggle() } label: {
-            Image(systemName: isVideoPaused ? "play.fill" : "pause.fill")
-              .frame(width: 40, height: 44)
-          }
-          .accessibilityLabel(isVideoPaused ? "Play video" : "Pause video")
-          Button { isMuted.toggle() } label: {
-            Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-              .frame(width: 40, height: 44)
-          }
-          .accessibilityLabel(isMuted ? "Unmute video" : "Mute video")
-        }
-        .font(.system(size: 15))
-        .foregroundStyle(.white)
-        .background(Color.black.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .buttonStyle(.plain)
-        .padding(12)
+        CaptroVideoControls(isPaused: $isVideoPaused, isMuted: $isMuted, surface: "details")
+          .padding(12)
       }
     }
     .accessibilityElement(children: .contain)

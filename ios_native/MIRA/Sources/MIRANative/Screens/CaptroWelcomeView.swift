@@ -14,6 +14,27 @@ enum CaptroWelcomeLayout {
     CGSize(width: ceil(maximumWidth * 3 * maximumZoom),
            height: ceil(artworkHeight(width: maximumWidth) * 3))
   }
+  static func fittedArtworkHeight(width: CGFloat, availableHeight: CGFloat, controlsHeight: CGFloat) -> CGFloat {
+    min(artworkHeight(width: width), max(0, availableHeight - controlsHeight))
+  }
+}
+
+/// Measure the native controls once per layout pass, then give the illustration
+/// the remaining space. No geometry-to-state loop and no scroll view at normal sizes.
+private struct CaptroWelcomeFixedLayout: Layout {
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    proposal.replacingUnspecifiedDimensions()
+  }
+  func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    guard subviews.count == 2 else { return }
+    let controls = subviews[1].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+    let heroHeight = CaptroWelcomeLayout.fittedArtworkHeight(width: bounds.width,
+      availableHeight: bounds.height, controlsHeight: controls.height)
+    subviews[0].place(at: bounds.origin, anchor: .topLeading,
+      proposal: ProposedViewSize(width: bounds.width, height: heroHeight))
+    subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.maxY - controls.height), anchor: .topLeading,
+      proposal: ProposedViewSize(width: bounds.width, height: controls.height))
+  }
 }
 
 enum CaptroWelcomePalette {
@@ -51,9 +72,47 @@ struct CaptroWelcomeView<AppleControl: View>: View {
   var body: some View {
     GeometryReader { geometry in
       let width = min(geometry.size.width, CaptroWelcomeLayout.maximumWidth)
-      ScrollView {
-        VStack(spacing: 0) {
-          artwork(width: width)
+      Group {
+        if dynamicType.isAccessibilitySize {
+          // Extreme text sizes cannot fit all authentication/legal actions on
+          // one phone-height page. Keep readable type and explicit access to all.
+          ScrollView {
+            VStack(spacing: 0) {
+              artwork(width: width, height: CaptroWelcomeLayout.artworkHeight(width: width))
+              controls(width: width, compact: false)
+            }
+            .frame(width: width).frame(maxWidth: .infinity)
+          }
+          .scrollIndicators(.hidden)
+          .accessibilityIdentifier("welcome.accessibilityScroll")
+        } else {
+          let safeTop = geometry.safeAreaInsets.top
+          let topPadding = max(0, safeTop - 30)
+          CaptroWelcomeFixedLayout {
+            GeometryReader { hero in artwork(width: width, height: hero.size.height) }
+            controls(width: width, compact: geometry.size.height < 850)
+          }
+          .background(CaptroWelcomePalette.ink)
+          .padding(.top, topPadding)
+          .background(CaptroWelcomePalette.paper)
+          .frame(width: width, height: geometry.size.height + safeTop)
+          .offset(y: -safeTop)
+          .frame(maxWidth: .infinity, alignment: .top)
+          .accessibilityIdentifier("welcome.fixedPage")
+        }
+      }
+      .background(CaptroWelcomePalette.ink)
+    }
+    .background(CaptroWelcomePalette.ink.ignoresSafeArea())
+    .buttonStyle(.plain)
+    .task { await revealArtworkOnce() }
+    .onChange(of: reduceMotion) { _, reduced in
+      if reduced { settleArtwork() }
+    }
+    .onDisappear { settleArtwork() }
+  }
+
+  private func controls(width: CGFloat, compact: Bool) -> some View {
           VStack(spacing: 0) {
             Group {
               if dynamicType.isAccessibilitySize {
@@ -81,9 +140,9 @@ struct CaptroWelcomeView<AppleControl: View>: View {
             Text(dynamicType.isAccessibilitySize ? "Capture moments. Discover places. Keep what matters." : "Capture moments. Discover places.\nKeep what matters.")
               .font(.system(size: subtitleSize)).foregroundStyle(CaptroWelcomePalette.secondary)
               .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-              .padding(.horizontal, 34).padding(.top, 14)
+              .padding(.horizontal, 34).padding(.top, compact ? 6 : 14)
 
-            VStack(spacing: 11) {
+            VStack(spacing: compact ? 8 : 11) {
               appleControl()
                 .frame(height: 50).clipShape(Capsule())
                 .accessibilityIdentifier("welcome.apple")
@@ -94,7 +153,7 @@ struct CaptroWelcomeView<AppleControl: View>: View {
                 .contextMenu { emailOption }
                 .accessibilityAction(named: "Use email instead", onEmail)
             }
-            .padding(.horizontal, width * 0.091).padding(.top, 24)
+            .padding(.horizontal, width * 0.091).padding(.top, compact ? 12 : 24)
 
             if let error, !error.isEmpty {
               Text(error).font(.callout).foregroundStyle(Color(red: 1, green: 0.72, blue: 0.68))
@@ -105,7 +164,7 @@ struct CaptroWelcomeView<AppleControl: View>: View {
 
             Button("Continue as guest", action: onGuest)
               .font(.body.weight(.medium)).foregroundStyle(CaptroWelcomePalette.secondary)
-              .frame(minHeight: 44).padding(.top, 8).disabled(busy)
+              .frame(minHeight: 44).padding(.top, compact ? 2 : 8).disabled(busy)
               .accessibilityIdentifier("welcome.guest")
 
             ViewThatFits(in: .horizontal) {
@@ -113,28 +172,9 @@ struct CaptroWelcomeView<AppleControl: View>: View {
               VStack(spacing: 0) { termsLink; privacyLink }
             }
             .font(.footnote).foregroundStyle(Color(white: 0.66))
-            .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
+            .padding(.horizontal, 20).padding(.top, compact ? 0 : 8).padding(.bottom, compact ? 0 : 8)
           }
           .background(CaptroWelcomePalette.ink)
-        }
-        .frame(width: width)
-        .padding(.top, max(0, geometry.safeAreaInsets.top - 30))
-        .background(CaptroWelcomePalette.paper)
-        .frame(maxWidth: .infinity)
-      }
-      .scrollIndicators(.hidden)
-      .background(CaptroWelcomePalette.ink)
-      // Only the decorative region extends under the status area. Controls stay
-      // in the scroll view's normal bottom safe area, even at accessibility sizes.
-      .ignoresSafeArea(edges: .top)
-    }
-    .background(CaptroWelcomePalette.ink.ignoresSafeArea())
-    .buttonStyle(.plain)
-    .task { await revealArtworkOnce() }
-    .onChange(of: reduceMotion) { _, reduced in
-      if reduced { settleArtwork() }
-    }
-    .onDisappear { settleArtwork() }
   }
 
   private var emailOption: some View {
@@ -151,19 +191,26 @@ struct CaptroWelcomeView<AppleControl: View>: View {
     }.accessibilityIdentifier("welcome.privacy")
   }
 
-  private func artwork(width: CGFloat) -> some View {
+  private func artwork(width: CGFloat, height: CGFloat) -> some View {
+    let imageWidth = min(width, max(0, height) / (932.0 / 870.0 * CaptroWelcomeLayout.maximumZoom))
+    return
     Image("CaptroWelcomeHero", bundle: .module)
       .resizable().interpolation(.high).scaledToFit()
-      .frame(width: width, height: width * 932 / 870)
+      .frame(width: imageWidth, height: imageWidth * 932 / 870)
       .mask(LinearGradient(stops: [.init(color: .black, location: 0),
         .init(color: .black, location: 0.985), .init(color: .clear, location: 1)],
         startPoint: .top, endPoint: .bottom))
       .scaleEffect(reduceMotion ? 1 : (zoomed ? CaptroWelcomeLayout.maximumZoom : 1), anchor: .top)
       .opacity(reduceMotion || revealed ? 1 : 0)
-      .frame(width: width, height: CaptroWelcomeLayout.artworkHeight(width: width), alignment: .top)
+      .frame(width: width, height: height, alignment: .top)
       // Fade only the empty black margin below the ribbon; no stamp pixels are
       // changed. This joins the supplied printed black to the native black UI.
-      .background(CaptroWelcomePalette.ink)
+      .background {
+        // Only the quiet surround changes when a short screen needs smaller art;
+        // the approved illustration itself is always uniformly fitted, untouched.
+        LinearGradient(stops: [.init(color: CaptroWelcomePalette.paper, location: 0.55),
+          .init(color: CaptroWelcomePalette.ink, location: 0.85)], startPoint: .top, endPoint: .bottom)
+      }
       .clipped()
       .accessibilityHidden(true)
       .allowsHitTesting(false)

@@ -60,11 +60,6 @@ struct CaptroMediaPager: View {
   private var showsStampOnCurrentSlide: Bool {
     showsCoverMediaOnly || selectedMediaIndex == 0
   }
-  private var needsTopVideoControls: Bool {
-    guard currentMediaIsVideo, let frameSize else { return false }
-    return dynamicTypeSize.isAccessibilitySize
-      || stampReading.collapsedHeight > frameSize.height * 0.75 - 64
-  }
 
   var body: some View {
     sizedMedia
@@ -111,20 +106,8 @@ struct CaptroMediaPager: View {
           }
         }
     } else if let frameSize, post.captroMediaFeedCardContent.hasHomeStampContent == false, !post.hasAudio {
+      // A media-only post has no creator-only label. Its creator remains in Details.
       mediaLayers.frame(width: frameSize.width, height: frameSize.height).clipped()
-        .overlay(alignment: .bottomLeading) {
-          Button(action: onOpenPost) {
-            HStack(spacing: 7) {
-              RemoteAvatar(url: post.userProfileImage, size: 24)
-              Text(post.captroMediaFeedCardContent.username ?? post.authorDisplayName)
-                .font(.caption.weight(.semibold)).lineLimit(1)
-            }
-            .padding(8).background(MIRATheme.Color.surface)
-          }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("home.post.attribution")
-          .padding(.leading, 20).padding(.bottom, 64)
-        }
     } else if let frameSize {
       let visible = fittedMediaRect(in: frameSize)
       CaptroMediaStampLayout(mediaSize: frameSize,
@@ -154,7 +137,7 @@ struct CaptroMediaPager: View {
           .accessibilityElement(children: .ignore)
           .accessibilityIdentifier("home.post.media")
           .accessibilityLabel(mediaAccessibilityLabel)
-          .accessibilityHint(currentMediaIsVideo && !post.isCoverPost ? "Tap to pause or play video" : "Opens the post detail screen")
+          .accessibilityHint("Opens the post detail screen")
           .accessibilityAction(named: "Open post") { openPostUnlessPeeking() }
 
         if mediaURLs.count > 1 && !showsCoverMediaOnly {
@@ -164,20 +147,11 @@ struct CaptroMediaPager: View {
         }
 
         if currentMediaIsVideo {
-          if post.isCoverPost { videoControls.padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-          } else if let writing = post.mediaWriting(at: selectedMediaIndex) {
-            videoControls.padding(.trailing, 12)
-              .padding(.top, min(proxy.size.height - 52,
-                post.mediaGeometry(at: selectedMediaIndex).applying(to: writing).textRect(in: proxy.size, fill: true).maxY + 8))
-              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-          } else { videoControls
-            // Keep the existing actions. Only overflow reading moves them into
-            // the clear upper-left strip, away from text and the slide counter.
-            .frame(maxWidth: .infinity, maxHeight: .infinity,
-              alignment: needsTopVideoControls ? .topLeading : .bottomTrailing)
+          CaptroVideoControls(
+            isPaused: Binding(get: { isVideoPaused }, set: { isVideoPaused = $0 }),
+            isMuted: Binding(get: { isVideoMuted }, set: { isVideoMuted = $0 }), surface: "home")
             .padding(12)
-          }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
 
         if mediaURLs.count > 1 && !showsCoverMediaOnly {
@@ -193,9 +167,8 @@ struct CaptroMediaPager: View {
         if !showsCoverMediaOnly {
           CaptroFavoriteButton(post: post, api: api)
             .padding(.trailing, 14)
-            // Photo save sits lower, clear of the centered carousel dots. Video
-            // controls keep their own bottom-right row and need one-row clearance.
-            .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 0 : (currentMediaIsVideo && !post.isCoverPost && !needsTopVideoControls ? 60 : 38))
+            // Playback controls now have their own upper-left area on every video.
+            .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 0 : 38)
             .padding(.top, dynamicTypeSize.isAccessibilitySize ? 68 : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity,
               alignment: dynamicTypeSize.isAccessibilitySize ? .topTrailing : .bottomTrailing)
@@ -316,36 +289,9 @@ struct CaptroMediaPager: View {
 
   private func handleMediaTap() {
     guard !suppressTapAfterStampPeek else { return }
-    if currentMediaIsVideo && !post.isCoverPost {
-      isVideoPaused.toggle()
-    } else {
-      onOpenPost()
-    }
-  }
-
-  private var videoControls: some View {
-    HStack(spacing: 0) {
-      videoButton(icon: isVideoPaused ? "play.fill" : "pause.fill", label: isVideoPaused ? "Play video" : "Pause video") {
-        isVideoPaused.toggle()
-      }
-      videoButton(icon: isVideoMuted ? "speaker.slash.fill" : "speaker.wave.2.fill", label: isVideoMuted ? "Turn sound on" : "Mute video") {
-        isVideoMuted.toggle()
-      }
-    }
-  }
-
-  private func videoButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      Image(systemName: icon)
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(.white)
-        .frame(width: 30, height: 30)
-        .background(.black.opacity(0.48), in: Circle())
-        .frame(width: 44, height: 44)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel(label)
+    // Playback has dedicated controls. Bare video posts still need the same
+    // Details/creator destination as photos, even without a caption or stamp.
+    onOpenPost()
   }
 
   private func updateStampPeekTapSuppression(isHidden: Bool) {

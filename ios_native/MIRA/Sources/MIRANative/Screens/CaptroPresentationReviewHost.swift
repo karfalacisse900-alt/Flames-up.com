@@ -35,6 +35,19 @@ enum CaptroPresentationReviewFixture {
       "likesCount": 12, "commentsCount": 0,
       "response": ["type": "yes_no", "options": ["Yes", "No"], "counts": ["Yes": 2], "totalCount": 2]
     ]
+    if ProcessInfo.processInfo.arguments.contains("--review-empty") {
+      value["title"] = ""; value["caption"] = "  \n "
+    }
+    if ProcessInfo.processInfo.arguments.contains("--review-carousel") {
+      let second = URL(string: mediaURL)!.deletingLastPathComponent().appendingPathComponent("presentation-photo-2.jpg").absoluteString
+      value["images"] = [mediaURL, second]; value["feedMediaUrls"] = [mediaURL, second]
+      value["mediaDimensions"] = [dimensions, dimensions]
+    }
+    if ProcessInfo.processInfo.arguments.contains("--review-video") {
+      let video = URL(string: mediaURL)!.deletingLastPathComponent().appendingPathComponent("presentation-video.mp4").absoluteString
+      value["image"] = video; value["images"] = [video]; value["feedMediaUrls"] = [video]
+      value["mediaDimensions"] = [["width": 480, "height": 640]]
+    }
     if let commerce = commerceRecord { value["detail"] = ["commerce": commerce] }
     return value
   }
