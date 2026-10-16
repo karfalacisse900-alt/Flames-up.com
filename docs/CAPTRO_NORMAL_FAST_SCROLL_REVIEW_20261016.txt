@@ -1,0 +1,238 @@
+CAPTRO — NORMAL / FAST HOME SCROLL INVESTIGATION — 2026-10-16
+
+STATUS
+The physical-device shaking/freezing report remains UNRESOLVED / UNVERIFIED.
+Do not use passing tests, this optimization, or a TestFlight upload as evidence
+that normal and fast scrolling is smooth on the user's iPhone.
+
+SOURCE AND HARDWARE
+Last verified released baseline: 1.0.1 (635.1), native source 0e970d4b.
+Baseline diagnostic source: 492c4e65a42d83976be6d213da93af956e0463a3.
+Targeted optimization: 925b5434b7709e2b189f097ce6fcfeca3f6cfd39.
+Diagnostic workflow repair only: 9ae3ddc3f1f62f6fe0cc738848af26526a59319c.
+The installed build/iOS version on the user's phone has not been confirmed in
+this turn. A released build is not proof of the installed build.
+No physical iPhone or usable local Xcode/Instruments connection was available.
+The Windows host has no attached iPhone/Xcode. Available Mac CI is a simulator
+host, not an iPhone. Do not describe its recordings or CPU data as device tests.
+
+CONFIRMED CODE-LEVEL WORK, NOT A CONFIRMED EXPLANATION OF THE PHONE SYMPTOM
+1. CaptroMediaWriting.swift / MIRAPost.mediaWriting(at:): even posts without
+   editor overlays canonicalized and SHA-256-hashed the complete carousel twice
+   for a single lookup. Geometry and pause/mute lookups repeated this work.
+   Now return immediately for absent overlays and resolve only the requested
+   media ID, lazily, when a usable ID-bound overlay requires it. Canonical ID
+   bytes, legacy index fallback, first-match precedence and per-slide ownership
+   are unchanged. Binding already-bound overlays no longer hashes them again.
+2. CaptroFeedMediaPager.swift / feedStamp: onGeometryChange wrote a measured
+   collapsedHeight into observed row state although production layout never
+   read it. Removed that redundant measurement/publication path. Retained the
+   row-local store, selection, pause/mute choices and actual stamp layout.
+3. CaptroFeedPostView.swift: an unselected/new row previously hashed every media
+   ID to search for an empty selection. It now returns the same initial index
+   without that work. Selected media still uses stable identity, not positions.
+4. CaptroPostMediaGeometry.swift reuses the first-slide writing lookup rather
+   than repeatedly resolving the same overlay. No ratio or crop rules changed.
+
+RUNTIME CODE FILES
+ios_native/MIRA/Sources/MIRANative/Models/CaptroMediaWriting.swift
+ios_native/MIRA/Sources/MIRANative/Models/CaptroPostMediaGeometry.swift
+ios_native/MIRA/Sources/MIRANative/Models/MIRAModels.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedMediaPager.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostView.swift
+
+TEST / INSTRUMENTATION FILES
+ios_native/MIRA/Tests/MIRANativeTests/CaptroMediaGeometryTests.swift
+ios_native/MIRA/LayoutUITests/FeedScrollPerformanceTests.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroScrollWorkMetrics.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroFeedViewport.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroCarouselDiagnostics.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroSlowMediaFixture.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroFeedMediaStamp.swift
+ios_native/MIRA/Sources/MIRANative/Components/MIRAComponents.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroHomeFeedVisualTestView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift
+ios_native/MIRA/Sources/MIRANative/Services/MIRAAPIClient.swift
+ios_native/MIRA/Sources/MIRANative/Services/MIRAPerformance.swift
+ios_native/MIRA/Sources/MIRANative/Services/MIRAPlaybackCoordinator.swift
+ios_native/MIRA/AppTarget/CaptroApp.swift
+ios_native/MIRA/project.yml
+.github/workflows/native-scroll-performance.yml
+.github/workflows/native-stamps-validation.yml
+Instrumentation and isolated routes are DEBUG / CAPTRO_PERFORMANCE_REVIEW gated.
+No such flag is present in the distributed production archive.
+
+WHAT WAS DELIBERATELY NOT CHANGED
+No new scroll commands, restoration rules, gesture recognizers, native inertia,
+bounce, media ratios/crops, captions, visual design or image-quality reductions.
+No SDK, second media cache, backend change, merge or destructive data operation.
+Existing bounded image admission/prefetch and video ownership remain in place.
+ImageIO decoding was already off-main; moving it off-main is NOT this fix.
+Unrelated dirty account-safety, camera and publication reports were preserved.
+
+REGRESSION VERIFICATION COMPLETED
+Run 38909343962, source 925b5434, Xcode 26.6 (17F113), iOS Simulator 26.4.1
+(23E254a), arm64:
+- iPhone 17 Pro Max: 211 passed (200 unit tests + 11 UI tests), zero failures.
+- iPhone 13 mini: 10 UI tests passed, zero failures.
+Includes four new canonical-ID / overlay lookup / blank-content / reordering
+regressions plus existing Favorites, video controls, welcome, carousel framing
+and lazy-feed return checks. This is not a physical performance acceptance pass.
+Artifacts: approved-welcome-native-review; native-validation-source.
+
+PERFORMANCE METHOD
+CaptroPerformance is Release -O with CAPTRO_PERFORMANCE_REVIEW, without DEBUG.
+That compile flag is absent from the normal TestFlight archive; diagnostics and
+isolated fixture routes do not ship. Diagnostic bundle version is 1.0.1 (2),
+identified by workflow run and exact source, not a distributed TestFlight build.
+48 deterministic mixed posts, 12-item pages, a delayed failure/retry at offset
+36, and a held final empty page. Gesture schedule: 650 pt/s normal drags and
+2400 pt/s flicks, short diagonal starts, up/down direction changes, and repeated
+passes over cached content. Native drag/release is used, never setContentOffset.
+The 50-drag measurement body runs once as XCTest warm-up and once as the measured
+iteration: 100 drags per transport. First-pass snapshots include cold visits;
+XCTest CPU/memory summaries describe the later measured (warmed) pass. Those are
+single samples, not statistically established device performance improvements.
+Simulator hardware CPU-cycle/instruction metrics reporting zero are unavailable
+counters, not evidence of zero CPU work.
+Good fixture transport: 20 ms latency, 2,048,000 bytes/s per request.
+Weak fixture transport: 500 ms latency, 64,000 bytes/s per request.
+These are per-request URLProtocol conditions, NOT aggregate network conditioning,
+packet loss, or real cellular/Wi-Fi. Photos are synthetic local fixture content;
+video is local and shared, not a live adaptive-HLS/network benchmark.
+Both recordings use the same ordered corpus and gesture schedule, not a matched
+physical finger trajectory. Native deceleration can finish at different offsets;
+the final screenshots are not a same-post visual comparison. The complete run
+recordings and per-phase attachments are retained rather than presenting one
+still image as evidence of smoothness.
+XCTest waits for quiescence: these discrete gestures do not verify a continuous
+finger-down reversal or a touch interrupting real-device deceleration.
+Collect CADisplayLink cadence only during motion, offset commands, mounted row
+geometry, pagination state, request budgets, aggregate main-thread operation
+durations and XCTest CPU/memory/scroll metrics. Serialization happens on explicit
+test reads. Timing hooks are excluded from ordinary production hot paths.
+
+DIAGNOSTIC INFRASTRUCTURE FINDINGS
+Initial baseline run 38906972445 completed its unprofiled test step successfully.
+Its extra CPU replay was cancelled before the overall CI deadline. Export then
+failed (exit 64); the archive step failed creating its zip. No artifact was
+retained, so no numerical baseline or valid CPU trace is claimed from that run.
+Available API logs were incomplete. Do not infer an app freeze from this failure.
+The pipeline now preserves primary measurements BEFORE optional profiling,
+isolates the profiler archive, handles incomplete extra replay bundles, and makes
+root-created trace output readable by the uploader. It also builds only the
+arm64 simulator architecture instead of unnecessarily compiling x86_64 as well.
+The exact zip failure cause was not recoverable from retained logs; root-owned
+trace files were a concrete archive risk, not a proven app-performance cause.
+
+MEASURED COMPARISON — COMPLETED, NOT A DEVICE ACCEPTANCE PASS
+Baseline 38915636796 and candidate 38915640721 both completed their two unprofiled
+tests successfully, with retained artifacts. Same Release optimization, fixture,
+gesture code, Xcode 26.6, macOS 26.6.2, and arm64 iPhone 13 Pro simulator running
+iOS 26.4.1 (23E254a); separate hosted Mac runners, not the same physical device.
+One measured iteration per network profile. No confidence intervals or claim of
+a statistically established speed improvement. Recording/automation and host
+scheduling can affect these measurements. The synthetic photos total only about
+0.6 MB transferred per run; this is not a realistic high-resolution media corpus.
+
+Metric                              Good: before -> after    Weak: before -> after
+Measured-pass app CPU seconds        85.135 -> 73.566          72.891 -> 66.954
+Measured-pass peak physical MB       146.480 -> 141.728        137.534 -> 143.449
+All-pass row-body construction ms    913.303 -> 247.158        844.369 -> 236.692
+All-pass pager-body construction ms  3564.712 -> 1789.428      3200.398 -> 1744.166
+CADisplayLink intervals observed     10050 -> 10540            10042 -> 10679
+Intervals exceeding 50 ms            399 -> 333                368 -> 302
+Intervals exceeding 100 ms           226 -> 96                 186 -> 71
+Maximum observed interval ms         1074.724 -> 3402.109      677.260 -> 3127.656
+First/cold bottom maximum gap ms     1074.724 -> 629.147       677.260 -> 562.004
+Programmatic offset commands         0 -> 0                    0 -> 0
+Sampled mounted-row geometry changes 0 -> 0                    0 -> 0
+Image-decode calls / on main         54 / 0 -> 54 / 0          54 / 0 -> 54 / 0
+Peak admitted image jobs             3 -> 4                    4 -> 5
+Peak speculative image jobs          2 -> 2                    2 -> 2
+
+MB above means decimal MB (XCTest kB / 1000). Body timers measure construction,
+not all deferred SwiftUI rendering. CADisplayLink gaps are main-run-loop cadence
+observations, NOT GPU-presented frame times or physical-device FPS. They include
+host/automation effects. In particular the worse candidate maximum gaps mean
+these results do NOT establish smooth scrolling or an overall hitch fix.
+
+The retained geometry sample ring contains 3298/3296 baseline and 3297/3297
+candidate records across captured windows. The analyzer compares common mounted
+rows only within 0.5 seconds, threshold 0.75 pt. It found no height or content-Y
+changes in those windows, not a proof that no transient shift ever occurred.
+Viewport sampling p95 in these retained windows was 0.170/0.159 ms before and
+0.166/0.158 ms after. Across all samples its maximum was 3.301/4.415 ms before,
+4.109/2.410 ms after. No evidence here supports rewriting viewport sampling.
+All runs reached 48 posts with retry/final-page handling and zero offset commands.
+
+REMAINING MEASURED MAIN-THREAD WORK — NOT FIXED IN 638.1
+MIRAComponents.swift:1448-1512 / syncPlayback -> configureAudioSession:
+AVAudioSession.setCategory + setActive(true) run synchronously on MainActor when
+a video takes ownership. Instrumented activation had one long call per profile:
+baseline good/weak maxima 736.448 / 525.716 ms; candidate 537.154 / 419.185 ms.
+This is confirmed synchronous main-thread work in this simulator, not a proven
+explanation for every shake on the user's phone. The aggregate counters do not
+provide a call-stack-correlated frame-by-frame attribution.
+MIRAPlaybackCoordinator.swift:234 / preparePlayer also remains MainActor work.
+Candidate prewarming reached 135.174 ms in the weak run (44.965 ms good).
+These are explicit remaining risks, not silently dismissed as internet delay.
+A subsequent audio/player preparation change needs serialized audio ownership,
+stale-completion rejection, and camera/interrupt/background transition tests;
+blindly wrapping these calls in a detached task could race another audio owner.
+No unverified audio-session architecture change is included in the uploaded build.
+
+OPTIONAL TIME PROFILER — FAILED, NOT USABLE
+Candidate run 38915640721 completed an additional good-transport UI replay, but
+the separate host Time Profiler did not finalize. cpu.log records reaching the
+120-second limit, capture_exit=137 after the bounded watchdog, then Document
+Missing Template / internal export errors. No usable app CPU stacks or trace
+analysis are claimed. The primary tests/metrics/recordings survived separately.
+This is a profiler finalization failure, not evidence that the app froze at
+startup. The workflow now propagates a nonzero capture exit as an explicit failed
+profiling step instead of allowing an otherwise-green test job to mask it.
+
+RELEASE STATUS — VERIFIED
+1.0.1 (638.1), exact archived source 9ae3ddc3f1f62f6fe0cc738848af26526a59319c.
+Native changes are 925b5434; 9ae3ddc3 changes the diagnostic workflow only.
+Upload run 38916708048 passed matching-source validation, signed Release archive,
+authentication configuration checks, IPA export and App Store Connect upload.
+Read-only availability run 38920457190 attempt 2 at 2026-10-16 15:03:18 UTC:
+processing VALID, internalBuildState IN_BETA_TESTING, groups Captro private and
+Captro private2. External state READY_FOR_BETA_SUBMISSION, not external approval.
+An earlier read-only check timed out; retry succeeded. No duplicate upload.
+This is an available improvement candidate, NOT a claim that the phone glitch is
+resolved. The user authorized this TestFlight upload. No merge/backend deploy.
+
+EVIDENCE
+Regression: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38909343962
+Baseline: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38915636796
+Candidate: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38915640721
+Each primary artifact is named optimized-scroll-evidence, containing scroll.mp4,
+source.txt, scroll.log, Scroll-summary.json, Scroll-metrics.json, and attachments.
+Candidate optimized-scroll-cpu contains the failed capture log and separate replay
+evidence; its existence must not be described as a successful CPU profile.
+Local copies and comparison JSON are under:
+C:/Users/The-s/Documents/New project/feed-restoration-evidence/normal-fast-scroll-20261016/
+No generated mockups were used as runtime evidence.
+
+CONCLUSION BY FAILURE CLASS
+- Rendering stalls: long main-thread audio/player calls and run-loop gaps were
+  observed in simulator tests; the user's phone symptom is not reproduced here.
+- Layout/offset jumps: not reproduced in the retained geometry windows; no
+  application offset commands occurred. Sampling is not exhaustive proof.
+- Resource churn: image work remained bounded; no on-main image decode occurred.
+  Player setup is still synchronous and sometimes expensive; retained evidence
+  does not establish unbounded player ownership or a cache replacement need.
+- Identity/gestures: regression assertions passed; no wrong-media reuse was
+  demonstrated. Continuous finger-down reversals/interrupted deceleration and
+  physical-device nested gesture contention remain unverified.
+The actual complete root cause of physical-device shaking/freezes is not yet
+established. This task must not be labeled fully resolved.
+
+REMAINING DEVICE VERIFICATION
+Physical Release Instruments recording with installed build, iOS, refresh rate,
+same actual posts and cold/warm runs on good/weak connections; normal and fast
+scrolling, bottom entry/pagination, interrupted deceleration, memory pressure,
+real HLS buffering and continuous gesture conflicts. Needed before closing the
+user's shaking/freezing report.

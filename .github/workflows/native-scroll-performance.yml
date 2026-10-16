@@ -99,8 +99,13 @@ jobs:
             -only-testing:CaptroLayoutUITests/FeedScrollPerformanceTests/testNormalAndFastGoodTransport \
             CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES ARCHS=arm64 'OTHER_SWIFT_FLAGS=$(inherited) -DCAPTRO_PERFORMANCE_REVIEW' \
             test-without-building > "$RUNNER_TEMP/profiled.log" 2>&1
-          if wait "$profiler"; then echo 'capture_exit=0' >> "$RUNNER_TEMP/cpu.log";
-          else echo "capture_exit=$?" >> "$RUNNER_TEMP/cpu.log"; fi
+          capture_status=0
+          wait "$profiler" || capture_status=$?
+          echo "capture_exit=$capture_status" >> "$RUNNER_TEMP/cpu.log"
+          if [ "$capture_status" -ne 0 ]; then
+            echo '::error::Time Profiler did not finalize successfully. Retained scrolling tests are not a successful CPU profile.'
+            exit "$capture_status"
+          fi
       - name: Export separate profiler evidence
         if: always()
         run: |
