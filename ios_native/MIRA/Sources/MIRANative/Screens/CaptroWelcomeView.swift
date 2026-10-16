@@ -101,6 +101,15 @@ struct CaptroWelcomeView<AppleControl: View>: View {
         }
       }
       .background(CaptroWelcomePalette.ink)
+      .overlay(alignment: .top) {
+        // SwiftUI's surrounding background fills the unsafe region with ink.
+        // Cover only the empty band above the artwork, never the artwork itself.
+        CaptroWelcomePalette.paper
+          .frame(height: dynamicType.isAccessibilitySize ? geometry.safeAreaInsets.top
+            : max(0, geometry.safeAreaInsets.top - 30))
+          .offset(y: -geometry.safeAreaInsets.top)
+          .allowsHitTesting(false).accessibilityHidden(true)
+      }
     }
     .background {
       VStack(spacing: 0) {

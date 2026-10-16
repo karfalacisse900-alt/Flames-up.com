@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 /// Actual native welcome controls; no provider credentials or production writes.
 final class WelcomeTests: XCTestCase {
@@ -47,7 +48,21 @@ final class WelcomeTests: XCTestCase {
     }
     app.swipeUp(); XCTAssertEqual(google.frame.minY, original.minY, accuracy: 1)
     app.swipeDown(); XCTAssertEqual(google.frame.minY, original.minY, accuracy: 1)
+    assertPaperBehindStatusArea(app)
     capture(app, "welcome-fixed-all-actions")
+  }
+  private func assertPaperBehindStatusArea(_ app: XCUIApplication) {
+    guard let image = app.screenshot().image.cgImage,
+      let sample = image.cropping(to: CGRect(x: image.width / 2, y: 8, width: 1, height: 1)) else {
+      XCTFail("Missing rendered welcome image"); return
+    }
+    var pixel = [UInt8](repeating: 0, count: 4)
+    let context = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+    XCTAssertGreaterThan(pixel[0], 200, "Status area must continue the paper, not an unreadable black band")
+    XCTAssertGreaterThan(pixel[1], 190)
+    XCTAssertGreaterThan(pixel[2], 150)
   }
   func testConsentCancelAndExistingEmailRoute() {
     let app = launch(["--welcome-reduce-motion"])
