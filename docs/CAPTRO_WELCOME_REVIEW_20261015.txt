@@ -3,10 +3,12 @@ CAPTRO — Approved welcome screen implementation review
 
 Scope and source
 Review branch: fix/approved-welcome-artwork, based on 6bf55b0a.
-Initial implementation: 5e0773ff. Current native source: 07be0255.
-No merge, backend deployment, or TestFlight
-upload is authorized for these welcome changes. The prior performance release
-remains on its separate branch. No feed/carousel/restoration code was edited.
+Initial implementation: 5e0773ff. Native implementation last changed: 07be0255.
+The user subsequently authorized TestFlight with "update testflight". Released
+source: 9b354e88ceab595a6289b67d9fb6a6b9aa9f1e21, with the identical native tree
+3b379c7c3e7851cc6e6c5433f5904c5ab1837bad. No merge or backend deployment was made.
+The release includes the already-approved work inherited from 6bf55b0a;
+this welcome change did not edit feed/carousel/restoration implementation.
 Unrelated modified rollout/review documents and supabase/.temp are preserved.
 
 Artwork
@@ -98,8 +100,9 @@ latency during the first 600ms. The controls are not gated by the artwork animat
 in code. The 11.13-second native recording includes the existing launch screen
 and the artwork motion. Simulator startup used several seconds, so this clip
 does NOT establish the full eight-second zoom settling time. The workflow's
-capture duration was subsequently extended to 20 seconds for future runs; that
-diagnostic-only adjustment was not rerun. It changes no native app code.
+capture duration was subsequently extended to 20 seconds and rerun in release
+validation 38828151057. The new settled still was visually inspected; exact
+animation timing and physical-device motion have not been instrumented.
 Live provider success/cancellation/failure, VoiceOver operation, physical image
 sharpness and physical-device motion remain unverified until actually tested.
 
@@ -154,5 +157,32 @@ Changed files (all paths relative to repository)
 
 Release boundary
 No production setting, backend, permission, feed store, carousel, or restoration
-implementation was changed. No welcome merge, deployment or TestFlight upload.
+implementation was changed by this welcome work. No merge or backend deployment.
 Artwork-quality approval remains pending even when native checks pass.
+
+Authorized TestFlight release — 2026-10-15 EDT / 2026-10-16 UTC
+Version 1.0.1 (631.1), source 9b354e88ceab595a6289b67d9fb6a6b9aa9f1e21.
+Release validation: 38828151057, successful; 196 tests on iPhone 17 Pro Max and
+4 on iPhone 13 mini, iOS 26.4.1 simulators. 200 passed, zero failures/skips.
+The standard pre-generation source attestation was added to the welcome CI path
+in 9b354e88, then the complete native validation was rerun. The mandatory release
+gate was not bypassed or weakened. Five release-gate regression tests also passed
+locally with Node. Current source matches the previously reviewed native tree.
+Release workflow: 38830639981, completed successfully at 2026-10-16 00:50:46 UTC.
+Signed Release archive, authentication entitlement/callback validation, IPA
+export, artifact preservation, and Apple upload all passed. Apple's uploader
+reported "UPLOAD SUCCEEDED with no errors" at 00:50:41 UTC.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38830639981
+The first read-only Apple status check (38831855634, 00:51:29 UTC) still listed
+626.1 as newest. Upload acceptance alone is not confirmation of tester availability.
+Final Apple availability: confirmed by read-only status run 38832242090 at
+2026-10-16 00:55:33 UTC (2026-10-15 20:55:33 EDT). Apple reports version 1.0.1,
+build 631.1, processing VALID, expired false, internalBuildState IN_BETA_TESTING,
+autoNotifyEnabled true, assigned to existing Captro private and Captro private2
+groups. External review remains READY_FOR_BETA_SUBMISSION; no external review,
+new tester invitations, or public App Store release was submitted.
+Retained evidence:
+C:/Users/The-s/Documents/New project/feed-restoration-evidence/welcome-release-631-evidence/
+Includes source.json, both xcresult summaries, native screenshots and recording.
+No physical-device scrolling, artwork sharpness, live provider login, or full
+performance fix is claimed by this TestFlight upload.
