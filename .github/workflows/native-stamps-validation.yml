@@ -19,7 +19,7 @@ on:
         type: boolean
         default: false
       vertical_baseline:
-        description: Compare unchanged b3bdebf6 source using the same vertical-feed fixture and gestures
+        description: Compare unchanged baseline (optimized scroll 492c4e65; older vertical audit b3bdebf6)
         type: boolean
         default: false
       slow_media:
@@ -98,6 +98,7 @@ jobs:
     if: ${{ inputs.release_scroll_profile }}
     uses: ./.github/workflows/native-scroll-performance.yml
     with:
+      baseline: ${{ inputs.vertical_baseline }}
       profile_cpu: ${{ inputs.profile_only }}
   welcome:
     if: ${{ inputs.welcome_review }}
