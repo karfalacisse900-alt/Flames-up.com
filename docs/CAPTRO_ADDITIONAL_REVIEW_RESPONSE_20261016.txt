@@ -1,0 +1,308 @@
+CAPTRO — ADDITIONAL REVIEW REPAIR AND VERIFICATION
+16 October 2026
+
+RELEASE DECISION
+This is a staged repair, not a production clearance. No production migration,
+Worker deployment, merge, real charge/refund, or TestFlight upload was performed.
+The earlier profile/message/media/group authorization defects and missing push
+RPC remain release blockers. Physical-iPhone scrolling remains unresolved and
+unverified by this work; no new performance claim is made.
+
+BASELINES — DO NOT EQUATE THESE
+Reviewed app: 638.1 / 9ae3ddc3f1f62f6fe0cc738848af26526a59319c.
+Starting checkout: fix/home-scroll-release-profile at
+252cf6ddb4bdd60ebb9dd17f05e8da5b8a54061a (included the subsequent investigation).
+Repair branch: fix/additional-review-20261016. No merge.
+App/API implementation source under final validation:
+c9aa6d9633eaf86caf6e2edae76d899b986e5a56.
+Later evidence-only changes, if present, do not alter that implementation.
+Validated native tree: 8c08c5cdecd40b395b0569d80bc5ff0924110265.
+Validated API source tree: b867f6948f99eced62c369b8526ece882b85033e.
+Latest observed TestFlight workflow is still 38920457190 at 9ae3ddc. This is
+workflow evidence, not a read of the installed phone or current Apple tester UI.
+Current deployed Worker fingerprint could not be established: read-only Wrangler
+inspection lacked its API token. No credential values were printed.
+
+Fresh read-only Supabase catalog checks in this session found metadata, not a
+physical app_users.status column. They did not find security migration versions
+20261006012846, 20261013154326, 20261013154328, the push-registration RPC, or the
+new commerce migration/RPCs. No customer rows or transactions were queried.
+
+Existing unrelated dirty documentation and the earlier uncommitted security-gate
+work were preserved. The new feature branch does not silently include them.
+
+PLAN FOLLOWED
+Read the exact eight-item review/appendices; establish source and schema state;
+repair currency and commerce boundaries; repair session/recovery and expiry;
+add focused deterministic tests; run native CI and an isolated PostgreSQL
+contention reproduction; document remaining deployment and runtime gates.
+No image SDK, scrolling rewrite, design change, or obsolete bookmark fix.
+
+1. CURRENCY CORRECTNESS
+Initial classification: CONFIRMED source bug, not an observed customer charge.
+Root cause: the active creator used all ISO codes but multiplied every price by
+100; labels divided by 100; backend accepted arbitrary three-letter currencies.
+
+Changes:
+- One resource contract, CaptroCurrencyContract.json, is consumed by native code,
+  backend validation and admin finance formatting. Initial explicit set: USD and
+  JPY. Unmodeled provider special cases are rejected rather than guessed.
+- CaptroMoney parses exact decimal/grouped input into integer units; precision,
+  bounds and supported currencies are checked. No floating-point price scaling.
+- Currency pickers and paid drafts use that contract. Legacy event price editing
+  and validateCreatorEvent now apply the same precision rules, retaining free
+  informational event prices and the existing comma-decimal draft compatibility.
+- Backend requires a versioned non-USD contract, rejects old ambiguous non-USD
+  creation, and gates legacy unversioned non-USD checkout for review.
+- Fixed fees are currency-specific. USD retains its configured legacy units;
+  JPY requires explicitly reviewed CAPTRO_CURRENCY_FEES. No invented FX rate or
+  production configuration was supplied. Purchase totals honor who pays the fee.
+- Admin totals/refunds use exact provider-unit formatting. Unknown historical
+  currency units are labeled as such, not silently divided by a guessed exponent.
+- Ledger/report queries already group by currency; they were not replaced.
+
+Files/functions:
+  ios_native/MIRA/Sources/MIRANative/Resources/CaptroCurrencyContract.json
+  ios_native/MIRA/Sources/MIRANative/Models/CaptroCommerce.swift (CaptroMoney, draft)
+  ios_native/MIRA/Sources/MIRANative/Models/CaptroEventDraft.swift
+  ios_native/MIRA/Sources/MIRANative/Screens/{CaptroCommerceEditor,
+    CaptroEventEditor,NotificationLibrarySearchCreateViews,CaptroCommerceDetailViews}.swift
+  backend-cf/src/{currency,commerce,post-objects}.ts
+  backend-cf/src/index.ts (fee config, publication, purchase quote/creation)
+  admin-web/src/FinancePage.tsx
+
+Evidence: USD 10.00 -> 1000; JPY 1,000 -> 1000; provider request mocks retain the
+same integer total; refund forwarding retains units; invalid precision/codes
+fail. Native parser and event-editor tests cover the corresponding inputs.
+
+Status: PARTIALLY FIXED / implementation tested; commercial enablement pending.
+JPY fee policy, provider minimums for the actual settlement currency, seller
+settlement/payout compatibility and Stripe TEST acceptance remain required.
+The existing instant payout flow is USD-only; this patch does not promise JPY
+instant payouts. No historical price was rewritten. Inspection plan: enumerate
+non-USD price/purchase snapshots in an approved, access-controlled environment;
+compare creator intent and provider units; quarantine ambiguous unpaid prices;
+ask creator confirmation before replacement/versioning; preserve paid snapshots
+and accounting records. Never blanket-divide historical rows by 100.
+
+2. HOSTED CHECKOUT EXPIRY / LATE PAYMENT
+Initial classification: CONFIRMED source/SQL lifecycle defect.
+Root cause: DB wall-clock expiry released hosted holds without provider state;
+Checkout independently expired 35 minutes after creation; late confirmation
+rejected the now-expired purchase.
+
+Changes: hosted-hold.ts reconciles fresh provider state, rereads after an expiry
+race, retains processing/ambiguous payments, and releases only after terminal
+unpaid evidence. The scheduled path and webhook/status recovery cover hosted
+payments as well as native. Creation failures no longer release a possibly
+accepted provider operation. Checkout uses the canonical stored hold deadline.
+The old SQL clock-only release helper becomes a compatibility no-op. Network
+calls stay outside DB transactions. Confirmation remains idempotent.
+Verified legacy late payments create a service-only app_payment_recovery record
+instead of resurrecting sold inventory or auto-refunding. Buyer status says
+payment_received_under_review; admin exposes an explicit recovery count.
+
+Files: backend-cf/src/hosted-hold.ts; index.ts (createCommerceCheckoutSession,
+completeCommercePurchaseFromSession, reconcileHostedPurchase, scheduled holds,
+purchase status); migration 20261016214657; admin dashboard files.
+
+Evidence: mocked paid/delayed webhook, completion racing expire, processing,
+cancel timeout and network failure; actual Worker request adapter deadline and
+integer amount checks; SQL elapsed hold plus duplicate confirmation yields one
+entitlement. Separate PostgreSQL connections ran release/confirmation overlap.
+
+Status: PARTIALLY FIXED. Stripe TEST lifecycle/late-webhook verification and an
+approved operator recovery runbook are release gates. No automatic real refund.
+An unresolved, missing Checkout ID can conservatively retain inventory when
+idempotent provider lookup/replay cannot resolve it. Very delayed creation may
+hit Stripe's minimum future Checkout expiry. Old unresolved holds can also
+consume the scheduled oldest-40 batch; durable retry scheduling/operational
+alerting should be completed before enabling this rollout at scale. The durable
+paid-recovery record is not itself proof of completed fulfillment/refund.
+The appendix's reverse_transfer hypothesis remains UNCONFIRMED and unchanged.
+
+3. OVERLAPPING BOOKINGS
+Initial classification: CONFIRMED and reproduced locally against old SQL.
+Root cause: unique start timestamps did not enforce interval occupancy.
+
+Change: captro_reserve_booking_slot serializes on the offering/resource row,
+across tiers, and checks peak occupancy of half-open intervals [start,end).
+Adjacent intervals remain valid; cancellation uses the same item boundary.
+New booking_capacity is distinct from lifetime/tier inventory capacity.
+
+File: supabase/migrations/20261016214657_additional_commerce_lifecycle.sql.
+Evidence: real isolated PostgreSQL 17.11, separate concurrent connections:
+BEFORE: 10:00–11:00 and 10:01–11:01 both reserved capacity one (2 reservations).
+AFTER: only one reserved; second rejected CAPTRO_BOOKING_SLOT_UNAVAILABLE.
+Adjacent 11:00–12:00 accepted. PGlite additionally tests across tiers, capacity
+two/peak occupancy, UTC intervals with DST offsets, and cancellation/release.
+
+Status: LOCAL REPAIR VERIFIED; production migration pending. One purchasable is
+the shared resource. Cross-offering shared staff/room resources are not modeled.
+Existing multi-capacity services require an explicit inventory review before the
+conservative default of one is applied. No customer bookings changed.
+
+4. APPROVAL / CHECKOUT AVAILABILITY
+Initial classification: CONFIRMED. Insert-only date validation missed approval
+updates and new checkout from an old pending purchase.
+Change: transactional assert_purchase_available checks item dates/status, active
+price/snapshot and capacity. Approval status transitions run the assertion;
+captro_validate_checkout checks pending hold and availability before both native
+and hosted provider creation. Already-paid confirmation is deliberately not
+rejected merely because time has passed.
+Files: new SQL migration; index.ts native/hosted checkout helpers.
+Evidence: request-before/approve-after expiry and ended event, free and paid,
+roll back with no reserved inventory/entitlement; valid approval works; changed
+price blocks checkout; Worker mock confirms rejection before provider creation.
+Status: LOCAL REPAIR VERIFIED; deployment and full provider/date-boundary staging
+tests remain. No DB lock is held across provider calls.
+
+5. TRANSIENT AUTH / SESSION PRESERVATION
+Initial classification: CONFIRMED. All refresh failures became 401 and bootstrap
+nested catches cleared Keychain after retryable profile failures.
+Changes: typed upstream credential rejection versus 429/503; numeric Retry-After;
+malformed/network/unknown upstream errors remain retryable. Opt-in native partial
+refresh saves rotated credentials even when profile hydration is unavailable;
+old clients do not receive a changed user shape. Cold bootstrap with no cached
+profile shows Retry without erasing credentials. Existing session-generation,
+owner checks and account-switch protections remain.
+Explicit SESSION_REVOKED / ACCOUNT_DISABLED / USER_NOT_FOUND protected responses
+invalidate the matching session without attempting refresh. Expired access tokens
+still get refresh. Password-reset requests cannot sign out the unrelated account.
+Files: backend-cf/src/auth-refresh-errors.ts; index.ts auth middleware/refresh;
+MIRAAuthSession.swift, MIRAAPIClient.swift, MIRANativeRootView.swift.
+Evidence: actual endpoint mock 429/500/503, offline/malformed response, invalid
+refresh token, rotated tokens with failed profile lookup. Native transport tests
+cover cold retry, normal API refresh/profile outage, invalid refresh, explicit
+revocation and delayed results after logout/account switching.
+Status: LOCAL REPAIR / native CI result below. Real Supabase rotation, Keychain
+entitlements and account switching on a device still require staging/device tests.
+
+6. PASSWORD RECOVERY FROM ROOT
+Initial classification: CONFIRMED. Context was global but presentation existed
+only in AuthNativeView.
+Change: root-owned CaptroRecoveryPresenter presents a single real reset form over
+the active destination/sheet, waits for transitions, and does not discard the
+underlying draft. Cancellation clears recovery context/password fields. Success
+targets recovery credentials but does not silently switch the current account.
+Files: CaptroRecoveryPresenter.swift, MIRANativeRootView.swift, AuthNativeView.swift,
+MIRAAuthSession.swift.
+Evidence: native session test resets B while A remains signed in with A's stored
+credentials. Code compiles in native validation; no live email was used.
+Status: PARTIALLY VERIFIED. Signed-out/guest/onboarding/same-account/different-
+account cold/warm UI presentation, repeated/expired links, and already-presented
+sheet interactions still require UI/device acceptance. Do not call all states
+runtime-tested from a hostless session test.
+
+7. STORY EXPIRY
+Initial classification: CONFIRMED. Thirty-day cache hydration ignored per-Story
+expiresAt; failed refresh retained expired entries.
+Change: CaptroStoryExpiry uses an explicit testable clock. Invalid/missing expiry
+fails closed. Cache hydration, Home rail/opening, foreground and nearest-expiry
+timer, viewer advance/back and foreground all re-filter and drop empty groups.
+Stable group IDs are retained through expiry, including distinct Story groups
+from the same owner. No feed-post IDs, carousel selection or offset logic changed.
+Files: CaptroStoryExpiry.swift, MIRAAppCacheStore.swift, MIRAModels.swift,
+MainFeedView.swift, DiscoverNativeView.swift.
+Evidence: controlled-clock mixed expiry, exact boundary, invalid/missing date,
+empty group and same-owner distinct group regression. Existing focus tests pass.
+Status: LOCAL REPAIR VERIFIED at model/cache boundary; offline viewer UI/time
+passage, background/foreground interaction still need end-to-end device checks.
+Expiry filtering does not certify deletion/block/access freshness while offline.
+
+8. ADMIN SCHEMA / PARTIAL ERRORS
+Initial classification: CONFIRMED source/live-schema incompatibility.
+Root cause: app_users.status did not exist; Promise.all rejected all cards.
+Change: canonical metadata->>status query; independent settled dashboard results,
+null/unavailable counts and explicit partial errors, not fake zeros. Queue
+enrichment is also independent. Existing admin authorization is unchanged.
+Files: backend-cf/src/dashboard-results.ts, index.ts /admin dashboard;
+admin-web/src/App.tsx, types.ts.
+Evidence: metadata-only SQL schema accepts canonical count and rejects old status
+column; independent failed card does not erase successful cards; typechecks and
+admin production build listed below.
+Status: LOCAL REPAIR VERIFIED; deployed Worker/admin dashboard runtime not tested.
+
+TEST RESULTS
+Final native validation PASSED on c9aa6d9633eaf86caf6e2edae76d899b986e5a56:
+210 tests, zero failures. Xcode 26.6, iPhone 17 Pro simulator, iOS 26.4.1,
+arm64, Debug configuration, CaptroStampTests target; no signing/distribution.
+Completed 2026-10-16 22:53:22 UTC. This builds the app and executes hostless
+native regression tests; it is not a physical device or Release profile.
+Initial native checkpoint 2a5823be: 208 tests passed, zero failures, Debug iPhone
+simulator on macos-26; run 38974394375. Not the final-source acceptance result.
+An intermediate build b3180468 failed due to a reducer closure signature in the
+new formatter. Fixed in c9aa6d96. Superseded runs were cancelled, not called passes.
+Final-source validation: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38977200024
+
+Local focused tests: 22 passed, zero failures across additional_review,
+additional_commerce_database and additional_provider_contract. They cover
+executable logic, real SQL, and Worker
+functions with provider mocks; no provider calls. Separate PostgreSQL before/
+after contention script: backend-cf/scripts/check-additional-postgres.mjs.
+Postgres image digest: sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3.
+The fixture container had no published ports and used ephemeral data. It was
+removed after testing; only generated test databases were discarded.
+
+Broad backend suite: 314 tests, 310 passed, 4 failed, no skips/cancellations.
+Backend TypeScript noEmit: passed. Admin TypeScript (app + node config): passed.
+Admin Vite production build: passed (33 modules; no deployment).
+git diff --check: passed. No new runtime image/loading dependency was installed.
+Four existing source-shape assertions remain failing and were not weakened:
+  captro_media_post_retirement.test.mjs:37 (old placement expression)
+  ios_auth_guest_guard.test.mjs:34 (old guest-button source spelling)
+  post_media.test.mjs:119 (old play/pause source block)
+  stripe_connect_marketplace.test.mjs:387 (old Details Menu toggle expression)
+These failures mean the broad suite is not green. They are not new proof of a
+runtime regression, nor are they permission to ignore release validation.
+
+NOT PERFORMED
+No physical iPhone, Release Instruments, visual before/after screenshots, Apple/
+Google login, real email recovery, APNs, live admin session, Stripe TEST or live
+transaction, real refund, webhook delivery, or production exploit test. Simulator
+logic tests are not proof of smooth scrolling or every presentation interaction.
+
+MIGRATION / ROLLOUT PLAN — REVIEW ONLY
+New migration: 20261016214657_additional_commerce_lifecycle.sql.
+Includes booking_capacity, transactional interval/approval/checkout guards,
+provider-owned hold release and private durable paid recovery records. No price,
+post, vote, media or financial-history rewrite. RPCs/recovery table are denied to
+anon/authenticated and available only to the service boundary.
+
+Before production approval:
+1. Stage earlier authorization repairs plus media approval and missing push RPC;
+   run outsider/two-account negative permission tests and actual privilege checks.
+2. Snapshot grants, SQL definitions and schema metadata. Review existing booking
+   overlap/capacity and ambiguous historical non-USD price data without automatic
+   correction. Review JPY fees, settlement and payout policy separately.
+3. Apply commerce migration in disposable staging, then matching Worker; test
+   actual hosted/native creation, delayed/duplicate/out-of-order events, processing,
+   failed creates, expiry/confirmation races and operator late-payment recovery.
+4. Rollout must coordinate Worker and migration; old Worker plus SQL no-op expiry
+   intentionally retains holds. New Worker without new RPCs fails closed. Use an
+   approved checkout maintenance window/feature gate; do not blind-deploy either.
+5. Validate native recovery/expiry UI matrix and matched-source Release gates;
+   separately finish physical-device performance evidence. Only then consider
+   TestFlight distribution. User authorized an update when done, not bypassing
+   the explicit higher-priority release blockers or applying production SQL now.
+
+Rollback: disable new checkout through an approved control and retain provider
+reconciliation/recovery records. Do not restore clock-only hold release after
+paid transactions, erase recovery rows, broaden privileges, reinterpret prices,
+or delete financial records. Prefer a reviewed forward repair to reversal of
+authorization constraints. Keep previous app/Worker artifacts for diagnosis;
+coordinate backend compatibility before reverting either runtime.
+
+PRIORITIZED OPEN BLOCKERS
+P1: Earlier live authorization/schema/push gaps; deletion completeness/retry work.
+P1: Actual provider lifecycle acceptance and managed late-payment resolution;
+    historical currency review and settlement/payout eligibility before JPY use.
+P2: Root recovery UI matrix and expired-Story offline/foreground UI verification.
+P2: Native Release/device scrolling incident and unavailable usable CPU profile.
+P2: Four broad-suite source assertions and release-gate compatibility review.
+No TestFlight update is represented as complete by this report.
+
+REFERENCE CONTRACTS CHECKED
+https://docs.stripe.com/currencies (provider units and currency-specific rules)
+https://docs.stripe.com/api/checkout/sessions/expire (provider expiration)
+https://supabase.com/docs/guides/auth/debugging/error-codes (typed auth failures)
