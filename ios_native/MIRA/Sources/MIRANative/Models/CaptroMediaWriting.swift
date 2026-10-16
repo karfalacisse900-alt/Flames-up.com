@@ -136,21 +136,30 @@ public struct CaptroMediaWritingEnvelope: Codable, Hashable {
 
 extension MIRAPost {
   func mediaWriting(at index: Int) -> CaptroMediaWriting? {
-    let identity = feedMediaIdentities.indices.contains(index) ? feedMediaIdentities[index] : nil
-    return editorOverlays?.first {
-      $0.type == "media_writing" && ($0.mediaId != nil ? $0.mediaId == identity : $0.mediaIndex == index)
-        && [1, 2].contains($0.writing?.schemaVersion ?? 0)
-        && $0.writing?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    // Most feed media has no writing. Do not canonicalize/hash every carousel
+    // URL merely to discover that there is no overlay to look up.
+    guard let editorOverlays, !editorOverlays.isEmpty else { return nil }
+    var identity: String?
+    var resolvedIdentity = false
+    return editorOverlays.first {
+      guard $0.type == "media_writing", [1, 2].contains($0.writing?.schemaVersion ?? 0),
+            $0.writing?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { return false }
+      guard let mediaID = $0.mediaId else { return $0.mediaIndex == index }
+      if !resolvedIdentity {
+        identity = mediaIdentity(at: index)
+        resolvedIdentity = true
+      }
+      return mediaID == identity
     }?.writing
   }
   /// Bind legacy positional records at ingestion, before any in-session edits.
   func bindingWritingIdentities() -> MIRAPost {
+    guard let editorOverlays, editorOverlays.contains(where: { $0.mediaId == nil }) else { return self }
     var value = self
-    let identities = feedMediaIdentities
-    value.editorOverlays = editorOverlays?.map { original in
+    value.editorOverlays = editorOverlays.map { original in
       var item = original
-      if item.mediaId == nil, let index = item.mediaIndex, identities.indices.contains(index) {
-        item.mediaId = identities[index]
+      if item.mediaId == nil, let index = item.mediaIndex {
+        item.mediaId = mediaIdentity(at: index)
       }
       return item
     }

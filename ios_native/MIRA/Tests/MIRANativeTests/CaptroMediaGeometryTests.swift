@@ -139,4 +139,71 @@ final class CaptroMediaGeometryTests: XCTestCase {
     XCTAssertEqual(post.mediaGeometry(at: 0).displayAspectRatio, 0.8)
     XCTAssertEqual(post.feedFrameHeightToWidthRatio, 1.25)
   }
+
+  func testSingleMediaIdentityMatchesExistingCanonicalIDs() throws {
+    let post = try framedPost(0.8)
+    for index in post.feedMediaURLs.indices {
+      XCTAssertEqual(post.mediaIdentity(at: index), post.feedMediaIdentities[index])
+    }
+    XCTAssertNil(post.mediaIdentity(at: -1))
+    XCTAssertNil(post.mediaIdentity(at: 2))
+    let refreshed = try framedPost(0.8, title: "DifferentSignedToken")
+    XCTAssertEqual(post.mediaIdentity(at: 0), refreshed.mediaIdentity(at: 0))
+  }
+
+  func testWritingLookupIgnoresAbsentBlankAndUnsupportedOverlays() throws {
+    var post = try framedPost(0.8)
+    let geometry = post.mediaGeometry(at: 0)
+    XCTAssertNil(post.mediaWriting(at: 0))
+    post.editorOverlays = []
+    XCTAssertNil(post.mediaWriting(at: 0))
+    var writing = CaptroMediaWriting.cover(); writing.text = " \n "
+    post.editorOverlays = [.init(type: "media_writing", mediaIndex: 0, writing: writing)]
+    XCTAssertNil(post.mediaWriting(at: 0))
+    writing.text = "FUTURE"; writing.schemaVersion = 999
+    post.editorOverlays = [.init(type: "media_writing", mediaIndex: 0, writing: writing)]
+    XCTAssertNil(post.mediaWriting(at: 0))
+    writing.schemaVersion = 2
+    post.editorOverlays = [.init(type: "unrelated_effect", mediaIndex: 0, writing: writing)]
+    XCTAssertNil(post.mediaWriting(at: 0))
+    XCTAssertEqual(post.mediaGeometry(at: 0), geometry)
+  }
+
+  func testWritingBindingPreservesMediaOwnershipAfterReorder() throws {
+    var post = try framedPost(0.8)
+    var writing = CaptroMediaWriting.cover(); writing.text = "FIRST PHOTO"
+    post.editorOverlays = [.init(type: "media_writing", mediaIndex: 0, writing: writing)]
+    XCTAssertEqual(post.mediaWriting(at: 0), writing)
+    XCTAssertNil(post.mediaWriting(at: 1))
+    let bound = post.bindingWritingIdentities()
+    XCTAssertEqual(bound.editorOverlays?.first?.mediaId, post.mediaIdentity(at: 0))
+    XCTAssertEqual(bound.bindingWritingIdentities().editorOverlays, bound.editorOverlays)
+    var reordered = try framedPost(0.8, title: "NewToken", reversed: true)
+    reordered.editorOverlays = bound.editorOverlays
+    XCTAssertNil(reordered.mediaWriting(at: 0), "A stale positional index must not override stable media ownership")
+    XCTAssertEqual(reordered.mediaWriting(at: 1), writing)
+  }
+
+  func testOptimizedWritingLookupMatchesPreviousSelectionRules() throws {
+    var post = try framedPost(0.8)
+    var first = CaptroMediaWriting.cover(); first.text = "FIRST"
+    var second = first; second.text = "SECOND"
+    var bound = CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: 0, writing: second)
+    bound.mediaId = post.mediaIdentity(at: 1)
+    let legacy = CaptroMediaWritingEnvelope(type: "media_writing", mediaIndex: 0, writing: first)
+    var invalid = first; invalid.schemaVersion = 999
+    post.editorOverlays = [.init(type: "media_writing", mediaIndex: 0, writing: invalid), bound, legacy]
+    for index in -1...3 {
+      // Reference the pre-optimization selection rules, including first-match
+      // precedence and legacy index fallback. Only redundant hashing changes.
+      let ids = post.feedMediaIdentities
+      let identity = ids.indices.contains(index) ? ids[index] : nil
+      let expected = post.editorOverlays?.first {
+        $0.type == "media_writing" && [1, 2].contains($0.writing?.schemaVersion ?? 0) &&
+        ($0.mediaId.map { $0 == identity } ?? ($0.mediaIndex == index)) &&
+        $0.writing?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      }?.writing
+      XCTAssertEqual(post.mediaWriting(at: index), expected)
+    }
+  }
 }

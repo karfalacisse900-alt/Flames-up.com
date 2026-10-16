@@ -231,6 +231,15 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     return sources.map { Self.mediaIdentity($0) }
   }
 
+  /// Resolve just the requested item's unchanged canonical identity. Layout
+  /// and overlay lookup must not hash the entire carousel for one slide.
+  func mediaIdentity(at index: Int) -> String? {
+    let originals = mediaURLs
+    let sources = originals.isEmpty ? feedMediaURLs : originals
+    guard sources.indices.contains(index) else { return nil }
+    return Self.mediaIdentity(sources[index])
+  }
+
   public static func mediaIdentity(_ source: String) -> String {
     var components = URLComponents(string: source)
     components?.query = nil; components?.fragment = nil

@@ -22,7 +22,7 @@ struct CaptroMediaPager: View {
   @State private var stampTapResetTask: Task<Void, Never>?
   @State private var carouselPrefetchTask: Task<Void, Never>?
   private var currentMediaID: String {
-    post.feedMediaIdentities.indices.contains(selectedMediaIndex) ? post.feedMediaIdentities[selectedMediaIndex] : ""
+    post.mediaIdentity(at: selectedMediaIndex) ?? ""
   }
   private var isVideoPaused: Bool {
     get { stampReading.pausedMediaIDs.contains(currentMediaID) }
@@ -247,11 +247,6 @@ struct CaptroMediaPager: View {
     }
     .background(MIRATheme.Color.surface)
     .overlay(Rectangle().strokeBorder(MIRATheme.Color.textPrimary, lineWidth: 1))
-    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-      if abs(stampReading.collapsedHeight - height) > 0.5 {
-        stampReading.collapsedHeight = height
-      }
-    }
     .opacity(showsStampOnCurrentSlide && !isHoldingStamp ? 1 : 0)
     .allowsHitTesting(showsStampOnCurrentSlide)
     .accessibilityHidden(!showsStampOnCurrentSlide)

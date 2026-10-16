@@ -59,15 +59,16 @@ extension MIRAPost {
     let dimension = dimensions.indices.contains(index) ? dimensions[index] : nil
     let first = dimensions.first?.framing
     let writing = mediaWriting(at: index)
+    let coverWriting = index == 0 ? writing : mediaWriting(at: 0)
     let source = dimension?.heightToWidthRatio.map { Double(1 / $0) }
       ?? writing.map { Double($0.sourceAspectRatio) } ?? 0.8
     let legacyFirst = dimensions.first?.heightToWidthRatio.map { Double(1 / $0) }
-      ?? mediaWriting(at: 0).map { Double($0.sourceAspectRatio) } ?? 0.8
+      ?? coverWriting.map { Double($0.sourceAspectRatio) } ?? 0.8
     let legacyFormat = MIRASupportedPostAspectRatio.from(format: dimensions.first?.format).map { Double(1 / $0.heightToWidthRatio) }
     let persistedDisplay = [dimensions.first?.displayAspectRatio, dimensions.first?.feedAspectRatio, legacyFormat]
       .compactMap { $0 }.first { candidate in CaptroPostMediaGeometry.ratios.contains { abs($0 - candidate) < 0.00001 } }
     let display = first?.isValid == true ? first!.displayAspectRatio
-      : CaptroPostMediaGeometry.selectedRatio(for: mediaWriting(at: 0)?.homeAspectRatio.map { Double($0) } ?? persistedDisplay ?? legacyFirst)
+      : CaptroPostMediaGeometry.selectedRatio(for: coverWriting?.homeAspectRatio.map { Double($0) } ?? persistedDisplay ?? legacyFirst)
     var result = CaptroPostMediaGeometry(sourceAspectRatio: source, displayAspectRatio: display,
       cropX: Double(writing?.cropX ?? 0.5), cropY: Double(writing?.cropY ?? 0.5))
     result.usesSourceCoordinates = writing != nil

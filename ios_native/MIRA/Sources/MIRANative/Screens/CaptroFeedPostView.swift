@@ -46,7 +46,10 @@ struct CaptroFeedPostView: View {
   @ObservedObject var rowState: CaptroFeedRowState
   var onMediaSelectionChange: (String) -> Void = { _ in }
   private var selectedMediaIndex: Binding<Int> {
-    Binding(get: { post.feedMediaIdentities.firstIndex(of: rowState.selectedMediaID ?? "") ?? 0 }, set: { index in
+    Binding(get: {
+      guard let mediaID = rowState.selectedMediaID else { return 0 }
+      return post.feedMediaIdentities.firstIndex(of: mediaID) ?? 0
+    }, set: { index in
       let identities = post.feedMediaIdentities
       guard identities.indices.contains(index), rowState.selectedMediaID != identities[index] else { return }
       rowState.select(identities[index])
