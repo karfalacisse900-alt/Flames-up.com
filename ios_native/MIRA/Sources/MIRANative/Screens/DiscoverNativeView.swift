@@ -1495,7 +1495,7 @@ struct StoryViewerNativeView: View {
 
   private func storyRailNeighbor(offset: Int) -> MIRAStoryGroup? {
     let groups = storyRailGroups
-    guard let index = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }) else { return nil }
+    guard let index = groups.firstIndex(where: { $0.id == activeGroup.id }) else { return nil }
     let neighborIndex = index + offset
     guard groups.indices.contains(neighborIndex) else { return nil }
     return groups[neighborIndex]
@@ -1527,7 +1527,7 @@ struct StoryViewerNativeView: View {
     }
 
     let groups = storyRailGroups
-    if let groupIndex = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }) {
+    if let groupIndex = groups.firstIndex(where: { $0.id == activeGroup.id }) {
       for offset in [1] {
         let nextIndex = groupIndex + offset
         guard groups.indices.contains(nextIndex) else { continue }
@@ -1628,7 +1628,7 @@ struct StoryViewerNativeView: View {
 
   private func switchStoryGroup(offset: Int) {
     let groups = storyRailGroups
-    guard let currentIndex = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }) else { return }
+    guard let currentIndex = groups.firstIndex(where: { $0.id == activeGroup.id }) else { return }
     let nextIndex = currentIndex + offset
     guard groups.indices.contains(nextIndex) else { return }
     selectStoryGroup(groups[nextIndex])
@@ -1688,7 +1688,7 @@ struct StoryViewerNativeView: View {
   }
 
   private var captureCounter: String {
-    let preceding = storyRailGroups.prefix { !CaptroStoryExpiry.sameOwner($0, activeGroup) }
+    let preceding = storyRailGroups.prefix { $0.id != activeGroup.id }
       .reduce(0) { $0 + ($1.statuses?.count ?? 0) }
     let total = storyRailGroups.reduce(0) { $0 + ($1.statuses?.count ?? 0) }
     return "\(preceding + selectedIndex + 1) / \(max(1, total))"
@@ -2041,7 +2041,7 @@ struct StoryViewerNativeView: View {
     localRailGroups = CaptroStoryExpiry.groups(allGroups.isEmpty ? [activeGroup] : allGroups, at: now)
     nextStoryExpiry = CaptroStoryExpiry.next(localRailGroups ?? [])
     if remaining.isEmpty {
-      let ownerIndex = allGroups.firstIndex { CaptroStoryExpiry.sameOwner($0, activeGroup) }
+      let ownerIndex = allGroups.firstIndex { $0.id == activeGroup.id }
       let following = ownerIndex.map { Array(allGroups.dropFirst($0 + 1)) } ?? []
       if let next = CaptroStoryExpiry.groups(following, at: now).first { selectStoryGroup(next) }
       else { closeStoryViewer() }
@@ -2055,7 +2055,7 @@ struct StoryViewerNativeView: View {
     if recheckStoryExpiry() { return }
     guard selectedIndex < stories.count - 1 else {
       let groups = storyRailGroups
-      if let index = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }), index < groups.count - 1 {
+      if let index = groups.firstIndex(where: { $0.id == activeGroup.id }), index < groups.count - 1 {
         goToNextStoryGroup()
       } else {
         closeStoryViewer()

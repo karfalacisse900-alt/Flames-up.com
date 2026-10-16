@@ -18,13 +18,10 @@ enum CaptroStoryExpiry {
       guard !statuses.isEmpty else { return nil }
       return MIRAStoryGroup(userId: group.userId, userUsername: group.userUsername,
         userFullName: group.userFullName, userProfileImage: group.userProfileImage,
-        hasUnviewed: group.hasUnviewed, ownerType: group.ownerType, clubId: group.clubId, statuses: statuses)
+        hasUnviewed: group.hasUnviewed, ownerType: group.ownerType, clubId: group.clubId, statuses: statuses, cacheGroupID: group.id)
     }
   }
   static func next(_ groups: [MIRAStoryGroup]) -> Date? {
     groups.flatMap { $0.statuses ?? [] }.compactMap { date($0.expiresAt) }.min()
-  }
-  static func sameOwner(_ a: MIRAStoryGroup, _ b: MIRAStoryGroup) -> Bool {
-    a.userId == b.userId && a.clubId == b.clubId && a.ownerType == b.ownerType
   }
 }

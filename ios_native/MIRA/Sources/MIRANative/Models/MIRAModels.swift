@@ -943,7 +943,7 @@ public struct MIRAStatusPreview: Codable, Identifiable, Hashable {
 }
 
 public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
-  public var id: String { statuses?.first?.id ?? userId }
+  public var id: String { cacheGroupID ?? statuses?.first?.id ?? userId }
   public let userId: String
   public let userUsername: String?
   public let userFullName: String?
@@ -952,6 +952,9 @@ public struct MIRAStoryGroup: Codable, Identifiable, Hashable {
   public var ownerType: String? = nil
   public var clubId: String? = nil
   public let statuses: [MIRAStatusPreview]?
+  // Preserve the original group identity when its first Story expires. A user
+  // can have several distinct single-Story groups; owner ID is not group ID.
+  public var cacheGroupID: String? = nil
 
   public var displayName: String {
     if let userFullName, !userFullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

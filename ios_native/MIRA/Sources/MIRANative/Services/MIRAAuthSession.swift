@@ -129,10 +129,10 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
     MIRAPerformanceTimeline.mark("auth_bootstrap_start")
     MIRAAuthDiagnostics.sessionStage("restore_started")
     isBootstrapping = true
-    needsSessionRetry = false
     let storedToken = await keychain.accessToken()
     guard generation == sessionGeneration else { return }
     guard let storedToken, !storedToken.isEmpty else {
+      needsSessionRetry = false
       MIRALocalJSONCache.setAccountScope(userId: nil)
       token = nil
       refreshToken = nil

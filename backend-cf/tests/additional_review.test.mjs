@@ -4,7 +4,8 @@ import {readFileSync} from 'node:fs';
 import {decimalProviderUnits, validateCurrencyAmount, currencyFeeUnits} from '../src/currency.ts';
 import {validateCommerceInput} from '../src/commerce.ts';
 import {saleAmounts} from '../src/stripe-money.ts';
-import {upstreamRefreshFailure} from '../src/auth-refresh-errors.ts';
+import {AuthRefreshFailure, upstreamRefreshFailure} from '../src/auth-refresh-errors.ts';
+import {stripTypeScriptTypes} from 'node:module';
 import {reconcileHostedHold} from '../src/hosted-hold.ts';
 import {dashboardResults} from '../src/dashboard-results.ts';
 
@@ -37,6 +38,34 @@ test('refresh invalidation requires an explicit upstream credential rejection', 
   assert.equal(upstreamRefreshFailure(400,'refresh_token_already_used').status,401);
   assert.equal(upstreamRefreshFailure(429,'over_request_rate_limit','42').retryAfter,'42');
   assert.equal(upstreamRefreshFailure(429,'over_request_rate_limit','secret\nvalue').retryAfter,'30');
+});
+test('actual refresh endpoint preserves retryability and rotated tokens across identity-read failure',async()=>{
+  const source=readFileSync(new URL('../src/index.ts',import.meta.url),'utf8');
+  const route=stripTypeScriptTypes(source.slice(source.indexOf("api.post('/auth/refresh'"),source.indexOf("api.post('/auth/password/reset/request'")));
+  const refresh=stripTypeScriptTypes(source.slice(source.indexOf('async function refreshSupabaseSession('),source.indexOf('function passwordResetRedirectTarget(')));
+  let handler; let provider; let profileFailure;
+  const dependencies={api:{post:(_path,value)=>{handler=value;}},rejectLargeRequest:()=>null,requireSupabasePrimaryDatabase:()=>null,
+    enforceRateLimit:async()=>null,clientIp:()=>'',cleanText:v=>String(v??'').trim(),getSupabaseUrl:()=> 'https://fixture.invalid',
+    supabasePublicAuthHeaders:()=>({}),fetch:async()=>{if(provider instanceof Error)throw provider;return provider;},
+    issueCaptroTokenForSupabaseAccessToken:async()=>{if(profileFailure)throw profileFailure;return {user:{id:'fixture'}};},
+    supabaseAuthSessionResponse:(session,user)=>({...session,user}),getErrorCode:e=>e.message,AuthRefreshFailure,upstreamRefreshFailure};
+  new Function(...Object.keys(dependencies),refresh+'\n'+route)(...Object.values(dependencies));
+  const context=(partial=true)=>({req:{json:async()=>({refresh_token:'fixture-refresh',supports_partial_refresh:partial})},
+    header:()=>{},json:(body,status=200)=>({body,status})});
+  for(const status of [429,500,503]) {
+    provider=new Response(JSON.stringify({code:'temporary'}),{status});
+    assert.equal((await handler(context())).status,status===429?429:503);
+  }
+  provider=new Error('offline');assert.equal((await handler(context())).status,503);
+  provider=new Response('not JSON',{status:200});assert.equal((await handler(context())).status,503);
+  provider=new Response(JSON.stringify({code:'refresh_token_not_found'}),{status:400});
+  assert.equal((await handler(context())).status,401);
+  const rotated=()=>new Response(JSON.stringify({access_token:'fixture-new',refresh_token:'fixture-rotated'}));
+  profileFailure=new Error('PROFILE_UPSTREAM_UNAVAILABLE');provider=rotated();
+  const result=await handler(context());assert.equal(result.status,200);assert.equal(result.body.user,null);
+  assert.equal(result.body.refresh_token,'fixture-rotated');
+  provider=rotated();assert.equal((await handler(context(false))).status,503);
+  profileFailure=new Error('ACCOUNT_DISABLED');provider=rotated();assert.equal((await handler(context())).status,403);
 });
 function fixture(session, intent='requires_payment_method') {
   const calls=[];

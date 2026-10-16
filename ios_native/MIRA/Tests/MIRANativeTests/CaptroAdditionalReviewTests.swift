@@ -27,7 +27,10 @@ final class CaptroAdditionalReviewTests: XCTestCase {
     let groups = try JSONDecoder().decode([MIRAStoryGroup].self, from: Data(json.utf8))
     let now = try XCTUnwrap(CaptroStoryExpiry.date("2035-01-01T10:00:00Z"))
     XCTAssertEqual(CaptroStoryExpiry.groups(groups, at: now).first?.statuses?.map(\.id), ["valid"])
+    XCTAssertEqual(CaptroStoryExpiry.groups(groups, at: now).first?.id, groups.first?.id)
     XCTAssertTrue(CaptroStoryExpiry.groups(groups, at: now.addingTimeInterval(3600)).isEmpty)
     XCTAssertEqual(groups.first?.statuses?.count, 4) // no destructive stored-data edit
+    let separate = try JSONDecoder().decode([MIRAStoryGroup].self, from: Data("[{\"userId\":\"same\",\"statuses\":[{\"id\":\"one\",\"userId\":\"same\",\"expiresAt\":\"2035-01-01T11:00:00Z\"}]},{\"userId\":\"same\",\"statuses\":[{\"id\":\"two\",\"userId\":\"same\",\"expiresAt\":\"2035-01-01T11:00:00Z\"}]}]".utf8))
+    XCTAssertEqual(CaptroStoryExpiry.groups(separate, at: now).map(\.id), ["one", "two"])
   }
 }

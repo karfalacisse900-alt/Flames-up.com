@@ -17133,6 +17133,8 @@ api.post('/posts', authMiddleware, async (c) => {
   }
   if (commerceConfig?.purchasable.payment_model === 'paid'
       && commerceConfig.purchasable.commerce_class === 'outside_app') {
+    try { getMarketplaceFeeConfig(c, commerceConfig.prices[0].currency); }
+    catch { return c.json({ detail: 'That currency is not enabled for payments yet. Choose another supported currency.', code: 'CAPTRO_CURRENCY_FEE_NOT_CONFIGURED' }, 409); }
     if (!getStripeConfig(c).configured) {
       return c.json({ detail: 'Card payments are temporarily unavailable.', code: 'COMMERCE_PAYMENTS_UNAVAILABLE' }, 503);
     }
