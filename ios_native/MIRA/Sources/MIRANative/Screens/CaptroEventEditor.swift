@@ -33,7 +33,7 @@ struct CaptroEventEditorFields: View {
               .keyboardType(.decimalPad)
               .accessibilityLabel("Entry price")
             Picker("Currency", selection: $draft.currency) {
-              ForEach(Locale.commonISOCurrencyCodes, id: \.self) { Text($0).tag($0) }
+              ForEach(CaptroMoney.supportedCurrencies, id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.menu)
           }
         }

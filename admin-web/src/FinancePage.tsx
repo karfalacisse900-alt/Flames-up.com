@@ -1,11 +1,8 @@
 import {useEffect,useState} from 'react';
 import {AdminApi,ApiError} from './api';
 import type {FinanceSummary,FinanceRecord,FinanceOrder} from './types';
+import {formatProviderMoney as money} from '../../backend-cf/src/currency';
 const categories=[['event','Events'],['club','Clubs'],['meetup','Meetups'],['deal','Deals'],['group_access','Group access'],['local_offer','Local offers']] as const;
-function money(amount:number,currency:string){
- const formatter=new Intl.NumberFormat(undefined,{style:'currency',currency});
- return Number.isSafeInteger(amount)?formatter.format(amount/10**(formatter.resolvedOptions().maximumFractionDigits??2)):'Amount unavailable';
-}
 // Ledger release is not proof of a currently withdrawable Stripe balance.
 function Totals({row}:{row:FinanceRecord}){return <dl className="finance-totals"><div><dt>Pending</dt><dd>{money(row.pending,row.currency)}</dd></div><div><dt>Released / unpaid</dt><dd>{money(row.available,row.currency)}</dd></div><div><dt>Paid out to date</dt><dd>{money(row.paid_out,row.currency)}</dd></div></dl>;}
 export function FinancePage({token}:{token:string}){

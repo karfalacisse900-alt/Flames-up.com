@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {decimalProviderUnits, validateCurrencyAmount, currencyFeeUnits} from '../src/currency.ts';
+import {decimalProviderUnits, validateCurrencyAmount, currencyFeeUnits, formatProviderMoney} from '../src/currency.ts';
+import {validateCreatorEvent} from '../src/post-objects.ts';
 import {validateCommerceInput} from '../src/commerce.ts';
 import {saleAmounts} from '../src/stripe-money.ts';
 import {AuthRefreshFailure, upstreamRefreshFailure} from '../src/auth-refresh-errors.ts';
@@ -31,6 +32,17 @@ test('invalid precision, unsafe units, unsupported and provider-special currenci
   assert.throws(()=>currencyFeeUnits({},'JPY'),/NOT_CONFIGURED/);
   assert.throws(()=>validateCommerceInput({enabled:true,contentType:'event',paymentModel:'paid',commerceClass:'outside_app',
     title:'Old draft',currency:'JPY',prices:[{unitAmount:100000}]}, {postType:'event',title:'Old draft',description:'',visibility:'public'}),/Update Captro/);
+});
+test('admin totals, negative refunds and informational event prices use the same precision',()=>{
+  assert.equal(formatProviderMoney(1000,'USD','en-US'),'$10.00');
+  assert.equal(formatProviderMoney(1000,'JPY','en-US'),'¥1,000');
+  assert.equal(formatProviderMoney(-1,'USD','en-US'),'-$0.01');
+  assert.equal(formatProviderMoney(-1099,'USD','en-US'),'-$10.99');
+  assert.equal(formatProviderMoney(1000,'ISK','en-US'),'ISK 1000 provider units');
+  assert.equal(validateCreatorEvent({price:'1000',currency:'JPY'}).price,'1000');
+  assert.equal(validateCreatorEvent({price:'0',currency:'JPY'}).price,'0');
+  assert.throws(()=>validateCreatorEvent({price:'1000.01',currency:'JPY'}),/PRECISION/);
+  assert.throws(()=>validateCreatorEvent({price:'1000',currency:'ISK'}),/UNSUPPORTED/);
 });
 test('refresh invalidation requires an explicit upstream credential rejection', () => {
   for (const status of [400,403,429,500,502,503]) assert.notEqual(upstreamRefreshFailure(status,'unknown').status,401);

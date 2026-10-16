@@ -30,7 +30,7 @@ struct CaptroEventDraft: Codable, Hashable {
   var city = ""
   var hasPrice = false
   var price = ""
-  var currency = Locale.current.currency?.identifier ?? "USD"
+  var currency = CaptroMoney.defaultCurrency
   var attendanceEnabled = true
 
   init(event: CaptroEventDetails? = nil) {
@@ -57,14 +57,25 @@ struct CaptroEventDraft: Codable, Hashable {
   var validationError: String? {
     if hasSchedule && hasEndTime && endsAt <= startsAt { return "End time must be after the start time." }
     if hasPrice && !normalizedPrice.isEmpty {
-      guard normalizedPrice.range(of: #"^\d{1,7}(\.\d{1,2})?$"#, options: .regularExpression) != nil else {
-        return "Enter a valid price, with up to two decimal places."
+      guard CaptroMoney.parse(normalizedPrice, currency: currency, locale: Locale(identifier: "en_US_POSIX"), paid: false) != nil else {
+        return "Choose a supported currency and price without extra decimal places. Your saved price has not been changed."
       }
     } else if hasPrice { return "Enter a price, or 0 for free entry." }
     return nil
   }
 
-  private var normalizedPrice: String { price.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".") }
+  private var normalizedPrice: String {
+    // Keep comma-decimal event drafts compatible without treating JPY grouping as a fraction.
+    let value = price.trimmingCharacters(in: .whitespaces)
+    if let units = CaptroMoney.parse(value, currency: currency, paid: false) {
+      return CaptroMoney.decimalText(minorUnits: units, currency: currency) ?? value
+    }
+    let canonical = value.replacingOccurrences(of: ",", with: ".")
+    if currency == "USD", let units = CaptroMoney.parse(canonical, currency: currency, locale: Locale(identifier: "en_US_POSIX"), paid: false) {
+      return CaptroMoney.decimalText(minorUnits: units, currency: currency) ?? value
+    }
+    return value
+  }
 
   var input: CaptroEventInput {
     let formatter = ISO8601DateFormatter()

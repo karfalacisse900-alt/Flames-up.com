@@ -172,7 +172,7 @@ enum CaptroMoney {
     let code = Locale.current.currency?.identifier ?? "USD"
     return supportedCurrencies.contains(code) ? code : "USD"
   }
-  static func parse(_ value: String, currency: String, locale: Locale = .current) -> Int? {
+  static func parse(_ value: String, currency: String, locale: Locale = .current, paid: Bool = true) -> Int? {
     guard let rule = contract?.currencies[currency.uppercased()] else { return nil }
     let parts = value.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: locale.decimalSeparator ?? ".")
     guard parts.count <= 2 else { return nil }
@@ -187,8 +187,15 @@ enum CaptroMoney {
           fraction.unicodeScalars.allSatisfy(digits.contains), fraction.count <= rule.exponent,
           parts.count == 1 || !fraction.isEmpty,
           let units = Int(whole + fraction + String(repeating: "0", count: rule.exponent - fraction.count)),
-          units >= rule.minimum, units <= rule.maximum else { return nil }
+          units >= (paid ? rule.minimum : 0), units <= rule.maximum else { return nil }
     return units
+  }
+  static func decimalText(minorUnits: Int, currency: String) -> String? {
+    guard let rule = contract?.currencies[currency.uppercased()], minorUnits >= 0 else { return nil }
+    let scale = (0..<rule.exponent).reduce(1) { $0 * 10 }
+    guard rule.exponent > 0 else { return String(minorUnits) }
+    let fraction = String(minorUnits % scale)
+    return "\(minorUnits / scale)." + String(repeating: "0", count: rule.exponent - fraction.count) + fraction
   }
   static func format(minorUnits: Int, currency: String) -> String {
     let code = currency.uppercased()

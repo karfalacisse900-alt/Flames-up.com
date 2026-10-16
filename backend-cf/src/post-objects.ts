@@ -1,3 +1,4 @@
+import {decimalProviderUnits} from './currency.ts';
 type Select = (table: string, filters: Record<string, string>, select?: string, limit?: number) => Promise<any[]>;
 
 const text = (value: unknown, max = 300): string | undefined => typeof value === 'string' && value.trim()
@@ -41,7 +42,7 @@ export function validateCreatorEvent(value: unknown): Record<string, any> {
     const price = String(input.price).trim();
     const currency = typeof input.currency === 'string' ? input.currency.trim().toUpperCase() : '';
     if (!/^\d{1,7}(\.\d{1,2})?$/.test(price)) throw new Error('Enter a valid non-negative price.');
-    if (!Intl.supportedValuesOf('currency').includes(currency)) throw new Error('Choose a valid currency.');
+    decimalProviderUnits(price, currency, false); // Display-only facts still obey the currency precision contract.
     result.price = price;
     result.currency = currency;
   }
