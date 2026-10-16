@@ -45,6 +45,8 @@ struct MIRAApp: App {
     } else {
       MIRANativeRootView()
     }
+#elseif CAPTRO_PERFORMANCE_REVIEW
+    CaptroHomeFeedVisualTestView()
 #else
     MIRANativeRootView()
 #endif

@@ -86,7 +86,7 @@ final class MainFeedModel: ObservableObject {
     self.api = api
   }
 
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
   private var isVisualFixture = false
   var testPageLoader: ((String, Int) async throws -> [MIRAPost])?
   var testPageSorter: (([MIRAPost]) async -> [MIRAPost])?
@@ -165,7 +165,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func load(forceRefresh: Bool = false, userInitiated: Bool = false) async {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     if isVisualFixture { return }
 #endif
     if !isGuestFeedMode && currentUserId == nil && currentUsername == nil {
@@ -260,7 +260,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func hydrateCachedFeedIfNeeded() async {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     if testPageLoader != nil { return }
 #endif
     guard feedSection == .forYou else { return }
@@ -587,7 +587,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func prefetchNextPageIfNeeded(afterInitialCount initialCount: Int) {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     guard testAutomaticPagination else { return }
 #endif
     guard canLoadMore, initialCount <= firstPageLimit else { return }
@@ -948,7 +948,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func fetchFeedPage(skip: Int, freshRead: Bool = false, continuing: Bool = false) async throws -> CaptroFeedPage {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     if let testPageLoader { return CaptroFeedPage(legacy: try await testPageLoader(feedSection.apiScope, skip), limit: firstPageLimit) }
 #endif
     let endpoint = isGuestFeedMode ? "/posts/world-board" : "/posts/feed"
@@ -966,7 +966,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   func selectFeedSection(_ section: MainFeedSection) {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     if isVisualFixture {
       feedSection = section
       return
@@ -1020,7 +1020,7 @@ final class MainFeedModel: ObservableObject {
   }
 
   private func sortedByNativeScore(_ posts: [MIRAPost]) async -> [MIRAPost] {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     if let testPageSorter { return await testPageSorter(posts) }
 #endif
     return await Task.detached(priority: .userInitiated) {
@@ -1562,7 +1562,11 @@ public struct MainFeedView: View {
   }
 
   private func verticalPostStream(width: CGFloat, bottomInset: CGFloat) -> some View {
-#if DEBUG
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("feedBody", start: work) }
+#endif
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     CaptroCarouselTraceRecorder.shared.noteFeedEvaluation()
 #endif
     return ScrollView(.vertical) {
@@ -1591,7 +1595,7 @@ public struct MainFeedView: View {
     .accessibilityLabel("Home posts")
     .accessibilityValue("Post \(currentPostIndex + 1) of \(displayedPosts.count)")
     .accessibilityIdentifier("home.post.stream")
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     .overlay(alignment: .topLeading) {
       if ProcessInfo.processInfo.arguments.contains("--captro-restore-audit") {
         CaptroFeedViewportDiagnostics(owner: viewport).frame(width: 2, height: 2).allowsHitTesting(false)
@@ -2398,7 +2402,7 @@ private struct MainNativePostCard: View {
   }
 
   private func debugTap(_ action: String) {
-    #if DEBUG
+    #if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     let author = post.userId?.isEmpty == false ? post.userId! : "missing"
     print("[Captro feed tap] action=\(action) post_id=\(post.id) author_id=\(author)")
     #endif

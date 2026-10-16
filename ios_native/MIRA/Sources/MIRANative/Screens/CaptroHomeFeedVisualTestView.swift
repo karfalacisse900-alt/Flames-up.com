@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
 import Foundation
 import SwiftUI
 import UIKit
@@ -6,6 +6,9 @@ import AVFoundation
 
 @MainActor
 public struct CaptroHomeFeedVisualTestView: View {
+#if CAPTRO_PERFORMANCE_REVIEW
+  private static let isolatedAccount: Void = MIRALocalJSONCache.setAccountScope(userId: "scroll-profile-\(UUID().uuidString)")
+#endif
   @State private var selectedTab = 0
   @StateObject private var model: MainFeedModel
   @StateObject private var verticalFixture: CaptroVerticalFeedFixture
@@ -14,6 +17,9 @@ public struct CaptroHomeFeedVisualTestView: View {
     && !ProcessInfo.processInfo.arguments.contains("--captro-visual-mixed-carousel")
 
   public init() {
+#if CAPTRO_PERFORMANCE_REVIEW
+    _ = Self.isolatedAccount
+#endif
     let fixture = CaptroVerticalFeedFixture()
     _verticalFixture = StateObject(wrappedValue: fixture)
     let publication = CaptroPublicationFeedFixture(enabled: ProcessInfo.processInfo.arguments.contains("--captro-publication-feed-test"))
@@ -27,7 +33,13 @@ public struct CaptroHomeFeedVisualTestView: View {
       _model = StateObject(wrappedValue: model)
     } else if ProcessInfo.processInfo.arguments.contains("--captro-vertical-feed-test") {
       // Explicit offline API: Stories/auth requests cannot touch production.
+#if CAPTRO_PERFORMANCE_REVIEW
+      // Optimized diagnostic binary only: never authenticate or query production.
+      let model = MainFeedModel(api: MIRAAPIClient(baseURL: URL(string: "https://localhost:9452/api")!,
+        session: URLSession(configuration: .ephemeral)))
+#else
       let model = MainFeedModel(api: CaptroComposerTestAPI.make())
+#endif
       model.currentUserId = "composer-ui-test"
       model.currentUsername = "test_creator"
       model.testPageLoader = { _, offset in try await fixture.page(offset: offset) }
@@ -80,6 +92,9 @@ public struct CaptroHomeFeedVisualTestView: View {
           if CaptroSlowMediaFixture.enabled {
             CaptroSlowMediaDiagnostics().frame(width: 2, height: 2).allowsHitTesting(false)
           }
+#if CAPTRO_PERFORMANCE_REVIEW
+          CaptroScrollWorkDiagnostics().frame(width: 2, height: 2).allowsHitTesting(false)
+#endif
         }
       }
     }

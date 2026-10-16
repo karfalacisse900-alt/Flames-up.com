@@ -2,6 +2,10 @@ name: Validate Captro Stamps
 on:
   workflow_dispatch:
     inputs:
+      release_scroll_profile:
+        description: Optimized isolated Home scroll measurements; never distribute this diagnostic binary
+        type: boolean
+        default: false
       welcome_review:
         description: Render the approved welcome artwork and test native consent/guest/legal routes; no publishing
         type: boolean
@@ -90,6 +94,11 @@ on:
 permissions:
   contents: read
 jobs:
+  release-scroll-profile:
+    if: ${{ inputs.release_scroll_profile }}
+    uses: ./.github/workflows/native-scroll-performance.yml
+    with:
+      profile_cpu: ${{ inputs.profile_only }}
   welcome:
     if: ${{ inputs.welcome_review }}
     uses: ./.github/workflows/native-welcome-validation.yml
@@ -116,7 +125,7 @@ jobs:
       baseline: ${{ inputs.carousel_baseline }}
       small_phone: ${{ inputs.small_review_only }}
   stamps:
-    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review }}
+    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review && !inputs.release_scroll_profile }}
     runs-on: macos-26
     environment: captro-payments-live
     timeout-minutes: 65

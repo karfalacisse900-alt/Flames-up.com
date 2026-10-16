@@ -108,6 +108,14 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:
+  CaptroPerformance:
+    build:
+      targets:
+        Captro: all
+    test:
+      config: Release
+      targets:
+        - CaptroLayoutUITests
   Captro:
     build:
       targets:

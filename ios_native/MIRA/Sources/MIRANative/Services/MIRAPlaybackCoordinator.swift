@@ -232,6 +232,10 @@ public final class MIRAVideoPrewarmManager {
   }
 
   private func preparePlayer(for key: String, playbackURL: URL) {
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("prewarmPlayer", start: work) }
+#endif
     guard MIRAMediaNetworkPolicy.shared.current.permitsPrefetch,
           wantedPlayers.contains(key), preparedPlayers[key] == nil else { return }
     let item = AVPlayerItem(url: playbackURL)

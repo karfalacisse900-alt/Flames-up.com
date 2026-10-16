@@ -33,7 +33,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
           !scroll.isDecelerating else { return false }
     return abs(scroll.contentOffset.y + scroll.adjustedContentInset.top) <= 1
   }
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
   struct FrameCadenceMetrics {
     private(set) var intervals = 0
     private(set) var totalMilliseconds: Double = 0
@@ -167,7 +167,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     if !active {
       sample() // Capture before navigation/tab-bar layout starts changing.
       isActive = false
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
       stopFrameCadence()
 #endif
     } else {
@@ -231,7 +231,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     while let candidate = ancestor {
       if let target = candidate as? UIScrollView, !target.isPagingEnabled {
         guard scroll !== target else { return }
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
         stopFrameCadence()
 #endif
         scroll?.panGestureRecognizer.removeTarget(self, action: #selector(dragChanged))
@@ -269,12 +269,12 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
 
   func sample() {
     guard isActive, let scroll, scroll.window != nil, scroll.bounds.height > 0 else {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
       stopFrameCadence()
 #endif
       return
     }
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     let sampleStart = ProcessInfo.processInfo.systemUptime
     updateFrameCadenceObservation()
     var geometryMilliseconds: Double = 0
@@ -301,7 +301,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     }
     var detached: [String] = []
     var mounted: [(id: String, index: Int, frame: CGRect)] = []
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     debugLastVisitedMarkerCount = cells.count
 #endif
     for (id, marker) in cells {
@@ -317,7 +317,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     // of dictionary/registration order. Only the mounted subset is sorted.
     mounted.sort { $0.index < $1.index }
     let frames = mounted.map { ($0.id, $0.frame) }
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     debugLastFrameCount = frames.count
     debugLastVisibleIDs = []
     geometryMilliseconds = (ProcessInfo.processInfo.systemUptime - sampleStart) * 1000
@@ -341,7 +341,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
       let destination = min(maximum, max(minimum, y))
       // Complete once, including no-op restoration. No recursive correction loop.
       if abs(destination - scroll.contentOffset.y) > 0.5 {
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
         traceCommand(from: scroll.contentOffset.y, to: destination,
           mounted: target != nil, reason: pending.reason)
 #endif
@@ -352,7 +352,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     let viewport = scroll.bounds.inset(by: UIEdgeInsets(top: scroll.adjustedContentInset.top, left: 0,
       bottom: scroll.adjustedContentInset.bottom, right: 0))
     let visible = frames.filter { $0.1.intersects(viewport) && $0.1.height > 0 }
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     debugLastVisibleIDs = visible.map(\.0)
     if debugRecordsSamples {
       visibleRows = visible.map { SampleMetrics.Row(id: $0.0, contentY: Double($0.1.minY), height: Double($0.1.height)) }
@@ -373,19 +373,19 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     }
     if next != activeID {
       activeID = next
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
       debugVisiblePublicationCount += 1
       let callbackStart = ProcessInfo.processInfo.systemUptime
 #endif
       onVisible?(next)
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
       callbackMilliseconds = (ProcessInfo.processInfo.systemUptime - callbackStart) * 1000
 #endif
     }
   }
 }
 
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
 /// Read-only test instrumentation. No SwiftUI state publications per scroll tick.
 struct CaptroFeedViewportDiagnostics: UIViewRepresentable {
   let owner: CaptroFeedViewport

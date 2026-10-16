@@ -62,7 +62,11 @@ struct CaptroMediaPager: View {
   }
 
   var body: some View {
-    sizedMedia
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("pagerBody", start: work) }
+#endif
+    return sizedMedia
 #if DEBUG
       .overlay(alignment: .topLeading) {
         if CaptroCarouselTraceRecorder.isEnabled {

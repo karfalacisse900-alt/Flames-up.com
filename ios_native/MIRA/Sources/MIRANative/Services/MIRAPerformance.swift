@@ -557,6 +557,10 @@ public enum MIRAImageDiskCache {
   }
 
   private static func decodedImage(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("imageDecode", start: work) }
+#endif
     let options = [
       kCGImageSourceShouldCache: false
     ] as CFDictionary

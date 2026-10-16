@@ -152,6 +152,10 @@ struct CaptroMediaStampLayout: Layout {
   var visibleMediaRect: CGRect? = nil
 
   private func placement(_ subviews: Subviews) -> (size: CGSize, y: CGFloat) {
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("stampLayout", start: work) }
+#endif
     let visible = visibleMediaRect ?? CGRect(origin: .zero, size: mediaSize)
     let size = subviews[1].sizeThatFits(ProposedViewSize(width: stampWidth, height: nil))
     let overlayTop = max(minimumStampTop, visible.minY + CaptroFeedStampGeometry.originY(mediaHeight: visible.height,

@@ -347,7 +347,7 @@ actor MIRAImageLoadPipeline {
   private let admission: MIRAImageLoadAdmission
   private let followsNetworkPolicy: Bool
   private var policyObserver: NSObjectProtocol?
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
   private var testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)?
   private static let tracesLoads = ProcessInfo.processInfo.arguments.contains("--captro-vertical-diagnostics")
 
@@ -426,15 +426,15 @@ actor MIRAImageLoadPipeline {
     let requestID = UUID()
     let admission = admission
     admission.register(requestID, priority: priority)
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     let testLoader = testLoader
 #endif
     let task = Task.detached(priority: priority == .visible ? .userInitiated : .utility) { () -> MIRAImageLoadResult? in
       guard await admission.waitForSlot(requestID) else { return nil }
       defer { admission.release(requestID) }
       guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
-#if DEBUG
-      if Self.tracesLoads {
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
+      if Self.tracesLoads && !ProcessInfo.processInfo.arguments.contains("--captro-scroll-performance") {
         let state = admission.snapshot
         print("[CaptroImageLoad] active=\(state.active) prefetch=\(state.activePrefetch) waiting=\(state.waiting) peak=\(state.peakActive)")
       }
@@ -1232,10 +1232,16 @@ private struct MIRAResolvedVideoPlayer: View {
     }
 
     if let directURL, directURL.isPlayableFileOrRemoteVideo {
+#if CAPTRO_PERFORMANCE_REVIEW
+      let work = CaptroScrollWorkMetrics.begin()
+#endif
       let item = AVPlayerItem(url: directURL)
       configurePlayerItemForFastStoryPlayback(item)
       let avPlayer = AVPlayer(playerItem: item)
       configurePlayback(for: avPlayer)
+#if CAPTRO_PERFORMANCE_REVIEW
+      CaptroScrollWorkMetrics.end("directPlayerSetup", start: work)
+#endif
       player = avPlayer
       isPlayerReady = false
       await startVideoMetric(label: directURL.host ?? directURL.path)
@@ -1286,6 +1292,10 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func applyStreamPlaybackInfo(_ info: MIRAStreamPlaybackInfo, createPlayer: Bool) {
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("streamPlayerSetup", start: work) }
+#endif
     thumbnailURL = info.thumbnail
     guard !createPlayer || (isOnScreen && wantsPlayback) else { return }
     if createPlayer, let player {
@@ -1488,6 +1498,10 @@ private struct MIRAResolvedVideoPlayer: View {
 
   @MainActor
   private func configureAudioSession() {
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("audioSessionActivation", start: work) }
+#endif
     do {
       let session = AVAudioSession.sharedInstance()
       try session.setCategory(.playback, mode: .moviePlayback)
@@ -1508,6 +1522,10 @@ private struct MIRAVideoPlayerView: UIViewRepresentable {
   let contentMode: ContentMode
 
   func makeUIView(context: Context) -> PlayerView {
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("playerLayerCreate", start: work) }
+#endif
     let view = PlayerView()
     view.backgroundColor = .clear
     view.playerLayer.player = player
@@ -1517,6 +1535,10 @@ private struct MIRAVideoPlayerView: UIViewRepresentable {
   }
 
   func updateUIView(_ uiView: PlayerView, context: Context) {
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("playerLayerUpdate", start: work) }
+#endif
     uiView.backgroundColor = .clear
     uiView.playerLayer.player = player
     uiView.playerLayer.backgroundColor = UIColor.clear.cgColor

@@ -60,7 +60,11 @@ struct CaptroFeedPostView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    postContent
+#if CAPTRO_PERFORMANCE_REVIEW
+    let work = CaptroScrollWorkMetrics.begin()
+    defer { CaptroScrollWorkMetrics.end("rowBody", start: work) }
+#endif
+    return postContent
     .frame(maxWidth: .infinity, alignment: .topLeading)
   }
 

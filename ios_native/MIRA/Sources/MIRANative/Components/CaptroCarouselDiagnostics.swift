@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
 import SwiftUI
 import UIKit
 

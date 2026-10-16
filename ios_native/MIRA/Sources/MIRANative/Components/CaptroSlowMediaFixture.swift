@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
 import Foundation
 import SwiftUI
 import UIKit
@@ -7,7 +7,10 @@ import UIKit
 /// 500ms initial latency, 4096 bytes/64ms = 0.512 Mbps per request. Local videos
 /// are intentionally unchanged; this fixture cannot establish HLS performance.
 final class CaptroSlowMediaFixture: URLProtocol {
-  static let enabled = ProcessInfo.processInfo.arguments.contains("--captro-vertical-slow-network")
+  static let slow = ProcessInfo.processInfo.arguments.contains("--captro-vertical-slow-network")
+  static let enabled = slow || ProcessInfo.processInfo.arguments.contains("--captro-vertical-good-network")
+  private static var latency: Double { slow ? 0.5 : 0.02 }
+  private static var interval: Double { slow ? 0.064 : 0.002 }
   private static let statsLock = NSLock()
   private static var requests = 0
   private static var active = 0
@@ -39,7 +42,7 @@ final class CaptroSlowMediaFixture: URLProtocol {
         self.send(data, offset: 0)
       }
       work = next
-      delivery.asyncAfter(deadline: .now() + 0.5, execute: next)
+      delivery.asyncAfter(deadline: .now() + Self.latency, execute: next)
     }
   }
   private func send(_ data: Data, offset: Int) {
@@ -51,7 +54,7 @@ final class CaptroSlowMediaFixture: URLProtocol {
     client?.urlProtocol(self, didLoad: chunk)
     let next = DispatchWorkItem { [weak self] in self?.send(data, offset: end) }
     work = next
-    delivery.asyncAfter(deadline: .now() + 0.064, execute: next)
+    delivery.asyncAfter(deadline: .now() + Self.interval, execute: next)
   }
   private func finish(error: Error?) {
     guard !stopped else { return }
@@ -75,7 +78,7 @@ final class CaptroSlowMediaFixture: URLProtocol {
   }
   static var summary: String {
     statsLock.withLock {
-      "latencyMs=500;bytesPerSecondPerRequest=64000;requests=\(requests);active=\(active);peak=\(peak);bytes=\(bytes);cancelled=\(cancelled);failures=\(failures)"
+      "latencyMs=\(Int(latency * 1000));bytesPerSecondPerRequest=\(Int(4096 / interval));requests=\(requests);active=\(active);peak=\(peak);bytes=\(bytes);cancelled=\(cancelled);failures=\(failures)"
     }
   }
 }

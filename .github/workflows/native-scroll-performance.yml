@@ -1,0 +1,103 @@
+name: Optimized Home scrolling diagnostics
+on:
+  workflow_call:
+    inputs:
+      profile_cpu:
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  profile:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Record source and available hardware
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/source.txt"
+          xcodebuild -version >> "$RUNNER_TEMP/source.txt"
+          xcrun devicectl list devices >> "$RUNNER_TEMP/source.txt" 2>&1 || true
+          xcrun xctrace list devices >> "$RUNNER_TEMP/source.txt" 2>&1
+          echo 'Release -O with CAPTRO_PERFORMANCE_REVIEW; no DEBUG; isolated fixtures, NOT a physical device run or distributable binary.' >> "$RUNNER_TEMP/source.txt"
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Start simulator
+        run: |
+          runtime=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(r for r in json.load(sys.stdin)["devices"] if r.endswith("iOS-26-4")))')
+          device=$(xcrun simctl create 'Captro optimized scroll' com.apple.CoreSimulator.SimDeviceType.iPhone-13-Pro "$runtime")
+          echo "CAPTRO_SIM=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl list devices available >> "$RUNNER_TEMP/source.txt"
+      - name: Build optimized isolated diagnostic app
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme CaptroPerformance -configuration Release \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" \
+            -derivedDataPath "$RUNNER_TEMP/ScrollBuild" CODE_SIGNING_ALLOWED=NO \
+            'OTHER_SWIFT_FLAGS=$(inherited) -DCAPTRO_PERFORMANCE_REVIEW' \
+            build-for-testing 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Normal and fast gestures, cold and warm, good and weak transport
+        timeout-minutes: 22
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcrun simctl io "$CAPTRO_SIM" recordVideo --codec=h264 "$RUNNER_TEMP/scroll.mp4" > "$RUNNER_TEMP/recording.log" 2>&1 &
+          recorder=$!
+          trap 'kill -INT "$recorder" 2>/dev/null || true' EXIT
+          xcodebuild -project Captro.xcodeproj -scheme CaptroPerformance -configuration Release \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/ScrollBuild" -resultBundlePath "$RUNNER_TEMP/Scroll.xcresult" \
+            -only-testing:CaptroLayoutUITests/FeedScrollPerformanceTests CODE_SIGNING_ALLOWED=NO \
+            'OTHER_SWIFT_FLAGS=$(inherited) -DCAPTRO_PERFORMANCE_REVIEW' \
+            test-without-building 2>&1 | tee "$RUNNER_TEMP/scroll.log"
+      - name: Bounded separate host Time Profiler capture
+        if: ${{ inputs.profile_cpu && success() }}
+        timeout-minutes: 7
+        working-directory: ios_native/MIRA
+        run: |
+          # Separate profiled trial: never mix profiler overhead into the paired
+          # unprofiled metrics. Root avoids a hidden host authorization prompt.
+          sudo xcrun xctrace record --template 'Time Profiler' --all-processes --time-limit 120s \
+            --output "$RUNNER_TEMP/ScrollCPU.trace" > "$RUNNER_TEMP/cpu.log" 2>&1 &
+          profiler=$!
+          ( sleep 160; sudo kill -INT "$profiler" 2>/dev/null || true; sleep 10; sudo kill -KILL "$profiler" 2>/dev/null || true ) &
+          watchdog=$!
+          trap 'sudo kill -INT "$profiler" 2>/dev/null || true; kill "$watchdog" 2>/dev/null || true' EXIT
+          xcodebuild -project Captro.xcodeproj -scheme CaptroPerformance -configuration Release \
+            -destination "platform=iOS Simulator,id=$CAPTRO_SIM" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/ScrollBuild" -resultBundlePath "$RUNNER_TEMP/Profiled.xcresult" \
+            -only-testing:CaptroLayoutUITests/FeedScrollPerformanceTests/testNormalAndFastGoodTransport \
+            CODE_SIGNING_ALLOWED=NO 'OTHER_SWIFT_FLAGS=$(inherited) -DCAPTRO_PERFORMANCE_REVIEW' \
+            test-without-building > "$RUNNER_TEMP/profiled.log" 2>&1
+          wait "$profiler" || true
+      - name: Export actual evidence
+        if: always()
+        run: |
+          for name in Scroll Profiled; do
+            if [ -d "$RUNNER_TEMP/$name.xcresult" ]; then
+              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$name.xcresult" --output-path "$RUNNER_TEMP/$name-evidence"
+              xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/$name.xcresult" > "$RUNNER_TEMP/$name-summary.json"
+              xcrun xcresulttool get test-results metrics --path "$RUNNER_TEMP/$name.xcresult" > "$RUNNER_TEMP/$name-metrics.json" 2>&1 || true
+            fi
+          done
+          if [ -d "$RUNNER_TEMP/ScrollCPU.trace" ]; then
+            sudo xcrun xctrace export --input "$RUNNER_TEMP/ScrollCPU.trace" --toc --output "$RUNNER_TEMP/cpu-toc.xml" >> "$RUNNER_TEMP/cpu.log" 2>&1 || true
+            sudo xcrun xctrace export --input "$RUNNER_TEMP/ScrollCPU.trace" --xpath '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]' --output "$RUNNER_TEMP/cpu-samples.xml" >> "$RUNNER_TEMP/cpu.log" 2>&1 || true
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: optimized-scroll-evidence
+          path: |
+            ${{ runner.temp }}/source.txt
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/scroll.mp4
+            ${{ runner.temp }}/*-summary.json
+            ${{ runner.temp }}/*-metrics.json
+            ${{ runner.temp }}/*-evidence/
+            ${{ runner.temp }}/cpu-*.xml
+            ${{ runner.temp }}/ScrollCPU.trace/
