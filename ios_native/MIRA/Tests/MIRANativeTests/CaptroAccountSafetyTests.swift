@@ -2,6 +2,40 @@ import XCTest
 @testable import MIRANative
 
 @MainActor final class CaptroAccountSafetyTests: XCTestCase {
+  func testColdBootstrapOutageOffersRetryWithoutErasingSession() async throws {
+    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let (auth, api, keychain) = await fixture()
+    AccountSafetyProtocol.handler = { $0.reply(503, Data("{\"code\":\"UPSTREAM_UNAVAILABLE\"}".utf8)) }
+    await auth.bootstrap(api: api)
+    XCTAssertTrue(auth.needsSessionRetry)
+    let retained = await keychain.refreshToken()
+    XCTAssertEqual(retained, "refresh-a")
+    AccountSafetyProtocol.handler = { $0.reply(200, Data("{\"id\":\"a\",\"username\":\"tester_a\"}".utf8)) }
+    await auth.bootstrap(api: api)
+    XCTAssertFalse(auth.needsSessionRetry)
+    XCTAssertEqual(auth.user?.id, "a")
+    keychain.clearSession()
+  }
+
+  func testAPIRefreshFollowedByProfileOutageKeepsRotatedSession() async throws {
+    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let (auth, api, keychain) = await fixture()
+    AccountSafetyProtocol.handler = { transport in
+      if transport.request.url?.path == "/auth/refresh" {
+        transport.reply(200, Data("{\"access_token\":\"rotated\",\"refresh_token\":\"rotated-refresh\",\"user\":{\"id\":\"a\"}}".utf8))
+      } else if transport.request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-a" {
+        transport.reply(401, Data("{\"code\":\"INVALID_TOKEN\"}".utf8))
+      } else { transport.reply(503, Data("{\"code\":\"UPSTREAM_UNAVAILABLE\"}".utf8)) }
+    }
+    await auth.bootstrap(api: api)
+    let retained = await keychain.refreshToken()
+    XCTAssertEqual(retained, "rotated-refresh")
+    XCTAssertEqual(auth.user?.id, "a")
+    keychain.clearSession()
+  }
+
   func testRefreshOutagesPreserveCredentialsAndRetry() async throws {
     for status in [429, 500, 503] {
       let (auth, api, keychain) = await fixture()

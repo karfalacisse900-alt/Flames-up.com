@@ -52,6 +52,7 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
   @Published public private(set) var user: MIRAUser?
   @Published public private(set) var isGuest: Bool
   @Published public private(set) var isBootstrapping = true
+  @Published public private(set) var needsSessionRetry = false
   @Published public private(set) var isWorking = false
   @Published public var errorMessage: String?
   @Published public var passwordResetContext: MIRAPasswordResetContext?
@@ -128,6 +129,7 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
     MIRAPerformanceTimeline.mark("auth_bootstrap_start")
     MIRAAuthDiagnostics.sessionStage("restore_started")
     isBootstrapping = true
+    needsSessionRetry = false
     let storedToken = await keychain.accessToken()
     guard generation == sessionGeneration else { return }
     guard let storedToken, !storedToken.isEmpty else {
@@ -202,6 +204,7 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
       }
     }
     isBootstrapping = false
+    needsSessionRetry = user == nil && token != nil
     MIRAPerformanceTimeline.mark("auth_bootstrap_finished", detail: user == nil ? "signed_out" : "signed_in")
   }
 
@@ -412,6 +415,7 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
       refreshToken = response.refreshToken
       MIRALocalJSONCache.setAccountScope(userId: response.user.id)
       user = response.user
+      needsSessionRetry = false
       setGuestMode(false)
       isBootstrapping = false
       keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
@@ -455,6 +459,7 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
     refreshToken = nil
     user = nil
     errorMessage = nil
+    needsSessionRetry = false
     passwordResetContext = nil
     isWorking = false
     isBootstrapping = false

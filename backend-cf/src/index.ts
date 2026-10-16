@@ -20148,6 +20148,14 @@ api.get('/payments/purchases/:purchaseId', authMiddleware, async (c) => {
     id: postgrestEqFilter(purchaseId), buyer_id: postgrestEqFilter(authId),
   }, '*', 1);
   if (!rows[0]) return c.json({ detail: 'Purchase not found.' }, 404);
+  if (['payment_pending', 'expired'].includes(rows[0].status) && rows[0].payment_interface !== 'native'
+      && cleanText(rows[0].provider_checkout_id, 180).startsWith('cs_')) {
+    const session = await stripeApiGet(c, `/checkout/sessions/${encodeURIComponent(rows[0].provider_checkout_id)}`);
+    if (session.ok && session.data?.payment_status === 'paid') {
+      await completeCommercePurchaseFromSession(c, `status-checkout-${rows[0].id}`, session.data);
+      rows = await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(purchaseId), buyer_id: postgrestEqFilter(authId) }, '*', 1);
+    }
+  }
   if (rows[0].status === 'payment_pending' && rows[0].payment_interface === 'native'
       && cleanText(rows[0].provider_payment_id, 180).startsWith('pi_')) {
     try {
@@ -20164,7 +20172,10 @@ api.get('/payments/purchases/:purchaseId', authMiddleware, async (c) => {
     }
   }
   c.header('Cache-Control', 'private, no-store');
-  return c.json({ purchase: commercePurchasePayload(rows[0]) });
+  const recovery = await supabaseAdminSelectRows(c, 'app_payment_recovery', {
+    purchase_id: postgrestEqFilter(purchaseId), status: 'eq.needs_review',
+  }, 'purchase_id', 1);
+  return c.json({ purchase: commercePurchasePayload(recovery.length ? { ...rows[0], status: 'payment_received_under_review' } : rows[0]) });
 });
 
 api.post('/commerce/purchases/:purchaseId/checkout', authMiddleware, async (c) => {
@@ -23022,6 +23033,7 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
         posts_removed_today: () => supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['removed', 'deleted']), updated_at: `gte.${todayIso}` }),
         users_suspended_today: () => supabaseAdminCountRows(c, 'app_users', { 'metadata->>status': postgrestEqFilter('suspended'), updated_at: `gte.${todayIso}` }),
         new_accounts_today: () => supabaseAdminCountRows(c, 'app_users', { created_at: `gte.${todayIso}` }),
+        payment_recovery_pending: () => supabaseAdminCountRows(c, 'app_payment_recovery', { status: 'eq.needs_review' }),
         upload_failures_24h: () => supabaseAdminCountRows(c, 'app_media_assets', { or: '(moderation_status.eq.failed,upload_status.eq.failed)', updated_at: `gte.${dayAgoIso}` }),
         new_reports: async () => supabaseEnrichAdminReportRows(c, await supabaseAdminQueryRows(c, 'app_reports', {
           select: '*',
@@ -23042,6 +23054,7 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
           posts_removed_today: values.posts_removed_today,
           users_suspended_today: values.users_suspended_today,
           new_accounts_today: values.new_accounts_today,
+          payment_recovery_pending: values.payment_recovery_pending,
           upload_failures_24h: values.upload_failures_24h,
         },
         errors,

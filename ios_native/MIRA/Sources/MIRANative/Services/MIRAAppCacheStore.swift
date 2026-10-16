@@ -245,7 +245,15 @@ actor MIRAAppCacheStore {
   }
 
   func loadDiscoverStories() async -> [MIRAStoryGroup]? {
-    await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: CacheKey.discoverStories, maxAge: contentCacheAge)
+    let scope = MIRALocalJSONCache.currentScopeIdentifier
+    guard let cached = await MIRALocalJSONCache.load([MIRAStoryGroup].self, key: CacheKey.discoverStories,
+      maxAge: contentCacheAge, expectedScopeIdentifier: scope),
+      scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+    let active = CaptroStoryExpiry.groups(cached, at: Date())
+    if active != cached {
+      await MIRALocalJSONCache.save(active, key: CacheKey.discoverStories, expectedScopeIdentifier: scope)
+    }
+    return scope == MIRALocalJSONCache.currentScopeIdentifier ? active : nil
   }
 
   func saveDiscoverStories(_ stories: [MIRAStoryGroup]) async {

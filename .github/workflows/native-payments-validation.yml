@@ -2,6 +2,10 @@ name: Validate Native Payments
 on:
   workflow_dispatch:
     inputs:
+      additional_review:
+        description: Isolated native review regressions; no production credentials or distribution
+        type: boolean
+        default: false
       skip_generic_build:
         description: Avoid the redundant generic build; simulator tests still build the complete app
         type: boolean
@@ -16,7 +20,11 @@ on:
 permissions:
   contents: read
 jobs:
+  additional-review:
+    if: ${{ inputs.additional_review }}
+    uses: ./.github/workflows/additional-review-validation.yml
   validate:
+    if: ${{ !inputs.additional_review }}
     runs-on: macos-26
     timeout-minutes: 45
     steps:

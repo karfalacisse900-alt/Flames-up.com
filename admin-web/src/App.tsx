@@ -519,6 +519,7 @@ function DashboardPage({ token, openReport }: { token: string; openReport: (id: 
     ['urgent_reports', 'Urgent reports'],
     ['upload_failures_24h', 'Upload failures'],
     ['new_accounts_today', 'New accounts'],
+    ['payment_recovery_pending', 'Paid purchases needing recovery'],
   ];
   return (
     <section className="page">

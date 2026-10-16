@@ -312,7 +312,15 @@ public struct MIRANativeRootView: View {
 
   @ViewBuilder
   private var destinationView: some View {
-    if authSession.user == nil && !authSession.isGuest {
+    if authSession.needsSessionRetry && authSession.user == nil && !authSession.isGuest {
+      VStack(spacing: 20) {
+        Text("Couldn’t restore your session").font(.title2)
+        Text("Your sign-in is saved. Check your connection and try again.").foregroundStyle(.secondary)
+        Button("Try again") { Task { await authSession.bootstrap(api: api) } }
+          .disabled(authSession.isBootstrapping)
+        Button("Use a different account") { authSession.logout() }
+      }.padding(24)
+    } else if authSession.user == nil && !authSession.isGuest {
       AuthNativeView(session: authSession, api: api)
         .transition(.opacity)
     } else if let user = authSession.user, user.isDeletionPending {
