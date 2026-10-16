@@ -1163,6 +1163,9 @@ private struct StoryThoughtBubbleState: Identifiable, Hashable {
 }
 
 struct StoryViewerNativeView: View {
+  @State private var expiryNow = Date()
+  @State private var localRailGroups: [MIRAStoryGroup]?
+  @State private var nextStoryExpiry: Date?
   let group: MIRAStoryGroup
   let allGroups: [MIRAStoryGroup]
   let api: MIRAAPIClient
@@ -1199,7 +1202,7 @@ struct StoryViewerNativeView: View {
   @Environment(\.scenePhase) private var scenePhase
 
   private var stories: [MIRAStatusPreview] {
-    localStories ?? (activeGroup.statuses?.isEmpty == false ? activeGroup.statuses! : [])
+    localStories ?? CaptroStoryExpiry.active(activeGroup.statuses ?? [], at: expiryNow)
   }
 
   private var activeGroup: MIRAStoryGroup {
@@ -1207,8 +1210,8 @@ struct StoryViewerNativeView: View {
   }
 
   private var storyRailGroups: [MIRAStoryGroup] {
-    let available = allGroups.filter { $0.statuses?.isEmpty == false }
-    return available.isEmpty ? [activeGroup] : available
+    let available = localRailGroups ?? CaptroStoryExpiry.groups(allGroups, at: expiryNow)
+    return available.isEmpty ? CaptroStoryExpiry.groups([activeGroup], at: expiryNow) : available
   }
 
   private var currentStory: MIRAStatusPreview? {
@@ -1232,6 +1235,7 @@ struct StoryViewerNativeView: View {
     )
     .miraStatusBarHidden(true)
     .onAppear {
+      recheckStoryExpiry()
       armStoryPlaybackForCurrentStory(reason: "story_view_open")
     }
     .task(id: currentStory?.id) {
@@ -1239,6 +1243,13 @@ struct StoryViewerNativeView: View {
       let _: EmptyResponse? = try? await api.post("/statuses/\(id)/view", body: EmptyBody())
     }
     .task(id: storyPrewarmTaskID) { await prewarmStoryMediaWindow() }
+    .task(id: nextStoryExpiry) {
+      guard let expiry = nextStoryExpiry else { return }
+      do { try await Task.sleep(for: .seconds(max(0, expiry.timeIntervalSinceNow))) }
+      catch { return }
+      guard !Task.isCancelled else { return }
+      recheckStoryExpiry()
+    }
     .task(id: currentStory?.id) { await prepareStoryAudioIfNeeded() }
     .task {
       if localStories == nil { localStories = activeGroup.statuses ?? [] }
@@ -1328,6 +1339,7 @@ struct StoryViewerNativeView: View {
     }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active {
+        recheckStoryExpiry()
         armStoryPlaybackForCurrentStory(reason: "story_active")
         resumeStoryAudioIfNeeded()
       } else {
@@ -1483,7 +1495,7 @@ struct StoryViewerNativeView: View {
 
   private func storyRailNeighbor(offset: Int) -> MIRAStoryGroup? {
     let groups = storyRailGroups
-    guard let index = groups.firstIndex(where: { $0.id == activeGroup.id }) else { return nil }
+    guard let index = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }) else { return nil }
     let neighborIndex = index + offset
     guard groups.indices.contains(neighborIndex) else { return nil }
     return groups[neighborIndex]
@@ -1515,7 +1527,7 @@ struct StoryViewerNativeView: View {
     }
 
     let groups = storyRailGroups
-    if let groupIndex = groups.firstIndex(where: { $0.id == activeGroup.id }) {
+    if let groupIndex = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }) {
       for offset in [1] {
         let nextIndex = groupIndex + offset
         guard groups.indices.contains(nextIndex) else { continue }
@@ -1577,6 +1589,7 @@ struct StoryViewerNativeView: View {
   }
 
   private func selectStoryGroup(_ railGroup: MIRAStoryGroup) {
+    guard let railGroup = CaptroStoryExpiry.groups([railGroup], at: Date()).first else { recheckStoryExpiry(); return }
     let urls = orderedUniqueStoryURLs((railGroup.statuses ?? []).prefix(2).compactMap(\.mediaURL))
     if !urls.isEmpty {
       MIRAVideoPrewarmManager.shared.prewarm(urls: urls, keepOnly: Set(urls.filter(\.isVideoURL).prefix(1)))
@@ -1615,7 +1628,7 @@ struct StoryViewerNativeView: View {
 
   private func switchStoryGroup(offset: Int) {
     let groups = storyRailGroups
-    guard let currentIndex = groups.firstIndex(where: { $0.id == activeGroup.id }) else { return }
+    guard let currentIndex = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }) else { return }
     let nextIndex = currentIndex + offset
     guard groups.indices.contains(nextIndex) else { return }
     selectStoryGroup(groups[nextIndex])
@@ -1675,7 +1688,7 @@ struct StoryViewerNativeView: View {
   }
 
   private var captureCounter: String {
-    let preceding = storyRailGroups.prefix { $0.id != activeGroup.id }
+    let preceding = storyRailGroups.prefix { !CaptroStoryExpiry.sameOwner($0, activeGroup) }
       .reduce(0) { $0 + ($1.statuses?.count ?? 0) }
     let total = storyRailGroups.reduce(0) { $0 + ($1.statuses?.count ?? 0) }
     return "\(preceding + selectedIndex + 1) / \(max(1, total))"
@@ -2007,6 +2020,7 @@ struct StoryViewerNativeView: View {
   }
 
   private func goToPreviousStory() {
+    if recheckStoryExpiry() { return }
     if selectedIndex == 0 { goToPreviousStoryGroup(); return }
     if selectedIndex > 0 {
       prewarmStoriesStarting(at: selectedIndex - 1)
@@ -2016,10 +2030,32 @@ struct StoryViewerNativeView: View {
     }
   }
 
+  @discardableResult private func recheckStoryExpiry() -> Bool {
+    let previous = stories
+    let previousID = currentStory?.id
+    let now = Date()
+    let remaining = CaptroStoryExpiry.active(previous, at: now)
+    let nextID = previous.dropFirst(selectedIndex).first { story in remaining.contains { $0.id == story.id } }?.id
+    expiryNow = now
+    localStories = remaining
+    localRailGroups = CaptroStoryExpiry.groups(allGroups.isEmpty ? [activeGroup] : allGroups, at: now)
+    nextStoryExpiry = CaptroStoryExpiry.next(localRailGroups ?? [])
+    if remaining.isEmpty {
+      let ownerIndex = allGroups.firstIndex { CaptroStoryExpiry.sameOwner($0, activeGroup) }
+      let following = ownerIndex.map { Array(allGroups.dropFirst($0 + 1)) } ?? []
+      if let next = CaptroStoryExpiry.groups(following, at: now).first { selectStoryGroup(next) }
+      else { closeStoryViewer() }
+      return true
+    }
+    selectedIndex = remaining.firstIndex { $0.id == previousID } ?? remaining.firstIndex { $0.id == nextID } ?? 0
+    return currentStory?.id != previousID
+  }
+
   private func goToNextStory() {
+    if recheckStoryExpiry() { return }
     guard selectedIndex < stories.count - 1 else {
       let groups = storyRailGroups
-      if let index = groups.firstIndex(where: { $0.id == activeGroup.id }), index < groups.count - 1 {
+      if let index = groups.firstIndex(where: { CaptroStoryExpiry.sameOwner($0, activeGroup) }), index < groups.count - 1 {
         goToNextStoryGroup()
       } else {
         closeStoryViewer()

@@ -95,6 +95,7 @@ targets:
       - path: Tests/MIRANativeTests/CaptroMediaGeometryTests.swift
       - path: Tests/MIRANativeTests/CaptroFavoritesTests.swift
       - path: Tests/MIRANativeTests/CaptroAccountSafetyTests.swift
+      - path: Tests/MIRANativeTests/CaptroAdditionalReviewTests.swift
       - path: Tests/MIRANativeTests/CaptroReliabilityTests.swift
       - path: Tests/MIRANativeTests/CaptroImageUploadPreparationTests.swift
       - path: Tests/MIRANativeTests/CaptroCaptureReviewTests.swift

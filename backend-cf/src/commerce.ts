@@ -1,3 +1,4 @@
+import { currencyRule, validateCurrencyAmount } from './currency.ts';
 type Select = (table: string, filters: Record<string, string>, select?: string, limit?: number) => Promise<any[]>;
 
 const CONTENT_TYPES = new Set([
@@ -122,18 +123,19 @@ export function validateCommerceInput(value: unknown, options: {
   const expiresAt = isoDate(read(input, 'expiresAt', 'expires_at'), 'expiration date');
   if (startsAt && endsAt && endsAt <= startsAt) throw new Error('End time must be after start time.');
   const capacity = integer(input.capacity, 1, 1_000_000);
-  const currency = (text(input.currency, 3) || 'USD').toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error('Choose a valid currency.');
+  const currency = input.currency == null ? 'USD' : typeof input.currency === 'string' ? input.currency.trim().toUpperCase() : '';
+  currencyRule(currency);
+  // Older clients multiplied all currencies by 100. Do not accept ambiguous
+  // non-USD drafts from those versions or reinterpret historical stored prices.
+  if (currency !== 'USD' && read(input, 'moneyContractVersion', 'money_contract_version') !== 1) throw new Error('Update Captro to publish in this currency.');
   const rawPrices = Array.isArray(input.prices) && input.prices.length ? input.prices.slice(0, 12) : [{
     label: 'General', unitAmount: paymentModel === 'paid' ? read(input, 'unitAmount', 'unit_amount') : 0,
     capacity,
   }];
   const prices: CaptroValidatedPrice[] = rawPrices.map((raw: any, index: number) => {
-    const amountValue = Number(read(raw, 'unitAmount', 'unit_amount'));
+    const amountValue = read(raw, 'unitAmount', 'unit_amount');
     const amount = paymentModel === 'free' ? 0 : amountValue;
-    if (paymentModel === 'paid' && (!Number.isInteger(amount) || amount < 50 || amount > 5_000_000)) {
-      throw new Error('Enter a price of at least $0.50.');
-    }
+    validateCurrencyAmount(amount, currency, paymentModel === 'paid');
     const tierCapacity = integer(raw.capacity, 1, 1_000_000);
     return {
       label: text(raw.label, 80) || (index === 0 ? 'General' : `Tier ${index + 1}`),
@@ -171,7 +173,7 @@ export function validateCommerceInput(value: unknown, options: {
       refund_policy: text(read(input, 'refundPolicy', 'refund_policy'), 1600) || '',
       visibility: ['public', 'followers', 'friends', 'private'].includes(options.visibility) ? options.visibility : 'public',
       audience: ['anyone', 'followers', 'friends', 'approval'].includes(String(input.audience)) ? String(input.audience) : 'anyone',
-      public_data: publicDataForType(contentType, read(input, 'publicData', 'public_data')),
+      public_data: { ...publicDataForType(contentType, read(input, 'publicData', 'public_data')), moneyContractVersion: 1 },
       private_config: {},
     },
     prices,

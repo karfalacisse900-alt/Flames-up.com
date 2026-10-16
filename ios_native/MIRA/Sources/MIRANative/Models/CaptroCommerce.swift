@@ -34,6 +34,7 @@ public struct CaptroCommerceDetails: Codable, Hashable, Identifiable {
   public let serviceFeeBasisPoints: Int?
   public let serviceFeeFixedAmount: Int?
   public let serviceFeeMinimumAmount: Int?
+  public var serviceFeeBuyerPays: Bool? = nil
 
   public var resolvedLowestPrice: CaptroCommercePrice? {
     if let lowestPrice, lowestPrice.active { return lowestPrice }
@@ -159,16 +160,52 @@ public struct CaptroCommercePublicData: Codable, Hashable {
 }
 
 enum CaptroMoney {
+  private struct Rule: Decodable { let exponent: Int; let minimum: Int; let maximum: Int }
+  private struct Contract: Decodable { let version: Int; let currencies: [String: Rule] }
+  private static let contract: Contract? = {
+    guard let url = Bundle.module.url(forResource: "CaptroCurrencyContract", withExtension: "json"),
+          let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONDecoder().decode(Contract.self, from: data)
+  }()
+  static var supportedCurrencies: [String] { (contract?.currencies.keys.map { $0 } ?? []).sorted() }
+  static var defaultCurrency: String {
+    let code = Locale.current.currency?.identifier ?? "USD"
+    return supportedCurrencies.contains(code) ? code : "USD"
+  }
+  static func parse(_ value: String, currency: String, locale: Locale = .current) -> Int? {
+    guard let rule = contract?.currencies[currency.uppercased()] else { return nil }
+    let parts = value.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: locale.decimalSeparator ?? ".")
+    guard parts.count <= 2 else { return nil }
+    let groups = parts[0].components(separatedBy: locale.groupingSeparator ?? ",")
+    if groups.count > 1 {
+      guard (1...3).contains(groups[0].count), groups.dropFirst().allSatisfy({ $0.count == 3 }) else { return nil }
+    }
+    let whole = groups.joined()
+    let fraction = parts.count == 2 ? parts[1] : ""
+    let digits = CharacterSet(charactersIn: "0123456789")
+    guard !whole.isEmpty, whole.unicodeScalars.allSatisfy(digits.contains),
+          fraction.unicodeScalars.allSatisfy(digits.contains), fraction.count <= rule.exponent,
+          parts.count == 1 || !fraction.isEmpty,
+          let units = Int(whole + fraction + String(repeating: "0", count: rule.exponent - fraction.count)),
+          units >= rule.minimum, units <= rule.maximum else { return nil }
+    return units
+  }
   static func format(minorUnits: Int, currency: String) -> String {
+    let code = currency.uppercased()
+    guard let rule = contract?.currencies[code] else { return "\(code) \(minorUnits) provider units" }
+    let scale = (0..<rule.exponent).reduce(1) { result, _ in result * 10 }
     let formatter = NumberFormatter()
     formatter.numberStyle = .currency
-    formatter.currencyCode = currency.uppercased()
-    formatter.maximumFractionDigits = minorUnits % 100 == 0 ? 0 : 2
-    return formatter.string(from: NSNumber(value: Double(minorUnits) / 100.0)) ?? "\(currency.uppercased()) \(minorUnits / 100)"
+    formatter.currencyCode = code
+    formatter.minimumFractionDigits = minorUnits % scale == 0 ? 0 : rule.exponent
+    formatter.maximumFractionDigits = rule.exponent
+    let value = NSDecimalNumber(decimal: Decimal(minorUnits) / Decimal(scale))
+    return formatter.string(from: value) ?? "\(code) \(value.stringValue)"
   }
 }
 
 public struct CaptroCommerceInput: Encodable {
+  public let moneyContractVersion = 1
   public let enabled: Bool
   public let contentType: String
   public let paymentModel: String
@@ -227,7 +264,7 @@ struct CaptroCommerceDraft: Codable, Hashable {
   var expiresAt = Date().addingTimeInterval(60 * 60 * 24 * 30)
   var refundPolicy = ""
   var audience = "anyone"
-  var currency = Locale.current.currency?.identifier ?? "USD"
+  var currency = CaptroMoney.defaultCurrency
   var prices = [CaptroCommercePriceDraft()]
   var ageRequirement = ""
   var originalPrice = ""
@@ -246,11 +283,12 @@ struct CaptroCommerceDraft: Codable, Hashable {
   }
 
   var validationError: String? {
+    guard CaptroMoney.supportedCurrencies.contains(currency) else { return "Choose a supported currency before publishing. Your saved price has not been changed." }
     if let capacityValue = positiveInt(capacity), capacityValue < 1 { return "Capacity must be at least 1." }
     if !capacity.trimmingCharacters(in: .whitespaces).isEmpty && positiveInt(capacity) == nil { return "Enter a valid capacity." }
     if isPaid {
       for tier in prices {
-        guard minorUnits(tier.price) != nil else { return "Enter a valid price of at least 0.50 for every tier." }
+        guard minorUnits(tier.price) != nil else { return "Enter a supported price and currency for every tier, without extra decimal places." }
         if !tier.capacity.trimmingCharacters(in: .whitespaces).isEmpty && positiveInt(tier.capacity) == nil {
           return "Enter a valid quantity for every tier."
         }
@@ -268,7 +306,8 @@ struct CaptroCommerceDraft: Codable, Hashable {
     address: String?,
     city fallbackCity: String?
   ) -> CaptroCommerceInput? {
-    guard enabled, let contentType = kind.commerceContentType else { return nil }
+    guard enabled, validationError == nil, CaptroMoney.supportedCurrencies.contains(currency),
+          let contentType = kind.commerceContentType else { return nil }
     let formatter = ISO8601DateFormatter()
     let priceInputs = (isPaid ? prices : [CaptroCommercePriceDraft(label: "General", price: "0")]).map {
       CaptroCommercePriceInput(
@@ -327,9 +366,7 @@ struct CaptroCommerceDraft: Codable, Hashable {
   }
 
   private func minorUnits(_ value: String) -> Int? {
-    let clean = value.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
-    guard let decimal = Decimal(string: clean), decimal >= Decimal(string: "0.50")!, decimal <= 50_000 else { return nil }
-    return NSDecimalNumber(decimal: decimal * Decimal(100)).intValue
+    CaptroMoney.parse(value, currency: currency)
   }
 }
 

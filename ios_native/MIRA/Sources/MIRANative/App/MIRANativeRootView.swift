@@ -216,6 +216,7 @@ public struct MIRANativeRootView: View {
       }
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
+    .background(CaptroRecoveryPresenter(session: authSession, api: api).frame(width: 0, height: 0))
     .environmentObject(localization)
     .preferredColorScheme(selectedTab == .scan && cameraDarkChrome ? .dark : MIRAAppearanceResolver.colorScheme(for: appearancePreference))
     .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }

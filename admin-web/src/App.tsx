@@ -530,12 +530,13 @@ function DashboardPage({ token, openReport }: { token: string; openReport: (id: 
             {cardOrder.map(([key, label]) => (
               <article className="metric-card" key={key}>
                 <span>{label}</span>
-                <strong>{cards[key] || 0}</strong>
+                <strong>{cards[key] ?? 'Unavailable'}</strong>
+                {data?.errors?.[key] ? <span role="status">{data.errors[key]}</span> : null}
               </article>
             ))}
           </div>
           <Panel title="Priority queue">
-            {data?.queues.new_reports.length ? (
+            {data?.errors?.new_reports ? <ErrorBanner message={data.errors.new_reports} /> : data?.queues.new_reports.length ? (
               <div className="admin-table compact-table">
                 <div className="table-head reports-head">
                   <span>Priority</span>

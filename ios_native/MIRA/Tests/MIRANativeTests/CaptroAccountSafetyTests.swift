@@ -2,6 +2,56 @@ import XCTest
 @testable import MIRANative
 
 @MainActor final class CaptroAccountSafetyTests: XCTestCase {
+  func testRefreshOutagesPreserveCredentialsAndRetry() async throws {
+    for status in [429, 500, 503] {
+      let (auth, api, keychain) = await fixture()
+      AccountSafetyProtocol.handler = { $0.reply(status, Data("{\"code\":\"SESSION_REFRESH_UNAVAILABLE\"}".utf8)) }
+      let accepted = await auth.refreshAccessTokenIfNeeded(api: api)
+      XCTAssertFalse(accepted)
+      let retained = await keychain.refreshToken()
+      XCTAssertEqual(retained, "refresh-a")
+      AccountSafetyProtocol.handler = { $0.reply(200, Self.authResponse("a")) }
+      let recovered = await auth.refreshAccessTokenIfNeeded(api: api)
+      XCTAssertTrue(recovered)
+      keychain.clearSession()
+    }
+    MIRALocalJSONCache.setAccountScope(userId: nil)
+  }
+
+  func testConfirmedRefreshRejectionClearsCredentials() async throws {
+    let (auth, api, keychain) = await fixture()
+    AccountSafetyProtocol.handler = { $0.reply(401, Data("{\"code\":\"INVALID_TOKEN\"}".utf8)) }
+    let accepted = await auth.refreshAccessTokenIfNeeded(api: api)
+    XCTAssertFalse(accepted)
+    let retained = await keychain.refreshToken()
+    XCTAssertNil(retained)
+  }
+
+  func testRotatedCredentialsSurviveMissingProfile() async throws {
+    let (auth, api, keychain) = await fixture()
+    AccountSafetyProtocol.handler = { $0.reply(200, Data("{\"access_token\":\"rotated\",\"refresh_token\":\"rotated-refresh\",\"user\":null,\"profile_pending\":true}".utf8)) }
+    let accepted = await auth.refreshAccessTokenIfNeeded(api: api)
+    XCTAssertTrue(accepted)
+    let retained = await keychain.refreshToken()
+    XCTAssertEqual(retained, "rotated-refresh")
+    keychain.clearSession()
+  }
+
+  func testRecoveryForAnotherAccountDoesNotSwitchCurrentAccount() async throws {
+    let (auth, api, keychain) = await fixture()
+    AccountSafetyProtocol.handler = { $0.reply(200, Self.authResponse("a")) }
+    await auth.login(email: "a@example.invalid", password: "fixture", api: api)
+    auth.passwordResetContext = MIRAPasswordResetContext(accessToken: "recovery-b", refreshToken: nil, email: nil)
+    AccountSafetyProtocol.handler = { $0.reply(200, Self.authResponse("b")) }
+    let completed = await auth.completePasswordReset(password: "fixture-new-password", api: api)
+    XCTAssertTrue(completed)
+    XCTAssertEqual(auth.user?.id, "a")
+    let retained = await keychain.accessToken()
+    XCTAssertEqual(retained, "fixture-a")
+    XCTAssertNil(auth.passwordResetContext)
+    keychain.clearSession(); MIRALocalJSONCache.setAccountScope(userId: nil)
+  }
+
   private func fixture() async -> (MIRAAuthSession, MIRAAPIClient, AccountSafetySessionStorage) {
     let id = UUID().uuidString
     // This is a hostless logic-test bundle. System Keychain writes are not a

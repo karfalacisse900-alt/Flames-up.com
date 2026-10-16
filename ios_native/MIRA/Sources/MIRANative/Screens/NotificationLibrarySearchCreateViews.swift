@@ -1878,7 +1878,7 @@ public struct CreatePostNativeView: View {
         TextField("Price", text: primaryCommercePrice)
           .keyboardType(.decimalPad)
         Picker("Currency", selection: $draft.commerceDraft.currency) {
-          ForEach(Locale.commonISOCurrencyCodes, id: \.self) { Text($0).tag($0) }
+          ForEach(CaptroMoney.supportedCurrencies, id: \.self) { Text($0).tag($0) }
         }
         Picker("Used for", selection: $draft.commerceDraft.isUsedOutsideApp) {
           Text("In person / service").tag(true)

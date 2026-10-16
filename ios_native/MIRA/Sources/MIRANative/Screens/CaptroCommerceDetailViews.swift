@@ -304,7 +304,7 @@ struct CaptroCommerceDetailSection: View {
     let fixed = max(0, commerce.serviceFeeFixedAmount ?? 0)
     let minimum = max(0, commerce.serviceFeeMinimumAmount ?? 0)
     let percentage = (item * basisPoints + 9_999) / 10_000
-    let fee = max(minimum, percentage + fixed)
+    let fee = commerce.serviceFeeBuyerPays == false ? 0 : max(minimum, percentage + fixed)
     let tax = max(0, (price.taxAmount ?? 0) * quantity)
     return (item, fee, tax, item + fee + tax, price.currency)
   }

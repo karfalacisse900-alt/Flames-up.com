@@ -65,7 +65,7 @@ test('creator input preserves type-specific public fields but never accepts priv
   assert.equal(config.purchasable.fulfillment_type, 'membership');
   assert.equal(config.purchasable.payment_model, 'paid');
   assert.equal(config.prices[0].unit_amount, 800);
-  assert.deepEqual(config.purchasable.public_data, { benefits: ['Monthly walk'], rules: ['Be kind'] });
+  assert.deepEqual(config.purchasable.public_data, { benefits: ['Monthly walk'], rules: ['Be kind'], moneyContractVersion: 1 });
   assert.deepEqual(config.purchasable.private_config, {});
   assert.doesNotMatch(JSON.stringify(config), /attacker-controlled|groupChatId/);
 });
@@ -84,7 +84,7 @@ test('free access is truly zero and paid prices cannot be less than fifty cents'
     paymentModel: 'paid',
     commerceClass: 'outside_app',
     prices: [{ label: 'Deal', unitAmount: 49 }],
-  }, baseOptions), /at least \$0\.50/);
+  }, baseOptions), /CAPTRO_CURRENCY_AMOUNT_INVALID/);
 });
 
 test('paid checkout requires an explicit outside-app or digital classification', () => {

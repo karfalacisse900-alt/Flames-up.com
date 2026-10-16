@@ -34,7 +34,8 @@ export type AdminSession = {
 };
 
 export type DashboardResponse = {
-  cards: Record<string, number>;
+  cards: Record<string, number | null>;
+  errors?: Record<string, string>;
   queues: {
     new_reports: ReportSummary[];
   };

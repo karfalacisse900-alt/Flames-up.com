@@ -1,20 +1,26 @@
 import Foundation
 
+private struct CaptroRefreshResponse: Decodable {
+  let accessToken: String
+  let refreshToken: String?
+  let user: MIRAUser?
+}
+
 @MainActor private final class MIRAAuthRefreshCoordinator {
-  private var inFlight: (id: UUID, token: String, task: Task<MIRAAuthResponse, Error>)?
+  private var inFlight: (id: UUID, token: String, task: Task<CaptroRefreshResponse, Error>)?
 
   func cancel() {
     inFlight?.task.cancel()
     inFlight = nil
   }
 
-  func refresh(api: MIRAAPIClient, refreshToken: String) async throws -> MIRAAuthResponse {
+  func refresh(api: MIRAAPIClient, refreshToken: String) async throws -> CaptroRefreshResponse {
     if let inFlight, inFlight.token == refreshToken {
       return try await inFlight.task.value
     }
     cancel()
     let id = UUID()
-    let task = Task<MIRAAuthResponse, Error> {
+    let task = Task<CaptroRefreshResponse, Error> {
       try await api.post(
         "/auth/refresh",
         body: MIRARefreshSessionBody(refreshToken: refreshToken)
@@ -91,19 +97,22 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
     do {
       let response = try await refreshCoordinator.refresh(api: api, refreshToken: storedRefreshToken)
       guard generation == sessionGeneration, !Task.isCancelled,
-            expectedUserID == nil || expectedUserID == response.user.id else { return false }
+            expectedUserID == nil || response.user == nil || expectedUserID == response.user?.id,
+            !response.accessToken.isEmpty else { return false }
       token = response.accessToken
       refreshToken = response.refreshToken ?? storedRefreshToken
-      MIRALocalJSONCache.setAccountScope(userId: response.user.id)
-      user = response.user
       keychain.saveSession(accessToken: response.accessToken, refreshToken: refreshToken)
-      await persistProfile(response.user)
+      if let freshUser = response.user {
+        MIRALocalJSONCache.setAccountScope(userId: freshUser.id)
+        user = freshUser
+        await persistProfile(freshUser)
+      }
       guard generation == sessionGeneration else { return false }
       errorMessage = nil
       return true
     } catch {
       guard generation == sessionGeneration, !Task.isCancelled else { return false }
-      let shouldInvalidateSession = error.isUnauthorizedAPIError || error.isForbiddenAPIError
+      let shouldInvalidateSession = error.isConfirmedSessionRejection
       guard shouldInvalidateSession else {
         errorMessage = nil
         return false
@@ -177,13 +186,14 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
           MIRAAuthDiagnostics.sessionStage("restore_refreshed")
         } catch {
           guard generation == sessionGeneration, !Task.isCancelled else { return }
-          clearSessionState()
-          MIRAAuthDiagnostics.sessionStage("restore_rejected")
+          if error.isConfirmedSessionRejection { clearSessionState() }
+          MIRAAuthDiagnostics.sessionStage("restore_profile_deferred")
         }
       } else if error.isUnauthorizedAPIError || error.isForbiddenAPIError {
         guard generation == sessionGeneration else { return }
-        clearSessionState()
-        MIRAAuthDiagnostics.sessionStage("restore_rejected")
+        // refreshAccessTokenIfNeeded owns invalidation. Its transient failure
+        // must not be overwritten by the original access-token 401 here.
+        MIRAAuthDiagnostics.sessionStage("restore_refresh_deferred")
       } else {
         // Keep the stored session intact on transient/network failures so the
         // user is not signed out unexpectedly during bootstrap.
@@ -220,13 +230,12 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
           MIRAPerformanceTimeline.mark("auth_cached_user_recovered")
         } catch {
           guard generation == sessionGeneration, !Task.isCancelled else { return }
-          clearSessionState()
-          MIRAPerformanceTimeline.mark("auth_cached_user_rejected")
+          if error.isConfirmedSessionRejection { clearSessionState() }
+          MIRAPerformanceTimeline.mark("auth_cached_profile_deferred")
         }
       } else if error.isUnauthorizedAPIError || error.isForbiddenAPIError {
         guard generation == sessionGeneration else { return }
-        clearSessionState()
-        MIRAPerformanceTimeline.mark("auth_cached_user_rejected")
+        MIRAPerformanceTimeline.mark("auth_cached_refresh_deferred")
       }
     }
   }
@@ -300,13 +309,12 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
       errorMessage = "Reset session is missing. Open the email link again."
       return false
     }
-    invalidateSessionWork()
     let generation = sessionGeneration
     isWorking = true
     errorMessage = nil
     defer { if generation == sessionGeneration { isWorking = false } }
     do {
-      let response: MIRAAuthResponse = try await api.post(
+      let _: MIRAAuthResponse = try await api.post(
         "/auth/password/reset/confirm",
         body: MIRAPasswordResetConfirmBody(
           accessToken: passwordResetContext.accessToken,
@@ -314,16 +322,11 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
           password: password
         )
       )
-      guard generation == sessionGeneration, !Task.isCancelled else { return false }
-      token = response.accessToken
-      refreshToken = response.refreshToken
-      MIRALocalJSONCache.setAccountScope(userId: response.user.id)
-      user = response.user
-      setGuestMode(false)
-      isBootstrapping = false
+      guard generation == sessionGeneration, !Task.isCancelled,
+            self.passwordResetContext == passwordResetContext else { return false }
+      // A recovery link is not an account-switch command. Reset the recovery
+      // identity on the server, but preserve the current account/guest session.
       self.passwordResetContext = nil
-      keychain.saveSession(accessToken: response.accessToken, refreshToken: response.refreshToken)
-      await persistProfile(response.user)
       return generation == sessionGeneration
     } catch {
       guard generation == sessionGeneration, !Task.isCancelled else { return false }
@@ -346,6 +349,7 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
 
   @MainActor
   public func handleIncomingURL(_ url: URL) {
+    guard !isWorking || passwordResetContext == nil else { return }
     guard let context = passwordResetContext(from: url) else { return }
     passwordResetContext = context
     errorMessage = nil
@@ -508,6 +512,14 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
 }
 
 private extension Error {
+  var isConfirmedSessionRejection: Bool {
+    guard let apiError = self as? MIRAAPIError else { return false }
+    if case .server(let status, let code, _) = apiError {
+      if code == "SESSION_REFRESH_FAILED" { return false } // older Worker outage response
+      return status == 401 || (status == 403 && code == "ACCOUNT_DISABLED")
+    }
+    return false // an unparseable response is not proof of revocation
+  }
   var isUnauthorizedAPIError: Bool {
     guard let apiError = self as? MIRAAPIError else { return false }
     if case .badStatus(let status) = apiError, status == 401 { return true }

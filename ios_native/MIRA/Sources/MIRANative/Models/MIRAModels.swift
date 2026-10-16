@@ -1478,6 +1478,7 @@ public struct MIRAGoogleOAuthBody: Encodable {
 }
 
 public struct MIRARefreshSessionBody: Encodable {
+  public let supportsPartialRefresh = true
   public let refreshToken: String
 }
 

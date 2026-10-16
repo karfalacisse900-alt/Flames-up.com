@@ -68,7 +68,7 @@ struct CaptroCommerceEditorFields: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
         Spacer()
         Picker("Currency", selection: $draft.currency) {
-          ForEach(Locale.commonISOCurrencyCodes, id: \.self) { Text($0).tag($0) }
+          ForEach(CaptroMoney.supportedCurrencies, id: \.self) { Text($0).tag($0) }
         }
         .pickerStyle(.menu)
       }
@@ -196,8 +196,6 @@ struct CaptroCommerceEditorFields: View {
   }
 
   private func priceMinorUnits(_ value: String) -> Int? {
-    let clean = value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: ".")
-    guard let decimal = Decimal(string: clean), decimal >= Decimal(string: "0.50")! else { return nil }
-    return NSDecimalNumber(decimal: decimal * Decimal(100)).intValue
+    CaptroMoney.parse(value, currency: draft.currency)
   }
 }

@@ -1103,6 +1103,7 @@ enum MainFeedSection: String, CaseIterable {
 
 public struct MainFeedView: View {
   @State private var homeStories: [MIRAStoryGroup] = []
+  @State private var homeStoriesExpiry: Date?
   @State private var homeAvatarURL: String?
   @State private var isRefreshingHomeStories = false
   @State private var lastHomeStoriesRefreshAttemptAt: Date?
@@ -1284,7 +1285,8 @@ public struct MainFeedView: View {
   private var activeFeed: some View {
       observingFeed
       .onChange(of: scenePhase) { _, phase in
-        guard phase == .active, !model.posts.isEmpty else { return }
+        guard phase == .active else { return }
+        updateHomeStories(homeStories)
         Task {
           async let feed: Void = model.revalidateIfStale()
           async let stories: Void = loadHomeStories()
@@ -1441,7 +1443,7 @@ public struct MainFeedView: View {
           }
           ForEach(homeStories) { group in
             Button {
-              selectedStoryGroup = group
+              selectedStoryGroup = CaptroStoryExpiry.groups([group], at: Date()).first
             } label: {
               homeStoryAvatar(url: group.userProfileImage, unseen: group.hasUnviewed == true, add: false, clubName: group.ownerType == "club" ? group.displayName : nil)
             }
@@ -1455,6 +1457,13 @@ public struct MainFeedView: View {
       .frame(maxWidth: .infinity)
       .clipped()
       .accessibilityIdentifier("home.story.rail")
+      .task(id: homeStoriesExpiry) {
+        guard let expiry = homeStoriesExpiry else { return }
+        do { try await Task.sleep(for: .seconds(max(0, expiry.timeIntervalSinceNow))) }
+        catch { return }
+        guard !Task.isCancelled else { return }
+        updateHomeStories(homeStories)
+      }
     }
     .frame(height: 78)
     .background(MIRATheme.Color.surface)
@@ -1496,6 +1505,7 @@ public struct MainFeedView: View {
   }
 
   private func loadHomeStories(forceRefresh: Bool = false) async {
+    updateHomeStories(homeStories)
     guard !isRefreshingHomeStories else { return }
     if !forceRefresh, let lastHomeStoriesRefreshAttemptAt,
        Date().timeIntervalSince(lastHomeStoriesRefreshAttemptAt) < 30 { return }
@@ -1506,17 +1516,23 @@ public struct MainFeedView: View {
       homeAvatarURL = profile.profileImage
     }
     if let cached = await MIRAAppCacheStore.shared.loadDiscoverStories(), homeStories.isEmpty {
-      homeStories = cached.filter { $0.statuses?.isEmpty == false }
+      updateHomeStories(cached)
       MIRAPerformanceTimeline.mark("home_stories_visible", detail: "cache")
     }
     do {
       let fresh: [MIRAStoryGroup] = try await model.api.get("/statuses")
-      homeStories = fresh.filter { $0.statuses?.isEmpty == false }
+      updateHomeStories(fresh)
       MIRAPerformanceTimeline.mark("home_stories_visible", detail: "server")
       await MIRAAppCacheStore.shared.saveDiscoverStories(homeStories)
     } catch {
-      // Keep cached stories visible when offline.
+      // Preserve only still-valid cached content, never revive expired Stories.
+      updateHomeStories(homeStories)
     }
+  }
+  private func updateHomeStories(_ groups: [MIRAStoryGroup]) {
+    let active = CaptroStoryExpiry.groups(groups, at: Date())
+    if homeStories != active { homeStories = active }
+    homeStoriesExpiry = CaptroStoryExpiry.next(active)
   }
   @ViewBuilder
   private func feedContent(size: CGSize, bottomInset: CGFloat) -> some View {

@@ -21,8 +21,6 @@ public struct AuthNativeView: View {
   @State private var isForgotPasswordVisible = false
   @State private var forgotPasswordEmail = ""
   @State private var forgotPasswordNotice = ""
-  @State private var resetPassword = ""
-  @State private var confirmResetPassword = ""
   @State private var appleSignInNonce: String?
   @State private var isSocialSignInWorking = false
   @State private var welcomeHasRevealedArtwork = false
@@ -84,19 +82,6 @@ public struct AuthNativeView: View {
       }
       .presentationDetents([.medium, .large])
       .interactiveDismissDisabled(isSocialSignInWorking || session.isWorking)
-    }
-    .sheet(isPresented: Binding(
-      get: { session.passwordResetContext != nil },
-      set: { if !$0 { session.clearPasswordResetContext() } }
-    )) {
-      NavigationStack {
-        resetPasswordPanel
-          .toolbar { ToolbarItem(placement: .cancellationAction) {
-            Button("Cancel") { session.clearPasswordResetContext(); resetPassword = ""; confirmResetPassword = "" }
-              .disabled(session.isWorking)
-          } }
-      }
-      .interactiveDismissDisabled(session.isWorking)
     }
   }
 
@@ -223,30 +208,6 @@ public struct AuthNativeView: View {
         }.disabled(session.isWorking || !forgotPasswordEmail.contains("@"))
       }
       if !forgotPasswordNotice.isEmpty { Text(forgotPasswordNotice).foregroundStyle(MIRATheme.Color.forest) }
-      if let error = session.errorMessage { Text(error).foregroundStyle(.red) }
-    }
-  }
-
-  private var resetPasswordPanel: some View {
-    SettingsDetailScaffold(title: "New password") {
-      Section {
-        SecureField("New password", text: $resetPassword).textContentType(.newPassword)
-        SecureField("Confirm password", text: $confirmResetPassword).textContentType(.newPassword)
-      } footer: { Text("Use at least 8 characters.") }
-      Section {
-        Button {
-          Task {
-            if await session.completePasswordReset(password: resetPassword, api: api) {
-              resetPassword = ""; confirmResetPassword = ""
-              session.clearPasswordResetContext()
-              isForgotPasswordVisible = false
-              isAuthPanelVisible = false
-            }
-          }
-        } label: { HStack { Text("Save new password"); Spacer(); if session.isWorking { ProgressView() } } }
-          .disabled(session.isWorking || resetPassword.count < 8 || resetPassword != confirmResetPassword)
-      }
-      if !confirmResetPassword.isEmpty && resetPassword != confirmResetPassword { Text("Passwords do not match.").foregroundStyle(.red) }
       if let error = session.errorMessage { Text(error).foregroundStyle(.red) }
     }
   }

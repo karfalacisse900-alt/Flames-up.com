@@ -1,4 +1,8 @@
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
+import { dashboardResults } from './dashboard-results';
+import { AuthRefreshFailure, upstreamRefreshFailure } from './auth-refresh-errors';
+import { currencyFeeUnits } from './currency';
+import { reconcileHostedHold } from './hosted-hold';
 import { validateMediaWritingOverlays } from './media-writing';
 import { validatePostMediaFraming } from './post-media-framing';
 import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody, newMediaStampWritingError } from './creation-intent';
@@ -8652,22 +8656,23 @@ function stripeRequestHeaders(c: any, options: StripeRequestOptions = {}): Recor
   return headers;
 }
 
-function getMarketplaceFeeConfig(c: any) {
+function getMarketplaceFeeConfig(c: any, currency = 'USD') {
+  const units = currencyFeeUnits(c.env, currency);
   const integer = (value: unknown, fallback: number, minimum: number, maximum: number) => {
     const parsed = Number(value);
     return Number.isInteger(parsed) ? Math.max(minimum, Math.min(maximum, parsed)) : fallback;
   };
   return {
     basisPoints: integer(c.env.CAPTRO_SERVICE_FEE_BPS, 500, 0, 10_000),
-    fixedAmount: integer(c.env.CAPTRO_SERVICE_FEE_FIXED_CENTS, 30, 0, 100_000),
-    minimumAmount: integer(c.env.CAPTRO_SERVICE_FEE_MINIMUM_CENTS, 0, 0, 100_000),
+    fixedAmount: integer(units.fixed, 30, 0, 100_000),
+    minimumAmount: integer(units.minimum, 0, 0, 100_000),
     buyerPaysPlatformFee: c.env.CAPTRO_PLATFORM_FEE_BUYER_PAYS !== 'false',
     creatorPaysPlatformFee: c.env.CAPTRO_PLATFORM_FEE_CREATOR_PAYS === 'true',
   };
 }
 
-function marketplaceAmounts(c: any, itemAmount: number, taxAmount = 0) {
-  return saleAmounts(itemAmount, getMarketplaceFeeConfig(c), taxAmount);
+function marketplaceAmounts(c: any, itemAmount: number, taxAmount = 0, currency = 'USD') {
+  return saleAmounts(itemAmount, getMarketplaceFeeConfig(c, currency), taxAmount);
 }
 
 async function requireStripeDatabaseMode(c: any) {
@@ -9391,9 +9396,16 @@ async function commerceDetailsForVisiblePost(c: any, post: any, viewerAppUserId:
 
 function commercePayloadWithPricing(c: any, payload: any) {
   if (!payload) return payload;
-  const fee = getMarketplaceFeeConfig(c);
+  if (payload.paymentModel === 'free') return payload;
+  let fee: ReturnType<typeof getMarketplaceFeeConfig>;
+  const currency = payload.lowestPrice?.currency || payload.prices?.[0]?.currency || 'USD';
+  try { fee = getMarketplaceFeeConfig(c, currency); }
+  catch { return { ...payload, status: 'unavailable', pricingError: 'Currency pricing is awaiting configuration.' }; }
+  if (currency !== 'USD' && payload.publicData?.moneyContractVersion !== 1) {
+    return { ...payload, status: 'unavailable', pricingError: 'This legacy price needs creator review.' };
+  }
   const prices = Array.isArray(payload.prices) ? payload.prices.map((price: any) => {
-    const amounts = marketplaceAmounts(c, Number(price?.unitAmount || 0));
+    const amounts = marketplaceAmounts(c, Number(price?.unitAmount || 0), 0, price.currency);
     return {
       ...price,
       creatorAmount: amounts.creatorAmount,
@@ -9412,6 +9424,7 @@ function commercePayloadWithPricing(c: any, payload: any) {
     serviceFeeBasisPoints: fee.basisPoints,
     serviceFeeFixedAmount: fee.fixedAmount,
     serviceFeeMinimumAmount: fee.minimumAmount,
+    serviceFeeBuyerPays: fee.buyerPaysPlatformFee,
   };
 }
 
@@ -10727,7 +10740,8 @@ async function completeCommercePurchaseFromSession(c: any, eventId: string, sess
   }
   const settlement = await waitForMarketplaceSettlement(c, intent, purchase);
   const digest = await sha256Hex(JSON.stringify({ id: session?.id, payment_intent: paymentIntentId, amount, currency: session?.currency }));
-  const confirmedPurchase = await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
+  let confirmedPurchase;
+  try { confirmedPurchase = await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
     p_purchase_id: purchaseId,
     p_provider_event_id: cleanText(eventId, 180),
     p_provider_checkout_id: cleanText(session?.id, 180),
@@ -10740,7 +10754,16 @@ async function completeCommercePurchaseFromSession(c: any, eventId: string, sess
     p_currency: cleanText(session?.currency || 'usd', 3).toUpperCase(),
     p_available_at: null,
     p_payload_digest: digest,
-  });
+  }); } catch (error) {
+    if (!getErrorCode(error).includes('CAPTRO_PURCHASE_NOT_PAYABLE')) throw error;
+    // A verified paid legacy hold may already have been released by an older
+    // Worker. Never resurrect inventory or auto-refund; persist an operator case.
+    await supabaseAdminRpc(c, 'captro_record_late_payment', {
+      p_purchase_id: purchaseId, p_payment_id: paymentIntentId, p_event_id: cleanText(eventId, 180),
+      p_amount: amount, p_currency: cleanText(session.currency, 3).toUpperCase(),
+    });
+    return { processed: true, recoveryRequired: true };
+  }
   await reconcileCreatorEarnings(c, purchase.connected_account_id);
   return { processed: true, purchase: confirmedPurchase };
 }
@@ -10768,6 +10791,7 @@ async function requireRetainedPlatform(c:any) {
 }
 
 async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = false) {
+  if (!forExpiry) await supabaseAdminRpc(c, 'captro_validate_checkout', { p_purchase_id: purchase.id });
   const stripe = getStripeConfig(c);
   if (!stripe.configured || !stripe.webhookConfigured) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
   if (purchase.status !== 'payment_pending' || purchase.payment_interface !== 'native') throw new Error('CAPTRO_PURCHASE_NOT_PAYABLE');
@@ -10905,10 +10929,7 @@ async function reconcileCreatorEarnings(c: any, connectedAccountId: string) {
 async function cancelCommercePurchaseFromSession(c: any, session: any) {
   const purchaseId = isUuidText(session?.metadata?.captro_purchase_id || '');
   if (!purchaseId || session?.metadata?.source !== 'captro_commerce') return { processed: false };
-  await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', {
-    p_purchase_id: purchaseId,
-    p_checkout_id: cleanText(session?.id, 180),
-  });
+  await reconcileHostedPurchase(c, { id: purchaseId, provider_checkout_id: cleanText(session?.id, 180) });
   return { processed: true };
 }
 
@@ -11008,7 +11029,8 @@ async function refundCommercePurchaseFromCharge(c: any, eventId: string, charge:
   return { processed };
 }
 
-async function createCommerceCheckoutSession(c: any, purchase: any) {
+async function createCommerceCheckoutSession(c: any, purchase: any, forExpiry = false) {
+  if (!forExpiry) await supabaseAdminRpc(c, 'captro_validate_checkout', { p_purchase_id: purchase.id });
   const purchasableRows = await supabaseAdminSelectRows(c, 'app_purchasables', {
     id: postgrestEqFilter(purchase?.purchasable_id),
   }, '*', 1);
@@ -11048,7 +11070,7 @@ async function createCommerceCheckoutSession(c: any, purchase: any) {
     success_url: `${successUrl}${successUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${cancelUrl}${cancelUrl.includes('?') ? '&' : '?'}purchase_id=${purchaseId}`,
     client_reference_id: purchase.buyer_id,
-    expires_at: Math.floor(Date.now() / 1000) + (35 * 60),
+    expires_at: Math.floor(Date.parse(purchase.hold_expires_at) / 1000),
     'line_items[0][price]': stripePriceId,
     'line_items[0][quantity]': Math.max(1, Number(purchase.quantity || 1)),
     'metadata[source]': 'captro_commerce',
@@ -12929,8 +12951,8 @@ async function refreshSupabaseSession(c: any, refreshToken: string) {
     body: JSON.stringify({ refresh_token: token }),
   });
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`SUPABASE_REFRESH_FAILED:${response.status}:${text.slice(0, 180)}`);
+    const body: any = await response.json().catch(() => ({}));
+    throw upstreamRefreshFailure(response.status, body.code ?? body.error_code, response.headers.get('retry-after'));
   }
   const data: any = await response.json().catch(() => ({}));
   if (!data?.access_token) throw new Error('SUPABASE_REFRESH_SESSION_MISSING');
@@ -15193,16 +15215,28 @@ api.post('/auth/refresh', async (c) => {
     if (!refreshToken) return c.json({ detail: 'refresh_token is required' }, 400);
 
     const session = await refreshSupabaseSession(c, refreshToken);
-    const issued = await issueCaptroTokenForSupabaseAccessToken(c, session.access_token);
-    return c.json(supabaseAuthSessionResponse(session, issued.user));
+    try {
+      const issued = await issueCaptroTokenForSupabaseAccessToken(c, session.access_token);
+      return c.json(supabaseAuthSessionResponse(session, issued.user));
+    } catch (error) {
+      if (getErrorCode(error) === 'ACCOUNT_DISABLED') throw error;
+      // Rotation already succeeded. New clients retain the rotated credentials
+      // and retry /auth/me; this response grants no profile or authorization.
+      if (body.supportsPartialRefresh === true || body.supports_partial_refresh === true) {
+        return c.json({ access_token: session.access_token, refresh_token: session.refresh_token,
+          user: null, profile_pending: true });
+      }
+      throw error;
+    }
   } catch (error: any) {
     const code = getErrorCode(error);
     if (code === 'SUPABASE_REFRESH_TOKEN_REQUIRED') return c.json({ detail: 'refresh_token is required' }, 400);
-    if (code.startsWith('SUPABASE_REFRESH_FAILED:400') || code.startsWith('SUPABASE_REFRESH_FAILED:401') || code.startsWith('SUPABASE_REFRESH_FAILED:403')) {
-      return c.json({ detail: 'Invalid session. Please sign in again.', code: 'INVALID_TOKEN' }, 401);
+    if (error instanceof AuthRefreshFailure) {
+      if (error.retryAfter) c.header('Retry-After', error.retryAfter);
+      return c.json({ detail: error.status === 401 ? 'Invalid session. Please sign in again.' : 'Session refresh is temporarily unavailable. Try again.', code: error.code }, error.status);
     }
-    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.' }, 403);
-    return c.json({ detail: 'Session refresh failed. Please sign in again.', code: 'SESSION_REFRESH_FAILED' }, 401);
+    if (code === 'ACCOUNT_DISABLED') return c.json({ detail: 'This account cannot be used.', code }, 403);
+    return c.json({ detail: 'Session refresh is temporarily unavailable. Try again.', code: 'SESSION_REFRESH_UNAVAILABLE' }, 503);
   }
 });
 
@@ -20047,7 +20081,8 @@ const beginCommercePurchaseHandler = async (c: any) => {
     const suppliedKey = cleanText(body.idempotency_key || body.idempotencyKey, 120);
     if (native && !isUuidText(suppliedKey)) return c.json({ detail: 'A payment request ID is required.', code: 'CAPTRO_IDEMPOTENCY_KEY_REQUIRED' }, 400);
     const idempotencyKey = suppliedKey || `purchase-${uuid()}`;
-    const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity);
+    if (price.currency !== 'USD' && purchasable.public_data?.moneyContractVersion !== 1) throw new Error('CAPTRO_LEGACY_PRICE_REVIEW_REQUIRED');
+    const amounts = marketplaceAmounts(c, Number(price.unit_amount || 0) * quantity, 0, price.currency);
     stage = 'purchase_hold';
     paymentTrace(c, 'checkout_start', { buyerId: buyerAuthId, accessId: purchasable.id, tierId: price.id, quantity, amount: amounts.buyerTotal });
     let purchase: any = await supabaseAdminRpc(c, 'captro_begin_marketplace_purchase_v2', {
@@ -20077,10 +20112,9 @@ const beginCommercePurchaseHandler = async (c: any) => {
           purchase.provider_checkout_id = session.id;
         }
       } catch (error) {
-        if (purchase.payment_interface !== 'native') await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', {
-          p_purchase_id: purchase.id,
-          p_checkout_id: purchase.provider_checkout_id || '',
-        }).catch(() => undefined);
+        // A timeout can mean provider creation succeeded but its response was
+        // lost. Keep the hold for provider-aware reconciliation, never release
+        // solely because this request failed.
         throw error;
       }
     }
@@ -22981,37 +23015,38 @@ api.get('/admin/dashboard', authMiddleware, async (c) => {
       const todayIso = todayStart.toISOString();
       const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const openStatuses = ['open', 'pending', 'under_review', 'in_review', 'escalated'];
-      const [openReports, urgentReports, reportsToday, postsRemovedToday, usersSuspendedToday, newAccountsToday, uploadFailures, quickRows] = await Promise.all([
-        supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses) }),
-        supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses), priority: postgrestInFilter(['urgent', 'high']) }),
-        supabaseAdminCountRows(c, 'app_reports', { created_at: `gte.${todayIso}` }),
-        supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['removed', 'deleted']), updated_at: `gte.${todayIso}` }),
-        supabaseAdminCountRows(c, 'app_users', { status: postgrestEqFilter('suspended'), updated_at: `gte.${todayIso}` }),
-        supabaseAdminCountRows(c, 'app_users', { created_at: `gte.${todayIso}` }),
-        supabaseAdminCountRows(c, 'app_media_assets', { or: '(moderation_status.eq.failed,upload_status.eq.failed)', updated_at: `gte.${dayAgoIso}` }),
-        supabaseAdminQueryRows(c, 'app_reports', {
+      const { values, errors } = await dashboardResults({
+        open_reports: () => supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses) }),
+        urgent_reports: () => supabaseAdminCountRows(c, 'app_reports', { status: postgrestInFilter(openStatuses), priority: postgrestInFilter(['urgent', 'high']) }),
+        reports_today: () => supabaseAdminCountRows(c, 'app_reports', { created_at: `gte.${todayIso}` }),
+        posts_removed_today: () => supabaseAdminCountRows(c, 'app_posts', { status: postgrestInFilter(['removed', 'deleted']), updated_at: `gte.${todayIso}` }),
+        users_suspended_today: () => supabaseAdminCountRows(c, 'app_users', { 'metadata->>status': postgrestEqFilter('suspended'), updated_at: `gte.${todayIso}` }),
+        new_accounts_today: () => supabaseAdminCountRows(c, 'app_users', { created_at: `gte.${todayIso}` }),
+        upload_failures_24h: () => supabaseAdminCountRows(c, 'app_media_assets', { or: '(moderation_status.eq.failed,upload_status.eq.failed)', updated_at: `gte.${dayAgoIso}` }),
+        new_reports: async () => supabaseEnrichAdminReportRows(c, await supabaseAdminQueryRows(c, 'app_reports', {
           select: '*',
           filters: { status: postgrestInFilter(openStatuses) },
           order: 'created_at.desc',
           limit: 40,
-        }),
-      ]);
+        })),
+      });
       const rank: Record<string, number> = { urgent: 0, high: 1, medium: 2, normal: 3 };
-      const quick = (await supabaseEnrichAdminReportRows(c, quickRows))
-        .sort((a, b) => (rank[cleanText(a.priority || 'normal', 20)] ?? 4) - (rank[cleanText(b.priority || 'normal', 20)] ?? 4))
+      const quick = (values.new_reports ?? [])
+        .sort((a: any, b: any) => (rank[cleanText(a.priority || 'normal', 20)] ?? 4) - (rank[cleanText(b.priority || 'normal', 20)] ?? 4))
         .slice(0, 8);
       return c.json({
         cards: {
-          open_reports: openReports,
-          urgent_reports: urgentReports,
-          reports_today: reportsToday,
-          posts_removed_today: postsRemovedToday,
-          users_suspended_today: usersSuspendedToday,
-          new_accounts_today: newAccountsToday,
-          upload_failures_24h: uploadFailures,
+          open_reports: values.open_reports,
+          urgent_reports: values.urgent_reports,
+          reports_today: values.reports_today,
+          posts_removed_today: values.posts_removed_today,
+          users_suspended_today: values.users_suspended_today,
+          new_accounts_today: values.new_accounts_today,
+          upload_failures_24h: values.upload_failures_24h,
         },
+        errors,
         queues: {
-          new_reports: quick.map((row) => adminReportSummary(row, c.env)),
+          new_reports: quick.map((row: any) => adminReportSummary(row, c.env)),
         },
       });
     }
@@ -26135,16 +26170,52 @@ async function handleMediaModerationQueue(batch: MessageBatch<MediaModerationJob
   }
 }
 
+async function reconcileHostedPurchase(c: any, purchase: any, expireOpen = false) {
+  if (!purchase.provider_checkout_id) {
+    // Replaying the original key/expiry resolves ambiguous creation. If the
+    // provider cannot resolve it, retain inventory and surface the error.
+    const recovered = await createCommerceCheckoutSession(c, purchase, true);
+    purchase.provider_checkout_id = recovered.id;
+  }
+  const sessionPath = `/checkout/sessions/${encodeURIComponent(purchase.provider_checkout_id)}`;
+  const read = async (path: string) => {
+    const result = await stripeApiGet(c, path);
+    if (!result.ok) throw stripeProviderError(result, 'STRIPE_PAYMENT_EXPIRY_READ_FAILED');
+    return result.data;
+  };
+  return reconcileHostedHold({
+    readSession: async () => {
+      const session = await read(sessionPath);
+      if (session.metadata?.source !== 'captro_commerce' || session.metadata?.captro_purchase_id !== purchase.id
+          || session.id !== purchase.provider_checkout_id) throw new Error('STRIPE_PAYMENT_MISMATCH');
+      return session;
+    },
+    expireSession: async () => {
+      if (!expireOpen) return;
+      const result = await stripeApiRequest(c, `${sessionPath}/expire`, {}, `checkout-expire:${purchase.id}`);
+      if (!result.ok) throw stripeProviderError(result, 'STRIPE_CHECKOUT_EXPIRY_FAILED');
+    },
+    readIntent: id => read(`/payment_intents/${encodeURIComponent(id)}`),
+    cancelIntent: async id => {
+      const result = await stripeApiRequest(c, `/payment_intents/${encodeURIComponent(id)}/cancel`, {}, `checkout-payment-expire:${purchase.id}`);
+      if (!result.ok) throw stripeProviderError(result, 'STRIPE_PAYMENT_EXPIRY_FAILED');
+    },
+    confirm: session => completeCommercePurchaseFromSession(c, `reconcile-checkout-${purchase.id}`, session),
+    release: () => supabaseAdminRpc(c, 'captro_cancel_purchase_hold', { p_purchase_id: purchase.id, p_checkout_id: purchase.provider_checkout_id }),
+  });
+}
+
 async function expireNativePaymentHolds(env: Env) {
   const c: any = { env };
   if (!getStripeConfig(c).configured) return;
   await requireStripeDatabaseMode(c);
   const rows = await supabaseAdminQueryRows(c, 'app_purchases', {
-    filters: { status: 'eq.payment_pending', payment_interface: 'eq.native', hold_expires_at: `lt.${now()}` },
+    filters: { status: 'eq.payment_pending', hold_expires_at: `lt.${now()}` },
     order: 'hold_expires_at.asc', limit: 40,
   });
   for (const purchase of rows) {
     try {
+      if (purchase.payment_interface !== 'native') { await reconcileHostedPurchase(c, purchase, true); continue; }
       // Resolve a timed-out create using the original idempotency key before releasing inventory.
       if (!purchase.provider_payment_id) await createCommercePaymentIntent(c, purchase, true);
       const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`);

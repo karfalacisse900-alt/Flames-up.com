@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "currencies": {
+    "USD": { "exponent": 2, "minimum": 50, "maximum": 5000000 },
+    "JPY": { "exponent": 0, "minimum": 50, "maximum": 5000000 }
+  }
+}
