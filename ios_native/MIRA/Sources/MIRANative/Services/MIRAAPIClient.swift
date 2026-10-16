@@ -510,7 +510,7 @@ public final class MIRAAPIClient {
       || requestPath.hasSuffix("/auth/oauth/google")
       || requestPath.hasSuffix("/auth/oauth/apple")
       || requestPath.contains("/auth/password/reset/")
-    if !isRefreshRequest && !isCredentialRequest {
+    if (status == 401 || status == 403) && !isRefreshRequest && !isCredentialRequest {
       let failure = apiError(status: status, data: data)
       if await rejectExplicitRevocation(failure, generation: generation) { throw failure }
     }
