@@ -68,7 +68,9 @@ jobs:
           xcrun simctl io "$WELCOME_SMALL" recordVideo --codec=h264 "$RUNNER_TEMP/welcome-native-reveal.mp4" &
           recording=$!
           xcrun simctl launch "$WELCOME_SMALL" "$bundle" --captro-welcome-review
-          sleep 11
+          # Cold simulator launch can consume several seconds before the
+          # 600ms + 8s artwork motion starts. This is capture duration only.
+          sleep 20
           kill -INT "$recording"
           wait "$recording" || true
           xcrun simctl io "$WELCOME_SMALL" screenshot "$RUNNER_TEMP/welcome-native-settled.png"

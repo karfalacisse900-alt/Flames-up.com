@@ -3,7 +3,8 @@ CAPTRO — Approved welcome screen implementation review
 
 Scope and source
 Review branch: fix/approved-welcome-artwork, based on 6bf55b0a.
-Initial implementation: 5e0773ff. No merge, backend deployment, or TestFlight
+Initial implementation: 5e0773ff. Current native source: 07be0255.
+No merge, backend deployment, or TestFlight
 upload is authorized for these welcome changes. The prior performance release
 remains on its separate branch. No feed/carousel/restoration code was edited.
 Unrelated modified rollout/review documents and supabase/.temp are preserved.
@@ -62,16 +63,96 @@ Google font is licensed under SIL OFL 1.1; license is bundled. No animation SDK,
 new authentication SDK, remote hero loading, or additional backend was introduced.
 
 Verification status
-Exact artwork pixel preservation: PASS locally (decoded source crop vs export).
-git diff --check: PASS for initial implementation.
-Native CI review 38816965004: pending. Large iPhone 17 Pro Max and small iPhone
-13 mini simulators, iOS 26.4 runtime, unsigned debug native application.
+Exact artwork pixel preservation: PASS locally. All 810,840 decoded pixels match
+the approved source's x=0/y=0/870x932 rectangle, including the stamp lettering.
+git diff --check: PASS after the current native changes.
+Native CI review 38816965004: build failed in the DEBUG review host because the
+system accessibilityReduceMotion environment key is read-only. Fixed in 9f40a744
+using a DEBUG-only injectable preference; release still reads the system value.
+Run 38819156924 (9f40a744) built successfully and passed 196 tests on iPhone 17
+Pro Max and 4 on iPhone 13 mini: 192 unit tests plus four welcome UI tests on
+each size, 200 executions, zero failures/skips. iOS 26.4.1 (23E254a), arm64
+simulators, Xcode 26.6 (17F113), macOS 26.6.2, unsigned Debug application.
+Visual review of that run nevertheless found two issues that reachability tests
+did not prove absent: loose headline leading/subtitle wrapping and a Google
+label that was double-scaled at accessibility sizes. 07be0255 uses native line
+views for tight normal-size leading, preserves the approved subtitle line break,
+and applies Dynamic Type exactly once to Google Sans. Its accessibility button
+can grow vertically without an elliptical mask clipping the label. The tests
+now reject a Google button taller than 190pt at accessibility3.
+Final run 38823383863 at 07be0255 PASSED: native build, all 196 large-iPhone tests
+and all four small-iPhone tests. Same device/runtime/toolchain configuration as
+above. 200 executions, zero failures/skips. The final screenshots were inspected,
+not inferred from the passing tests. The accessibility Google label is readable
+on two lines, without the original double-scaling or clipping.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38823383863
 Focused tests exercise real shipping welcome views with isolated tokenless
 storage and an unreachable localhost API, not production accounts. Tests cover
 consent cancellation, existing email entry, guest-without-credentials, legal
-navigation, error presentation, accessible text, and immediate control use.
+navigation, error presentation, accessible text, and usable controls.
 The error fixture checks presentation, not a real provider outage. The consent
-cancel test is NOT a successful Apple/Google provider-cancellation test.
+cancel test is NOT a successful Apple/Google provider-cancellation test. The
+reduced-motion fixture tests the same still-image branch, not toggling iOS Settings.
+XCTest waits for launch quiescence: it does not establish millisecond-level input
+latency during the first 600ms. The controls are not gated by the artwork animation
+in code. The 11.13-second native recording includes the existing launch screen
+and the artwork motion. Simulator startup used several seconds, so this clip
+does NOT establish the full eight-second zoom settling time. The workflow's
+capture duration was subsequently extended to 20 seconds for future runs; that
+diagnostic-only adjustment was not rerun. It changes no native app code.
 Live provider success/cancellation/failure, VoiceOver operation, physical image
 sharpness and physical-device motion remain unverified until actually tested.
-Do not claim actual implementation screenshots until the CI artifacts exist.
+
+Visual evidence and comparison
+Evidence directory (outside the source checkout):
+C:/Users/The-s/Documents/New project/feed-restoration-evidence/welcome-07be0255/
+- welcome-large.png: actual iPhone 17 Pro Max simulator still, 1320x2868.
+- welcome-small.png: actual iPhone 13 mini XCTest still, 1124x2436.
+- welcome-accessibility.png: actual smaller-iPhone accessibility3 controls.
+- welcome-normal-motion.png: actual normal-motion simulator capture, 1080x2340;
+  not proof the final animation frame had settled when captured.
+- welcome-native-reveal.mp4: unedited native 11.13s simulator recording.
+- reference-vs-native.png: labeled comparison, both columns 870px wide with
+  proportions preserved. Shorter reference has black padding beneath it;
+  neither screenshot is stretched to imitate the other's aspect ratio.
+- WelcomeLarge/Small-summary.json, welcome-source.txt and logs retain results.
+
+Visual inspection: approved artwork/lettering are retained without cut stamp
+edges or duplicate wordmark; the lower black join has no hard rectangular seam.
+Headline leading and subtitle wrapping now follow the reference. Native status
+safe area and official provider rendering account for remaining layout/branding
+differences. Legal links are visible on the larger default layout; the smaller
+layout uses a short scroll to reach them. Enlarged text remains scrollable and
+actions/legal links stay reachable. No visual proof of physical-device sharpness
+is claimed: the 870px source is upsampled during 3x rendering and remains softer
+than native text. Please replace only CaptroWelcomeHero with a higher-resolution
+approved original (1484x1589 minimum display envelope, preserving 870:932 aspect;
+a genuine 1740x1864 export is a convenient exact-ratio source), or explicitly
+approve a new rendition. Final artwork quality is not signed off.
+
+Changed files (all paths relative to repository)
+- ios_native/MIRA/Sources/MIRANative/Screens/CaptroWelcomeView.swift:
+  approved artwork, native copy/controls, accessibility and one-shot motion.
+- ios_native/MIRA/Sources/MIRANative/Screens/AuthNativeView.swift:
+  actual welcome route, preserved provider handlers/consent/email/guest flows.
+- ios_native/MIRA/Sources/MIRANative/Resources/WelcomeAssets.xcassets:
+  CaptroWelcomeHero, official CaptroGoogleMark and catalog metadata.
+- ios_native/MIRA/Sources/MIRANative/Resources/GoogleSans-Medium.ttf,
+  GoogleSans-OFL.txt and WELCOME_ASSET_PROVENANCE.txt:
+  official provider font, license, exact extraction and resolution disclosure.
+- ios_native/MIRA/Sources/MIRANative/Screens/CaptroWelcomeReviewHost.swift,
+  ios_native/MIRA/AppTarget/CaptroApp.swift:
+  DEBUG-only isolated route to the actual shipping welcome view.
+- ios_native/MIRA/LayoutUITests/WelcomeTests.swift,
+  ios_native/MIRA/Tests/MIRANativeTests/CaptroWelcomeTests.swift,
+  ios_native/MIRA/project.yml:
+  native control/geometry/guest checks and test target registration.
+- .github/workflows/native-welcome-validation.yml,
+  .github/workflows/native-stamps-validation.yml:
+  unsigned, isolated two-device review workflow; no publishing or production API.
+- docs/CAPTRO_WELCOME_REVIEW_20261015.txt: this implementation review.
+
+Release boundary
+No production setting, backend, permission, feed store, carousel, or restoration
+implementation was changed. No welcome merge, deployment or TestFlight upload.
+Artwork-quality approval remains pending even when native checks pass.
