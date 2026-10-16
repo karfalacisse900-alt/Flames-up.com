@@ -192,7 +192,7 @@ enum CaptroMoney {
   }
   static func decimalText(minorUnits: Int, currency: String) -> String? {
     guard let rule = contract?.currencies[currency.uppercased()], minorUnits >= 0 else { return nil }
-    let scale = (0..<rule.exponent).reduce(1) { $0 * 10 }
+    let scale = (0..<rule.exponent).reduce(1) { result, _ in result * 10 }
     guard rule.exponent > 0 else { return String(minorUnits) }
     let fraction = String(minorUnits % scale)
     return "\(minorUnits / scale)." + String(repeating: "0", count: rule.exponent - fraction.count) + fraction
