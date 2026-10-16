@@ -98,12 +98,16 @@ struct CaptroWelcomeView<AppleControl: View>: View {
           .frame(width: width, height: geometry.size.height + safeTop)
           .offset(y: -safeTop)
           .frame(maxWidth: .infinity, alignment: .top)
-          .accessibilityIdentifier("welcome.fixedPage")
         }
       }
       .background(CaptroWelcomePalette.ink)
     }
-    .background(CaptroWelcomePalette.ink.ignoresSafeArea())
+    .background {
+      VStack(spacing: 0) {
+        CaptroWelcomePalette.paper.frame(height: 120)
+        CaptroWelcomePalette.ink
+      }.ignoresSafeArea()
+    }
     .buttonStyle(.plain)
     .task { await revealArtworkOnce() }
     .onChange(of: reduceMotion) { _, reduced in
