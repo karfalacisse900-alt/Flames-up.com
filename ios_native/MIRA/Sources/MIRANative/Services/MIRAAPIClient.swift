@@ -510,6 +510,10 @@ public final class MIRAAPIClient {
       || requestPath.hasSuffix("/auth/oauth/google")
       || requestPath.hasSuffix("/auth/oauth/apple")
       || requestPath.contains("/auth/password/reset/")
+    if !isRefreshRequest && !isCredentialRequest {
+      let failure = apiError(status: status, data: data)
+      if await rejectExplicitRevocation(failure, generation: generation) { throw failure }
+    }
     if !isRefreshRequest,
        !isCredentialRequest,
        (status == 401 || status == 403),
@@ -534,7 +538,11 @@ public final class MIRAAPIClient {
       try await validateSessionGeneration(generation)
       let retryStatus = (retryResponse as? HTTPURLResponse)?.statusCode ?? 0
       await retryMetric.finish(status: "\(retryStatus)", bytes: retryData.count)
-      guard (200..<300).contains(retryStatus) else { throw apiError(status: retryStatus, data: retryData) }
+      guard (200..<300).contains(retryStatus) else {
+        let failure = apiError(status: retryStatus, data: retryData)
+        _ = await rejectExplicitRevocation(failure, generation: generation)
+        throw failure
+      }
       return retryData
     }
     guard (200..<300).contains(status) else { throw apiError(status: status, data: data) }
@@ -559,6 +567,16 @@ public final class MIRAAPIClient {
     guard let token, !token.isEmpty else { return "anonymous" }
     let digest = SHA256.hash(data: Data(token.utf8))
     return digest.prefix(12).map { String(format: "%02x", $0) }.joined()
+  }
+
+  private func rejectExplicitRevocation(_ error: MIRAAPIError, generation: UInt64?) async -> Bool {
+    guard case .server(let status, let code, _) = error,
+          (status == 401 || status == 403),
+          ["SESSION_REVOKED", "ACCOUNT_DISABLED", "USER_NOT_FOUND"].contains(code ?? ""),
+          let auth = sessionProvider as? MIRAAuthSession else { return false }
+    // A known revoked/deleted identity is not an expired access token. Do not
+    // mint a new session or preserve it just because the refresh service is down.
+    return await auth.rejectRevokedSession(generation: generation)
   }
 
   private func apiError(status: Int, data: Data) -> MIRAAPIError {

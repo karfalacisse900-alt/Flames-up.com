@@ -379,6 +379,13 @@ extension MIRAKeychainSessionProvider: MIRAAuthSessionStorage {}
   }
 
   @MainActor
+  func rejectRevokedSession(generation: UInt64?) -> Bool {
+    guard let generation, generation == sessionGeneration else { return false }
+    logout()
+    return true
+  }
+
+  @MainActor
   public func replaceUser(_ updatedUser: MIRAUser) {
     guard updatedUser.id == user?.id else { return }
     user = updatedUser
@@ -521,7 +528,8 @@ private extension Error {
     guard let apiError = self as? MIRAAPIError else { return false }
     if case .server(let status, let code, _) = apiError {
       if code == "SESSION_REFRESH_FAILED" { return false } // older Worker outage response
-      return status == 401 || (status == 403 && code == "ACCOUNT_DISABLED")
+      return (status == 401 && ["INVALID_TOKEN", "SESSION_REVOKED", "USER_NOT_FOUND"].contains(code ?? ""))
+        || (status == 403 && code == "ACCOUNT_DISABLED")
     }
     return false // an unparseable response is not proof of revocation
   }

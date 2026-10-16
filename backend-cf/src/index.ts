@@ -443,10 +443,10 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
       if (Number.isFinite(suspendedUntil) && suspendedUntil <= Date.now()) {
         await supabaseClearExpiredSuspension(c, userId).catch(() => {});
       } else {
-        return c.json({ detail: 'This account is suspended.' }, 403);
+        return c.json({ detail: 'This account is suspended.', code: 'ACCOUNT_DISABLED' }, 403);
       }
     } else if (accountStatus === 'banned' || accountStatus === 'deleted') {
-      return c.json({ detail: 'This account cannot be used.' }, 403);
+      return c.json({ detail: 'This account cannot be used.', code: 'ACCOUNT_DISABLED' }, 403);
     }
     payload = canonicalSupabaseRequestPayload(payload, user);
     userId = String(payload?.sub || userId);

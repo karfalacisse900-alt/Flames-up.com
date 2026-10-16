@@ -61,6 +61,26 @@ import XCTest
     XCTAssertNil(retained)
   }
 
+  func testExplicitRevocationDoesNotAttemptRefreshDuringAnOutage() async throws {
+    for (status, code) in [(401, "SESSION_REVOKED"), (403, "ACCOUNT_DISABLED")] {
+      MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+      let (auth, api, keychain) = await fixture()
+      let requests = AccountSafetyRequests()
+      AccountSafetyProtocol.handler = { transport in
+        requests.append(transport.request)
+        if transport.request.url?.path == "/auth/refresh" { transport.reply(503, Data("{}".utf8)) }
+        else { transport.reply(status, Data("{\"code\":\"\(code)\"}".utf8)) }
+      }
+      await auth.bootstrap(api: api)
+      let retained = await keychain.refreshToken()
+      XCTAssertNil(retained)
+      XCTAssertNil(auth.user)
+      XCTAssertFalse(auth.needsSessionRetry)
+      XCTAssertFalse(requests.values.contains { $0.url?.path == "/auth/refresh" })
+    }
+    MIRALocalJSONCache.setAccountScope(userId: nil)
+  }
+
   func testRotatedCredentialsSurviveMissingProfile() async throws {
     let (auth, api, keychain) = await fixture()
     AccountSafetyProtocol.handler = { $0.reply(200, Data("{\"access_token\":\"rotated\",\"refresh_token\":\"rotated-refresh\",\"user\":null,\"profile_pending\":true}".utf8)) }
