@@ -1,0 +1,156 @@
+CAPTRO — Targeted post controls and fixed welcome layout
+2026-10-16
+
+Scope
+User authorized these targeted UI changes and a TestFlight update afterward.
+Branch: fix/targeted-post-controls, based on 9489561f.
+Implementation commits: e5bf5cac, e000dfdc, 883f7039, 0e970d4b.
+No merge, backend deployment, database migration, artwork replacement, crypto
+tipping, or unrelated feature changes. Existing dirty rollout documents and
+supabase/.temp remain untouched. CaptroFeedViewport, feed row state, carousel
+paging/direction gates, media ratios and playback coordinator unchanged. The
+only MainFeedView change removes the secondary post-menu Share entry/arguments;
+its feed loading, scrolling, restoration and layout logic are unchanged.
+
+Changes and reasons
+- PostDetailNativeView: empty navigation title instead of Post; removed only the
+  Comments/count heading. Actual comments, input, replies and moderation remain.
+  Removed Like/Unlike, Share and Organize entries from its three-dot menu. Other
+  existing applicable actions are retained; no underlying like/share service
+  was removed. Save menu now reads the same account-scoped Favorites store as Home.
+- CaptroFavoriteButton: while a request is pending, consume the button's touch
+  area and reject new actions instead of disabling hit testing (which could
+  send a second tap through to the media). Tap still requires long-press failure;
+  scroll movement cancels the press. Accessible organize action is retained.
+- CaptroFavoritesStore: retain a single per-post busy reservation across the
+  read/write boundary; existing private save, revision, operation-ID retry,
+  rollback, collection memberships, Undo and account-generation checks retained.
+  Concise failed-write message replaces raw server error text. No like changes.
+- CaptroVideoControls: one small shared pair of independent 44pt controls, with
+  high-contrast backing, labels and 12pt top-left inset on Home and Details.
+  Home playback preferences stay in the existing row-local media-ID state.
+- CaptroFeedMediaPager: removed creator-only overlay from bare media. Written
+  captions/meaningful stamps remain. Tapping media opens Details; dedicated
+  video buttons control pause/mute. Creator stays available in Details. No feed
+  dimensions, selection identity, restoration, or preload policy were changed.
+- CaptroWelcomeView: normal Dynamic Type uses a measured fixed Layout, not a
+  vertical ScrollView. Controls retain intrinsic readable sizes; remaining
+  height goes to proportionally fitted approved artwork. Compact spacing on
+  short screens. Only artwork performs the existing one-shot reveal/slow zoom.
+  Safe-area paper backing and native control accessibility IDs are preserved.
+
+Accessibility conflict
+At accessibility text sizes all required authentication/legal actions cannot
+fit on one phone-height page without hiding content or shrinking chosen text.
+The explicit accessibility-only fallback remains scrollable. Normal text sizes
+have no welcome scroll container. This exception is intentional and disclosed,
+not a claim that every enlarged layout fits on a single stationary page.
+
+Artwork
+Unchanged approved 870x932 hero extraction from the supplied 870x1808 image.
+No redraw, image generation, upscaling export, or altered stamp lettering.
+It remains provisional: the previous 480pt maximum / 3x / 1.03 zoom envelope
+needs at least 1484x1589 source pixels. This update does not resolve source
+sharpness or claim physical-device artwork approval.
+
+Test method
+Native Xcode build and XCTest on iPhone 17 Pro Max and iPhone 13 mini simulators.
+Tests render shipping views with DEBUG-only isolated transport. Fixture media
+is a photograph and a synthetic local H.264/AAC test video, not production posts
+or evidence of camera quality. Save/comment requests use a controlled local
+URLProtocol, not real users. Runtime captures are implementation screenshots,
+not generated mockups. No physical iPhone is available on this Windows host.
+
+First validation: 38839807705, e5bf5cac
+Native build passed. All 196 unit tests, four Favorites UI tests and two existing
+carousel/restoration UI tests passed on the large simulator. Four normal-size
+welcome tests failed: the parent Layout accessibility identifier propagated to
+children, replacing their individual IDs. The captured controls were visible,
+but accessibility IDs/decoration semantics were wrong. e000dfdc removes that
+parent ID. Its attempted background-only safe-area adjustment did not remove
+the dark strip in captured screenshots. Accessibility
+welcome test passed in that first run. No failed build was distributed.
+
+Subsequent verification
+38892438891 was cancelled before completion to include removal of the remaining
+Home Share menu entry. 38893201772 at 883f7039 passed all 217 executions:
+196 unit tests plus 11 UI tests on iPhone 17 Pro Max and 10 UI tests on iPhone
+13 mini (iOS 26.4.1, 23E254a; Xcode 26.6, macOS 26.6.2). No skips or failures.
+Screenshot review, independent of those passing tests, still found a black strip
+at the top behind the status area. 0e970d4b explicitly fills only the empty band
+above the artwork and adds a rendered-pixel assertion for the paper background.
+That passed-but-visually-imperfect candidate was not distributed.
+
+Final validation and release
+Final run 38897730476 PASSED at source
+0e970d4bf08e59975842d7b56da546025514ac69, native tree
+bb4a56b4c572614edf6b16ed052baf4d10acaee8. Native build passed. 207 tests on iPhone
+17 Pro Max (196 unit + 11 UI), and 10 UI tests on iPhone 13 mini: 217 total,
+zero failures, skips, or expected failures. Same iOS 26.4.1 / Xcode 26.6 toolchain.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38897730476
+The actual small/large normal welcome screenshots and settled-motion capture
+were inspected: all actions/legal links fit, stamp edges remain visible, the
+dark status strip is gone, and native buttons remain in their fixed positions.
+The paired controls and filled Favorite star were also inspected on the actual
+small-screen video fixture. These are simulator implementation captures only.
+
+Coverage includes direct save/unsave and Details/Saved synchronization, rapid
+taps during delayed requests, rollback/Retry, exclusive long press, cancel,
+multiple collections and Undo membership restoration, gesture cancellation,
+unchanged carousel index/frame after save and Details return, top-left 44pt
+video controls without accidental navigation, pause state surviving a save,
+no bare-media creator card, creator availability/comment submission in Details,
+removed menu labels/headings, welcome drag immobility/action reachability,
+consent/legal/email/guest/error routes and enlarged-text access. The existing
+mixed-carousel frame and lazy-feed no-scroll-restoration regressions also ran.
+
+TestFlight release 38902650403 successfully archived, validated Release auth,
+exported and uploaded 1.0.1 (635.1) from that exact source. The mandatory
+matching-source verification gate passed. At 2026-10-16 13:00:42 UTC Apple altool
+reported UPLOAD SUCCEEDED with no errors. Signed IPA artifact 12047900194 is
+preserved by the workflow (27,469,308-byte artifact archive).
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38902650403
+Read-only Apple check 38904720635 at 13:01:45 UTC still listed 631.1 as the latest
+processed build. Final read-only check 38905042213 at 13:04:19 UTC confirmed:
+version 1.0.1, build 635.1, processing VALID, not expired, internalBuildState
+IN_BETA_TESTING, autoNotifyEnabled true, assigned to Captro private and
+Captro private2. External state READY_FOR_BETA_SUBMISSION; no public App Store
+release or external beta submission was made. Existing tester groups were used.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38905042213
+
+Evidence
+C:/Users/The-s/Documents/New project/feed-restoration-evidence/targeted-controls-0e970d4b/
+- welcome-WelcomeSmall.png: iPhone 13 mini simulator rendering, 1124x2436.
+- welcome-WelcomeLarge.png: iPhone 17 Pro Max simulator rendering, 1320x2868.
+- bare-home-video-WelcomeSmall.png / -WelcomeLarge.png: shipping media component
+  in an explicitly labeled local test host, synthetic AVPlayer video.
+- details-comments-WelcomeSmall.png / -WelcomeLarge.png: actual Details with
+  comment input/keyboard, not a mockup or proof of production comment persistence.
+- saved-library-WelcomeSmall.png / -WelcomeLarge.png: actual Favorites library.
+- welcome-accessibility-WelcomeSmall.png / -WelcomeLarge.png: enlarged-text UI.
+- welcome-native-reveal.mp4 and welcome-native-settled.png: native small-phone
+  capture of the existing artwork-only animation; no generated imagery.
+- Original xcresult exports, summaries, logs and source attestation retained.
+
+Limitations
+Automated fixture tests do not prove live provider authentication, production
+network persistence on two physical accounts, physical audio output, VoiceOver
+operation, or the previously reported physical-device scroll jitter is resolved.
+No such claim is made. Existing scroll-restoration safeguards are preserved.
+
+Changed files (relative to repository)
+ios_native/MIRA/Sources/MIRANative/Components/CaptroFavoriteButton.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroVideoControls.swift
+ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift (options menu only)
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedMediaPager.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroWelcomeView.swift
+ios_native/MIRA/Sources/MIRANative/Services/CaptroFavoritesStore.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroFavoritesView.swift (test ID only)
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroFavoritesReviewHost.swift (DEBUG)
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroPresentationReviewHost.swift (DEBUG)
+ios_native/MIRA/Tests/MIRANativeTests/CaptroFavoritesTests.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroWelcomeTests.swift
+ios_native/MIRA/LayoutUITests/FavoritesTests.swift
+ios_native/MIRA/LayoutUITests/WelcomeTests.swift
+.github/workflows/native-welcome-validation.yml
