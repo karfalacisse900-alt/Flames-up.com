@@ -1176,8 +1176,6 @@ public struct MainFeedView: View {
       ) { dismiss in
         if let post = postOptionsTarget {
           MainFeedPostOptionsSheet(
-            post: post,
-            shareURL: mainFeedShareURL(for: post),
             onReport: { reportPostFromOptions(post, dismiss: dismiss) },
             onNotInterested: {
               CaptroHaptics.light()
@@ -2408,8 +2406,6 @@ private struct MainNativePostCard: View {
 }
 
 private struct MainFeedPostOptionsSheet: View {
-  let post: MIRAPost
-  let shareURL: URL
   let onReport: () -> Void
   let onNotInterested: () -> Void
 
@@ -2429,14 +2425,6 @@ private struct MainFeedPostOptionsSheet: View {
         action: onNotInterested
       )
 
-      ShareLink(item: shareURL, subject: Text(post.titleText), message: Text(post.titleText)) {
-        MIRAActionModalPillLabel(
-          title: "Share",
-          systemImage: "square.and.arrow.up"
-        )
-      }
-      .buttonStyle(.miraPress)
-      .accessibilityLabel("Share")
     }
   }
 }
