@@ -381,6 +381,10 @@ test("real database console workflows and negative authorization", async (t) => 
     await t.test(
       "last owner, privileged targets and removed admins protected",
       async () => {
+        // An unusable owner account cannot count as the remaining administrator.
+        await db.exec(
+          "insert into app_users(id,metadata) values('inactive-owner','{\"status\":\"banned\"}');insert into app_admin_roles(user_id,role) values('inactive-owner','owner')",
+        );
         assert.equal(
           (
             await execute("owner", {

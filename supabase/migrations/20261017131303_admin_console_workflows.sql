@@ -109,7 +109,11 @@ begin
       select admin_version into v from app_admin_roles where user_id=target for update;
       if coalesce(v,0)<>(p_request->>'version')::bigint then raise exception 'STALE_VERSION'; end if;
       if p_request->>'role' not in ('owner','moderator','support','none') then raise exception 'INVALID_ROLE'; end if;
-      if p_request->>'role'<>'owner' and exists(select 1 from app_admin_roles where user_id=target and role='owner') and (select count(*) from app_admin_roles where role='owner')<=1 then raise exception 'LAST_OWNER'; end if;
+      -- A disabled or orphaned owner is not a usable fallback for account recovery.
+      if p_request->>'role'<>'owner' and exists(select 1 from app_admin_roles where user_id=target and role='owner')
+        and (select count(*) from app_admin_roles ar join app_users au on au.id=ar.user_id
+          where ar.role='owner' and coalesce(au.metadata->>'status','active')='active')<=1
+        then raise exception 'LAST_OWNER'; end if;
       if p_request->>'role'='none' then delete from app_admin_roles where user_id=target;
       else insert into app_admin_roles(user_id,role,created_by,admin_version) values(target,p_request->>'role',p_actor,coalesce(v,0)+1)
         on conflict(user_id) do update set role=excluded.role,admin_version=excluded.admin_version,updated_at=stamp; end if;
