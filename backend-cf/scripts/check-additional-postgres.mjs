@@ -56,6 +56,7 @@ for(const patched of [false,true]) {
     insert into app_purchasables(id,post_id,creator_id,creator_app_user_id,content_type,fulfillment_type,payment_model,title)
       values('${item}','${post}','${seller}','seller','booking','reservation','paid','Fixture');
     insert into app_prices(id,purchasable_id,unit_amount,currency) values('${price}','${item}',1000,'USD');`);
+  if(patched)sql(database,`update app_purchasables set booking_capacity=1 where id='${item}';`); // explicitly reviewed fixture, never a migration default
   const result=await race(database,begin('first','10:00','11:00'),begin('overlap','10:01','11:01'));
   assert.equal(result.code,patched?3:0,result.error);
   if(patched)assert.match(result.error,/CAPTRO_BOOKING_SLOT_UNAVAILABLE/);

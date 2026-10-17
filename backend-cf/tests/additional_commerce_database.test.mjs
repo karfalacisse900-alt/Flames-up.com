@@ -13,6 +13,8 @@ test('review migration enforces interval resources, approval dates and provider-
     await db.exec(readFileSync(new URL('../../supabase/migrations/'+f,import.meta.url),'utf8'));
   }
   const one=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
+  await db.exec(readFileSync(new URL('../../supabase/migrations/20261017002255_reliable_payment_reconciliation.sql',import.meta.url),'utf8'));
+  await db.exec(readFileSync(new URL('../../supabase/migrations/20261017002807_payment_recovery_resolution.sql',import.meta.url),'utf8'));
   const seller=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
   const buyer=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
   await db.exec("insert into app_payment_environment(id,stripe_mode) values(true,'test')");
@@ -76,6 +78,73 @@ test('review migration enforces interval resources, approval dates and provider-
     assert.equal((await one('select count(*)::int n from app_payment_recovery where purchase_id=$1',[purchase.id])).n,1);
     assert.equal((await one('select count(*)::int n from app_entitlements where purchase_id=$1',[purchase.id])).n,0);
     await db.exec('set role authenticated');await assert.rejects(record(),/permission denied/);await db.exec('reset role');
+  });
+  await t.test('operator recovery is owned, capacity-safe and idempotent; recording a case is never completion',async()=>{
+    const row=await item('event','ticket');await db.query('update app_purchasables set capacity=1 where id=$1',[row.id]);
+    const paid=await begin(row,'operator-paid');await one("select * from captro_cancel_purchase_hold($1,'')",[paid.id]);
+    await one("select captro_record_late_payment($1,'pi_operator','evt_operator',1000,'USD')",[paid.id]);
+    const competing=await begin(row,'operator-occupied');
+    const claim=await one("select * from captro_claim_payment_recovery($1,'admin-a','fulfill','Verified provider payment')",[paid.id]);
+    await assert.rejects(one("select * from captro_claim_payment_recovery($1,'admin-b','refund','Another operator attempt')",[paid.id]),/BUSY/);
+    const fulfill=()=>one("select * from captro_resolve_payment_recovery($1,'admin-a',$2,'fulfilled','pi_operator','ch_operator',40)",[paid.id,claim.lease_token]);
+    await assert.rejects(fulfill(),/CAPACITY_REACHED/);
+    assert.equal((await one('select status from app_payment_recovery where purchase_id=$1',[paid.id])).status,'needs_review');
+    await one("select * from captro_cancel_purchase_hold($1,'')",[competing.id]);
+    await fulfill();await fulfill();
+    assert.equal((await one('select count(*)::int n from app_entitlements where purchase_id=$1',[paid.id])).n,1);
+    assert.equal((await one('select quantity_committed from app_purchasables where id=$1',[row.id])).quantity_committed,1);
+    await assert.rejects(begin(row,'cannot-resell'),/CAPACITY_REACHED/);
+    const refundItem=await item('event','ticket'),refund=await begin(refundItem,'operator-refund');
+    await one("select * from captro_cancel_purchase_hold($1,'')",[refund.id]);
+    await one("select captro_record_late_payment($1,'pi_refund','evt_refund',1000,'USD')",[refund.id]);
+    const old=await one("select * from captro_claim_payment_recovery($1,'admin-a','refund','Buyer requested full refund')",[refund.id]);
+    await db.query("update app_payment_recovery set lease_until=now()-interval '1 second' where purchase_id=$1",[refund.id]);
+    await assert.rejects(one("select * from captro_claim_payment_recovery($1,'admin-b','fulfill','Cannot switch after refund')",[refund.id]),/REFUND_IN_FLIGHT/);
+    const fresh=await one("select * from captro_claim_payment_recovery($1,'admin-b','refund','Reconciled lost refund response')",[refund.id]);
+    await assert.rejects(one("select * from captro_resolve_payment_recovery($1,'admin-a',$2,'refunded','re_fixture',null,0)",[refund.id,old.lease_token]),/LEASE_LOST/);
+    const finish=()=>one("select * from captro_resolve_payment_recovery($1,'admin-b',$2,'refunded','re_fixture',null,0)",[refund.id,fresh.lease_token]);
+    await finish();await finish();
+    assert.equal((await one('select count(*)::int n from app_payments where purchase_id=$1',[refund.id])).n,1);
+    assert.equal((await one('select count(*)::int n from app_entitlements where purchase_id=$1',[refund.id])).n,0);
+    assert.equal((await one('select count(*)::int n from app_payment_recovery_events where purchase_id=$1',[refund.id])).n,3);
+    await db.exec('set role authenticated');
+    await assert.rejects(finish(),/permission denied/);await db.exec('reset role');
+  });
+  await t.test('unreviewed historical capacity gates only new bookings and preserves existing commitments',async()=>{
+    const row=await item('booking','reservation',true,false,3); await begin(row,'reviewed-first');
+    await db.query('update app_purchasables set booking_capacity=null where id=$1',[row.id]);
+    await assert.rejects(begin(row,'unreviewed-new'),/CAPACITY_REVIEW_REQUIRED/);
+    assert.equal((await one('select sum(quantity_committed)::int n from app_booking_slots where purchasable_id=$1',[row.id])).n,1);
+  });
+  await t.test('durable leases progress beyond forty unresolved jobs; backoff, restart and stale completion are safe',async()=>{
+    const row=await item('event','ticket'); const ids=[];
+    for(let i=0;i<97;i++) ids.push((await begin(row,'queue-'+i)).id);
+    await db.query("update app_purchases set hold_expires_at=now()-interval '1 hour' where id=any($1::uuid[])",[ids]);
+    const visited=new Set();
+    for(let batch=0;batch<4;batch++) {
+      const claimed=(await db.query('select * from captro_claim_purchase_reconciliation(40)')).rows;
+      for(const job of claimed) {
+        assert.ok(!visited.has(job.purchase.id),'Backoff must make room for unattempted work');visited.add(job.purchase.id);
+        assert.equal((await one('select captro_renew_purchase_reconciliation($1,$2) ok',[job.purchase.id,job.token])).ok,true);
+        await assert.rejects(one("select captro_finish_purchase_reconciliation($1,$2,'released')",[job.purchase.id,job.token]),/TERMINAL_NOT_VERIFIED/);
+        assert.equal((await one("select captro_finish_purchase_reconciliation($1,$2,'processing') ok",[job.purchase.id,job.token])).ok,true);
+        assert.equal((await one("select captro_finish_purchase_reconciliation($1,$2,'processing') ok",[job.purchase.id,job.token])).ok,false);
+      }
+    }
+    assert.ok(ids.every(id=>visited.has(id)),'Every new purchase progresses despite >40 old unresolved purchases');
+    const id=ids[0]; await db.query("update app_purchase_reconciliation set next_attempt_at=now()-interval '1 second',attempt_count=8,first_seen_at=now()-interval '2 days' where purchase_id=$1",[id]);
+    const old=await one('select * from captro_claim_purchase_reconciliation(1)');
+    assert.equal((await db.query('select * from captro_claim_purchase_reconciliation(1)')).rows.length,0,'Live lease cannot be reclaimed');
+    await db.query("update app_purchase_reconciliation set lease_until=now()-interval '1 second' where purchase_id=$1",[id]);
+    const fresh=await one('select * from captro_claim_purchase_reconciliation(1)');assert.notEqual(old.token,fresh.token);
+    assert.equal((await one("select captro_finish_purchase_reconciliation($1,$2,'processing') ok",[id,old.token])).ok,false);
+    await one("select captro_finish_purchase_reconciliation($1,$2,'transient_failure')",[id,fresh.token]);
+    const state=await one('select *,extract(epoch from next_attempt_at-now())::int delay from app_purchase_reconciliation where purchase_id=$1',[id]);
+    assert.equal(state.needs_attention,true);assert.ok(state.delay>=120&&state.delay<=21660);
+    assert.equal((await one('select status from app_purchases where id=$1',[id])).status,'payment_pending');
+    await db.exec('set role authenticated');
+    await assert.rejects(db.query('select * from captro_claim_purchase_reconciliation(40)'),/permission denied/);
+    await db.exec('reset role');
   });
   await t.test('dashboard canonical status works against metadata-only schema',async()=>{
     await db.exec("create table app_users(metadata jsonb); insert into app_users values('{\"status\":\"suspended\"}'),('{\"status\":\"active\"}');");

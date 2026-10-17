@@ -19,8 +19,10 @@ test('USD and JPY use the same integer provider contract across draft, price and
       {postType:'event',title:'Fixture',description:'',visibility:'public'});
     assert.equal(config.prices[0].unit_amount, 1000);
     assert.equal(config.prices[0].currency, currency);
-    const fee = currencyFeeUnits({CAPTRO_CURRENCY_FEES:'{"JPY":{"fixed":30,"minimum":0}}'},currency);
-    assert.equal(saleAmounts(amount,{basisPoints:500,fixedAmount:fee.fixed,minimumAmount:fee.minimum,buyerPaysPlatformFee:true,creatorPaysPlatformFee:false}).buyerTotal,1080);
+    if(currency==='USD') {
+      const fee=currencyFeeUnits({},currency);
+      assert.equal(saleAmounts(amount,{basisPoints:500,fixedAmount:fee.fixed,minimumAmount:fee.minimum,buyerPaysPlatformFee:true,creatorPaysPlatformFee:false}).buyerTotal,1080);
+    } else assert.throws(()=>currencyFeeUnits({CAPTRO_CURRENCY_FEES:'{"JPY":{"fixed":30,"minimum":0}}'},currency),/SETTLEMENT_NOT_SUPPORTED/);
   }
 });
 test('invalid precision, unsafe units, unsupported and provider-special currencies fail closed', () => {
@@ -29,7 +31,7 @@ test('invalid precision, unsafe units, unsupported and provider-special currenci
   }
   assert.throws(()=>validateCurrencyAmount('1000','USD'));
   assert.throws(()=>validateCurrencyAmount(1000.1,'JPY'));
-  assert.throws(()=>currencyFeeUnits({},'JPY'),/NOT_CONFIGURED/);
+  assert.throws(()=>currencyFeeUnits({},'JPY'),/SETTLEMENT_NOT_SUPPORTED/);
   assert.throws(()=>validateCommerceInput({enabled:true,contentType:'event',paymentModel:'paid',commerceClass:'outside_app',
     title:'Old draft',currency:'JPY',prices:[{unitAmount:100000}]}, {postType:'event',title:'Old draft',description:'',visibility:'public'}),/Update Captro/);
 });

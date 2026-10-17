@@ -1,11 +1,12 @@
 import {useEffect,useState} from 'react';
 import {AdminApi,ApiError} from './api';
+import {RecoveryPanel} from './RecoveryPanel';
 import type {FinanceSummary,FinanceRecord,FinanceOrder} from './types';
 import {formatProviderMoney as money} from '../../backend-cf/src/currency';
 const categories=[['event','Events'],['club','Clubs'],['meetup','Meetups'],['deal','Deals'],['group_access','Group access'],['local_offer','Local offers']] as const;
 // Ledger release is not proof of a currently withdrawable Stripe balance.
 function Totals({row}:{row:FinanceRecord}){return <dl className="finance-totals"><div><dt>Pending</dt><dd>{money(row.pending,row.currency)}</dd></div><div><dt>Released / unpaid</dt><dd>{money(row.available,row.currency)}</dd></div><div><dt>Paid out to date</dt><dd>{money(row.paid_out,row.currency)}</dd></div></dl>;}
-export function FinancePage({token}:{token:string}){
+export function FinancePage({token,canResolve=false}:{token:string;canResolve?:boolean}){
  const [summary,setSummary]=useState<FinanceSummary|null>(null);
  const [selection,setSelection]=useState<{category:string;currency:string;objectId?:string;sellerId?:string}|null>(null);
  const [records,setRecords]=useState<FinanceRecord[]>([]);
@@ -28,6 +29,7 @@ export function FinancePage({token}:{token:string}){
  return <section className="page">
   <div className="page-header"><div><span className="eyebrow">Private finance reporting</span><h1>Captro Funds</h1><p>Virtual categories, not bank accounts. Stripe cash and seller earnings are reported separately.</p></div><button className="secondary-button" disabled={loading} onClick={()=>setRefresh(x=>x+1)}>Refresh</button></div>
   {error&&<p role="alert" className="error-banner">{error}</p>}
+  {!selection&&<RecoveryPanel token={token} canResolve={canResolve}/>}
   {loading&&<p role="status">Updating finance records…</p>}
   {selection&&<button className="ghost-button" onClick={back}>← Back</button>}
   {!selection&&summary&&<>

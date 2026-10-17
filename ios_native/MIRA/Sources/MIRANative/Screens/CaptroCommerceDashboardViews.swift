@@ -111,6 +111,7 @@ struct CaptroCommerceDashboardView: View {
         Text(purchase.itemTitle).font(.system(size: 14, weight: .semibold)).lineLimit(2)
         Text(purchaseStatus(purchase)).font(.system(size: 11, weight: .medium))
           .foregroundStyle(CaptroDetailStyle.secondary)
+        if let message = purchase.recoveryMessage { Text(message).font(.footnote) }
       }
       Spacer(minLength: 8)
       if let entitlement = purchase.entitlement {
@@ -286,6 +287,7 @@ struct CaptroDashboardPassView: View {
       receiptLine("TOTAL", amount: purchase.totalAmount).fontWeight(.bold)
       Text(purchase.status == "confirmed" ? "PAID" : purchase.status.replacingOccurrences(of: "_", with: " ").uppercased())
         .font(.caption.weight(.bold))
+      if let message = purchase.recoveryMessage { Text(message).font(.body).accessibilityIdentifier("purchase.recovery.status") }
       if let card = purchase.receiptPaymentMethod {
         Text("Paid with \(card.brand.capitalized) •••• \(card.last4)").font(.footnote)
       }

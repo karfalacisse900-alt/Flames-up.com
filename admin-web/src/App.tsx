@@ -1603,7 +1603,7 @@ function App() {
   }
 
   const content = (() => {
-    if (active === 'finance' && can(session, 'payments:read')) return <FinancePage token={token} />;
+    if (active === 'finance' && can(session, 'payments:read')) return <FinancePage token={token} canResolve={can(session,'payments:refund')} />;
     if (active === 'dashboard') return <DashboardPage token={token} openReport={(id) => { setSelectedReportId(id); setActive('reports'); }} />;
     if (active === 'reports') return <ReportsPage token={token} selectedId={selectedReportId} setSelectedId={setSelectedReportId} openAction={openAction} />;
     if (active === 'voice') return <VoiceReviewPage token={token} openAction={openAction} />;

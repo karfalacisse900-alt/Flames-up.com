@@ -129,6 +129,9 @@ export async function login(email: string, password: string) {
 
 export const AdminApi = {
   financePools: (token:string)=>request<FinanceSummary>('/admin/finance/pools',token),
+  paymentRecovery: (token:string)=>request<import('./RecoveryPanel').RecoveryQueue>('/admin/finance/recovery',token),
+  resolvePaymentRecovery: (token:string,id:string,body:{decision:'fulfill'|'refund';note:string})=>
+    request<{status:string}>('/admin/finance/recovery/'+encodeURIComponent(id)+'/resolve',token,{method:'POST',body:JSON.stringify(body)}),
   financeRecords: (token:string,query:string)=>request<{items:FinanceRecord[];nextOffset:number|null}>('/admin/finance/records'+query,token),
   financeOrder: (token:string,id:string,offset=0)=>request<FinanceOrder>('/admin/finance/orders/'+encodeURIComponent(id)+'?offset='+offset,token),
   me: (token: string) => request<AdminSession>('/admin/me', token),

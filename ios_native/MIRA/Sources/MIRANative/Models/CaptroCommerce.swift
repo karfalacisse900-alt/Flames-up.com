@@ -294,6 +294,7 @@ struct CaptroCommerceDraft: Codable, Hashable {
     if let capacityValue = positiveInt(capacity), capacityValue < 1 { return "Capacity must be at least 1." }
     if !capacity.trimmingCharacters(in: .whitespaces).isEmpty && positiveInt(capacity) == nil { return "Enter a valid capacity." }
     if isPaid {
+      guard currency == "USD" else { return "Paid checkout currently supports USD only. Your saved price has not been changed." }
       for tier in prices {
         guard minorUnits(tier.price) != nil else { return "Enter a supported price and currency for every tier, without extra decimal places." }
         if !tier.capacity.trimmingCharacters(in: .whitespaces).isEmpty && positiveInt(tier.capacity) == nil {
@@ -402,6 +403,11 @@ public struct CaptroCommercePurchase: Decodable, Hashable, Identifiable {
   public let entitlement: CaptroEntitlementSummary?
 
   public var totalLabel: String { CaptroMoney.format(minorUnits: totalAmount, currency: currency) }
+  public var recoveryMessage: String? {
+    status == "payment_received_under_review"
+      ? "Payment received. Access is under review. Do not pay again. Captro support will arrange fulfillment or a refund."
+      : nil
+  }
 }
 
 public struct CaptroReceiptPaymentMethod: Decodable, Hashable {

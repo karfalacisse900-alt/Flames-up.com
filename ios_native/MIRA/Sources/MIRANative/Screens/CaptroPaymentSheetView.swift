@@ -205,6 +205,7 @@ struct CaptroPaymentSheetView: View {
           try? await Task.sleep(for: .seconds(delay))
           guard !Task.isCancelled else { return }
           if let response: CaptroCommerceActionResponse = try? await api.get("/payments/purchases/\(purchase.id)") {
+            if let recovery = response.purchase.recoveryMessage { sheet = nil; message = recovery; return }
             if response.purchase.status == "confirmed" {
               paid = true
               message = nil

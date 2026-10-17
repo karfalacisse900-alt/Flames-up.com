@@ -3,9 +3,10 @@
 begin;
 
 -- A single offering is one shared resource across its price tiers. Resource
--- capacity is separate from lifetime ticket/tier inventory. Existing offerings
--- default conservatively to one; review multi-capacity services before rollout.
-alter table public.app_purchasables add column booking_capacity integer not null default 1
+-- capacity is separate from lifetime ticket/tier inventory. NULL means not
+-- reviewed, not capacity one. Preserve every historical reservation and hold.
+-- New reservations are gated until an operator verifies this resource's capacity.
+alter table public.app_purchasables add column booking_capacity integer
   check (booking_capacity between 1 and 1000000);
 
 create or replace function public.captro_reserve_booking_slot(
@@ -23,6 +24,7 @@ begin
   select booking_capacity into resource_capacity from public.app_purchasables
     where id=p_purchasable_id for update;
   if not found then raise exception 'CAPTRO_ITEM_UNAVAILABLE'; end if;
+  if resource_capacity is null then raise exception 'CAPTRO_BOOKING_CAPACITY_REVIEW_REQUIRED'; end if;
   -- Half-open intervals: adjacent appointments do not overlap. Measure peak
   -- occupancy, not the sum of disjoint appointments within a long request.
   with points as (

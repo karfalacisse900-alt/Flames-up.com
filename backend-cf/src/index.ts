@@ -3,6 +3,8 @@ import { dashboardResults } from './dashboard-results';
 import { AuthRefreshFailure, upstreamRefreshFailure } from './auth-refresh-errors';
 import { currencyFeeUnits } from './currency';
 import { reconcileHostedHold } from './hosted-hold';
+import { runPurchaseReconciliation, type ReconciliationOutcome } from './purchase-reconciliation';
+import { resolvePaymentRecovery } from './payment-recovery';
 import { validateMediaWritingOverlays } from './media-writing';
 import { validatePostMediaFraming } from './post-media-framing';
 import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody, newMediaStampWritingError } from './creation-intent';
@@ -46,6 +48,7 @@ type MediaModerationJobMessage = {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
+  CAPTRO_PAYMENT_RECOVERY_ACTIONS?: string;
   STRIPE_MODE?: string;
   CAPTRO_PAYOUT_FEE_POLICY?: string;
   CAPTRO_APPLE_PAY_MERCHANT_ID?: string;
@@ -10874,7 +10877,7 @@ async function completeCommercePurchaseFromIntent(c: any, eventId: string, objec
         && (intent.transfer_data.destination !== purchase.stripe_destination_account_id
           || intent.transfer_data.amount !== purchase.creator_amount))) throw new Error('STRIPE_PAYMENT_MISMATCH');
   const settlement = await waitForMarketplaceSettlement(c, intent, purchase);
-  await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
+  try { await supabaseAdminRpc(c, 'captro_confirm_marketplace_purchase', {
     p_purchase_id: purchaseId, p_provider_event_id: eventId, p_provider_checkout_id: null,
     p_provider_payment_id: intent.id, p_provider_charge_id: settlement.charge.id,
     p_provider_transfer_id: settlement.transferId,
@@ -10883,7 +10886,14 @@ async function completeCommercePurchaseFromIntent(c: any, eventId: string, objec
     // Platform settlement time is not the connected account's available balance.
     p_available_at: null,
     p_payload_digest: await sha256Hex(JSON.stringify({ eventId, intentId: intent.id, amount: intent.amount_received })),
-  });
+  }); } catch (error) {
+    if (!getErrorCode(error).includes('CAPTRO_PURCHASE_NOT_PAYABLE')) throw error;
+    await supabaseAdminRpc(c, 'captro_record_late_payment', {
+      p_purchase_id: purchaseId, p_payment_id: intent.id, p_event_id: cleanText(eventId, 180),
+      p_amount: intent.amount_received, p_currency: intent.currency.toUpperCase(),
+    });
+    return { recoveryRequired: true };
+  }
   const card = settlement.charge.payment_method_details?.card;
   if (card && /^\d{4}$/.test(String(card.last4 || ''))) {
     await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id) }, {
@@ -20875,6 +20885,63 @@ api.post('/admin/commerce/purchases/:purchaseId/release',authMiddleware,async(c)
   }
 });
 
+api.get('/admin/finance/recovery', authMiddleware, async c => {
+  try {
+    await requireAdminRole(c, 'payments:read');
+    const cases = await supabaseAdminQueryRows(c, 'app_payment_recovery', {
+      filters: {status:'eq.needs_review'}, order:'created_at.asc', limit:100,
+    });
+    const alerts = await supabaseAdminQueryRows(c, 'app_purchase_reconciliation', {
+      filters:{needs_attention:'eq.true'}, order:'first_seen_at.asc',limit:100,
+    });
+    c.header('Cache-Control','private, no-store');
+    return c.json({cases:cases.map(row=>({purchaseId:row.purchase_id,status:row.status,decision:row.decision,
+      owner:row.owner_id,attempts:row.attempt_count,createdAt:row.created_at,lastAttemptAt:row.last_attempt_at})),
+      alerts:alerts.map(row=>({purchaseId:row.purchase_id,outcome:row.last_outcome,attempts:row.attempt_count,
+        firstSeenAt:row.first_seen_at,nextAttemptAt:row.next_attempt_at})),
+      actionsEnabled:c.env.CAPTRO_PAYMENT_RECOVERY_ACTIONS==='approved'});
+  } catch(error) { return c.json({detail:'Recovery queue could not be loaded.'},getErrorCode(error)==='FORBIDDEN'?403:503); }
+});
+
+api.post('/admin/finance/recovery/:purchaseId/resolve', authMiddleware, async c => {
+  try {
+    const admin=await requireAdminRole(c,'payments:refund');
+    const limited=await requireAdminWriteRateLimit(c,admin,'payment_recovery');if(limited)return limited;
+    // Separate rollout switch. Prepared code must never silently enable money movement.
+    if(c.env.CAPTRO_PAYMENT_RECOVERY_ACTIONS!=='approved') return c.json({detail:'Recovery actions require rollout approval.'},503);
+    await requireStripeDatabaseMode(c);
+    const id=isUuidText(c.req.param('purchaseId')); const body:any=await c.req.json();
+    const unknown=rejectUnknownFields(c,body,['decision','note']); if(unknown)return unknown;
+    if(!id||!['fulfill','refund'].includes(body.decision)||typeof body.note!=='string'||body.note.trim().length<10)
+      return c.json({detail:'Choose a decision and enter a review note.'},400);
+    const purchase=(await supabaseAdminSelectRows(c,'app_purchases',{id:postgrestEqFilter(id)},'*',1))[0];
+    if(!purchase)return c.json({detail:'Recovery case not found.'},404);
+    const read=async(path:string)=>{
+      const response=await stripeApiGet(c,path);
+      if(!response.ok)throw stripeProviderError(response,'STRIPE_RECOVERY_READ_FAILED');return response.data;
+    };
+    const result=await resolvePaymentRecovery({purchase,liveMode:getStripeConfig(c).liveMode,now:()=>Date.now(),
+      claim:()=>supabaseAdminRpc(c,'captro_claim_payment_recovery',{p_purchase_id:id,p_operator:admin.userId,p_decision:body.decision,p_note:body.note.slice(0,1000)}),
+      readIntent:pid=>read(`/payment_intents/${encodeURIComponent(pid)}`),
+      readCharge:cid=>read(`/charges/${encodeURIComponent(cid)}?expand[]=balance_transaction`),
+      listRefunds:pid=>read(`/refunds?payment_intent=${encodeURIComponent(pid)}&limit=100`),
+      createRefund:async(pid,amount,key)=>{
+        // Separate/deferred platform charge: never request a destination transfer reversal here.
+        const response=await stripeApiRequest(c,'/refunds',{payment_intent:pid,amount,
+          'metadata[captro_recovery_purchase_id]':id},key);
+        if(!response.ok)throw stripeProviderError(response,'STRIPE_RECOVERY_REFUND_FAILED');return response.data;
+      },
+      resolve:(record,outcome,reference,charge,fee)=>supabaseAdminRpc(c,'captro_resolve_payment_recovery',{
+        p_purchase_id:id,p_operator:admin.userId,p_token:record.lease_token,p_outcome:outcome,
+        p_reference:reference,p_charge_id:charge,p_processing_amount:fee,
+      }),
+    });
+    c.header('Cache-Control','private, no-store');return c.json({status:result.status});
+  } catch(error) {
+    return c.json({code:paymentErrorCode(error),detail:'Recovery is not complete. Recheck the case and provider state before retrying.'},getErrorCode(error)==='FORBIDDEN'?403:409);
+  }
+});
+
 // Read-only finance reporting. These routes never initiate payments/transfers.
 api.get('/admin/finance/pools', authMiddleware, async (c) => {
  try {
@@ -21167,6 +21234,10 @@ api.get('/commerce/me', authMiddleware, async (c) => {
         filters: { entitlement_id: postgrestInFilter(creatorEntitlementIds) }, limit: 1000,
       }) : Promise.resolve([]),
     ]);
+    const recoveries = purchases.length ? await supabaseAdminQueryRows(c,'app_payment_recovery',{
+      filters:{purchase_id:postgrestInFilter(purchases.map(row=>row.id)),status:'eq.needs_review'},limit:200,
+    }) : [];
+    const recovering = new Set(recoveries.map(row=>row.purchase_id));
     const myStuff = purchases.map(purchase => {
       const entitlement = entitlements.find(row => row.purchase_id === purchase.id);
       const item = buyerItems.find(row => row.id === purchase.purchasable_id);
@@ -21176,7 +21247,7 @@ api.get('/commerce/me', authMiddleware, async (c) => {
         ? ['ticket', 'redemption'].includes(entitlement.kind)
           || (entitlement.kind === 'attendance' && item?.pass_required === true)
         : false;
-      return commercePurchasePayload(purchase, entitlement ? {
+      return commercePurchasePayload(recovering.has(purchase.id) ? {...purchase,status:'payment_received_under_review'} : purchase, entitlement ? {
         ...entitlement,
         destination_id: destinationId,
         has_pass: hasPass,
@@ -26224,32 +26295,45 @@ async function expireNativePaymentHolds(env: Env) {
   const c: any = { env };
   if (!getStripeConfig(c).configured) return;
   await requireStripeDatabaseMode(c);
-  const rows = await supabaseAdminQueryRows(c, 'app_purchases', {
-    filters: { status: 'eq.payment_pending', hold_expires_at: `lt.${now()}` },
-    order: 'hold_expires_at.asc', limit: 40,
-  });
-  for (const purchase of rows) {
-    try {
-      if (purchase.payment_interface !== 'native') { await reconcileHostedPurchase(c, purchase, true); continue; }
+  const metrics = await runPurchaseReconciliation({
+    claim: () => supabaseAdminRpc(c, 'captro_claim_purchase_reconciliation', { p_limit: 40 }),
+    renew: job => supabaseAdminRpc(c, 'captro_renew_purchase_reconciliation', { p_purchase_id: job.purchase.id, p_token: job.token }),
+    finish: (job, outcome) => supabaseAdminRpc(c, 'captro_finish_purchase_reconciliation', {
+      p_purchase_id: job.purchase.id, p_token: job.token, p_outcome: outcome,
+    }),
+    inspect: async (purchase): Promise<ReconciliationOutcome> => {
+      // Webhooks or a previous worker may have completed a leased item already.
+      if (['confirmed','refunded','partially_refunded'].includes(purchase.status)) return 'confirmed';
+      if (['expired','cancelled','rejected'].includes(purchase.status)) return 'released';
+      if (purchase.payment_interface !== 'native') {
+        const result = await reconcileHostedPurchase(c, purchase, true);
+        if (result === 'recovery') return 'recovery';
+        return result === 'paid' ? 'confirmed' : result === 'released' ? 'released' : 'processing';
+      }
       // Resolve a timed-out create using the original idempotency key before releasing inventory.
       if (!purchase.provider_payment_id) await createCommercePaymentIntent(c, purchase, true);
       const intent = await stripeApiGet(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}`);
       if (!intent.ok) throw stripeProviderError(intent, 'STRIPE_PAYMENT_EXPIRY_READ_FAILED');
       if (intent.data.status === 'succeeded') {
-        await completeCommercePurchaseFromIntent(c, `reconcile-payment-${intent.data.id}`, intent.data);
-        continue;
+        const result = await completeCommercePurchaseFromIntent(c, `reconcile-payment-${intent.data.id}`, intent.data);
+        return result?.recoveryRequired ? 'recovery' : 'confirmed';
       }
-      if (intent.data.status === 'processing') continue;
+      if (intent.data.status === 'processing') return 'processing';
       if (intent.data.status !== 'canceled') {
         const canceled = await stripeApiRequest(c, `/payment_intents/${encodeURIComponent(purchase.provider_payment_id)}/cancel`,
           {}, `payment-expire:${purchase.id}`);
-        if (!canceled.ok || canceled.data.status !== 'canceled') continue;
+        if (!canceled.ok) throw stripeProviderError(canceled, 'STRIPE_PAYMENT_EXPIRY_FAILED');
+        if (canceled.data.status !== 'canceled') return 'processing';
       }
       await supabaseAdminRpc(c, 'captro_cancel_purchase_hold', { p_purchase_id: purchase.id, p_checkout_id: '' });
-    } catch (error) {
-      console.warn(JSON.stringify({ event: 'native_payment_expiry_failed', purchase_id: purchase.id, code: getErrorCode(error) }));
-    }
-  }
+      return 'released';
+    },
+  });
+  // Aggregate only: no payment identity, amounts, buyer data, URLs, or provider body.
+  console.info(JSON.stringify({ event: 'purchase_reconciliation_batch', ...metrics }));
+  if (metrics.attention || metrics.checkpointFailure) console.warn(JSON.stringify({
+    event: 'purchase_reconciliation_attention', count: metrics.attention, checkpoints: metrics.checkpointFailure,
+  }));
 }
 
 async function reconcileStripeFinancialState(env: Env) {

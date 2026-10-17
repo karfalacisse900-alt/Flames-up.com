@@ -46,13 +46,7 @@ export function currencyFeeUnits(env: Record<string, unknown>, currency: string)
     fixed: Number(env.CAPTRO_SERVICE_FEE_FIXED_CENTS ?? 30),
     minimum: Number(env.CAPTRO_SERVICE_FEE_MINIMUM_CENTS ?? 0),
   };
-  // Do not apply a dollar-denominated fixed fee to another currency or invent
-  // an exchange rate. Non-USD enablement requires a reviewed provider-unit fee.
-  let config: any;
-  try { config = JSON.parse(String(env.CAPTRO_CURRENCY_FEES ?? '{}'))[currency]; } catch {}
-  if (!config || !Number.isSafeInteger(config.fixed) || !Number.isSafeInteger(config.minimum)
-      || config.fixed < 0 || config.minimum < 0 || config.fixed > 100000 || config.minimum > 100000) {
-    throw new Error('CAPTRO_CURRENCY_FEE_NOT_CONFIGURED');
-  }
-  return { fixed: config.fixed, minimum: config.minimum };
+  // Formatting a currency correctly is not settlement/payout support. The current
+  // payout contract is USD-only. No environment fee JSON may bypass that boundary.
+  throw new Error('CAPTRO_CURRENCY_SETTLEMENT_NOT_SUPPORTED');
 }

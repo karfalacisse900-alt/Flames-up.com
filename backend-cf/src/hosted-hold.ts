@@ -13,7 +13,10 @@ export async function reconcileHostedHold(io: {
     try { await io.expireSession(); } catch {}
     session = await io.readSession();
   }
-  if (session.payment_status === 'paid') { await io.confirm(session); return 'paid'; }
+  if (session.payment_status === 'paid') {
+    const result: any = await io.confirm(session);
+    return result?.recoveryRequired ? 'recovery' : 'paid';
+  }
   if (!['expired', 'complete'].includes(session.status)) return 'pending';
   const id = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
   if (id) {

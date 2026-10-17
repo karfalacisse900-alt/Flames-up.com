@@ -25,6 +25,8 @@ export function purchaseFailureMessage(code: string): string {
     case 'CAPTRO_TIER_SOLD_OUT': return 'There are no places left for this option. Refresh the details to choose another option.';
     case 'CAPTRO_PRICE_UNAVAILABLE': return 'This price has changed or is unavailable. Reopen the item for current options.';
     case 'CAPTRO_BOOKING_SLOT_UNAVAILABLE': return 'This time is no longer available. Choose another time.';
+    case 'CAPTRO_BOOKING_CAPACITY_REVIEW_REQUIRED': return 'Bookings are temporarily unavailable while this service’s capacity is reviewed. Existing reservations are unchanged.';
+    case 'CAPTRO_CURRENCY_SETTLEMENT_NOT_SUPPORTED': return 'Paid checkout currently supports USD only. Your saved price has not been changed.';
     case 'CAPTRO_PAYOUTS_NOT_READY':
     case 'CAPTRO_SELLER_IDENTITY_REQUIRED':
     case 'CAPTRO_PAYOUT_SCHEDULE_REVIEW_REQUIRED': return 'The seller must finish seller setup before accepting payments. Your card was not charged.';
