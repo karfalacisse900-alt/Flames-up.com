@@ -30,7 +30,7 @@ test('request pins correct redirect and confirm never exposes returned sessions'
   let payload;
   const result=await recoveryHandler(request({email:'fixture@example.com'}),'request',async(url,options)=>{
     assert.equal(url,'https://api.flames-up.com/api/auth/password/reset/request');
-    assert.equal(options.redirect,'error');payload=JSON.parse(options.body);
+    assert.equal(options.redirect,'manual');payload=JSON.parse(options.body);
     return Response.json({sent:true});
   });
   assert.equal(result.status,200);assert.equal(payload.redirect_to,target);

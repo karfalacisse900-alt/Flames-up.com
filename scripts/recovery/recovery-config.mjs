@@ -12,7 +12,7 @@ export function repairPlan(config) {
     mailer_templates_recovery_content: !existing || (existing.includes('.ConfirmationURL') && !existing.includes('.SiteURL')) ? existing : template,
   };
 }
-export async function configureRecovery({ token, project, apply = false, fetcher = fetch, saveBackup = async () => {} }) {
+export async function configureRecovery({ token, project, apply = false, fetcher = fetch, saveBackup = async () => {}, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   if (!token || project !== 'cclgvxukwccvtgrbcwie') throw Error('Expected Captro project and management authentication are required.');
   const url = `https://api.supabase.com/v1/projects/${project}/config/auth`;
   async function configRequest(method = 'GET', body) {
@@ -35,11 +35,18 @@ export async function configureRecovery({ token, project, apply = false, fetcher
   // An invalid synthetic token tests the redirect without consuming a real email link.
   const probe = new URL(`https://${project}.supabase.co/auth/v1/verify`);
   probe.searchParams.set('type','recovery'); probe.searchParams.set('token','captro-invalid-redirect-probe'); probe.searchParams.set('redirect_to',target);
-  const response = await fetcher(probe, { redirect:'manual', signal:AbortSignal.timeout(15000) });
-  const location = response.headers.get('location');
-  let destination = '';
-  try { const parsed = new URL(location); destination = parsed.origin + parsed.pathname; } catch {}
-  summary.redirectProbeMatches = destination === target;
+  // Auth configuration may take a few seconds to reach serving instances. Re-read,
+  // never repeat the configuration mutation or consume a real recovery credential.
+  summary.redirectProbeMatches = false;
+  for (let attempt = 0; attempt < (apply ? 5 : 1); attempt++) {
+    if (attempt) await wait(1000 * 2 ** (attempt - 1));
+    const response = await fetcher(probe, { redirect:'manual', signal:AbortSignal.timeout(15000) });
+    let destination = '';
+    try { const parsed = new URL(response.headers.get('location')); destination = parsed.origin + parsed.pathname; } catch {}
+    summary.redirectProbeMatches = destination === target;
+    summary.redirectProbeAttempts = attempt + 1;
+    if (summary.redirectProbeMatches) break;
+  }
   if (apply && !summary.redirectProbeMatches) throw Error('Provider redirect did not match the repaired recovery page.');
   return summary;
 }

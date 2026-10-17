@@ -1,0 +1,6 @@
+{
+  "name": "captro-site",
+  "pages_build_output_dir": ".",
+  "compatibility_date": "2026-10-17",
+  "compatibility_flags": ["global_fetch_strictly_public"]
+}
