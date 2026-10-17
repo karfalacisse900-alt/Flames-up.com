@@ -138,7 +138,7 @@ struct CaptroMediaPager: View {
           .frame(width: proxy.size.width, height: proxy.size.height)
           .contentShape(Rectangle())
           .onTapGesture(perform: handleMediaTap)
-          .accessibilityElement(children: .ignore)
+          .accessibilityElement(children: .contain)
           .accessibilityIdentifier("home.post.media")
           .accessibilityLabel(mediaAccessibilityLabel)
           .accessibilityHint("Opens the post detail screen")
@@ -186,7 +186,6 @@ struct CaptroMediaPager: View {
   private var mediaContent: some View {
     if let url = mediaURLs.first, showsCoverMediaOnly || mediaURLs.count == 1 {
       mediaView(url: url, index: 0)
-        .allowsHitTesting(false)
     } else {
       TabView(selection: $selectedMediaIndex) {
         ForEach(slides) { slide in

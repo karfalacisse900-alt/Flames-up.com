@@ -336,33 +336,42 @@ struct MIRAImageLoadResult {
   let source: MIRAImageLoadSource
 }
 
+enum MIRAImageLoadOutcome {
+  case loaded(MIRAImageLoadResult), failed(CaptroImageFailure), cancelled
+  var result: MIRAImageLoadResult? { if case .loaded(let value) = self { return value }; return nil }
+}
+
 actor MIRAImageLoadPipeline {
   static let shared = MIRAImageLoadPipeline(followsNetworkPolicy: true)
   private struct Load {
     let id: UUID
-    let task: Task<MIRAImageLoadResult?, Never>
+    let task: Task<MIRAImageLoadOutcome, Never>
     var readers: Set<UUID>
   }
   private var inFlight: [String: Load] = [:]
   private let admission: MIRAImageLoadAdmission
   private let followsNetworkPolicy: Bool
   private var policyObserver: NSObjectProtocol?
+  private let session: URLSession
 #if DEBUG || CAPTRO_PERFORMANCE_REVIEW
   private var testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)?
   private static let tracesLoads = ProcessInfo.processInfo.arguments.contains("--captro-vertical-diagnostics")
 
   init(admission: MIRAImageLoadAdmission = MIRAImageLoadAdmission(),
        followsNetworkPolicy: Bool = false,
+       session: URLSession = MIRAAPIClient.productionSession,
        testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)? = nil) {
     self.admission = admission
     self.followsNetworkPolicy = followsNetworkPolicy
     self.testLoader = testLoader
+    self.session = session
   }
   nonisolated var diagnosticSnapshot: MIRAImageLoadAdmission.Snapshot { admission.snapshot }
 #else
   private init(followsNetworkPolicy: Bool) {
     admission = MIRAImageLoadAdmission()
     self.followsNetworkPolicy = followsNetworkPolicy
+    session = MIRAAPIClient.productionSession
   }
 #endif
 
@@ -381,11 +390,11 @@ actor MIRAImageLoadPipeline {
     } else { inFlight[key] = load }
   }
 
-  private func wait(for load: Load, reader: UUID, key: String) async -> MIRAImageLoadResult? {
+  private func wait(for load: Load, reader: UUID, key: String) async -> MIRAImageLoadOutcome {
     await withTaskCancellationHandler {
       let result = await load.task.value
       release(reader, key: key, generation: load.id)
-      return Task.isCancelled ? nil : result
+      return Task.isCancelled ? .cancelled : result
     } onCancel: {
       Task { await self.release(reader, key: key, generation: load.id) }
     }
@@ -396,25 +405,31 @@ actor MIRAImageLoadPipeline {
     expectedScope: String? = nil,
     priority: MIRAImageLoadAdmission.Priority = .visible
   ) async -> MIRAImageLoadResult? {
+    await outcome(for: remoteURL, maxPixelSize: maxPixelSize, expectedScope: expectedScope, priority: priority).result
+  }
+
+  func outcome(for remoteURL: URL, maxPixelSize: CGFloat, expectedScope: String? = nil,
+               priority: MIRAImageLoadAdmission.Priority = .visible) async -> MIRAImageLoadOutcome {
     let scope = expectedScope ?? MIRALocalJSONCache.currentScopeIdentifier
-    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return .cancelled }
+    guard remoteURL.isFileURL || MIRANetworkSecurityPolicy.isSecureMediaURL(remoteURL) else { return .failed(.inaccessible) }
     if followsNetworkPolicy {
       if policyObserver == nil {
         policyObserver = NotificationCenter.default.addObserver(forName: MIRAMediaNetworkPolicy.didChange,
           object: nil, queue: nil) { [weak self] _ in Task { await self?.refreshBudget() } }
       }
       refreshBudget()
-      if priority == .prefetch && !MIRAMediaNetworkPolicy.shared.current.permitsPrefetch { return nil }
+      if priority == .prefetch && !MIRAMediaNetworkPolicy.shared.current.permitsPrefetch { return .cancelled }
     }
     let resolvedMaxPixelSize = max(64, maxPixelSize)
     let key = "\(scope):\(remoteURL.absoluteString)#\(Int(resolvedMaxPixelSize.rounded()))"
 
     if let cached = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
       MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory")
-      return MIRAImageLoadResult(image: cached, source: .memory)
+      return .loaded(MIRAImageLoadResult(image: cached, source: .memory))
     }
 
-    guard !Task.isCancelled else { return nil }
+    guard !Task.isCancelled else { return .cancelled }
     let reader = UUID()
     if var existing = inFlight[key] {
       existing.readers.insert(reader)
@@ -425,38 +440,39 @@ actor MIRAImageLoadPipeline {
 
     let requestID = UUID()
     let admission = admission
+    let session = session
     admission.register(requestID, priority: priority)
 #if DEBUG || CAPTRO_PERFORMANCE_REVIEW
     let testLoader = testLoader
 #endif
-    let task = Task.detached(priority: priority == .visible ? .userInitiated : .utility) { () -> MIRAImageLoadResult? in
-      guard await admission.waitForSlot(requestID) else { return nil }
+    let task = Task.detached(priority: priority == .visible ? .userInitiated : .utility) { () -> MIRAImageLoadOutcome in
+      guard await admission.waitForSlot(requestID) else { return .cancelled }
       defer { admission.release(requestID) }
-      guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+      guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return .cancelled }
 #if DEBUG || CAPTRO_PERFORMANCE_REVIEW
       if Self.tracesLoads && !ProcessInfo.processInfo.arguments.contains("--captro-scroll-performance") {
         let state = admission.snapshot
         print("[CaptroImageLoad] active=\(state.active) prefetch=\(state.activePrefetch) waiting=\(state.waiting) peak=\(state.peakActive)")
       }
-      if let testLoader { return await testLoader(remoteURL) }
+      if let testLoader { return await testLoader(remoteURL).map(MIRAImageLoadOutcome.loaded) ?? .failed(.transport) }
 #endif
       if remoteURL.isFileURL,
          let data = try? Data(contentsOf: remoteURL),
          let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) {
-        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return .cancelled }
         MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost, scope: scope)
-        return MIRAImageLoadResult(image: decoded, source: .disk)
+        return .loaded(MIRAImageLoadResult(image: decoded, source: .disk))
       }
 
       if let diskCached = await MIRAImageDiskCache.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
-        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return .cancelled }
         MIRAImageMemoryCache.shared.store(diskCached, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: diskCached.miraCacheCost, scope: scope)
         MIRAApplePerformanceLogger.event("media_cache_hit", detail: "disk")
-        return MIRAImageLoadResult(image: diskCached, source: .disk)
+        return .loaded(MIRAImageLoadResult(image: diskCached, source: .disk))
       }
 
       do {
-        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return .cancelled }
         MIRAApplePerformanceLogger.event("media_cache_miss", detail: "network")
         var request = URLRequest(url: remoteURL)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -468,22 +484,25 @@ actor MIRAImageLoadPipeline {
         let data: Data
         let response: URLResponse
         do {
-          (data, response) = try await MIRAAPIClient.productionSession.data(for: request)
+          (data, response) = try await session.data(for: request)
         } catch {
           await metric.finish(status: "error")
           throw error
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 200
         await metric.finish(status: String(status), bytes: data.count)
-        guard !Task.isCancelled, (200..<300).contains(status), data.count <= 24 * 1024 * 1024 else { return nil }
-        guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return nil }
-        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return .cancelled }
+        if let failure = CaptroImageFailure.response(status: status, mime: response.mimeType) { return .failed(failure) }
+        guard data.count <= 24 * 1024 * 1024 else { return .failed(.oversized) }
+        guard let decoded = await MIRAImageDiskCache.decode(data, maxPixelSize: resolvedMaxPixelSize) else { return .failed(.invalidData) }
+        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return .cancelled }
 
         MIRAImageMemoryCache.shared.store(decoded, for: remoteURL, maxPixelSize: resolvedMaxPixelSize, cost: decoded.miraCacheCost, scope: scope)
         await MIRAImageDiskCache.store(data: data, for: remoteURL, scope: scope)
-        return MIRAImageLoadResult(image: decoded, source: .network)
+        return .loaded(MIRAImageLoadResult(image: decoded, source: .network))
       } catch {
-        return nil
+        if Task.isCancelled || (error as? URLError)?.code == .cancelled { return .cancelled }
+        return .failed(.transport)
       }
     }
 
@@ -494,12 +513,14 @@ actor MIRAImageLoadPipeline {
 }
 
 public struct MIRACachedImage<Content: View, Placeholder: View>: View {
+  var pipeline: MIRAImageLoadPipeline = .shared
   let url: String?
   let fallbackURLs: [String]
   let maxPixelSize: CGFloat
   let animatesNetworkLoad: Bool
   let keepsPreviousImageWhileLoading: Bool
   let allowsRetry: Bool
+  let statusRect: CGRect?
   let onImageLoaded: (UIImage) -> Void
   let content: (Image) -> Content
   let placeholder: () -> Placeholder
@@ -508,7 +529,10 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   @State private var loadedURL: URL?
   @State private var loadedScope: String?
   @State private var isImageVisible = false
-  @State private var loadFailed = false
+  @State private var failure: CaptroImageFailure?
+  @State private var activeLoad = UUID()
+  @State private var wasConnected = MIRAMediaNetworkPolicy.shared.current.connected
+  @State private var reconnectAttempts = 0
   @State private var retryGeneration = 0
 
   public init(
@@ -518,6 +542,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     animatesNetworkLoad: Bool = true,
     keepsPreviousImageWhileLoading: Bool = false,
     allowsRetry: Bool = false,
+    statusRect: CGRect? = nil,
     onImageLoaded: @escaping (UIImage) -> Void = { _ in },
     @ViewBuilder content: @escaping (Image) -> Content,
     @ViewBuilder placeholder: @escaping () -> Placeholder
@@ -528,6 +553,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     self.animatesNetworkLoad = animatesNetworkLoad
     self.keepsPreviousImageWhileLoading = keepsPreviousImageWhileLoading
     self.allowsRetry = allowsRetry
+    self.statusRect = statusRect
     self.onImageLoaded = onImageLoaded
     self.content = content
     self.placeholder = placeholder
@@ -536,7 +562,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
   public var body: some View {
     Group {
       if let uiImage, loadedScope == MIRALocalJSONCache.currentScopeIdentifier,
-         keepsPreviousImageWhileLoading || loadedURL.map({ candidateURLs.contains($0) }) == true {
+         loadedURL.map({ candidateURLs.contains($0) }) == true {
         content(Image(uiImage: uiImage))
           .opacity(isImageVisible ? 1 : 0)
       } else if let memoryImage = memoryImageForCurrentURL {
@@ -545,18 +571,40 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
         placeholder()
       }
     }
-    .overlay {
-      if allowsRetry && loadFailed {
-        Button { loadFailed = false; retryGeneration += 1 } label: {
-          Label("Retry image", systemImage: "arrow.clockwise")
-            .font(.caption.weight(.semibold)).padding(.horizontal, 12)
-            .frame(minHeight: 44).background(.regularMaterial)
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("media.image.retry")
+    .overlay(alignment: .topLeading) {
+      if allowsRetry {
+        statusContent
+          .frame(width: statusRect?.width, height: statusRect?.height)
+          .frame(maxWidth: statusRect == nil ? .infinity : nil, maxHeight: statusRect == nil ? .infinity : nil)
+          .offset(x: statusRect?.minX ?? 0, y: statusRect?.minY ?? 0)
       }
     }
     .task(id: loadTaskID) { await loadImage() }
+    .onReceive(NotificationCenter.default.publisher(for: MIRAMediaNetworkPolicy.didChange)) { _ in
+      let connected = MIRAMediaNetworkPolicy.shared.current.connected
+      defer { wasConnected = connected }
+      if connected && !wasConnected && failure?.mayRetryAutomatically == true && reconnectAttempts < 2 {
+        reconnectAttempts += 1; retryGeneration += 1
+      }
+    }
+  }
+
+  @ViewBuilder private var statusContent: some View {
+    if let failure {
+      VStack(spacing: 6) {
+        Text(failure.message).font(.caption).multilineTextAlignment(.center)
+        if !failure.unavailable {
+          Button { retryGeneration += 1 } label: {
+            Label("Retry image", systemImage: "arrow.clockwise").font(.caption.weight(.semibold))
+              .frame(minWidth: 44, minHeight: 44)
+          }.buttonStyle(.plain).accessibilityIdentifier("media.image.retry")
+        }
+      }.padding(10).background(.regularMaterial)
+        .accessibilityIdentifier(failure.unavailable ? "media.image.unavailable" : "media.image.failed")
+    } else if uiImage == nil && memoryImageForCurrentURL == nil {
+      ProgressView("Loading image").font(.caption).padding(10).background(.regularMaterial)
+        .allowsHitTesting(false).accessibilityIdentifier("media.image.loading")
+    }
   }
 
   private var memoryImageForCurrentURL: UIImage? {
@@ -578,8 +626,9 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     let primary = ([url ?? ""] + fallbackURLs)
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
       .filter { !$0.isEmpty }
-    let transformFallbacks = primary.compactMap(Self.cloudflareImageTransformSourceURL)
-    return (primary + transformFallbacks)
+    // Only the API/model's explicit same-media URLs. Never unwrap a transform
+    // URL to invent an alternate origin that may not have the same authorization.
+    return primary
       .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 
@@ -589,162 +638,51 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
 
   @MainActor
   private func loadImage() async {
-    loadFailed = false
+    let generation = UUID()
+    activeLoad = generation
+    failure = nil
     let scope = MIRALocalJSONCache.currentScopeIdentifier
     let remoteURLs = candidateURLs
     guard !remoteURLs.isEmpty else {
-      await MainActor.run {
-        uiImage = nil
-        loadedURL = nil
-        loadedScope = nil
-      }
+      uiImage = nil; loadedURL = nil; loadedScope = nil; failure = .missing
       return
     }
-
-    let isAlreadyLoaded = await MainActor.run {
-      if let loadedURL {
-        return loadedScope == scope && remoteURLs.contains(loadedURL)
-          && max(uiImage?.size.width ?? 0, uiImage?.size.height ?? 0) >= max(64, maxPixelSize)
-      }
-      return false
+    // Keep an image during same-media refresh/size upgrades, never across reuse.
+    if loadedScope != scope || loadedURL.map({ !remoteURLs.contains($0) }) != false {
+      uiImage = nil; loadedURL = nil; loadedScope = nil; isImageVisible = false
     }
-    if isAlreadyLoaded { return }
-
     let resolvedMaxPixelSize = max(64, maxPixelSize)
-
-    for remoteURL in remoteURLs {
-      if let memoryImage = MIRAImageMemoryCache.shared.image(for: remoteURL, maxPixelSize: resolvedMaxPixelSize, scope: scope) {
-        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-        await MainActor.run {
-          uiImage = memoryImage
-          loadedURL = remoteURL
-          loadedScope = scope
-          isImageVisible = true
-          onImageLoaded(memoryImage)
-        }
-        MIRAApplePerformanceLogger.event("media_cache_hit", detail: "memory_sync")
-        return
-      }
-    }
-
-    let shouldClear = await MainActor.run {
-      if let loadedURL {
-        return loadedScope != scope || !remoteURLs.contains(loadedURL)
-      }
-      return true
-    }
-    if shouldClear {
-      await MainActor.run {
-        if keepsPreviousImageWhileLoading && loadedScope == scope {
-          isImageVisible = uiImage != nil
-        } else {
-          uiImage = nil
-          loadedScope = nil
-          isImageVisible = false
-        }
-      }
-    }
-
-    for remoteURL in remoteURLs {
-      if let result = await MIRAImageLoadPipeline.shared.image(
-        for: remoteURL, maxPixelSize: resolvedMaxPixelSize, expectedScope: scope
-      ) {
-        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-        await MainActor.run {
-          uiImage = result.image
-          loadedURL = remoteURL
-          loadedScope = scope
-          if result.source == .network, animatesNetworkLoad {
-            withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
-              isImageVisible = true
-            }
-          } else {
-            isImageVisible = true
-          }
+    var remaining = remoteURLs
+    var lastFailure: CaptroImageFailure = .missing
+    for attempt in 0...2 {
+      var retryable: [URL] = []
+      for remoteURL in remaining {
+        let outcome = await pipeline.outcome(for: remoteURL,
+          maxPixelSize: resolvedMaxPixelSize, expectedScope: scope)
+        guard !Task.isCancelled, activeLoad == generation, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+        switch outcome {
+        case .cancelled: return
+        case .loaded(let result):
+          uiImage = result.image; loadedURL = remoteURL; loadedScope = scope; failure = nil
+          if result.source == .network && animatesNetworkLoad {
+            withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) { isImageVisible = true }
+          } else { isImageVisible = true }
           onImageLoaded(result.image)
-        }
-        let detail: String
-        switch result.source {
-        case .memory: detail = "memory"
-        case .disk: detail = "disk"
-        case .network: detail = isPrimaryCandidate(remoteURL, in: remoteURLs) ? "network" : "fallback_network"
-        }
-        MIRAPerformanceTimeline.markOnce("time_to_first_thumbnail", detail: detail)
-        return
-      }
-      if !isPrimaryCandidate(remoteURL, in: remoteURLs) {
-        MIRAApplePerformanceLogger.event("media_cache_miss", detail: "fallback_failed")
-      }
-    }
-
-    // Brief propagation recovery only. A failed mounted row must not keep
-    // multiplying network work; after two retries expose a deliberate retry.
-    for attempt in 1...2 {
-      guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-      let delay = min(UInt64(attempt) * 550_000_000, UInt64(2_400_000_000))
-      try? await Task.sleep(nanoseconds: delay)
-      for remoteURL in remoteURLs {
-        if let result = await MIRAImageLoadPipeline.shared.image(
-          for: remoteURL, maxPixelSize: resolvedMaxPixelSize, expectedScope: scope
-        ) {
-          guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-          await MainActor.run {
-            uiImage = result.image
-            loadedURL = remoteURL
-            loadedScope = scope
-            if result.source == .network, animatesNetworkLoad {
-              withAnimation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion)) {
-                isImageVisible = true
-              }
-            } else {
-              isImageVisible = true
-            }
-            onImageLoaded(result.image)
-          }
-          MIRAApplePerformanceLogger.event("media_retry_loaded", detail: "attempt=\(attempt)")
           return
+        case .failed(let cause):
+          lastFailure = cause
+          if !cause.permitsFallback { failure = cause; return }
+          if cause.mayRetryAutomatically { retryable.append(remoteURL) }
         }
       }
+      guard attempt < 2, !retryable.isEmpty else { break }
+      remaining = retryable
+      do { try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 550_000_000) } catch { return }
     }
-
-    // A final failed/cancelled A request may return after this cell has loaded
-    // B. It must not erase B's image, just as it must not replace B on success.
-    guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-    loadFailed = true
-    let shouldClearAfterFailure = await MainActor.run {
-      if let loadedURL {
-        return !remoteURLs.contains(loadedURL)
-      }
-      return true
-    }
-    if shouldClearAfterFailure {
-      await MainActor.run {
-        guard !Task.isCancelled, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-        if keepsPreviousImageWhileLoading {
-          isImageVisible = uiImage != nil
-        } else {
-          uiImage = nil
-          isImageVisible = false
-        }
-      }
-    }
+    guard !Task.isCancelled, activeLoad == generation, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+    failure = lastFailure
   }
 
-  private func isPrimaryCandidate(_ remoteURL: URL, in remoteURLs: [URL]) -> Bool {
-    guard let first = remoteURLs.first else { return false }
-    return remoteURL == first
-  }
-
-  private static func cloudflareImageTransformSourceURL(_ value: String) -> String? {
-    guard value.contains("/cdn-cgi/image/"),
-          let sourceRange = value.range(of: "/https://", options: [], range: value.startIndex..<value.endIndex) else {
-      return nil
-    }
-    let encodedSource = String(value[sourceRange.lowerBound...].dropFirst())
-    let source = encodedSource.removingPercentEncoding ?? encodedSource
-    guard let url = URL(string: source), url.scheme?.lowercased() == "https" else { return nil }
-    return source
-  }
 }
 
 private extension UIImage {
@@ -890,6 +828,7 @@ public struct RemoteMediaView: View {
   let placeholderTint: Color
   let plainBackground: Bool
   let prefersPreviewForDataSaver: Bool
+  let imageStatusRect: CGRect?
   let onMeasuredRatio: (CGFloat) -> Void
 
   public init(
@@ -906,6 +845,7 @@ public struct RemoteMediaView: View {
     placeholderTint: Color = MIRATheme.Color.textSecondary.opacity(0.72),
     plainBackground: Bool = false,
     prefersPreviewForDataSaver: Bool = false,
+    imageStatusRect: CGRect? = nil,
     onMeasuredRatio: @escaping (CGFloat) -> Void = { _ in }
   ) {
     self.url = url
@@ -921,6 +861,7 @@ public struct RemoteMediaView: View {
     self.placeholderTint = placeholderTint
     self.plainBackground = plainBackground
     self.prefersPreviewForDataSaver = prefersPreviewForDataSaver
+    self.imageStatusRect = imageStatusRect
     self.onMeasuredRatio = onMeasuredRatio
   }
 
@@ -956,9 +897,9 @@ public struct RemoteMediaView: View {
             }
           }
           MIRACachedImage(url: networkBudget.reducesData && prefersPreviewForDataSaver ? (resolvedPlaceholderURL ?? url) : url,
-            fallbackURLs: resolvedFallbackURLs,
+            fallbackURLs: [url] + resolvedFallbackURLs + [resolvedPlaceholderURL].compactMap { $0 },
             maxPixelSize: min(maxPixelSize, networkBudget.imagePixelLimit),
-            allowsRetry: true, onImageLoaded: reportRatio) { image in
+            allowsRetry: true, statusRect: imageStatusRect, onImageLoaded: reportRatio) { image in
             image.resizable().aspectRatio(contentMode: contentMode)
           } placeholder: {
             Color.clear

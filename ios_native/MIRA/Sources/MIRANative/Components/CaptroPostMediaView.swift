@@ -24,7 +24,8 @@ struct CaptroPostMediaView: View {
         contentMode: .fill, shouldPlay: shouldPlay, videoMuted: muted,
         maxPixelSize: maxPixelSize,
         placeholderColor: MIRATheme.Color.mediaPlaceholder, plainBackground: true,
-        prefersPreviewForDataSaver: imageDelivery?.preview != nil)
+        prefersPreviewForDataSaver: imageDelivery?.preview != nil,
+        imageStatusRect: CGRect(x: -source.minX, y: -source.minY, width: size.width, height: size.height))
         .frame(width: source.width, height: source.height)
         .offset(x: source.minX, y: source.minY)
       if let writing, !writing.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
