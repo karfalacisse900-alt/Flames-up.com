@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {favoritePlacement} from './helpers/native-ui-contract.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 const native = new URL('../../ios_native/MIRA/Sources/MIRANative/', import.meta.url);
@@ -46,7 +47,7 @@ test('media-first composer, Details chrome, and lower Favorites placement do not
   assert.match(feed, /CaptroFeedPaginationFooter\(/);
   assert.match(read('Components/CaptroFeedPaginationFooter.swift'), /home.pagination.retry/);
   assert.doesNotMatch(feed, /ignoresSafeArea\(\.container, edges: \.bottom\)/);
-  assert.match(read('Screens/CaptroFeedMediaPager.swift'), /60 : 38/);
+  favoritePlacement(read('Screens/CaptroFeedMediaPager.swift'));
   const root = read('App/MIRANativeRootView.swift');
   assert.match(root, /configureWithOpaqueBackground/);
   assert.match(root, /tint\(MIRATheme.Color.textPrimary\)/);

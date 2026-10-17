@@ -195,6 +195,15 @@ public struct MIRANativeRootView: View {
     MIRAPerformanceTimeline.mark("native_root_init")
   }
 
+#if DEBUG
+  init(reviewSession: MIRAAuthSession, api: MIRAAPIClient) {
+    _authSession = StateObject(wrappedValue: reviewSession)
+    _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: api))
+    _localization = StateObject(wrappedValue: MIRALocalization.shared)
+    self.api = api
+  }
+#endif
+
   public var body: some View {
     ZStack {
       destinationView

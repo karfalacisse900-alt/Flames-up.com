@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {detailFavorites} from './helpers/native-ui-contract.mjs';
 import { readFileSync } from 'node:fs';
 import {
   STRIPE_ACCOUNTS_V2_VERSION,
@@ -388,7 +389,7 @@ test('stamp has one detail target while saving remains available in the detail h
   assert.doesNotMatch(details, /reactionRow|reactionLabel/);
   assert.match(details, /private var commentsSection/);
   assert.match(details, /detailHeader/);
-  assert.match(details, /Menu \{[\s\S]*?model\.toggleSave\(\)/);
+  detailFavorites(details,readFileSync(new URL('../../ios_native/MIRA/Sources/MIRANative/Components/CaptroFavoriteButton.swift',import.meta.url),'utf8'));
   assert.doesNotMatch(overlayCard, /Button\(action: onSave\)/);
   assert.match(homePost, /CaptroStructuredFeedCard\(post: post,[\s\S]*?onOpen: onOpenPost\)/);
   assert.match(homePost, /let content = post\.captroMediaFeedCardContent/);

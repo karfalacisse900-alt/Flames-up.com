@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import {guestRoute} from './helpers/native-ui-contract.mjs';
 
 const authSession = readFileSync(
   new URL('../../ios_native/MIRA/Sources/MIRANative/Services/MIRAAuthSession.swift', import.meta.url),
@@ -38,7 +39,7 @@ test('guest access is persisted and routed into the app without an auth token', 
   assert.match(authSession, /public func exitGuestMode\(\)[\s\S]*setGuestMode\(false\)/);
   assert.match(rootView, /if authSession\.user == nil && !authSession\.isGuest/);
   assert.match(rootView, /GuestSignInRequiredView/);
-  assert.match(authView, /Button\("Continue as Guest", action: onGuest\)/);
+  guestRoute(authView,readFileSync(new URL('../../ios_native/MIRA/Sources/MIRANative/Screens/CaptroWelcomeView.swift',import.meta.url),'utf8'),authSession);
   assert.match(mainFeed, /let endpoint = isGuestFeedMode \? "\/posts\/world-board" : "\/posts\/feed"/);
   assert.match(mainFeed, /private let publicFeedCacheKey = "native\.main\.public\.feed\.v1"/);
   assert.match(mainFeed, /pagination=v2&limit=/);

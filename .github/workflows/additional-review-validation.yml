@@ -7,7 +7,7 @@ permissions:
 jobs:
   native:
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v6
       - run: brew install xcodegen
@@ -24,7 +24,11 @@ jobs:
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/ReviewBuild" -resultBundlePath "$RUNNER_TEMP/Review.xcresult" \
-            CODE_SIGNING_ALLOWED=NO -only-testing:CaptroStampTests test \
+            CODE_SIGNING_ALLOWED=NO -only-testing:CaptroStampTests \
+            -only-testing:CaptroLayoutUITests/AccountRecoveryTests \
+            -only-testing:CaptroLayoutUITests/FavoritesTests/testCarouselSaveDetailsUnsaveAndSavedLibraryStaySynchronized \
+            -only-testing:CaptroLayoutUITests/FavoritesTests/testBareVideoCreatorOnlyInDetailsAndTopLeftControlsDoNotNavigate \
+            -only-testing:CaptroLayoutUITests/WelcomeTests/testNormalWelcomeIsFixedAndEveryActionFitsWithoutScrolling test \
             2>&1 | tee "$RUNNER_TEMP/review-native.log"
       - uses: actions/upload-artifact@v4
         if: always()

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import {videoControls} from './helpers/native-ui-contract.mjs';
 import ts from 'typescript';
 import { DIRECT_VIDEO_MAX_BYTES, orderPostMediaAssets, streamProcessingState, streamUID } from '../src/post-media.ts';
 
@@ -133,6 +134,6 @@ test('post creation accepts both kinds; Home scrolls vertically with in-media ca
   assert.doesNotMatch(pager, /isVideoMuted = true/);
   assert.match(pager, /shouldPlay: isVideoActive && !isVideoPaused/);
   assert.match(pager, /mediaURLs.count > 1 && !showsCoverMediaOnly/);
-  assert.match(pager, /if currentMediaIsVideo && !post\.isCoverPost \{\s*isVideoPaused.toggle\(\)/);
+  videoControls(pager,ios('Components/CaptroVideoControls.swift'));
   assert.match(ios('Screens/PostDetailNativeView.swift'), /TabView\(selection: \$selectedIndex\)/);
 });
