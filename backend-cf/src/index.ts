@@ -1,3 +1,4 @@
+import { registerConsoleRoutes, consoleUserFilters, activeAdminRestriction } from './admin-console';
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
 import { dashboardResults } from './dashboard-results';
 import { AuthRefreshFailure, upstreamRefreshFailure } from './auth-refresh-errors';
@@ -357,6 +358,12 @@ api.all('/admin/media-backups/*', retiredFeature('Legacy media backups'));
 api.use('/admin/*', async (c, next) => {
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'admin');
   if (supabaseRequired) return supabaseRequired;
+  c.header('Cache-Control','private, no-store');
+  // Retire unversioned moderation writes. Existing financial endpoints keep their
+  // separate verified contracts; they are not generic moderation controls.
+  if (!['GET','HEAD','OPTIONS'].includes(c.req.method) && /^\/api\/admin\/(moderation|reports|users|posts|comments|messages|make-admin|remove-post)(\/|$)/.test(new URL(c.req.url).pathname)) {
+    return c.json({detail:'Use the versioned console operation workflow. Legacy moderation writes are disabled.',code:'ADMIN_WORKFLOW_UPGRADE_REQUIRED'},409);
+  }
   await next();
 });
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -453,6 +460,8 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     }
     payload = canonicalSupabaseRequestPayload(payload, user);
     userId = String(payload?.sub || userId);
+    if(!['GET','HEAD','OPTIONS'].includes(c.req.method) && /^\/api\/(commerce\/purchases(?:\/[^/]+\/(?:checkout|decision))?|checkout\/create-payment-intent|stripe\/checkout\/sessions)$/.test(requestPath)
+      && await userHasActiveRestriction(c,userId,'commerce')) return c.json({detail:'This account is temporarily restricted from new commercial actions.',code:'CAPABILITY_RESTRICTED'},403);
     c.set('jwtPayload', payload);
     await next();
   } catch (error: any) {
@@ -21874,7 +21883,7 @@ api.post('/admin/commerce/purchases/:purchaseId/refund', authMiddleware, async (
 
 function normalizeRestrictionType(value: unknown): string {
   const type = cleanText(value || 'all', 60).toLowerCase().replace(/[\s-]+/g, '_');
-  return ['all', 'posting', 'commenting', 'messaging', 'discover', 'handshake'].includes(type) ? type : 'all';
+  return ['all', 'posting', 'commenting', 'messaging', 'commerce', 'discover', 'handshake'].includes(type) ? type : 'all';
 }
 
 function supabaseUserRestrictionsFromMetadata(metadataValue: unknown): any[] {
@@ -21893,23 +21902,14 @@ function supabaseUserRestrictionsFromMetadata(metadataValue: unknown): any[] {
       created_at: cleanText(restriction?.created_at || restriction?.starts_at || '', 80),
     }))
     .filter((restriction: any) => restriction.reason || restriction.ends_at || restriction.created_at)
-    .sort((a: any, b: any) => (Date.parse(b.created_at || b.starts_at || '') || 0) - (Date.parse(a.created_at || a.starts_at || '') || 0))
-    .slice(0, 100);
+    .sort((a: any, b: any) => (Date.parse(b.created_at || b.starts_at || '') || 0) - (Date.parse(a.created_at || a.starts_at || '') || 0));
 }
 
-async function userHasActiveRestriction(c: any, userId: string, type: 'posting' | 'commenting' | 'messaging' | 'discover' | 'handshake'): Promise<boolean> {
+async function userHasActiveRestriction(c: any, userId: string, type: 'posting' | 'commenting' | 'messaging' | 'commerce' | 'discover' | 'handshake'): Promise<boolean> {
   if (supabasePrimaryConfigured(c)) {
     const row = await getSupabaseAppUserRowByAnyId(c, userId);
     const restrictions = supabaseUserRestrictionsFromMetadata(row?.metadata);
-    const currentTime = Date.now();
-    return restrictions.some((restriction: any) => {
-      const restrictionType = normalizeRestrictionType(restriction?.restriction_type || restriction?.type);
-      if (restrictionType !== 'all' && restrictionType !== type) return false;
-      const startsAt = Date.parse(String(restriction?.starts_at || restriction?.created_at || ''));
-      const endsAt = Date.parse(String(restriction?.ends_at || ''));
-      return (!Number.isFinite(startsAt) || startsAt <= currentTime)
-        && (!Number.isFinite(endsAt) || endsAt > currentTime);
-    });
+    return activeAdminRestriction(restrictions,type);
   }
   await ensureAdminModerationSchema(c.env.DB);
   const row = await c.env.DB.prepare(
@@ -21978,14 +21978,14 @@ function adminUserPayload(row: any, role: AdminRole) {
 function adminSupabaseUserPayload(row: any, role: AdminRole, reportCount = 0) {
   const legacy = supabaseAppUserToLegacyUser(row);
   const metadata = parseJsonObject(row?.metadata);
-  return adminUserPayload({
+  return { ...adminUserPayload({
     ...legacy,
     report_count: reportCount,
     warning_count: Number((metadata as any).warning_count || 0),
     suspended_until: cleanText((metadata as any).suspended_until, 80),
     banned_at: cleanText((metadata as any).banned_at, 80),
     ban_reason: cleanMultilineText((metadata as any).ban_reason, 500),
-  }, role);
+  }, role), admin_version:Number((metadata as any).admin_version||0) };
 }
 
 async function supabaseAdminReportCountsForUsers(c: any, userIds: string[]): Promise<Map<string, number>> {
@@ -22007,28 +22007,17 @@ async function supabaseAdminReportCountsForUsers(c: any, userIds: string[]): Pro
   return counts;
 }
 
-async function supabaseAdminUserRows(c: any, input: { search?: string; status?: string; limit: number; offset: number }) {
+async function supabaseAdminUserRows(c: any, input: { search?: string; status?: string; limit: number; offset: number; privateLookup?: boolean }) {
   const search = cleanText(input.search || '', 120).toLowerCase();
   const status = cleanText(input.status || '', 40).toLowerCase();
-  const rowLimit = Math.min(500, Math.max(input.limit + input.offset + 50, input.limit));
   const rows = await supabaseAdminQueryRows(c, 'app_users', {
     select: SUPABASE_APP_USER_SELECT,
-    order: 'created_at.desc',
-    limit: rowLimit,
+    filters: consoleUserFilters(search,status,!!input.privateLookup),
+    order: 'created_at.desc,id.asc',
+    limit: input.limit,
+    offset: input.offset,
   });
-  return rows
-    .filter((row) => {
-      const legacy = supabaseAppUserToLegacyUser(row);
-      if (status && status !== 'all' && cleanText(legacy.status || 'active', 40).toLowerCase() !== status) return false;
-      if (!search) return true;
-      return [
-        legacy.id,
-        legacy.username,
-        legacy.full_name,
-        legacy.email,
-      ].some((value) => String(value || '').toLowerCase().includes(search));
-    })
-    .slice(input.offset, input.offset + input.limit);
+  return rows;
 }
 
 async function supabasePatchUserModerationMetadata(c: any, targetUserId: string, mutate: (metadata: Record<string, any>, row: any) => Record<string, any>) {
@@ -22446,6 +22435,7 @@ function adminReportSummary(row: any, env?: Env) {
     status: normalizeReportStatus(row.status, 'pending'),
     priority: cleanText(row.priority || 'normal', 20),
     assigned_to: row.assigned_to || '',
+    admin_version: Number(row.admin_version || 0),
     created_at: row.created_at || '',
     updated_at: row.updated_at || '',
     closed_at: row.closed_at || null,
@@ -22469,6 +22459,8 @@ function adminReportSummary(row: any, env?: Env) {
 
 async function supabaseEnrichAdminReportRows(c: any, reports: any[]): Promise<any[]> {
   if (!reports.length) return [];
+  const evidenceAdmin=await getAdminContext(c);
+  const canReadMessages=!!evidenceAdmin&&adminCan(evidenceAdmin.role,'messages:reported:read');
   const reporterIds = reports.map((row) => publicId(row?.reporter_id, 120)).filter(Boolean);
   const ownerIds = reports.map((row) => publicId(row?.target_owner_user_id, 120)).filter(Boolean);
   const postIds = new Set<string>();
@@ -22483,7 +22475,7 @@ async function supabaseEnrichAdminReportRows(c: any, reports: any[]): Promise<an
     if ((targetType === 'post' || targetType === 'discover_post') && targetId) postIds.add(targetId);
     if (contentId) postIds.add(contentId);
     if (targetType === 'comment' && targetId) commentIds.add(targetId);
-    if (targetType === 'message' && targetId) messageIds.add(targetId);
+    if (canReadMessages && targetType === 'message' && targetId) messageIds.add(targetId);
   }
 
   const [users, posts, comments, messages] = await Promise.all([
@@ -22543,7 +22535,7 @@ async function supabaseEnrichAdminReportRows(c: any, reports: any[]): Promise<an
       report_type: targetType,
       content_id: contentId,
       created_at: report?.legacy_created_at || report?.created_at,
-      updated_at: report?.legacy_updated_at || report?.updated_at,
+      updated_at: report?.updated_at || report?.legacy_updated_at,
       reporter_username: reporter?.username,
       reporter_full_name: reporter?.full_name,
       reporter_profile_image: reporter?.avatar_url,
@@ -22706,7 +22698,7 @@ async function adminReportDetail(c: any, report: any) {
   if (supabasePrimaryConfigured(c)) {
     const type = reportTargetType(report);
     let target: any = { type, missing: true };
-    if ((type === 'post' || type === 'discover_post') && (report.post_id || report.reported_id)) {
+    if ((type === 'post' || type === 'discover_post') && report.post_id) {
       target = {
         type: 'post',
         post: adminPostPayload({
@@ -22724,7 +22716,7 @@ async function adminReportDetail(c: any, report: any) {
           user_profile_image: report.target_profile_image || '',
         }, c.env),
       };
-    } else if (type === 'comment' && (report.comment_id || report.reported_id)) {
+    } else if (type === 'comment' && report.comment_id) {
       target = {
         type: 'comment',
         comment: {
@@ -22735,7 +22727,7 @@ async function adminReportDetail(c: any, report: any) {
           status: cleanText(report.comment_status, 40),
         },
       };
-    } else if (type === 'message' && (report.message_id || report.reported_id)) {
+    } else if (type === 'message' && report.message_id) {
       target = {
         type: 'message',
         privacy_warning: true,
@@ -22770,7 +22762,7 @@ async function adminReportDetail(c: any, report: any) {
       filters: actionFilters,
       order: 'created_at.desc',
       limit: 30,
-    }).catch(() => []);
+    });
     return {
       ...adminReportSummary(report, c.env),
       admin_notes: cleanMultilineText(report.admin_notes, 1000),
@@ -22778,7 +22770,7 @@ async function adminReportDetail(c: any, report: any) {
       reviewed_by: report.reviewed_by || '',
       reviewed_at: report.reviewed_at || null,
       target,
-      notes: [],
+      notes: ((Array.isArray(parseJsonObject(report.metadata).internal_notes)?parseJsonObject(report.metadata).internal_notes:[]) as any[]).slice(-50).map((item:any)=>({id:item.id,note:cleanMultilineText(item.note,2000),created_at:item.created_at,admin:{id:item.admin_id,username:null,full_name:'Administrator'}})),
       previous_actions: actionRows.map((action: any) => ({
         ...action,
         reason: cleanMultilineText(action.reason, 500),
@@ -23103,6 +23095,11 @@ api.post('/admin/moderation/:id/reject', authMiddleware, async (c) => {
   }
 });
 
+registerConsoleRoutes(api,authMiddleware,{
+  authorize:requireAdminRole,rateLimit:requireAdminWriteRateLimit,rpc:supabaseAdminRpc,
+  rows:supabaseAdminQueryRows,count:supabaseAdminCountRows,
+});
+
 api.get('/admin/me', authMiddleware, async (c) => {
   try {
     const admin = await requireAdminRole(c, 'admin:read');
@@ -23224,6 +23221,9 @@ api.get('/admin/reports', authMiddleware, async (c) => {
       const targetType = cleanText(c.req.query('target_type') || c.req.query('type') || '', 60);
       if (targetType && targetType !== 'all') filters.target_type = postgrestEqFilter(normalizeReportTargetType(targetType));
       const fromDate = cleanText(c.req.query('from') || '', 40);
+      if(c.req.query('assigned')==='none')filters.assigned_to='is.null';
+      const priority=cleanText(c.req.query('priority')||'',20);
+      if(['urgent','high','medium','normal','low'].includes(priority))filters.priority=postgrestEqFilter(priority);
       if (/^\d{4}-\d{2}-\d{2}/.test(fromDate)) filters.created_at = `gte.${fromDate}`;
       const search = postgrestSearchTerm(c.req.query('search') || '');
       if (search) {
@@ -23232,13 +23232,11 @@ api.get('/admin/reports', authMiddleware, async (c) => {
       const rows = await supabaseAdminQueryRows(c, 'app_reports', {
         select: '*',
         filters,
-        order: 'created_at.desc',
+        order: c.req.query('sort')==='oldest'?'created_at.asc,id.asc':'created_at.desc,id.asc',
         limit,
         offset,
       });
       const enriched = await supabaseEnrichAdminReportRows(c, rows);
-      const rank: Record<string, number> = { urgent: 0, high: 1, medium: 2, normal: 3 };
-      enriched.sort((a, b) => (rank[cleanText(a.priority || 'normal', 20)] ?? 4) - (rank[cleanText(b.priority || 'normal', 20)] ?? 4));
       return c.json({
         results: enriched.map((row) => adminReportSummary(row, c.env)),
         pagination: { limit, offset, next_offset: offset + limit },
@@ -23543,7 +23541,8 @@ api.get('/admin/users', authMiddleware, async (c) => {
     const rawSearch = cleanText(c.req.query('search') || '', 120);
     const status = cleanText(c.req.query('status') || '', 40);
     if (supabasePrimaryConfigured(c)) {
-      const rows = await supabaseAdminUserRows(c, { search: rawSearch, status, limit, offset });
+      if(rawSearch.includes('@')&&!adminCan(admin.role,'users:private')) return c.json({detail:'Private account lookup requires additional permission.'},403);
+      const rows = await supabaseAdminUserRows(c, { search: rawSearch, status, limit, offset, privateLookup:adminCan(admin.role,'users:private') });
       const reportCounts = await supabaseAdminReportCountsForUsers(c, rows.map((row) => publicId(row?.id, 120)));
       return c.json({
         results: rows.map((row) => adminSupabaseUserPayload(row, admin.role, reportCounts.get(publicId(row?.id, 120)) || 0)),
@@ -23592,14 +23591,8 @@ api.get('/admin/users/:userId', authMiddleware, async (c) => {
           filters: { or: `(target_user_id.eq.${rowId},target_id.eq.${rowId})` },
           order: 'created_at.desc',
           limit: 50,
-        }).catch((error: any) => {
-          console.warn(JSON.stringify({ event: 'supabase_admin_user_actions_failed', code: getErrorCode(error).slice(0, 180) }));
-          return [];
         }),
-        supabaseReadVisiblePosts(c, rowId, { ownerId: rowId, limit: 12 }).catch((error: any) => {
-          console.warn(JSON.stringify({ event: 'supabase_admin_user_posts_failed', code: getErrorCode(error).slice(0, 180) }));
-          return [];
-        }),
+        supabaseReadVisiblePosts(c, '', { ownerId: rowId, limit: 12 }),
       ]);
       return c.json({
         user: adminSupabaseUserPayload(row, admin.role, reportCounts.get(rowId) || 0),
@@ -23917,26 +23910,19 @@ api.get('/admin/posts', authMiddleware, async (c) => {
       if (category && category !== 'all' && !normalizedCategory) return c.json({ detail: 'Unknown category.' }, 400);
       const filters: Record<string, string> = {};
       if (status !== 'all') filters.status = postgrestEqFilter(status);
-      const needsMemoryFilter = !!normalizedCategory || surface === 'discover' || !!rawSearch;
+      if(normalizedCategory)filters.category=postgrestEqFilter(normalizedCategory);
+      if(surface==='discover')filters['metadata->>discover_blocked_at']='is.null';
+      const search=postgrestSearchTerm(rawSearch);
+      if(search)filters.or=`(legacy_post_id.ilike.*${search}*,title.ilike.*${search}*,content.ilike.*${search}*,app_user_id.ilike.*${search}*)`;
       const rows = await supabaseAdminQueryRows(c, 'app_posts', {
         select: SUPABASE_APP_POST_SELECT,
         filters,
         order: 'legacy_created_at.desc.nullslast,created_at.desc',
-        limit: needsMemoryFilter ? Math.min(1000, Math.max(offset + limit + 100, (offset + limit) * 5)) : limit,
-        offset: needsMemoryFilter ? 0 : offset,
+        limit:limit+1,
+        offset,
       });
-      const postRows = rows.filter((row) => {
-        if (normalizedCategory && !supabaseAppPostMatchesCategory(row, normalizedCategory)) return false;
-        if (surface === 'discover') {
-          const metadata = parseJsonObject(row?.metadata);
-          if (cleanText((metadata as any).discover_blocked_at, 80)) return false;
-        }
-        return true;
-      });
-      const payloads = await supabaseAdminPostPayloads(c, postRows);
-      const filtered = rawSearch ? payloads.filter((payload) => supabaseAdminPostPayloadMatchesSearch(payload, rawSearch)) : payloads;
-      const results = needsMemoryFilter ? filtered.slice(offset, offset + limit) : filtered;
-      return c.json({ results, pagination: { limit, offset, next_offset: offset + limit } });
+      const results=await supabaseAdminPostPayloads(c,rows.slice(0,limit));
+      return c.json({ results, pagination: { limit, offset, next_offset: rows.length>limit?offset+limit:null } });
     }
 
     await ensureAdminModerationSchema(c.env.DB);
@@ -24683,6 +24669,8 @@ api.get('/admin/audit-logs', authMiddleware, async (c) => {
       if (action) filters.action_type = postgrestEqFilter(action);
       if (targetType) filters.target_type = postgrestEqFilter(targetType);
       if (adminId) filters.actor_admin_user_id = postgrestEqFilter(adminId);
+      const search=postgrestSearchTerm(c.req.query('search')||'');
+      if(search)filters.or=`(target_id.ilike.*${search}*,action_type.ilike.*${search}*,id.ilike.*${search}*)`;
       const rows = await supabaseAdminQueryRows(c, 'app_audit_logs', {
         select: '*',
         filters,
