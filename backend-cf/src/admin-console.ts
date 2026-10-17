@@ -46,9 +46,16 @@ export function recentAdminMFA(jwt: any, now = Date.now() / 1000) {
   );
 }
 export function validateConsoleOperation(input: any) {
-  if (!input || !consolePermissions[input.action])
+  if (
+    !input ||
+    typeof input.action !== "string" ||
+    !Object.hasOwn(consolePermissions, input.action)
+  )
     throw new Error("INVALID_ACTION");
-  if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(input.id || ""))
+  if (
+    typeof input.id !== "string" ||
+    !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(input.id)
+  )
     throw new Error("INVALID_OPERATION_ID");
   if (typeof input.target !== "string" || !/^[\w-]{1,160}$/.test(input.target))
     throw new Error("INVALID_TARGET");
@@ -61,7 +68,7 @@ export function validateConsoleOperation(input: any) {
   if (!Number.isSafeInteger(input.version) || input.version < 0)
     throw new Error("VERSION_REQUIRED");
   if (
-    input.note &&
+    input.note !== undefined &&
     (typeof input.note !== "string" || input.note.length > 2000)
   )
     throw new Error("INVALID_NOTE");
@@ -84,9 +91,17 @@ export function validateConsoleOperation(input: any) {
     !["owner", "moderator", "support", "none"].includes(input.role)
   )
     throw new Error("INVALID_ROLE");
-  if (input.assignee && !/^[\w-]{1,160}$/.test(input.assignee))
+  if (
+    input.assignee !== undefined &&
+    (typeof input.assignee !== "string" ||
+      (input.assignee !== "" && !/^[\w-]{1,160}$/.test(input.assignee)))
+  )
     throw new Error("INVALID_ASSIGNEE");
-  if (input.duplicate_of && !/^[\w-]{1,160}$/.test(input.duplicate_of))
+  if (
+    input.duplicate_of !== undefined &&
+    (typeof input.duplicate_of !== "string" ||
+      !/^[\w-]{1,160}$/.test(input.duplicate_of))
+  )
     throw new Error("INVALID_DUPLICATE");
   return Object.fromEntries(
     [
@@ -219,7 +234,11 @@ export function registerConsoleRoutes(api: any, auth: any, io: any) {
     auth,
     run(async (c) => {
       const actor = await io.authorize(c, "admin:read");
-      if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(c.req.param("id")))
+      if (
+        !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(
+          c.req.param("id"),
+        )
+      )
         return c.json({ detail: "Invalid operation ID" }, 400);
       const rows = await io.rows(c, "app_admin_operations", {
         select: "id,result,created_at",
@@ -281,18 +300,23 @@ export function registerConsoleRoutes(api: any, auth: any, io: any) {
       table: "app_admin_roles",
       select: "user_id,role,admin_version,created_at,updated_at",
       permission: "roles:write",
+      order: "created_at.desc,user_id.asc",
     },
     operations: {
       table: "app_admin_operations",
       select: "id,actor_id,result,created_at",
       permission: "audit:read",
+      order: "created_at.desc,actor_id.asc,id.asc",
     },
   };
   api.get(
     "/admin/console/:section",
     auth,
     run(async (c) => {
-      const resource = resources[c.req.param("section")];
+      const section = c.req.param("section");
+      const resource = Object.hasOwn(resources, section)
+        ? resources[section]
+        : undefined;
       if (!resource) return c.json({ detail: "Unknown section" }, 404);
       await io.authorize(c, resource.permission);
       const page = consolePage(c.req.query());
@@ -308,7 +332,7 @@ export function registerConsoleRoutes(api: any, auth: any, io: any) {
       const rows = await io.rows(c, resource.table, {
         select: resource.select,
         filters,
-        order: "created_at.desc",
+        order: resource.order || "created_at.desc,id.asc",
         limit: page.limit + 1,
         offset: page.offset,
       });

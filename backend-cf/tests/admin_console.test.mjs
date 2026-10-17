@@ -82,6 +82,12 @@ test("console validates target, precision, reason, scopes, roles, and private se
   for (const patch of [
     { id: "abc" },
     { action: "delete_everything" },
+    { action: "constructor" },
+    { action: "__proto__" },
+    { id: "aaaaaaaa--------------------------------" },
+    { note: 0 },
+    { assignee: 123 },
+    { duplicate_of: true },
     { target: "x),or(id.eq.other)" },
     { version: -1 },
     { reason: "" },
@@ -165,6 +171,14 @@ test("HTTP denies anonymous/ordinary/support writes and missing MFA; independent
     403,
   );
   assert.equal(writes, 0);
+  assert.equal(
+    (
+      await app.request("/admin/console/constructor", {
+        headers: { Authorization: "owner" },
+      })
+    ).status,
+    404,
+  );
   const body = await (
     await app.request("/admin/console-summary", {
       headers: { Authorization: "support" },
