@@ -14,9 +14,16 @@ export function passwordProblem(password, confirmation) {
 export function startRecoveryPage(window, document) {
   let { token } = recoveryContext(window.location.hash);
   // Drop both query and fragment before any network activity. Never display provider error text.
-  window.history.replaceState(null, '', window.location.pathname);
   const get = (id) => document.getElementById(id);
   const reset = get('reset-form'), request = get('request-form'), status = get('status');
+  try {
+    window.history.replaceState(null, '', window.location.pathname);
+  } catch {
+    token = '';
+    status.textContent = 'This browser cannot start secure recovery. Open the newest email link directly in Chrome, Edge or Safari.';
+    status.dataset.error = 'true';
+    return;
+  }
   let busy = false;
   function message(value, error = false) { status.textContent = value; status.dataset.error = String(error); }
   function clear() { token = ''; reset.reset(); reset.hidden = true; }
@@ -77,5 +84,6 @@ export function startRecoveryPage(window, document) {
   get('cancel').addEventListener('click', () => { if (!busy) requestMode('Reset cancelled. No password change was requested.'); });
   window.addEventListener('pagehide', clear);
   window.addEventListener('pageshow', (event) => { if (event.persisted) requestMode('For your security, request a fresh link after leaving this page.'); });
+  get('startup-help').hidden = true;
 }
 if (typeof window !== 'undefined' && typeof document !== 'undefined') startRecoveryPage(window, document);

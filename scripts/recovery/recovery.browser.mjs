@@ -49,5 +49,20 @@ try{
   await page.setViewportSize({width:390,height:844});await fresh('#type=recovery&access_token=synthetic-only');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   const output=process.env.CAPTRO_SCREENSHOTS || fileURLToPath(new URL('../../recovery-test-results/',import.meta.url));await mkdir(output,{recursive:true});await page.screenshot({path:output+'/recovery-mobile.png',fullPage:true});
-  assert.deepEqual(errors,[]);console.log('PASS narrow layout and actual CSP; seven browser scenarios passed');
+  assert.deepEqual(errors,[]);console.log('PASS narrow layout and actual CSP');
+  const blocked=await context.newPage();
+  await blocked.route('**/reset.mjs',route=>route.abort());
+  await blocked.goto(base);
+  assert.equal(await blocked.locator('#startup-help').isVisible(),true);
+  assert.match(await blocked.locator('#status').textContent(),/Starting secure/);
+  assert.equal(await blocked.locator('#reset-form').isVisible(),false);
+  await blocked.close();console.log('PASS blocked script retains useful, safe instructions');
+  const restricted=await context.newPage();
+  await restricted.addInitScript(()=>{history.replaceState=()=>{throw new DOMException('Restricted','SecurityError');};});
+  const before=calls.length;
+  await restricted.goto(base+'#type=recovery&access_token=synthetic-only');
+  await restricted.getByText('This browser cannot start secure recovery.',{exact:false}).waitFor();
+  assert.equal(await restricted.locator('#reset-form').isVisible(),false);
+  assert.equal(calls.length,before);
+  await restricted.close();console.log('PASS restricted history fails safely; nine browser scenarios passed');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
