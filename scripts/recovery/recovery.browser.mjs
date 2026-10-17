@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {readFile,mkdir} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+const {chromium}=await import(process.env.CAPTRO_PLAYWRIGHT || 'playwright');
+const root=new URL('../../captro-site/',import.meta.url);
+const server=createServer(async(req,res)=>{
+  const pathname=new URL(req.url,'http://localhost').pathname;
+  const name=pathname.endsWith('/reset.mjs')?'reset.mjs':pathname.endsWith('/reset.css')?'reset.css':'index.html';
+  res.setHeader('Content-Type',name.endsWith('.mjs')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');
+  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'");
+  res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');
+  res.end(await readFile(new URL('auth/reset-password/'+name,root)));
+});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const base=`http://127.0.0.1:${server.address().port}/auth/reset-password/`;
+const browser=await chromium.launch({headless:true,channel:process.env.CAPTRO_BROWSER_CHANNEL || 'msedge'});
+const context=await browser.newContext({viewport:{width:1100,height:900}});
+let mode='success',calls=[];
+await context.route('**/auth/reset-password/api/*',async route=>{
+  calls.push({url:route.request().url(),body:route.request().postDataJSON()});
+  if(mode==='offline'){await route.abort('internetdisconnected');return;}
+  await new Promise(resolve=>setTimeout(resolve,120));
+  await route.fulfill({status:mode==='expired'?401:mode==='limited'?429:200,contentType:'application/json',body:JSON.stringify({ok:mode==='success'})});
+});
+const page=await context.newPage(); const errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+page.on('console',msg=>{if(msg.type()==='error' && /Content Security Policy|Refused to/.test(msg.text())) errors.push(msg.text());});
+const fresh=async(hash='')=>{await page.goto('about:blank');await page.goto(base+hash);await page.locator('#status').filter({hasText:/Enter your new|missing/}).waitFor();};
+const fill=async()=>{await page.getByLabel('New password',{exact:true}).fill('Synthetic passphrase 123!');await page.getByLabel('Confirm new password').fill('Synthetic passphrase 123!');};
+try{
+  await fresh();assert.equal(await page.locator('#request-form').isVisible(),true);assert.equal(await page.locator('#reset-form').isVisible(),false);
+  await page.getByLabel('Email address').fill('fixture@example.com');await page.getByRole('button',{name:'Send reset email'}).click();await page.getByText('If that email belongs',{exact:false}).waitFor();
+  assert.equal(calls.length,1);console.log('PASS missing link and honest email request');
+  await fresh('#type=recovery&access_token=synthetic-only&refresh_token=never-store');
+  assert.equal(page.url(),base);assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);
+  await fill();await page.getByLabel('Confirm new password').fill('Not the same passphrase');
+  await page.getByRole('button',{name:'Save new password'}).click();await page.getByText('The passwords do not match.').waitFor();assert.equal(calls.length,1);
+  console.log('PASS token URL removed, no storage and mismatch blocked');
+  await fill();await page.evaluate(()=>{const form=document.getElementById('reset-form');form.dispatchEvent(new Event('submit',{cancelable:true}));form.dispatchEvent(new Event('submit',{cancelable:true}));});
+  await page.getByText('Password updated.',{exact:true}).waitFor();assert.equal(calls.length,2);assert.equal(calls[1].body.refresh_token,undefined);assert.equal(await page.locator('#password').inputValue(),'');
+  console.log('PASS single confirmed update, duplicate submit ignored and secrets cleared');
+  mode='expired';await fresh('#type=recovery&access_token=synthetic-only');await fill();await page.getByRole('button',{name:'Save new password'}).click();await page.getByText('This reset link cannot be used.',{exact:false}).waitFor();assert.equal(await page.locator('#request-form').isVisible(),true);
+  console.log('PASS expired link offers recovery rather than success');
+  mode='offline';await fresh('#type=recovery&access_token=synthetic-only');await fill();await page.getByRole('button',{name:'Save new password'}).click();await page.getByText('The update could not be confirmed because',{exact:false}).waitFor();assert.equal(await page.locator('#success').isVisible(),false);
+  console.log('PASS lost response stays explicitly unconfirmed');
+  mode='success';await fresh('#type=recovery&access_token=synthetic-only');const previous=calls.length;await page.getByRole('button',{name:'Cancel reset'}).click();assert.equal(calls.length,previous);assert.equal(await page.locator('#request-form').isVisible(),true);
+  console.log('PASS cancel performs no password mutation');
+  await page.setViewportSize({width:390,height:844});await fresh('#type=recovery&access_token=synthetic-only');
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  const output=process.env.CAPTRO_SCREENSHOTS || fileURLToPath(new URL('../../recovery-test-results/',import.meta.url));await mkdir(output,{recursive:true});await page.screenshot({path:output+'/recovery-mobile.png',fullPage:true});
+  assert.deepEqual(errors,[]);console.log('PASS narrow layout and actual CSP; seven browser scenarios passed');
+}finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
