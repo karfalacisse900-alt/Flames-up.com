@@ -6,6 +6,25 @@ import UIKit
 /// suspended until explicitly released, so concurrency is measured without
 /// network timing or sleep-based work simulation.
 final class CaptroImageLoadAdmissionTests: XCTestCase {
+  func testVisibleSubscriberRecoversWhenBudgetRetiresJobImmediatelyBeforeJoin() async {
+    let admission = MIRAImageLoadAdmission(maximumActive: 1, maximumPrefetch: 0)
+    let pipeline = MIRAImageLoadPipeline(admission: admission, testLoader: { _ in
+      MIRAImageLoadResult(image: UIImage(), source: .network)
+    }, beforeVisibleJoin: {
+      // Runs within the pipeline actor turn: old task cannot remove its inFlight
+      // record before this visible subscriber tries to join it.
+      admission.updateBudget(maximumActive: 1, maximumPrefetch: 0)
+    })
+    let remote = url("retired-\(UUID().uuidString)")
+    let prefetch = Task { await pipeline.outcome(for: remote, maxPixelSize: 64, priority: .prefetch) }
+    await eventually { admission.snapshot.waiting == 1 }
+    let visible = await pipeline.outcome(for: remote, maxPixelSize: 64)
+    guard case .loaded = visible else { prefetch.cancel(); return XCTFail("Visible subscriber joined a retired job") }
+    let retired = await prefetch.value
+    guard case .cancelled = retired else { return XCTFail("Budget must retire speculative work") }
+    XCTAssertEqual(admission.snapshot.admitted, 1)
+    XCTAssertEqual(admission.snapshot.active, 0)
+  }
   func testVisibleDemandCannotPromoteRetiredPrefetch() async {
     let admission = MIRAImageLoadAdmission(maximumActive: 1, maximumPrefetch: 1)
     let retired = UUID()

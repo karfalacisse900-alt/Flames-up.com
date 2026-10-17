@@ -364,15 +364,18 @@ actor MIRAImageLoadPipeline {
   private let session: URLSession
 #if DEBUG || CAPTRO_PERFORMANCE_REVIEW
   private var testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)?
+  private var beforeVisibleJoin: (@Sendable () -> Void)?
   private static let tracesLoads = ProcessInfo.processInfo.arguments.contains("--captro-vertical-diagnostics")
 
   init(admission: MIRAImageLoadAdmission = MIRAImageLoadAdmission(),
        followsNetworkPolicy: Bool = false,
        session: URLSession = MIRAAPIClient.productionSession,
-       testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)? = nil) {
+       testLoader: (@Sendable (URL) async -> MIRAImageLoadResult?)? = nil,
+       beforeVisibleJoin: (@Sendable () -> Void)? = nil) {
     self.admission = admission
     self.followsNetworkPolicy = followsNetworkPolicy
     self.testLoader = testLoader
+    self.beforeVisibleJoin = beforeVisibleJoin
     self.session = session
   }
   nonisolated var diagnosticSnapshot: MIRAImageLoadAdmission.Snapshot { admission.snapshot }
@@ -442,6 +445,9 @@ actor MIRAImageLoadPipeline {
     let reader = UUID()
     // Budget changes can retire admission before the detached task unwinds.
     // Atomically promote before joining; never attach visible demand to that tombstone.
+#if DEBUG || CAPTRO_PERFORMANCE_REVIEW
+    if priority == .visible, inFlight[key] != nil { beforeVisibleJoin?() }
+#endif
     if let existing = inFlight[key], priority == .visible, !admission.promote(existing.id) {
       inFlight[key] = nil
     }
