@@ -1,0 +1,93 @@
+CAPTRO BROWSER PASSWORD RECOVERY — 17 OCTOBER 2026
+
+Approved scope: browser recovery page, recovery redirect, narrowly necessary website
+integration and a fresh recovery email. No owner role, password, admin access policy,
+main API Worker, native app, payment, database migration or passkey setting changed.
+
+Source isolation:
+fix/browser-recovery-20261017 in captro-browser-recovery-20261017 worktree.
+Based on 68e4e6f6167aab140e465443b15d257c88a1391f, the most recent successful public
+site deployment. Compared all eight unrelated public pages/styles with their live
+versions; they matched. Existing repair worktree and unrelated dirty files preserved.
+No merge. Only the isolated recovery branch was pushed for the approved deployment.
+
+Confirmed causes:
+1. captro.app DNS returned NXDOMAIN.
+2. The live Supabase allowlist did not contain the working recovery page, so a
+   synthetic invalid-token redirect probe fell back to the non-resolving domain.
+3. Existing recovery page offered only app deep-link navigation, not browser reset.
+4. That page used an inline script blocked by its actual script-src 'self' policy.
+5. Direct browser calls from captro-site.pages.dev to the API lacked allowed CORS.
+
+Implemented:
+- Native HTML browser password form, confirmation, cancellation, email retry and
+  honest expired/failure/unconfirmed states. External module complies with CSP.
+- Fragment tokens are removed from URL immediately and held only in page memory;
+  no storage, analytics, automatic app opening, token-copy control or token links.
+- Same-origin Pages handler accepts only request/confirm, fixed upstream endpoint,
+  exact JSON fields, bounded streaming body, timeout and no redirect following.
+  No privileged keys; existing Captro API validates sessions and account restrictions.
+  Returned sessions/identities are discarded, never exposed by the handler.
+- Explicit Pages runtime and public fetch routing; runtime-safe fetch binding and
+  controller timeout. Initial deployed bridge returned 502 although direct API
+  returned 401; corrected deployment now returns the expected 401. No claim that
+  one individual runtime option was independently isolated as the sole cause.
+- Added ONLY https://captro-site.pages.dev/auth/reset-password/ to Supabase's existing
+  uri_allow_list. Preserved all existing entries. Recovery email template already
+  used the correct confirmation URL; unchanged. Global Site URL also unchanged.
+- Cache-Control no-store on recovery assets/responses and no-referrer policy.
+
+Files:
+captro-site/auth/reset-password/index.html, reset.css, reset.mjs
+captro-site/functions/auth/reset-password/api/[action].js
+captro-site/_headers, _routes.json, wrangler.jsonc
+scripts/recovery/recovery-config.mjs, recovery.test.mjs, recovery.browser.mjs
+.github/workflows/captro-site-deploy.yml
+
+Verification:
+node --test scripts/recovery/recovery.test.mjs: 7 passed, 0 failed (local and CI).
+Browser fixture suite: 7 scenarios passed in headless Edge, real CSP, 390px layout.
+Fixture success/password changes are mocked, not real account password changes.
+Initial browser harness needed a full navigation rather than hash-only navigation;
+corrected and rerun. Screenshot inspected at actual rendered dimensions.
+wrangler pages functions build: passed.
+Live browser: form rendered, fragment scrubbed, synthetic invalid token rejected
+through deployed handler and useful recovery state displayed. No page JS errors.
+No real user password was changed or sign-in claimed successful.
+
+Deployment evidence:
+Read-only initial inspection: GitHub Actions 39078716198 (allowlist missing).
+First page/config deployment: 39078900076. Page and exact config patch succeeded,
+but immediate serving-instance redirect check failed during propagation. Retained
+rollback artifact contains only prior redirect/template fields, no credentials.
+Read-only follow-up: 39079022442, correct redirect confirmed.
+Final successful deployment: 39079141153, source
+b4738ba4519c74f34da10ad75aa210cf9faf7ad9.
+Deployment URL: https://bea526cf.captro-site.pages.dev
+Canonical recovery URL: https://captro-site.pages.dev/auth/reset-password/
+Final config verification: exact redirect allowed; template unchanged; no further
+patch needed; invalid-token redirect probe matched on first attempt.
+
+Fresh email requested once after final live checks through the new handler for the
+user's supplied Gmail. HTTP 200 / ok true. Inbox delivery and real password reset
+are NOT verified; the user must open their newest private email link and complete
+the reset. Neither token nor password was requested from the user or printed.
+After reset, admin sign-in remains https://captro-admin.pages.dev/ with server role
+checks. Passkey enrollment has NOT been enabled or completed by this repair.
+
+Rollback/forward repair:
+Prefer forward repair to preserve working recovery. Existing public static files
+are unchanged apart from security headers and the reset page. If necessary, roll
+back Pages to the previous deployment and use the private GitHub rollback artifact
+from run 39078900076 to restore only the two captured Auth fields after reviewing
+any subsequent allowlist additions. Do not overwrite the full Auth configuration,
+remove other application redirects, broaden origins or change roles. Returning to
+the previous redirect would restore the known broken recovery path, so do not do
+that merely to revert a cosmetic issue. Main API deployment is independent.
+
+Remaining limits:
+- captro.app DNS itself is still unresolved; recovery now uses the working Pages host.
+- Live successful reset, inbox receipt, owner sign-in and passkey enrollment await
+  user interaction. No phone biometrics or provider identity verification simulated.
+- Repository's default branch reports pre-existing dependency alerts; no new runtime
+  dependency was introduced and this repair does not clear those unrelated alerts.
