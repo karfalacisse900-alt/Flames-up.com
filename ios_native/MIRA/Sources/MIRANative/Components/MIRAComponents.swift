@@ -342,7 +342,16 @@ enum MIRAImageLoadOutcome {
 }
 
 actor MIRAImageLoadPipeline {
-  static let shared = MIRAImageLoadPipeline(followsNetworkPolicy: true)
+  static let shared: MIRAImageLoadPipeline = {
+#if DEBUG
+    if ProcessInfo.processInfo.arguments.contains("--captro-image-recovery-review") {
+      let config = URLSessionConfiguration.ephemeral
+      config.protocolClasses = [CaptroImageRecoveryFixtureProtocol.self]
+      return MIRAImageLoadPipeline(followsNetworkPolicy: true, session: URLSession(configuration: config))
+    }
+#endif
+    return MIRAImageLoadPipeline(followsNetworkPolicy: true)
+  }()
   private struct Load {
     let id: UUID
     let task: Task<MIRAImageLoadOutcome, Never>

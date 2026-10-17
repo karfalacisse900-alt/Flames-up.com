@@ -10,10 +10,12 @@ enum CaptroPresentationReviewFixture {
       .components(separatedBy: "=").last ?? "general"
   }
   static var mediaURL: String {
-    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    if ProcessInfo.processInfo.arguments.contains("--captro-image-recovery-review") { return CaptroImageRecoveryFixtureProtocol.mediaURL }
+    return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("presentation-photo.jpg").absoluteString
   }
   static let dimensions: [String: Int] = {
+    if ProcessInfo.processInfo.arguments.contains("--captro-image-recovery-review") { return ["width": 16, "height": 20] }
     guard let url = URL(string: mediaURL),
       let source = CGImageSourceCreateWithURL(url as CFURL, nil),
       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
