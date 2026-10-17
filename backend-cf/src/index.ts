@@ -20905,6 +20905,31 @@ api.get('/admin/finance/recovery', authMiddleware, async c => {
   } catch(error) { return c.json({detail:'Recovery queue could not be loaded.'},getErrorCode(error)==='FORBIDDEN'?403:503); }
 });
 
+api.get('/admin/finance/recovery/:purchaseId', authMiddleware, async c => {
+  try {
+    await requireAdminRole(c,'payments:read');
+    await requireStripeDatabaseMode(c);
+    const id=isUuidText(c.req.param('purchaseId'));if(!id)return c.json({detail:'Case not found.'},404);
+    const record=(await supabaseAdminSelectRows(c,'app_payment_recovery',{purchase_id:postgrestEqFilter(id)},'*',1))[0];
+    const purchase=(await supabaseAdminSelectRows(c,'app_purchases',{id:postgrestEqFilter(id)},'*',1))[0];
+    if(!record||!purchase||purchase.stripe_mode!==configuredStripeMode(c))return c.json({detail:'Case not found in this payment mode.'},404);
+    const provider=await stripeApiGet(c,`/payment_intents/${encodeURIComponent(record.provider_payment_id)}`);
+    if(!provider.ok)throw Error('RECOVERY_READ_UNAVAILABLE');
+    if(provider.data.id!==record.provider_payment_id || provider.data.livemode!==getStripeConfig(c).liveMode
+      || provider.data.metadata?.captro_purchase_id!==id || provider.data.metadata?.source!=='captro_commerce'
+      || provider.data.amount_received!==record.amount || provider.data.currency?.toUpperCase()!==record.currency
+      || record.amount!==purchase.total_amount || record.currency!==purchase.currency) throw Error('STRIPE_PAYMENT_MISMATCH');
+    const events=await supabaseAdminQueryRows(c,'app_payment_recovery_events',{
+      filters:{purchase_id:postgrestEqFilter(id)},order:'created_at.desc',limit:100,
+    });
+    c.header('Cache-Control','private, no-store');
+    return c.json({purchaseId:id,amount:record.amount,currency:record.currency,purchaseStatus:purchase.status,
+      status:record.status,decision:record.decision,providerStatus:provider.data.status,
+      paymentId:record.provider_payment_id,mode:configuredStripeMode(c),observedAt:now(),
+      events:events.map(e=>({operator:e.operator_id,event:e.event,decision:e.decision,note:e.note,at:e.created_at}))});
+  }catch(error){return c.json({detail:'Could not verify this recovery case. No action was performed.'},getErrorCode(error)==='FORBIDDEN'?403:503);}
+});
+
 api.post('/admin/finance/recovery/:purchaseId/resolve', authMiddleware, async c => {
   try {
     const admin=await requireAdminRole(c,'payments:refund');

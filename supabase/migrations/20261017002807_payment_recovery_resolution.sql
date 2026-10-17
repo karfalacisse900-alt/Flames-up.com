@@ -71,6 +71,8 @@ begin
     or p.settlement_model<>'deferred' or p.total_amount<>r.amount or p.currency<>r.currency then
     raise exception 'CAPTRO_RECOVERY_MANUAL_ACCOUNTING_REQUIRED'; end if;
   if p_outcome='fulfilled' and r.decision='fulfill' then
+    if p_reference is distinct from r.provider_payment_id or p_charge_id not like 'ch\_%' escape '\' or p_charge_id is null then
+      raise exception 'CAPTRO_RECOVERY_PAYMENT_REFERENCE_MISMATCH'; end if;
     if p.currency<>'USD' then raise exception 'CAPTRO_CURRENCY_SETTLEMENT_NOT_SUPPORTED'; end if;
     perform captro_assert_purchase_available(p);
     select * into item from app_purchasables where id=p.purchasable_id for update;

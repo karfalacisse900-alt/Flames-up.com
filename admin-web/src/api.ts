@@ -130,6 +130,7 @@ export async function login(email: string, password: string) {
 export const AdminApi = {
   financePools: (token:string)=>request<FinanceSummary>('/admin/finance/pools',token),
   paymentRecovery: (token:string)=>request<import('./RecoveryPanel').RecoveryQueue>('/admin/finance/recovery',token),
+  paymentRecoveryCase: (token:string,id:string)=>request<import('./RecoveryPanel').RecoveryCase>('/admin/finance/recovery/'+encodeURIComponent(id),token),
   resolvePaymentRecovery: (token:string,id:string,body:{decision:'fulfill'|'refund';note:string})=>
     request<{status:string}>('/admin/finance/recovery/'+encodeURIComponent(id)+'/resolve',token,{method:'POST',body:JSON.stringify(body)}),
   financeRecords: (token:string,query:string)=>request<{items:FinanceRecord[];nextOffset:number|null}>('/admin/finance/records'+query,token),

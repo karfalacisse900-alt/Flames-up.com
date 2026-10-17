@@ -40,7 +40,8 @@ export async function resolvePaymentRecovery(io: {
   if (!refund) {
     if (charge.amount_refunded || listed.data.some((r: any) => !['failed','canceled'].includes(r.status))) throw Error('CAPTRO_RECOVERY_MANUAL_ACCOUNTING_REQUIRED');
     // Never reuse an expired provider idempotency key to blindly create another refund.
-    if (io.now() - Date.parse(record.decision_started_at) >= 23 * 3600000) throw Error('CAPTRO_RECOVERY_MANUAL_ACCOUNTING_REQUIRED');
+    const started=Date.parse(record.decision_started_at);
+    if (!Number.isFinite(started) || started>io.now() || io.now()-started >= 23 * 3600000) throw Error('CAPTRO_RECOVERY_MANUAL_ACCOUNTING_REQUIRED');
     refund = await io.createRefund(intent.id,record.amount,`recovery-refund:${p.id}`);
   }
   if (!refund?.id?.startsWith('re_') || refund.payment_intent !== intent.id || refund.amount !== record.amount

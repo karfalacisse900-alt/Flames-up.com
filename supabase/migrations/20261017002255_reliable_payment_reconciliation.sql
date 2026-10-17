@@ -25,8 +25,8 @@ returns table(purchase jsonb,token uuid,attempts integer,age_seconds bigint)
 language plpgsql set search_path=public as $$
 begin
   -- Bounded discovery; a failed old job already has a row, so cannot starve discovery.
-  insert into app_purchase_reconciliation(purchase_id,next_attempt_at)
-    select p.id,p.hold_expires_at from app_purchases p
+  insert into app_purchase_reconciliation(purchase_id,first_seen_at,next_attempt_at)
+    select p.id,p.created_at,p.hold_expires_at from app_purchases p
     where p.status='payment_pending' and p.hold_expires_at<=now()
       and not exists(select 1 from app_purchase_reconciliation q where q.purchase_id=p.id)
     order by p.hold_expires_at,p.id limit 400 on conflict do nothing;
@@ -34,8 +34,9 @@ begin
     select q.purchase_id from app_purchase_reconciliation q
     where q.completed_at is null and q.next_attempt_at<=now()
       and (q.lease_until is null or q.lease_until<=now())
-    -- Never-attempted work precedes retries; among retries oldest attempt wins.
-    order by q.last_attempt_at nulls first,q.next_attempt_at,q.purchase_id
+    -- Oldest due time wins. Backoff makes room for new work without allowing a
+    -- sustained stream of new purchases to starve an already-due retry.
+    order by q.next_attempt_at,q.last_attempt_at nulls first,q.purchase_id
     limit greatest(1,least(coalesce(p_limit,40),40)) for update skip locked
   ), claimed as (
     update app_purchase_reconciliation q set lease_token=gen_random_uuid(),

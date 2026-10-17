@@ -34,6 +34,10 @@ test('processing refund remains unresolved; expired idempotency window cannot cr
  assert.equal(f.calls.some(x=>x[0]==='resolve'),false);
  const old=fixture();old.io.now=()=>Date.parse('2035-01-03T00:00:00Z');
  await assert.rejects(resolvePaymentRecovery(old.io),/MANUAL_ACCOUNTING/);assert.equal(old.calls.length,0);
+ for(const started of [undefined,'invalid','2040-01-01T00:00:00Z']) {
+  const invalid=fixture();invalid.record.decision_started_at=started;
+  await assert.rejects(resolvePaymentRecovery(invalid.io),/MANUAL_ACCOUNTING/);assert.equal(invalid.calls.length,0);
+ }
 });
 test('wrong buyer purchase, mode, amount, refund or transferred/disputed charge never resolves',async()=>{
  for(const mutate of [f=>f.intent.metadata.captro_purchase_id='other',f=>f.intent.amount_received=999,

@@ -11,6 +11,12 @@ const info=JSON.parse(docker(['inspect',container]))[0];
 assert.equal(info.Config.Image,'postgres:17');
 assert.equal(Object.keys(info.HostConfig.PortBindings??{}).length,0,'No exposed database ports allowed');
 assert.equal((info.Mounts??[]).filter(x=>x.Type!=='tmpfs').length,0,'No persistent mounts allowed');
+let ready=false;
+for(let attempt=0;attempt<20;attempt++) {
+  try { docker(['exec',container,'pg_isready','-U','postgres']);ready=true;break; } catch {}
+  await new Promise(resolve=>setTimeout(resolve,500));
+}
+assert.ok(ready,'Disposable PostgreSQL did not become ready');
 function sql(database,input) {
   return docker(['exec','-i',container,'psql','-X','-qAt','-v','ON_ERROR_STOP=1','-U','postgres','-d',database],{input});
 }
@@ -76,6 +82,19 @@ for(const patched of [false,true]) {
     sql(database,confirm);
     assert.equal(Number(sql(database,`select count(*) from app_entitlements where purchase_id='${purchase}';`).trim()),1);
     console.log('AFTER: elapsed-hold release/confirmation overlap + replay -> one entitlement');
+    sql(database,migration('20261017002255_reliable_payment_reconciliation.sql'));
+    sql(database,migration('20261017002807_payment_recovery_resolution.sql'));
+    sql(database,`update app_purchasables set content_type='event',fulfillment_type='ticket' where id='${item}';
+      do $$ begin for n in 1..100 loop perform captro_begin_marketplace_purchase_v2('${buyer}','buyer','${item}','${price}',1,'fixture-queue-'||n,'{}',0,0,0,'checkout'); end loop; end $$;
+      update app_purchases set hold_expires_at=now()-interval '2 hours' where status='payment_pending';`);
+    const queues=await race(database,'select count(*) from captro_claim_purchase_reconciliation(40);','select count(*) from captro_claim_purchase_reconciliation(40);');
+    assert.equal(queues.code,0,queues.error);assert.match(queues.output,/40/);
+    assert.equal(Number(sql(database,'select count(*) from app_purchase_reconciliation where lease_token is not null;').trim()),80);
+    assert.equal(Number(sql(database,'select max(attempt_count) from app_purchase_reconciliation;').trim()),1);
+    sql(database,"select captro_finish_purchase_reconciliation(purchase_id,lease_token,'processing') from app_purchase_reconciliation where lease_token is not null;");
+    const final=Number(sql(database,'select count(*) from captro_claim_purchase_reconciliation(40);').trim());
+    assert.ok(final>=20&&final<=21);
+    console.log(`AFTER: two concurrent queue claimers own 80 distinct jobs; next batch reaches ${final} newer jobs without repeating processing holds`);
   }
 }
 console.log('All isolated PostgreSQL acceptance checks passed. Provider interactions were mocked, not charged.');

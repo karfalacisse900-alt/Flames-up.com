@@ -90,6 +90,7 @@ test('review migration enforces interval resources, approval dates and provider-
     await assert.rejects(fulfill(),/CAPACITY_REACHED/);
     assert.equal((await one('select status from app_payment_recovery where purchase_id=$1',[paid.id])).status,'needs_review');
     await one("select * from captro_cancel_purchase_hold($1,'')",[competing.id]);
+    await assert.rejects(one("select * from captro_resolve_payment_recovery($1,'admin-a',$2,'fulfilled','pi_other','ch_operator',40)",[paid.id,claim.lease_token]),/REFERENCE_MISMATCH/);
     await fulfill();await fulfill();
     assert.equal((await one('select count(*)::int n from app_entitlements where purchase_id=$1',[paid.id])).n,1);
     assert.equal((await one('select quantity_committed from app_purchasables where id=$1',[row.id])).quantity_committed,1);
@@ -127,7 +128,18 @@ test('review migration enforces interval resources, approval dates and provider-
         assert.ok(!visited.has(job.purchase.id),'Backoff must make room for unattempted work');visited.add(job.purchase.id);
         assert.equal((await one('select captro_renew_purchase_reconciliation($1,$2) ok',[job.purchase.id,job.token])).ok,true);
         await assert.rejects(one("select captro_finish_purchase_reconciliation($1,$2,'released')",[job.purchase.id,job.token]),/TERMINAL_NOT_VERIFIED/);
-        assert.equal((await one("select captro_finish_purchase_reconciliation($1,$2,'processing') ok",[job.purchase.id,job.token])).ok,true);
+        let outcome='processing';
+        const ordinal=ids.indexOf(job.purchase.id);
+        if(ordinal>=80 && ordinal%2===0) {
+          // Mock a freshly verified paid provider response, including replay.
+          const confirm=()=>one("select * from captro_confirm_marketplace_purchase($1,$2,null,$3,$4,null,1000,40,0,'USD',null,'fixture')",[job.purchase.id,'evt_queue_'+ordinal,'pi_queue_'+ordinal,'ch_queue_'+ordinal]);
+          await confirm();await confirm();outcome='confirmed';
+          assert.equal((await one('select count(*)::int n from app_entitlements where purchase_id=$1',[job.purchase.id])).n,1);
+        } else if(ordinal>=80) {
+          await one("select * from captro_cancel_purchase_hold($1,'')",[job.purchase.id]);outcome='released';
+          assert.equal((await one('select count(*)::int n from app_entitlements where purchase_id=$1',[job.purchase.id])).n,0);
+        }
+        assert.equal((await one('select captro_finish_purchase_reconciliation($1,$2,$3) ok',[job.purchase.id,job.token,outcome])).ok,true);
         assert.equal((await one("select captro_finish_purchase_reconciliation($1,$2,'processing') ok",[job.purchase.id,job.token])).ok,false);
       }
     }
@@ -142,6 +154,14 @@ test('review migration enforces interval resources, approval dates and provider-
     const state=await one('select *,extract(epoch from next_attempt_at-now())::int delay from app_purchase_reconciliation where purchase_id=$1',[id]);
     assert.equal(state.needs_attention,true);assert.ok(state.delay>=120&&state.delay<=21660);
     assert.equal((await one('select status from app_purchases where id=$1',[id])).status,'payment_pending');
+    // Continuous arrivals must not reverse the starvation problem for old retries.
+    const newer=await begin(row,'queue-new-arrival');
+    await db.query("update app_purchases set hold_expires_at=now()-interval '1 second' where id=$1",[newer.id]);
+    await db.query("update app_purchase_reconciliation set next_attempt_at=now()-interval '1 minute' where purchase_id=$1",[id]);
+    const dueRetry=await one('select * from captro_claim_purchase_reconciliation(1)');
+    assert.equal(dueRetry.purchase.id,id,'Oldest due retry precedes a newer first attempt');
+    await one("select captro_finish_purchase_reconciliation($1,$2,'processing')",[id,dueRetry.token]);
+    assert.equal((await one('select * from captro_claim_purchase_reconciliation(1)')).purchase.id,newer.id);
     await db.exec('set role authenticated');
     await assert.rejects(db.query('select * from captro_claim_purchase_reconciliation(40)'),/permission denied/);
     await db.exec('reset role');
