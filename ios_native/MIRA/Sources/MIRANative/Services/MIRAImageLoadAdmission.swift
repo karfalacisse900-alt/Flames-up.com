@@ -86,14 +86,19 @@ final class MIRAImageLoadAdmission: @unchecked Sendable {
     }
   }
 
-  func promote(_ id: UUID) {
+  @discardableResult
+  func promote(_ id: UUID) -> Bool {
+    var live = false
     let resumptions: [Resume] = lock.withLock {
-      guard var entry = entries[id], entry.priority == .prefetch else { return [] }
+      guard var entry = entries[id] else { return [] }
+      live = true
+      guard entry.priority == .prefetch else { return [] }
       entry.priority = .visible
       entries[id] = entry
       return drainLocked()
     }
     resume(resumptions)
+    return live
   }
 
   func cancelWaiting(_ id: UUID) {

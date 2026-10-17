@@ -440,10 +440,14 @@ actor MIRAImageLoadPipeline {
 
     guard !Task.isCancelled else { return .cancelled }
     let reader = UUID()
+    // Budget changes can retire admission before the detached task unwinds.
+    // Atomically promote before joining; never attach visible demand to that tombstone.
+    if let existing = inFlight[key], priority == .visible, !admission.promote(existing.id) {
+      inFlight[key] = nil
+    }
     if var existing = inFlight[key] {
       existing.readers.insert(reader)
       inFlight[key] = existing
-      if priority == .visible { admission.promote(existing.id) }
       return await wait(for: existing, reader: reader, key: key)
     }
 
@@ -602,6 +606,7 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     if let failure {
       VStack(spacing: 6) {
         Text(failure.message).font(.caption).multilineTextAlignment(.center)
+          .accessibilityIdentifier(failure.unavailable ? "media.image.unavailable" : "media.image.failed")
         if !failure.unavailable {
           Button { retryGeneration += 1 } label: {
             Label("Retry image", systemImage: "arrow.clockwise").font(.caption.weight(.semibold))
@@ -609,7 +614,6 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
           }.buttonStyle(.plain).accessibilityIdentifier("media.image.retry")
         }
       }.padding(10).background(.regularMaterial)
-        .accessibilityIdentifier(failure.unavailable ? "media.image.unavailable" : "media.image.failed")
     } else if uiImage == nil && memoryImageForCurrentURL == nil {
       ProgressView("Loading image").font(.caption).padding(10).background(.regularMaterial)
         .allowsHitTesting(false).accessibilityIdentifier("media.image.loading")
@@ -652,6 +656,15 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
     failure = nil
     let scope = MIRALocalJSONCache.currentScopeIdentifier
     let remoteURLs = candidateURLs
+    // Bound the complete row recovery, including admission waits and all candidates.
+    // No geometry/state identity change. Late results cannot replace the terminal UI.
+    let deadline = Task { @MainActor in
+      do { try await Task.sleep(nanoseconds: 20_000_000_000) } catch { return }
+      guard activeLoad == generation, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
+      activeLoad = UUID()
+      failure = .transport
+    }
+    defer { deadline.cancel() }
     guard !remoteURLs.isEmpty else {
       uiImage = nil; loadedURL = nil; loadedScope = nil; failure = .missing
       return
@@ -670,7 +683,11 @@ public struct MIRACachedImage<Content: View, Placeholder: View>: View {
           maxPixelSize: resolvedMaxPixelSize, expectedScope: scope)
         guard !Task.isCancelled, activeLoad == generation, scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
         switch outcome {
-        case .cancelled: return
+        case .cancelled:
+          // Genuine disappearance/account changes already returned above. A live
+          // row must not remain a spinner after an internally cancelled request.
+          failure = .transport
+          return
         case .loaded(let result):
           uiImage = result.image; loadedURL = remoteURL; loadedScope = scope; failure = nil
           if result.source == .network && animatesNetworkLoad {
@@ -828,6 +845,7 @@ public struct RemoteMediaView: View {
   let isVideo: Bool
   let placeholderURL: String?
   let fallbackURL: String?
+  let additionalFallbackURLs: [String]
   let contentMode: ContentMode
   let shouldPlay: Bool
   let videoMuted: Bool
@@ -845,6 +863,7 @@ public struct RemoteMediaView: View {
     isVideo: Bool,
     placeholderURL: String? = nil,
     fallbackURL: String? = nil,
+    additionalFallbackURLs: [String] = [],
     contentMode: ContentMode = .fit,
     shouldPlay: Bool = false,
     videoMuted: Bool = false,
@@ -861,6 +880,7 @@ public struct RemoteMediaView: View {
     self.isVideo = isVideo
     self.placeholderURL = placeholderURL
     self.fallbackURL = fallbackURL
+    self.additionalFallbackURLs = additionalFallbackURLs
     self.contentMode = contentMode
     self.shouldPlay = shouldPlay
     self.videoMuted = videoMuted
@@ -950,9 +970,10 @@ public struct RemoteMediaView: View {
   }
 
   private var resolvedFallbackURLs: [String] {
-    let trimmed = fallbackURL?.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let trimmed, !trimmed.isEmpty, trimmed != url, trimmed != resolvedPlaceholderURL else { return [] }
-    return [trimmed]
+    var seen = Set([url])
+    return ([fallbackURL].compactMap { $0 } + additionalFallbackURLs)
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 
   private func reportRatio(_ image: UIImage) {

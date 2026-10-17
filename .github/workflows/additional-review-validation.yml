@@ -52,10 +52,18 @@ jobs:
             CODE_SIGNING_ALLOWED=NO -only-testing:CaptroStampTests \
             -only-testing:CaptroLayoutUITests/AccountRecoveryTests \
             -only-testing:CaptroLayoutUITests/MediaRecoveryTests \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
+            -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands \
             -only-testing:CaptroLayoutUITests/FavoritesTests/testCarouselSaveDetailsUnsaveAndSavedLibraryStaySynchronized \
             -only-testing:CaptroLayoutUITests/FavoritesTests/testBareVideoCreatorOnlyInDetailsAndTopLeftControlsDoNotNavigate \
             -only-testing:CaptroLayoutUITests/WelcomeTests/testNormalWelcomeIsFixedAndEveryActionFitsWithoutScrolling test-without-building \
             2>&1 | tee "$RUNNER_TEMP/review-native.log"
+      - name: Export actual app screenshots
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/Review.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Review.xcresult" --output-path "$RUNNER_TEMP/recovery-screenshots"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -65,3 +73,4 @@ jobs:
             ${{ runner.temp }}/review-build.log
             ${{ runner.temp }}/review-devices.json
             ${{ runner.temp }}/Review.xcresult
+            ${{ runner.temp }}/recovery-screenshots/

@@ -21,6 +21,7 @@ struct CaptroPostMediaView: View {
       RemoteMediaView(url: isVideo ? url : (imageDelivery?.display ?? url), isVideo: isVideo,
         placeholderURL: isVideo ? placeholderURL : (imageDelivery?.preview ?? placeholderURL),
         fallbackURL: isVideo ? nil : imageDelivery?.source,
+        additionalFallbackURLs: isVideo ? [] : [imageDelivery?.fallback].compactMap { $0 },
         contentMode: .fill, shouldPlay: shouldPlay, videoMuted: muted,
         maxPixelSize: maxPixelSize,
         placeholderColor: MIRATheme.Color.mediaPlaceholder, plainBackground: true,

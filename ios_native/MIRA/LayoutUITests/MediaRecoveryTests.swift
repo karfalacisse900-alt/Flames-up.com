@@ -2,6 +2,25 @@ import XCTest
 import UIKit
 
 final class MediaRecoveryTests: XCTestCase {
+  func testHomeServerFallbackDisplaysCorrectPixels() {
+    let app = XCUIApplication()
+    app.launchArguments = ["--captro-design-quality-test", "--captro-favorites-review", "--review-empty",
+      "--captro-image-recovery-review", "--review-server-fallback"]
+    app.launch()
+    let media = app.descendants(matching: .any)["home.post.media"].firstMatch
+    XCTAssertTrue(media.waitForExistence(timeout: 20))
+    let before = media.frame
+    let loaded = NSPredicate { _, _ in
+      !app.descendants(matching: .any)["media.image.loading"].exists
+    }
+    expectation(for: loaded, evaluatedWith: app)
+    waitForExpectations(timeout: 10)
+    XCTAssertFalse(app.buttons["media.image.retry"].exists)
+    XCTAssertEqual(media.frame.minY, before.minY, accuracy: 1)
+    XCTAssertEqual(media.frame.height, before.height, accuracy: 1)
+    assertRed(app, in: media.frame)
+    capture(app, "home-authorized-server-fallback")
+  }
   func testHomeRetryDisplaysCorrectPixelsWithoutOpeningDetailsOrMovingMedia() {
     let app=XCUIApplication()
     app.launchArguments=["--captro-design-quality-test","--captro-favorites-review","--review-empty","--captro-image-recovery-review"]

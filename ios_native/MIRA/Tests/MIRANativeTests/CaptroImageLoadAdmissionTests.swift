@@ -6,6 +6,24 @@ import UIKit
 /// suspended until explicitly released, so concurrency is measured without
 /// network timing or sleep-based work simulation.
 final class CaptroImageLoadAdmissionTests: XCTestCase {
+  func testVisibleDemandCannotPromoteRetiredPrefetch() async {
+    let admission = MIRAImageLoadAdmission(maximumActive: 1, maximumPrefetch: 1)
+    let retired = UUID()
+    admission.register(retired, priority: .prefetch)
+    // Deterministic race window: admission removed, detached task has not unwound.
+    admission.updateBudget(maximumActive: 1, maximumPrefetch: 0)
+    XCTAssertFalse(admission.promote(retired))
+    let old = await admission.waitForSlot(retired)
+    XCTAssertFalse(old)
+    let replacement = UUID()
+    admission.register(replacement, priority: .visible)
+    XCTAssertTrue(admission.promote(replacement))
+    let live = await admission.waitForSlot(replacement)
+    XCTAssertTrue(live)
+    admission.release(retired)
+    XCTAssertEqual(admission.snapshot.active, 1)
+    admission.release(replacement)
+  }
   func testLowDataBudgetDropsQueuedPrefetchButPreservesPromotedVisibleReader() async {
     let admission = MIRAImageLoadAdmission(maximumActive: 2, maximumPrefetch: 1)
     let active = UUID(), discarded = UUID(), promoted = UUID()

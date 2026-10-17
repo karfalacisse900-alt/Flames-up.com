@@ -37,6 +37,9 @@ enum CaptroPresentationReviewFixture {
       "likesCount": 12, "commentsCount": 0,
       "response": ["type": "yes_no", "options": ["Yes", "No"], "counts": ["Yes": 2], "totalCount": 2]
     ]
+    if ProcessInfo.processInfo.arguments.contains("--review-server-fallback") {
+      value["mediaFallbackUrls"] = [CaptroImageRecoveryFixtureProtocol.fallbackURL]
+    }
     if ProcessInfo.processInfo.arguments.contains("--review-empty") {
       value["title"] = ""; value["caption"] = "  \n "
     }

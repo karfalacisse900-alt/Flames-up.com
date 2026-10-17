@@ -3,6 +3,21 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroMediaNetworkTests: XCTestCase {
+  func testExplicitFallbackKeepsSignedURLAndExactSlideAlignment() throws {
+    let sources = ["https://media.invalid/a.jpg", "https://media.invalid/b.jpg"]
+    let fallback = "https://api.flames-up.com/media/a?signature=fixture-only"
+    func decode(_ values: [String]) throws -> MIRAPost {
+      let data = try JSONSerialization.data(withJSONObject: ["id": "fallback-test", "images": sources,
+        "mediaFallbackUrls": values])
+      return try JSONDecoder().decode(MIRAPost.self, from: data)
+    }
+    let complete = try decode([fallback, ""])
+    XCTAssertEqual(complete.imageDelivery(at: 0, dataSaver: false)?.fallback, fallback)
+    XCTAssertEqual(complete.imageDelivery(at: 1, dataSaver: false)?.fallback, "")
+    let partial = try decode([fallback])
+    XCTAssertNil(partial.imageDelivery(at: 0, dataSaver: false)?.fallback)
+    XCTAssertNil(partial.imageDelivery(at: 1, dataSaver: false)?.fallback)
+  }
   func testReadinessWaitCanBeCancelledWithoutReplacingItem() async {
     let item = AVPlayerItem(asset: AVMutableComposition())
     let player = AVPlayer()

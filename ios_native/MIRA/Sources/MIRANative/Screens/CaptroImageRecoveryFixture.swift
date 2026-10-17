@@ -6,6 +6,7 @@ import UIKit
 /// Exercise real HTTP/decode/cache/view transitions; no production URL is used.
 final class CaptroImageRecoveryFixtureProtocol: URLProtocol {
   static let mediaURL = "https://image-fixture.invalid/\(UUID().uuidString)/photo.png"
+  static var fallbackURL: String { mediaURL.replacingOccurrences(of: "photo.png", with: "fallback.png") }
   private static let lock = NSLock()
   private static var attempts: [String:Int] = [:]
   private var stopped = false
@@ -18,7 +19,8 @@ final class CaptroImageRecoveryFixtureProtocol: URLProtocol {
     DispatchQueue.global().asyncAfter(deadline:.now()+0.15) { [self] in
       guard !lock.withLock({stopped}) else { return }
       let data:Data
-      if attempt==1 { data=Data("corrupt fixture".utf8) }
+      let fallbackScenario = ProcessInfo.processInfo.arguments.contains("--review-server-fallback")
+      if fallbackScenario ? key != Self.fallbackURL : attempt == 1 { data=Data("corrupt fixture".utf8) }
       else {
         let context=CGContext(data:nil,width:16,height:20,bitsPerComponent:8,bytesPerRow:64,
           space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!

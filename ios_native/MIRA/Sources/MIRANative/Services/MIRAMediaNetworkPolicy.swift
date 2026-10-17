@@ -90,6 +90,7 @@ struct CaptroImageDelivery: Equatable {
   let source: String
   let display: String
   let preview: String?
+  var fallback: String? = nil
 
   /// Only accept server-supplied, uncropped derivatives for this exact source.
   /// Never manufacture variants, remove signatures or proxy private originals.
@@ -141,6 +142,10 @@ extension MIRAPost {
     let preview = CaptroImageDelivery.uncropped(thumbnails.count == originals.count ? thumbnails[index] : nil, of: source)
     let small = preview != source ? preview : nil
     let display = dataSaver ? (small ?? feed ?? source) : (feed ?? source)
-    return CaptroImageDelivery(source: source, display: display, preview: small == display ? nil : small)
+    // Do not use a compressed/partial legacy array: it could belong to another slide.
+    let fallbacks = mediaFallbackUrls?.values ?? []
+    let fallback = fallbacks.count == originals.count ? fallbacks[index] : nil
+    return CaptroImageDelivery(source: source, display: display, preview: small == display ? nil : small,
+      fallback: fallback)
   }
 }
