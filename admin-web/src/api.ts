@@ -61,7 +61,7 @@ async function readPayload(response: Response) {
   try {
     return JSON.parse(text);
   } catch {
-    return { detail: response.ok ? undefined : 'Captro API returned an unexpected response.' };
+    throw new ApiError('Captro API returned an unexpected response. Please retry.', 502);
   }
 }
 
@@ -76,24 +76,38 @@ async function refreshAdminSession(refreshToken: string) {
   return payload as { access_token: string; refresh_token?: string };
 }
 
-async function request<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
+let refreshInFlight: {owner:string; promise:ReturnType<typeof refreshAdminSession>} | undefined;
+let sessionEpoch=0;
+export function invalidateAdminSession(){sessionEpoch++;refreshInFlight=undefined;}
+export async function request<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
+  const epoch=sessionEpoch;
+  const owner=sessionStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || '';
+  const access=sessionStorage.getItem(ADMIN_TOKEN_KEY) || token;
+  const identity=requestId();
   const makeHeaders = (accessToken: string) => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${accessToken}`,
-    'X-Request-ID': requestId(),
+    'X-Request-ID': identity,
     ...(options.headers || {}),
   });
 
   let response = await fetchWithTimeout(`${API_BASE}${path}`, {
     ...options,
-    headers: makeHeaders(token),
+    headers: makeHeaders(access),
   });
 
-  if ((response.status === 401 || response.status === 403) && !path.endsWith('/auth/refresh')) {
+  if (response.status === 401 && !path.endsWith('/auth/refresh')) {
     const refreshToken = sessionStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || '';
     if (refreshToken) {
       try {
-        const refreshed = await refreshAdminSession(refreshToken);
+        if(!refreshInFlight || refreshInFlight.owner!==refreshToken) {
+          const promise=refreshAdminSession(refreshToken);
+          refreshInFlight={owner:refreshToken,promise};
+          void promise.finally(()=>{if(refreshInFlight?.promise===promise)refreshInFlight=undefined;}).catch(()=>{});
+        }
+        const refreshed = await refreshInFlight.promise;
+        if(sessionEpoch!==epoch) throw new ApiError('Account changed. Please reload.',409);
+        if(!refreshed.access_token)throw new ApiError('Invalid refresh response. Please retry.',502);
         const nextAccessToken = refreshed.access_token || token;
         const nextRefreshToken = refreshed.refresh_token || refreshToken;
         sessionStorage.setItem(ADMIN_TOKEN_KEY, nextAccessToken);
@@ -102,14 +116,18 @@ async function request<T>(path: string, token: string, options: RequestInit = {}
           ...options,
           headers: makeHeaders(nextAccessToken),
         });
-      } catch {
-        sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-        sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+      } catch (error) {
+        if(error instanceof ApiError && error.status===401 && sessionStorage.getItem(ADMIN_REFRESH_TOKEN_KEY)===owner) {
+          sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+          sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+        }
+        throw error;
       }
     }
   }
 
   const payload = await readPayload(response);
+  if(sessionEpoch!==epoch)throw new ApiError('Account changed. Please reload.',409);
   if (!response.ok) {
     throw new ApiError(payload?.detail || 'Request failed', response.status);
   }

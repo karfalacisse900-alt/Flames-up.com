@@ -1,4 +1,6 @@
-import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { Console } from './Console';
+import { invalidateAdminSession } from './api';
 import { FinancePage } from './FinancePage';
 import { ADMIN_REFRESH_TOKEN_KEY, ADMIN_TOKEN_KEY, AdminApi, ApiError, API_BASE, login } from './api';
 import type {
@@ -1527,6 +1529,7 @@ function SettingsPage({ session }: { session: AdminSession }) {
 }
 
 function App() {
+  const sessionGeneration=useRef(0);
   const [token, setToken] = useState(() => sessionStorage.getItem(ADMIN_TOKEN_KEY) || '');
   const [session, setSession] = useState<AdminSession | null>(null);
   const [booting, setBooting] = useState(true);
@@ -1538,10 +1541,13 @@ function App() {
   const [toast, setToast] = useState('');
 
   const loadSession = useCallback(async (nextToken: string, nextRefreshToken?: string) => {
+    const generation=++sessionGeneration.current;
+    if(nextRefreshToken){invalidateAdminSession();sessionStorage.setItem(ADMIN_TOKEN_KEY,nextToken);sessionStorage.setItem(ADMIN_REFRESH_TOKEN_KEY,nextRefreshToken);}
     setBooting(true);
     setAccessError('');
     try {
       const next = await AdminApi.me(nextToken);
+      if(generation!==sessionGeneration.current)return;
       const resolvedAccessToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || nextToken;
       const resolvedRefreshToken = sessionStorage.getItem(ADMIN_REFRESH_TOKEN_KEY) || nextRefreshToken || '';
       setSession(next);
@@ -1549,9 +1555,13 @@ function App() {
       if (resolvedRefreshToken) sessionStorage.setItem(ADMIN_REFRESH_TOKEN_KEY, resolvedRefreshToken);
       setToken(resolvedAccessToken);
     } catch (error) {
-      sessionStorage.removeItem(ADMIN_TOKEN_KEY);
-      sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
-      setToken('');
+      if(generation!==sessionGeneration.current)return;
+      if(error instanceof ApiError && [401,403].includes(error.status)){
+        invalidateAdminSession();
+        sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+        sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
+        setToken('');
+      }
       setSession(null);
       if (error instanceof ApiError && error.status === 403) {
         setAccessError('This account signed in, but it is not approved for Captro Admin yet.');
@@ -1559,7 +1569,7 @@ function App() {
         setAccessError(error instanceof Error ? error.message : 'Access denied');
       }
     } finally {
-      setBooting(false);
+      if(generation===sessionGeneration.current)setBooting(false);
     }
   }, []);
 
@@ -1569,6 +1579,8 @@ function App() {
   }, []);
 
   function logout() {
+    sessionGeneration.current++;
+    invalidateAdminSession();
     sessionStorage.removeItem(ADMIN_TOKEN_KEY);
     sessionStorage.removeItem(ADMIN_REFRESH_TOKEN_KEY);
     setToken('');
@@ -1594,6 +1606,7 @@ function App() {
 
   if (booting) return <main className="login-shell"><div className="loading-card">Checking admin access...</div></main>;
   if (!session || !token) {
+    if(token&&accessError)return <main className="login-shell"><section className="loading-card"><ErrorBanner message={accessError}/><button className="primary-button" onClick={()=>void loadSession(token)}>Retry access verification</button><button className="ghost-button" onClick={logout}>Sign out</button></section></main>;
     return (
       <LoginScreen
         initialError={accessError}
@@ -1617,12 +1630,7 @@ function App() {
   })();
 
   return (
-    <AdminLayout session={session} active={active} setActive={setActive} onLogout={logout}>
-      {accessError ? <ErrorBanner message={accessError} /> : null}
-      {content}
-      {toast ? <div className="toast">{toast}</div> : null}
-      {dialog ? <ActionDialog state={dialog} onClose={() => setDialog(null)} /> : null}
-    </AdminLayout>
+    <Console session={session} token={token} onLogout={logout}/>
   );
 }
 
