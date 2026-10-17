@@ -1,0 +1,275 @@
+CAPTRO — REMAINING RELIABILITY REPAIRS
+16 October 2026 (America/New_York; CI timestamps are UTC on 17 October)
+
+RELEASE STATUS: NOT CLEARED
+No production migration, Worker deployment, merge, TestFlight upload, customer
+data repair, charge, refund or transfer was performed. Physical-iPhone image and
+scrolling acceptance remains OPEN. Prepared recovery actions default to disabled.
+Local tests are not provider/staging/device acceptance.
+
+BASELINE AND SCOPE
+Workspace: captro-payout-debit-fix; branch fix/additional-review-20261016.
+Starting HEAD: 765bd3557c542d3ee161d30a67a0af0bda8b70bb.
+Read docs/CAPTRO_ADDITIONAL_REVIEW_RESPONSE_20261016.txt before editing.
+The review's release 638.1 / 9ae3ddc is NOT this working branch. Current deployed
+Worker, production schema and installed phone build were not freshly identified
+in this continuation. Earlier live authorization/push defects remain blockers
+until current deployment evidence proves otherwise. No secret values printed.
+Unrelated dirty documentation, deletion audit and Supabase temp files preserved.
+
+Small source commits:
+70ff35e3: typed image outcomes, same-media fallback and accessible Home Retry.
+62b4496e: durable reconciliation/recovery, buyer/admin status, currency/capacity gate.
+c52e2acc: replace four obsolete wiring assertions; root recovery UI fixtures.
+e936a727: fence ambiguous provider-creation replay; correct hostless render test.
+35224653: app-hosted corrupt-image -> Retry -> visible pixels and Details test.
+1f9ec8c9: final fair scheduling, provider review, concurrency/mixed-queue regressions.
+0c8d23e0: security gate and isolated three-identity authorization tests.
+a9227929e0d6dd06b85d1cf90aacbe54021cd266: final validation fixture installation.
+Native tree: 3e705ee8101cb29b48d3f9033fa783c9dced7b3b.
+API source tree: 0a36dce8e04cc8a4239aa2abdc565793e48760e2.
+Migration tree: a75ef5529e29f501e1c112ea3fd9191068d2a951.
+Any following documentation-only commit does not change those implementation trees.
+
+1. BLANK IMAGES — SOURCE FIXED IN PART; CUSTOMER FAILURE NOT REPRODUCED
+Confirmed source defects:
+- Shared image failures collapsed into nil, indistinguishable from cancellation.
+  Active post media could therefore show an unexplained placeholder indefinitely.
+- Home's single-media pager disabled hit testing for the entire media subtree,
+  including Retry. This is a real inert-control path, not a diagnosed network issue.
+- Data Saver could choose a preview without retaining the explicit original as a
+  fallback. Previous generic transform unwrapping could invent an origin URL.
+- Broad previous-image retention did not enforce membership in the current media
+  candidate set; stale-account checks alone are insufficient for cell reuse.
+
+Fix: typed loaded/failed/cancelled outcomes; loading/failed/unavailable presentation;
+44-point Retry; preserve loaded same-media image during upgrades; reject account
+and task generations; explicit API/model same-media fallbacks only. 401/403 stop
+fallback. Missing/removed/inaccessible assets get an unavailable explanation.
+Initial request plus at most two transient retries (550/1100 ms); 429 is not
+automatically hammered. Reconnect is bounded. Coalescing, admission limits and
+subscriber-aware cancellation remain. No cache purge, SDK, scroll command or
+carousel identity change. Error UI is positioned inside the existing crop frame.
+
+Files:
+  ios_native/MIRA/Sources/MIRANative/Components/MIRAComponents.swift
+    MIRAImageLoadPipeline.outcome; MIRACachedImage.loadImage/statusContent
+  Components/CaptroFeedMediaPager.swift; Components/CaptroPostMediaView.swift
+  Services/CaptroImageFailure.swift
+  Tests/MIRANativeTests/CaptroImageRecoveryTests.swift
+  LayoutUITests/MediaRecoveryTests.swift; Screens/CaptroImageRecoveryFixture.swift
+
+Tests added: 401/403/404/410/429/503, HTML/corrupt payload, decoded pixels, memory
+cache hit, offline -> online success, stale-account rejection. App-hosted fixture
+uses the actual Home row and Details: corrupt response, Retry, red-pixel screenshot
+assertion, unchanged frame, no accidental Details navigation, same cached image.
+Existing admission/subscriber/cancellation and geometry tests retained.
+
+Limits: no affected real post/authorized delivery trace was captured, so the
+reported customer blank image's specific metadata/URL/server/decode stage remains
+unproven. Stories/carousel/expired-signed-URL and weak-network device matrix remains
+open. No automatic renewal of expired signed URLs is claimed. The existing 24 MiB
+response guard still runs after URLSession buffering; a streaming byte ceiling is
+not implemented here. No claim of physical scrolling improvement.
+
+2. OLDEST-40 STARVATION — SOURCE + LOCAL DATABASE VERIFIED
+Root cause: unresolved purchases could repeatedly occupy the oldest-40 selection.
+New service-only schedule stores due time, attempts, original purchase age, outcome,
+lease token/expiry and attention state. Claims use SKIP LOCKED; four provider tasks
+at once. Backoff 120 s to 6 h plus <=60 s jitter. Oldest due work wins: new arrivals
+do not starve retries and repeatedly processing records do not monopolize batches.
+Token checks reject stale completion. Terminal outcomes require matching database
+evidence. Network/ambiguous/missing provider identity never means unpaid.
+Missing-ID creation cannot blindly replay after 23 h or invalid/future timestamps:
+provider idempotency retention is finite. Hold stays for explicit review instead.
+Alerts after eight attempts/24 h; aggregate logs omit identities/payment details.
+Restricted admin queue shows actionable ownership/age/next-attempt information.
+
+Files: backend-cf/src/purchase-reconciliation.ts; index.ts expireNativePaymentHolds;
+supabase/migrations/20261017002255_reliable_payment_reconciliation.sql.
+Local SQL tests include >40 old processing records plus newer paid/unpaid records,
+verified single entitlement or release, backoff/restart/stale lease and new-arrival
+fairness. PostgreSQL 17.11 separate-connection contention test: two workers claim
+80 distinct jobs, then the next batch reaches 21 more without repeating old holds.
+No provider calls occur inside database transactions.
+
+3. PAID RECOVERY — IMPLEMENTED, DISABLED PENDING PROVIDER/STAGING ACCEPTANCE
+A recovery-table insertion is NOT resolution. Buyer checkout/My Stuff/receipt say
+payment received, access under review, do not pay again. Operator queue/detail
+reads fresh provider state and records owner, decision, note, lease and attempts.
+Write route requires payments:refund, rate limit and explicit rollout switch
+CAPTRO_PAYMENT_RECOVERY_ACTIONS=approved (not configured by this work).
+Fresh provider amount/currency/mode/identity/charge/refund checks precede resolution.
+Fulfillment reacquires capacity transactionally and grants one entitlement. A
+refund decision cannot later switch to fulfillment after a possibly sent refund.
+Refund uses stable key, reconciles lost responses from provider list, and leaves
+pending/ambiguous outcomes OPEN. A full verified refund records a final reference;
+no entitlement or second inventory decrement. No destination-transfer reversal is
+sent for deferred platform charges. Unsupported accounting/partial refunds require
+manual review rather than guessing. Only supported released/unfulfilled cases use
+this automated resolution path; already-transferred/disputed cases are rejected.
+
+Files: backend-cf/src/payment-recovery.ts; index.ts recovery routes/My Stuff;
+supabase/migrations/20261017002807_payment_recovery_resolution.sql;
+admin-web/src/RecoveryPanel.tsx, api.ts, FinancePage.tsx;
+native Models/CaptroCommerce.swift, Screens/CaptroPaymentSheetView.swift,
+Screens/CaptroCommerceDashboardViews.swift.
+Tests: lost refund response, pending/refund replay window, wrong mode/amount/ID,
+disputed/transferred/refunded charges, two operators, stale lease, occupied capacity,
+single fulfillment/refund replay, cannot resell fulfilled capacity, role denial.
+All provider behavior mocked. Admin compiled/bundled, not browser-interaction or
+live-provider accepted. Claimed attempts/audit remain available on uncertain failure;
+operator must inspect before retry. No real charge/refund/transfer authorized/run.
+
+4. HISTORICAL PRICES/BOOKINGS — GUARDED; INSPECTION PREPARED, NOT EXECUTED LIVE
+JPY formatting is NOT JPY commerce enablement. Paid checkout now remains USD-only,
+regardless of an environment fee JSON. Native paid draft validation explains this;
+legacy values remain intact. No price or purchase snapshot was rescaled.
+Prepared (unapplied) lifecycle migration gives booking_capacity NO DEFAULT. NULL
+means explicit capacity review required for NEW reservations, not capacity one.
+Existing holds/confirmed commitments are preserved. Resource is one purchasable
+across tiers; different catalog objects sharing a real physical resource require
+owner review before opening bookings. No silent resource inference is made.
+Read-only inspection script: docs/CAPTRO_HISTORICAL_COMMERCE_INSPECTION.sql.
+It separates aggregate discovery from approved record-level review; flags unknown
+money-contract version, non-USD commitments, overlapping/unknown-end intervals,
+multi-capacity services and commitment drift. Existing immutable orders, ledgers,
+provider IDs, holds and entitlements are never rewritten by that script.
+Files: currency.ts; purchase-errors.ts; native CaptroCommerce.swift;
+unapplied 20261016214657_additional_commerce_lifecycle.sql.
+Local tests preserve old commitment with capacity unset; new booking is rejected.
+Actual PostgreSQL BEFORE overlap 10:00/10:01 -> 2 reservations; AFTER -> 1;
+adjacent -> accepted. Multi-capacity/DST/cross-tier/approval tests also retained.
+Old binary -> deployed matching Worker/PostgREST compatibility remains unverified.
+
+5. ACCOUNT/RECOVERY — MODEL TESTS + ROOT UI FIXTURES; PROVIDERS NOT VERIFIED
+Retained generation safeguards and retryable-versus-invalid credential handling.
+Existing tests cover logout/account switch vs delayed refresh/bootstrap/replay,
+429/5xx/offline/malformed refresh, rotated token followed by profile failure,
+confirmed invalid/revoked tokens, push rebinding and different-account recovery.
+New DEBUG-only fixtures render the real MIRANativeRootView and recovery presenter,
+not a simulated success screen. UI tests cover signed-out, guest, signed-in,
+username onboarding and deletion state; recovery over an already-open draft sheet;
+cancel preserves text/session; repeated/cold links; different-account completion;
+expired link. Fixture draft is not the full production composer.
+Files: Screens/CaptroAccountFlowReviewHost.swift; LayoutUITests/AccountRecoveryTests.swift;
+root/app DEBUG injection only. No new production OAuth implementation.
+Actual Apple/Google provider cancellation, account chooser, token exchange, device
+Keychain/APNs and interrupted provider sign-in remain UNRUN. Do not equate injected
+session/model tests with provider acceptance.
+
+6. PHYSICAL MEDIA/SCROLLING — OPEN / NO DEVICE AVAILABLE
+This workstation is Windows; CI is macOS simulator. No physical iPhone, installed
+build/iOS check, Release Instruments trace, frame-time/main-thread/memory/byte
+measurements, realistic weak-network run, sample capture or before/after device
+recording was obtained. No claim that the Home shake, freeze or blank-image report
+is resolved. Preserve matched-content cold/warm runs, normal/fast flicks, deceleration
+reversals, diagonals, bottom pagination, Details return, memory pressure, low storage,
+network loss/recovery and background upload as explicit acceptance gates.
+
+7. FOUR BACKEND FAILURES — REPAIRED WITHOUT SKIPS
+Starting rerun: 314 total, 310 pass, 4 fail. Failures were obsolete source-location
+assertions after UI extraction (Favorites placement, Welcome guest path, shared
+video controls, shared Details save action), not four newly reproduced UI incidents.
+Replaced with checks of active routed components, enabled bindings/touch targets,
+shared store toggle/busy behavior. Added mutation tests proving broken route,
+disconnected save, moved overlay and inert pause are caught. They are wiring tests,
+not substitutes for runtime gestures. Existing Favorites/Welcome UI scenarios are
+included in native validation. No test deleted, skipped or changed to unconditional
+success. Final suite/check results recorded in the verification addendum below.
+
+8. SECURITY AND COORDINATED ROLLOUT — PREPARED; NOT DEPLOYED
+Extended the prior security gate with disposable A/B/C identities: participant
+reads vs outsider denial, profile trust/media/message direct writes denied, group
+self-enrollment denied, banned identity denied, client push-RPC denied and service
+token ownership A -> B. Effective SQL privileges and injected drift are checked,
+not just migration-name presence. Normal and retry TestFlight upload routes now
+require this read-only catalog gate; configure-only remains non-distributing.
+Files: scripts/app-store/{security-schema-checks.sql,verify-security-schema.mjs};
+backend-cf/tests/security_schema_gate.test.mjs; native-ios-testflight.yml.
+Earlier account-deletion repair/provider audits are not silently considered closed.
+
+APPROVAL-REQUIRED ROLLOUT / FORWARD REPAIR PLAN
+A. Inventory actual deployed Worker/hash, migrations/grants/RPCs, old/new binaries,
+   webhook delivery backlog and payment mode; secure snapshots/backups. Run the
+   read-only historical plan with approved scope. Do not log secrets/customer rows.
+B. In a DISPOSABLE Supabase staging clone matching catalog/roles (no customer data),
+   apply security_backend_write_boundary, security_media_approval_boundary and
+   single_owner_push_registration; exercise two-account Worker routes plus direct
+   PostgREST negative tests, push switch, banned/deleted identities and moderation.
+C. Rehearse a short approved checkout-maintenance gate at the edge: block NEW
+   POST /commerce/purchases, /checkout/create-payment-intent,
+   /commerce/purchases/:id/checkout, /commerce/purchases/:id/decision and legacy
+   /stripe/checkout/sessions. Confirm every active creation alias. Do NOT block
+   provider webhooks, buyer status, reconciliation, existing access, or authorized
+   resolution. This gate is a deployment prerequisite, not an already-installed rule.
+D. While gated, apply prepared lifecycle 20261016214657, queue 20261017002255,
+   recovery 20261017002807; then deploy the exact matching Worker/admin. Old Worker
+   must not run concurrently as an alternate public target. SQL clock-only expiry
+   becomes no-op: intermediate state retains holds instead of releasing paid stock.
+   New Worker must not be exposed before its RPCs exist. Recovery action switch stays
+   OFF. Keep reconciliation/webhook retries active and monitor oldest due age.
+E. Stage old/new clients, free/paid approvals, pending holds, processing and delayed
+   success, >40 queue jobs, loss/retry, invalid dates, overlapping bookings, history,
+   schema privileges and operator role matrix. Perform provider TEST acceptance only
+   with separately authorized environment/actions. No live financial tests.
+F. Open new checkout only after required schema/Worker compatibility and historical
+   capacity review. Keep unreviewed/non-USD items gated. Deploy native only after
+   account/image/UI checks and physical acceptance; security gate must pass before
+   TestFlight. Enable recovery money actions separately after operator/provider signoff.
+
+Rollback: reclose new-checkout gate; retain additive tables, queue, recovery events,
+provider IDs, entitlements and financial history. Use a compatible prior Worker or
+forward repair; do NOT revert to a pre-hardening Worker/clock-only expiry, broaden
+grants, drop recovery tables or delete failed jobs. Reconcile any ambiguous provider
+requests before retry; hold inventory until verified terminal evidence. Freeze money
+actions separately if admin/Worker compatibility fails. No restoring unsafe access
+as a convenience. Production backup restoration needs its own reviewed incident plan.
+
+WHAT STAGING ACTUALLY MEANS HERE
+Executed: local PGlite real SQL/roles/migrations; local isolated PostgreSQL 17.11
+with separate concurrent connections; mock provider orchestration. No exposed DB
+port or persistent volumes. Disposable container removed after testing; only fixture
+data was removed. NOT executed: a complete Supabase/PostgREST/auth deployment with
+matching Worker/admin, old client binaries and real Stripe TEST/provider sessions.
+
+RELEASE CHECKLIST (OPEN UNTIL EVIDENCE EXISTS)
+Security: deployed catalog assertions; Worker fingerprint; two-account staging;
+  media approval and push RPC; deletion failure/retry/retention; old-token revocation.
+Payments: exact-schema staging; hosted/native race; >40 fairness; processing/lost
+  response; operator permission + test refunds; historical capacity/currency review.
+Images: affected-post trace; all active surfaces; retry pixels/geometry; authorized
+  signed URL expiry; weak connection/reconnect/reuse/account switch; byte ceiling.
+Accounts: actual Apple/Google + cancellation; guest/account/root recovery + real
+  composer draft; Keychain and APNs on device; transient outage vs true revocation.
+Physical: matched Release build/device/iOS/source; usable Instruments samples;
+  normal/fast-scroll recordings and measured frame/main-thread/memory outcomes.
+
+VERIFICATION ADDENDUM
+Final backend rerun: 324 tests passed, 0 failed, 0 skipped, 0 cancelled;
+20,093.9 ms reported by node:test. Includes SQL/PGlite, provider mocks, security
+gate/mutation tests. Backend TypeScript noEmit also passed on this final source.
+Backend/admin TypeScript checks and admin production build passed (34 modules).
+Native 38986210482 at 70ff35e3: 213 tests, 212 passed, 1 failed. The hostless
+UIWindow screenshot returned black; transport/decoding tests passed. Replaced
+window rendering with SwiftUI ImageRenderer, keeping the exact red-pixel assertion;
+added actual app-hosted Retry/pixel/geometry test rather than removing the assertion.
+The subsequent runs 38987215286, 38987322187 and 38988086272 were cancelled as
+superseded, not counted as passes: the expanded workflow omitted local media needed
+by its existing Favorites/video scenarios. Build-for-testing -> fixture install ->
+test-without-building is now explicit. This is a harness repair, not a user-flow fix.
+Final run 38988815593 at a9227929 is IN PROGRESS at handoff; no final native pass,
+rendered screenshot, root-account UI pass or build-success claim is made yet.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/38988815593
+Configuration: Debug simulator, project 1.0.1 (2), not a distributed TestFlight
+build. Previous run logs identify Xcode 26.6 / 17F113; final workflow captures exact
+toolchain/device JSON and xcresult. Physical-device result remains unavailable.
+The first hostless black-window assertion must pass in the corrected render test;
+the final actual-app test must prove correct visible pixels after Retry. Do not
+infer either from the backend suite or treat a queued/running CI job as verification.
+No generated mockup is presented as implementation evidence.
+
+PRIMARY REFERENCES
+PostgreSQL SKIP LOCKED: https://www.postgresql.org/docs/current/sql-select.html
+Provider idempotency expiry: https://docs.stripe.com/api/idempotent_requests
+Refund verification: https://docs.stripe.com/api/refunds/create
