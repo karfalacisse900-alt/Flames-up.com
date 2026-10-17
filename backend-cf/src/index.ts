@@ -3,7 +3,7 @@ import { dashboardResults } from './dashboard-results';
 import { AuthRefreshFailure, upstreamRefreshFailure } from './auth-refresh-errors';
 import { currencyFeeUnits } from './currency';
 import { reconcileHostedHold } from './hosted-hold';
-import { runPurchaseReconciliation, type ReconciliationOutcome } from './purchase-reconciliation';
+import { runPurchaseReconciliation, requireReplayableProviderCreation, type ReconciliationOutcome } from './purchase-reconciliation';
 import { resolvePaymentRecovery } from './payment-recovery';
 import { validateMediaWritingOverlays } from './media-writing';
 import { validatePostMediaFraming } from './post-media-framing';
@@ -10794,6 +10794,7 @@ async function requireRetainedPlatform(c:any) {
 }
 
 async function createCommercePaymentIntent(c: any, purchase: any, forExpiry = false) {
+  if (forExpiry && !purchase.provider_payment_id) requireReplayableProviderCreation(purchase);
   if (!forExpiry) await supabaseAdminRpc(c, 'captro_validate_checkout', { p_purchase_id: purchase.id });
   const stripe = getStripeConfig(c);
   if (!stripe.configured || !stripe.webhookConfigured) throw new Error('STRIPE_PAYMENTS_NOT_CONFIGURED');
@@ -11040,6 +11041,7 @@ async function refundCommercePurchaseFromCharge(c: any, eventId: string, charge:
 }
 
 async function createCommerceCheckoutSession(c: any, purchase: any, forExpiry = false) {
+  if (forExpiry && !purchase.provider_checkout_id) requireReplayableProviderCreation(purchase);
   if (!forExpiry) await supabaseAdminRpc(c, 'captro_validate_checkout', { p_purchase_id: purchase.id });
   const purchasableRows = await supabaseAdminSelectRows(c, 'app_purchasables', {
     id: postgrestEqFilter(purchase?.purchasable_id),

@@ -62,22 +62,19 @@ final class CaptroImageRecoveryTests: XCTestCase {
     var view = MIRACachedImage(url: remote.absoluteString, maxPixelSize: 64, animatesNetworkLoad: false,
       allowsRetry: true) { $0.resizable().scaledToFill() } placeholder: { Color.blue }
     view.pipeline = loader
-    let host = UIHostingController(rootView: view.frame(width: 120, height: 150).clipped())
-    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 120, height: 150))
-    window.rootViewController = host; window.isHidden = false
-    defer { window.isHidden = true }
-    host.view.frame = window.bounds; host.view.setNeedsLayout(); host.view.layoutIfNeeded()
-    try await Task.sleep(nanoseconds: 100_000_000)
-    let rendered = UIGraphicsImageRenderer(size: window.bounds.size).image { _ in
-      host.view.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-    }
+    // Hostless XCTest has no app scene/window; drawHierarchy returned black.
+    // Render the shipping SwiftUI view directly, retaining the pixel assertion.
+    // Interactive presentation is separately exercised by app-hosted UI tests.
+    let renderer = ImageRenderer(content: view.frame(width: 120, height: 150).clipped())
+    renderer.scale = 1
+    let rendered = try XCTUnwrap(renderer.uiImage)
     let cg = try XCTUnwrap(rendered.cgImage)
     var pixel = [UInt8](repeating: 0, count: 4)
     let context = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     context.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
     XCTAssertGreaterThan(pixel[0], 220); XCTAssertLessThan(pixel[2], 30, "Must render the red image, not the blue placeholder")
-    XCTAssertEqual(host.view.bounds.size, CGSize(width: 120, height: 150))
+    XCTAssertEqual(rendered.size, CGSize(width: 120, height: 150))
   }
 
   func testOfflineRecoveryAndOldAccountRejection() async {

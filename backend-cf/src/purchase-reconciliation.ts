@@ -1,6 +1,15 @@
 export type ReconciliationOutcome = 'processing' | 'transient_failure' | 'missing_identity' | 'confirmed' | 'released' | 'recovery';
 export type ReconciliationJob = {purchase: any; token: string; attempts: number; age_seconds: number};
 
+export function requireReplayableProviderCreation(purchase: {created_at?: string}, now = Date.now()) {
+  const created = Date.parse(purchase.created_at ?? '');
+  // Stripe may prune an idempotency key after 24h. A new empty intent then says
+  // nothing about whether the original attempt was paid. Preserve the hold.
+  if (!Number.isFinite(created) || created > now || now-created >= 23*3600000) {
+    throw Error('CAPTRO_PROVIDER_IDENTITY_REVIEW_REQUIRED');
+  }
+}
+
 /** Database leases own the schedule. No process-local retry loops or customer logs. */
 export async function runPurchaseReconciliation(io: {
   claim: () => Promise<ReconciliationJob[]>;

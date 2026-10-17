@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {resolvePaymentRecovery} from '../src/payment-recovery.ts';
-import {runPurchaseReconciliation} from '../src/purchase-reconciliation.ts';
+import {runPurchaseReconciliation,requireReplayableProviderCreation} from '../src/purchase-reconciliation.ts';
 
 function fixture(decision='refund') {
  const record={status:'needs_review',provider_payment_id:'pi_fixture',amount:1000,currency:'USD',decision,decision_started_at:'2035-01-01T00:00:00Z'};
@@ -15,6 +15,12 @@ function fixture(decision='refund') {
   resolve:async(_r,status,reference)=>{calls.push(['resolve',status,reference]);return {status};}};
  return {io,record,intent,charge,refund,calls,stored};
 }
+test('missing provider identity cannot be recreated after the provider idempotency retention window',()=>{
+ const now=Date.parse('2035-01-02T00:00:00Z');
+ assert.doesNotThrow(()=>requireReplayableProviderCreation({created_at:'2035-01-01T23:00:00Z'},now));
+ for(const created_at of [undefined,'invalid','2035-01-03T00:00:00Z','2035-01-01T00:00:00Z'])
+  assert.throws(()=>requireReplayableProviderCreation({created_at},now),/IDENTITY_REVIEW_REQUIRED/);
+});
 test('authorized full refund uses a stable key; lost response is reconciled before replay',async()=>{
  const f=fixture();f.io.createRefund=async(id,amount,key)=>{f.calls.push([id,amount,key]);f.stored.push(f.refund);throw Error('lost response');};
  await assert.rejects(resolvePaymentRecovery(f.io),/lost response/);
