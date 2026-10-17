@@ -1,0 +1,16 @@
+
+> captro-admin-web@0.1.0 test:browser
+> node tests/console.browser.mjs
+
+PASS desktop report selection, URL, rendered layout
+PASS server filtering and pagination
+PASS confirmed operation updates queue and inspector
+PASS rejected action leaves case accurate
+PASS rapid submissions deduplicated; lost response resolved without replaying mutation
+PASS delayed old detail cannot overwrite current selection
+PASS broken media is explicit and retryable
+PASS query failure never masquerades as empty result
+PASS tablet layout no horizontal page overflow and cached image visible
+PASS read-only UI and keyboard focus
+PASS revoked administrator loses the open console on access recheck
+PASS browser suite; screenshots: C:\Users\The-s\AppData\Local\Temp\captro-admin-console\screenshots

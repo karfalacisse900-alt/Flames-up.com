@@ -1,0 +1,237 @@
+CAPTRO PRIVATE ADMIN CONSOLE — LOCAL IMPLEMENTATION REVIEW
+17 October 2026
+
+STATUS: IMPLEMENTED IN PART; NOT PRODUCTION-READY
+
+This is working HTML/React, Worker route code and a tested PostgreSQL workflow,
+not a flattened mockup. The complete requested moderation system is NOT finished.
+No production migration, Worker/admin deployment, merge, push, TestFlight upload,
+customer mutation, charge, refund or transfer was performed. Incomplete sensitive
+actions are disabled or explicitly unavailable. Do not deploy this candidate alone.
+
+BASELINE AND SOURCE
+Repository: captro-payout-debit-fix
+Branch: fix/additional-review-20261016
+Starting HEAD: e15e267f24885cb2e9ab5179ba580ab5c88cd1eb
+Read the existing routes, operational schema, auth/roles, moderation, tests and
+docs/CAPTRO_REMAINING_RELIABILITY_20261016.txt before implementation. No AGENTS.md
+was found. Existing unrelated dirty documentation/scripts/Supabase temp files were
+preserved and excluded from commits. No native iOS files were changed.
+
+Small implementation commits:
+28827cc320b0c1d1cf26c10ac51159d06ca15132 — versioned backend workflows/migration
+708adba94666ce218bf2a47e65506ea648ed75d9 — cool-gray console and browser regression
+7954e2e84c832afab0353fc918e84ae07ea6f7c9 — validation, list ordering, test runner
+dd90db4cfa42aa988733813535058c9b9798d9df — last USABLE owner protection
+The final code tested is dd90db4c. Following documentation/artifact commits do not
+change that implementation. There is no distributed build corresponding to this work.
+
+IMPLEMENTED SCREENS / VISUAL COMPARISON
+All ten requested navigation destinations exist: Overview, Reports, Users,
+Content, Media, Clubs & Events, Appeals, Operations, Audit History, Admin Access.
+Reusable CSS tokens supply white panels, cool-gray workspace, near-black copy,
+restrained blue actions, system sans typography, borders, focus and reduced motion.
+The 245 px desktop sidebar, 64 px header, four cards and report queue/right inspector
+follow the supplied 1586 x 992 reference. Tablet layout was inspected at 1024 x 900.
+The source image is NOT shipped as a background. No fictional production counts or
+accounts were added. Screenshot fixtures are isolated under admin-web/tests only.
+
+Actual rendered captures:
+docs/admin-console/desktop.png — 1586 x 992
+docs/admin-console/tablet.png — 1024 x 900
+Both were opened and visually compared with the reference. Images, type, boundaries,
+spacing, selected row and tablet overflow were checked. A cached-image readiness
+reset found in the first tablet pass was repaired and the capture rerun.
+Deliberate differences: real required Media/Admin Access navigation, usable extra
+case controls, explicit test-workspace label, simple Captro C/wordmark rather than
+an invented folded-logo asset. No dead notification bell or decorative menu action.
+These are implementation screenshots with synthetic cases, NOT live customer data.
+
+WORKING BEHAVIOR
+Reports:
+- Existing Report API/database queue reused; no automatic ban based on volume.
+- DB-side search, status/assignment/priority filters, ordering and bounded pages.
+- URL retains selected case/filters/page. Section list positions are retained.
+- Independent summary counts report failures instead of pretending to be zero.
+- Selected case uses request identity guards, explicit missing/deleted target state,
+  stable preview, retry, creator, reason, internal note and protected history.
+- Review, assign, note, duplicate grouping, escalate, dismiss and case resolution
+  use confirmed server results. Duplicate grouping requires the same actual target.
+- Resolving a report DOES NOT remove content; the interface explicitly says so.
+
+Users and access:
+- Server-side canonical ID/username search; email search requires private-read
+  permission. User state/version, reports, public posts and history reuse real routes.
+- Warn, scoped timed restriction, timed suspension, ban and reinstatement are
+  separate commands with reason, target, confirmation and stale-version checks.
+- Restrictions include commerce; enforcement checks existing API sessions. Bans
+  preserve financial/account records and session-revocation markers on reinstatement.
+- Fresh trusted role lookup on requests; owner/moderator/support permission checks.
+  Client-provided role/email/localStorage cannot grant authorization.
+- Role changes, ban and reinstatement require verified JWT aal2 AND a recent TOTP
+  amr timestamp. A freshly refreshed token's iat is NOT a substitute for recent MFA.
+- Last-owner check counts active, existing owner accounts, not unusable role rows.
+- Open console rechecks access; revoked access clears the interface. Transient
+  auth failures preserve the session and offer retry; 403 is not auto-refreshed.
+
+Other sections:
+- Content and Stories metadata, media metadata, purchasable listings, operations,
+  appeals, role assignments and audit history use bounded server pages.
+- Existing financial support view remains permission-restricted/read-only here;
+  no generic balance, payout, refund or ticket editing controls were added.
+- Appeals can enter independent review and be upheld, linked to the original
+  decision. RPC submission enforces ownership and replay uniqueness. User-facing
+  notices exclude internal notes. See missing end-to-end work below.
+- Metadata lists do not expose provider secrets, storage keys or private URLs.
+
+ACTION / DATABASE CONTRACT
+New prepared migration: supabase/migrations/20261017131303_admin_console_workflows.sql
+Created using the Supabase migration CLI; NOT applied to production.
+Adds report/role versions, service-only operations and appeals, mutation/appeal RPCs.
+Each authorized operation is serialized by actor+operation ID, checks the current
+record version, writes outcome/audit atomically, and replays the original result.
+Different payload with the same operation ID is rejected. Failed mutation attempts
+inside the RPC retain a redacted durable outcome/audit. No provider network call is
+made while holding these database locks. Ordinary clients have no table/RPC access.
+The Supabase skills informed service-only privileges, short transactions and staged
+rollout; no client policies were broadened to make the console work.
+
+The browser prevents duplicate submission and, after an ambiguous network result,
+queries the actor's durable operation before retrying with the same ID. It does not
+optimistically claim success. Native confirmation dialog supplies focus/escape.
+Body validation, per-action authorization and existing write rate limit are enforced
+on the server. Admin responses are private/no-store. Existing trusted authentication
+and origin handling are reused; real deployment CORS/CSP/MFA configuration is unverified.
+
+EXACT LOCAL VERIFICATION
+Environment: Windows, installed headless Microsoft Edge, local Vite on 127.0.0.1:4173.
+Browser fixtures intercept API calls; fixture images load into actual DOM image
+elements. This is NOT a real deployed Worker -> Supabase browser acceptance run.
+
+backend-cf:
+  node node_modules/typescript/bin/tsc --noEmit
+  node --experimental-strip-types --test tests/*.test.mjs
+Result: TypeScript PASS. Final full suite 336 tests, 336 passed, 0 failed,
+0 cancelled, 0 skipped, 0 todo; 19,891.6619 ms. Node emitted the existing experimental
+type-stripping/module-type warnings, not test errors.
+
+The 12 console tests (including nested cases) run actual migration SQL in PGlite
+and Hono routes with isolated adapters: client privilege denial, ordinary/support
+denial, expiry, MFA, forged fields, stale updates, replay/conflicting payload,
+audit/no duplicate decision, notes, assignment/duplicates, notices, suspension/ban/
+reinstatement, last owner/revoked admin, own-decision appeals/independent review.
+SQL stale interleavings were tested; this is NOT a separate-connection live
+PostgreSQL concurrency/lock stress test or PostgREST/RLS integration certification.
+
+Regression sensitivity demonstrated:
+- New inherited-action rejection probes failed against the earlier module (which
+  accepted constructor/__proto__); the final validator rejects both.
+- Added an inactive second owner fixture. Before the SQL change, the test actually
+  allowed removal of the only usable owner; the assertion failed, then passed with
+  the active-owner guard. The intermediate run had 9 pass/3 fail including the
+  dependent appeal test and parent; the final full suite above has zero failures.
+
+admin-web:
+  npm install --ignore-scripts
+  npm run build
+  npm run dev -- --host 127.0.0.1 --port 4173   (separate process)
+  npm run test:browser
+Playwright 1.64.1 is a pinned DEV dependency; Edge must be installed for this runner.
+CAPTRO_SCREENSHOTS optionally selects output directory; default test-results/admin-console.
+Result: install audit found 0 vulnerabilities; both TS configs and Vite 7.3.6 build
+PASS (37 modules). JS 284.69 kB / 85.56 kB gzip; CSS 33.97 kB / 7.88 kB gzip.
+No production SDK added. Browser suite: 11 scenarios passed, zero page JS errors:
+1. Desktop selection/URL/rendered layout.
+2. Server-filter/page request parameters and responses.
+3. Confirmed action updates queue and inspector.
+4. Rejected action leaves accurate state.
+5. Double-click deduplication and lost-response status reconciliation.
+6. Delayed old detail cannot replace the new selection.
+7. Broken preview displays failure and working Retry.
+8. Failed list is not empty success; retry recovers.
+9. Tablet has no page-level horizontal overflow; cached image shows visible pixels.
+10. Read-only support and keyboard focus.
+11. Removed administrator loses open-console access on recheck.
+
+Logs retained in docs/admin-console/backend-test.log and browser-test.log.
+Automated keyboard smoke tests are not a full screen-reader/contrast/accessibility
+audit. No physical tablet, Safari, live provider login or real admin session tested.
+
+CHANGED FILES
+backend-cf/src/admin-console.ts — route adapter, policy, validation, summary, paging
+backend-cf/src/index.ts — registration, scoped search/evidence, restriction enforcement,
+  no-store and legacy mutation gate; preserved unrelated finance/native behavior
+backend-cf/tests/admin_console.test.mjs — route and real isolated SQL regressions
+supabase/migrations/20261017131303_admin_console_workflows.sql — prepared only
+admin-web/src/Console.tsx — reusable native HTML console/inspector/confirmation
+admin-web/src/console.css — design tokens and responsive accessible presentation
+admin-web/src/console-state.ts — section/URL and safe preview helpers
+admin-web/src/App.tsx — active console integration and session generation guards
+admin-web/src/api.ts — honest JSON errors, coalesced transient-safe session refresh
+admin-web/tests/console.browser.mjs — isolated fixture browser tests/screenshots
+admin-web/package.json, package-lock.json — reproducible browser test runner
+This report, screenshots and test logs — evidence only
+
+OPEN REQUIREMENTS / RELEASE BLOCKERS — DO NOT CLAIM COMPLETE
+1. Earlier security migrations and actual deployed privileges have NOT been freshly
+   certified. Prepared console guard checks only selected grants, not all security
+   invariants. Full direct-DB restriction/revocation acceptance remains required.
+2. Source-enforced content quarantine/hide/removal/restoration across private media,
+   variants/CDN caches, Home, search, Stories and profile is NOT implemented here.
+   Media/Stories lists are metadata-only; authorized private/video evidence preview
+   and restoration flows need further work. Disabled controls say so.
+3. Durable permanent deletion/resource preview/retention and partial cleanup failures
+   are NOT implemented/tested by this console patch. Banning is never deletion.
+4. Appeals lack the app-facing submission route/form and safe overturn/restoration
+   workflow. Review/uphold is only a partial workflow, not complete appeal acceptance.
+5. Sensitive role/ban operations require recent MFA, but enrollment/challenge UI and
+   approved identity configuration are not part of this patch. Do not remove the
+   backend MFA guard to enable a button.
+6. Legacy unversioned admin writes are blocked with 409. Until equivalent safe
+   content workflows exist, deploying this candidate would pause some existing
+   moderation actions. This is a deliberate release blocker, not ready migration.
+7. Listing moderation -> affected paid-purchase review linkage is NOT implemented.
+   Existing financial records/entitlements are untouched, not automatically revoked.
+8. Authentication/validation/rate-limit rejections occurring before the RPC are not
+   all durable audit entries; SQL-authorized success/failure outcomes are. Complete
+   privacy-safe pre-RPC failure auditing before claiming every attempt is retained.
+9. Pending operation UUID is retained during the confirmation dialog, not across
+   browser restart. Durable history exists, but cross-relaunch recovery UI is open.
+10. No bulk actions shipped. No production full-schema integration, cross-account
+    staging tests, direct-media revocation proof or distributed concurrency tests.
+11. Final brand asset, manual accessibility/keyboard traversal, Safari, portrait
+    tablet and extreme text-size acceptance remain. No native scrolling/device or
+    iPhone performance claim is made by any of these admin tests.
+
+COORDINATED ROLLOUT CHECKLIST — APPROVAL REQUIRED
+[ ] Finish the open sensitive workflows above before production release.
+[ ] Fresh read-only deployed Worker fingerprint, schema/grants/policies/function
+    inventory; do not equate branch contents with production state.
+[ ] Verify security_backend_write_boundary, security_media_approval_boundary and
+    single_owner_push_registration migrations against actual supported clients.
+    Preserve prior commerce/recovery scheduling and financial history contracts.
+[ ] Inventory app_admin_roles.user_id. New SQL uses canonical app_users.id; old
+    trusted lookup can accept auth-ID aliases. Explicitly reconcile aliases in
+    reviewed staging; never automatically grant a role based on profile/email.
+[ ] Apply exact migration chain in disposable staging with matching Worker/admin.
+    Test ordinary/outsider/support/moderator/owner identities and existing tokens,
+    direct PostgREST denial, timed expiry, private evidence, paid listing impact,
+    migration failure rollback, lost response and true simultaneous transactions.
+[ ] Configure approved MFA/step-up and test enrollment/recovery/expiry. Review
+    deployment HTTPS, strict origin allowlist, CSP, token handling and secret scope.
+[ ] Approved maintenance/feature-gating window: security prerequisites, additive
+    console schema, matching Worker, then admin bundle. Verify each gate before
+    opening mutation controls. Do not run schema-only/old-Worker mixed mutations.
+[ ] Retain operations/audit/appeal/recovery records for reviewed retention. Forward
+    repair failed operations; never delete history to resolve a migration problem.
+[ ] Rollback UI reads to a compatible build or disable mutations, while keeping
+    reconciliation/services running. Do not restore unsafe legacy write routes,
+    broaden RLS, reverse financial snapshots or use clock-only payment expiry.
+[ ] Owner approval for production migration/deployment; no approval inferred from
+    local build or screenshots. Then smoke test read-only and authorized isolated
+    fixture flows before any customer moderation.
+
+Primary guidance checked:
+https://supabase.com/docs/guides/auth/auth-mfa
+https://supabase.com/docs/guides/auth/jwt-fields
+https://supabase.com/docs/guides/database/postgres/row-level-security

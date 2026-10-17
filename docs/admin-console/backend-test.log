@@ -1,0 +1,511 @@
+▶ review migration enforces interval resources, approval dates and provider-owned release
+  ✔ different overlapping starts share capacity across tiers; adjacent intervals succeed (149.5967ms)
+  ✔ multi-capacity uses peak occupancy and respects actual UTC intervals across DST offsets (77.1807ms)
+  ✔ approval after event end or offer expiry rolls back inventory and entitlement (299.1529ms)
+  ✔ valid approval succeeds; checkout revalidates changed price and dates (35.1105ms)
+  ✔ elapsed hosted hold survives new purchases and accepts delayed paid confirmation exactly once (110.1797ms)
+  ✔ already-released verified payment creates one durable recovery, never unreserved access (40.9863ms)
+  ✔ operator recovery is owned, capacity-safe and idempotent; recording a case is never completion (292.3321ms)
+  ✔ unreviewed historical capacity gates only new bookings and preserves existing commitments (116.9416ms)
+  ✔ durable leases progress beyond forty unresolved jobs; backoff, restart and stale completion are safe (2242.1846ms)
+  ✔ dashboard canonical status works against metadata-only schema (6.0216ms)
+✔ review migration enforces interval resources, approval dates and provider-owned release (13934.5607ms)
+(node:2104) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/stripe-money.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:2104) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+✔ actual native PaymentIntent requests preserve USD and JPY integer totals (11.4912ms)
+✔ actual hosted checkout shares the database hold deadline and validates before provider creation (16.1269ms)
+✔ refund integer amount is forwarded without currency rescaling (provider flag compatibility NOT asserted) (5.2326ms)
+(node:29292) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/currency.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:29292) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+✔ USD and JPY use the same integer provider contract across draft, price and checkout (5.062ms)
+✔ invalid precision, unsafe units, unsupported and provider-special currencies fail closed (0.7491ms)
+✔ admin totals, negative refunds and informational event prices use the same precision (44.8512ms)
+✔ refresh invalidation requires an explicit upstream credential rejection (0.5967ms)
+✔ actual refresh endpoint preserves retryability and rotated tokens across identity-read failure (76.8743ms)
+✔ paid hosted checkout with delayed webhook confirms rather than releasing inventory (2.3688ms)
+✔ completion wins an expiry race; failed expire is followed by a fresh provider read (0.9804ms)
+✔ processing or succeeded-but-not-yet-propagated intents retain inventory (1.4894ms)
+✔ release requires terminal provider evidence, never a network exception (1.4129ms)
+✔ failed cancellation and still-open checkout remain held (0.5402ms)
+✔ dashboard card failure is explicit and does not hide independent results (8.4988ms)
+(node:17616) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/admin-console.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ capability expiry is explicit and older active restrictions cannot be truncated out (2.4196ms)
+✔ recent token issuance does not substitute for recent verified MFA (1.1165ms)
+✔ console validates target, precision, reason, scopes, roles, and private search (8.4218ms)
+✔ HTTP denies anonymous/ordinary/support writes and missing MFA; independent summary survives failure (58.4712ms)
+▶ real database console workflows and negative authorization
+  ✔ client roles cannot read operations or execute trusted mutation RPC (38.6986ms)
+  ✔ ordinary/support writes denied and authorized failed attempt audited (70.054ms)
+  ✔ lost response replay once, payload conflict and stale concurrent action reject (42.101ms)
+  ✔ notes retained, assignment and duplicate grouping validate real targets (37.8556ms)
+  ✔ timed suspension, permanent ban and reinstatement preserve history/revocation (27.181ms)
+  ✔ last owner, privileged targets and removed admins protected (17.6677ms)
+  ✔ appeals bind to own decision, replay uniquely and require independent reviewer (81.3967ms)
+✔ real database console workflows and negative authorization (10215.8436ms)
+✔ retry refreshes the same purchase and requires a fresh explicit presentation (3.1031ms)
+✔ PaymentSheet failures are logged in Release with safe correlation metadata (0.4424ms)
+✔ intent creation never selects a saved card or seller destination (0.8528ms)
+(node:29724) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/commerce.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ all supported commerce post types resolve to one of the shared entitlement kinds (4.4771ms)
+✔ creator input preserves type-specific public fields but never accepts private access state (2.8103ms)
+✔ free access is truly zero and paid prices cannot be less than fifty cents (1.0789ms)
+✔ paid checkout requires an explicit outside-app or digital classification (0.6147ms)
+✔ the Home payload exposes compact commerce facts without private configuration (1.2195ms)
+✔ money, inventory, purchases and access stay out of app_posts and behind service-role RLS (0.5036ms)
+✔ purchase snapshots are immutable inputs and payment confirmation alone issues access (3.4964ms)
+✔ digital access uses hosted checkout while native card checkout remains gated (1.4653ms)
+✔ booking inventory and QR passes are serialized and cannot be consumed twice (1.0557ms)
+✔ creator, Details and Me surfaces use the shared commerce API without changing Home paging (0.732ms)
+✔ receipt dates accept real Stripe/Postgres fractions without losing the day or timezone (3.4516ms)
+✔ ordinary publisher requires media, retains legacy draft data, and never submits response choices (9.5801ms)
+✔ poll presentation is removed without touching server-authorized membership and RSVP (37.7418ms)
+✔ legacy text has no Home card or empty Profile tile; stored records remain accessible in an archive (11.2131ms)
+✔ media-first composer, Details chrome, and lower Favorites placement do not reintroduce voice or feed scrolling (60.3255ms)
+✔ Story asynchronous results and playback are owned by the selected stable identity (2.9779ms)
+✔ guest Home reads only the public feed and keeps an isolated cache (2.3618ms)
+✔ Home post anatomy ends at the photograph and Captro stamp (0.5432ms)
+✔ Home hides ordinary legacy text but retains media and structured posts without deleting data (1.3878ms)
+✔ Event, Meetup and Deal use one restrained listing hierarchy without changing Moment (4.323ms)
+✔ Moment details keep full writing below clean media without duplicating Cover artwork (4.3374ms)
+✔ Moment writing and real audio controls stay inside the Stamp surface (4.8845ms)
+✔ Home preview omits the separate creator and location header (0.3341ms)
+✔ Home post is a full-width feed section without an outer card (0.7878ms)
+✔ Home and Details share a stable crop transform; fullscreen preserves originals (9.2358ms)
+✔ media canvas keeps the first slide frame stable and fits extreme height without a More row (0.6759ms)
+✔ Captro uses a purpose-built family of stamp types and actions (1.1311ms)
+✔ holding the Home stamp temporarily reveals the unobstructed photo (1.6943ms)
+✔ Home carousel stamp appears only on its first slide (0.2885ms)
+✔ Home carousel locks each touch to horizontal or vertical intent (0.3893ms)
+✔ composer persists one free-writing draft and keeps structured setup behind Add (0.7232ms)
+✔ single-card creation preserves native mixed-media picking and original proportions (1.3626ms)
+✔ composer exposes quiet tools, native actions, and no Post category (0.7223ms)
+✔ feed image upload preserves composition and stays within the hosted-image limit (0.4739ms)
+✔ composer selectors use one lifecycle owner and anchored editorial menus (3.0067ms)
+✔ time directly edits its optional value and Maps search never requests device location on entry (0.7251ms)
+✔ native Story presentation has no extra canvas fade or delayed dismissal (4.0109ms)
+✔ Stamp audio belongs to the visible post, not only to video activation (4.8764ms)
+✔ Capture opens the live native camera and does not reintroduce receipt or voice entry points (3.0622ms)
+✔ Post Assist uses the same server-side OpenAI key and does not return fake suggestions on failure (0.8347ms)
+✔ new post text, captions, and comment replies are screened before publication (2.9585ms)
+✔ Story viewer and default editor preserve the entire original frame (0.4509ms)
+✔ Capture hands reviewed media to existing composers and voice recording remains retired (9.8279ms)
+✔ feed caption overflow uses rendered height instead of character count (2.1905ms)
+(node:29372) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/purchase-errors.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ capture navigation is capture-by-capture and identifies groups by stable ID (1.9538ms)
+✔ Story navigation uses left and right taps plus swipe down, without hiding media controls (0.6077ms)
+✔ linked details never confuse attachment IDs and post IDs (2.2601ms)
+✔ purchase recovery identifies ownership, inventory and seller setup without fake success (0.4136ms)
+✔ Profile restores payment access and invalid checkout has an explicit error (8.6981ms)
+(node:1840) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/media-upload.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ chat realtime exposes only publishable configuration after auth (2.5725ms)
+✔ chat replication is scoped to RLS-protected tables (0.3862ms)
+✔ resumable Stream intent bounds duration and preserves signed playback policy (2.8561ms)
+✔ club member context remains behind group membership authorization (2.1356ms)
+✔ club room keeps live message transport and only shows supplied activity (0.5898ms)
+✔ Home status rail is API-backed, neutral, and masked by fixed controls (0.8415ms)
+(node:4172) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/commerce.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:4172) ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time
+✔ explicit event end closes new sales without changing original data (9.469ms)
+✔ availability uses absolute timestamps, not viewer timezone or start-only guesses (0.3844ms)
+✔ access-only hydration still authorizes visibility before skipping unrelated decoration (7.7329ms)
+✔ identity lookup coalesces within one request, never across accounts or requests (13.8102ms)
+(node:2672) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/media-writing.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Cover is ordinary metadata, not a new account tier or hidden schedule (1.3455ms)
+✔ Cover persists distinct per-item typography and crop without replacing source media (29.9759ms)
+✔ Cover has its own 70-grapheme limit, no paragraph or unsupported crop (1.1699ms)
+✔ unwritten carousel slides store no label and arbitrary source ratios remain valid (0.326ms)
+(node:20724) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/creation-intent.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ three ordinary writing intents and Cover; no Post category or phrase injection (31.5487ms)
+✔ 500-character counting matches native extended grapheme clusters (1.8942ms)
+✔ Concern cannot submit a hidden schedule (9.0203ms)
+✔ ordinary messages retain punctuation and Unicode as plain text (0.4859ms)
+✔ new metadata reuses existing columns, moderation, and idempotent publishing (8.7023ms)
+✔ platform payment issues access independently of seller setup and appends immutable pending ledger (11592.3566ms)
+(node:2120) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/post-objects.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ creator event fields round trip with iOS snake-case and retain exact schedule and price (63.8645ms)
+✔ event editor never accepts ticket ownership, codes, counts or verification (1.1907ms)
+✔ invalid event prices and schedules fail before storage (6.3336ms)
+✔ optional facts stay optional and a free event is different from a missing price (0.6326ms)
+✔ post edits check creator ownership, issuer management and concurrent updates (7.3351ms)
+✔ composer respects the keyboard and exposes editable stamps, not just hidden details (8.2635ms)
+✔ Favorites route refuses saving inaccessible posts and never trusts client owner (223.3223ms)
+✔ Favorites route uses authenticated identity and permits removing unavailable saves (45.144ms)
+✔ Favorites list exposes unavailable rows, not private post contents or unsafe previews (21.1759ms)
+✔ Favorites migration: multi-collection save, unsave and Undo are atomic; likes untouched (10987.0179ms)
+✔ Favorites migration: owner isolation, no direct API access, rollback and stale write rejection (3413.2267ms)
+✔ Favorites migration: legacy collections imported once; old save routes retain and clear memberships (2608.1066ms)
+(node:15688) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/feed-pagination.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ cursor is encrypted, authentic, account/scope/city bound and time limited (53.1827ms)
+✔ boundary retains timestamp microseconds and refuses non-data filter syntax (1.1111ms)
+✔ generated keyset conditions match PostgreSQL ordering with timestamp ties, microseconds and NULL legacy dates (9963.439ms)
+(node:9924) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/feed-relevance.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ feed ranking reuses only the authorized input set and keeps stable IDs (4.0099ms)
+✔ cancelled or sold-out commerce is not boosted by matching AI topics (0.5656ms)
+✔ guest world board survives a rate-limit store outage (26.739ms)
+(node:30564) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/creation-intent.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ new media captions and supplied titles have independent grapheme limits (32.7952ms)
+✔ text-only and full structured descriptions retain their separate limits (2.247ms)
+✔ rejection never edits the input or a legacy record (1.775ms)
+✔ visual writing accepts 60 graphemes but rejects 61 without rewriting (3.4494ms)
+(node:23704) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/image-delivery.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ versioned derivatives shrink without cropping and never bypass private signatures (3.1086ms)
+✔ publishing keeps the original reference independent of feed variant configuration (8.3417ms)
+✔ signed, foreign, invalid and unknown variants are not rewritten (1.7017ms)
+✔ guest access is persisted and routed into the app without an auth token (5.6477ms)
+✔ native OAuth preserves provider requirements before calling Captro (3.295ms)
+✔ terms validation explains the requirement instead of making auth look inert (0.6839ms)
+✔ iOS engagement hydration uses fresh server state before stale local cache (38.3311ms)
+✔ post detail refresh does not merge current stale engagement over refreshed server post (38.2968ms)
+✔ Worker engagement mutations return the requested viewer state after canonical repair (38.474ms)
+(node:5096) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/media-writing.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ stable source identity survives validation without accepting URLs or arbitrary identifiers (39.0933ms)
+✔ writing round trip preserves exact words, line breaks and source geometry (0.738ms)
+✔ one independent overlay per media item; missing and duplicate indices rejected (0.7829ms)
+✔ invalid versions, typography, coordinates, paragraphs fail instead of silent rewriting (1.2329ms)
+✔ legacy editor metadata is not misinterpreted as unflattened writing (2.194ms)
+✔ existing JSONB editor_data preserves source-relative writing without flattening (9378.4974ms)
+(node:3220) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/media-upload.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Stream accepts current and legacy Cloudflare direct-upload hosts only over HTTPS (2.2246ms)
+✔ Images allowlist stays limited to Cloudflare Images (0.9132ms)
+✔ camera evidence requires an exact clean non-baseline checkout and both passed suites (9.7608ms)
+✔ release gate accepts only successful matching native source (2.738ms)
+✔ missing validation fails before network or build work (0.8256ms)
+✔ retry validation compares the preserved IPA source, not current checkout (0.8343ms)
+✔ both TestFlight upload paths require the non-optional gate first (3.6558ms)
+✔ updated wiring coverage rejects a broken guest route, inert playback, disconnected save and moved favorite (70.2617ms)
+✔ OAuth fallback resolves returning accounts by provider subject (3.7285ms)
+✔ Google uses the server-verified bridge instead of the nonce-incompatible Supabase grant (0.8278ms)
+✔ Apple retains its raw nonce and uses the same server-verified bridge as Google (1.2418ms)
+✔ OAuth session bridge requires its dedicated production secret (4.8117ms)
+✔ OAuth rate limiting falls back to D1 when the KV binding throws (0.4798ms)
+✔ iOS social-auth payload fields remain accepted by both routes (1.5158ms)
+(node:6764) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/purchase-errors.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ RPC names cannot hide actual capacity or permission exceptions (2.2658ms)
+(node:12540) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/payment-recovery.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ missing provider identity cannot be recreated after the provider idempotency retention window (2.0188ms)
+✔ authorized full refund uses a stable key; lost response is reconciled before replay (2.4371ms)
+✔ processing refund remains unresolved; expired idempotency window cannot create a new refund (1.0263ms)
+✔ wrong buyer purchase, mode, amount, refund or transferred/disputed charge never resolves (2.935ms)
+✔ fulfillment never refunds and rejects already-refunded charges (0.5527ms)
+✔ batch bounds four provider operations and distinguishes processing, missing identity and failure (212.6404ms)
+(node:18384) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/post-media-framing.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ legacy source dimensions are not overwritten by an old feed derivative (232.1207ms)
+✔ framing keeps original dimensions and explicit user crop through JSONB (10376.5878ms)
+✔ all four supported formats and Swift snake-case payloads round trip (2.5159ms)
+✔ malformed crop data is rejected, never silently clipped or coerced (1.3694ms)
+(node:21792) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/post-media.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Stream needs confirmed encoding completion and never treats an error as ready (4.075ms)
+✔ Stream HLS references resolve to the same provider ID for posters (2.0337ms)
+✔ mixed-media cover/order is determined by selection, not database row order (9.1368ms)
+✔ approved owner videos can publish, in order, without weakening moderation (549.5708ms)
+✔ real completion route waits for Stream before starting moderation (313.2134ms)
+✔ post creation accepts both kinds; Home scrolls vertically with in-media carousels (205.006ms)
+(node:27464) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/post-objects.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Home object allowlist never includes private ticket or document details (3.7663ms)
+✔ public document status requires stored backend evidence, not caller claims (0.4606ms)
+✔ only the actual active ticket owner can obtain ticket fields (0.683ms)
+✔ public enrichment only attaches records to already-visible posts (0.8657ms)
+✔ private object routes recheck visibility and owner and do not enter the post cache (31.1251ms)
+✔ one response per account, changing choice reverses the old count, and deleting a post cascades (9873.7878ms)
+✔ legacy server votes remain authorized while the revised native client removes responses (5.9793ms)
+✔ approves low-risk image uploads (8.0342ms)
+✔ rejects high-risk media before publish (1.8334ms)
+✔ sends ambiguous media to admin review (0.9293ms)
+✔ does not reject AI-generated likelihood unless policy disallows at high confidence (1.9171ms)
+✔ image upload intent enforces Cloudflare Images hosted-file limit (9.5639ms)
+(node:888) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/creation-intent.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ confirmed photo/video/carousel and stamp publication retains one canonical ID through insert, Home and Details (9847.8655ms)
+✔ pending, rejected and review-required media cannot produce a successful post or Home entry (395.9371ms)
+✔ failed database insert reports failure and does not manufacture a successful Home post (106.2349ms)
+✔ private posts remain author-only; Following and Around do not imply eligibility from successful publication (123.7453ms)
+✔ public display city and actual following relationships admit eligible published posts (111.9603ms)
+✔ media metadata missing dimensions is not misclassified as a retired text-only post on the server (109.664ms)
+✔ blocked accounts and non-active records remain absent from the authorized Home page (155.6168ms)
+✔ documents raw-offset pagination overlap after access filtering (not a fixed regression) (115.5078ms)
+✔ documents premature end when an authorization-filtered raw window contains no visible posts (113.5571ms)
+✔ real publication writes the ordering timestamp and precedes older migrated records; null legacy rows retain their compatibility order (198.9572ms)
+✔ v2 actual feed handler traverses authorization-filtered windows without duplicate or skipped posts (118.2143ms)
+✔ v2 empty bounded scan returns an opaque advancing continuation; final accessible post remains reachable (116.5786ms)
+✔ v2 ignores insertions ahead of the cursor, tolerates removed boundary rows, and rejects wrong account/scope (130.7953ms)
+✔ v2 world-board uses identical authorized pagination and legacy callers still receive arrays (94.8761ms)
+(node:13968) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/realtime-diagnostics.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ voice breadcrumbs accept only bounded stages and counters, never media or secrets (7.0538ms)
+✔ structured image-free cards remain compact; ordinary text and poll cards are retired (0.7599ms)
+(node:812) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/realtime-session.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ speech-to-speech config uses semantic VAD with automatic replies and interruption (5.8684ms)
+✔ only fresh flat credentials are accepted, never an HTTP error or legacy nested token (0.5971ms)
+✔ permanent credentials/model/billing/config failures do not enter transient retry loops (1.0543ms)
+✔ retired voice has no chat recorder, player, retry upload, or AI route (24.9587ms)
+(node:30404) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/retired-posting.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ ordinary posts require media; captions alone and old intent aliases cannot bypass it (2.4402ms)
+✔ structured posts retain their existing validation and access flows (1.024ms)
+✔ new voice and poll payloads are rejected without modifying old payloads (0.4073ms)
+✔ retired actions fail clearly while historical reads and real stamp actions remain (1.1308ms)
+(node:12192) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/runtime-urls.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ only an explicit isolated test runtime can use loopback Supabase without TLS (2.4616ms)
+(node:8248) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/scan.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ recognition alone never becomes Verified (13.2606ms)
+✔ a supported document needs real provider, date, and arithmetic checks (1.3872ms)
+✔ duplicate clearance is never invented by extraction (0.8697ms)
+✔ one clear provider signal does not clear all missing checks (0.7674ms)
+✔ an empty indicator list or false flags alone do not prove a completed risk assessment (2.0358ms)
+✔ Veryfi meta.fraud green decision is accepted but yellow, red and conflicting decisions are not (9.8062ms)
+✔ generated, screen-photographed, manipulated and uncertain documents never qualify for rewards (2.7893ms)
+✔ page-level LCD and field tampering evidence override even a green summary (2.0688ms)
+✔ digital receipt imports can pass only with an explicit acceptable risk decision (1.0011ms)
+{"event":"veryfi_request_started","scanId":"scan-test","documentType":"auto_receipt_or_invoice","mimeType":"image/jpeg","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"scan-test","httpStatus":201,"elapsedMs":6}
+{"event":"veryfi_document_processed","scanId":"scan-test","providerDocumentId":"provider-document-1","documentType":"receipt"}
+{"event":"veryfi_request_started","scanId":"scan-test","documentType":"auto_receipt_or_invoice","mimeType":"image/jpeg","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"scan-test","httpStatus":401,"elapsedMs":1}
+{"event":"veryfi_provider_error","scanId":"scan-test","httpStatus":401,"providerError":"Request rejected"}
+{"event":"veryfi_request_started","scanId":"scan-test","documentType":"auto_receipt_or_invoice","mimeType":"image/jpeg","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"scan-test","httpStatus":403,"elapsedMs":0}
+{"event":"veryfi_provider_error","scanId":"scan-test","httpStatus":403,"providerError":"Request rejected"}
+{"event":"veryfi_request_started","scanId":"scan-test","documentType":"auto_receipt_or_invoice","mimeType":"image/jpeg","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"scan-test","httpStatus":422,"elapsedMs":1}
+{"event":"veryfi_provider_error","scanId":"scan-test","httpStatus":422,"providerError":"Request rejected"}
+{"event":"veryfi_request_started","scanId":"scan-test","documentType":"auto_receipt_or_invoice","mimeType":"image/jpeg","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"scan-test","httpStatus":429,"elapsedMs":0}
+{"event":"veryfi_provider_error","scanId":"scan-test","httpStatus":429,"providerError":"Request rejected"}
+{"event":"veryfi_request_started","scanId":"scan-test","documentType":"auto_receipt_or_invoice","mimeType":"image/jpeg","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"scan-test","httpStatus":200,"elapsedMs":0}
+{"event":"veryfi_request_started","scanId":"scan-test","documentType":"auto_receipt_or_invoice","mimeType":"image/jpeg","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"scan-test","httpStatus":302,"elapsedMs":0}
+{"event":"veryfi_provider_error","scanId":"scan-test","httpStatus":302,"providerError":"Provider returned no readable error message"}
+{"event":"veryfi_request_started","scanId":"file-type-test","documentType":"auto_receipt_or_invoice","mimeType":"image/png","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"file-type-test","httpStatus":201,"elapsedMs":0}
+{"event":"veryfi_document_processed","scanId":"file-type-test","providerDocumentId":"provider-document-1","documentType":"receipt"}
+{"event":"veryfi_request_started","scanId":"file-type-test","documentType":"auto_receipt_or_invoice","mimeType":"application/pdf","fileBytes":300,"credentials":{"clientId":true,"apiKey":true,"username":true,"signingSecret":false}}
+{"event":"veryfi_response","scanId":"file-type-test","httpStatus":201,"elapsedMs":0}
+{"event":"veryfi_document_processed","scanId":"file-type-test","providerDocumentId":"provider-document-1","documentType":"invoice"}
+✔ legacy risk verdict repair cannot debit existing rewards or remove submissions (44.8323ms)
+✔ invoice fields and date-embedded time are extracted without client guesses (0.7906ms)
+✔ Veryfi errors redact configured credentials and personal values (0.7436ms)
+✔ confidence-enriched Veryfi fields normalize identically to plain fields (0.703ms)
+✔ provider sends actual bytes, checks status and rejects malformed success (86.0706ms)
+✔ legacy Supabase missing-bucket response provisions private storage (1.7628ms)
+✔ PNG and PDF uploads keep their bytes and use provider-detected document types (3.8249ms)
+✔ failed arithmetic prevents a Verified verdict (0.4985ms)
+✔ savings already included in item prices are not deducted from subtotal twice (1.3582ms)
+✔ receipt feedback eligibility requires consistent core purchase data (6.2532ms)
+✔ purchase category drives the expected feedback questions (1.9343ms)
+✔ Veryfi request signatures use the documented serialized payload and base64 HMAC (13.749ms)
+✔ receipt and invoice rewards are server-configurable with guarded defaults (0.5184ms)
+✔ semantic reward fingerprint survives a different photograph of the same receipt (10.9514ms)
+✔ database serializes exact file duplicates across accounts independently of OCR (5.4542ms)
+✔ migration locks billing to ten cents and makes retries idempotent (3.6652ms)
+✔ receipt reward migration is private, atomic, and exactly ten cents (3.7809ms)
+✔ corrected receipt migration stores configured rewards and provider-owned verification state (24.5722ms)
+✔ consumer verdict vocabulary excludes accusation and score labels (26.744ms)
+✔ retired receipt Capture has no new reward entry point while private historical balances and receipts remain accessible (120.6091ms)
+✔ reward API stores raw documents in a private server-side bucket (27.0969ms)
+✔ App Store setup uses the dedicated in-app purchase availability resource (22.3671ms)
+✔ forged profile admin flags and owner names/emails grant no privileges (233.137ms)
+✔ role lookup failure, foreign assignment, conflict and disabled account fail closed (97.4114ms)
+✔ legacy write routes check specific permissions before changing anything (45.6723ms)
+✔ reported-message review never fetches surrounding private conversation (32.2798ms)
+✔ private backup signing checks uploader ownership even for existing forged messages (17.6767ms)
+✔ private attachment full and range responses override public storage cache metadata (73.378ms)
+✔ unattached private media is not visible through an administrator override (15.5114ms)
+✔ database failures never echo private message rows into error output (39.5574ms)
+✔ duplicate detection works without putting private text into a PostgREST URL (75.8962ms)
+✔ private Story replies retain authorization but are not sent to cloud AI (21.3523ms)
+✔ optional viewer authorization cannot reuse a server-revoked session (9.7118ms)
+✔ SQL: unrelated accounts, self-enrollment, forged roles and message rewriting are denied; revocation preserves history (8214.953ms)
+✔ push registration uses authenticated identity and one atomic server operation (13.0503ms)
+✔ SQL: push takeover, delayed old logout, duplicate registration and client denial (2803.9054ms)
+✔ schema evidence must be complete, unique, boolean, and entirely passed (2.546ms)
+✔ management request is bounded, read-only, catalog-only, and never follows redirects (77.9327ms)
+✔ missing credentials, network failures, and malformed results fail closed without secret output (3.6299ms)
+✔ actual SQL rejects pre-hardening schema and later privilege, RLS, policy, RPC, index, or migration drift (8056.8373ms)
+✔ fresh and preserved TestFlight uploads both require the live schema check; status reads do not (7.9667ms)
+(node:19812) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/seller-policy.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ a seller needs separate Identity, Connect, and manual payout readiness (1.8004ms)
+✔ buyer checkout is separate from seller identity and free creation (3.1645ms)
+✔ Identity records are backend-only and only Stripe can approve (1.0838ms)
+✔ new seller schedules are manual; existing live schedules are not silently rewritten (1.0235ms)
+(node:21948) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/stamp-style.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ all 15 source variants compile to both native densities and validate in their own family (8.2938ms)
+✔ style cannot change product type or inject arbitrary artwork (0.2731ms)
+✔ cancelled and expired attachments keep the real attachment ID, independent of post ID (1.189ms)
+✔ new statuses expire after 14 days and legacy reports use the same window (43.9685ms)
+✔ story viewers are owner-only and replies are private direct messages (8.3216ms)
+✔ story links are validated against an active public Captro post (9.3024ms)
+✔ story text and media must pass server-side publication checks (15.3513ms)
+✔ database replaces the 24-hour story expiry cap with 14 days (2.8619ms)
+✔ status editor keeps the writing area clear of the publish button (4.6196ms)
+(node:26364) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/story-safety.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Workers AI safety accepts only exact valid classifications (2.0122ms)
+✔ Workers AI errors and unexpected shapes fail closed (1.988ms)
+✔ Workers AI receives only the submitted text and uses a safety model (0.4874ms)
+(node:23568) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/stripe-connect-v2.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Stripe Connect stores Captro-managed payout accounts without raw card data or hosted account links (5.1029ms)
+✔ paid posts create reusable Stripe products and prices independently of payout readiness (1.7642ms)
+✔ connected accounts and reusable catalog IDs are isolated by Stripe mode (1.4428ms)
+✔ an unused current-mode Express payout profile can migrate to Captro-managed Custom (2.8729ms)
+✔ recipient readiness depends on transfers and payouts rather than direct charges (1.5062ms)
+✔ recipient readiness uses the actual Accounts v2 transfer capability (0.6934ms)
+✔ Accounts v2 payloads use the Captro marketplace recipient configuration (0.4927ms)
+✔ buyer fees are configurable while the creator receives the full listed item amount (2.0703ms)
+✔ payment confirmation creates one immutable earning and entitlement server-side (8.4997ms)
+✔ marketplace settlement foreign keys have covering indexes (0.6206ms)
+✔ refunds and disputes preserve the original sale and reverse access and earnings (4.268ms)
+✔ creator and admin refunds share one Stripe path with financial authorization and audit (5.5759ms)
+✔ Connect account, payout and purchase events are handled without the app remaining open (5.2682ms)
+✔ Earnings UI is backed by private live endpoints and never invents balances (2.5162ms)
+✔ Profile payment cards use Stripe CustomerSheet and never store raw card data (21.4089ms)
+✔ native checkout displays saved buyer cards while payout remains debit-only (0.8857ms)
+✔ native payout requests accept Codable snake_case identifiers (0.8307ms)
+✔ paid-post onboarding preserves the creator draft and media selection (0.3441ms)
+✔ seller payout onboarding stays inside Captro with embedded Stripe collection and no Express link (3.6318ms)
+✔ embedded payout onboarding never opens a Stripe-hosted browser or accepts raw card data (0.4018ms)
+✔ payout setup errors are safe for users and never expose database responses (2.4219ms)
+✔ buyer checkout never runs seller verification or payout setup (2.3699ms)
+✔ stamp has one detail target while saving remains available in the detail header (2.92ms)
+✔ native payment migrations enforce snapshots, idempotency, ticket issuance and refund capacity (4989.5539ms)
+(node:30444) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/stripe-money.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ twenty dollar purchase preserves creator proceeds and calculates integer fees (3.6362ms)
+✔ Stripe mode must be explicit and both keys must match (0.9674ms)
+✔ refund allocations use bounded integer arithmetic (0.5142ms)
+✔ payout destination must be a currently eligible debit card, never a bank or credit card (0.8107ms)
+✔ withdrawals use Stripe destination-specific net instant balance, not sales or general available (1.1983ms)
+✔ native checkout uses provider UI and only persisted confirmation grants completion (3.8464ms)
+✔ native release and Stripe smoke use the directly deployed production Worker (0.4333ms)
+✔ production Supabase session verification stays valid when public keys rotate (1.1715ms)
+✔ read-only Stripe acceptance refuses live keys without logging credentials (180.4218ms)
+✔ test acceptance cannot target the production Worker (185.4339ms)
+✔ sandbox CI scripts reject mismatched keys without printing them (667.1591ms)
+✔ protected sandbox acceptance is pinned to its configured test account and exercises real money state (0.5917ms)
+✔ the production bootstrap binds one Stripe mode and provisions both signed webhook destinations (1.6215ms)
+✔ scheduled reconciliation recovers missed payment and payout webhooks from Stripe state (2.7304ms)
+(node:9240) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/stripe-response.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ Stripe failures retain correlation without logging sensitive provider content (71.7857ms)
+✔ Malformed Stripe responses fail closed, including successful HTTP responses (2.7724ms)
+✔ Accounts v2 platform activation failures use a stable public error code (0.8605ms)
+✔ Stripe successful objects are unchanged and do not emit failure logs (0.8146ms)
+✔ Provider-controlled error fields cannot inject secrets into diagnostics (1.056ms)
+(node:29768) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///C:/Users/The-s/Documents/New%20project/captro-payout-debit-fix/backend-cf/src/voice.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to C:\Users\The-s\Documents\New project\captro-payout-debit-fix\backend-cf\package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ server measures a decodable WAV and enforces the reply duration limit (3.0985ms)
+✔ rejects corrupt input instead of trusting filename or MIME metadata (0.6297ms)
+✔ silence or empty recognition is held for review (1.4566ms)
+✔ clean speech can publish and flagged speech stays private during rollout (0.2508ms)
+✔ automatic rejection requires the flag, explicit configuration, certainty, and grounded evidence (0.2799ms)
+✔ review evidence must occur in the submitting author content (0.3249ms)
+✔ exhausted AI credits stop retries without exposing provider responses (0.5019ms)
+✔ source keeps Cloudflare R2 storage private and publishing version-bound (9.8924ms)
+✔ native voice recording and assistant implementations are retired (2.1041ms)
+✔ composer and comments cannot record or upload retired voice attachments (7.6041ms)
+✔ stored stamped voice records retain historical moderation boundaries (9.3174ms)
+✔ migration permits private voice posts and voice-only replies without opening ordinary empty comments (3805.7336ms)
+✔ voice reply creation binds after a focused comment count, not a full engagement refresh (7.0728ms)
+ℹ tests 336
+ℹ suites 0
+ℹ pass 336
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 19891.6619
