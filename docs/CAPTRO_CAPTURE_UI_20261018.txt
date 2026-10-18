@@ -1,0 +1,85 @@
+CAPTRO CAPTURE UI — 18 OCTOBER 2026
+
+Scope and source
+Started on fix/additional-review-20261016 at 081f4bfa (Home image recovery).
+Native Capture implementation: 7496b606.
+Updated source-contract tests: 5e87696a (native sources identical to 7496b606).
+Existing dirty reports, audit script, Supabase temporary files and the pending
+Home-image report were not included or overwritten. No merge, deployment,
+permission configuration change or TestFlight distribution.
+
+Implementation
+- Existing CaptroCameraCaptureService / AVCapturePhotoOutput / MovieFileOutput
+  remain the sole Capture pipeline. Preview remains the real AVCaptureVideoPreviewLayer.
+  No scene image, mock camera, new capture SDK, second session or filter engine.
+- Near-black chrome, white controls, yellow-green selected mode/zoom and focus.
+  Top row: capability-aware photo flash/video torch, small CAPTRO, settings.
+  PHOTO/VIDEO move above the white photo / red record-stop shutter. Capture's
+  native tab tint/background become white/black; Home and Me retain their theme.
+- Pinch routes into existing serialized setZoom; actual published zoom drives
+  controls. The service currently selects the wide camera: 1x plus digital zoom
+  adjustment, not invented 0.5x/2x optical lenses. No pipeline lens upgrade here.
+- Tap focus uses captureDevicePointConverted(fromLayerPoint:), with a brief local
+  indicator. Existing exposure control remains available after focus. Press response
+  is short, with light capture/mode haptics; Reduce Motion suppresses scaling.
+- Real 3/10-second photo countdown; cancel on loss of activity/interruption,
+  block mode/flip/repeated capture while counting down. Service's existing capture
+  admission and file-finalization guards remain authoritative.
+- Recording indicator starts from AVFoundation's didStartRecording callback.
+  Preparation says Starting; finalization says Saving. Capture success and thumbnail
+  reveal require a returned result, not a button tap. Review/retake and Post/Story
+  handoff retain the existing original and cancellation behavior.
+- Settings sheet: grid, photo timer, actual active resolution/frame rate and limits.
+  The current verified pipeline has one video quality (1080p/30 H.264 SDR) and
+  full-resolution quality-prioritized photos, so quality is shown read-only rather
+  than offering fake HD/4K/60fps switches. No new re-encoding path.
+- Gallery uses the existing CaptroPostMediaPicker via system PhotosPicker. The
+  thumbnail queries only already-authorized/limited Photos, off-main, no iCloud
+  download, no requestAuthorization call. Unavailable thumbnail uses a real picker
+  button with an icon. Import failure is explicit; no automatic publication.
+
+Files changed
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroCameraNativeView.swift
+ios_native/MIRA/Sources/MIRANative/Services/CaptroCameraCaptureService.swift
+ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift (Capture-only tab colors)
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroDesignQualityTestView.swift (test host colors)
+ios_native/MIRA/Tests/MIRANativeTests/CaptroCameraCaptureTests.swift
+ios_native/MIRA/LayoutUITests/CaptureCameraTests.swift
+backend-cf/tests/capture_assistant_guard.test.mjs
+backend-cf/tests/scan_verification.test.mjs
+backend-cf/tests/captro_media_post_retirement.test.mjs
+
+Executed locally
+git diff --check: pass.
+node --test backend-cf/tests/capture_assistant_guard.test.mjs: 6 passed.
+From backend-cf: node --experimental-strip-types --test --test-reporter=tap tests/*.test.mjs
+Final result: 336 passed, 0 failed, 0 skipped; 15544.4 ms.
+Initial full runs exposed two obsolete source assertions prohibiting the newly
+requested gallery and requiring an unconditional tab tint. Replaced them with
+explicit system-picker reuse/no-permission-expansion and Capture-only color guards;
+retired receipt/voice/other-screen assertions retained. No test was skipped.
+
+Native validation (not distribution)
+39171933599: native-stamps-validation.yml, camera_carousel=true, iPhone 17 target.
+39171935631: same plus small_review_only=true, iPhone 13 mini target.
+Both source 7496b606. Native tests, recordings and screenshots pending at this
+report revision; inspect completed jobs and actual attachments before acceptance.
+Workflow builds Debug without signing, runs CaptureCameraTests and carousel tests,
+then CaptroStampTests and selected restoration/frame regressions. Exact commands
+are in .github/workflows/native-camera-carousel-validation.yml.
+
+Open acceptance / honest limits
+No physical camera or iPhone attached to this Windows environment. Simulator
+unavailable-camera screenshots are NOT live preview or camera-quality evidence.
+Still require device verification: preview/output framing, focus coordinates at
+corners and rotations, front mirroring, pinch/button sync, flash vs torch, timers
+and cancellation, rapid capture/start/stop, interruption/background finalization,
+low storage/heat, limited/denied Photos and microphone, photo/video handoff and
+original-file properties. Test large Dynamic Type, VoiceOver and Reduce Motion.
+App manifest supports portrait UI only; landscape UI is not newly enabled.
+Physical device orientation behavior remains in the existing capture service.
+No claim of physical-device scrolling, capture quality or recording reliability
+is warranted from the source checks or backend tests.
+
+Primary API reference
+https://developer.apple.com/documentation/avfoundation/avcapturevideopreviewlayer/capturedevicepointconverted(fromlayerpoint:)
