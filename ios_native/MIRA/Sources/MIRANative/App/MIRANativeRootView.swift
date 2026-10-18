@@ -394,8 +394,8 @@ public struct MIRANativeRootView: View {
         .tag(MIRATab.profile)
         .tabItem { Label("Me", systemImage: "person.fill") }
     }
-    .tint(MIRATheme.Color.textPrimary)
-    .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
+    .tint(selectedTab == .scan && cameraDarkChrome ? Color.white : MIRATheme.Color.textPrimary)
+    .toolbarBackground(selectedTab == .scan && cameraDarkChrome ? Color.black : MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .background(MIRATheme.Color.appBackground)
     .onChange(of: selectedTab) { _, tab in

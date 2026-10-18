@@ -13,7 +13,7 @@ final class CaptureCameraTests: XCTestCase {
     attachment.name = label + "-simulator-not-camera-quality"
     attachment.lifetime = .keepAlways; add(attachment)
   }
-  func testUnavailableCameraHasNoReceiptOrLibraryEntry() {
+  func testUnavailableCameraHasNoReceiptAndOffersSystemPhotoPicker() {
     let app = launch(review: false)
     XCTAssertTrue(app.buttons["capture.mode.photo"].waitForExistence(timeout: 15))
     XCTAssertTrue(app.buttons["capture.mode.video"].exists)
@@ -28,7 +28,31 @@ final class CaptureCameraTests: XCTestCase {
     XCTAssertFalse(app.buttons["Scan a receipt"].exists)
     XCTAssertFalse(app.buttons["Choose photo"].exists)
     XCTAssertFalse(app.buttons["Import document"].exists)
+    XCTAssertTrue(app.buttons["capture.library"].isHittable)
+    XCTAssertTrue(app.buttons["capture.flash"].exists)
+    XCTAssertFalse(app.buttons["capture.flash"].isEnabled)
+    let mode = app.buttons["capture.mode.photo"]
+    XCTAssertLessThan(mode.frame.maxY, app.buttons["capture.shutter"].frame.minY)
+    XCTAssertGreaterThan(mode.frame.minY, app.buttons["capture.options"].frame.maxY)
     capture(app, "camera-unavailable-state")
+  }
+  func testCameraSettingsAndModeRemainUsableWithoutCameraHardware() {
+    let app = launch(review: false)
+    XCTAssertTrue(app.buttons["capture.options"].waitForExistence(timeout: 15))
+    let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    let deny = springboard.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Don’t Allow", "Don't Allow")).firstMatch
+    if deny.waitForExistence(timeout: 5) { deny.tap() }
+    XCTAssertTrue(app.staticTexts["capture.unavailable"].firstMatch.waitForExistence(timeout: 10))
+    app.buttons["capture.options"].tap()
+    XCTAssertTrue(app.switches["capture.grid"].waitForExistence(timeout: 5))
+    app.switches["capture.grid"].tap()
+    XCTAssertTrue(app.descendants(matching: .any)["capture.timer"].firstMatch.exists)
+    capture(app, "camera-compact-settings")
+    app.buttons["Done"].tap()
+    app.buttons["capture.mode.video"].tap()
+    XCTAssertTrue(app.buttons["capture.mode.video"].isSelected)
+    XCTAssertFalse(app.buttons["capture.shutter"].isEnabled)
+    capture(app, "camera-video-unavailable-not-fake-preview")
   }
   func testReviewEnhanceCompareAndComposerCancellationKeepsCapture() {
     let app = launch(review: true)

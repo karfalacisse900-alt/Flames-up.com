@@ -22,7 +22,13 @@ test('Capture opens the live native camera and does not reintroduce receipt or v
   assert.match(capture, /CaptroLiveCameraPreview\(session: camera.session/);
   assert.match(captureService, /AVCapturePhotoOutput\(\)/);
   assert.match(captureService, /AVCaptureMovieFileOutput\(\)/);
-  assert.doesNotMatch(capture, /CaptroScanView|CaptroReceiptCameraView|CaptroCaptureAssistantView|PhotosPicker|fileImporter|hubMode\(/);
+  assert.doesNotMatch(capture, /CaptroScanView|CaptroReceiptCameraView|CaptroCaptureAssistantView|fileImporter|hubMode\(/);
+  // Capture now explicitly supports the system picker; never expand permission
+  // merely to fill the gallery thumbnail or introduce a second media importer.
+  assert.match(capture, /\.photosPicker\(isPresented: \$showLibrary/);
+  assert.match(capture, /CaptroPostMediaPicker.load\(item\)/);
+  assert.match(capture, /authorization == \.authorized \|\| authorization == \.limited/);
+  assert.doesNotMatch(capture, /PHPhotoLibrary.requestAuthorization|requestAuthorization\(for:/);
   assert.doesNotMatch(capture, /Looking for documents|Choose photo|Import document|Upload receipt/);
 });
 

@@ -5,6 +5,16 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCameraCaptureTests: XCTestCase {
+  func testQualityLabelUsesConfiguredFormatAndNeverInventsDefaultResolution() {
+    XCTAssertEqual(CaptroCameraPolicy.videoFormatLabel(dimensions: CMVideoDimensions(width: 1920, height: 1080),
+      frameDuration: CMTime(value: 1, timescale: 30)), "1080p · 30 FPS")
+    XCTAssertEqual(CaptroCameraPolicy.videoFormatLabel(dimensions: CMVideoDimensions(width: 1280, height: 720),
+      frameDuration: CMTime(value: 1, timescale: 24)), "720p · 24 FPS")
+    XCTAssertEqual(CaptroCameraPolicy.videoFormatLabel(dimensions: CMVideoDimensions(width: 0, height: 0),
+      frameDuration: .invalid), "Not configured")
+    XCTAssertEqual(CaptroCameraPolicy.videoFormatLabel(dimensions: CMVideoDimensions(width: 1920, height: 1080),
+      frameDuration: .zero), "Not configured")
+  }
   func testExplicitCancelRejectsLateCapturedMediaAndRepeatedCancellation() {
     var delivery = CaptroCameraDeliveryGate()
     XCTAssertTrue(delivery.acceptsResult)

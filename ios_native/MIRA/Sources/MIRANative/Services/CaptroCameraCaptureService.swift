@@ -24,7 +24,9 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
   @Published private(set) var zoomRange: ClosedRange<CGFloat> = 1...1
   @Published private(set) var lensZooms: [CGFloat] = [1]
   @Published private(set) var recordingSeconds: TimeInterval = 0
-  @Published private(set) var videoQualityLabel = "1080p · 30 FPS"
+  @Published private(set) var videoQualityLabel = "Not configured"
+  @Published private(set) var photoQualityLabel = "Not configured"
+  @Published private(set) var isRecordingStarted = false
   @Published private(set) var isFrontCamera = false
   @Published private(set) var hasFlash = false
   @Published private(set) var hasTorch = false
@@ -444,6 +446,7 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
   private func captureVideo() {
     guard ProcessInfo.processInfo.thermalState != .critical else { fail("iPhone needs to cool down before recording."); return }
     transition(.recording)
+    publish { $0.isRecordingStarted = false }
     captureRetention = self
     beginFinalizationProtection()
     captureStartedAt = ProcessInfo.processInfo.systemUptime
@@ -498,11 +501,18 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
     let torch = device.hasTorch
     let front = device.position == .front
     let exposure = device.exposureTargetBias
+    let photoDimensions = photoOutput.maxPhotoDimensions
+    let photoLabel = "\(photoDimensions.width) × \(photoDimensions.height)"
+    let videoDimensions = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+    let videoLabel = CaptroCameraPolicy.videoFormatLabel(dimensions: videoDimensions, frameDuration: device.activeVideoMinFrameDuration)
+    let videoMode = captureMode == .video
     publish {
       $0.zoom = zoom; $0.zoomRange = range; $0.lensZooms = [1]
       $0.hasFlash = flash; $0.hasTorch = torch; $0.isFrontCamera = front
       $0.previewAspectRatio = ratio; $0.exposureBias = exposure
       $0.previewOrientation = resolvedOrientation
+      $0.photoQualityLabel = photoLabel
+      $0.videoQualityLabel = videoMode ? videoLabel : "Not configured"
     }
   }
 
@@ -529,7 +539,7 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
   private func transition(_ value: State) { operation = value; publish { $0.state = value } }
   private func fail(_ message: String) {
     applyTorch(false); stopSession(); transition(.failed)
-    publish { $0.errorMessage = message }
+    publish { $0.errorMessage = message; $0.isRecordingStarted = false }
     endFinalizationProtection()
     captureRetention = nil
   }
@@ -667,6 +677,7 @@ extension CaptroCameraCaptureService: AVCapturePhotoCaptureDelegate, AVCaptureFi
   func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
     queue.async { [weak self] in
       guard let self, self.movieURL == fileURL else { return }
+      self.publish { $0.isRecordingStarted = true }
 #if DEBUG
       print("CaptroCamera video_started elapsed_ms=\(Int((ProcessInfo.processInfo.systemUptime - self.captureStartedAt) * 1000)) main=\(Thread.isMainThread)")
 #endif
@@ -677,6 +688,7 @@ extension CaptroCameraCaptureService: AVCapturePhotoCaptureDelegate, AVCaptureFi
   func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo fileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
     queue.async { [weak self] in
       guard let self, self.movieURL == fileURL else { return }
+      self.publish { $0.isRecordingStarted = false }
       self.recordingTimer?.cancel(); self.recordingTimer = nil
       self.movieURL = nil
       self.transition(.finalizing)
@@ -703,6 +715,12 @@ extension CaptroCameraCaptureService: AVCapturePhotoCaptureDelegate, AVCaptureFi
 }
 
 enum CaptroCameraPolicy {
+  static func videoFormatLabel(dimensions: CMVideoDimensions, frameDuration: CMTime) -> String {
+    let seconds = frameDuration.seconds
+    guard dimensions.width > 0, dimensions.height > 0, seconds.isFinite, seconds > 0,
+          (1...240).contains(1 / seconds) else { return "Not configured" }
+    return "\(min(dimensions.width, dimensions.height))p · \(Int((1 / seconds).rounded())) FPS"
+  }
   static let minimumFreeBytes: Int64 = 50_000_000
   static func canBeginCapture(state: CaptroCameraCaptureService.State, wantsActive: Bool, running: Bool, hasResult: Bool) -> Bool {
     state == .ready && wantsActive && running && !hasResult

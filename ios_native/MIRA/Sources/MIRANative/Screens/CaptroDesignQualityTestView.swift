@@ -115,8 +115,8 @@ private struct CaptroCameraTabReviewHost: View {
         .tag(1).tabItem { Label("Capture", systemImage: "viewfinder") }
       Text("Profile test destination").tag(2).tabItem { Label("Me", systemImage: "person.fill") }
     }
-    .tint(MIRATheme.Color.textPrimary)
-    .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
+    .tint(selection == 1 ? Color.white : MIRATheme.Color.textPrimary)
+    .toolbarBackground(selection == 1 ? Color.black : MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
   }
 }
