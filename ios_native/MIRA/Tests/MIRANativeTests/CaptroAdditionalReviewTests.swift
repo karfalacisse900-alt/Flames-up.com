@@ -2,6 +2,26 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroAdditionalReviewTests: XCTestCase {
+  func testProfileLinksValidateOnlyCanonicalAppRoutes() throws {
+    let url = try XCTUnwrap(CaptroProfileLink.url(userID: "owner-123"))
+    XCTAssertEqual(CaptroProfileLink.parse(url)?.id, "owner-123")
+    for value in ["captro://profile/a/b", "captro://profile/../b", "https://evil.invalid/profile/a", "captro://profile/a?token=secret", "captro://profile/a#b"] {
+      XCTAssertNil(CaptroProfileLink.parse(try XCTUnwrap(URL(string: value))))
+    }
+    XCTAssertNil(CaptroProfileLink.url(userID: "../admin"))
+    XCTAssertNil(CaptroProfileLink.url(userID: ""))
+  }
+
+  func testOptionalProfileFieldsDecodeWithoutInventingCountsOrPendingRequests() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let user = try decoder.decode(MIRAUser.self, from: Data(#"{"id":"private","privacy_locked":true,"follow_pending":true}"#.utf8))
+    XCTAssertNil(user.followersCount)
+    XCTAssertNil(user.openTo)
+    XCTAssertEqual(user.followPending, true)
+    XCTAssertEqual(user.privacyLocked, true)
+    let old = try decoder.decode(MIRAUser.self, from: Data(#"{"id":"old"}"#.utf8))
+    XCTAssertNil(old.followPending)
+  }
   func testExactCurrencyParsingAndSupportedPrecision() {
     let us = Locale(identifier: "en_US")
     XCTAssertEqual(CaptroMoney.parse("10.00", currency: "USD", locale: us), 1000)

@@ -20,6 +20,12 @@ final class ProfileNativeModel: ObservableObject {
   @Published private(set) var hasLoadedActivity = false
   @Published private(set) var activityError: String?
   @Published var profileError: String?
+  @Published var showcase = CaptroProfileShowcase()
+  @Published var showcaseError: String?
+  @Published private(set) var hasLoadedProfile = false
+  @Published private(set) var canLoadMore = false
+  @Published private(set) var isLoadingMore = false
+  private var nextOffset = 0
   let api: MIRAAPIClient
   private let userCacheKey = "native.profile.me.v5"
   private var isLoadingFreshProfile = false
@@ -47,6 +53,8 @@ final class ProfileNativeModel: ObservableObject {
     receiptSubmissions = []
     commerceDashboard = nil
     profileError = nil
+    showcase = CaptroProfileShowcase(); showcaseError = nil
+    hasLoadedProfile = false; canLoadMore = false; nextOffset = 0
   }
 
   func requestRefresh() {
@@ -71,10 +79,12 @@ final class ProfileNativeModel: ObservableObject {
   func load() async {
     guard !isLoadingFreshProfile else { return }
     isLoadingFreshProfile = true
+    profileError = nil
     lastRevalidationAttemptAt = Date()
     let generation = loadGeneration
     defer {
       if loadGeneration == generation {
+        hasLoadedProfile = true
         isLoadingFreshProfile = false
         if refreshRequested {
           refreshRequested = false
@@ -94,6 +104,7 @@ final class ProfileNativeModel: ObservableObject {
       let fetchedPosts: [MIRAPost]? = try? await api.get("/users/\(knownUserID)/posts")
       guard loadGeneration == generation else { return }
       if let fetchedPosts {
+        nextOffset = fetchedPosts.count; canLoadMore = fetchedPosts.count == 60
         let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
           existing: posts,
           fresh: profileVisiblePosts(fetchedPosts),
@@ -103,11 +114,12 @@ final class ProfileNativeModel: ObservableObject {
         if posts != mergedPosts { posts = mergedPosts }
         await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: knownUserID)
         await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey(for: knownUserID))
-      }
+      } else { profileError = "Could not refresh your posts. Your saved view is unchanged." }
     }
 
-    guard let freshUser = await freshUserRequest,
-          loadGeneration == generation else { return }
+    let freshResult = await freshUserRequest
+    guard loadGeneration == generation else { return }
+    guard let freshUser = freshResult else { profileError = "Could not refresh your profile. Try again."; return }
     if let knownUserID, knownUserID != freshUser.id {
       resetForAccountChange()
       profileError = "Your session changed. Please sign in again."
@@ -120,6 +132,7 @@ final class ProfileNativeModel: ObservableObject {
 
     if knownUserID == nil {
       if let fetchedPosts: [MIRAPost] = try? await api.get("/users/\(freshUser.id)/posts") {
+        nextOffset = fetchedPosts.count; canLoadMore = fetchedPosts.count == 60
         let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
           existing: posts,
           fresh: profileVisiblePosts(fetchedPosts),
@@ -129,10 +142,48 @@ final class ProfileNativeModel: ObservableObject {
         if posts != mergedPosts { posts = mergedPosts }
         await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: freshUser.id)
         await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey(for: freshUser.id))
-      }
+      } else { profileError = "Could not load your posts. Try again." }
     }
     guard loadGeneration == generation else { return }
+    await loadShowcase()
   }
+
+  func loadShowcase() async {
+    guard let id = user?.id else { return }
+    let generation = loadGeneration
+    do {
+      let fresh: CaptroProfileShowcase = try await api.get("/users/\(id)/showcase")
+      guard generation == loadGeneration else { return }
+      showcase = fresh; showcaseError = nil
+    } catch { if generation == loadGeneration { showcaseError = "Could not load pinned items and clubs." } }
+  }
+
+  func loadMore() async {
+    guard let id = user?.id, canLoadMore, !isLoadingMore, !isLoadingFreshProfile else { return }
+    let generation = loadGeneration
+    isLoadingMore = true
+    defer { if generation == loadGeneration { isLoadingMore = false } }
+    do {
+      let page: [MIRAPost] = try await api.get("/users/\(id)/posts?skip=\(nextOffset)&limit=60")
+      guard generation == loadGeneration, !Task.isCancelled else { return }
+      let ids = Set(posts.map(\.id))
+      posts += profileVisiblePosts(page).filter { !ids.contains($0.id) }
+      nextOffset += page.count; canLoadMore = page.count == 60; profileError = nil
+    } catch { if generation == loadGeneration { profileError = "Could not load more posts. Try again." } }
+  }
+
+  func displayClub(_ post: MIRAPost) async {
+    guard !isUpdatingShowcase else { return }
+    isUpdatingShowcase = true
+    defer { isUpdatingShowcase = false }
+    var ids = showcase.clubs.map(\.id)
+    if ids.contains(post.id) { ids.removeAll { $0 == post.id } } else { ids.append(post.id) }
+    do {
+      let _: EmptyResponse = try await api.put("/users/me/showcase", body: ProfileClubSelectionBody(club_post_ids: ids))
+      await loadShowcase()
+    } catch { profileError = "Could not update displayed clubs. Try again." }
+  }
+  @Published private(set) var isUpdatingShowcase = false
 
   func loadActivity(forceRefresh: Bool = false) async {
     guard !isLoadingActivity else { return }
@@ -282,26 +333,15 @@ final class ProfileNativeModel: ObservableObject {
   }
 
   func togglePin(_ post: MIRAPost) async {
-    guard let user else { return }
-    guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
-    let previous = posts[index]
-    let shouldPin = !previous.isPinned
-    posts[index] = previous.updatingPinned(at: shouldPin ? ISO8601DateFormatter().string(from: Date()) : nil)
+    guard user != nil, !isUpdatingShowcase else { return }
+    isUpdatingShowcase = true
+    defer { isUpdatingShowcase = false }
+    let shouldPin = showcase.pinned?.id != post.id
     do {
-      let updated: MIRAPost = try await api.put("/posts/\(post.id)/pin", body: PostPinBody(pinned: shouldPin))
-      if let currentIndex = posts.firstIndex(where: { $0.id == post.id }) {
-        posts[currentIndex] = updated
-      }
-      posts.sort { lhs, rhs in
-        if lhs.isPinned != rhs.isPinned { return lhs.isPinned && !rhs.isPinned }
-        return (lhs.createdAt ?? "") > (rhs.createdAt ?? "")
-      }
-      await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: user.id)
-      await MIRALocalJSONCache.save(posts, key: postsCacheKey(for: user.id))
-      NotificationCenter.default.post(name: .captroPostDetailsUpdated, object: updated)
+      let _: EmptyResponse = try await api.put("/users/me/showcase", body: ProfilePinSelectionBody(pinned_post_id: shouldPin ? post.id : ""))
+      await loadShowcase()
       profileError = nil
     } catch {
-      posts[index] = previous
       profileError = "Could not update pinned post."
     }
   }
@@ -324,11 +364,16 @@ final class ProfileNativeModel: ObservableObject {
 private struct PostVisibilityUpdateBody: Encodable {
   let visibility: String
 }
+private struct ProfilePinSelectionBody: Encodable { let pinned_post_id: String }
+private struct ProfileClubSelectionBody: Encodable { let club_post_ids: [String] }
 
 private struct ProfileUpdateBody: Encodable {
   let fullName: String?
   let username: String?
   let profileImage: String?
+  let bio: String
+  let city: String
+  let openTo: String
 }
 
 private struct ProfileUsernameAvailabilityResponse: Decodable {
@@ -357,6 +402,7 @@ private struct ProfileGridSkeleton: View {
 
 public struct ProfileNativeView: View {
   @StateObject private var model: ProfileNativeModel
+  @State private var selectedSection: CaptroProfileSection = .moments
   @State private var showEditProfile = false
   @State private var queuedProfileReport: MIRAComment?
   @State private var queuedPostDeletion = false
@@ -402,16 +448,47 @@ public struct ProfileNativeView: View {
       ScrollView {
         VStack(spacing: MIRATheme.Space.lg) {
           profileHeader
-          NavigationLink(destination: CaptroFavoritesView(api: model.api)) {
-            Label("Favorites", systemImage: "star").font(.subheadline)
-              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-              .padding(.horizontal, MIRATheme.Space.md)
-          }.accessibilityIdentifier("profile.favorites")
-          if model.posts.isEmpty && model.user == nil {
+          if let pinned = model.showcase.pinned {
+            NavigationLink(destination: DiscoverPostDetailNativeView(post: pinned, api: model.api).miraHideTabBarOnAppear()) {
+              CaptroProfileItemRow(post: pinned, pinned: true)
+            }.buttonStyle(.plain).padding(.horizontal, 20)
+              .contextMenu { Button("Unpin") { Task { await model.togglePin(pinned) } } }
+          }
+          CaptroProfileTabs(selection: $selectedSection)
+          if !model.hasLoadedProfile && model.posts.isEmpty {
+            ProgressView("Loading profile…").frame(minHeight: 100)
+          } else if model.profileError != nil && model.posts.isEmpty {
+            EmptyView() // The retry/error below is not an empty-success state.
+          } else if selectedSection == .clubs {
+            if let error = model.showcaseError {
+              Text(error).font(.subheadline)
+              Button("Try again") { Task { await model.loadShowcase() } }
+            } else {
+              ForEach(model.showcase.clubs) { post in
+                NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api)) {
+                  CaptroProfileItemRow(post: post)
+                }.buttonStyle(.plain).padding(.horizontal, 20)
+              }
+              if model.showcase.clubs.isEmpty { Text("No clubs displayed").foregroundStyle(.secondary) }
+            }
+            NavigationLink("Choose clubs to display") {
+              List(model.posts.filter { $0.captroEditorialCardContent.type == .club }) { post in
+                Button { Task { await model.displayClub(post) } } label: {
+                  HStack {
+                    Text(post.captroEditorialCardContent.title)
+                    Spacer()
+                    if model.showcase.clubs.contains(where: { $0.id == post.id }) { Image(systemName: "checkmark") }
+                  }
+                }.disabled(model.isUpdatingShowcase)
+              }.navigationTitle("Displayed clubs")
+            }.frame(minHeight: 44)
+          } else if selectedSection == .plans {
+            CaptroProfilePlans(posts: model.posts, api: model.api, onPin: { post in Task { await model.togglePin(post) } })
+          } else if model.posts.isEmpty && model.user == nil && !model.hasLoadedProfile {
             ProfileGridSkeleton()
           } else {
             LazyVGrid(columns: postGridColumns, spacing: 1) {
-              ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost }) { post in
+              ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost && !$0.isProfilePlan && $0.captroEditorialCardContent.type != .club }) { post in
                 profilePostTile(post)
               }
             }
@@ -423,16 +500,26 @@ public struct ProfileNativeView: View {
               .font(.system(size: 13, weight: .semibold))
               .foregroundStyle(.red)
               .padding(.horizontal, MIRATheme.Space.md)
+            Button("Try again") { Task { await model.load() } }.frame(minHeight: 44)
+          }
+          if model.canLoadMore {
+            Button(model.isLoadingMore ? "Loading…" : "Load more") { Task { await model.loadMore() } }
+              .disabled(model.isLoadingMore).frame(minHeight: 44)
           }
         }
       }
-      .background(MIRATheme.Color.appBackground)
+      .background(Color(uiColor: .systemBackground))
       .miraScrollFeel(.feed)
+      .refreshable { await model.load() }
       .miraScreenEnter(.tab)
-      .navigationTitle("")
+      .navigationTitle("Profile")
+      .navigationBarTitleDisplayMode(.inline)
       .toolbar(profileTabBarVisibility, for: .tabBar)
       .toolbar {
         ToolbarItemGroup(placement: .topBarTrailing) {
+          NavigationLink(destination: CaptroFavoritesView(api: model.api)) {
+            Image(systemName: "bookmark").frame(width: 44, height: 44)
+          }.accessibilityLabel("Saved").accessibilityIdentifier("profile.favorites")
           ProfileToolbarDestinationButton(
             systemImage: "bubble.left.and.bubble.right",
             accessibilityLabel: "Chats",
@@ -626,7 +713,7 @@ public struct ProfileNativeView: View {
 
   private func presentProfilePostActions(_ post: MIRAPost) {
     CaptroHaptics.light()
-    profilePostActionTarget = post
+    profilePostActionTarget = post.updatingPinned(at: model.showcase.pinned?.id == post.id ? ISO8601DateFormatter().string(from: Date()) : nil)
     withAnimation(CaptroMotion.actionModalAnimation(reduceMotion: reduceMotion)) {
       isProfilePostActionModalPresented = true
     }
@@ -641,48 +728,21 @@ public struct ProfileNativeView: View {
   }
 
   private var profileHeader: some View {
-    VStack(alignment: .leading, spacing: 20) {
-      HStack(alignment: .center, spacing: 16) {
-        RemoteAvatar(url: model.user?.profileImage, size: 64)
-        VStack(alignment: .leading, spacing: 4) {
-          Text(profileTitle)
-            .font(.title2.weight(.semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .fixedSize(horizontal: false, vertical: true)
-          if let username = model.user?.username, !username.isEmpty {
-            Text("@\(MIRAUsernameRules.normalized(username))")
-              .font(.subheadline)
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        Spacer(minLength: 0)
-      }
-      if let bio = model.user?.bio?.trimmingCharacters(in: .whitespacesAndNewlines), !bio.isEmpty {
-        Text(bio).font(.body).foregroundStyle(MIRATheme.Color.textSecondary)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-      let metricsLayout = profileTextSize.isAccessibilitySize
-        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-        : AnyLayout(HStackLayout(spacing: 12))
-      metricsLayout {
-        profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Followers", model.user?.followersCount ?? 0)
-        profileMetric("Following", model.user?.followingCount ?? 0)
-      }
+    VStack(alignment: .leading, spacing: 18) {
+      CaptroProfileIntroduction(user: model.user)
+      HStack(spacing: 10) {
       Button { showEditProfile = true } label: {
         Text("Edit profile")
-          .font(.subheadline.weight(.medium))
-          .frame(maxWidth: .infinity, minHeight: 44)
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 10))
-          .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(MIRATheme.Color.hairline, lineWidth: 0.5))
       }
-      .buttonStyle(.plain)
+      .buttonStyle(CaptroProfileActionStyle(primary: true))
       .accessibilityIdentifier("profile.edit")
-      Text("Creations")
-        .font(.headline).foregroundStyle(MIRATheme.Color.textPrimary)
-        .accessibilityAddTraits(.isHeader)
+      .disabled(model.user == nil)
+      if let id = model.user?.id, let link = CaptroProfileLink.url(userID: id) {
+        ShareLink(item: link) { Text("Share profile") }.buttonStyle(CaptroProfileActionStyle())
+      }
+      }
+      NavigationLink("Follow requests") { CaptroFollowRequestsView(api: model.api) }
+        .font(.subheadline).frame(minHeight: 44)
     }
     .padding(.horizontal, 20)
     .padding(.top, 12)
@@ -1016,6 +1076,14 @@ final class UserProfileNativeModel: ObservableObject {
   @Published var isBlockedBy = false
   @Published var isLoading = false
   @Published var errorMessage: String?
+  @Published var showcase = CaptroProfileShowcase()
+  @Published var requiresSignIn = false
+  @Published var followPending = false
+  @Published private(set) var isUpdatingRelationship = false
+  @Published private(set) var canLoadMore = false
+  @Published private(set) var isLoadingMore = false
+  private var generation = 0
+  private var nextOffset = 0
   let userId: String
   let api: MIRAAPIClient
   private var userCacheKey: String { "native.profile.user.\(userId).v5" }
@@ -1027,40 +1095,41 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func load() async {
-    if user == nil {
-      var cachedUser = await MIRAAppCacheStore.shared.loadViewedProfile(userId: userId)
-      if cachedUser == nil {
-        cachedUser = await MIRALocalJSONCache.load(MIRAUser.self, key: userCacheKey, maxAge: 60 * 60 * 24 * 90)
-      }
-      if let cachedUser {
-        apply(user: cachedUser)
-        var cachedPosts = await MIRAAppCacheStore.shared.loadProfilePosts(userId: userId)
-        if cachedPosts == nil {
-          cachedPosts = await MIRALocalJSONCache.load([MIRAPost].self, key: postsCacheKey, maxAge: 60 * 60 * 24 * 90)
-        }
-        posts = await MIRAPostEngagementSync.apply(to: profileVisiblePosts(cachedPosts ?? posts))
-      }
+    generation += 1
+    let request = generation
+    isLoading = true; isLoadingMore = false; errorMessage = nil; canLoadMore = false; requiresSignIn = false
+    // Visitor caches are never authority for current privacy/block state.
+    posts = []; user = nil; nextOffset = 0; showcase = CaptroProfileShowcase()
+    defer { if request == generation { isLoading = false } }
+    do {
+      let fresh: MIRAUser = try await api.get("/users/\(userId)")
+      guard request == generation, !Task.isCancelled else { return }
+      apply(user: fresh)
+      guard fresh.privacyLocked != true, !isBlocked, !isBlockedBy else { return }
+      let page: [MIRAPost] = try await api.get("/users/\(userId)/posts?limit=60&skip=0")
+      guard request == generation, !Task.isCancelled else { return }
+      posts = profileVisiblePosts(page); nextOffset = page.count; canLoadMore = page.count == 60
+      let selected: CaptroProfileShowcase = try await api.get("/users/\(userId)/showcase")
+      guard request == generation, !Task.isCancelled else { return }
+      showcase = selected
+    } catch {
+      guard request == generation, !Task.isCancelled else { return }
+      if let apiError = error as? MIRAAPIError, case .server(let status, _, _) = apiError { requiresSignIn = status == 401 }
+      errorMessage = "This profile could not be loaded. Check your connection or sign in, then try again."
     }
+  }
 
-    isLoading = user == nil && posts.isEmpty
-    defer { isLoading = false }
-
-    if let freshUser: MIRAUser = try? await api.get("/users/\(userId)") {
-      apply(user: freshUser)
-      await MIRAAppCacheStore.shared.saveViewedProfile(freshUser, userId: userId)
-      await MIRALocalJSONCache.save(freshUser, key: userCacheKey)
-    }
-    let freshPosts = profileVisiblePosts((try? await api.get("/users/\(userId)/posts")) ?? posts)
-    let mergedPosts = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
-      existing: posts,
-      fresh: freshPosts,
-      maxCount: 120
-    )
-    if posts != mergedPosts {
-      posts = mergedPosts
-    }
-    await MIRAAppCacheStore.shared.saveProfilePosts(mergedPosts, userId: userId)
-    await MIRALocalJSONCache.save(mergedPosts, key: postsCacheKey)
+  func loadMore() async {
+    guard canLoadMore, !isLoadingMore, !isLoading, user?.privacyLocked != true, !isBlocked, !isBlockedBy else { return }
+    let request = generation; isLoadingMore = true
+    defer { if request == generation { isLoadingMore = false } }
+    do {
+      let page: [MIRAPost] = try await api.get("/users/\(userId)/posts?limit=60&skip=\(nextOffset)")
+      guard request == generation, !Task.isCancelled else { return }
+      let existing = Set(posts.map(\.id))
+      posts += profileVisiblePosts(page).filter { !existing.contains($0.id) }
+      nextOffset += page.count; canLoadMore = page.count == 60; errorMessage = nil
+    } catch { if request == generation { errorMessage = "Could not load more posts. Try again." } }
   }
 
   func removePostLocally(id postId: String) async {
@@ -1084,28 +1153,30 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func toggleFollow() async {
-    let previousFollowing = isFollowing
-    let previousFollowers = followersCount
-    let nextFollowing = !isFollowing
-    isFollowing = nextFollowing
-    followersCount = max(0, followersCount + (nextFollowing ? 1 : -1))
+    guard !isUpdatingRelationship, !isBlocked, !isBlockedBy else { return }
+    isUpdatingRelationship = true
+    defer { isUpdatingRelationship = false }
+    let nextFollowing = !(isFollowing || followPending)
     do {
       let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
-      isFollowing = response.following ?? nextFollowing
+      isFollowing = response.following == true
+      followPending = response.followPending == true
       followersCount = response.followersCount ?? followersCount
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: isFollowing, followersCount: followersCount))
+      await load()
     } catch {
-      isFollowing = previousFollowing
-      followersCount = previousFollowers
+      errorMessage = "Could not confirm the follow change. Retry to reconcile your request."
     }
   }
 
   func blockUser() async -> Bool {
     do {
       let _: EmptyResponse? = try await api.post("/users/\(userId)/block", body: EmptyBody())
+      generation += 1; canLoadMore = false
       isBlocked = true
       isFollowing = false
       posts = []
+      showcase = CaptroProfileShowcase()
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: userId, following: false))
       errorMessage = nil
       return true
@@ -1131,6 +1202,7 @@ final class UserProfileNativeModel: ObservableObject {
   private func apply(user freshUser: MIRAUser) {
     user = freshUser
     isFollowing = freshUser.viewerFollowing
+    followPending = freshUser.followPending == true
     followersCount = freshUser.followersCount ?? followersCount
     isBlocked = freshUser.viewerHasBlocked == true
     isBlockedBy = freshUser.viewerBlockedBy == true
@@ -1138,6 +1210,8 @@ final class UserProfileNativeModel: ObservableObject {
 }
 
 public struct UserProfileNativeView: View {
+  @State private var selectedSection: CaptroProfileSection = .moments
+  @Environment(\.scenePhase) private var profileScenePhase
   @State private var queuedCommentReport: MIRAComment?
   @State private var queuedProfileReport = false
   @StateObject private var model: UserProfileNativeModel
@@ -1161,32 +1235,68 @@ public struct UserProfileNativeView: View {
     ScrollView {
       VStack(spacing: MIRATheme.Space.lg) {
         profileHeader
-
+        if let pinned = model.showcase.pinned, model.user?.privacyLocked != true, !model.isBlocked, !model.isBlockedBy {
+          NavigationLink(destination: DiscoverPostDetailNativeView(post: pinned, api: model.api)) {
+            CaptroProfileItemRow(post: pinned, pinned: true)
+          }.buttonStyle(.plain).padding(.horizontal, 20)
+        }
+        CaptroProfileTabs(selection: $selectedSection)
         if model.posts.isEmpty && model.isLoading {
           ProfileGridSkeleton()
+        } else if let error = model.errorMessage {
+          VStack(spacing: 12) {
+            Text(error).font(.subheadline)
+            Button("Try again") { Task { await model.load() } }.frame(minHeight: 44)
+            if model.requiresSignIn {
+              Button("Sign in") { NotificationCenter.default.post(name: .captroProfileSignInRequested, object: nil) }.frame(minHeight: 44)
+            }
+          }.padding(20)
+        } else if model.user?.privacyLocked == true || model.isBlocked || model.isBlockedBy {
+          MIRAEmptyState(title: "Private or unavailable profile", message: "Only authorized content is shown.", systemImage: "lock")
+        } else if selectedSection == .clubs {
+          ForEach(model.showcase.clubs) { post in
+            NavigationLink(destination: DiscoverPostDetailNativeView(post: post, api: model.api)) {
+              CaptroProfileItemRow(post: post)
+            }.buttonStyle(.plain).padding(.horizontal, 20)
+          }
+          if model.showcase.clubs.isEmpty { Text("No clubs displayed").foregroundStyle(.secondary) }
+        } else if selectedSection == .plans {
+          CaptroProfilePlans(posts: model.posts, api: model.api)
         } else if model.posts.isEmpty {
           MIRAEmptyState(title: "No posts yet", message: "This profile has not posted yet.", systemImage: "square.grid.3x3")
             .padding(.horizontal, MIRATheme.Space.md)
         } else {
           LazyVGrid(columns: postGridColumns, spacing: 1) {
-            ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost }) { post in
+            ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost && !$0.isProfilePlan && $0.captroEditorialCardContent.type != .club }) { post in
               userProfilePostTile(post)
             }
           }
           .frame(maxWidth: .infinity, alignment: .center)
           CaptroLegacyPostArchive(posts: model.posts, api: model.api)
         }
+        if model.canLoadMore {
+          Button(model.isLoadingMore ? "Loading…" : "Load more") { Task { await model.loadMore() } }
+            .disabled(model.isLoadingMore).frame(minHeight: 44)
+        }
       }
       .padding(.top, MIRATheme.Space.md)
       .padding(.bottom, MIRATheme.Space.xxl)
     }
-    .background(MIRATheme.Color.appBackground)
+    .background(Color(uiColor: .systemBackground))
     .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
-    .navigationTitle(model.user?.displayName ?? "Profile")
+    .navigationTitle(model.user?.username.map { "@\($0)" } ?? "Profile")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
+    .toolbar { ToolbarItem(placement: .topBarTrailing) { profileSafetyMenu } }
+    .refreshable { await model.load() }
     .task { await model.load() }
+    .onChange(of: profileScenePhase) { _, phase in
+      if phase == .active { Task { await model.load() } }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { _ in
+      Task { await model.load() }
+    }
     .onReceive(NotificationCenter.default.publisher(for: .miraPostWasRemoved)) { notification in
       guard let update = MIRAPostRemovalSync.update(from: notification) else { return }
       Task { await model.removePostLocally(id: update.postId) }
@@ -1270,6 +1380,9 @@ public struct UserProfileNativeView: View {
       }
     }) { dismissOptions in
       MIRAActionModalCard {
+        if let link = CaptroProfileLink.url(userID: model.userId) {
+          ShareLink(item: link) { Label("Share profile", systemImage: "square.and.arrow.up").frame(minHeight: 44) }
+        }
         MIRAActionModalButton(
           title: model.isBlocked ? "Unblock" : "Block",
           systemImage: model.isBlocked ? "hand.raised.slash" : "nosign",
@@ -1350,31 +1463,8 @@ public struct UserProfileNativeView: View {
   }
 
   private var profileHeader: some View {
-    VStack(spacing: MIRATheme.Space.md) {
-      ZStack(alignment: .topTrailing) {
-        RemoteAvatar(url: model.user?.profileImage, size: 92)
-          .frame(maxWidth: .infinity)
-        profileSafetyMenu
-      }
-      VStack(spacing: 4) {
-        Text(profileTitle)
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
-        if let username = model.user?.username, !username.isEmpty {
-          Text("@\(username)")
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textMuted)
-            .lineLimit(1)
-        }
-      }
-
-      HStack(spacing: MIRATheme.Space.xl) {
-        profileMetric("Posts", model.user?.postsCount ?? model.posts.count)
-        profileMetric("Followers", model.followersCount)
-        profileMetric("Following", model.user?.followingCount ?? 0)
-      }
-
+    VStack(alignment: .leading, spacing: 18) {
+      CaptroProfileIntroduction(user: model.user)
       if model.isBlocked {
         profileStatusNotice("You blocked this user. Unblock them to message or follow again.")
       } else if model.isBlockedBy {
@@ -1384,34 +1474,25 @@ public struct UserProfileNativeView: View {
           Button {
             Task { await model.toggleFollow() }
           } label: {
-            Label(model.isFollowing ? "Following" : "Follow", systemImage: model.isFollowing ? "checkmark" : "plus")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(model.isFollowing ? MIRATheme.Color.textPrimary : .white)
-              .frame(maxWidth: .infinity, minHeight: 46)
-              .background(model.isFollowing ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
-              .clipShape(Capsule())
+            Text(model.isFollowing ? "Following" : model.followPending ? "Cancel request" : model.user?.isPrivate == true ? "Request to follow" : "Follow")
           }
-          .buttonStyle(.plain)
+          .buttonStyle(CaptroProfileActionStyle(primary: true))
+          .disabled(model.isUpdatingRelationship || model.user == nil)
+          .accessibilityIdentifier("profile.follow")
 
           Button {
             Task { await openMessageChat() }
           } label: {
-            Label(isOpeningMessage ? "Opening" : "Message", systemImage: isOpeningMessage ? "hourglass" : "message")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(MIRATheme.Color.textPrimary)
-              .frame(maxWidth: .infinity, minHeight: 46)
-              .background(MIRATheme.Color.surfaceSoft)
-              .clipShape(Capsule())
+            Text(isOpeningMessage ? "Opening…" : "Message")
           }
-          .buttonStyle(.plain)
-          .disabled(isOpeningMessage)
+          .buttonStyle(CaptroProfileActionStyle())
+          .disabled(isOpeningMessage || model.user == nil)
         }
       }
     }
-    .padding(MIRATheme.Space.xl)
+    .padding(.horizontal, 20)
+    .padding(.vertical, 12)
     .frame(maxWidth: .infinity)
-    .miraCardSurface()
-    .padding(.horizontal, MIRATheme.Space.md)
   }
 
   private var profileSafetyMenu: some View {
@@ -1426,9 +1507,7 @@ public struct UserProfileNativeView: View {
       Image(systemName: "ellipsis")
         .font(.system(size: 16, weight: .bold))
         .foregroundStyle(MIRATheme.Color.textSecondary)
-        .frame(width: 34, height: 34)
-        .background(MIRATheme.Color.surfaceSoft)
-        .clipShape(Circle())
+        .frame(width: 44, height: 44)
     }
     .buttonStyle(.miraPress)
     .accessibilityLabel("Profile options")
@@ -1646,13 +1725,18 @@ private struct ProfilePostTile: View {
     GeometryReader { proxy in
       let tileWidth = size ?? proxy.size.width
       let geometry = post.mediaGeometry(at: 0)
-      let tileHeight = geometry.size(width: tileWidth).height
+      let tileHeight = tileWidth
       ZStack(alignment: .topTrailing) {
         Group {
           if let media = post.mediaURLs.first {
-            CaptroPostMediaView(url: media, geometry: geometry,
-              size: CGSize(width: tileWidth, height: tileHeight), isVideo: media.isVideoURL,
-              placeholderURL: media.isVideoURL ? post.thumbnailMediaURLs.first : nil, maxPixelSize: 520)
+            if media.isVideoURL {
+              RemoteMediaView(url: post.thumbnailMediaURLs.first ?? "", isVideo: false,
+                contentMode: .fill, maxPixelSize: 420)
+            } else {
+              CaptroPostMediaView(url: media, geometry: geometry,
+                size: CGSize(width: tileWidth, height: tileHeight), maxPixelSize: 420,
+                imageDelivery: post.imageDelivery(at: 0, dataSaver: true))
+            }
           } else {
             MIRATheme.Color.surfaceSoft
           }
@@ -1664,13 +1748,13 @@ private struct ProfilePostTile: View {
       }
       .frame(width: tileWidth, height: tileHeight)
     }
-    .aspectRatio(post.mediaGeometry(at: 0).displayAspectRatio, contentMode: .fit)
+    .aspectRatio(1, contentMode: .fit)
     .contentShape(Rectangle())
   }
 
   @ViewBuilder
   private var statusBadges: some View {
-    if post.isPinned || isPrivate {
+    if post.isPinned || isPrivate || post.mediaURLs.count > 1 || post.mediaURLs.first?.isVideoURL == true {
       HStack(spacing: 5) {
         if post.isPinned {
           profileTileBadge(systemImage: "pin.fill", label: "Pinned post")
@@ -1678,6 +1762,8 @@ private struct ProfilePostTile: View {
         if isPrivate {
           profileTileBadge(systemImage: "lock.fill", label: "Private post")
         }
+        if post.mediaURLs.count > 1 { profileTileBadge(systemImage: "square.on.square.fill", label: "Carousel") }
+        else if post.mediaURLs.first?.isVideoURL == true { profileTileBadge(systemImage: "play.fill", label: "Video") }
       }
       .padding(.top, 10)
       .padding(.trailing, 10)
@@ -1761,6 +1847,12 @@ struct EditProfileNativeView: View {
   @State private var username: String
   @State private var profileImage: String?
   @State private var originalUsername: String
+  @State private var bio: String
+  @State private var city: String
+  @State private var openTo: String
+  @State private var originalBio: String
+  @State private var originalCity: String
+  @State private var originalOpenTo: String
   @State private var pickerItem: PhotosPickerItem?
   @State private var pickedImageData: Data?
   @State private var pickedUIImage: UIImage?
@@ -1779,6 +1871,12 @@ struct EditProfileNativeView: View {
     _username = State(initialValue: user?.username ?? "")
     _profileImage = State(initialValue: user?.profileImage)
     _originalUsername = State(initialValue: MIRAUsernameRules.normalized(user?.username))
+    _bio = State(initialValue: user?.bio ?? "")
+    _city = State(initialValue: user?.city ?? "")
+    _openTo = State(initialValue: user?.openTo ?? "")
+    _originalBio = State(initialValue: user?.bio ?? "")
+    _originalCity = State(initialValue: user?.city ?? "")
+    _originalOpenTo = State(initialValue: user?.openTo ?? "")
   }
 
   var body: some View {
@@ -1800,6 +1898,9 @@ struct EditProfileNativeView: View {
           VStack(spacing: MIRATheme.Space.md) {
             editField(title: "Name", text: $fullName, placeholder: "Your name")
             editField(title: "Username", text: $username, placeholder: "username")
+            editField(title: "Bio", text: $bio, placeholder: "A little about you")
+            editField(title: "City", text: $city, placeholder: "Optional city, not an exact address")
+            editField(title: "Open to", text: $openTo, placeholder: "Photo walks · Creative projects")
             Text("Use 3-20 lowercase letters, numbers, underscores, or periods. Do not include @.")
               .font(.system(size: 12, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textMuted)
@@ -1871,6 +1972,7 @@ struct EditProfileNativeView: View {
     fullName != originalFullName
       || MIRAUsernameRules.normalized(username) != originalUsername
       || pickedImageData != nil
+      || bio != originalBio || city != originalCity || openTo != originalOpenTo
   }
 
   @ViewBuilder
@@ -1906,6 +2008,10 @@ struct EditProfileNativeView: View {
 
   private func save() async {
     guard !isSaving else { return }
+    guard bio.count <= 500, city.count <= 160, openTo.count <= 120 else {
+      errorMessage = "Use up to 500 characters for your bio, 160 for city and 120 for Open to."
+      return
+    }
     let cleanName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
     let cleanUsername = MIRAUsernameRules.normalized(username)
     let usernameToSave = cleanUsername.isEmpty ? nil : cleanUsername
@@ -1937,9 +2043,12 @@ struct EditProfileNativeView: View {
       let updated: MIRAUser = try await api.put(
         "/users/me",
         body: ProfileUpdateBody(
-          fullName: cleanName.isEmpty ? nil : cleanName,
+          fullName: cleanName,
           username: usernameToSave,
-          profileImage: uploadedImage
+          profileImage: uploadedImage,
+          bio: bio.trimmingCharacters(in: .whitespacesAndNewlines),
+          city: city.trimmingCharacters(in: .whitespacesAndNewlines),
+          openTo: openTo.trimmingCharacters(in: .whitespacesAndNewlines)
         )
       )
       if let freshProfileImage = updated.profileImage, !freshProfileImage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2012,6 +2121,10 @@ struct EditProfileNativeView: View {
     guard user == nil, !didHydrateMissingUser else { return }
     didHydrateMissingUser = true
     guard let me: MIRAUser = try? await api.get("/auth/me") else { return }
+    originalBio = me.bio ?? ""; originalCity = me.city ?? ""; originalOpenTo = me.openTo ?? ""
+    if bio.isEmpty { bio = originalBio }
+    if city.isEmpty { city = originalCity }
+    if openTo.isEmpty { openTo = originalOpenTo }
     originalFullName = me.fullName ?? ""
     if fullName.isEmpty {
       fullName = me.fullName ?? ""

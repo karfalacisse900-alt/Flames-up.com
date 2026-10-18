@@ -29,7 +29,7 @@ test('legacy text has no Home card or empty Profile tile; stored records remain 
   assert.match(feed, /pageOffsets\[section\] = skip \+ loaded\.count/);
   assert.match(feed, /isLastVisible/);
   const profile = read('Screens/ProfileChatVerificationStudio.swift');
-  assert.match(profile, /ForEach\(model.posts.filter \{ !\$0.isLegacyOrdinaryTextPost \}\)/);
+  assert.match(profile, /ForEach\(model.posts.filter \{ !\$0.isLegacyOrdinaryTextPost(?: && [^}]+)? \}\)/);
   assert.match(profile, /CaptroLegacyPostArchive\(posts: model.posts, api: model.api\)/);
   assert.match(profile, /DisclosureGroup\("Earlier posts/);
   assert.match(profile, /PostDetailNativeView\(post: post, api: api\)/);

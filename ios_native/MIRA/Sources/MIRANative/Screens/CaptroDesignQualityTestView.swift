@@ -31,6 +31,8 @@ public struct CaptroDesignQualityTestView: View {
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-composer") {
         CreatePostNativeView(api: CaptroComposerTestAPI.make(), initialCaption:
           ProcessInfo.processInfo.arguments.contains("--captro-composer-legacy-draft") ? "Keep my saved caption." : nil)
+      } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-visitor-profile") {
+        NavigationStack { UserProfileNativeView(userId: "profile-visitor-fixture", api: CaptroComposerTestAPI.make()) }
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-profile") {
         ProfileNativeView(api: CaptroComposerTestAPI.make())
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-chat") {

@@ -5953,6 +5953,7 @@ async function supabaseBlockedUserIds(c: any, viewerId: string): Promise<Set<str
     }
   } catch (error: any) {
     console.warn(JSON.stringify({ event: 'supabase_blocks_read_failed', code: getErrorCode(error).slice(0, 180) }));
+    throw error; // Authorization uncertainty must never become an empty block list.
   }
   return blocked;
 }
@@ -6487,20 +6488,12 @@ async function supabaseFollowStats(c: any, userId: string) {
   const cleanUserId = publicId(userId, 120);
   if (!cleanUserId) return { followers_count: 0, following_count: 0 };
   const [followers, following] = await Promise.all([
-    supabaseAdminQueryRows(c, 'app_follows', {
-      select: 'app_follower_id,status',
-      filters: { app_following_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') },
-      limit: 10000,
-    }).catch(() => []),
-    supabaseAdminQueryRows(c, 'app_follows', {
-      select: 'app_following_id,status',
-      filters: { app_follower_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') },
-      limit: 10000,
-    }).catch(() => []),
+    supabaseAdminCountRows(c, 'app_follows', { app_following_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') }),
+    supabaseAdminCountRows(c, 'app_follows', { app_follower_id: postgrestEqFilter(cleanUserId), status: postgrestEqFilter('active') }),
   ]);
   return {
-    followers_count: followers.length,
-    following_count: following.length,
+    followers_count: followers,
+    following_count: following,
   };
 }
 
@@ -6513,12 +6506,12 @@ async function supabaseBlockPair(c: any, firstUserId: string, secondUserId: stri
       select: 'id,blocker_id,blocked_id,created_at',
       filters: { blocker_id: postgrestEqFilter(first), blocked_id: postgrestEqFilter(second) },
       limit: 1,
-    }).catch(() => []),
+    }),
     supabaseAdminQueryRows(c, 'app_blocks', {
       select: 'id,blocker_id,blocked_id,created_at',
       filters: { blocker_id: postgrestEqFilter(second), blocked_id: postgrestEqFilter(first) },
       limit: 1,
-    }).catch(() => []),
+    }),
   ]);
   return forward[0] || reverse[0] || null;
 }
@@ -6543,10 +6536,13 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
   const target = await supabaseUserByAnyId(c, targetId);
   if (!target || supabaseUserStatus(target) !== 'active') return { status: 404 as const, body: { detail: 'User not found' } };
   const targetAppId = publicId(target.id, 120);
-  const [followStats, isFollowing, block] = await Promise.all([
+  const [followStats, isFollowing, block, pendingRows] = await Promise.all([
     supabaseFollowStats(c, targetAppId),
     viewerId && viewerId !== targetAppId ? supabaseIsFollowing(c, viewerId, targetAppId) : Promise.resolve(false),
     viewerId && viewerId !== targetAppId ? supabaseBlockPair(c, viewerId, targetAppId) : Promise.resolve(null),
+    viewerId && viewerId !== targetAppId ? supabaseAdminQueryRows(c, 'app_follows', {
+      select: 'status', filters: { app_follower_id: postgrestEqFilter(viewerId), app_following_id: postgrestEqFilter(targetAppId), status: 'eq.pending' }, limit: 1,
+    }) : Promise.resolve([]),
   ]);
   const viewerHasBlocked = publicId(block?.blocker_id, 120) === viewerId && publicId(block?.blocked_id, 120) === targetAppId;
   const viewerBlockedBy = publicId(block?.blocker_id, 120) === targetAppId && publicId(block?.blocked_id, 120) === viewerId;
@@ -6566,7 +6562,7 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
     posts_count: Number((counts as any).posts_count || 0),
   });
   const privacyLocked = !!target.is_private && viewerId !== targetAppId && !isFollowing;
-  if (viewerBlockedBy || privacyLocked) {
+  if (viewerHasBlocked || viewerBlockedBy || privacyLocked) {
     return {
       status: 200 as const,
       body: {
@@ -6574,10 +6570,8 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
         username: safe.username,
         full_name: safe.full_name,
         profile_image: safe.profile_image,
-        followers_count: safe.followers_count,
-        following_count: safe.following_count,
-        posts_count: safe.posts_count,
         is_following: isFollowing,
+        follow_pending: pendingRows.length > 0,
         viewer_has_blocked: viewerHasBlocked,
         viewer_blocked_by: viewerBlockedBy,
         is_private: true,
@@ -6585,7 +6579,7 @@ async function supabasePublicUserPayload(c: any, viewerId: string, targetId: str
       },
     };
   }
-  return { status: 200 as const, body: { ...safe, is_following: isFollowing, viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy } };
+  return { status: 200 as const, body: { ...safe, open_to: cleanText(parseJsonObject(target.profile).open_to, 120), follow_pending: pendingRows.length > 0, is_following: isFollowing, viewer_has_blocked: viewerHasBlocked, viewer_blocked_by: viewerBlockedBy } };
 }
 
 async function supabaseSetFollowState(c: any, followerId: string, followingId: string, requested: boolean | null) {
@@ -6604,27 +6598,9 @@ async function supabaseSetFollowState(c: any, followerId: string, followingId: s
   if (await supabaseBlockPair(c, follower, following)) return { status: 403 as const, body: { detail: 'You cannot follow this profile.' } };
   const wasFollowing = await supabaseIsFollowing(c, follower, following);
   const nextFollowing = requested === null ? !wasFollowing : requested;
-  if (nextFollowing) {
-    const [followerAuth, followingAuth] = await Promise.all([
-      supabaseAuthUserIdForAppUserId(c, follower),
-      supabaseAuthUserIdForAppUserId(c, following),
-    ]);
-    await supabaseAdminUpsert(c, 'app_follows', [{
-      app_follower_id: follower,
-      app_following_id: following,
-      follower_id: followerAuth || null,
-      following_id: followingAuth || null,
-      status: 'active',
-      metadata: { source: 'cloudflare_worker_primary' },
-      legacy_created_at: now(),
-      updated_at: now(),
-    }], 'app_follower_id,app_following_id');
-  } else {
-    await supabaseAdminDeleteRows(c, 'app_follows', {
-      app_follower_id: postgrestEqFilter(follower),
-      app_following_id: postgrestEqFilter(following),
-    });
-  }
+  const result = await supabaseAdminRpc(c, 'captro_profile_follow', {
+    p_actor: follower, p_target: following, p_action: nextFollowing ? 'follow' : 'unfollow',
+  });
   const [followerStats, followingStats] = await Promise.all([
     supabaseFollowStats(c, follower),
     supabaseFollowStats(c, following),
@@ -6632,7 +6608,8 @@ async function supabaseSetFollowState(c: any, followerId: string, followingId: s
   return {
     status: 200 as const,
     body: {
-      following: nextFollowing,
+      following: result?.following === true,
+      follow_pending: result?.follow_pending === true,
       following_count: followerStats.following_count,
       followers_count: followingStats.followers_count,
     },
@@ -8434,6 +8411,7 @@ function safeUserPayload(user: any, opts: { includePrivate?: boolean } = {}) {
     cover_image: safeMediaReference(user.cover_image),
     profile_background_image: safeMediaReference(user.profile_background_image || user.cover_image),
     bio: cleanMultilineText(user.bio, 500),
+    open_to: cleanText(user.open_to, 120),
     city: cleanText(user.city, 120),
     social_website: safeExternalUrl(user.social_website),
     social_tiktok: cleanText(user.social_tiktok, 120),
@@ -12344,6 +12322,7 @@ function supabaseAppUserToLegacyUser(row: any): any {
     social_instagram: cleanText((profile as any).social_instagram, 120),
     age: clampNumber((profile as any).age, 13, 120, 0),
     looking_for: cleanText((profile as any).looking_for, 120),
+    open_to: cleanText((profile as any).open_to, 120),
     interests: Array.isArray((profile as any).interests)
       ? JSON.stringify((profile as any).interests.map((item: unknown) => cleanText(item, 60)).filter(Boolean).slice(0, 24))
       : cleanText((profile as any).interests, 1000),
@@ -15712,9 +15691,10 @@ api.put('/users/me', authMiddleware, async (c) => {
   const limited = await enforceRateLimit(c, 'account_update', userId, 60, 60);
   if (limited) return limited;
   const body = await c.req.json();
-  const unknown = rejectUnknownFields(c, body, ['full_name', 'fullName', 'bio', 'profile_image', 'profileImage', 'cover_image', 'coverImage', 'profile_background_image', 'profileBackgroundImage', 'city', 'username', 'age', 'looking_for', 'lookingFor', 'interests', 'social_website', 'socialWebsite', 'social_tiktok', 'socialTiktok', 'social_instagram', 'socialInstagram', 'is_private', 'isPrivate', 'language']);
+  const unknown = rejectUnknownFields(c, body, ['full_name', 'fullName', 'bio', 'profile_image', 'profileImage', 'cover_image', 'coverImage', 'profile_background_image', 'profileBackgroundImage', 'city', 'username', 'age', 'looking_for', 'lookingFor', 'interests', 'social_website', 'socialWebsite', 'social_tiktok', 'socialTiktok', 'social_instagram', 'socialInstagram', 'is_private', 'isPrivate', 'language', 'open_to', 'openTo']);
   if (unknown) return unknown;
   if (body.fullName !== undefined && body.full_name === undefined) body.full_name = body.fullName;
+  if (body.openTo !== undefined && body.open_to === undefined) body.open_to = body.openTo;
   if (body.profileImage !== undefined && body.profile_image === undefined) body.profile_image = body.profileImage;
   if (body.coverImage !== undefined && body.cover_image === undefined) body.cover_image = body.coverImage;
   if (body.profileBackgroundImage !== undefined && body.profile_background_image === undefined) body.profile_background_image = body.profileBackgroundImage;
@@ -15729,6 +15709,10 @@ api.put('/users/me', authMiddleware, async (c) => {
 
   const appUserId = publicId(currentRow.id, 120);
   const profile = parseJsonObject(currentRow.profile);
+  if (body.open_to !== undefined) {
+    if (typeof body.open_to !== 'string' || body.open_to.length > 120) return c.json({ detail: 'Open to must be at most 120 characters.' }, 400);
+    profile.open_to = cleanText(body.open_to, 120);
+  }
   const patch: Record<string, unknown> = {};
   let usernameChanged = false;
 
@@ -15774,7 +15758,7 @@ api.put('/users/me', authMiddleware, async (c) => {
     profile.profile_background_image = safeMediaReference(body.profile_background_image);
   }
 
-  const profileFields = ['language', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'profile_background_image'];
+  const profileFields = ['language', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'profile_background_image', 'open_to'];
   const profileChanged = profileFields.some((field) => body[field] !== undefined);
   if (profileChanged) patch.profile = profile;
   if (Object.keys(patch).length === 0) return c.json({ detail: 'Nothing to update' }, 400);
@@ -16398,7 +16382,66 @@ api.get('/users/:userId', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const targetUserId = c.req.param('userId');
   const result = await supabasePublicUserPayload(c, viewerId, targetUserId);
+  c.header('Cache-Control', 'no-store');
   return c.json(result.body, result.status);
+});
+
+api.get('/users/:userId/showcase', authMiddleware, async (c) => {
+  const viewer = getUserId(c);
+  const access = await supabasePublicUserPayload(c, viewer, c.req.param('userId'));
+  c.header('Cache-Control', 'no-store');
+  if (access.status !== 200) return c.json(access.body, access.status);
+  if ((access.body as any).privacy_locked || (access.body as any).viewer_has_blocked || (access.body as any).viewer_blocked_by) return c.json({ pinned: null, clubs: [] });
+  const target = await supabaseUserByAnyId(c, c.req.param('userId'));
+  const profile = parseJsonObject(target.profile);
+  const pin = publicId(profile.pinned_post_id, 120);
+  const ids = Array.isArray(profile.club_post_ids) ? [...new Set(profile.club_post_ids.map((id: any) => publicId(id, 120)).filter(Boolean))].slice(0, 12) : [];
+  const visible = new Map<string, any>();
+  // Bounded references, each reauthorized against current canonical visibility.
+  for (const id of [...new Set([pin, ...ids].filter(Boolean))]) {
+    const [post] = await supabaseReadVisiblePosts(c, viewer, { ownerId: target.id, postId: id, limit: 1 });
+    if (post) visible.set(id, feedPostPayload(post, [], c.env));
+  }
+  return c.json({ pinned: visible.get(pin) || null, clubs: ids.map(id => visible.get(id)).filter(Boolean) });
+});
+
+api.put('/users/me/showcase', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const limited = await enforceRateLimit(c, 'profile_showcase', userId, 30, 60);
+  if (limited) return limited;
+  const body = await c.req.json();
+  const unknown = rejectUnknownFields(c, body, ['pinned_post_id', 'club_post_ids']);
+  if (unknown) return unknown;
+  await supabaseAdminRpc(c, 'captro_profile_showcase', { p_actor: userId, p_patch: body });
+  return c.json({ success: true });
+});
+
+api.get('/users/me/follow-requests', authMiddleware, async (c) => {
+  const userId = getUserId(c);
+  const skip = Math.max(0, Number.parseInt(c.req.query('skip') || '0', 10) || 0);
+  const rows = await supabaseAdminQueryRows(c, 'app_follows', {
+    select: 'app_follower_id,created_at', filters: { app_following_id: postgrestEqFilter(userId), status: 'eq.pending' },
+    order: 'created_at.asc,app_follower_id.asc', offset: skip, limit: 30,
+  });
+  const users = await supabaseUsersByAnyIds(c, rows.map(row => row.app_follower_id));
+  const blocked = await supabaseBlockedUserIds(c, userId);
+  c.header('Cache-Control', 'no-store');
+  return c.json(rows.filter(row => !blocked.has(row.app_follower_id) && supabaseUserIsActive(users.get(row.app_follower_id))).map(row => {
+    const user = users.get(row.app_follower_id);
+    return { id: row.app_follower_id, username: publicUsernameFor(user), full_name: cleanText(user?.full_name, 120), profile_image: safeMediaReference(user?.avatar_url) };
+  }));
+});
+
+api.post('/users/me/follow-requests/:requesterId', authMiddleware, async (c) => {
+  const actor = getUserId(c);
+  const body = await c.req.json();
+  if (typeof body.approved !== 'boolean') return c.json({ detail: 'Choose approve or decline.' }, 400);
+  const limited = await enforceRateLimit(c, 'follow_decision', actor, 60, 60);
+  if (limited) return limited;
+  const result = await supabaseAdminRpc(c, 'captro_profile_follow', {
+    p_actor: actor, p_target: c.req.param('requesterId'), p_action: body.approved ? 'approve' : 'decline',
+  });
+  return c.json(result);
 });
 
 api.post('/users/:userId/follow', authMiddleware, async (c) => {
@@ -17795,6 +17838,12 @@ api.get('/users/:userId/posts', authMiddleware, async (c) => {
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '60', 1, 100, 60);
   try {
+    const access = await supabasePublicUserPayload(c, viewerId, targetId);
+    if (access.status !== 200) return c.json(access.body, access.status);
+    if ((access.body as any).privacy_locked || (access.body as any).viewer_has_blocked || (access.body as any).viewer_blocked_by) {
+      c.header('Cache-Control', 'no-store');
+      return c.json({ detail: 'This profile is private or unavailable.' }, 403);
+    }
     const rows = await supabaseReadVisiblePosts(c, viewerId, { ownerId: targetId, limit, offset: skip, order: 'newest' });
     const response = c.json(rows.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');

@@ -171,6 +171,7 @@ public struct MIRANativeRootView: View {
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
   @State private var cameraDarkChrome = false
+  @State private var profileLink: CaptroProfileLink?
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
@@ -226,6 +227,17 @@ public struct MIRANativeRootView: View {
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
     .background(CaptroRecoveryPresenter(session: authSession, api: api).frame(width: 0, height: 0))
+    .sheet(item: $profileLink) { route in
+      NavigationStack {
+        UserProfileNativeView(userId: route.id, api: api)
+          .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { profileLink = nil } } }
+      }
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .captroProfileSignInRequested)) { _ in
+      guard authSession.isGuest else { return }
+      profileLink = nil
+      leaveGuestModeForSignIn()
+    }
     .environmentObject(localization)
     .preferredColorScheme(selectedTab == .scan && cameraDarkChrome ? .dark : MIRAAppearanceResolver.colorScheme(for: appearancePreference))
     .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }
@@ -243,6 +255,8 @@ public struct MIRANativeRootView: View {
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { _, userID in
+      // A profile opened under the previous account must not retain its presentation.
+      profileLink = nil
       api.favorites.configure(accountID: userID ?? "")
       MIRAPlaybackCoordinator.pauseAll(reason: "account_changed")
       MIRAVideoPrewarmManager.shared.resetForAccountChange()
@@ -308,6 +322,7 @@ public struct MIRANativeRootView: View {
       registerPushToken(token)
     }
     .onOpenURL { url in
+      if let route = CaptroProfileLink.parse(url) { profileLink = route; return }
       if StripeAPI.handleURLCallback(with: url) { return }
       let googleHandled = GIDSignIn.sharedInstance.handle(url)
       MIRAAuthDiagnostics.callbackReceived(url, googleHandled: googleHandled)

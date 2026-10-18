@@ -33,13 +33,19 @@ private final class CaptroComposerTestProtocol: URLProtocol {
     } else if ProcessInfo.processInfo.arguments.contains("--captro-presentation-review"),
        request.httpMethod == "GET", path.hasSuffix("/posts/review-post/object") {
       body = "{}"; status = 200 // This viewer has no private ticket/document.
-    } else if path.hasSuffix("/auth/me") {
-      body = #"{"id":"composer-ui-test","full_name":"Test Creator","username":"test_creator","is_private":false}"#
+    } else if path.hasSuffix("/auth/me") || path.hasSuffix("/users/profile-visitor-fixture") {
+      if ProcessInfo.processInfo.arguments.contains("--captro-profile-private") && path.hasSuffix("profile-visitor-fixture") {
+        body = #"{"id":"profile-visitor-fixture","full_name":"Private Creator","username":"private_creator","is_private":true,"privacy_locked":true}"#
+      } else {
+        body = #"{"id":"composer-ui-test","full_name":"Test Creator","username":"test_creator","is_private":false,"bio":"City walks, photography and finding good coffee.","city":"New York","open_to":"Photo walks · Creative projects","followers_count":128,"following_count":86}"#
+      }
       status = 200
+    } else if path.hasSuffix("/showcase") {
+      body = #"{"pinned":null,"clubs":[]}"#; status = 200
     } else if path.hasSuffix("/posts/creation-capabilities") {
       body = authorized ? #"{"structured_types":["club","event","meetup","deal"]}"# : #"{"structured_types":[]}"#
       status = 200
-    } else if path.hasSuffix("/users/composer-ui-test/posts") || path.hasSuffix("/statuses") || path.hasSuffix("/conversations") {
+    } else if path.hasSuffix("/users/composer-ui-test/posts") || path.hasSuffix("/users/profile-visitor-fixture/posts") || path.hasSuffix("/statuses") || path.hasSuffix("/conversations") || path.hasSuffix("/follow-requests") {
       body = "[]"
       status = 200
     } else {

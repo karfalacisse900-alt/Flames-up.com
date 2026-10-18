@@ -58,6 +58,8 @@ public enum MIRAUsernameRules {
 }
 
 public struct MIRAUser: Codable, Identifiable, Hashable {
+  public var openTo: String? = nil
+  public var followPending: Bool? = nil
   public let id: String
   public let username: String?
   public let usernameRequired: Bool?
@@ -1949,6 +1951,7 @@ public struct SaveCollectionBody: Encodable {
 }
 
 public struct FollowResponse: Decodable {
+  public let followPending: Bool?
   public let following: Bool?
   public let followingCount: Int?
   public let followersCount: Int?
