@@ -50,7 +50,8 @@ test('media-first composer, Details chrome, and lower Favorites placement do not
   favoritePlacement(read('Screens/CaptroFeedMediaPager.swift'));
   const root = read('App/MIRANativeRootView.swift');
   assert.match(root, /configureWithOpaqueBackground/);
-  assert.match(root, /tint\(MIRATheme.Color.textPrimary\)/);
+  assert.match(root, /tint\(selectedTab == \.scan && cameraDarkChrome \? Color.white : MIRATheme.Color.textPrimary\)/);
+  assert.match(root, /toolbarBackground\(selectedTab == \.scan && cameraDarkChrome \? Color.black : MIRATheme.Color.surface, for: \.tabBar\)/);
 });
 test('Story asynchronous results and playback are owned by the selected stable identity', () => {
   const story = read('Screens/DiscoverNativeView.swift');
