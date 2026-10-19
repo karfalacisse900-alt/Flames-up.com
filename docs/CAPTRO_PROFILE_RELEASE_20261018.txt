@@ -1,0 +1,78 @@
+CAPTRO PROFILE RELEASE — 18 October 2026
+
+Native implementation: 1ba2aa0dc85128026bbad85438a9f3edfbc4d4f8
+Release source: 780ce49f101e8f3cb198952c035f5287a41841fc
+Native tree: 5c0f6221b823bcaadfbaee1c066ee37d50daeea0
+TestFlight archive/upload run: 39179790354, 1.0.1 (644.1), SUCCESS.
+Apple upload accepted 2026-10-19 00:24:39 UTC, no errors.
+Delivery UUID: 1fdf19a5-7aa1-4be3-af78-4e837673eec5.
+Apple tester availability VERIFIED at 2026-10-19 00:33:26 UTC:
+processing VALID, internal IN_BETA_TESTING, not expired.
+Assigned groups: Captro private and Captro private2.
+External beta remains READY_FOR_BETA_SUBMISSION (not public beta approval).
+Read-only status run 39180666461, attempt 5.
+
+WHY THE PREVIOUS UPDATE DID NOT SHOW PROFILE
+641.1 was the earlier Capture/media candidate, not the Profile native tree.
+Do not identify that upload as the Profile release.
+
+PROFILE CHANGES
+Owner/visitor native layouts, neutral header, owner Saved/Settings and Edit/Share,
+visitor Follow/Message with private-request state, optional Open to, one pin,
+Moments/Plans/Clubs, three-column media grid using the existing image loader.
+Existing management destinations remain available; no mockup accounts/counts
+are production data. Capture, Home media recovery and restoration are preserved.
+
+BACKEND
+Production Worker baseline is 130bdc53336d9af6cc8d8bf14c669fb22eb5efa6.
+prepare-profile-worker.mjs projects only reviewed profile functions/routes onto
+that baseline. Unshipped commerce/admin repairs on the branch are NOT deployed.
+Deployment 39179692040 passed; version a25d5a5a-4088-4ced-85bd-13a5f83d3549.
+Profile migration 20261018224210_profile_privacy_showcase is applied.
+It uses service-only atomic follow/showcase/edit operations. Ordinary profile
+edits merge only submitted safe fields, preserving concurrent pin/club updates.
+The authenticated user payload omitted open_to despite persisting it. The live
+smoke detected this; a regression failed before the fix and passed afterward.
+authUserPayload now carries that field through /auth/me and sign-in responses.
+
+VERIFICATION ACTUALLY PERFORMED
+- node --test tests/profile-privacy.test.mjs: 3 passed, 0 failed.
+- node node_modules/typescript/bin/tsc --noEmit: passed.
+- Full local repair-branch backend: node --test tests/*.test.mjs:
+  339 passed, 0 failed/skipped. This includes unshipped work and is NOT
+  evidence that all corresponding migrations/features are deployed.
+- Scoped production artifact: npx tsc --noEmit && npm test:
+  282 passed, 0 failed (run 39179692040).
+- Live API with two newly created disposable identities and one private post:
+  edit/Open to, rejection of protected fields, private projection/content denial,
+  repeat follow request, owner approval, unfollow, pin/edit/unpin passed.
+  Exact temporary fixtures were removed afterward; no customer records changed.
+- Existing public-feed smoke passed after Worker deployment.
+- Native large simulator run 39175594103: 10 interaction UI tests plus
+  224 regression tests (219 logic / 5 Home UI), no failures or skips.
+  iPhone 17 simulator, iOS 26.4.1; native source 1ba2aa0d.
+- Small iPhone 13 mini simulator run 39176608102: 10 interaction tests passed,
+  0 failures/skips, iOS 26.4.1, same native source; screenshots inspected.
+- Actual owner/visitor/private-profile simulator screenshots inspected.
+  Fixtures use empty content grids: these are not live-photo/pin pixel evidence.
+- Matching-source native gate and live security schema gate remain mandatory.
+  Upload run passed both gates, including all 14 live schema assertions.
+
+LIMITATIONS / OPEN ACCEPTANCE
+No physical-iPhone Profile, camera-quality or fast-scroll verification performed.
+Do not describe physical freezes as fixed based on these simulator tests.
+Profile sharing currently uses captro://profile/<id>, not a universal HTTPS link.
+Legacy pinned_at records are not automatically migrated to the new chosen pin.
+Follow-request UI initially loads 30 requests; additional-page UI remains work.
+Visiting own ID through the visitor route and refresh layout stability need
+further focused review. Permission/access changes require fresh server checks;
+these smoke tests do not constitute a comprehensive security certification.
+Full commerce/account/provider-device acceptance from the broader review is
+separate; this release does not claim all historical findings are resolved.
+
+OPERATIONAL SAFETY
+No staging project was used or deleted for this release; no billing changes.
+No real payment, refund, transfer, customer follow or customer message performed.
+Preserve server-only grants and follow requests on rollback/forward repair.
+Do not roll back to broad client profile/media writes or clock-only payment expiry.
+The fresh release checkout preserves the earlier damaged worktree untouched.
