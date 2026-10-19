@@ -1,11 +1,11 @@
 // Metadata only: no customer rows, provider calls or destructive operations.
 const query=`
 with tables(name) as (values ('app_payment_recovery'),('app_purchase_reconciliation'),('app_payment_recovery_events'),
- ('app_admin_operations'),('app_admin_appeals'),('app_account_cleanup_jobs')),
+ ('app_admin_operations'),('app_admin_appeals'),('app_account_cleanup_jobs'),('app_admin_roles'),('app_audit_logs'),('app_moderation_actions'),('app_reports')),
  funcs(signature) as (values ('captro_validate_checkout(uuid)'),('captro_claim_purchase_reconciliation(integer)'),
  ('captro_renew_purchase_reconciliation(uuid,uuid)'),('captro_finish_purchase_reconciliation(uuid,uuid,text)'),
  ('captro_claim_payment_recovery(uuid,text,text,text)'),('captro_admin_execute(text,jsonb)'),('captro_restore_pending_account(text)'))
-select 'private_tables' check_id, count(c.oid)=6 and bool_and(c.relrowsecurity and
+select 'private_tables' check_id, count(c.oid)=10 and bool_and(c.relrowsecurity and
  not has_table_privilege('authenticated',c.oid,'SELECT,INSERT,UPDATE,DELETE') and
  not has_table_privilege('anon',c.oid,'SELECT,INSERT,UPDATE,DELETE')) passed
 from tables t left join pg_class c on c.oid=to_regclass('public.'||t.name)

@@ -216,6 +216,8 @@ test("real database console workflows and negative authorization", async (t) => 
       assert.ok(sql);
       await db.exec(sql);
     }
+    // Match the live legacy grant shape, not an unrealistically clean fixture.
+    await db.exec('grant select,insert,update,delete on app_audit_logs,app_moderation_actions,app_reports to anon,authenticated');
     await db.exec(
       readFileSync(
         new URL(
@@ -235,6 +237,10 @@ test("real database console workflows and negative authorization", async (t) => 
           JSON.stringify(op),
         ])
       ).rows[0].result;
+    for (const table of ['app_audit_logs','app_moderation_actions','app_reports','app_admin_roles']) {
+      const privilege = await db.query("select has_table_privilege('authenticated',$1,'SELECT,INSERT,UPDATE,DELETE') allowed",[table]);
+      assert.equal(privilege.rows[0].allowed,false,table+' remains server-only');
+    }
     await t.test(
       "client roles cannot read operations or execute trusted mutation RPC",
       async () => {

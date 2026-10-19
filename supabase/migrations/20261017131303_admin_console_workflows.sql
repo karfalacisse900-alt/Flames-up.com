@@ -1,5 +1,14 @@
 -- PREPARED ONLY. Requires the reviewed backend-write and media boundaries first.
 -- Additive: no customer/financial rows are deleted or reinterpreted.
+-- The existing RLS policies deny client admin access, but legacy table grants
+-- still permit audit DML at the privilege layer. Remove those grants as well.
+-- Reports are created/read through the authenticated Worker; direct row reads
+-- must not expose internal notes added by the console to the reporter.
+revoke all on public.app_admin_roles,public.app_audit_logs,public.app_moderation_actions,public.app_reports from public,anon,authenticated;
+alter table public.app_admin_roles enable row level security;
+alter table public.app_audit_logs enable row level security;
+alter table public.app_moderation_actions enable row level security;
+alter table public.app_reports enable row level security;
 do $$ begin
   if has_table_privilege('authenticated','public.app_users','UPDATE')
     or has_table_privilege('authenticated','public.app_admin_roles','INSERT')

@@ -4,9 +4,9 @@ const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/wo
   headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(20000)});
 if(!r.ok)throw Error('Deployment lookup HTTP '+r.status);
 const data=await r.json();const versions=data.result?.deployments?.[0]?.versions;
-if(versions?.length!==1||versions[0].version_id!=='a25d5a5a-4088-4ced-85bd-13a5f83d3549'||versions[0].percentage!==100)
+if(versions?.length!==1||versions[0].version_id!=='3e268d98-a9ff-4d7b-8f5a-284323d86bde'||versions[0].percentage!==100)
   throw Error('Production changed since review; inspect the new baseline before deploying.');
-console.log('Verified scoped Profile production baseline a25d5a5a-4088-4ced-85bd-13a5f83d3549');
+console.log('Verified maintenance Worker 3e268d98-a9ff-4d7b-8f5a-284323d86bde from run 39329583253; resume forward repair.');
 const settings=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/flames-up-api/settings`,{
   headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(20000)});
 if(!settings.ok)throw Error('Settings lookup HTTP '+settings.status);
