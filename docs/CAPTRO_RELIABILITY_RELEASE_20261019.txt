@@ -112,6 +112,17 @@ TESTS ACTUALLY RUN
   12 interaction + 228 regression tests passed (223 logic + 5 Home UI).
   Includes both MediaRecoveryTests pixel/geometry tests; screenshots inspected.
   Later native changes require the newer matching-source runs, not this older pass.
+- Read-only public-media probe, 19 October approximately 21:55 UTC:
+  Located public Welcome post d90eda93-abaa-4ad5-abbb-53d6faf96a14 by @thecissay
+  through the anonymous world-board API. One image, feed URL, thumbnail and
+  fallback entry were correctly index-aligned. Primary/source imagedelivery.net
+  returned HTTP 200 image/jpeg, 95,665 bytes; preview returned 200 image/jpeg,
+  51,230 bytes. Windows System.Drawing decoded them as 768x768 and 480x480.
+  Legacy api.flames-up.com fallback returned HTTP 404 JSON. No URL queries,
+  credentials or image content recorded. Metadata reports 483x515; this discrepancy
+  needs original-asset/framing verification and is not assumed to cause blankness.
+  This establishes currently working delivery/desktop decoding, NOT iOS ImageIO,
+  correct on-device rendering, the installed build, or the original failing request.
 
 ROLLOUT AND FORWARD REPAIR
 Deployment sequence: verify source and existing production version -> tests and
@@ -151,8 +162,9 @@ separately. Disabled leaked-password protection/admin identity configuration rem
 configuration follow-ups, not silently changed or solved by a billing upgrade.
 Payments: local concurrency/provider mocks pass. Real Stripe TEST end-to-end and
 authorized operator recovery approval still required; no real money test run.
-Images: app-hosted row/Details recovery verified with known pixels. Installed build,
-affected live Welcome asset, weak-network physical trace remain unverified.
+Images: app-hosted row/Details recovery verified with known pixels. Public Welcome
+delivery now traced as above; installed build and weak-network physical trace remain
+unverified. Its legacy fallback is unavailable; no public URL was invented to fix it.
 Account flows: model tests plus dedicated app-hosted recovery fixture run pending;
 real Apple/Google cancellation/sign-in/APNs on hardware not verified.
 Physical scrolling: OPEN. No attached iPhone, Release Instruments capture, realistic
