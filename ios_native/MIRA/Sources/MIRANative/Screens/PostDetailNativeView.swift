@@ -1316,27 +1316,27 @@ private struct CommentRow: View {
       VStack(alignment: .leading, spacing: 7) {
         if comment.pinned {
           Label("Pinned by creator", systemImage: "pin.fill")
-            .font(.system(size: 11, weight: .semibold))
+            .font(.caption2.weight(.semibold))
             .foregroundStyle(editorial ? CaptroDetailStyle.accent : MIRATheme.Color.forest)
         }
         VStack(alignment: .leading, spacing: 5) {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(comment.user?.displayName ?? "user")
-              .font(.system(size: 14, weight: .semibold))
+              .font(.subheadline.weight(.semibold))
               .foregroundStyle(editorial ? CaptroDetailStyle.ink : MIRATheme.Color.textPrimary)
-              .lineLimit(1)
+              .lineLimit(2)
               .truncationMode(.tail)
               .layoutPriority(1)
             if let createdAt = comment.createdAt {
               Text(relativeAge(createdAt))
-                .font(.system(size: 12, weight: .medium))
+                .font(.caption.weight(.medium))
                 .foregroundStyle(editorial ? CaptroDetailStyle.secondary : MIRATheme.Color.textMuted.opacity(0.82))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
             }
           }
           Text(comment.text)
-            .font(.system(size: 15, weight: .regular))
+            .font(.body)
             .foregroundStyle(editorial ? CaptroDetailStyle.ink : MIRATheme.Color.textPrimary)
             .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
@@ -1356,7 +1356,8 @@ private struct CommentRow: View {
             onReply()
           }
           .buttonStyle(.plain)
-          .frame(minHeight: editorial ? 32 : 0)
+          .frame(minWidth: 44, minHeight: 44)
+          .contentShape(Rectangle())
           Button {
             CaptroHaptics.light()
             onLike()
@@ -1367,10 +1368,11 @@ private struct CommentRow: View {
             }
           }
           .buttonStyle(.plain)
-          .frame(minWidth: editorial ? 44 : 0, minHeight: editorial ? 32 : 0)
+          .frame(minWidth: 44, minHeight: 44)
+          .contentShape(Rectangle())
           .foregroundStyle(comment.viewerLiked ? MIRATheme.Color.like : (editorial ? CaptroDetailStyle.secondary : MIRATheme.Color.textMuted))
         }
-        .font(.system(size: 12, weight: .semibold))
+        .font(.caption.weight(.semibold))
         .foregroundStyle(editorial ? CaptroDetailStyle.secondary : MIRATheme.Color.textMuted)
         .padding(.leading, MIRATheme.Space.xs)
       }

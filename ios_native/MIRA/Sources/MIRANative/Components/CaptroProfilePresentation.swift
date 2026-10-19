@@ -38,6 +38,8 @@ struct CaptroFollowRequestsView: View {
   @State private var loading = true
   @State private var error: String?
   @State private var updating: String?
+  @State private var nextSkip: Int? = 0
+  @State private var requestGeneration = UUID()
   var body: some View {
     List {
       if loading { ProgressView("Loading requests…") }
@@ -52,12 +54,24 @@ struct CaptroFollowRequestsView: View {
           }.buttonStyle(.bordered).disabled(updating != nil)
         }.padding(.vertical, 6)
       }
+      if let nextSkip, nextSkip > 0 {
+        Button("Load more requests") { Task { await load(reset: false) } }.disabled(loading)
+      }
     }.navigationTitle("Follow requests").task { await load() }.refreshable { await load() }
   }
-  private func load() async {
-    loading = true; defer { loading = false }
-    do { requests = try await api.get("/users/me/follow-requests"); error = nil }
-    catch { self.error = "Could not load requests." }
+  private struct Page: Decodable { let users: [MIRAUser]; let nextSkip: Int? }
+  private func load(reset: Bool = true) async {
+    if loading && !reset { return }
+    let generation = UUID(); requestGeneration = generation
+    let offset = reset ? 0 : (nextSkip ?? 0)
+    loading = true; defer { if requestGeneration == generation { loading = false } }
+    do {
+      let page: Page = try await api.get("/users/me/follow-requests?paged=1&skip=\(offset)")
+      guard requestGeneration == generation, !Task.isCancelled else { return }
+      let existing = Set((reset ? [] : requests).map(\.id))
+      requests = (reset ? [] : requests) + page.users.filter { !existing.contains($0.id) }
+      nextSkip = page.nextSkip; error = nil
+    } catch { if requestGeneration == generation { self.error = "Could not load requests." } }
   }
   private func decide(_ id: String, approved: Bool) async {
     guard updating == nil else { return }; updating = id; defer { updating = nil }
@@ -90,7 +104,7 @@ struct CaptroProfileItemRow: View {
       VStack(alignment: .leading, spacing: 4) {
         if pinned { Text("PINNED").font(.caption).foregroundStyle(.secondary) }
         Text(card.title.isEmpty ? "View moment" : card.title).font(.subheadline.weight(.semibold))
-        if !card.homeStampMetadata.isEmpty { Text(card.homeStampMetadata).font(.caption).foregroundStyle(.secondary) }
+        if !card.homeStampDetails.isEmpty { Text(card.homeStampDetails).font(.caption).foregroundStyle(.secondary) }
         if let status = card.availabilityText, !status.isEmpty { Text(status).font(.caption.weight(.semibold)) }
         if let zone = post.detail?.commerce?.timeZone ?? post.detail?.event?.timeZone {
           Text(zone).font(.caption2).foregroundStyle(.secondary)

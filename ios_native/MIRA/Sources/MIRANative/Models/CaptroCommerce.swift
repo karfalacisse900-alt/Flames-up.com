@@ -168,9 +168,10 @@ enum CaptroMoney {
     return try? JSONDecoder().decode(Contract.self, from: data)
   }()
   static var supportedCurrencies: [String] { (contract?.currencies.keys.map { $0 } ?? []).sorted() }
+  // Formatting historical amounts is not permission to create new paid prices.
+  static let creationCurrencies = ["USD"]
   static var defaultCurrency: String {
-    let code = Locale.current.currency?.identifier ?? "USD"
-    return supportedCurrencies.contains(code) ? code : "USD"
+    "USD"
   }
   static func parse(_ value: String, currency: String, locale: Locale = .current, paid: Bool = true) -> Int? {
     guard let rule = contract?.currencies[currency.uppercased()] else { return nil }

@@ -1097,24 +1097,40 @@ final class UserProfileNativeModel: ObservableObject {
   func load() async {
     generation += 1
     let request = generation
-    isLoading = true; isLoadingMore = false; errorMessage = nil; canLoadMore = false; requiresSignIn = false
+    isLoading = true; isLoadingMore = false; errorMessage = nil; requiresSignIn = false
     // Visitor caches are never authority for current privacy/block state.
-    posts = []; user = nil; nextOffset = 0; showcase = CaptroProfileShowcase()
     defer { if request == generation { isLoading = false } }
     do {
       let fresh: MIRAUser = try await api.get("/users/\(userId)")
       guard request == generation, !Task.isCancelled else { return }
       apply(user: fresh)
-      guard fresh.privacyLocked != true, !isBlocked, !isBlockedBy else { return }
+      guard fresh.privacyLocked != true, !isBlocked, !isBlockedBy else {
+        posts = []; showcase = CaptroProfileShowcase(); canLoadMore = false; nextOffset = 0
+        return
+      }
       let page: [MIRAPost] = try await api.get("/users/\(userId)/posts?limit=60&skip=0")
       guard request == generation, !Task.isCancelled else { return }
-      posts = profileVisiblePosts(page); nextOffset = page.count; canLoadMore = page.count == 60
+      let visible = profileVisiblePosts(page)
+      if posts.isEmpty {
+        posts = visible; nextOffset = page.count; canLoadMore = page.count == 60
+      } else {
+        // Refresh existing cells in place; only explicit pagination appends rows.
+        let updates = Dictionary(visible.map { ($0.id, $0) }, uniquingKeysWith: { _, new in new })
+        let firstPageIDs = Set(posts.prefix(60).map(\.id))
+        posts = posts.compactMap { old in updates[old.id] ?? (page.count == 60 && !firstPageIDs.contains(old.id) ? old : nil) }
+        let retained = Set(posts.map(\.id))
+        posts += visible.filter { !retained.contains($0.id) }
+        if page.count < 60 { nextOffset = page.count; canLoadMore = false }
+      }
       let selected: CaptroProfileShowcase = try await api.get("/users/\(userId)/showcase")
       guard request == generation, !Task.isCancelled else { return }
       showcase = selected
     } catch {
       guard request == generation, !Task.isCancelled else { return }
-      if let apiError = error as? MIRAAPIError, case .server(let status, _, _) = apiError { requiresSignIn = status == 401 }
+      if let apiError = error as? MIRAAPIError, case .server(let status, _, _) = apiError {
+        requiresSignIn = status == 401
+        if [401,403,404,410].contains(status) { posts = []; user = nil; showcase = CaptroProfileShowcase(); canLoadMore = false }
+      }
       errorMessage = "This profile could not be loaded. Check your connection or sign in, then try again."
     }
   }
@@ -1133,6 +1149,8 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func removePostLocally(id postId: String) async {
+    if showcase.pinned?.id == postId { showcase.pinned = nil }
+    showcase.clubs.removeAll { $0.id == postId }
     guard posts.contains(where: { $0.id == postId }) else { return }
     posts.removeAll { $0.id == postId }
     await MIRAAppCacheStore.shared.saveProfilePosts(posts, userId: userId)
@@ -1243,7 +1261,7 @@ public struct UserProfileNativeView: View {
         CaptroProfileTabs(selection: $selectedSection)
         if model.posts.isEmpty && model.isLoading {
           ProfileGridSkeleton()
-        } else if let error = model.errorMessage {
+        } else if let error = model.errorMessage, model.posts.isEmpty {
           VStack(spacing: 12) {
             Text(error).font(.subheadline)
             Button("Try again") { Task { await model.load() } }.frame(minHeight: 44)
@@ -1277,6 +1295,10 @@ public struct UserProfileNativeView: View {
         if model.canLoadMore {
           Button(model.isLoadingMore ? "Loading…" : "Load more") { Task { await model.loadMore() } }
             .disabled(model.isLoadingMore).frame(minHeight: 44)
+        }
+        if !model.posts.isEmpty, let error = model.errorMessage {
+          Text(error).font(.footnote).padding(.horizontal, 20)
+          Button("Retry profile update") { Task { await model.load() } }.frame(minHeight: 44)
         }
       }
       .padding(.top, MIRATheme.Space.md)
@@ -1535,7 +1557,10 @@ public struct UserProfileNativeView: View {
     isOpeningMessage = true
     defer { isOpeningMessage = false }
 
-    let roomModel = ConversationNativeModel(kind: .direct(peerId: model.userId), api: model.api, currentUserId: "")
+    let current: MIRAUser
+    do { current = try await model.api.get("/auth/me") }
+    catch { model.errorMessage = "Sign in or reconnect to open this conversation."; return }
+    let roomModel = ConversationNativeModel(kind: .direct(peerId: model.userId), api: model.api, currentUserId: current.id)
     messageRoute = ChatOpenRoute(
       id: "profile-\(model.userId)",
       title: model.user?.displayName ?? "Chat",

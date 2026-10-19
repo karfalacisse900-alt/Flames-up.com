@@ -66,6 +66,7 @@ jobs:
         run: |
           set -o pipefail
           tests=(-only-testing:CaptroLayoutUITests/HomeFullBleedTests/testSameCarouselHomeAndDetailsGestureTrace
+            -only-testing:CaptroLayoutUITests/MediaRecoveryTests
             -only-testing:CaptroLayoutUITests/CaptureCameraTests
             -only-testing:CaptroLayoutUITests/ProfileRedesignTests
             -only-testing:CaptroLayoutUITests/AppSystemUITests/testProfileEditingPreservesUnsavedChangesAndNativeNavigation

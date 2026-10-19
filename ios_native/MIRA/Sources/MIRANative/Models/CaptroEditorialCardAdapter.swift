@@ -169,9 +169,13 @@ enum CaptroHomeStampContext {
 
 extension CaptroEditorialCardContent {
   var homeStampMetadata: String {
+    [homeStampDetails, availabilityText ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+  }
+
+  var homeStampDetails: String {
     let values: [String?] = [.event, .meetup].contains(type)
-      ? [scheduleText, locationText, chipText, priceText, availabilityText]
-      : [subtitle ?? locationText, chipText, priceText, scheduleText, availabilityText]
+      ? [scheduleText, priceText, locationText, chipText]
+      : [subtitle ?? locationText, priceText, chipText, scheduleText]
     var parts: [String] = []
     for value in values {
       let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

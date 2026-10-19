@@ -47,7 +47,7 @@ struct CaptroFeedMediaStamp: View {
   }
 
   private var captionLines: Int? {
-    min(maxCaptionLines, CaptroHomeStampTextBudget.captionLines(title: clean(content.title), metadata: metadata,
+    min(maxCaptionLines, CaptroHomeStampTextBudget.captionLines(title: clean(content.title), metadata: [metadata, clean(content.availabilityText) ?? ""].filter { !$0.isEmpty }.joined(separator: "\n"),
       caption: caption, creator: clean(content.username) != nil, width: stampWidth - 22,
       height: readingBudget, titleSize: titleSize, bodySize: bodySize,
       metadataSize: metadataSize, creatorSize: creatorSize) ?? maxCaptionLines)
@@ -76,6 +76,13 @@ struct CaptroFeedMediaStamp: View {
           .fixedSize(horizontal: false, vertical: true)
           .padding(.top, clean(content.title) == nil ? 0 : 5)
       }
+      if let availability = clean(content.availabilityText) {
+        Text(availability)
+          .font(.system(size: metadataSize, weight: .semibold))
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 5)
+          .accessibilityIdentifier("home.post.stamp.availability")
+      }
       if let caption {
         Text(caption).font(.system(size: bodySize)).lineSpacing(2)
           .lineLimit(captionLines)
@@ -103,7 +110,7 @@ struct CaptroFeedMediaStamp: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  private var metadata: String { content.homeStampMetadata }
+  private var metadata: String { content.homeStampDetails }
   private var caption: String? { clean(content.description) ?? clean(content.summaryText) }
   private func clean(_ value: String?) -> String? {
     let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

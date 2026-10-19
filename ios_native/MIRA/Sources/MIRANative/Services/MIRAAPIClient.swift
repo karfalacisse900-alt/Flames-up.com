@@ -239,6 +239,14 @@ public final class MIRAAPIClient {
                   session: session, directUploadSession: directUploadSession)
   }
 
+  /// Telemetry is optional and must never be queued with a mutable account identity.
+  func telemetryClient() async -> MIRAAPIClient? {
+    let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
+    guard let token = await sessionProvider?.accessToken(), !token.isEmpty,
+          (try? await validateSessionGeneration(generation)) != nil else { return nil }
+    return pinned(to: token)
+  }
+
   public func uploadMultipart<T: Decodable>(
     _ path: String,
     fieldName: String = "file",

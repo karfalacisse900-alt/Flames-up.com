@@ -68,7 +68,7 @@ struct CaptroCommerceEditorFields: View {
           .foregroundStyle(MIRATheme.Color.textMuted)
         Spacer()
         Picker("Currency", selection: $draft.currency) {
-          ForEach(CaptroMoney.supportedCurrencies, id: \.self) { Text($0).tag($0) }
+          ForEach(CaptroMoney.creationCurrencies, id: \.self) { Text($0).tag($0) }
         }
         .pickerStyle(.menu)
       }

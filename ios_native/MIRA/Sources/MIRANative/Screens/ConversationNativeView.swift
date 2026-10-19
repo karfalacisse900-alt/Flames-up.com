@@ -86,7 +86,7 @@ final class ConversationNativeModel: ObservableObject {
   private func hydrateLocalMessages() async {
     guard messages.isEmpty else { return }
     if let snapshot = await localStore.loadThread(kind: kind, currentUserId: currentUserId, limit: 50) {
-      messages = snapshot.messages
+      messages = CaptroHiddenMessages.visible(snapshot.messages, account: currentUserId, kind: kind)
       lastSyncedAt = snapshot.lastSyncedAt ?? latestMessageCursor()
       lastServerSequence = snapshot.lastServerSequence
       hasOlderMessages = snapshot.hasOlderRemote
@@ -115,7 +115,7 @@ final class ConversationNativeModel: ObservableObject {
         rows = response.messages
       }
       if !rows.isEmpty || messages.isEmpty {
-        messages = await localStore.merge(messages, with: rows)
+        messages = CaptroHiddenMessages.visible(await localStore.merge(messages, with: rows), account: currentUserId, kind: kind)
         lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
         lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
         if messages.count >= 50 { hasOlderMessages = true }
@@ -174,7 +174,7 @@ final class ConversationNativeModel: ObservableObject {
         groupInfo = response.group
         rows = response.messages
       }
-      messages = await localStore.reconcileRecent(messages, with: rows)
+      messages = CaptroHiddenMessages.visible(await localStore.reconcileRecent(messages, with: rows), account: currentUserId, kind: kind)
       lastSyncedAt = latestMessageCursor()
       lastServerSequence = messages.compactMap(\.serverSequence).max()
       hasOlderMessages = rows.count >= 50 || messages.filter { !$0.id.hasPrefix("local-") }.count > rows.count
@@ -229,7 +229,7 @@ final class ConversationNativeModel: ObservableObject {
         await persistThread()
         return
       }
-      messages = await localStore.merge(rows, with: messages)
+      messages = CaptroHiddenMessages.visible(await localStore.merge(rows, with: messages), account: currentUserId, kind: kind)
       hasOlderMessages = rows.count >= 50
       prefetchMessageMedia(rows)
       await persistThread()
@@ -289,6 +289,7 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   func deleteForMe(_ message: MIRAMessage) {
+    CaptroHiddenMessages.hide(message.id, account: currentUserId, kind: kind)
     messages.removeAll { $0.id == message.id }
     Task { await persistThread() }
   }

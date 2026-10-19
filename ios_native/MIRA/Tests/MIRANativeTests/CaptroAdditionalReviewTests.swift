@@ -2,6 +2,49 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroAdditionalReviewTests: XCTestCase {
+  func testCreationCurrenciesDoNotEnableUnreviewedSettlement() {
+    XCTAssertEqual(CaptroMoney.creationCurrencies, ["USD"])
+    XCTAssertEqual(CaptroMoney.defaultCurrency, "USD")
+    var draft = CaptroCommerceDraft()
+    draft.enabled = true; draft.isPaid = true; draft.currency = "JPY"
+    draft.prices[0].price = "1000"
+    XCTAssertNotNil(draft.validationError)
+    XCTAssertEqual(draft.currency, "JPY") // never silently rescale an old draft
+    XCTAssertEqual(draft.prices[0].price, "1000")
+  }
+
+  func testNotificationRoutingUsesTypedCanonicalTargetsNotArbitraryLinks() throws {
+    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+    func item(_ type: String, _ data: String) throws -> MIRANotification {
+      try decoder.decode(MIRANotification.self, from: Data("{\"id\":\"fixture\",\"type\":\"\(type)\",\"data\":\(data)}".utf8))
+    }
+    XCTAssertEqual(CaptroNotificationTarget.resolve(try item("comment_reply", #"{"post_id":"post-1"}"#)), .post("post-1"))
+    XCTAssertEqual(CaptroNotificationTarget.resolve(try item("message", #"{"sender_id":"peer-1"}"#)), .direct("peer-1"))
+    XCTAssertEqual(CaptroNotificationTarget.resolve(try item("group_message", #"{"group_id":"group-1"}"#)), .group("group-1"))
+    XCTAssertNil(CaptroNotificationTarget.resolve(try item("new_post", #"{"post_id":"../private"}"#)))
+    XCTAssertNil(CaptroNotificationTarget.resolve(try item("new_post", #"{"url":"https://evil.invalid"}"#)))
+  }
+
+  func testHiddenMessagesSurviveRefreshAndRemainAccountAndThreadScoped() throws {
+    let suite = "captro.hidden.fixture.\(UUID())"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let message = try JSONDecoder().decode(MIRAMessage.self, from: Data(#"{"id":"message-1"}"#.utf8))
+    CaptroHiddenMessages.hide(message.id, account: "a", kind: .direct(peerId: "b"), defaults: defaults)
+    XCTAssertTrue(CaptroHiddenMessages.visible([message], account: "a", kind: .direct(peerId: "b"), defaults: defaults).isEmpty)
+    let reopened = try XCTUnwrap(UserDefaults(suiteName: suite))
+    XCTAssertTrue(CaptroHiddenMessages.visible([message], account: "a", kind: .direct(peerId: "b"), defaults: reopened).isEmpty)
+    XCTAssertEqual(CaptroHiddenMessages.visible([message], account: "b", kind: .direct(peerId: "a"), defaults: defaults).count, 1)
+    XCTAssertEqual(CaptroHiddenMessages.visible([message], account: "a", kind: .group(groupId: "b"), defaults: defaults).count, 1)
+  }
+
+  func testTelemetryEnqueueDoesNotWaitForStalledDelivery() async {
+    let queue = CaptroTelemetryQueue(capacity: 2)
+    let start = Date()
+    await queue.enqueue { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+    for _ in 0..<100 { await queue.enqueue { } }
+    XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+  }
   func testProfileLinksValidateOnlyCanonicalAppRoutes() throws {
     let url = try XCTUnwrap(CaptroProfileLink.url(userID: "owner-123"))
     XCTAssertEqual(CaptroProfileLink.parse(url)?.id, "owner-123")

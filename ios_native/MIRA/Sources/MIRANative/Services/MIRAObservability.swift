@@ -14,6 +14,32 @@ private struct MIRAClientEventResponse: Decodable {
   let accepted: Bool?
 }
 
+/// Lossy, bounded telemetry: never retain an unbounded offline spool or wait for
+/// delivery in an upload's success/error path. Requests keep their original identity.
+actor CaptroTelemetryQueue {
+  static let shared = CaptroTelemetryQueue()
+  private var jobs: [(Date, () async -> Void)] = []
+  private var draining = false
+  private let capacity: Int
+  init(capacity: Int = 16) { self.capacity = max(1, capacity) }
+
+  func enqueue(_ operation: @escaping () async -> Void) {
+    guard jobs.count < capacity else { return }
+    jobs.append((Date(), operation))
+    guard !draining else { return }
+    draining = true
+    Task { await drain() }
+  }
+
+  private func drain() async {
+    while !jobs.isEmpty {
+      let (created, operation) = jobs.removeFirst()
+      if Date().timeIntervalSince(created) < 15 { await operation() }
+    }
+    draining = false
+  }
+}
+
 public enum MIRAObservability {
   public static func record(
     _ eventName: String,
@@ -33,10 +59,9 @@ public enum MIRAObservability {
       platform: "ios"
     )
 
-    do {
-      let _: MIRAClientEventResponse = try await api.post("/client/events", body: body)
-    } catch {
-      // Telemetry must never block the user flow.
+    guard let client = await api.telemetryClient() else { return }
+    await CaptroTelemetryQueue.shared.enqueue {
+      let _: MIRAClientEventResponse? = try? await client.post("/client/events", body: body)
     }
   }
 

@@ -377,6 +377,7 @@ actor MIRAAppCacheStore {
   func loadPostDraftMedia(_ draft: MIRAPostDraftSnapshot, snapshots: [MIRAPostDraftMediaSnapshot]? = nil) async -> [MIRAPickedMedia] {
     (snapshots ?? draft.media).compactMap { item in
       guard let data = try? Data(contentsOf: URL(fileURLWithPath: item.localFilePath)),
+            !data.isEmpty,
             let kind = MIRAPickedMediaKind(rawValue: item.kind)
       else { return nil }
       return MIRAPickedMedia(

@@ -1,5 +1,24 @@
 import Foundation
 
+enum CaptroHiddenMessages {
+  static func key(account: String, kind: ConversationNativeKind) -> String {
+    let thread: String
+    switch kind { case .direct(let id): thread = "direct.\(id)"; case .group(let id): thread = "group.\(id)" }
+    return "captro.chat.hidden.v1.\(account).\(thread)"
+  }
+  static func hide(_ id: String, account: String, kind: ConversationNativeKind, defaults: UserDefaults = .standard) {
+    guard !account.isEmpty else { return }
+    let key = key(account: account, kind: kind)
+    var ids = Set(defaults.stringArray(forKey: key) ?? [])
+    ids.insert(id)
+    defaults.set(ids.sorted(), forKey: key)
+  }
+  static func visible(_ rows: [MIRAMessage], account: String, kind: ConversationNativeKind, defaults: UserDefaults = .standard) -> [MIRAMessage] {
+    let ids = Set(defaults.stringArray(forKey: key(account: account, kind: kind)) ?? [])
+    return rows.filter { !ids.contains($0.id) }
+  }
+}
+
 public struct MIRAChatThreadSnapshot: Codable, Hashable {
   public let messages: [MIRAMessage]
   public let lastSyncedAt: String?

@@ -1007,6 +1007,7 @@ private struct MIRAResolvedVideoPlayer: View {
   @State private var videoMetric: MIRAPerformanceMetric?
   @State private var generatedThumbnail: UIImage?
   @State private var isPlayerReady = false
+  @State private var hasPresentedFrame = false
   @State private var globallyPaused = false
   @State private var videoRetryAttempt = 0
   @State private var streamReadyRetryAttempt = 0
@@ -1032,9 +1033,13 @@ private struct MIRAResolvedVideoPlayer: View {
       }
 
       if let player {
-        MIRAVideoPlayerView(player: player, contentMode: contentMode)
-          .opacity(isPlayerReady ? 1 : 0)
-          .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: isPlayerReady)
+        MIRAVideoPlayerView(player: player, contentMode: contentMode) { presentedPlayer, ready in
+          guard self.player === presentedPlayer else { return }
+          hasPresentedFrame = ready
+          if ready { MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "layer_presented") }
+        }
+          .opacity(hasPresentedFrame ? 1 : 0)
+          .animation(CaptroMotion.mediaFadeAnimation(reduceMotion: reduceMotion), value: hasPresentedFrame)
           .onAppear { syncPlayback(player) }
           .onDisappear {
             MIRAPlaybackCoordinator.releaseVideo(player)
@@ -1204,7 +1209,6 @@ private struct MIRAResolvedVideoPlayer: View {
       await startVideoMetric(label: "prewarmed")
       syncPlayback(prewarmedPlayer)
       observeReadiness(prewarmedPlayer, expectedURL: url)
-      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "prewarmed")
       return
     }
 
@@ -1224,7 +1228,6 @@ private struct MIRAResolvedVideoPlayer: View {
       await startVideoMetric(label: directURL.host ?? directURL.path)
       syncPlayback(avPlayer)
       observeReadiness(avPlayer, expectedURL: url)
-      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "direct")
       return
     }
 
@@ -1289,7 +1292,6 @@ private struct MIRAResolvedVideoPlayer: View {
       Task { await startVideoMetric(label: "stream \(info.uid ?? "video")") }
       syncPlayback(avPlayer)
       observeReadiness(avPlayer, expectedURL: url)
-      MIRAPerformanceTimeline.markOnce("time_to_first_video_frame", detail: "stream")
     } else if createPlayer {
       failed = false
       stopVideoMetric(status: "not_ready")
@@ -1497,6 +1499,42 @@ private struct MIRAResolvedVideoPlayer: View {
 private struct MIRAVideoPlayerView: UIViewRepresentable {
   let player: AVPlayer
   let contentMode: ContentMode
+  let onReadiness: (AVPlayer, Bool) -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  @MainActor final class Coordinator {
+    var observation: NSKeyValueObservation?
+    var generation = UUID()
+    var player: AVPlayer?
+    var item: AVPlayerItem?
+    func bind(_ view: PlayerView, player: AVPlayer, callback: @escaping (AVPlayer, Bool) -> Void) {
+      guard self.player !== player || item !== player.currentItem else { return }
+      observation = nil
+      generation = UUID()
+      self.player = player
+      item = player.currentItem
+      let expected = generation
+      view.playerLayer.player = player
+      // Never reveal the new layer using readiness left over from another item.
+      view.playerLayer.opacity = 0
+      observation = view.playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self, weak view] layer, _ in
+        let ready = layer.isReadyForDisplay
+        Task { @MainActor in
+          guard let self, let view, self.generation == expected,
+                self.player === player, self.item === player.currentItem else { return }
+          view.playerLayer.opacity = ready ? 1 : 0
+          callback(player, ready)
+        }
+      }
+    }
+    func invalidate() { generation = UUID(); observation = nil; player = nil; item = nil }
+  }
+
+  static func dismantleUIView(_ uiView: PlayerView, coordinator: Coordinator) {
+    coordinator.invalidate()
+    uiView.playerLayer.player = nil
+  }
 
   func makeUIView(context: Context) -> PlayerView {
 #if CAPTRO_PERFORMANCE_REVIEW
@@ -1505,7 +1543,7 @@ private struct MIRAVideoPlayerView: UIViewRepresentable {
 #endif
     let view = PlayerView()
     view.backgroundColor = .clear
-    view.playerLayer.player = player
+    context.coordinator.bind(view, player: player, callback: onReadiness)
     view.playerLayer.backgroundColor = UIColor.clear.cgColor
     view.playerLayer.videoGravity = videoGravity
     return view
@@ -1517,7 +1555,7 @@ private struct MIRAVideoPlayerView: UIViewRepresentable {
     defer { CaptroScrollWorkMetrics.end("playerLayerUpdate", start: work) }
 #endif
     uiView.backgroundColor = .clear
-    uiView.playerLayer.player = player
+    context.coordinator.bind(uiView, player: player, callback: onReadiness)
     uiView.playerLayer.backgroundColor = UIColor.clear.cgColor
     uiView.playerLayer.videoGravity = videoGravity
   }

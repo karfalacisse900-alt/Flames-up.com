@@ -28,8 +28,6 @@ final class NotificationNativeModel: ObservableObject {
         notifications = fresh
       }
       await MIRAAppCacheStore.shared.saveNotifications(fresh)
-      let _: EmptyResponse = try await api.post("/notifications/mark-read", body: EmptyBody())
-      notifications = await MIRAAppCacheStore.shared.markNotificationsRead(notifications)
       errorMessage = nil
     } catch {
       if notifications.isEmpty {
@@ -37,10 +35,24 @@ final class NotificationNativeModel: ObservableObject {
       }
     }
   }
+
+  func markOpened(_ id: String) async {
+    do {
+      let _: EmptyResponse = try await api.post("/notifications/mark-read", body: ReadBody(ids: [id]))
+      notifications = notifications.map { $0.id == id ? $0.updatingRead(true) : $0 }
+      await MIRAAppCacheStore.shared.saveNotifications(notifications)
+    } catch { errorMessage = "Opened, but read status couldn’t be saved. Refresh to retry." }
+  }
+  private struct ReadBody: Encodable { let ids: [String] }
 }
 
 public struct NotificationNativeView: View {
   @StateObject private var model: NotificationNativeModel
+  @State private var target: CaptroNotificationTarget?
+  @State private var targetPost: MIRAPost?
+  @State private var currentUserID = ""
+  @State private var opening = false
+  @State private var notice: String?
 
   public init(api: MIRAAPIClient) {
     _model = StateObject(wrappedValue: NotificationNativeModel(api: api))
@@ -58,8 +70,10 @@ public struct NotificationNativeView: View {
           MIRAEmptyState(title: "No notifications yet", message: "Likes, replies, follows, gifts, and posts will appear here.", systemImage: "bell")
         } else {
           ForEach(model.notifications) { item in
-            notificationRow(item)
+            Button { Task { await open(item) } } label: { notificationRow(item) }
+              .buttonStyle(.plain).disabled(opening)
           }
+          if let error = model.errorMessage { Text(error).font(.footnote) }
         }
       }
       .padding(MIRATheme.Space.md)
@@ -70,6 +84,36 @@ public struct NotificationNativeView: View {
     .miraHideTabBarOnAppear()
     .task { await model.load() }
     .refreshable { await model.load() }
+    .navigationDestination(item: $target) { destination in
+      switch destination {
+      case .post: if let targetPost { DiscoverPostDetailNativeView(post: targetPost, api: model.api) }
+      case .profile(let id): UserProfileNativeView(userId: id, api: model.api)
+      case .direct(let id): ConversationNativeView(peerId: id, title: "Conversation", api: model.api, currentUserId: currentUserID)
+      case .group(let id): ConversationNativeView(groupId: id, title: "Conversation", api: model.api, currentUserId: currentUserID)
+      }
+    }
+    .alert("Activity", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
+      Button("OK", role: .cancel) { notice = nil }
+    } message: { Text(notice ?? "") }
+  }
+
+  @MainActor private func open(_ item: MIRANotification) async {
+    guard !opening else { return }; opening = true; defer { opening = false }
+    guard let destination = CaptroNotificationTarget.resolve(item) else {
+      notice = item.body ?? "This activity has no available destination."
+      await model.markOpened(item.id)
+      return
+    }
+    do {
+      switch destination {
+      case .post(let id): targetPost = try await model.api.get("/posts/\(id)")
+      case .profile(let id): let _: MIRAUser = try await model.api.get("/users/\(id)")
+      case .direct, .group:
+        let me: MIRAUser = try await model.api.get("/auth/me"); currentUserID = me.id
+      }
+      target = destination
+      await model.markOpened(item.id)
+    } catch { notice = "This activity couldn’t be opened. It may be unavailable, or your connection needs to recover. Try again." }
   }
 
   private func notificationRow(_ item: MIRANotification) -> some View {
@@ -88,6 +132,9 @@ public struct NotificationNativeView: View {
           .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .fixedSize(horizontal: false, vertical: true)
+        if let created = CaptroStoryExpiry.date(item.createdAt) {
+          Text(created, style: .relative).font(.caption).foregroundStyle(.secondary)
+        }
       }
       Spacer()
       if item.isRead?.value == false {
@@ -1065,6 +1112,10 @@ public struct CreatePostNativeView: View {
   @State private var showBroadLocation = false
   @State private var broadLocationError: String?
   @State private var hasLoadedBroadLocation = false
+  @State private var loadingCapabilities = false
+  @State private var capabilitiesError: String?
+  @State private var missingDraftMediaCount = 0
+  @State private var showMissingDraftMedia = false
   @State private var taggedUsers: [MIRAUser] = []
   @State private var hashtags: [String] = []
   @State private var selectedAudioTrack: MIRAAudiusTrack?
@@ -1104,6 +1155,16 @@ public struct CreatePostNativeView: View {
         .toolbarBackground(.visible, for: .navigationBar)
     }
     .interactiveDismissDisabled(isPosting || hasUnsavedPost)
+    .alert("Some draft attachments are unavailable", isPresented: $showMissingDraftMedia) {
+      Button("Retry recovery") { Task { hasRestoredPostDraft = false; await restorePostDraftIfNeeded() } }
+      Button("Remove missing attachments", role: .destructive) {
+        missingDraftMediaCount = 0
+        cacheComposerDraft(includeMedia: true)
+      }
+      Button("Keep draft", role: .cancel) { }
+    } message: {
+      Text("\(missingDraftMediaCount) attachment(s) could not be restored. Your saved draft is unchanged. Retry recovery or explicitly remove the missing attachments before publishing.")
+    }
     .alert("Discard this post?", isPresented: $showDiscardConfirmation) {
       Button("Discard post", role: .destructive) { close() }
       Button("Keep editing", role: .cancel) { writingFocused = true }
@@ -1570,6 +1631,14 @@ public struct CreatePostNativeView: View {
             } else { presentation = nil }
           }
         }
+        if missingDraftMediaCount > 0 {
+          CaptroEditorialMenuRow(title: "Recover missing attachments") { showMissingDraftMedia = true }
+        }
+        if loadingCapabilities { ProgressView("Checking creation options…") }
+        if let capabilitiesError {
+          Text(capabilitiesError).font(.footnote)
+          CaptroEditorialMenuRow(title: "Retry creation options") { Task { await loadCreationCapabilities() } }
+        }
         if creationCapabilities?.structuredTypes.isEmpty == false {
           Rectangle().fill(MIRATheme.Color.editorialMenuText.opacity(0.28)).frame(height: 0.5).padding(.vertical, 3)
           CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) { showsMoreCreationWays = true }
@@ -1878,7 +1947,7 @@ public struct CreatePostNativeView: View {
         TextField("Price", text: primaryCommercePrice)
           .keyboardType(.decimalPad)
         Picker("Currency", selection: $draft.commerceDraft.currency) {
-          ForEach(CaptroMoney.supportedCurrencies, id: \.self) { Text($0).tag($0) }
+          ForEach(CaptroMoney.creationCurrencies, id: \.self) { Text($0).tag($0) }
         }
         Picker("Used for", selection: $draft.commerceDraft.isUsedOutsideApp) {
           Text("In person / service").tag(true)
@@ -2072,6 +2141,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var canPost: Bool {
+    guard missingDraftMediaCount == 0 else { return false }
     guard pendingInitialCapture.isEmpty, mediaItems.count <= CaptroComposerMediaHandoff.maximumItems else { return false }
     guard mediaItems.allSatisfy({ $0.postFraming?.isValid == true }) else { return false }
     guard draft.writingValidationMessage == nil, draft.mediaRequirementMessage == nil else { return false }
@@ -2497,6 +2567,8 @@ public struct CreatePostNativeView: View {
     guard let draft = await MIRAAppCacheStore.shared.loadPostDraft() else { return }
     restoredComposition = true
     let restoredMedia = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft)
+    missingDraftMediaCount = max(0, draft.media.count - restoredMedia.count)
+    showMissingDraftMedia = missingDraftMediaCount > 0
     isRestoringPostDraft = true
     defer { isRestoringPostDraft = false }
     title = draft.title
@@ -2557,6 +2629,8 @@ public struct CreatePostNativeView: View {
 
   @MainActor
   private func persistComposerDraft(uploadStatus: String, errorMessage: String?, includeMedia: Bool) async {
+    // Do not overwrite the original manifest with a silently shortened draft.
+    guard missingDraftMediaCount == 0 else { return }
     guard hasRestoredPostDraft, !isClosing, !Task.isCancelled else { return }
     guard hasUnsavedPost else {
       await MIRAAppCacheStore.shared.clearPostDraft()
@@ -2770,10 +2844,23 @@ public struct CreatePostNativeView: View {
         draft.audience = audience
         initialAudience = audience
       }
-      creationCapabilities = try? await api.get("/posts/creation-capabilities")
       // Opening the composer never assigns a location or requests location permission.
     } catch {
       broadLocation = MIRABroadDisplayLocation()
+    }
+    await loadCreationCapabilities()
+  }
+
+  @MainActor
+  private func loadCreationCapabilities() async {
+    guard !loadingCapabilities else { return }
+    loadingCapabilities = true
+    defer { loadingCapabilities = false }
+    do {
+      creationCapabilities = try await api.get("/posts/creation-capabilities")
+      capabilitiesError = nil
+    } catch {
+      capabilitiesError = "Creation options couldn’t be verified. Your draft is safe."
     }
   }
 
@@ -3961,6 +4048,12 @@ private struct PostPeopleTagSheet: View {
   @State private var query = ""
   @State private var users: [MIRAUser] = []
   @State private var isLoading = false
+  @State private var pendingUsers: [MIRAUser] = []
+  @State private var initialized = false
+  @State private var searchError: String?
+  @State private var searchGeneration = UUID()
+  @State private var retryGeneration = 0
+  @State private var limitReached = false
 
   var body: some View {
     NavigationStack {
@@ -3979,9 +4072,9 @@ private struct PostPeopleTagSheet: View {
         .padding(MIRATheme.Space.md)
 
         List {
-          if !selectedUsers.isEmpty {
+          if !pendingUsers.isEmpty {
             Section("Tagged") {
-              ForEach(selectedUsers) { user in
+              ForEach(pendingUsers) { user in
                 personRow(user, selected: true)
                   .listRowBackground(MIRATheme.Color.surface)
               }
@@ -3993,9 +4086,16 @@ private struct PostPeopleTagSheet: View {
               ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 58)
                 .listRowBackground(MIRATheme.Color.surface)
+            } else if let searchError {
+              VStack(alignment: .leading, spacing: 8) {
+                Text(searchError)
+                Button("Retry search") { retryGeneration += 1 }
+              }
+            } else if users.isEmpty && query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 {
+              Text("No people found.")
             } else {
               ForEach(users) { user in
-                personRow(user, selected: selectedUsers.contains(where: { $0.id == user.id }))
+                personRow(user, selected: pendingUsers.contains(where: { $0.id == user.id }))
                   .listRowBackground(MIRATheme.Color.surface)
               }
             }
@@ -4012,12 +4112,18 @@ private struct PostPeopleTagSheet: View {
           Button("Cancel") { close() }
         }
         ToolbarItem(placement: .topBarTrailing) {
-          Button("Done") { close() }
+          Button("Done") { selectedUsers = pendingUsers; close() }
             .fontWeight(.semibold)
         }
       }
-      .task(id: query) {
-        try? await Task.sleep(nanoseconds: 250_000_000)
+      .onAppear {
+        if !initialized { pendingUsers = selectedUsers; initialized = true }
+      }
+      .alert("You can tag up to 10 people.", isPresented: $limitReached) {
+        Button("OK", role: .cancel) { }
+      }
+      .task(id: "\(query)|\(retryGeneration)") {
+        do { try await Task.sleep(nanoseconds: 250_000_000) } catch { return }
         await searchUsers()
       }
     }
@@ -4052,11 +4158,11 @@ private struct PostPeopleTagSheet: View {
   }
 
   private func toggle(_ user: MIRAUser) {
-    if let index = selectedUsers.firstIndex(where: { $0.id == user.id }) {
-      selectedUsers.remove(at: index)
-    } else if selectedUsers.count < 10 {
-      selectedUsers.append(user)
-    }
+    if let index = pendingUsers.firstIndex(where: { $0.id == user.id }) {
+      pendingUsers.remove(at: index)
+    } else if pendingUsers.count < 10 {
+      pendingUsers.append(user)
+    } else { limitReached = true }
   }
 
   private func close() {
@@ -4069,14 +4175,25 @@ private struct PostPeopleTagSheet: View {
 
   @MainActor
   private func searchUsers() async {
+    let generation = UUID()
+    searchGeneration = generation
+    searchError = nil
     let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard clean.count >= 2 else {
       users = []
+      isLoading = false
       return
     }
     isLoading = true
-    defer { isLoading = false }
-    users = (try? await api.get("/users/search/\(clean.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? clean)")) ?? []
+    defer { if searchGeneration == generation { isLoading = false } }
+    do {
+      let result: [MIRAUser] = try await api.get("/users/search/\(clean.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? clean)")
+      guard !Task.isCancelled, searchGeneration == generation, clean == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+      users = result
+    } catch {
+      guard !Task.isCancelled, searchGeneration == generation else { return }
+      searchError = "Unable to search. Check your connection and try again."
+    }
   }
 }
 
@@ -4306,7 +4423,7 @@ public struct CreateStoryNativeView: View {
         onCancel: {
           closeCamera()
           DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : MIRATransitionTiming.fullScreenClose)) {
-            close()
+            if pendingStoryMedia == nil && !isTextStory { close() }
           }
         },
         onMusic: {
@@ -4355,8 +4472,6 @@ public struct CreateStoryNativeView: View {
       VStack(spacing: 0) {
         HStack {
           Button {
-            isTextStory = false
-            pendingStoryMedia = nil
             errorMessage = nil
             showCamera = true
           } label: {
