@@ -169,6 +169,7 @@ test('duplicate detection works without putting private text into a PostgREST UR
     const secretText = 'Private text that must not enter the query URL';
     let queries = 0;
     const route = run(handler('post', path), {
+      getClientRequestId: () => '', uuid: () => 'legacy-new-message',
       getUserId: () => 'alice', requireSupabasePrimaryDatabase: () => null,
       enforceRateLimit: async () => null, enforceUserRestriction: async () => null,
       rejectLargeRequest: () => null, rejectUnknownFields: () => null,

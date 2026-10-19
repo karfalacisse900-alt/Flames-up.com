@@ -10,19 +10,23 @@ import {stripTypeScriptTypes} from 'node:module';
 import {reconcileHostedHold} from '../src/hosted-hold.ts';
 import {dashboardResults} from '../src/dashboard-results.ts';
 
-test('USD and JPY use the same integer provider contract across draft, price and checkout', () => {
+test('exact USD/JPY units remain readable, but only reviewed USD settlement can create paid prices', () => {
   for (const [currency, decimal] of [['USD','10.00'],['JPY','1000']]) {
     const amount = decimalProviderUnits(decimal, currency);
     assert.equal(amount, 1000);
-    const config = validateCommerceInput({enabled:true, contentType:'event', paymentModel:'paid', commerceClass:'outside_app',
+    const create = () => validateCommerceInput({enabled:true, contentType:'event', paymentModel:'paid', commerceClass:'outside_app',
       title:'Fixture', currency, moneyContractVersion:1, prices:[{label:'General',unitAmount:amount}]},
       {postType:'event',title:'Fixture',description:'',visibility:'public'});
-    assert.equal(config.prices[0].unit_amount, 1000);
-    assert.equal(config.prices[0].currency, currency);
     if(currency==='USD') {
+      const config = create();
+      assert.equal(config.prices[0].unit_amount, 1000);
+      assert.equal(config.prices[0].currency, currency);
       const fee=currencyFeeUnits({},currency);
       assert.equal(saleAmounts(amount,{basisPoints:500,fixedAmount:fee.fixed,minimumAmount:fee.minimum,buyerPaysPlatformFee:true,creatorPaysPlatformFee:false}).buyerTotal,1080);
-    } else assert.throws(()=>currencyFeeUnits({CAPTRO_CURRENCY_FEES:'{"JPY":{"fixed":30,"minimum":0}}'},currency),/SETTLEMENT_NOT_SUPPORTED/);
+    } else {
+      assert.throws(create,/supports USD only/);
+      assert.throws(()=>currencyFeeUnits({CAPTRO_CURRENCY_FEES:'{"JPY":{"fixed":30,"minimum":0}}'},currency),/SETTLEMENT_NOT_SUPPORTED/);
+    }
   }
 });
 test('invalid precision, unsafe units, unsupported and provider-special currencies fail closed', () => {
@@ -33,7 +37,7 @@ test('invalid precision, unsafe units, unsupported and provider-special currenci
   assert.throws(()=>validateCurrencyAmount(1000.1,'JPY'));
   assert.throws(()=>currencyFeeUnits({},'JPY'),/SETTLEMENT_NOT_SUPPORTED/);
   assert.throws(()=>validateCommerceInput({enabled:true,contentType:'event',paymentModel:'paid',commerceClass:'outside_app',
-    title:'Old draft',currency:'JPY',prices:[{unitAmount:100000}]}, {postType:'event',title:'Old draft',description:'',visibility:'public'}),/Update Captro/);
+    title:'Old draft',currency:'JPY',prices:[{unitAmount:100000}]}, {postType:'event',title:'Old draft',description:'',visibility:'public'}),/supports USD only/);
 });
 test('admin totals, negative refunds and informational event prices use the same precision',()=>{
   assert.equal(formatProviderMoney(1000,'USD','en-US'),'$10.00');

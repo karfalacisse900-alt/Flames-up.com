@@ -1,3 +1,6 @@
+import { runAccountCleanup } from './account-cleanup';
+import { reliabilityRolloutBlocks } from './reliability-rollout';
+import { chatOperationID, sameChatOperation, persistChatOperation } from './chat-idempotency';
 import { registerConsoleRoutes, consoleUserFilters, activeAdminRestriction } from './admin-console';
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
 import { dashboardResults } from './dashboard-results';
@@ -49,6 +52,8 @@ type MediaModerationJobMessage = {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
+  CAPTRO_RELIABILITY_ROLLOUT?: string;
+  CAPTRO_ACCOUNT_CLEANUP_MANIFEST?: string;
   CAPTRO_PAYMENT_RECOVERY_ACTIONS?: string;
   STRIPE_MODE?: string;
   CAPTRO_PAYOUT_FEE_POLICY?: string;
@@ -183,6 +188,10 @@ const api = new Hono<HonoApp>();
 // Older clients get an explicit retirement response, never a fake success.
 // Historic voice access/deletion and moderation jobs remain authorized normally.
 api.use('*', async (c, next) => {
+  if (reliabilityRolloutBlocks(c.env.CAPTRO_RELIABILITY_ROLLOUT, c.req.method, c.req.path)) {
+    c.header('Retry-After', '60');
+    return c.json({ code:'RELIABILITY_MAINTENANCE', detail:'This action is temporarily paused for an update. Your work is preserved. Please retry shortly.' },503);
+  }
   const code = retiredFeatureCode(c.req.method, c.req.path);
   if (code) return c.json({ code, detail: code === 'VOICE_RETIRED'
     ? 'Voice features are no longer available. Your saved data has not been deleted.'
@@ -3231,6 +3240,7 @@ function getClientRequestId(c: any, body?: any): string | null {
   const raw = c.req.header('Idempotency-Key')
     || c.req.header('X-Idempotency-Key')
     || body?.client_request_id
+    || body?.clientRequestId
     || body?.idempotency_key
     || body?.request_id;
   const clean = String(raw || '').trim().replace(/[^a-zA-Z0-9_.:-]/g, '').slice(0, 120);
@@ -12891,8 +12901,7 @@ async function deleteSupabaseAuthUser(c: any, supabaseUserId: unknown) {
     headers: supabaseAdminAuthHeaders(c),
   });
   if (!response.ok && response.status !== 404) {
-    const text = await response.text().catch(() => '');
-    console.warn(JSON.stringify({ event: 'supabase_auth_cleanup_failed', status: response.status, code: text.slice(0, 120) }));
+    throw new Error(`SUPABASE_AUTH_CLEANUP_FAILED:${response.status}`);
   }
 }
 
@@ -15641,15 +15650,12 @@ async function restorePendingAccount(c: any) {
   if (String(user.status || 'active') !== 'deletion_pending') {
     return c.json({ restored: false, user: authUserPayload(user) });
   }
-  const metadata = parseJsonObject(currentRow.metadata);
-  metadata.status = 'active';
-  delete metadata.deletion_requested_at;
-  delete metadata.deletion_scheduled_at;
-  delete metadata.session_revoked_at;
-  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(publicId(user.id, 120)) }, {
-    metadata,
-    updated_at: now(),
-  });
+  try {
+    await supabaseAdminRpc(c, 'captro_restore_pending_account', { p_user: publicId(user.id,120) });
+  } catch (error) {
+    if (!getErrorCode(error).includes('CLEANUP_ALREADY_STARTED')) throw error;
+    return c.json({ detail:'Permanent cleanup has started. This account cannot be restored.', code:'CLEANUP_ALREADY_STARTED' },409);
+  }
   await updateSupabaseAuthUser(c, user.supabase_user_id, {
     user_metadata: { captro_user_id: user.id, account_status: 'active' },
     app_metadata: { captro_account_status: 'active' },
@@ -16427,10 +16433,11 @@ api.get('/users/me/follow-requests', authMiddleware, async (c) => {
   const users = await supabaseUsersByAnyIds(c, rows.map(row => row.app_follower_id));
   const blocked = await supabaseBlockedUserIds(c, userId);
   c.header('Cache-Control', 'no-store');
-  return c.json(rows.filter(row => !blocked.has(row.app_follower_id) && supabaseUserIsActive(users.get(row.app_follower_id))).map(row => {
+  const visible = rows.filter(row => !blocked.has(row.app_follower_id) && supabaseUserIsActive(users.get(row.app_follower_id))).map(row => {
     const user = users.get(row.app_follower_id);
     return { id: row.app_follower_id, username: publicUsernameFor(user), full_name: cleanText(user?.full_name, 120), profile_image: safeMediaReference(user?.avatar_url) };
-  }));
+  });
+  return c.json(c.req.query('paged') === '1' ? { users: visible, next_skip: rows.length === 30 ? skip + rows.length : null } : visible);
 });
 
 api.post('/users/me/follow-requests/:requesterId', authMiddleware, async (c) => {
@@ -18899,6 +18906,18 @@ api.post('/messages', authMiddleware, async (c) => {
   const invalidPeer = await validateDirectMessagePeer(c, userId, receiverId);
   if (invalidPeer) return invalidPeer;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty.' }, 400);
+  const requestKey = getClientRequestId(c, b);
+  if (requestKey && !/^[a-zA-Z0-9_.:-]{1,120}$/.test(requestKey)) return c.json({detail:'Invalid send request ID.'},400);
+  const id = requestKey ? await chatOperationID(userId, 'direct', receiverId, requestKey) : uuid();
+  const expectedMessage = { sender_id:userId, receiver_id:receiverId, body:content, media_url:mediaUrl||null, media_type:mediaType };
+  if (requestKey) {
+    const previous = await supabaseAdminQueryRows(c,'app_messages',{filters:{id:postgrestEqFilter(id)},limit:1});
+    if (previous[0]) {
+      try { sameChatOperation(previous[0],expectedMessage); }
+      catch { return c.json({detail:'This send request already belongs to a different message.',code:'CHAT_REQUEST_ID_CONFLICT'},409); }
+      return c.json(await messagePayload(c,supabaseMessageToLegacy(previous[0])));
+    }
+  }
   if (content && !mediaUrl) {
     const recentDuplicate = await supabaseAdminQueryRows(c, 'app_messages', {
       select: 'id,body',
@@ -18915,12 +18934,11 @@ api.post('/messages', authMiddleware, async (c) => {
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
   }
-  const id = uuid();
   const ts = now();
   const media: Record<string, unknown> = {};
   if (mediaUrl) media.url = mediaUrl;
   if (mediaType) media.type = mediaType;
-  await supabaseAdminUpsert(c, 'app_messages', [{
+  const intended = {
     id,
     sender_id: userId,
     receiver_id: receiverId,
@@ -18933,7 +18951,12 @@ api.post('/messages', authMiddleware, async (c) => {
     legacy_created_at: ts,
     created_at: ts,
     updated_at: ts,
-  }], 'id');
+  };
+  const persisted = await persistChatOperation(intended,
+    async () => (await supabaseAdminQueryRows(c,'app_messages',{filters:{id:postgrestEqFilter(id)},limit:1}))[0],
+    async () => { await supabaseAdminInsertRows(c,'app_messages',[intended]); });
+  if (!persisted.created) return c.json(await messagePayload(c,supabaseMessageToLegacy(persisted.row)));
+
   await setSupabasePrimaryTyping(c, userId, receiverId, false);
   runBackgroundTask(c, 'message_notification_failed', async () => {
     const sender = await supabaseUserByAnyId(c, userId);
@@ -19153,6 +19176,8 @@ api.get('/group-chats/:groupId/messages', authMiddleware, async (c) => {
 
 api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const restricted = await enforceUserRestriction(c, userId, 'messaging');
+  if (restricted) return restricted;
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'group_message_send');
   if (supabaseRequired) return supabaseRequired;
   const groupId = publicId(c.req.param('groupId'), 120);
@@ -19179,6 +19204,18 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
         ? 'file'
         : mediaUrl ? 'image' : null;
   if (!content && !mediaUrl) return c.json({ detail: 'Message is empty' }, 400);
+  const requestKey = getClientRequestId(c, body);
+  if (requestKey && !/^[a-zA-Z0-9_.:-]{1,120}$/.test(requestKey)) return c.json({detail:'Invalid send request ID.'},400);
+  const id = requestKey ? await chatOperationID(userId, 'group', groupId, requestKey) : uuid();
+  const expectedMessage = { sender_id:userId, group_id:groupId, body:content, media_url:mediaUrl||null, media_type:mediaType };
+  if (requestKey) {
+    const previous = await supabaseAdminQueryRows(c,'app_group_messages',{filters:{id:postgrestEqFilter(id)},limit:1});
+    if (previous[0]) {
+      try { sameChatOperation(previous[0],expectedMessage); }
+      catch { return c.json({detail:'This send request already belongs to a different message.',code:'CHAT_REQUEST_ID_CONFLICT'},409); }
+      return c.json(await messagePayload(c,supabaseMessageToLegacy(previous[0])));
+    }
+  }
   if (content && !mediaUrl) {
     const recentDuplicate = await supabaseAdminQueryRows(c, 'app_group_messages', {
       select: 'id,body',
@@ -19195,12 +19232,11 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
       return c.json({ detail: 'You already sent that message. Try again in a moment.' }, 429);
     }
   }
-  const id = uuid();
   const ts = now();
   const media: Record<string, unknown> = {};
   if (mediaUrl) media.url = mediaUrl;
   if (mediaType) media.type = mediaType;
-  await supabaseAdminUpsert(c, 'app_group_messages', [{
+  const intended = {
     id,
     group_id: groupId,
     sender_id: userId,
@@ -19211,7 +19247,12 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
     legacy_created_at: ts,
     created_at: ts,
     updated_at: ts,
-  }], 'id');
+  };
+  const persisted = await persistChatOperation(intended,
+    async () => (await supabaseAdminQueryRows(c,'app_group_messages',{filters:{id:postgrestEqFilter(id)},limit:1}))[0],
+    async () => { await supabaseAdminInsertRows(c,'app_group_messages',[intended]); });
+  if (!persisted.created) return c.json(await messagePayload(c,supabaseMessageToLegacy(persisted.row)));
+
   await supabaseAdminPatchRows(c, 'app_group_chats', { id: postgrestEqFilter(groupId) }, { updated_at: ts }).catch(() => undefined);
   return c.json(await messagePayload(c, supabaseMessageToLegacy({ id, group_id: groupId, sender_id: userId, body: content, media_url: mediaUrl || null, media_type: mediaType, media, created_at: ts, updated_at: ts, status: 'sent' })));
 });
@@ -19259,7 +19300,17 @@ api.post('/notifications/mark-read', authMiddleware, async (c) => {
   const userId = getUserId(c);
   const supabaseRequired = requireSupabasePrimaryDatabase(c, 'notifications_mark_read');
   if (supabaseRequired) return supabaseRequired;
-  await supabaseAdminPatchRows(c, 'app_notifications', { user_id: postgrestEqFilter(userId) }, { is_read: true, updated_at: now() });
+  const tooLarge = rejectLargeRequest(c, 16000); if (tooLarge) return tooLarge;
+  const body: any = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({detail:'Invalid notification request.'},400);
+  const filters: Record<string,string> = { user_id: postgrestEqFilter(userId) };
+  if ('ids' in body) {
+    if (!Array.isArray(body.ids) || body.ids.length<1 || body.ids.length>60 || body.ids.some((id:any)=>typeof id!=='string'||!id||id.length>120))
+      return c.json({detail:'Choose valid notification IDs.'},400);
+    filters.id = postgrestInFilter(body.ids);
+  }
+  // Empty legacy requests retain their old explicit bulk-read behavior.
+  await supabaseAdminPatchRows(c, 'app_notifications', filters, { is_read: true, updated_at: now() });
   return c.json({ marked: true });
 });
 
@@ -25918,28 +25969,22 @@ async function deleteCloudflareMediaAsset(env: Env, asset: any) {
   const accountId = cloudflareAccountId(env);
   const token = provider === 'stream' ? cloudflareStreamToken(env) : provider === 'images' ? cloudflareImagesToken(env) : '';
   if (provider === 'r2') {
-    await env.MEDIA_BACKUP?.delete(key).catch(() => {});
+    if (!env.MEDIA_BACKUP) throw Error('CLEANUP_R2_UNAVAILABLE');
+    await env.MEDIA_BACKUP.delete(key);
     return;
   }
-  if (!accountId || !token) return;
+  if (!accountId || !token) throw Error('CLEANUP_MEDIA_PROVIDER_UNAVAILABLE');
   const url = provider === 'stream'
     ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/stream/${encodeURIComponent(key)}`
     : provider === 'images'
       ? `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/images/v1/${encodeURIComponent(key)}`
       : '';
-  if (!url) return;
+  if (!url) throw Error('CLEANUP_MEDIA_PROVIDER_UNSUPPORTED');
   const response = await fetch(url, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` },
-  }).catch(() => null);
-  if (response && !response.ok && response.status !== 404) {
-    console.warn(JSON.stringify({
-      event: 'cloudflare_media_delete_failed',
-      provider,
-      status: response.status,
-      media_id: publicId(asset?.id || '', 120),
-    }));
-  }
+  });
+  if (!response.ok && response.status !== 404) throw Error('CLEANUP_MEDIA_DELETE_FAILED');
 }
 
 function chunkDeletionValues<T>(values: T[], size = 50): T[][] {
@@ -25960,84 +26005,81 @@ async function supabaseDeleteRowsByAnyField(c: any, table: string, fieldValues: 
     const cleanValue = cleanText(value, 240);
     if (!field || !cleanValue) continue;
     await supabaseAdminDeleteRowsIfShapeExists(c, table, { [field]: postgrestEqFilter(cleanValue) })
-      .catch((error: any) => console.warn(JSON.stringify({
-        event: 'supabase_account_deletion_table_cleanup_failed',
-        table,
-        field,
-        code: getErrorCode(error).slice(0, 180),
-      })));
+
   }
 }
 
 async function supabaseDeleteRowsForPostIds(c: any, table: string, field: string, postIds: string[]) {
   const cleanPostIds = Array.from(new Set(postIds.map((postId) => cleanText(postId, 120)).filter(Boolean)));
   for (const chunk of chunkDeletionValues(cleanPostIds)) {
-    await supabaseAdminDeleteRowsIfShapeExists(c, table, { [field]: postgrestInFilter(chunk) })
-      .catch((error: any) => console.warn(JSON.stringify({
-        event: 'supabase_account_deletion_post_cleanup_failed',
-        table,
-        field,
-        code: getErrorCode(error).slice(0, 180),
-      })));
+    await supabaseAdminDeleteRowsIfShapeExists(c, table, { [field]: postgrestInFilter(chunk) });
   }
 }
 
 async function permanentlyDeleteSupabaseAccount(env: Env, row: any) {
+  // The cross-store legacy/R2 inventory and retained-finance policy must be
+  // reviewed before destructive processing is enabled. Pending accounts remain
+  // inaccessible; absence of that approval must never become "deleted".
+  if (env.CAPTRO_ACCOUNT_CLEANUP_MANIFEST !== 'verified-v1') {
+    console.warn(JSON.stringify({ event: 'account_cleanup_attention', reason: 'manifest_review_required' }));
+    return;
+  }
   const c: any = { env };
-  const user = supabaseAppUserToLegacyUser(row);
-  const userId = publicId(user?.id, 120);
-  if (!userId || String(user?.status || '') === 'deleted') return;
-  const deletedAt = now();
-  const authUserId = isUuidText(row?.supabase_user_id || user?.supabase_user_id);
-
-  const identities = await supabaseAdminQueryRows(c, 'app_account_identities', {
-    select: 'provider,provider_user_id,email_hash',
-    filters: { user_id: postgrestEqFilter(userId) },
-    limit: 200,
-  }).catch(() => []);
-  const identityRows = identities.length ? identities : [{
-    provider: cleanText(user.oauth_provider || (user.email ? 'email' : ''), 40),
-    provider_user_id: cleanText(user.oauth_subject || authUserId || '', 240),
-    email_hash: user.email ? await privacyHash(c, normalizeOptionalEmail(user.email) || '') : '',
-  }];
-  for (const identity of identityRows) {
-    await supabaseAdminUpsertSafe(c, 'app_deleted_account_safety_records', [{
-      id: uuid(),
-      user_id: userId,
-      email_hash: cleanText(identity.email_hash || '', 160) || null,
-      provider: cleanText(identity.provider || '', 40) || null,
-      provider_user_id_hash: identity.provider_user_id ? await privacyHash(c, identity.provider_user_id) : null,
-      status_at_deletion: cleanText(user.status || 'deletion_pending', 40),
-      reason: cleanText(user.ban_reason || 'account_deletion', 160),
-      metadata: {
-        source: 'supabase_primary_scheduled_cleanup',
-        deleted_at: deletedAt,
-      },
-      created_at: deletedAt,
-    }], 'id');
-  }
-
-  const assets = await supabaseAdminQueryRows(c, 'app_media_assets', {
-    select: 'id,storage_provider,storage_key,media_type',
-    filters: { user_id: postgrestEqFilter(userId) },
-    limit: 10000,
-  }).catch(() => []);
-  for (const asset of assets) await deleteCloudflareMediaAsset(env, asset);
-
-  const postRows = await supabaseAdminQueryRows(c, 'app_posts', {
-    select: 'legacy_post_id',
-    filters: { app_user_id: postgrestEqFilter(userId) },
-    limit: 10000,
-  }).catch(() => []);
-  const postIds = postRows.map((post: any) => cleanText(post.legacy_post_id, 120)).filter(Boolean);
-  for (const table of ['app_post_places', 'post_comments', 'app_post_interactions', 'app_media_assets']) {
-    await supabaseDeleteRowsForPostIds(c, table, 'legacy_post_id', postIds);
-  }
-
-  await supabaseDeleteRowsByAnyField(c, 'app_moderation_results', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
-  await supabaseDeleteRowsByAnyField(c, 'app_moderation_jobs', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
-  await supabaseDeleteRowsByAnyField(c, 'app_moderation_events', assets.map((asset: any) => ['media_id', cleanText(asset.id, 120)]));
-
+  const userId = publicId(row?.id, 120);
+  if (!userId) return;
+  const job = await supabaseAdminRpc(c, 'captro_claim_account_cleanup', { p_user: userId });
+  if (!job?.lease_token) return;
+  const authUserId = job.auth_user_id;
+  const checkpoint = (phase: number, error: string | null) => supabaseAdminRpc(c, 'captro_checkpoint_account_cleanup',
+    { p_user: userId, p_token: job.lease_token, p_phase: phase, p_error: error });
+  await runAccountCleanup(job, [
+    async () => {
+      // Financial FKs deliberately restrict deletion. Never delete or reinterpret
+      // purchases/entitlements to get past them; require a reviewed retention plan.
+      for (const [table, field, value] of [
+        ['app_purchases','buyer_app_user_id',userId],
+        ['app_purchasables','creator_app_user_id',userId],
+        ['app_entitlements','holder_app_user_id',userId],
+      ]) {
+        if ((await supabaseAdminQueryRows(c, table, { select:'id',filters:{[field]:postgrestEqFilter(value)},limit:1 })).length)
+          throw Error('CLEANUP_FINANCIAL_RETENTION_REVIEW');
+      }
+      const user = supabaseAppUserToLegacyUser(row);
+      await supabaseAdminUpsert(c, 'app_deleted_account_safety_records', [{
+        id: userId, user_id:userId,
+        email_hash:user.email ? await privacyHash(c,normalizeOptionalEmail(user.email)||'') : null,
+        provider:cleanText(user.oauth_provider||'email',40),
+        provider_user_id_hash:user.oauth_subject ? await privacyHash(c,user.oauth_subject) : null,
+        status_at_deletion:'deletion_pending',reason:'account_deletion',
+        metadata:{source:'retryable_account_cleanup'},created_at:now(),
+      }], 'id');
+      return true;
+    },
+    async () => {
+      const assets = await supabaseAdminQueryRows(c,'app_media_assets',{
+        select:'id,storage_provider,storage_key,media_type',filters:{user_id:postgrestEqFilter(userId)},order:'id.asc',limit:50,
+      });
+      for (const asset of assets) {
+        await deleteCloudflareMediaAsset(env,asset);
+        for (const table of ['app_moderation_results','app_moderation_jobs','app_moderation_events'])
+          await supabaseDeleteRowsByAnyField(c,table,[['media_id',asset.id]]);
+        // Remove the locator only after every required provider operation succeeded.
+        await supabaseAdminDeleteRows(c,'app_media_assets',{id:postgrestEqFilter(asset.id),user_id:postgrestEqFilter(userId)});
+      }
+      return assets.length===0;
+    },
+    async () => {
+      const posts=await supabaseAdminQueryRows(c,'app_posts',{
+        select:'legacy_post_id',filters:{app_user_id:postgrestEqFilter(userId)},order:'legacy_post_id.asc',limit:50,
+      });
+      const postIds=posts.map((post:any)=>cleanText(post.legacy_post_id,120)).filter(Boolean);
+      if (posts.length!==postIds.length) throw Error('CLEANUP_POST_ID_MISSING');
+      for (const table of ['app_post_places','post_comments','app_post_interactions'])
+        await supabaseDeleteRowsForPostIds(c,table,'legacy_post_id',postIds);
+      await supabaseDeleteRowsForPostIds(c,'app_posts','legacy_post_id',postIds);
+      return posts.length===0;
+    },
+    async () => {
   const userScopedDeletes: Array<[string, Array<[string, string]>]> = [
     ['app_push_tokens', [['user_id', userId]]],
     ['app_notifications', [['user_id', userId], ['from_user_id', userId]]],
@@ -26048,7 +26090,6 @@ async function permanentlyDeleteSupabaseAccount(env: Env, row: any) {
     ['app_blocks', [['blocker_id', userId], ['blocked_id', userId]]],
     ['app_friend_requests', [['from_user_id', userId], ['to_user_id', userId]]],
     ['app_friendships', [['user_id', userId], ['friend_id', userId]]],
-    ['app_reports', [['reporter_id', userId], ['target_owner_user_id', userId], ['assigned_to', userId], ['reviewed_by', userId]]],
     ['app_messages', [['sender_id', userId], ['receiver_id', userId]]],
     ['app_group_messages', [['sender_id', userId]]],
     ['app_group_chat_members', [['user_id', userId]]],
@@ -26062,53 +26103,15 @@ async function permanentlyDeleteSupabaseAccount(env: Env, row: any) {
     ['app_account_identities', [['user_id', userId]]],
   ];
   for (const [table, filters] of userScopedDeletes) await supabaseDeleteRowsByAnyField(c, table, filters);
-  await supabaseDeleteRowsForPostIds(c, 'app_posts', 'legacy_post_id', postIds);
-
-  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(userId) }, {
-    supabase_user_id: null,
-    email: null,
-    username: `deleted_${userId.slice(0, 12)}`,
-    full_name: 'Deleted user',
-    avatar_url: null,
-    cover_url: null,
-    bio: '',
-    city: '',
-    is_private: true,
-    is_verified: false,
-    counts: { followers_count: 0, following_count: 0, posts_count: 0 },
-    profile: {},
-    metadata: {
-      status: 'deleted',
-      deleted_at: deletedAt,
-      permanent_deletion_completed_at: deletedAt,
+      return true;
     },
-    updated_at: deletedAt,
-  });
-
-  await writeSupabaseAuditLog(c, {
-    actionType: 'account_deletion_permanent_completed',
-    actorUserId: 'system',
-    actorRole: 'system',
-    targetType: 'user',
-    targetId: userId,
-    targetUserId: userId,
-    metadata: {
-      deleted_at: deletedAt,
-      deleted_media_count: assets.length,
-      deleted_post_count: postIds.length,
+    async () => {
+      // This step retains auth_user_id durably even if Auth's FK nulls app_users.
+      if (authUserId) await deleteSupabaseAuthUser(c,authUserId);
+      return true;
     },
-  }).catch((error: any) => console.warn(JSON.stringify({
-    event: 'supabase_account_deletion_audit_failed',
-    code: getErrorCode(error).slice(0, 180),
-  })));
-
-  if (authUserId) {
-    await deleteSupabaseAuthUser(c, authUserId).catch((error: any) => {
-      console.warn(JSON.stringify({ event: 'supabase_auth_permanent_delete_failed', code: getErrorCode(error).slice(0, 160), user_id: publicId(userId, 120) }));
-    });
-  }
+  ],checkpoint);
 }
-
 async function permanentlyDeleteAccount(env: Env, user: any) {
   const userId = publicId(user?.id, 120);
   if (!userId || String(user?.status || '') === 'deleted') return;
@@ -26357,6 +26360,7 @@ async function reconcileHostedPurchase(c: any, purchase: any, expireOpen = false
 }
 
 async function expireNativePaymentHolds(env: Env) {
+  if (env.CAPTRO_RELIABILITY_ROLLOUT === 'maintenance') return;
   const c: any = { env };
   if (!getStripeConfig(c).configured) return;
   await requireStripeDatabaseMode(c);

@@ -125,6 +125,7 @@ export function validateCommerceInput(value: unknown, options: {
   const capacity = integer(input.capacity, 1, 1_000_000);
   const currency = input.currency == null ? 'USD' : typeof input.currency === 'string' ? input.currency.trim().toUpperCase() : '';
   currencyRule(currency);
+  if (paymentModel === 'paid' && currency !== 'USD') throw new Error('Paid checkout currently supports USD only. Historical prices have not been changed.');
   // Older clients multiplied all currencies by 100. Do not accept ambiguous
   // non-USD drafts from those versions or reinterpret historical stored prices.
   if (currency !== 'USD' && read(input, 'moneyContractVersion', 'money_contract_version') !== 1) throw new Error('Update Captro to publish in this currency.');
