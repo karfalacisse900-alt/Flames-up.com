@@ -1,0 +1,162 @@
+CAPTRO — COORDINATED RELIABILITY REPAIR
+19 October 2026, America/New_York. CI timestamps use UTC.
+
+STATUS
+Backend/database deployed; native release validation in progress.
+This report does not certify every audit item as fixed.
+Physical-iPhone performance/camera acceptance remains OPEN.
+No customer messages, follow relationships, charges, refunds or transfers were
+created as tests. Tests use disposable local PostgreSQL/PGlite and provider mocks.
+
+BASELINE
+Prior distributed app: 1.0.1 (644.1), source 780ce49f.
+Prior Worker: a25d5a5a-4088-4ced-85bd-13a5f83d3549 (scoped Profile artifact).
+Working checkout: captro-profile-release-20261018, fix/additional-review-20261016.
+Unrelated docs/CAPTRO_APP_REVIEW_20261018.txt and supabase/.temp preserved.
+
+IMPLEMENTATION COMMITS
+0c864940: notification navigation/read policy, bounded asynchronous telemetry,
+  actual video-layer first-frame readiness, draft-loss warning/publication block,
+  Story Back capture retention, Tag People Cancel/search, capability retry,
+  Profile refresh/follow-request pagination, USD-only paid creation, stamp status,
+  semantic comment fonts and Home media recovery tests added to release validation.
+a18adf86: persisted chat request identity and canonical message reconciliation.
+c006d337: matching API idempotency, activity pagination/read scope, durable cleanup
+  checkpoints prepared with destructive processing disabled pending inventory.
+4b19ac91: coordinated migration/Worker deployment and metadata/HTTP gates.
+302b35b0: realtime-vs-send acknowledgement deduplication, mixed notification JSON,
+  comment touch targets moved inside the actual Button labels.
+77a201bd: compile-time maintenance gate (no extra Cloudflare settings), recovery
+  UI fixture run alongside small-iPhone verification.
+0720e91f: admin migration matches legacy grants; direct audit/report access revoked.
+
+CONFIRMED CAUSES / TARGETED CHANGES
+1. Payment lifecycle: old clock-only hosted expiry and exact-start booking locks
+   were still live. Matching existing repairs use provider-aware reconciliation,
+   shared interval capacity, approval/checkout date checks and durable recovery.
+   Fair leased scheduling progresses past unresolved oldest-40 batches. Recovery
+   records are NOT final resolution. Fulfillment/refund operator mutations remain
+   disabled until separately approved; existing paid records are not rewritten.
+2. Currency: native pickers exposed currencies beyond reviewed settlement. New
+   paid creation is USD-only on both sides. Historical JPY formatting remains;
+   no price or immutable purchase snapshot was rescaled. Unreviewed booking
+   capacity stays NULL; new bookings require explicit capacity review.
+3. Account deletion: old code could swallow cleanup errors then claim completion.
+   Prepared leases/checkpoints retain Auth identity until required cleanup finishes;
+   failures retry, phone fields scrub only at verified completion. HOWEVER legacy
+   D1/R2 inventory and financial-retention manifest are incomplete. Automatic
+   destructive cleanup is deliberately disabled. Pending is not completed.
+4. Admin dashboard/session refresh: previously prepared canonical metadata-status
+   query, independent card errors and typed transient-refresh failures are included
+   in the coordinated Worker. Client role claims remain untrusted; security and
+   push RPC boundaries preserved. No public signup or permissive policy added.
+5. Video: AVPlayerItem.readyToPlay was used as frame presentation. The adapter now
+   observes AVPlayerLayer.isReadyForDisplay with player/item/generation checks;
+   poster remains until that signal and the first-frame metric moves there.
+   Synchronous audio activation/player-preparation lead remains OPEN; no hardware
+   cause or hitch improvement has been established by these changes.
+6. Image recovery: preserved repaired fallback/cancellation/cache infrastructure.
+   Actual CaptroFeedPostView and PostDetailNativeView run in an isolated host:
+   corrupt image -> tappable Retry -> expected decoded red fixture pixels;
+   no Details opening from Retry and media Y/height unchanged within 1 point.
+   Server fallback test also asserts decoded pixels. This is a real app-hosted
+   component test, NOT the affected customer's post, full-feed network trace,
+   production photograph or proof of physical scrolling smoothness.
+7. Upload telemetry: bounded queue (16 waiting/one active; stale jobs discarded)
+   captures account/session context. Successful/failed uploads no longer wait for
+   telemetry HTTP completion. No new analytics SDK or unbounded background queue.
+8. Notifications: typed post/profile/direct/group destinations; relative time;
+   mark one opened notification read instead of clearing on inbox load. Unknown
+   destinations show a notice. API retains old explicit bulk-read compatibility.
+9. Chat: persist a stable send ID before network submission. Server derives a
+   sender/thread-scoped canonical ID, inserts once and reconciles ambiguous writes.
+   Local failed bubble reconciles with server acceptance, including realtime racing
+   POST. Hide-for-me tombstones survive refresh/relaunch, scoped per account/thread.
+   Missing local retry media cannot become an empty successful send. APNs delivery
+   and exactly-once notification delivery remain outside this acceptance claim.
+10. Drafts/Story: missing attachment count blocks accidental altered publication;
+   original manifest retained until explicit removal. Retry/keep draft available.
+   Story Back retains capture for return from camera. Full per-attachment recovery,
+   corrupt-file validation, and persistent Story close/relaunch recovery remain open.
+11. Tag People: temporary selection commits on Done only; errors differ from no
+   results; cancelled/stale searches do not replace new results; limit announced.
+12. Capabilities: independent loading/error/retry without silently treating an
+   unknown capability as denial or granting unverified posting permissions.
+13. Profile: existing authorized content retained during transient refresh error;
+   confirmed access loss clears it; follow requests page beyond filtered first 30;
+   removed pin invalidated locally; messaging fetches the real current account ID.
+   Dedicated Plans pagination, canonical HTTPS sharing and own-ID visitor edge
+   acceptance remain open. Current native design and management destinations kept.
+14. Stamps/comments: unavailable status independent of truncated metadata; duplicate
+   profile status removed; semantic comment fonts and 44-point button-label targets.
+   Broader VoiceOver/Dynamic Type matrix is not certified by source changes alone.
+
+TESTS ACTUALLY RUN
+- backend-cf: node --experimental-strip-types --test tests/*.test.mjs
+  Final preflight run 39328837073: 349 passed, 0 failed/skipped.
+  One intermediate failure was a fixture missing the newly used getClientRequestId
+  dependency. Restored legacy-client mock; original private-text URL assertions
+  retained. Added actual direct/group route, notification scope and pagination tests.
+- node node_modules/typescript/bin/tsc --noEmit: passed.
+- node backend-cf/scripts/check-additional-postgres.mjs
+    captro-additional-review-20261019-acceptance
+  Disposable postgres:17, tmpfs, no published ports/persistent data.
+  BEFORE: concurrent overlapping capacity-one requests admitted 2 reservations.
+  AFTER: admitted 1; adjacent succeeded; delayed confirmation/replay yielded one
+  entitlement; concurrent claimers owned 80 distinct jobs and next batch reached
+  21 newer jobs without repeating processing holds. No real provider transaction.
+- node --experimental-strip-types --test tests/admin_console.test.mjs
+  12 passed after adding the actual legacy audit/report grants to the fixture.
+- admin-web: npm ci && npm run build: passed; lockfile unchanged, no browser claim.
+- Native run 39186902606, source 0c864940, iPhone 17 simulator iOS 26.4.1:
+  12 interaction + 228 regression tests passed (223 logic + 5 Home UI).
+  Includes both MediaRecoveryTests pixel/geometry tests; screenshots inspected.
+  Later native changes require the newer matching-source runs, not this older pass.
+
+ROLLOUT AND FORWARD REPAIR
+Deployment sequence: verify source and existing production version -> tests and
+security gate -> exact five-file SQL allowlist -> compile temporary maintenance
+Worker -> apply SQL -> verify schema/grants -> compile ready Worker -> public-feed
+and anonymous-denial checks -> matching-source native gate -> TestFlight.
+No new provider keys, subscriptions, payment webhooks, public-media permissions,
+prices, balances or historical records are changed by this rollout.
+
+First deploy 39329137677 rejected by Cloudflare's 64-variable plan limit; no SQL
+was applied. Replaced three new bindings with a compile-time rollout switch and
+kept financial/destructive actions disabled by absence of their approval gates.
+Second deploy 39329583253 installed maintenance version
+3e268d98-a9ff-4d7b-8f5a-284323d86bde and applied the three commerce migrations.
+Admin migration stopped on legacy audit grants (RLS denied but grants remained).
+Unapplied admin migration now explicitly revokes client access to audit, roles,
+moderation and report rows; normal reporting uses the authenticated Worker.
+Tests now model that real grant shape. Resume uses the exact maintenance version.
+Forward repair 39330118352 succeeded at 21:47 UTC. Production ready Worker:
+f38a5f5e-6007-485a-b2e0-af65d2f4a448, source 0720e91f. All five migrations are
+applied. 349 backend tests, 14 core security and 5 reliability-schema checks passed;
+public-feed pagination and five anonymous-denial route probes passed. No extra
+Cloudflare settings or plan upgrade. New-sale maintenance lifted. Post-migration
+advisor retains leaked-password warning and intentional server-only RLS/no-policy
+informational notices; no permissive policies were added to silence notices.
+Both fresh and retry TestFlight paths now require the new reliability schema gate
+as well as matching native-source evidence and the existing core security gate.
+
+Rollback must NOT restore clock-only expiration or broaden privileges. If a later
+step fails, leave new-sale maintenance in place, preserve reconciliation/history,
+inspect the exact error, and forward-fix. Do not drop recovery/jobs/entitlements.
+Cleanup and recovery mutations remain disabled; do not enable them to get green CI.
+
+RELEASE CHECKLIST / REMAINING LIMITATIONS
+Security: fresh 14-check core gate required; new private admin tables/RPCs verified
+separately. Disabled leaked-password protection/admin identity configuration remain
+configuration follow-ups, not silently changed or solved by a billing upgrade.
+Payments: local concurrency/provider mocks pass. Real Stripe TEST end-to-end and
+authorized operator recovery approval still required; no real money test run.
+Images: app-hosted row/Details recovery verified with known pixels. Installed build,
+affected live Welcome asset, weak-network physical trace remain unverified.
+Account flows: model tests plus dedicated app-hosted recovery fixture run pending;
+real Apple/Google cancellation/sign-in/APNs on hardware not verified.
+Physical scrolling: OPEN. No attached iPhone, Release Instruments capture, realistic
+remote HLS before/after timing, memory/thermal/low-storage camera results collected.
+Welcome: approved 870-pixel asset preserved; genuine >=1484-pixel-wide original
+still needed for the maximum 480-point / 3x / 1.03 zoom sharpness target.
+Do not describe this incremental release as all audit findings resolved.

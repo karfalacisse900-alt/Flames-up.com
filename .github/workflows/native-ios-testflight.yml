@@ -83,7 +83,9 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: node scripts/app-store/verify-security-schema.mjs
+        run: |
+          node scripts/app-store/verify-security-schema.mjs
+          node backend-cf/scripts/verify-reliability-schema.mjs
       - name: Upload the preserved IPA to TestFlight
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
@@ -356,7 +358,9 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: node scripts/app-store/verify-security-schema.mjs
+        run: |
+          node scripts/app-store/verify-security-schema.mjs
+          node backend-cf/scripts/verify-reliability-schema.mjs
       - name: Upload to TestFlight
         if: ${{ !inputs.configure_only }}
         env:
