@@ -125,6 +125,9 @@ jobs:
     with:
       baseline: ${{ inputs.carousel_baseline }}
       small_phone: ${{ inputs.small_review_only }}
+  account-recovery:
+    if: ${{ inputs.camera_carousel && inputs.small_review_only && !inputs.carousel_baseline }}
+    uses: ./.github/workflows/additional-review-validation.yml
   stamps:
     if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review && !inputs.release_scroll_profile }}
     runs-on: macos-26

@@ -1,5 +1,5 @@
 import { runAccountCleanup } from './account-cleanup';
-import { reliabilityRolloutBlocks } from './reliability-rollout';
+import { reliabilityRolloutBlocks, reliabilityReleaseMode } from './reliability-rollout';
 import { chatOperationID, sameChatOperation, persistChatOperation } from './chat-idempotency';
 import { registerConsoleRoutes, consoleUserFilters, activeAdminRestriction } from './admin-console';
 import { purchaseFailureMessage, paymentErrorCode } from './purchase-errors';
@@ -52,7 +52,6 @@ type MediaModerationJobMessage = {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
-  CAPTRO_RELIABILITY_ROLLOUT?: string;
   CAPTRO_ACCOUNT_CLEANUP_MANIFEST?: string;
   CAPTRO_PAYMENT_RECOVERY_ACTIONS?: string;
   STRIPE_MODE?: string;
@@ -188,7 +187,7 @@ const api = new Hono<HonoApp>();
 // Older clients get an explicit retirement response, never a fake success.
 // Historic voice access/deletion and moderation jobs remain authorized normally.
 api.use('*', async (c, next) => {
-  if (reliabilityRolloutBlocks(c.env.CAPTRO_RELIABILITY_ROLLOUT, c.req.method, c.req.path)) {
+  if (reliabilityRolloutBlocks(reliabilityReleaseMode(), c.req.method, c.req.path)) {
     c.header('Retry-After', '60');
     return c.json({ code:'RELIABILITY_MAINTENANCE', detail:'This action is temporarily paused for an update. Your work is preserved. Please retry shortly.' },503);
   }
@@ -26360,7 +26359,7 @@ async function reconcileHostedPurchase(c: any, purchase: any, expireOpen = false
 }
 
 async function expireNativePaymentHolds(env: Env) {
-  if (env.CAPTRO_RELIABILITY_ROLLOUT === 'maintenance') return;
+  if (reliabilityReleaseMode() === 'maintenance') return;
   const c: any = { env };
   if (!getStripeConfig(c).configured) return;
   await requireStripeDatabaseMode(c);

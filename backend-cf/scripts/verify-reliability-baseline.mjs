@@ -7,3 +7,14 @@ const data=await r.json();const versions=data.result?.deployments?.[0]?.versions
 if(versions?.length!==1||versions[0].version_id!=='a25d5a5a-4088-4ced-85bd-13a5f83d3549'||versions[0].percentage!==100)
   throw Error('Production changed since review; inspect the new baseline before deploying.');
 console.log('Verified scoped Profile production baseline a25d5a5a-4088-4ced-85bd-13a5f83d3549');
+const settings=await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/flames-up-api/settings`,{
+  headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(20000)});
+if(!settings.ok)throw Error('Settings lookup HTTP '+settings.status);
+const bindings=(await settings.json()).result?.bindings;
+if(!Array.isArray(bindings))throw Error('Missing binding inventory');
+// Existing settings stay untouched. Do not let a previously configured value
+// accidentally authorize destructive cleanup or financial recovery mutations.
+for(const name of ['CAPTRO_ACCOUNT_CLEANUP_MANIFEST','CAPTRO_PAYMENT_RECOVERY_ACTIONS'])
+  if(bindings.some(b=>b.name===name && (b.type!=='plain_text'||b.text!=='blocked')))
+    throw Error('Sensitive action gate requires review: '+name);
+console.log('Destructive cleanup and recovery actions remain disabled.');

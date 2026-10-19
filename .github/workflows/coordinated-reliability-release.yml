@@ -59,7 +59,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --env production --keep-vars --var CAPTRO_RELIABILITY_ROLLOUT:maintenance --var CAPTRO_ACCOUNT_CLEANUP_MANIFEST:blocked --var CAPTRO_PAYMENT_RECOVERY_ACTIONS:blocked
+        run: npx wrangler deploy --env production --keep-vars --define 'CAPTRO_RELIABILITY_RELEASE_MODE:"maintenance"'
       - name: Apply the tested allowlisted migrations
         if: ${{ inputs.deploy && !inputs.worker_only }}
         env:
@@ -80,7 +80,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --env production --keep-vars --var CAPTRO_RELIABILITY_ROLLOUT:ready --var CAPTRO_ACCOUNT_CLEANUP_MANIFEST:blocked --var CAPTRO_PAYMENT_RECOVERY_ACTIONS:blocked
+        run: npx wrangler deploy --env production --keep-vars --define 'CAPTRO_RELIABILITY_RELEASE_MODE:"ready"'
       - name: Verify public feed and anonymous denial without customer mutations
         if: ${{ inputs.deploy }}
         run: |
