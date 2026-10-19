@@ -2,7 +2,10 @@ CAPTRO — COORDINATED RELIABILITY REPAIR
 19 October 2026, America/New_York. CI timestamps use UTC.
 
 STATUS
-Backend/database deployed; native release validation in progress.
+Backend/database deployed; matching-source large/small-phone and recovery validation passed.
+Signed TestFlight 1.0.1 (647.1) uploaded successfully in run 39333363617.
+Apple confirmed VALID / IN_BETA_TESTING for Captro private and Captro private2
+at 22:34:36 UTC, read-only status run 39335545179 attempt 2.
 This report does not certify every audit item as fixed.
 Physical-iPhone performance/camera acceptance remains OPEN.
 No customer messages, follow relationships, charges, refunds or transfers were
@@ -29,6 +32,9 @@ c006d337: matching API idempotency, activity pagination/read scope, durable clea
 77a201bd: compile-time maintenance gate (no extra Cloudflare settings), recovery
   UI fixture run alongside small-iPhone verification.
 0720e91f: admin migration matches legacy grants; direct audit/report access revoked.
+23c9db32: both fresh/retry TestFlight paths require the reliability schema gate.
+86cad2c7e7cf34ad18566b878b62b140d0115434: exact archived 647.1 source, including
+  delivery probe documentation. Native code last changed in 302b35b0.
 
 CONFIRMED CAUSES / TARGETED CHANGES
 1. Payment lifecycle: old clock-only hosted expiry and exact-start booking locks
@@ -112,6 +118,23 @@ TESTS ACTUALLY RUN
   12 interaction + 228 regression tests passed (223 logic + 5 Home UI).
   Includes both MediaRecoveryTests pixel/geometry tests; screenshots inspected.
   Later native changes require the newer matching-source runs, not this older pass.
+- Final native run 39329134072, source 302b35b0, iPhone 17 / iOS 26.4.1 simulator:
+  12 interaction + 229 regression tests passed; zero failures/skips/expected failures.
+  Native tree f4af32e24369fa015aac163f5b7b572665af3303 matches archive source
+  86cad2c7e7cf34ad18566b878b62b140d0115434. Retry and fallback pixel assertions
+  retained; latest failure/loaded screenshots independently inspected.
+- Additional recovery job in run 39329586358, source 77a201bd (same native tree):
+  224 logic + 9 app-hosted UI tests passed, iPhone 17 Pro simulator. Includes
+  recovery from every root, cancellation preserving account/draft, cold/repeated/
+  different-account recovery and expired-link recovery; plus Home media, Favorites,
+  fixed welcome and return-position regressions. Uses isolated recovery fixtures,
+  not real provider email/token exchanges or physical-device verification.
+- Small-phone camera/carousel job in 39329586358, iPhone 13 mini / iOS 26.4.1:
+  12 interaction + 229 regression tests passed; zero failures/skips/expected failures.
+  Compact settings screenshot inspected; unavailable camera is honestly reported,
+  not substituted with a photograph. No claim about actual camera capture quality.
+- backend-cf: npm audit --omit=dev --json: zero reported runtime vulnerabilities.
+  This is scoped to the repair branch dependency tree, not a whole-repository scan.
 - Read-only public-media probe, 19 October approximately 21:55 UTC:
   Located public Welcome post d90eda93-abaa-4ad5-abbb-53d6faf96a14 by @thecissay
   through the anonymous world-board API. One image, feed URL, thumbnail and
@@ -150,6 +173,22 @@ advisor retains leaked-password warning and intentional server-only RLS/no-polic
 informational notices; no permissive policies were added to silence notices.
 Both fresh and retry TestFlight paths now require the new reliability schema gate
 as well as matching native-source evidence and the existing core security gate.
+Release run 39333363617 passed matching-source verification, signed Release archive,
+authentication configuration validation, IPA export and both live schema gates,
+then successfully uploaded 647.1. Apple availability is a separate check below.
+Apple status run 39335545179 attempt 1 still listed the older 644.1 during ingestion.
+Attempt 2 confirmed 647.1, version 1.0.1, processing VALID, not expired, internal
+IN_BETA_TESTING, auto-notify enabled, both existing private beta groups assigned.
+External public beta review remains READY_FOR_BETA_SUBMISSION; no public App Store
+release or new tester invitations were performed. This does not prove installation
+on the user's phone. Refresh Captro in TestFlight and select Update for 647.1.
+
+Evidence URLs:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39330118352
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39329134072
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39329586358
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39333363617
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39335545179
 
 Rollback must NOT restore clock-only expiration or broaden privileges. If a later
 step fails, leave new-sale maintenance in place, preserve reconciliation/history,
@@ -165,7 +204,7 @@ authorized operator recovery approval still required; no real money test run.
 Images: app-hosted row/Details recovery verified with known pixels. Public Welcome
 delivery now traced as above; installed build and weak-network physical trace remain
 unverified. Its legacy fallback is unavailable; no public URL was invented to fix it.
-Account flows: model tests plus dedicated app-hosted recovery fixture run pending;
+Account flows: model tests plus dedicated app-hosted recovery fixture run passed;
 real Apple/Google cancellation/sign-in/APNs on hardware not verified.
 Physical scrolling: OPEN. No attached iPhone, Release Instruments capture, realistic
 remote HLS before/after timing, memory/thermal/low-storage camera results collected.
