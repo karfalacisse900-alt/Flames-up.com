@@ -11943,6 +11943,7 @@ function authUserPayload(user: any) {
     city: user.city,
     age: user.age,
     looking_for: user.looking_for,
+    open_to: cleanText(user.open_to, 120),
     interests: user.interests,
     social_website: user.social_website,
     social_tiktok: user.social_tiktok,

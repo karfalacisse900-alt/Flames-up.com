@@ -4,6 +4,16 @@ import {readFileSync} from 'node:fs';
 import {PGlite} from '@electric-sql/pglite';
 import {stripTypeScriptTypes} from 'node:module';
 
+test('authenticated profile and sign-in payload retain persisted Open to',()=>{
+ const source=readFileSync(new URL('../src/index.ts',import.meta.url),'utf8');
+ const code=stripTypeScriptTypes(source.slice(source.indexOf('function authUserPayload('),source.indexOf('async function requirePhoneVerified(')));
+ const deps={usernameNeedsOnboarding:()=>false,publicUserEmail:v=>v,accountEmailVerified:()=>true,publicUsernameFor:u=>u.username,userHasActivePremium:()=>false,normalizeLanguage:v=>v,normalizeAuthProvider:v=>v,cleanText:v=>v??''};
+ const payload=Function(...Object.keys(deps),code+';return authUserPayload;')(...Object.values(deps));
+ assert.equal(payload({id:'owner',open_to:'Photo walks'}).open_to,'Photo walks');
+ assert.equal(payload({id:'owner',open_to:''}).open_to,'');
+ assert.equal(payload({id:'owner'}).open_to,'');
+});
+
 test('private follow transitions are atomic, idempotent and owner-decided', async()=>{
  const db=new PGlite();
  try {

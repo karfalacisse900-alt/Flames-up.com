@@ -8,7 +8,7 @@ const baseline=resolve(process.argv[3]);
 assert.notEqual(candidate,baseline);
 const source=readFileSync(candidate,'utf8');
 const original=readFileSync(baseline,'utf8');
-const functions=new Set(['supabasePublicUserPayload','supabaseFollowStats','supabaseBlockPair','supabaseBlockedUserIds','supabaseSetFollowState','supabaseAppUserToLegacyUser','safeUserPayload']);
+const functions=new Set(['supabasePublicUserPayload','supabaseFollowStats','supabaseBlockPair','supabaseBlockedUserIds','supabaseSetFollowState','supabaseAppUserToLegacyUser','safeUserPayload','authUserPayload']);
 const routes=new Set(['put /users/me','get /users/:userId','get /users/:userId/posts','get /users/:userId/showcase','put /users/me/showcase','get /users/me/follow-requests','post /users/me/follow-requests/:requesterId']);
 function nodes(text){
  const ast=ts.createSourceFile('index.ts',text,ts.ScriptTarget.Latest,true);

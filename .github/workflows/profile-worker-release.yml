@@ -37,8 +37,9 @@ jobs:
           const r=await fetch(`https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/flames-up-api/deployments`,{headers:{Authorization:`Bearer ${process.env.CLOUDFLARE_API_TOKEN}`},signal:AbortSignal.timeout(20000)});
           if(!r.ok)throw Error('Deployment lookup HTTP '+r.status);
           const data=await r.json();const versions=data.result?.deployments?.[0]?.versions;
-          if(versions?.length!==1||versions[0].version_id!=='54cb6650-e0dc-43df-9a4c-7a2ea5a4b00b'||versions[0].percentage!==100)throw Error('Production version changed; review baseline before deployment.');
-          console.log('Verified production baseline 54cb6650-e0dc-43df-9a4c-7a2ea5a4b00b');
+          // Scoped Profile deployment from run 39179321463; unchanged commerce baseline.
+          if(versions?.length!==1||versions[0].version_id!=='b7484384-9232-438c-8d42-e0d6e8378f69'||versions[0].percentage!==100)throw Error('Production version changed; review baseline before deployment.');
+          console.log('Verified production Profile candidate b7484384-9232-438c-8d42-e0d6e8378f69');
           JS
       - name: Prepare only reviewed profile functions and routes
         run: |
