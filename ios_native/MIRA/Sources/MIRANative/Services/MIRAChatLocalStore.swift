@@ -1,4 +1,14 @@
 import Foundation
+import CryptoKit
+
+enum CaptroChatOperation {
+  static func canonicalID(_ message: MIRAMessage) -> String {
+    guard message.id.hasPrefix("local-"), let sender = message.senderId, !sender.isEmpty,
+          let target = message.groupId ?? message.receiverId else { return message.id }
+    let text = ["captro-chat-v1", sender, message.groupId == nil ? "direct" : "group", target, message.id.lowercased()].joined(separator: "\0")
+    return SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+}
 
 enum CaptroHiddenMessages {
   static func key(account: String, kind: ConversationNativeKind) -> String {
@@ -15,7 +25,7 @@ enum CaptroHiddenMessages {
   }
   static func visible(_ rows: [MIRAMessage], account: String, kind: ConversationNativeKind, defaults: UserDefaults = .standard) -> [MIRAMessage] {
     let ids = Set(defaults.stringArray(forKey: key(account: account, kind: kind)) ?? [])
-    return rows.filter { !ids.contains($0.id) }
+    return rows.filter { !ids.contains($0.id) && !ids.contains(CaptroChatOperation.canonicalID($0)) }
   }
 }
 
@@ -182,10 +192,13 @@ actor MIRAChatLocalStore {
   private func dedupedMessages(_ messages: [MIRAMessage]) -> [MIRAMessage] {
     var byId: [String: MIRAMessage] = [:]
     for message in messages {
-      if let existing = byId[message.id] {
-        byId[message.id] = message.updating(localCreatedAt: existing.localCreatedAt)
+      let key = CaptroChatOperation.canonicalID(message)
+      if let existing = byId[key] {
+        // Canonical server acceptance wins over an older failed local bubble.
+        if !existing.id.hasPrefix("local-") && message.id.hasPrefix("local-") { continue }
+        byId[key] = message.updating(localCreatedAt: existing.localCreatedAt)
       } else {
-        byId[message.id] = message
+        byId[key] = message
       }
     }
     return Array(byId.values)

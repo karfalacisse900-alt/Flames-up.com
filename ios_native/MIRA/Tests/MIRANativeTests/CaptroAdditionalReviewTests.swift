@@ -2,6 +2,19 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroAdditionalReviewTests: XCTestCase {
+  func testLostChatResponseReconcilesCanonicalServerBubble() async {
+    let local = MIRAMessage(id: "local-123", senderId: "sender", receiverId: "peer", content: "Hello", status: "failed")
+    let id = CaptroChatOperation.canonicalID(local)
+    XCTAssertEqual(id, "f79f842b1895364a25237b105d7e64bc0e4c4f502adb4cbd70e65228740ff7ba")
+    let remote = local.updating(id: id, status: "sent")
+    let store = MIRAChatLocalStore()
+    let merged = await store.merge([local], with: [remote])
+    XCTAssertEqual(merged.count, 1); XCTAssertEqual(merged.first?.id, id)
+    let reverse = await store.merge([remote], with: [local])
+    XCTAssertEqual(reverse.count, 1); XCTAssertEqual(reverse.first?.status, "sent")
+    let refreshed = await store.reconcileRecent([local], with: [remote])
+    XCTAssertEqual(refreshed.count, 1)
+  }
   func testCreationCurrenciesDoNotEnableUnreviewedSettlement() {
     XCTAssertEqual(CaptroMoney.creationCurrencies, ["USD"])
     XCTAssertEqual(CaptroMoney.defaultCurrency, "USD")

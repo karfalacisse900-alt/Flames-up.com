@@ -256,17 +256,17 @@ final class ConversationNativeModel: ObservableObject {
     draft = ""
     updateTyping(false)
     if !(await send(content: clean, mediaUrl: nil, mediaType: nil)) {
-      draft = clean
+      errorMessage = "Could not confirm delivery. Retry the saved message below."
     }
   }
 
-  func sendPickedMedia(data: Data, contentTypes: [UTType]) async {
+  func sendPickedMedia(data: Data, contentTypes: [UTType], replacingLocalId: String? = nil) async {
     guard !isUploading else { return }
     isUploading = true
     defer { isUploading = false }
     let (kind, fileName, mimeType) = pickedMediaKind(from: contentTypes, fallbackData: data)
     let localURL = await localStore.storeOutgoingMedia(data: data, fileName: fileName)
-    let localId = appendLocalOutgoingMessage(
+    let localId = replacingLocalId ?? appendLocalOutgoingMessage(
       content: "",
       mediaUrl: localURL?.absoluteString,
       mediaType: kind == .video ? "video" : "image",
@@ -274,6 +274,10 @@ final class ConversationNativeModel: ObservableObject {
     )
     do {
       let url = try await uploadService.upload(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
+      if let index = messages.firstIndex(where: { $0.id == localId }) {
+        messages[index] = messages[index].updating(mediaUrl: url, uploadStatus: "uploaded")
+        await persistThread()
+      }
       await send(content: "", mediaUrl: url, mediaType: kind == .video ? "video" : "image", replacingLocalId: localId)
     } catch {
       updateLocalMessage(localId, status: "failed", uploadStatus: "failed")
@@ -290,6 +294,7 @@ final class ConversationNativeModel: ObservableObject {
 
   func deleteForMe(_ message: MIRAMessage) {
     CaptroHiddenMessages.hide(message.id, account: currentUserId, kind: kind)
+    CaptroHiddenMessages.hide(CaptroChatOperation.canonicalID(message), account: currentUserId, kind: kind)
     messages.removeAll { $0.id == message.id }
     Task { await persistThread() }
   }
@@ -329,6 +334,7 @@ final class ConversationNativeModel: ObservableObject {
     guard !isSending else { return false }
     isSending = true
     let localId = replacingLocalId ?? appendLocalOutgoingMessage(content: content, mediaUrl: mediaUrl, mediaType: mediaType, uploadStatus: mediaUrl == nil ? nil : "uploaded")
+    await persistThread()
     defer { isSending = false }
     do {
       let sent: MIRAMessage
@@ -336,12 +342,12 @@ final class ConversationNativeModel: ObservableObject {
       case let .direct(peerId):
         sent = try await api.post(
           "/messages",
-          body: SendMessageBody(receiverId: peerId, content: content, mediaUrl: mediaUrl, mediaType: mediaType)
+          body: SendMessageBody(receiverId: peerId, content: content, mediaUrl: mediaUrl, mediaType: mediaType, clientRequestId: localId)
         )
       case let .group(groupId):
         sent = try await api.post(
           "/group-chats/\(groupId)/messages",
-          body: GroupMessageBody(content: content, mediaUrl: mediaUrl, mediaType: mediaType)
+          body: GroupMessageBody(content: content, mediaUrl: mediaUrl, mediaType: mediaType, clientRequestId: localId)
         )
       }
       replaceLocalMessage(localId, with: sent.updating(status: "sent", uploadStatus: "uploaded"))
@@ -360,21 +366,23 @@ final class ConversationNativeModel: ObservableObject {
       errorMessage = "Voice messages are no longer supported. Your saved recording has not been deleted."
       return
     }
-    messages.removeAll { $0.id == message.id }
-    await persistThread()
     let mediaUrl = message.mediaUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
     if let mediaUrl,
        let url = URL(string: mediaUrl),
-       url.isFileURL,
-       let data = await loadLocalRetryData(from: url) {
+       url.isFileURL {
+      guard let data = await loadLocalRetryData(from: url), !data.isEmpty else {
+        errorMessage = "The saved attachment is unavailable. Your message has not been sent."
+        return
+      }
       let type = message.mediaType?.lowercased() == "video" ? UTType.movie : UTType.image
-      await sendPickedMedia(data: data, contentTypes: [type])
+      await sendPickedMedia(data: data, contentTypes: [type], replacingLocalId: message.id)
       return
     }
     _ = await send(
       content: message.content ?? "",
       mediaUrl: (mediaUrl?.isEmpty == false && URL(string: mediaUrl ?? "")?.isFileURL != true) ? mediaUrl : nil,
-      mediaType: message.mediaType
+      mediaType: message.mediaType,
+      replacingLocalId: message.id
     )
   }
 
