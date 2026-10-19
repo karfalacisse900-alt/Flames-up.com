@@ -15760,11 +15760,9 @@ api.put('/users/me', authMiddleware, async (c) => {
 
   const profileFields = ['language', 'age', 'looking_for', 'interests', 'social_website', 'social_tiktok', 'social_instagram', 'profile_background_image', 'open_to'];
   const profileChanged = profileFields.some((field) => body[field] !== undefined);
-  if (profileChanged) patch.profile = profile;
-  if (Object.keys(patch).length === 0) return c.json({ detail: 'Nothing to update' }, 400);
-  patch.updated_at = now();
-
-  await supabaseAdminPatchRows(c, 'app_users', { id: postgrestEqFilter(appUserId) }, patch);
+  if (Object.keys(patch).length === 0 && !profileChanged) return c.json({ detail: 'Nothing to update' }, 400);
+  const profilePatch = Object.fromEntries(profileFields.filter(field => body[field] !== undefined).map(field => [field, profile[field]]));
+  await supabaseAdminRpc(c, 'captro_profile_edit', { p_actor: appUserId, p_patch: patch, p_profile_patch: profilePatch });
   const refreshedRows = await supabaseAdminQueryRows(c, 'app_users', {
     select: SUPABASE_APP_USER_SELECT,
     filters: { id: postgrestEqFilter(appUserId) },
@@ -16407,6 +16405,8 @@ api.get('/users/:userId/showcase', authMiddleware, async (c) => {
 
 api.put('/users/me/showcase', authMiddleware, async (c) => {
   const userId = getUserId(c);
+  const tooLarge = rejectLargeRequest(c, 8_000);
+  if (tooLarge) return tooLarge;
   const limited = await enforceRateLimit(c, 'profile_showcase', userId, 30, 60);
   if (limited) return limited;
   const body = await c.req.json();

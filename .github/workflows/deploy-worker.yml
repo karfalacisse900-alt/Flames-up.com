@@ -6,6 +6,10 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      profile_release:
+        description: Release only scoped profile routes against the verified deployed Worker baseline
+        type: boolean
+        default: false
       favorites_smoke:
         description: After the authorized Worker deployment, verify private Favorites using disposable accounts
         type: boolean
@@ -44,6 +48,12 @@ on:
         default: false
 
 jobs:
+  scoped-profile:
+    if: ${{ inputs.profile_release == true }}
+    uses: ./.github/workflows/profile-worker-release.yml
+    with:
+      deploy: ${{ inputs.reliability_dry_run == false }}
+    secrets: inherit
   payment-diagnostics:
     if: ${{ inputs.payment_diagnostics_only == true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
@@ -76,7 +86,7 @@ jobs:
           print(json.dumps({'webhooks': [{'enabled': hook.get('status') == 'enabled', 'captro_worker': 'flames-up-api.karfalacisse900.workers.dev' in hook.get('url','') or 'api.flames-up.com' in hook.get('url',''), 'events': hook.get('enabled_events')} for hook in hooks.get('data', [])]}))
           PY
   deploy-reliability:
-    if: ${{ inputs.reliability_only == true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
+    if: ${{ inputs.profile_release != true && inputs.reliability_only == true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     timeout-minutes: 30
@@ -209,7 +219,7 @@ jobs:
             exit 1
           fi
   deploy:
-    if: ${{ inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
+    if: ${{ inputs.profile_release != true && inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:

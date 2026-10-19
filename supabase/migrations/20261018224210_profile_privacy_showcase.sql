@@ -59,7 +59,7 @@ create or replace function public.captro_profile_showcase(p_actor text, p_patch 
 returns jsonb language plpgsql security invoker set search_path = '' as $$
 declare owner_row public.app_users%rowtype; item text; items jsonb; result jsonb;
 begin
-  if jsonb_typeof(p_patch) <> 'object' or exists(select 1 from jsonb_object_keys(p_patch) k where k not in ('pinned_post_id','club_post_ids')) then
+  if p_patch is null or jsonb_typeof(p_patch) <> 'object' or exists(select 1 from jsonb_object_keys(p_patch) k where k not in ('pinned_post_id','club_post_ids')) then
     raise exception 'PROFILE_INVALID_FIELDS';
   end if;
   select * into owner_row from public.app_users where id=p_actor for update;
@@ -85,4 +85,29 @@ begin
 end $$;
 revoke all on function public.captro_profile_showcase(text,jsonb) from public,anon,authenticated;
 grant execute on function public.captro_profile_showcase(text,jsonb) to service_role;
+
+-- Edit only supplied fields under the same row lock used by showcase changes.
+-- Never replace a stale, whole profile JSON snapshot from an earlier API read.
+create or replace function public.captro_profile_edit(p_actor text, p_patch jsonb, p_profile_patch jsonb)
+returns void language plpgsql security invoker set search_path = '' as $$
+declare owner_row public.app_users%rowtype; edited public.app_users%rowtype;
+begin
+  if p_patch is null or p_profile_patch is null or jsonb_typeof(p_patch) <> 'object'
+    or jsonb_typeof(p_profile_patch) <> 'object' then raise exception 'PROFILE_INVALID_FIELDS'; end if;
+  if exists(select 1 from jsonb_object_keys(p_patch) k where k not in
+      ('full_name','bio','avatar_url','cover_url','city','is_private','username'))
+    or exists(select 1 from jsonb_object_keys(p_profile_patch) k where k not in
+      ('language','age','looking_for','interests','social_website','social_tiktok','social_instagram','profile_background_image','open_to')) then
+    raise exception 'PROFILE_INVALID_FIELDS';
+  end if;
+  select * into owner_row from public.app_users where id=p_actor for update;
+  if owner_row.id is null or coalesce(owner_row.metadata->>'status','active') <> 'active' then raise exception 'PROFILE_UNAVAILABLE'; end if;
+  edited := jsonb_populate_record(owner_row,p_patch);
+  update public.app_users set full_name=edited.full_name,bio=edited.bio,avatar_url=edited.avatar_url,
+    cover_url=edited.cover_url,city=edited.city,is_private=edited.is_private,username=edited.username,
+    profile=coalesce(owner_row.profile,'{}'::jsonb) || p_profile_patch,updated_at=now()
+    where id=p_actor;
+end $$;
+revoke all on function public.captro_profile_edit(text,jsonb,jsonb) from public,anon,authenticated;
+grant execute on function public.captro_profile_edit(text,jsonb,jsonb) to service_role;
 commit;

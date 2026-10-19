@@ -8,7 +8,8 @@ test('private follow transitions are atomic, idempotent and owner-decided', asyn
  const db=new PGlite();
  try {
   await db.exec(`create role anon; create role authenticated; create role service_role;
-   create table app_users(id text primary key,is_private boolean default false,metadata jsonb default '{}',profile jsonb default '{}',updated_at timestamptz);
+   create table app_users(id text primary key,is_private boolean default false,metadata jsonb default '{}',profile jsonb default '{}',updated_at timestamptz,
+     full_name text,bio text,avatar_url text,cover_url text,city text,username text);
    create table app_follows(app_follower_id text,app_following_id text,status text,updated_at timestamptz,primary key(app_follower_id,app_following_id));
    create table app_blocks(blocker_id text,blocked_id text);
    create table app_posts(legacy_post_id text primary key,app_user_id text,status text,post_type text);
@@ -38,10 +39,22 @@ test('private follow transitions are atomic, idempotent and owner-decided', asyn
   await assert.rejects(showcase('a',{club_post_ids:['moment-a']}),/NOT_CLUB/);
   await assert.rejects(showcase('a',{is_verified:true}),/INVALID_FIELDS/);
   await assert.rejects(showcase('a',{club_post_ids:Array(13).fill('club-a')}),/INVALID_CLUBS/);
+  await assert.rejects(showcase('a',null),/INVALID_FIELDS/);
+  const edit=async(patch,profile)=>(await db.query('select captro_profile_edit($1,$2,$3)',['a',JSON.stringify(patch),JSON.stringify(profile)]));
+  await showcase('a',{pinned_post_id:'club-a'});
+  await edit({bio:'Updated biography'},{open_to:'Photo walks'});
+  await showcase('a',{club_post_ids:[]});
+  const edited=(await db.query("select * from app_users where id='a'")).rows[0];
+  assert.equal(edited.bio,'Updated biography');
+  assert.equal(edited.profile.pinned_post_id,'club-a');
+  assert.equal(edited.profile.open_to,'Photo walks');
+  await assert.rejects(edit({metadata:{status:'active'}},{}),/INVALID_FIELDS/);
+  await assert.rejects(edit({},{pinned_post_id:'private-b'}),/INVALID_FIELDS/);
   await db.exec('set role authenticated');
   await assert.rejects(follow('b','a','follow'),/permission denied/);
   await assert.rejects(db.query("insert into app_follows values('b','a','active',now())"),/permission denied/);
   await assert.rejects(showcase('a',{pinned_post_id:'club-a'}),/permission denied/);
+  await assert.rejects(edit({bio:'Forged'},{}),/permission denied/);
  } finally {await db.close();}
 });
 
