@@ -7,6 +7,8 @@ final class CaptroAdditionalReviewTests: XCTestCase {
     let id = CaptroChatOperation.canonicalID(local)
     XCTAssertEqual(id, "f79f842b1895364a25237b105d7e64bc0e4c4f502adb4cbd70e65228740ff7ba")
     let remote = local.updating(id: id, status: "sent")
+    XCTAssertEqual(CaptroChatOperation.accepting(remote, localID: local.id, in: [local,remote]).count, 1)
+    XCTAssertEqual(CaptroChatOperation.accepting(remote, localID: local.id, in: [remote]).count, 1)
     let store = MIRAChatLocalStore()
     let merged = await store.merge([local], with: [remote])
     XCTAssertEqual(merged.count, 1); XCTAssertEqual(merged.first?.id, id)
@@ -32,6 +34,7 @@ final class CaptroAdditionalReviewTests: XCTestCase {
       try decoder.decode(MIRANotification.self, from: Data("{\"id\":\"fixture\",\"type\":\"\(type)\",\"data\":\(data)}".utf8))
     }
     XCTAssertEqual(CaptroNotificationTarget.resolve(try item("comment_reply", #"{"post_id":"post-1"}"#)), .post("post-1"))
+    XCTAssertEqual(CaptroNotificationTarget.resolve(try item("comment_reply", #"{"post_id":"post-1","count":2,"read":false,"extra":{"nested":true}}"#)), .post("post-1"))
     XCTAssertEqual(CaptroNotificationTarget.resolve(try item("message", #"{"sender_id":"peer-1"}"#)), .direct("peer-1"))
     XCTAssertEqual(CaptroNotificationTarget.resolve(try item("group_message", #"{"group_id":"group-1"}"#)), .group("group-1"))
     XCTAssertNil(CaptroNotificationTarget.resolve(try item("new_post", #"{"post_id":"../private"}"#)))

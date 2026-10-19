@@ -1351,13 +1351,13 @@ private struct CommentRow: View {
         .clipShape(RoundedRectangle(cornerRadius: editorial ? 0 : 16, style: .continuous))
 
         HStack(spacing: MIRATheme.Space.lg) {
-          Button("Reply") {
+          Button {
             CaptroHaptics.light()
             onReply()
+          } label: {
+            Text("Reply").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .frame(minWidth: 44, minHeight: 44)
-          .contentShape(Rectangle())
           Button {
             CaptroHaptics.light()
             onLike()
@@ -1366,10 +1366,10 @@ private struct CommentRow: View {
               Text(comment.viewerLiked ? "Liked" : "Like")
               if (comment.likesCount ?? 0) > 0 { Text(compact(comment.likesCount ?? 0)) }
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-          .frame(minWidth: 44, minHeight: 44)
-          .contentShape(Rectangle())
           .foregroundStyle(comment.viewerLiked ? MIRATheme.Color.like : (editorial ? CaptroDetailStyle.secondary : MIRATheme.Color.textMuted))
         }
         .font(.caption.weight(.semibold))

@@ -2,6 +2,11 @@ import Foundation
 import CryptoKit
 
 enum CaptroChatOperation {
+  static func accepting(_ sent: MIRAMessage, localID: String, in rows: [MIRAMessage]) -> [MIRAMessage] {
+    let original = rows.first { $0.id == localID }
+    let retained = rows.filter { $0.id != localID && $0.id != sent.id }
+    return retained + [sent.updating(localCreatedAt: original?.localCreatedAt ?? original?.createdAt)]
+  }
   static func canonicalID(_ message: MIRAMessage) -> String {
     guard message.id.hasPrefix("local-"), let sender = message.senderId, !sender.isEmpty,
           let target = message.groupId ?? message.receiverId else { return message.id }

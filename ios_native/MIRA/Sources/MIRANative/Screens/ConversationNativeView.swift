@@ -428,12 +428,9 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   private func replaceLocalMessage(_ localId: String, with sent: MIRAMessage) {
-    if let index = messages.firstIndex(where: { $0.id == localId }) {
-      let localCreatedAt = messages[index].localCreatedAt ?? messages[index].createdAt
-      messages[index] = sent.updating(localCreatedAt: localCreatedAt)
-    } else {
-      messages.append(sent)
-    }
+    // A poll/realtime event may have accepted this canonical row before POST returned.
+    messages = CaptroHiddenMessages.visible(
+      CaptroChatOperation.accepting(sent, localID: localId, in: messages), account: currentUserId, kind: kind)
     messages = messages.sortedForConversation()
     lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
     lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence

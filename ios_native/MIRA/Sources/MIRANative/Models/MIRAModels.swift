@@ -2110,6 +2110,30 @@ public struct FlexibleBool: Codable, Hashable {
   }
 }
 
+private indirect enum CaptroJSONValue: Codable {
+  case string(String), number(Decimal), bool(Bool), object([String: CaptroJSONValue]), array([CaptroJSONValue]), null
+  init(from decoder: Decoder) throws {
+    let box = try decoder.singleValueContainer()
+    if box.decodeNil() { self = .null }
+    else if let value = try? box.decode(Bool.self) { self = .bool(value) }
+    else if let value = try? box.decode(String.self) { self = .string(value) }
+    else if let value = try? box.decode(Decimal.self) { self = .number(value) }
+    else if let value = try? box.decode([String: CaptroJSONValue].self) { self = .object(value) }
+    else { self = .array(try box.decode([CaptroJSONValue].self)) }
+  }
+  func encode(to encoder: Encoder) throws {
+    var box = encoder.singleValueContainer()
+    switch self {
+    case .string(let v): try box.encode(v)
+    case .number(let v): try box.encode(v)
+    case .bool(let v): try box.encode(v)
+    case .object(let v): try box.encode(v)
+    case .array(let v): try box.encode(v)
+    case .null: try box.encodeNil()
+    }
+  }
+}
+
 public struct FlexibleJSONText: Codable, Hashable {
   public let raw: String
 
@@ -2119,8 +2143,8 @@ public struct FlexibleJSONText: Codable, Hashable {
       raw = string
       return
     }
-    if let object = try? container.decode([String: String].self),
-       let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+    if let object = try? container.decode([String: CaptroJSONValue].self),
+       let data = try? JSONEncoder().encode(object),
        let string = String(data: data, encoding: .utf8) {
       raw = string
       return
