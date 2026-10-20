@@ -221,11 +221,17 @@ struct CaptroWelcomeView<AppleControl: View>: View {
       Image("CaptroWelcomeHero", bundle: .module)
         .resizable().interpolation(.high).scaledToFit()
         .frame(width: imageSize.width, height: imageSize.height)
-        // The square supplied crop has only a few quiet pixels below the ribbon.
-        // Fade those final black pixels, not the ribbon or any ticket edge.
-        .mask(LinearGradient(stops: [.init(color: .black, location: 0),
-          .init(color: .black, location: 0.997), .init(color: .clear, location: 1)],
-          startPoint: .top, endPoint: .bottom))
+        // Feather only the outer paper/black canvas into the matching surround.
+        // The supplied pixels, proportions and all ticket edges stay unchanged;
+        // the narrow edge blend avoids a rectangular seam in the still/1x state.
+        .mask {
+          LinearGradient(stops: [.init(color: .clear, location: 0),
+            .init(color: .black, location: 0.012), .init(color: .black, location: 0.992),
+            .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom)
+            .mask(LinearGradient(stops: [.init(color: .clear, location: 0),
+              .init(color: .black, location: 0.006), .init(color: .black, location: 0.994),
+              .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+        }
         .scaleEffect(reduceMotion ? 1 : (zoomed ? CaptroWelcomeLayout.maximumZoom : 1), anchor: .top)
         .opacity(reduceMotion || revealed ? 1 : 0)
       // Separate supplied lockup in the cleared paper area. It does not move
