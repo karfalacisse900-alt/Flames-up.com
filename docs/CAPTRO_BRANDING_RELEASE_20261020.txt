@@ -1,0 +1,127 @@
+CAPTRO — PRODUCTION BRANDING / GUARDED SUPPORT RELEASE
+20 October 2026 UTC (19 October in New York)
+
+This report supersedes the deployment-status statements in the October 19
+branding/welcome development reports. Their asset hashes and provenance remain
+valid. User subsequently authorized deployment and TestFlight distribution.
+
+SOURCE
+Initial baseline 5a52f78d4ad97243e7deba759cac3527c04a9ded.
+Branding/support implementation 0463b8cc5de978d9fb681da8a7500487ab98e361.
+Final native source 959f6e8d4c62a87683c2fd0377957f3b8039d818.
+Worker deployment source 57651a08303195b6e696dd1eff314a284ce928cc.
+Branch fix/additional-review-20261016. No merge or public App Store submission.
+Unrelated app-review document, Supabase local metadata and admin screenshots
+are not part of these commits.
+
+DEPLOYED, NOT MERELY PREPARED
+- Existing admin Pages project: https://captro-admin.pages.dev
+  Run 39353446178 succeeded. The live supplied black logo matches byte-for-byte.
+- Existing Captro site Pages project: https://captro-site.pages.dev
+  Runs 39353437819 and 39355140927 succeeded. Logo exact-byte check passed.
+  Native/web/backend Support URLs now use this verified, owned HTTPS host.
+  flames-up.com still serves a separate, older Expo website: HTTP 200 there
+  was NOT evidence that a new Support page existed. That site was not replaced.
+  No DNS change, new subscription, duplicate Pages project or domain purchase.
+- Worker version 22171738-afa0-465c-afc2-33ecb0896e67 deployed in run 39355433534.
+  Only reviewed default-off Support code and its trusted origin were added.
+  No production migration, payment setting, secret, webhook, account or data
+  repair was performed. Existing code source baseline was independently
+  verified as version f38a5f5e-6007-485a-b2e0-af65d2f4a448 before deployment.
+
+WORKER VERIFICATION: DO NOT MISREPORT THE RUN AS FULLY GREEN
+Dry run 39354243466 passed TypeScript, all 361 backend tests, 14 live read-only
+security assertions and five reliability schema assertions. Actual deployment
+39355433534 passed the same gates and deployed successfully. Its public feed
+smoke traversed five pages / 58 unique eligible posts and reached a real end;
+five protected anonymous endpoints correctly returned 401.
+The final custom-domain smoke then received Cloudflare managed-challenge HTML
+from the cloud runner instead of JSON, so the overall workflow is FAILED.
+Independent checks from this workstation confirmed the deployed custom domain
+and native Worker domain return 503 CAPTRO_SUPPORT_UNAVAILABLE and admin 401.
+No WAF rule was relaxed or challenge bypass added to manufacture a green run.
+Custom-domain edge acceptance from cloud/mobile networks remains separate.
+
+SUPPORT STATUS — NOT PUBLICLY ACTIVATED OR PRODUCTION-CERTIFIED
+All three activation layers remain off: native Bundle flag absent, public
+support-page config disabled, backend explicitly disallows live/production.
+The migration additionally restricts support purchase snapshots to test mode.
+This does not enable a real charge, refund, transfer or payout.
+
+Completed beyond the earlier development report:
+- Root-owned, server-confirmed receipt presentation including cold launch.
+- Persisted opaque originating creator/post references scoped by buyer and
+  handoff, bounded count and expiry; removed on account switch/logout.
+- Return does not switch the Home tab or dismiss a draft to claim success.
+- My Stuff handles no-entitlement support receipts separately from tickets.
+- Existing finance projection/filter recognizes creator_support without a
+  second ledger; support remains zero platform/service fee.
+- Actual native sheet fixture tests cover amount selection, large text and a
+  deliberately failed browser launch, without simulating payment success.
+- Web fixture suite passed after the corrected production-host selection.
+
+External acceptance blockers:
+1. Written Stripe approval for the third-party creator-support business model
+   and final current-storefront review have not been supplied.
+2. Existing separate-charge model leaves Stripe processing/refund/dispute
+   liability initially with Captro. Creator-net accounting does not remove that
+   liability. The source payout policy is platform_absorbs; production fee/loss
+   responsibility and terms require explicit approval, not an automatic change.
+3. Sandbox run 39354233081 successfully loaded production DDL ONLY into disposable
+   PostgreSQL and applied the Support migration. No production/customer rows
+   were copied. Stripe test credentials and the expected platform were verified.
+   Provider contract execution stopped because no ready existing sandbox
+   recipient matched the required transfer/manual-payout readiness. No recipient
+   account was created or mutated and no Checkout/charge/refund/transfer occurred.
+   This is a BLOCKED provider test, not a successful end-to-end payment test.
+4. The actual signed 647.1 provisioning profile has application identifier
+   56C9MBK53P.com.captro.app and no associated-domains entitlement. No signing
+   settings/profile/identifier were changed. The server-side AASA is prepared
+   with this verified application identifier and only the receipt-return path;
+   its public serving check is recorded separately below. Verified Universal
+   Links still require capability/profile provisioning and physical acceptance.
+   The web fallback is honest; universalLinksVerified remains false.
+5. Manual hosted Checkout completion, real signed success/late webhooks, actual
+   settled processing fees, provider refunds/disputes and installed-app return
+   have not been accepted. Automated fixtures are not that evidence.
+
+TESTS / ARTWORK
+- Backend: npm test -> 361 passed, 0 failed/skipped; npx tsc --noEmit passed.
+- Actual browser page: node scripts/test-support-browser.mjs -> six groups
+  passed (amounts, delayed receipt, failure/retry, correct return identity,
+  cancellation, keyboard/narrow layout, disabled public configuration).
+- Exact official and welcome asset validators passed. No redraw or upscaling.
+- Existing welcome hero remains the supplied 1254x1254 logo-free raster; the
+  independent official lockup is 2400x624. The 480-point settled maximum still
+  needs a genuine 1440x1440 source at 3x. Final native/device sharpness approval
+  is pending; more pixels alone would not restore original detail.
+- No physical iPhone, real camera, Apple/Google callback, Instruments smoothness
+  profile or real weak-network device run occurred on this Windows machine.
+
+Native cloud validation and TestFlight outcome will be appended after the
+matching-source checks and Apple processing complete. Never infer distribution
+from an archive attempt or report this entire feature as production-ready.
+
+ADDITIONAL APP-HOSTED EVIDENCE
+Run 39353695005, account-recovery/native job, source 0463b8cc:
+iPhone 17 Pro simulator, iOS 26.4. 224 unit tests and 9 UI tests passed.
+Both MediaRecoveryTests passed with actual pixel and stable-frame assertions:
+testHomeRetryDisplaysCorrectPixelsWithoutOpeningDetailsOrMovingMedia and
+testHomeServerFallbackDisplaysCorrectPixels. The same asset rendered in Details.
+Account recovery, Favorites, mixed carousel and tab restoration also passed.
+Fixture screenshots and logs downloaded to:
+%TEMP%/captro-native-evidence-39353695005
+These are real simulator app runs with isolated fixtures, not a reproduction
+of the user's unidentified live image request or physical-device smoothness.
+
+ROLLBACK / FORWARD REPAIR
+Keep new Support creation disabled until all independent gates above pass.
+No Support production migration was applied, so ordinary purchases, entitlements
+and financial history are unchanged. Any future accepted Support operations must
+keep reconciliation/refunds/recovery available when creation is disabled.
+Do not drop financial tables, reset records, restore clock-only hold expiry,
+loosen authorization or disable Cloudflare protection to force a release check.
+
+This prompt expands the ZIP's icon-only handoff to existing logo placements too.
+If their scope conflicts, follow this prompt; keep the handoff's asset-validation
+and no-release safeguards. Subsequent explicit release approval is recorded above.

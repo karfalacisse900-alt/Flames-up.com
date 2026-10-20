@@ -1,0 +1,16 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["56C9MBK53P.com.captro.app"],
+        "components": [
+          {
+            "/": "/support-creator/return",
+            "?": {"purchase_id": "????????-????-????-????-????????????"},
+            "comment": "Only an opaque payment reference. Captro must authenticate the buyer and fetch status; a link is not confirmation."
+          }
+        ]
+      }
+    ]
+  }
+}

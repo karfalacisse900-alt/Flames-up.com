@@ -12,3 +12,7 @@
   Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https://imagedelivery.net https://api.flames-up.com https://flames-up-api.karfalacisse900.workers.dev; connect-src https://api.flames-up.com https://flames-up-api.karfalacisse900.workers.dev; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
   Referrer-Policy: no-referrer
   Cache-Control: no-store
+
+/.well-known/apple-app-site-association
+  Content-Type: application/json
+  Cache-Control: public, max-age=300
