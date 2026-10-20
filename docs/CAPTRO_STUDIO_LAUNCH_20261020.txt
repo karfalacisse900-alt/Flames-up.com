@@ -1,0 +1,98 @@
+CAPTRO — LIVE CAPTURE STUDIO AND FIRST-RENDER LAUNCH
+20 October 2026 UTC
+
+BASELINE AND SCOPE
+Branch: fix/additional-review-20261016.
+Starting source: 5b0e2bf9298e17105b1d0200e2e5544677e8e834.
+Starting native tree: 20fca96bf89f9f65304b46884827d5db0f20ff27,
+the same native source distributed in 1.0.1 (655.1).
+The user's installed binary has not been independently inspected.
+Existing untracked admin test output, app review and Supabase metadata preserved.
+No production database, Worker, payment configuration, bundle ID or signing change.
+
+CONFIRMED SOURCE CAUSES / CHANGES
+Capture previously fitted its aspect ratio into the height remaining in a padded
+vertical stack. A portrait video frame is taller than a photo frame, so fitting it
+into that remaining height narrows it. The repair computes output height from the
+available full width, independently anchors header/actions, reserves the video
+format label row in both modes, and allows tall video behind dark controls.
+The preview layer preserves aspect, never stretches. The recording-frame outline
+and settings explanation identify controls that overlay the frame, not saved pixels.
+Live mode changes use the configured output dimensions after serialized session
+configuration; denied/unavailable states still use the intended mode proportions.
+
+The switch control uses arrow.triangle.2.circlepath with a 52pt target and the
+"Switch camera" label. Shutter centering does not depend on a gallery spacer.
+Removed Capture's Photos imports, gallery state, picker presentation, picker load
+task and permitted-gallery-thumbnail task. Existing post/Story pickers are untouched.
+Review, retake, enhancement/original comparison and composer handoff remain.
+"LIVE CAPTURE ONLY" was already absent in this checkout.
+Capture-only compact navigation drives the existing TabView selection; other tabs
+retain their existing navigation and layout.
+
+Startup previously remained behind branding until session/cache preparation, with
+a forced minimum interval and repeating TimelineView pulse. Essential initialization
+now runs concurrently with the reveal. Branding ends immediately when routing is
+ready or after a 720ms deadline plus a 180ms crossfade. Slow initialization shows
+an explicit session-restoration loading state, then the existing retry/route UI.
+There is no repeating logo timer or wait for every feed image/video.
+Backgrounding removes the overlay without rearming it. Recovery presentation waits
+for identity resolution; a pending cold profile link survives initial auth restore.
+Warm recovery retains the already-mounted destination/draft. Decorative branding
+is excluded from accessibility and never receives touches.
+
+The four Startup SVG assets are mechanically separated from the approved supplied
+lockup, retaining original curve paths, outlined letter paths and transforms.
+The static storyboard and first-render view share a 292 x 75.92pt centered lockup,
+named adaptive background and initial 0.14 opacity. Reduce Motion uses a still
+logo. The welcome collage and its separate animation are not changed.
+
+LOCAL CHECKS
+Full backend suite: 371 passed, zero failed/cancelled/skipped.
+Command (backend-cf): node --experimental-strip-types --test tests/*.test.mjs
+Captured log: C:/Users/The-s/AppData/Local/Temp/captro-studio-backend-final-20261020.log
+TypeScript: node node_modules/typescript/bin/tsc --noEmit — passed.
+git -c core.autocrlf=false diff --check — passed.
+Two obsolete source assertions required gallery import in Capture. They now reject
+the import path and retain the unrelated composer picker requirement. The native
+UI tests independently assert no Capture gallery control, centered shutter,
+full-width photo/video ratios and stable controls across repeated mode changes.
+Two new vector/static-launch contract tests pass and reject deliberately changed
+curve coordinates and wordmark transforms. These are asset tests, not runtime proof.
+
+NATIVE VERIFICATION — IN PROGRESS, NOT YET ACCEPTED
+Initial candidate source: 39701fff895ee26807140f1aa6c63c7979643606.
+Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39505158001
+Actual root/Capture, small/large iPhone simulator, existing welcome/Favorites,
+Support entry fixtures, media recovery, carousel and scroll-restoration tests.
+Same launch metric driver also runs against the 655.1 baseline in a separate job;
+that modified baseline is not release-attested. Results/screenshots remain pending.
+Further focused review changes must be validated at their final native source tree
+before any new TestFlight upload. A compiled archive alone does not satisfy this.
+
+PHYSICAL ACCEPTANCE STILL OPEN
+No attached physical iPhone or local Xcode/Instruments is available in this Windows
+workspace. Cloud simulators cannot prove sensor output, focus/exposure, zoom,
+front/rear mirroring, microphone IO, recording interruption, thermal/storage behavior,
+or saved-edge framing. Use the same four-edge target for photo and video, both
+cameras, small/large devices, repeated modes, background/resume and denial recovery.
+Simulator frame assertions do not establish physical preview-to-recording equality.
+
+SUPPORT PAYMENT STATUS — NOT LIVE / NOT COMPLETED
+The profile/Details Support controls and sheet are implemented and were verified in
+the actual components by run 39489516422 before 655.1 distribution. The production
+rollout flags deliberately remain off. The current API/SQL support contract is test-
+only, not a production-enabled payment integration. Do not conflate UI tests with
+provider payment acceptance or claim that publishing this camera change enables it.
+Remaining gates from docs/CAPTRO_SUPPORT_COMPLETION_20261020.txt:
+- No verified Stripe approval for Captro's content-related creator-support model.
+- No ready eligible existing sandbox recipient in the retained three-account check.
+- Apple rejected Associated Domains capability setup with 403; no privilege bypass.
+- Test-only migration is not approved/applied as a live money contract; liability,
+  actual-fee settlement and real browser-return acceptance remain separate gates.
+No real charge, refund, transfer or payout-setting change was performed.
+Current primary policy recheck:
+https://stripe.com/legal/restricted-businesses (Content creation platforms)
+https://developer.apple.com/app-store/review/guidelines/ (3.1.1 and 3.1.1(a))
+Apple's US external-link permission is not a substitute for Stripe eligibility,
+recipient verification, correct financial accounting or associated-domain signing.

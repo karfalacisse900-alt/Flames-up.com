@@ -18,7 +18,7 @@ struct CaptroStudioLayout {
     controls = CGRect(x: 0, y: max(top + Self.headerHeight, size.height - bottom - controlsHeight), width: width, height: controlsHeight)
     // Photo normally sits below the header. Tall video remains a complete
     // full-width frame inside the screen, behind chrome where necessary.
-    let y = min(header.maxY, max(0, (size.height - height) / 2))
+    let y = min(header.maxY, max(0, size.height - bottom - height))
     preview = CGRect(x: 0, y: y, width: width, height: height)
     controlsOverlayFrame = preview.minY < header.maxY || preview.maxY > controls.minY
     zoomBottom = max(preview.minY + 44, min(preview.maxY, controls.minY)) - 8

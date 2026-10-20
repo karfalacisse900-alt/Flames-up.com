@@ -146,6 +146,20 @@ jobs:
           wait "$recording" || true
           xcrun simctl io "$WELCOME_SMALL" screenshot "$RUNNER_TEMP/welcome-native-settled.png"
       - name: Export actual implementation screenshots and test results
+        # The independent first-render launch is recorded separately from the
+        # approved welcome collage; neither recording stands in for camera IO.
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/WelcomeSmall.xcresult" ]; then
+            xcrun simctl terminate "$WELCOME_SMALL" com.captro.app || true
+            xcrun simctl io "$WELCOME_SMALL" recordVideo --codec=h264 "$RUNNER_TEMP/startup-native-reveal.mp4" &
+            recording=$!
+            xcrun simctl launch "$WELCOME_SMALL" com.captro.app --captro-account-flow-review --account-signed-in --startup-slow
+            sleep 12
+            kill -INT "$recording"
+            wait "$recording" || true
+          fi
+      - name: Export test evidence
         if: always()
         run: |
           for name in WelcomeLarge WelcomeSmall; do
@@ -169,5 +183,6 @@ jobs:
             ${{ runner.temp }}/welcome-*.log
             ${{ runner.temp }}/welcome-native-reveal.mp4
             ${{ runner.temp }}/welcome-native-settled.png
+            ${{ runner.temp }}/startup-native-reveal.mp4
             ${{ runner.temp }}/Welcome*-evidence/
             ${{ runner.temp }}/Welcome*-summary.json

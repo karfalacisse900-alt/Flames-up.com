@@ -246,7 +246,10 @@ public struct MIRANativeRootView: View {
       }
     }
     .environment(\.captroSupportViewerID, authSession.user?.id)
-    .preferredColorScheme(selectedTab == .scan && cameraDarkChrome ? .dark : MIRAAppearanceResolver.colorScheme(for: appearancePreference))
+    // The system launch screen uses the device appearance. Apply the user's
+    // in-app preference only after its matching first-frame overlay has left.
+    .preferredColorScheme(startup.isSplashMounted ? nil :
+      selectedTab == .scan && cameraDarkChrome ? .dark : MIRAAppearanceResolver.colorScheme(for: appearancePreference))
     .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }
     .statusBarHidden(shouldHideStatusBar)
     .onPreferenceChange(MIRAStatusBarHiddenPreferenceKey.self) { hidden in
@@ -255,6 +258,11 @@ public struct MIRANativeRootView: View {
     .onAppear {
       MIRAMainThreadStallMonitor.shared.start()
       MIRAPerformanceTimeline.markOnce("time_to_first_screen")
+    }
+    .onChange(of: startup.isSplashMounted) { _, mounted in
+      if !mounted && profileLink == nil && authSession.passwordResetContext == nil {
+        UIAccessibility.post(notification: .screenChanged, argument: nil)
+      }
     }
     .task {
       async let draftCleanup: Void = MIRAAppCacheStore.shared.clearPostDraftFromPreviousProcessIfNeeded()

@@ -251,6 +251,12 @@ struct CaptroCameraNativeView: View {
       Text(title.uppercased()).font(.subheadline.weight(camera.mode == mode ? .semibold : .regular)).tracking(1)
         .padding(.horizontal, 14).frame(minHeight: 44)
         .foregroundStyle(camera.mode == mode ? accent : .white.opacity(0.8))
+        .overlay(alignment: .bottom) {
+          if camera.mode == mode {
+            Capsule().fill(accent).frame(width: 16, height: 3).padding(.bottom, 4)
+              .accessibilityHidden(true)
+          }
+        }
     }.disabled(busy || recording || countdown > 0)
       .buttonStyle(CaptroCameraPressStyle())
       .accessibilityAddTraits(camera.mode == mode ? .isSelected : [])
