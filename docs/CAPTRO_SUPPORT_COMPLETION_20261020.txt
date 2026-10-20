@@ -1,0 +1,291 @@
+CAPTRO — SUPPORT CREATOR IMPLEMENTATION AND RELEASE FOLLOW-UP
+20 October 2026 UTC
+
+Request: finish the remaining Support feature without further questions.
+Baseline: 96ae39293af356eb0b830652aac056da51beacb4, branch
+fix/additional-review-20261016. Unrelated admin test output, the earlier app
+review document and Supabase local metadata were preserved.
+
+COMPLETED CODE
+0bd5c19b443a27d7d6b4bef5b7b954a4a73e4bdc:
+- The new-checkout kill switch no longer disables existing authenticated
+  receipt/status reconciliation. Origin, scoped bearer, expiration, owner,
+  account/revocation and canonical purchase checks remain enforced.
+- Unknown provider/network errors during eligibility return an honest retryable
+  503 rather than a successful "not eligible" response.
+- The browser return page also reads an existing receipt while creation is off.
+  Redirects are never treated as proof of payment.
+- Sandbox account discovery is bounded/paginated and reads the same Accounts v2
+  transfer capability as the actual seller flow. No account readiness is invented.
+
+58638edb:
+- Existing profile and Details Support buttons now offer explicit availability
+  retry and reject stale cancelled/account/creator results.
+- The real sheet uses the reference's restrained outlined rectangular amount
+  controls, full-width custom amount/checkout, accessible selected states and
+  truthful exact-decimal validation. It uses the creator's nonempty full name
+  when available, keeping the username separately.
+- Real UserProfileNativeView and PostDetailNativeView fixture tests now exercise
+  their Support buttons, correct recipient, dismissal, retained profile position,
+  retry and guest/self/non-US/ineligible denial. The old tests opened the sheet
+  directly and did not establish button integration.
+- No Home button, overlay, media geometry, navigation or payment SDK was added.
+
+fbeddbf90dbc40922bfe869ff3bba4115ece2c05:
+- First app-hosted integration tests exposed that the real profile/Details
+  Support buttons never appeared, despite direct-sheet tests passing.
+  Eligibility was attached to an empty conditional Group. Added a zero-size
+  lifecycle anchor so eligibility can run before revealing the button.
+  The identical runtime regressions now pass on both simulator sizes. This
+  establishes recovery in the tested components, not live payment acceptance.
+  No assertion was removed and no timeout was increased.
+- Included CaptroCreatorSupportTests.swift in the explicit Xcode test sources.
+  The previously green unit suite did not contain those six Support tests.
+- Native source tree: 20fca96bf89f9f65304b46884827d5db0f20ff27.
+
+9cd2ead9 / ac7a90b4:
+- Added an idempotent, explicitly invoked Apple capability/profile setup path.
+  It validates the exact live AASA, bundle and original distribution certificates;
+  it cannot delete/revoke certificates, change keys, enable payments, or select
+  an arbitrary domain. Profile downloads are confined to the ephemeral build.
+- Apple refused capability enablement with 403. No capability or new profile
+  was created. The unsupported entitlement was therefore NOT left in the
+  shipping source. Existing valid signing remains intact. If the source later
+  requests Associated Domains, archive verification requires the exact matching
+  signed entitlement; it never silently strips one to make a build pass.
+
+ACTUALLY DEPLOYED
+Worker source: 9cd2ead9.
+Worker version: 65023099-b270-4378-bac4-8a0ad6f84472.
+Deployment: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39403872227
+Succeeded: TypeScript, 369 backend tests, security/reliability schema checks,
+public pagination and anonymous protected-route denial. Creation endpoints
+remain 503 CAPTRO_SUPPORT_UNAVAILABLE; an invalid receipt bearer returns 401.
+Only backend-cf/src/creator-support.ts differed from the verified deployed
+Worker baseline. No production SQL, payment settings, keys or data were changed.
+
+Site: https://captro-site.pages.dev/support-creator/
+Deployment: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39403873119
+Succeeded. The receipt-recovery code is on the actual Pages deployment.
+The new-checkout page remains explicitly disabled, not a fictional live checkout.
+Cloud-runner smoke uses the actual native/Support workers.dev endpoint.
+The separate custom-domain Cloudflare challenge was not weakened or "fixed".
+
+TESTS AND FAILURE EVIDENCE
+- node --experimental-strip-types --test tests/creator_support.test.mjs
+  Before repair: 5 passed, 2 failed. The two failures reproduced kill-switch
+  receipt starvation and the false successful eligibility response.
+  After repair: all 7 passed.
+- node --experimental-strip-types --test tests/creator_support.test.mjs
+  tests/support_sandbox_recipient.test.mjs: 10 passed, 0 failed/skipped.
+- node node_modules/typescript/bin/tsc --noEmit: passed.
+- Full backend: node --experimental-strip-types --test tests/*.test.mjs
+  First run 367 passed; final deployed CI source includes two signing tests:
+  369 passed, 0 failed/skipped.
+- node scripts/test-support-browser.mjs: seven actual-page browser groups passed.
+  Includes custom cents, duplicate guarding, delayed confirmation, keyboard,
+  narrow layout, broken-avatar fallback, request recovery, context mismatch,
+  cancellation and receipts while new checkout is off.
+  Isolated fixtures only; screenshots are not real Stripe payment evidence:
+  C:/Users/The-s/AppData/Local/Temp/captro-support-evidence-20261019/
+- Signing contract tests check exact identities, no unexpected mutations,
+  read-only refusal, idempotency, existing certificate reuse and AASA scope.
+- Final targeted local rerun on fbeddbf9:
+  node --experimental-strip-types --test tests/creator_support.test.mjs
+  tests/support_sandbox_recipient.test.mjs tests/support_signing_contract.test.mjs
+  12 passed, 0 failed/skipped. Node's existing typeless-module warning remains;
+  no package-wide module-mode change was made for this focused repair.
+- First real-entry native run:
+  https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39402846416
+  241 tests: 238 passed, 3 failed, 0 skipped on the large simulator.
+  Failures: actual Details entry, actual profile entry and eligibility retry.
+  Hierarchy artifacts show the correct loaded profile/Details with no Support
+  button. Direct-sheet and accessibility tests passed; those were insufficient
+  proof of entry-point integration. The small-device phase did not run.
+- Matching-source rerun, completed successfully:
+  https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39489516422
+  Source fbeddbf90dbc40922bfe869ff3bba4115ece2c05.
+  Xcode 26.6 (17F113), macOS 26.6.2, iOS 26.4.1 (23E254a) simulators:
+  iPhone 17 Pro Max: 247 passed (230 unit + 17 UI), zero failures/skips.
+  iPhone 13 mini: 16 UI passed, zero failures/skips.
+  Retains the same entry-point assertions plus the newly included unit tests.
+  Profile and Details open the correct recipient; closing preserves position;
+  eligibility retry recovers; unsupported/guest/self/ineligible paths stay hidden;
+  browser-launch failure never claims payment; large text remains reachable.
+  Existing welcome, Favorites, mixed carousel and Home tab-restoration checks
+  pass in the scoped suite. This is not a physical smoothness certification.
+  Commands: xcodebuild ... build-for-testing, then test-without-building with
+  -only-testing:CaptroStampTests
+  -only-testing:CaptroLayoutUITests/WelcomeTests
+  -only-testing:CaptroLayoutUITests/CreatorSupportTests
+  -only-testing:CaptroLayoutUITests/FavoritesTests
+  -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
+  -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
+  The small run omits unit tests and the tab-restoration test, as configured.
+  Exact commands, device IDs and outputs retained in welcome-large.log and
+  welcome-small.log below; workflow native-welcome-validation.yml is unchanged.
+- Official icon/lockup and welcome SHA validation rerun: passed.
+  scripts/validate-official-brand.mjs and scripts/validate-welcome-brand.mjs.
+  Supplied welcome source still lacks genuine maximum-size 3x detail; no
+  re-encoding, redraw, silent upscaling or new artwork change was made.
+
+ACTUAL IMPLEMENTATION EVIDENCE (ISOLATED FIXTURES, NOT REAL PAYMENTS)
+Directory:
+C:/Users/The-s/AppData/Local/Temp/captro-support-native-39489516422/
+Attestation:
+C:/Users/The-s/AppData/Local/Temp/captro-support-source-39489516422/source.json
+Visually inspected:
+- WelcomeLarge-evidence/C800EE4A-F21B-424C-BBCF-21E95288CCC1.png
+  Actual profile button opened the correct Support sheet; unselected CTA disabled.
+- WelcomeLarge-evidence/66470DA8-E85C-4839-85C8-EBCAD4A6F3BA.png
+  Actual native sheet with $5 selected; reference-style outlined amounts and
+  fee disclosure. Browser opening is deliberately failed by the fixture.
+- WelcomeSmall-evidence/C54E6434-E3D8-42AF-89AD-613A4F799A87.png
+  Correct profile sheet on the small iPhone.
+- WelcomeSmall-evidence/46B56940-5EF3-4E59-AD4A-288E80A47A71.png
+  Accessibility text, two-column amounts and scroll-reachable checkout.
+These are app-rendered screenshots, not generated mockups. They do not show a
+real creator, live Checkout, successful charge or installed-app return.
+
+STRIPE SANDBOX — NOT A PAYMENT PASS
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39401856050
+The deployed schema (DDL only, no customer rows) and Support migration were
+loaded into disposable PostgreSQL on the CI runner. The provider readiness
+scan examined all 3 existing sandbox accounts: 1 incomplete, 2 non-manual
+payout schedules, 0 meeting the required gate. The run failed truthfully
+before creating Checkout, charge, refund, transfer or a connected account.
+This supplies the missing diagnostic; it does not establish payment acceptance.
+No payout settings were changed merely to force the contract test to pass.
+
+APPLE SIGNING — VERIFIED LIMITATION
+Read-only audit:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39402862574
+Current Captro_App_Store profile RSYRZK54QT is active through May 15, 2027;
+Apple Sign In is present; Associated Domains is absent.
+Attempt:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39403873360
+Apple returned HTTP 403 FORBIDDEN_ERROR on POST bundleIdCapabilities. The
+available API key cannot perform that operation. No alternate identity,
+permission bypass, certificate rotation or old-profile deletion was attempted.
+The AASA is live for 56C9MBK53P.com.captro.app and /support-creator/return only,
+but server association is not proof of an installed-app Universal Link.
+The web fallback therefore remains explicit; universalLinksVerified stays false.
+
+PUBLIC ACTIVATION IS STILL NOT COMPLETE
+The native flag, web creation flag, Worker live guard and test-only SQL snapshot
+contract remain closed. Consequently ordinary production profiles do NOT yet
+show a usable live Support button. Simulator fixture buttons are not evidence
+that public payments have been enabled.
+
+Unresolved activation requirements:
+1. Stripe approval/eligibility for Captro's third-party creator-support model.
+   No evidence of that approval is present; charges_enabled alone is not it.
+2. Reviewed fee/loss responsibility. Existing separate-charge/deferred-transfer
+   infrastructure debits the platform for provider fees/losses. The ledger models
+   creator net after actual processor costs and zero Captro commission, but that
+   does not erase Captro's contractual refund/dispute/negative-balance exposure.
+3. A legitimately ready sandbox recipient, then actual hosted Checkout completion,
+   signed webhook/actual-fee reconciliation and refund/dispute test acceptance.
+4. Apple capability permission, matching provisioning, and installed-app return.
+5. Reviewed production Support migration/activation, creator enrollment/consent,
+   and valid current storefront eligibility. Test-only SQL must not be applied
+   as if it enables a production settlement contract.
+
+Current primary references checked October 20, 2026:
+https://stripe.com/legal/restricted-businesses
+https://docs.stripe.com/connect/accounts-v2
+https://docs.stripe.com/api/v2/core/accounts/retrieve
+https://developer.apple.com/app-store/review/guidelines/
+https://developer.apple.com/documentation/appstoreconnectapi/post-v1-bundleidcapabilities
+https://developer.apple.com/documentation/appstoreconnectapi/post-v1-profiles
+Apple 3.1.1(a) currently permits external calls to action in the US storefront
+without an external-purchase-link entitlement; it does not waive Stripe
+eligibility or establish approval for other storefronts. Actual StoreKit
+storefront remains the native gate, never IP, city or device language.
+
+SAFETY / ROLLOUT
+New Support remains off until the independent gates above are satisfied.
+Do not disable receipt reconciliation if creation is later stopped.
+Preserve all purchases, earnings, entitlements, refunds and recovery history.
+Never restore clock-only expiry or weaken authorization to make rollout green.
+The Supabase skill reinforced service-only access, schema validation and keeping
+network calls outside transactions; this turn did not apply a database migration.
+
+TESTFLIGHT RELEASE
+Authorized run:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39496925875
+Source fbeddbf90dbc40922bfe869ff3bba4115ece2c05; build 1.0.1 (655.1).
+Dispatched only after validation 39489516422 completed successfully and its
+downloaded native-tree attestation matched exactly. No signing configuration
+mutation, external beta review or public App Store release was requested.
+Archive, signed authentication configuration, export and upload succeeded.
+Fresh live read-only checks passed immediately before upload:
+14 security assertions and five coordinated reliability assertions.
+Apple uploader: "UPLOAD SUCCEEDED with no errors" at 21:17:42 UTC October 20.
+Read-only inspection of the exported IPA independently confirms 1.0.1/655.1,
+com.captro.app, AppIcon, Captro_App_Store provisioning, Apple sign-in present,
+Support flag false and no Associated Domains. Its download is retained at:
+C:/Users/The-s/AppData/Local/Temp/captro-support-ipa-39496925875/Captro.ipa
+Apple processing/tester availability is checked separately below.
+A simulator pass is not physical-device or payment acceptance.
+
+FINAL APPLE AVAILABILITY
+First status run 39499349837 at 21:19 UTC still listed 649.1; this was not
+reported as a new-build availability pass.
+Follow-up read-only verification:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39499810067
+At 2026-10-20 21:22:35 UTC Apple confirmed:
+- Version 1.0.1, build 655.1, processing VALID, expired false.
+- Internal state IN_BETA_TESTING; autoNotifyEnabled true.
+- Assigned to Captro private and Captro private2.
+- External state READY_FOR_BETA_SUBMISSION. No external beta-review submission
+  or public App Store release was performed.
+This establishes availability to the existing tester groups, not installation
+on the user's iPhone. The binary intentionally keeps public Support off.
+
+RELEASE ACCEPTANCE SUMMARY
+- Deployed API/site repair: complete; versions and workflow evidence above.
+- Native Support button/sheet and denied/retry states: verified in real
+  app-hosted simulator components on both phone sizes, not just model tests.
+- Matching-source signed TestFlight update: available as 655.1.
+- Financial/provider acceptance: NOT complete. Sandbox readiness stopped the
+  contract before any payment. No real-money operation occurred.
+- Public Support: NOT enabled. Requires legitimate Stripe eligibility and
+  ready recipients, fee/liability review, provider end-to-end acceptance,
+  approved production contract and verified Apple/browser return.
+- Physical iPhone/camera/normal-fast-scroll/Instruments acceptance: remains
+  open. No new physical-device or installed-user-build evidence was collected.
+- Official branding: unchanged and hash-validated. Genuine maximum-size 3x
+  welcome-artwork sharpness remains pending, as in the preceding release report.
+- Existing Home/media recovery, Capture, profile privacy, Favorites and
+  financial history were preserved; this focused follow-up does not claim a
+  new comprehensive runtime audit of every earlier feature.
+
+CHANGED FILES THIS FOLLOW-UP
+.github/workflows/branding-support-worker-release.yml
+.github/workflows/native-ios-testflight.yml
+backend-cf/scripts/creator-support-stripe-contract.mjs
+backend-cf/scripts/support-sandbox-recipient.mjs
+backend-cf/scripts/verify-support-release.mjs
+backend-cf/src/creator-support.ts
+backend-cf/tests/creator_support.test.mjs
+backend-cf/tests/support_sandbox_recipient.test.mjs
+backend-cf/tests/support_signing_contract.test.mjs
+captro-site/support-creator/config.js
+captro-site/support-creator/support.js
+ios_native/MIRA/LayoutUITests/CreatorSupportTests.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroCreatorSupport.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroPostDetailSections.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroSupportReviewHost.swift
+ios_native/MIRA/Sources/MIRANative/Screens/ProfileChatVerificationStudio.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroCreatorSupportTests.swift
+ios_native/MIRA/project.yml
+scripts/app-store/support-link-signing.mjs
+scripts/app-store/testflight-status.mjs
+scripts/test-support-browser.mjs
+docs/CAPTRO_SUPPORT_COMPLETION_20261020.txt
+
+No migration file changed in this follow-up. Existing test-contract migration
+20261019234129 remains prepared and NOT applied to production. The fixture
+hosts and transport injection compile only in DEBUG; release does not expose
+a test-user route or an override to enable Support by launch arguments.
