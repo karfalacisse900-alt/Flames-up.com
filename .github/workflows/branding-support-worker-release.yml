@@ -54,12 +54,17 @@ jobs:
           node backend-cf/scripts/verify-feed-pagination.mjs
           node backend-cf/scripts/verify-reliability-http.mjs
           node --input-type=module <<'JS'
+          // Test the endpoint used by the native app and Support website. A
+          // separate custom-domain edge challenge is not an application 503.
           for(const path of ['session','checkout','status']) {
-            const r=await fetch('https://api.flames-up.com/api/creator-support/web/'+path, {
+            const r=await fetch('https://flames-up-api.karfalacisse900.workers.dev/api/creator-support/web/'+path, {
               method:'POST',headers:{'Content-Type':'application/json',Origin:'https://captro-site.pages.dev'},body:'{}',signal:AbortSignal.timeout(20000)
             });
             const b=await r.json();
-            if(r.status!==503||b.code!=='CAPTRO_SUPPORT_UNAVAILABLE')throw Error('Support must remain disabled: '+path);
-            console.log('PASS disabled support '+path);
+            const statusRead=path==='status';
+            const expectedStatus=statusRead?401:503;
+            const expectedCode=statusRead?'CAPTRO_SUPPORT_LINK_EXPIRED':'CAPTRO_SUPPORT_UNAVAILABLE';
+            if(r.status!==expectedStatus||b.code!==expectedCode)throw Error('Unexpected guarded Support response: '+path);
+            console.log('PASS '+(statusRead?'protected receipt read':'disabled support creation')+' '+path);
           }
           JS

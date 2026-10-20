@@ -3,6 +3,10 @@ name: Native iOS TestFlight
 on:
   workflow_dispatch:
     inputs:
+      configure_support_links:
+        description: Enable scoped Support return links using the existing bundle ID and certificate; no build or payments
+        type: boolean
+        default: false
       read_testflight_status:
         description: Read Apple processing and tester availability without rebuilding
         type: boolean
@@ -31,6 +35,20 @@ env:
   SCHEME: Captro
 
 jobs:
+  support-return-signing:
+    if: ${{ inputs.configure_support_links == true && inputs.read_testflight_status != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Configure scoped app returns without changing keys or payment settings
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+        run: node scripts/app-store/support-link-signing.mjs --apply
   testflight-status:
     if: ${{ inputs.read_testflight_status == true }}
     runs-on: ubuntu-latest
@@ -46,7 +64,7 @@ jobs:
           APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
         run: node scripts/app-store/testflight-status.mjs
   retry-upload:
-    if: ${{ inputs.read_testflight_status != true && inputs.configure_only != true && inputs.retry_upload_run != '' && inputs.retry_upload_run != null }}
+    if: ${{ inputs.configure_support_links != true && inputs.read_testflight_status != true && inputs.configure_only != true && inputs.retry_upload_run != '' && inputs.retry_upload_run != null }}
     name: Retry preserved TestFlight IPA upload
     runs-on: macos-26
     timeout-minutes: 15
@@ -103,7 +121,7 @@ jobs:
           xcrun altool --upload-app --type ios --file "$IPA_PATH" \
             --apiKey "$APP_STORE_CONNECT_API_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
   build-testflight:
-    if: ${{ inputs.read_testflight_status != true && (inputs.retry_upload_run == '' || inputs.retry_upload_run == null) }}
+    if: ${{ inputs.configure_support_links != true && inputs.read_testflight_status != true && (inputs.retry_upload_run == '' || inputs.retry_upload_run == null) }}
     name: Build native SwiftUI iOS app and upload to TestFlight
     runs-on: macos-26
     timeout-minutes: 60
@@ -172,6 +190,9 @@ jobs:
           IOS_PROVISIONING_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           CAPTRO_APPLE_PAY_MERCHANT_ID: ${{ vars.CAPTRO_APPLE_PAY_MERCHANT_ID }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
         run: |
           set -euo pipefail
 
@@ -183,6 +204,10 @@ jobs:
 
           echo -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > "$CERT_PATH"
           echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
+          # Same bundle and certificate, with the narrowly scoped app-return
+          # capability. This read never creates/revokes profiles or certificates.
+          node scripts/app-store/support-link-signing.mjs --download "$PROFILE_PATH"
+          IOS_PROVISIONING_PROFILE_NAME="Captro_App_Store_Support_Return_v1"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -278,6 +303,8 @@ jobs:
               info = plistlib.load(source)
           with open(os.path.join(runner_temp, "captro-release-entitlements.plist"), "rb") as source:
               entitlements = plistlib.load(source)
+          if entitlements.get("com.apple.developer.associated-domains") != ["applinks:captro-site.pages.dev"]:
+              raise SystemExit("Signed app must contain only the reviewed Support return association.")
 
           expected_bundle = "com.captro.app"
           expected_google_ios = "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
