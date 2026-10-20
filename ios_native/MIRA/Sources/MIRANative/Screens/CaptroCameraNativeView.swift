@@ -226,7 +226,7 @@ struct CaptroCameraNativeView: View {
           Text(camera.state == .finalizing ? "Saving…" : camera.isRecordingStarted ? "REC \(recordingTime)" : "Starting…")
         }.font(.caption.monospacedDigit()).accessibilityIdentifier("capture.recording.status")
       } else {
-        Text("CAPTRO").font(.caption.weight(.medium)).tracking(5).accessibilityHidden(true)
+        CaptroBrandLogo(onDark: true).frame(width: 86, height: 23).accessibilityHidden(true)
       }
       Spacer()
       if reviewMedia == nil {

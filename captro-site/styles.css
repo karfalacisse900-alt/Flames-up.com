@@ -93,8 +93,11 @@ img {
   gap: 2px;
 }
 
-.brand-name {
-  font-size: 18px;
+.brand-lockup {
+  display: block;
+  width: 142px;
+  height: auto;
+  object-fit: contain;
 }
 
 .brand-tag {

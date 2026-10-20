@@ -15,12 +15,20 @@ final class CaptroWelcomeTests: XCTestCase {
     }
   }
   func testSourceGeometryAndZoomDoNotStretchOrClipArtwork() {
+    XCTAssertEqual(CaptroWelcomeLayout.sourceSize, CGSize(width: 1254, height: 1254))
     for width in [CGFloat(320), 375, 390, 402, 430, 440, 480, 600] {
       let displayedWidth = min(width, CaptroWelcomeLayout.maximumWidth)
       XCTAssertEqual(CaptroWelcomeLayout.artworkHeight(width: width) / displayedWidth,
-                     932.0 / 870.0 * 1.03, accuracy: 0.0001)
+                     1.03, accuracy: 0.0001)
+      for height in [CGFloat(0), 100, 300, 600] {
+        let fitted = CaptroWelcomeLayout.fittedImageSize(width: width, height: height)
+        XCTAssertEqual(fitted.width, fitted.height, accuracy: 0.0001)
+        XCTAssertLessThanOrEqual(fitted.width * CaptroWelcomeLayout.maximumZoom, displayedWidth + 0.0001)
+        XCTAssertLessThanOrEqual(fitted.height * CaptroWelcomeLayout.maximumZoom, height + 0.0001)
+      }
     }
-    XCTAssertGreaterThanOrEqual(CaptroWelcomeLayout.requiredThreeXSource.width, 1484)
+    // Base art is 480 / 1.03 points wide; final zoom reaches 480 points.
+    XCTAssertEqual(CaptroWelcomeLayout.requiredThreeXSource, CGSize(width: 1440, height: 1440))
     XCTAssertGreaterThan(CaptroWelcomeLayout.requiredThreeXSource.width, CaptroWelcomeLayout.sourceSize.width)
   }
   @MainActor func testGuestDoesNotAcquireCredentials() async {

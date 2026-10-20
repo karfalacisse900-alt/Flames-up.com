@@ -1,19 +1,8 @@
 {
   "images": [
     {
-      "filename": "captro-launch-logo.png",
-      "idiom": "universal",
-      "scale": "1x"
-    },
-    {
-      "filename": "captro-launch-logo@2x.png",
-      "idiom": "universal",
-      "scale": "2x"
-    },
-    {
-      "filename": "captro-launch-logo@3x.png",
-      "idiom": "universal",
-      "scale": "3x"
+      "filename": "captro-lockup-black.png",
+      "idiom": "universal"
     }
   ],
   "info": {

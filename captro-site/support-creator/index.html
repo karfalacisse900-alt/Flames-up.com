@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="referrer" content="no-referrer">
+  <title>Support a creator · Captro</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/support-creator/support.css">
+  <script src="/support-creator/config.js" defer></script>
+  <script src="/support-creator/support.js" type="module"></script>
+</head>
+<body>
+  <main aria-labelledby="title">
+    <section class="card">
+      <div class="avatar-fallback" id="avatar-fallback" aria-hidden="true">C</div>
+      <img id="avatar" class="avatar" hidden alt="" width="64" height="64">
+      <h1 id="title">Support a creator</h1>
+      <p id="username" class="secondary"></p>
+      <p class="secondary">Send one-time support for their work.</p>
+      <form id="support-form" hidden>
+        <p class="secondary small">Test environment — no real payments.</p>
+        <fieldset id="amounts">
+          <legend>Amount (USD)</legend>
+          <div class="amount-options">
+            <button type="button" data-amount="200" aria-pressed="false">$2</button>
+            <button type="button" data-amount="500" aria-pressed="false">$5</button>
+            <button type="button" data-amount="1000" aria-pressed="false">$10</button>
+            <button type="button" data-amount="2000" aria-pressed="false">$20</button>
+          </div>
+          <label class="custom">Other amount (USD)
+            <input id="custom-amount" inputmode="decimal" autocomplete="off" placeholder="2.00–200.00" aria-describedby="amount-help">
+          </label>
+          <p id="amount-help" class="secondary small">Choose $2–$200. Up to two decimal places.</p>
+        </fieldset>
+        <p class="fees">Captro takes 0%. Payment-processing fees apply.</p>
+        <p class="secondary small">Your payment does not unlock content or benefits. The creator receives the amount after applicable processing fees.</p>
+        <button id="checkout" class="primary" disabled>Continue to secure checkout</button>
+        <p class="secondary small">Stripe-hosted checkout opens in this browser.</p>
+      </form>
+      <p id="status" role="status" aria-live="polite">Loading secure support…</p>
+      <button id="retry" type="button" hidden>Try again</button>
+      <button id="check-status" type="button" hidden>Check payment status</button>
+      <a id="app-return" class="return" hidden>Return to Captro</a>
+      <p id="manual-return" class="secondary small" hidden>You can return to Captro using the app switcher. Your original screen stays in place.</p>
+    </section>
+  </main>
+</body>
+</html>

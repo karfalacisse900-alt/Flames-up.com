@@ -1,0 +1,293 @@
+CAPTRO — OFFICIAL BRANDING AND SUPPORT CREATOR DEVELOPMENT HANDOFF
+19 October 2026
+
+FOLLOW-UP: User subsequently supplied captro-welcome-clean-assets.zip. The
+logo-free hero and separate official logo are now integrated; see
+CAPTRO_WELCOME_CLEAN_ASSET_20261019.txt for exact dimensions, provenance and
+remaining native/sharpness checks. The welcome-source blocker described below
+records the earlier state. Support/payment/return blockers are unchanged.
+
+STATUS — NOT A PRODUCTION ACTIVATION OR NATIVE RELEASE
+
+Baseline: fix/additional-review-20261016, HEAD
+5a52f78d4ad97243e7deba759cac3527c04a9ded. Changes below are uncommitted.
+No merge, deployment, production migration, DNS/payment setting change,
+charge, refund, transfer, App Store submission or TestFlight upload occurred.
+Unrelated docs/CAPTRO_APP_REVIEW_20261018.txt and supabase/.temp were preserved.
+
+The official assets are integrated into the existing editable brand placements.
+The welcome collage is the exception: its old wordmark is baked into the artwork.
+Support has a functioning local browser/API/SQL fixture implementation and native
+source integration, but is NOT production complete. Cold-launch return restoration,
+verified Universal Links, native execution, provider approval and Stripe test-mode
+end-to-end verification remain release blockers. All activation defaults are off.
+
+DOMAIN DECISION
+
+Use https://flames-up.com for the proposed support page and browser return.
+Read-only inspection found HTTPS 200 on that repository-owned domain;
+captro.app and www.flames-up.com did not resolve in this environment. No domain
+was purchased, detached or reconfigured. A working website is NOT evidence of
+a working Universal Link association. The /support-creator paths are local only.
+
+1. OFFICIAL ASSET INTEGRATION
+
+Input: C:\Users\The-s\Downloads\Captro-Official-Logo-Package (1).zip
+Read CODEX-HANDOFF.md. User's expanded existing-logo scope takes precedence over
+its icon-only scope; asset validation and no-release safeguards are retained.
+
+Exact byte copies, not redraws or generated approximations:
+- Existing AppIcon.appiconset now uses the supplied universal iOS 1024 manifest
+  and AppIcon-1024.png, identical to app-icons/captro-app-icon-dark-1024.png.
+  1024 x 1024, square, 8-bit RGB, opaque black/white, no pre-rounded corners.
+  SHA256: 375806C16A5753D86600396773445DB3B6DB1F7C95CB46A73B8E164C4FC975D5
+  One AppIcon set; target still selects AppIcon. No signing/bundle changes.
+- CaptroLaunchLogo uses the supplied black 2400 x 624 lockup.
+- CaptroBrandWhite uses the supplied white 2400 x 624 lockup.
+- Website/admin SVG lockups and symbols contain the supplied outlined lettering.
+- Favicon ICO/SVG and 180/192/512 PNG files are exact supplied bytes.
+- Original handoff, validation metadata and licenses retained in
+  design/captro-official-brand. No Poppins font installed or applied to UI text.
+
+Updated existing iOS locations:
+- Home-screen/App Store build icon: existing AppIcon asset set.
+- Sign-in heading: black lockup via CaptroBrandLogo.
+- Capture utility-row branding: white lockup, existing pipeline untouched.
+- Launch/loading/privacy-shield branding: existing CaptroLaunchLogo reference.
+- Existing Stripe Identity branding reference uses the same updated asset.
+  No payment/onboarding behavior changed by the asset replacement.
+
+Updated existing website locations:
+- captro-site/index.html header.
+- support/index.html and privacy-choices/index.html headers.
+- legal/terms, legal/privacy, legal/safety, legal/community-guidelines headers.
+- auth/reset-password/index.html existing brand kicker.
+- Their favicon/touch-icon metadata.
+- admin-web sign-in/header and console sidebar; compact tablet sidebar uses
+  supplied symbol only, desktop uses outlined symbol/name lockup.
+- admin-web favicon/touch-icon metadata.
+
+Not replaced / not found:
+- CaptroWelcomeHero.png: 870 x 932 collage includes its old wordmark in the
+  pixels. It remains untouched to preserve the approved art and avoid duplicate
+  branding. Need a logo-free/layered original to change that placement exactly.
+- No distinct About logo, branded email image or share-card template was found
+  to replace. Ordinary copyright/legal text and functional icons are unchanged.
+- No existing PWA manifest was found. 192/512 icons are supplied/prepared, not
+  a newly introduced installable web app or service worker.
+- Old 18 app-icon PNGs and 3 launch-logo PNGs are now unreferenced but retained.
+  Native filesystem removal was denied; no material files were deleted.
+
+Validation tools:
+- scripts/install-official-brand.ps1 copies explicit ZIP entries only and checks
+  SHA256 against each entry. -ValidateOnly performs read-only verification.
+- scripts/validate-official-brand.mjs checks PNG dimensions/RGB, master hash,
+  the single AppIcon set/references, lockup sizes and outlined SVG parity.
+
+2. SUPPORT ARCHITECTURE AND PAYMENT RESPONSIBILITIES
+
+Existing charge model: Stripe platform charges with deferred separate transfers
+to existing verified Connect accounts, manual payout/settlement controls.
+Support reuses app_purchases, app_payments, app_creator_earnings and the existing
+append-only marketplace ledger. No new wallet, connected account, webhook
+endpoint, native PaymentSheet path or duplicate payout engine was added.
+
+Amounts are integer USD provider units, $2–$200, with suggestions $2/$5/$10/$20.
+Exact parsing rejects fractional cents and out-of-range values. No currency
+expansion or historical price reinterpretation. Quantity is one. Support grants
+no entitlement, content, badge, visibility, membership or other benefit.
+
+Fee contract:
+- Support snapshots and SQL constraints require zero Captro/platform fee,
+  zero service-fee line and zero tax line in this development model.
+- Checkout does not request application_fee_amount or transfer_data. Existing
+  marketplace price/fee calculation is bypassed only for creator_support.
+- Existing trusted confirmation reads actual Stripe processing costs and
+  accounts for creator net. Test fixture: gross 500, actual fee 59, net 441,
+  Captro commission 0, pending earnings 441; this is not a quoted Stripe rate.
+- Existing audited release approval, known processing-cost and settlement gates
+  remain mandatory. Confirmation does not initiate an automatic transfer.
+- With the existing separate-charge model, Stripe initially debits the platform
+  for processing costs, refunds and disputes. Modeling creator net does not
+  eliminate Captro's provider liability. Unrecoverable fees/negative balances and
+  contractual liability need explicit approval before live activation.
+- Actual platform pricing configuration and fee payer settings were not verified
+  against the Stripe account. Payout fees remain a distinct existing ledger concern.
+
+Backend changes:
+- backend-cf/src/creator-support.ts: bounded inputs, exact amount contract,
+  scoped HMAC handoffs, authenticated eligibility/receipt routes, strict owned
+  browser origin, rate limits and sanitized errors. Bearer handoff expires in
+  2 hours; only its hash persists server-side. It is not an app login token.
+- backend-cf/src/index.ts: narrow service adapter and support branch in the
+  existing createCommerceCheckoutSession. Fresh canonical account, restrictions,
+  block/private-profile access, explicit server-managed enrollment and existing
+  Connect readiness/identity gates. Trusted destination from existing records.
+- Existing purchase idempotency, provider key, raw-signature webhook verification,
+  payment reconciliation, refunds, disputes and transfer controls are reused.
+- Retries reuse one purchase and one provider key. Failed provider responses do
+  not cancel the purchase or declare it unpaid. Redirects never confirm payment.
+- Receipt status remains readable by its authenticated buyer after creator
+  eligibility changes; revocation and account ownership are still enforced.
+- Status distinguishes confirming, confirmed, refunded, partially refunded,
+  disputed and payment-received-under-review. It does not erase recovery cases.
+
+Prepared migration (NOT applied to any hosted database):
+supabase/migrations/20261019234129_creator_support_test_contract.sql
+- Adds service-only enrollment and expiring handoff tables, no client RLS policy.
+- Allows no-post/no-purchasable records ONLY for constrained test-mode support.
+- Immutable financial snapshots remain in existing purchase/ledger tables.
+- Nonfinancial enrollment/handoff context cascades on Auth deletion; financial
+  purchase references are not cascaded away.
+- Wraps existing availability/date/entitlement helpers narrowly; ordinary
+  commerce follows the original functions and guards.
+- Support creates no entitlement; fulfillment marker enables existing manual
+  settlement review, not unconditional payout.
+- Applied only inside isolated PGlite fixtures with its prerequisite migrations.
+
+Web/native UI:
+- Native CaptroCreatorSupport.swift: discreet visitor-profile and Details
+  creator-row actions, recipient sheet, accessible amounts, custom USD input,
+  fee disclosure, repeated-tap guard and external UIApplication browser open.
+  Home and media overlays are not modified. Root provides viewer identity.
+- Native entry requires a Bundle flag (not configured), actual StoreKit USA
+  storefront and server eligibility. Locale/IP/city are not used for storefront.
+- captro-site/support-creator: real HTML/CSS/JS and server-backed states, not
+  screenshot UI; responsive layout, keyboard focus, broken-avatar fallback,
+  exact amounts, bounded requests, explicit retry, cancellation and status reads.
+- Fragment bearer removed immediately; tab-scoped temporary storage, strict
+  provider URL validation, no-referrer/no-store and restrictive CSP.
+- Custom native amounts survive browser handoff. An older checkout return cannot
+  display a different payment's receipt after the browser context changes.
+- Public web configuration is disabled with no API base configured. Backend
+  requires explicit test flag + Stripe test mode and rejects production env.
+  DB support snapshots cannot be live-mode. Test UI identifies test payments.
+
+Incomplete native/return work — do not call this feature production complete:
+- Warm existing Support sheet checks status on foreground/return notification.
+- Cold-launch originating-screen restoration and a root receipt presenter are
+  not implemented. No associated-domains entitlement or AASA change was made.
+- universalLinksVerified stays false. Web shows app-switcher fallback and never
+  advertises an unverified app link. A same-domain link may remain in Safari;
+  real cross-browser Universal Link behavior must be designed/tested on device.
+- Existing private earnings/history APIs are reused, but no dedicated support
+  history screen was built. No-post support records need My Stuff/finance category
+  compatibility review (currently generic/unassigned) before rollout.
+- Native source and tests were NOT compiled or run on this Windows machine.
+
+3. EXECUTED VERIFICATION
+
+From repository root, unless a working directory is specified:
+
+  ./scripts/install-official-brand.ps1 -Package
+    'C:\Users\The-s\Downloads\Captro-Official-Logo-Package (1).zip' -ValidateOnly
+  Result: all mapped entries byte-identical; exact dark master SHA confirmed.
+
+  node scripts/validate-official-brand.mjs
+  Result: passed icon dimensions, opaque RGB, hash, catalog and SVG checks.
+
+  cd backend-cf; npx tsc --noEmit --pretty false
+  Result: passed, exit 0.
+
+  cd backend-cf; npm test
+  Expands to node --experimental-strip-types --test tests/*.test.mjs
+  Final result: 361 tests, 361 passed, 0 failed/cancelled/skipped/todo.
+  Runtime approximately 16.6 seconds in final run.
+  Log: %TEMP%\captro-brand-support-backend-tests-20261019.log
+
+  cd admin-web; npm run build
+  Result: TypeScript and Vite production bundle passed, exit 0. Not deployed.
+
+  cd admin-web; npm run test:browser
+  Local preview at http://127.0.0.1:4173; isolated admin API fixtures.
+  Result: all 11 printed scenarios passed, plus rendered supplied-logo checks:
+  report selection/URL, filtering/pagination, confirmed and rejected mutations,
+  lost responses/duplicate prevention, stale detail, broken media, honest query
+  failures, tablet overflow, read-only/keyboard and revoked-session handling.
+  Log: %TEMP%\captro-brand-admin-browser-20261019.log
+
+  node scripts/test-support-browser.mjs
+  Result: passed actual static page with isolated API/provider fixtures:
+  recipient, broken avatar, correct exact amount, one checkout, delayed verified
+  status, disabled/unverified return links, phone width, keyboard, retry,
+  custom handoff amount, wrong-receipt identity rejection, cancellation status
+  read without a new checkout, and default-off production page. No page errors.
+
+  git -c core.autocrlf=false -c core.safecrlf=false diff --check
+  Result: passed before this documentation handoff; recheck at final delivery.
+
+Focused new tests:
+- creator_support.test.mjs: default-off/live denial, amount and snapshot checks,
+  scoped token, ownership/origin/expired/revoked/forged input, provider uncertainty.
+- creator_support_database.test.mjs: real migration/function fixture, idempotent
+  confirmation, one payment/earning, zero entitlement, actual-fee ledger, RLS,
+  dispute hold, partial/full refund replay and original event purchase behavior.
+- additional_provider_contract.test.mjs: actual existing Worker checkout
+  function with provider mocks; stable key on lost response, zero fee parameters;
+  existing raw-signature helper accepts correct signature and rejects tampering.
+- Native CaptroCreatorSupportTests.swift added for exact amounts, storefront and
+  allowed handoff/return URLs. These four tests were NOT executed.
+
+These tests do not establish real Stripe payment/refund/payout behavior, concurrent
+multi-session PostgreSQL acceptance, physical scrolling or native presentation.
+
+4. SCREENSHOTS ACTUALLY COLLECTED
+
+Browser fixture screenshots, NOT iPhone captures or native app evidence:
+%TEMP%\captro-support-evidence-20261019\support-desktop-fixture.png
+%TEMP%\captro-support-evidence-20261019\support-phone-web-fixture.png
+admin-web/test-results/admin-console/desktop.png
+admin-web/test-results/admin-console/tablet.png
+admin-web/test-results/admin-console/sign-in.png
+
+Viewed the actual supplied icon, support phone page, admin desktop/tablet/login.
+The web page follows the reference's restrained amount selection and hierarchy;
+it is an external browser page, not a native-sheet screenshot. Native visual
+comparison, launch icon rendering and accessibility/device checks remain unrun.
+
+5. ROLLOUT / REMAINING GATES (NO PUBLIC ACTIVATION APPROVED)
+
+1. Obtain written Stripe approval for third-party creator support; existing
+   Connect eligibility alone does not establish approval of the business model.
+   Review moderation obligations and permitted recipient activities.
+2. Verify current App Store storefront rules at release; do not treat no-perks
+   support as automatically exempt from in-app-purchase rules. USA gate is
+   deliberately narrow and is not a legal/provider approval certificate.
+3. Verify platform pricing, processing/payout fee allocation, refund/dispute
+   liability, tax treatment, terms and negative-balance recovery. No automatic
+   commitment for Captro to absorb fees was made.
+4. Complete cold-return/origin restoration, root receipt UI and history/category
+   compatibility. Compile native source and execute unit/app-hosted UI tests.
+5. Obtain approval for domain association/signing changes; publish and validate
+   the exact AASA and associated domain, then exercise installed-app/browser
+   return, absent app, stale link, different account and app-kill paths.
+6. Review/migrate only an isolated test database first with the matching Worker.
+   Keep feature flags off; verify legacy My Stuff, commerce, deletion and existing
+   clients against nullable support-only references. Do not rewrite old records.
+7. With authorized Stripe test keys, run actual Checkout success/cancel/failure,
+   delayed/duplicate/out-of-order webhooks, tampered destinations, restricted
+   creators, refunds/disputes before/after transfer, payout failure and actual-fee
+   reconciliation. No test credentials were available here; none were invented.
+8. Physical iPhone/browser, VoiceOver/Dynamic Type and feed-return position tests.
+   Native smoothness, media recovery and previous release blockers remain
+   separate acceptance gates; this work does not certify them.
+9. Only after these gates and explicit approval: review a live-mode migration
+   and configuration plan. Current schema/code intentionally disallow live
+   support, rather than enabling it by an accidental flag flip.
+10. Rollback: disable new entry points/creation first. Keep provider webhook,
+    reconciliation, recovery, refunds and financial history available for any
+    accepted test operations. Do not drop financial records or re-enable unsafe
+    clock-only hold expiration. No automatic down migration is supplied.
+
+Primary policy/technical sources checked during implementation:
+https://developer.apple.com/app-store/review/guidelines/#business
+https://developer.apple.com/documentation/storekit/storefront/current
+https://support.stripe.com/questions/prohibited-and-restricted-businesses-list-faqs
+https://support.stripe.com/questions/requirements-for-accepting-tips-or-donations?locale=en-GB
+https://docs.stripe.com/connect/separate-charges-and-transfers
+https://developers.cloudflare.com/pages/configuration/headers/
+
+The Supabase skill guided isolated migration testing, deny-by-default database
+access and short transactional mutations; no production migration was applied.
+
+This prompt expands the ZIP’s icon-only handoff to existing logo placements too. If their scope conflicts, follow this prompt; keep the handoff’s asset-validation and no-release safeguards.

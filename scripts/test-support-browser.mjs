@@ -1,0 +1,83 @@
+// Real static page, isolated provider/API fixtures; never contacts a live service.
+import assert from 'node:assert/strict';
+import {readFile,mkdir} from 'node:fs/promises';
+import {resolve,extname} from 'node:path';
+import {tmpdir} from 'node:os';
+import {fileURLToPath} from 'node:url';
+import {chromium} from '../admin-web/node_modules/playwright/index.mjs';
+const root=fileURLToPath(new URL('../captro-site/',import.meta.url));
+const output=resolve(tmpdir(),'captro-support-evidence-20261019');await mkdir(output,{recursive:true});
+const browser=await chromium.launch({headless:true,channel:'msedge'});
+const context=await browser.newContext({viewport:{width:1100,height:950},reducedMotion:'reduce'});
+let enabled=true,fail=false,paid=false,checkoutCalls=0,lastAmount=null;
+const id='12345678-1234-4234-8234-123456789012';
+await context.route('**/*',async route=>{
+ const request=route.request(),url=new URL(request.url());
+ if(url.hostname==='flames-up-api.karfalacisse900.workers.dev') {
+  const b=request.method()==='POST'?request.postDataJSON():{};
+  assert.equal(b.token,'a'.repeat(64));
+  const headers={'Access-Control-Allow-Origin':'https://flames-up.com','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
+  if(request.method()==='OPTIONS')return route.fulfill({status:204,headers});
+  if(fail)return route.fulfill({status:503,headers,json:{code:'CAPTRO_SUPPORT_RETRY'}});
+  if(url.pathname.endsWith('/session'))return route.fulfill({headers,json:{creator:{display_name:'Fixture Creator',username:'fixture',avatar_url:'https://imagedelivery.net/fixture/missing'},purchase:null}});
+  if(url.pathname.endsWith('/checkout')) {checkoutCalls++;lastAmount=b.amount;return route.fulfill({headers,json:{purchase:{id,amount:b.amount,currency:'USD',status:'confirming'}}});}
+  if(url.pathname.endsWith('/status'))return route.fulfill({headers,json:{id,amount:lastAmount||500,currency:'USD',status:paid?'confirmed':'confirming'}});
+  throw Error('Unexpected API route '+url.pathname);
+ }
+ if(url.hostname==='imagedelivery.net')return route.fulfill({status:404,body:''});
+ assert.equal(url.hostname,'flames-up.com','no external service in browser test');
+ if(url.pathname==='/support-creator/config.js')return route.fulfill({contentType:'text/javascript',body:`window.CAPTRO_SUPPORT_CONFIG={enabled:${enabled},apiBaseURL:'https://flames-up-api.karfalacisse900.workers.dev/api',universalLinksVerified:false};`});
+ const path=url.pathname==='/support-creator/'||url.pathname==='/support-creator/return'?'/support-creator/index.html':url.pathname;
+ const file=resolve(root,'.'+path);assert.ok(file.startsWith(root));
+ const types={'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'};
+ return route.fulfill({contentType:types[extname(file)]||'application/octet-stream',body:await readFile(file)});
+});
+const page=await context.newPage();
+const errors=[];page.on('pageerror',error=>errors.push(error.message));
+let navigation=0;
+const open=()=>page.goto('https://flames-up.com/support-creator/?fixture='+ ++navigation +'#handoff='+'a'.repeat(64));
+try {
+ await open();await page.getByRole('heading',{name:'Support Fixture Creator'}).waitFor();
+ assert.equal(new URL(page.url()).hash,'','bearer removed from address bar');
+ assert.ok(await page.locator('#avatar-fallback').isVisible());
+ console.log('Rendered font: '+await page.locator('h1').evaluate(element=>getComputedStyle(element).fontFamily));
+ await page.getByRole('button',{name:'$5',exact:true}).click();
+ assert.equal(await page.getByRole('button',{name:'$5',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.screenshot({path:resolve(output,'support-desktop-fixture.png'),fullPage:true});
+ await page.setViewportSize({width:390,height:844});
+ await page.screenshot({path:resolve(output,'support-phone-web-fixture.png'),fullPage:true});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.getByLabel('Other amount (USD)').fill('1.00');assert.equal(await page.locator('#checkout').isDisabled(),true);
+ await page.getByLabel('Other amount (USD)').fill('5.01');
+ await page.locator('#checkout').click();await page.getByText('Confirming payment. Please check again shortly.',{exact:true}).waitFor();
+ assert.equal(checkoutCalls,1);assert.equal(lastAmount,501);
+ assert.equal(await page.getByText(/Support confirmed/).count(),0,'redirect/request does not fake confirmation');
+ paid=true;await page.getByRole('button',{name:'Check payment status'}).click();
+ await page.getByText('Support confirmed: $5.01. Thank you.',{exact:true}).waitFor();
+ assert.equal(await page.locator('#app-return').isVisible(),false,'unverified Universal Link is not advertised');
+ assert.equal(await page.locator('#manual-return').isVisible(),true);
+ console.log('PASS actual page: recipient, failed-avatar fallback, exact custom amount, one checkout, delayed confirmation, honest app fallback and narrow layout');
+ fail=true;await open();await page.getByRole('button',{name:'Try again'}).waitFor();
+ fail=false;await page.getByRole('button',{name:'Try again'}).click();await page.getByRole('heading',{name:'Support Fixture Creator'}).waitFor();
+ await page.keyboard.press('Tab');assert.ok(await page.evaluate(()=>document.activeElement?.tagName!=='BODY'));
+ console.log('PASS failed request retry and keyboard focus');
+ await page.goto('https://flames-up.com/support-creator/?fixture=custom#handoff='+'a'.repeat(64)+'&amount=1234');
+ await page.getByRole('heading',{name:'Support Fixture Creator'}).waitFor();
+ assert.equal(await page.getByLabel('Other amount (USD)').inputValue(),'12.34');
+ assert.equal(await page.locator('#checkout').isDisabled(),false);
+ console.log('PASS native custom amount preserved across browser handoff');
+ await page.goto('https://flames-up.com/support-creator/return?purchase_id=22345678-1234-4234-8234-123456789012');
+ await page.getByText('This browser no longer has the matching checkout context. Return to Captro to check this payment.',{exact:true}).waitFor();
+ assert.equal(await page.getByText(/Support confirmed/).count(),0);
+ assert.equal(await page.locator('#support-form').isVisible(),false);
+ console.log('PASS older checkout return cannot display another payment receipt');
+ paid=false;await page.goto('https://flames-up.com/support-creator/return?purchase_id='+id+'&cancelled=1');
+ await page.getByText('Checkout closed. No payment is confirmed yet.',{exact:true}).waitFor();
+ assert.equal(await page.locator('#support-form').isVisible(),false);
+ assert.equal(checkoutCalls,1);
+ console.log('PASS cancellation return performs status read only; no extra payment');
+ enabled=false;await open();await page.getByText('Creator support is not available yet. No payment has been started.',{exact:true}).waitFor();
+ assert.equal(await page.locator('#support-form').isVisible(),false);assert.deepEqual(errors,[]);
+ console.log('PASS disabled production page; no fabricated payment UI');
+ console.log('Screenshots: '+output);
+} finally { await browser.close(); }

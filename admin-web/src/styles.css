@@ -154,6 +154,14 @@ code {
   line-height: 1.5;
 }
 
+.admin-brand-lockup {
+  display: inline-block;
+  max-width: 166px;
+  height: auto;
+  vertical-align: middle;
+  object-fit: contain;
+}
+
 .brand-mark {
   width: 60px;
   height: 60px;

@@ -89,7 +89,7 @@ public struct AuthNativeView: View {
     ScrollView {
       VStack(spacing: 24) {
         VStack(spacing: 12) {
-          Text("Captro").font(.title.weight(.bold)).foregroundStyle(MIRATheme.Color.forest)
+          CaptroBrandLogo().frame(width: 132, height: 35)
           Text(isCreatingAccount ? "Create account" : "Log in").font(.title2.weight(.bold))
           Text(isCreatingAccount ? "Join Captro and start sharing." : "Welcome back.")
             .font(.body).foregroundStyle(.secondary)

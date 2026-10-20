@@ -370,5 +370,7 @@ console.log(
   "PASS revoked administrator loses the open console on access recheck",
 );
 assert.deepEqual(errors, []);
+assert.ok(await page.locator('.admin-brand-lockup').first().evaluate(image => image.complete && image.naturalWidth > 0));
+await page.screenshot({path: resolve(output, 'sign-in.png'), fullPage: true});
 await browser.close();
 console.log(`PASS browser suite; screenshots: ${output}`);

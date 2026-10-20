@@ -1,0 +1,93 @@
+CAPTRO — LOGO-FREE WELCOME ASSET FOLLOW-UP
+19 October 2026
+
+Source baseline: fix/additional-review-20261016,
+5a52f78d4ad97243e7deba759cac3527c04a9ded, plus existing uncommitted work.
+No other pending branding, Support, Home/media, Capture or profile work overwritten.
+No upload, merge, deployment, signing or bundle-identity change.
+
+INPUT AND INSPECTION
+
+User supplied C:\Users\The-s\Downloads\captro-welcome-clean-assets.zip in
+response to the request for logo-free artwork and confirmed "this is it".
+The ZIP README identifies the PNGs as AI-edited rasters, not original layers,
+and warns that texture details differ. Both supplied images and the old hero
+were visually inspected. The new collage is used as supplied, not redrawn.
+
+Illustration: captro-welcome-collage-no-wordmark.png, 1254 x 1254, RGB PNG.
+SHA256: f2687645b233f580215387e3b337cc6c2dc11a30f71f9a7052c0f29a748a2fa6
+Reference: captro-welcome-reference-no-wordmark.png, 870 x 1808.
+The full-screen reference was NOT bundled as the interface. Its text/buttons
+remain reference-only; native controls and authentication remain unchanged.
+
+IMPLEMENTED
+
+- Replaced only the bytes of the existing CaptroWelcomeHero.png in
+  Sources/MIRANative/Resources/WelcomeAssets.xcassets/CaptroWelcomeHero.imageset.
+  The asset name and catalog reference remain stable. Installed/exported image
+  remains 1254 x 1254, hash-identical to the supplied illustration.
+- CaptroWelcomeView now uses the actual 1:1 source ratio instead of 870:932.
+- Added the already-integrated official black CaptroBrandLogo as a separate
+  overlay in the cleared paper region. No baked-in duplicate logo remains.
+  Uses the supplied 2400 x 624 outlined-lettering PNG export, not native type.
+- Logo stays stationary; illustration retains the one-time 600ms reveal and
+  8-second 1.00-to-1.03 zoom. Reduce Motion remains still immediately.
+- Both width and height reserve the zoom footprint. At full zoom no artwork
+  exceeds its allocated frame. The new illustration is never stretched or
+  aspect-filled. The final few black pixels blend into existing dark chrome;
+  the blend starts below the ribbon instead of fading its edge.
+- Native headline, subtitle, Apple/Google/guest/legal controls, ordinary fixed
+  layout, accessibility fallback, sign-in callbacks and navigation unchanged.
+
+SHARPNESS / PROVENANCE LIMIT
+
+New maximum unzoomed width = 480 / 1.03 = approximately 466.02 points.
+After 1.03 zoom the image reaches 480 points, within the existing maximum width.
+Therefore maximum 3x requirement is ceil(466.02 x 1.03 x 3) = 1440 pixels,
+and the square source needs 1440 x 1440. The 1254px supplied export falls short
+by 186px per dimension at that maximum. At a 440pt settled width, 1320px is
+needed; 1320 is not sufficient for the 480pt cap.
+
+No image was upscaled/re-encoded. AI-edited export dimensions do not prove
+recovered original detail. Keep final artwork-quality approval pending until
+actual device-scale review. A genuine higher-resolution approved square source
+of at least 1440 x 1440 is needed to meet the maximum sampling requirement;
+increasing pixel dimensions alone does not restore real texture detail.
+
+CHECKS
+
+node scripts/validate-welcome-brand.mjs
+  PASS: exact supplied SHA256, 1254 square PNG, existing single hero reference,
+  separate logo source and preserved animation/Reduce Motion guards.
+  This is an asset/source contract check, NOT a rendered SwiftUI test.
+
+node scripts/validate-official-brand.mjs
+  PASS: original official icon/lockup validation remains intact.
+
+cd backend-cf; npm test
+  PASS: 361 tests, 361 passed, zero failed/cancelled/skipped, approximately 17.2s.
+  Log: %TEMP%\captro-welcome-clean-backend-tests-20261019.log
+  Backend/source-contract regressions only, not native layout verification.
+
+git -c core.autocrlf=false -c core.safecrlf=false diff --check
+  PASS after edits.
+
+CaptroWelcomeTests.swift updated with source dimensions, nonstretch geometry,
+two-axis 1.03 zoom bounds at small/large widths and short heights, and the actual
+1440px maximum requirement. These native tests were NOT executed locally.
+Existing app-hosted WelcomeTests retain fixed-page, legal/auth/guest/error,
+Reduce Motion and large-text assertions; not executed here.
+
+No xcodebuild, swift or xcrun was available in this Windows environment.
+No native build, simulator screenshot, physical iPhone image-quality check,
+Apple/Google callback execution or screen-level visual acceptance is claimed.
+The supplied full-screen image is not implementation evidence.
+
+Native follow-up: run the existing native-welcome-validation workflow only
+after separately authorizing any required source push. Its large/small iPhone
+WelcomeTests and captured native screenshots should verify the paper/black
+join, logo clear space, image fidelity, controls and one-time motion.
+
+Changed this follow-up: CaptroWelcomeHero.png, CaptroWelcomeView.swift,
+CaptroWelcomeTests.swift, scripts/validate-welcome-brand.mjs, this report,
+and a follow-up note in the preceding branding report.

@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
+import {createHmac} from 'node:crypto';
 import {cents} from '../src/stripe-money.ts';
+import {supportCheckoutParameters,SupportError} from '../src/creator-support.ts';
 const source=readFileSync(new URL('../src/index.ts',import.meta.url),'utf8');
 function actual(name,next,deps) {
   const code=stripTypeScriptTypes(source.slice(source.indexOf(`async function ${name}(`),source.indexOf(next)));
@@ -17,6 +19,37 @@ const base={cents,cleanText:value=>String(value??''),postgrestEqFilter:x=>x,now:
   getStripeConfig:()=>({configured:true,webhookConfigured:true,mode:'test',liveMode:false,publishableKey:'pk_test_fixture'}),
   buyerStripeCustomerForUser:async()=>({provider_customer_id:null}),supabaseAdminPatchRows:async()=>{},
   marketplaceTransferGroup:id=>'fixture-'+id,stripeProviderError:()=>Error('provider rejected')};
+
+test('actual Support checkout bypasses marketplace pricing and retries the same provider operation',async()=>{
+  const row={...purchase(),content_type:'creator_support',payment_interface:'checkout',service_fee_amount:0,
+    platform_fee_amount:0,total_amount:500,item_amount:500,unit_amount:500,creator_id:'creator',stripe_destination_account_id:'acct_trusted'};
+  const calls=[];let fail=true;
+  const deps={...base,supportCheckoutParameters,SupportError,requireStripeDatabaseMode:async()=>{},
+    supabaseAdminRpc:async()=>{},supabaseAdminSelectRows:async()=>{throw Error('Must not create a synthetic purchasable');},
+    stripeApiRequest:async(_c,path,params,key)=>{
+      calls.push({path,params,key}); if(fail)throw Error('response lost');
+      return {ok:true,data:{id:'cs_support',url:'https://checkout.stripe.com/c/pay/cs_support',livemode:false,mode:'payment',currency:'usd',amount_total:500,
+        metadata:{source:'captro_commerce',captro_purchase_id:row.id}}};
+    }};
+  const create=actual('createCommerceCheckoutSession','function sanitizeCommerceSelection(',deps);
+  await assert.rejects(create({env:{}},row),/response lost/);fail=false;await create({env:{}},row);
+  assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1]);
+  assert.equal(calls[0].params['line_items[0][price_data][unit_amount]'],500);
+  assert.ok(!Object.keys(calls[0].params).some(key=>key.includes('application_fee')||key.includes('line_items[1]')));
+});
+
+test('existing webhook verifier checks actual raw bytes, timestamp, signature and secret for support events',async()=>{
+  const code=stripTypeScriptTypes(source.slice(source.indexOf('async function hmacSha256Hex('),source.indexOf('function commerceErrorCode(')));
+  const verify=new Function(`${code}\nreturn verifyStripeWebhookSignature;`)();
+  const secret='whsec_isolated_fixture',timestamp=Math.floor(Date.now()/1000);
+  const raw=JSON.stringify({id:'evt_support',type:'checkout.session.completed',livemode:false});
+  const header=time=>`t=${time},v1=${createHmac('sha256',secret).update(`${time}.${raw}`).digest('hex')}`;
+  assert.equal(await verify(raw,header(timestamp),secret),true);
+  assert.equal(await verify(raw+' ',header(timestamp),secret),false);
+  assert.equal(await verify(raw,header(timestamp-301),secret),false);
+  assert.equal(await verify(raw,header(timestamp),'whsec_wrong_fixture'),false);
+  assert.equal(await verify(raw,`t=${timestamp},v1=forged`,secret),false);
+});
 test('actual native PaymentIntent requests preserve USD and JPY integer totals',async()=>{
   for(const currency of ['USD','JPY']) {
     const row=purchase(currency),calls=[];

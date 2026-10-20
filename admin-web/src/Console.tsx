@@ -1514,11 +1514,9 @@ export function Console({
             navigate({ section: "dashboard" });
           }}
         >
-          <span className="captro-mark" aria-hidden="true">
-            C
-          </span>
+          <img className="captro-mark" src="/brand/captro-symbol-black.svg" alt="Captro" width="36" height="25" />
           <div>
-            <strong>Captro</strong>
+            <img className="console-lockup" src="/brand/captro-lockup-black.svg" alt="Captro" width="166" height="43" />
             <span>Admin console</span>
           </div>
         </a>

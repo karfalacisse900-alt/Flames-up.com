@@ -172,6 +172,7 @@ public struct MIRANativeRootView: View {
   @State private var featureStatusBarHidden = false
   @State private var cameraDarkChrome = false
   @State private var profileLink: CaptroProfileLink?
+  @StateObject private var supportReturns = CaptroSupportReturnStore()
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
@@ -227,6 +228,8 @@ public struct MIRANativeRootView: View {
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
     .background(CaptroRecoveryPresenter(session: authSession, api: api).frame(width: 0, height: 0))
+    .background(CaptroSupportReturnPresenter(store: supportReturns, session: authSession, api: api,
+      ready: !startup.isSplashMounted).frame(width: 0, height: 0))
     .sheet(item: $profileLink) { route in
       NavigationStack {
         UserProfileNativeView(userId: route.id, api: api)
@@ -239,6 +242,13 @@ public struct MIRANativeRootView: View {
       leaveGuestModeForSignIn()
     }
     .environmentObject(localization)
+    .environmentObject(supportReturns)
+    .onReceive(NotificationCenter.default.publisher(for: .captroSupportReturned)) { notification in
+      if CaptroSupportPolicy.enabled, let id = notification.object as? String, UUID(uuidString: id) != nil {
+        supportReturns.pendingPurchaseID = id
+      }
+    }
+    .environment(\.captroSupportViewerID, authSession.user?.id)
     .preferredColorScheme(selectedTab == .scan && cameraDarkChrome ? .dark : MIRAAppearanceResolver.colorScheme(for: appearancePreference))
     .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }
     .statusBarHidden(shouldHideStatusBar)
@@ -254,7 +264,8 @@ public struct MIRANativeRootView: View {
       await startup.start(authSession: authSession)
       registerCachedPushTokenIfPossible()
     }
-    .onChange(of: authSession.user?.id) { _, userID in
+    .onChange(of: authSession.user?.id) { oldUserID, userID in
+      if let oldUserID, oldUserID != userID { supportReturns.forget(accountID: oldUserID) }
       // A profile opened under the previous account must not retain its presentation.
       profileLink = nil
       api.favorites.configure(accountID: userID ?? "")
@@ -322,6 +333,11 @@ public struct MIRANativeRootView: View {
       registerPushToken(token)
     }
     .onOpenURL { url in
+      if CaptroSupportPolicy.enabled, let purchaseID = CaptroSupportPolicy.returnPurchase(url) {
+        supportReturns.pendingPurchaseID = purchaseID
+        NotificationCenter.default.post(name: .captroSupportReturned, object: purchaseID)
+        return
+      }
       if let route = CaptroProfileLink.parse(url) { profileLink = route; return }
       if StripeAPI.handleURLCallback(with: url) { return }
       let googleHandled = GIDSignIn.sharedInstance.handle(url)
@@ -713,7 +729,7 @@ private struct CaptroWordmarkView: View {
       .resizable()
       .scaledToFit()
       .frame(width: 292, height: 98)
-    .accessibilityLabel("Cap Tro")
+    .accessibilityLabel("Captro")
   }
 }
 

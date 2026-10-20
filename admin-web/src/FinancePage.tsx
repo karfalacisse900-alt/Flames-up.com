@@ -3,7 +3,7 @@ import {AdminApi,ApiError} from './api';
 import {RecoveryPanel} from './RecoveryPanel';
 import type {FinanceSummary,FinanceRecord,FinanceOrder} from './types';
 import {formatProviderMoney as money} from '../../backend-cf/src/currency';
-const categories=[['event','Events'],['club','Clubs'],['meetup','Meetups'],['deal','Deals'],['group_access','Group access'],['local_offer','Local offers']] as const;
+const categories=[['event','Events'],['club','Clubs'],['meetup','Meetups'],['deal','Deals'],['group_access','Group access'],['local_offer','Local offers'],['creator_support','Creator support']] as const;
 // Ledger release is not proof of a currently withdrawable Stripe balance.
 function Totals({row}:{row:FinanceRecord}){return <dl className="finance-totals"><div><dt>Pending</dt><dd>{money(row.pending,row.currency)}</dd></div><div><dt>Released / unpaid</dt><dd>{money(row.available,row.currency)}</dd></div><div><dt>Paid out to date</dt><dd>{money(row.paid_out,row.currency)}</dd></div></dl>;}
 export function FinancePage({token,canResolve=false}:{token:string;canResolve?:boolean}){

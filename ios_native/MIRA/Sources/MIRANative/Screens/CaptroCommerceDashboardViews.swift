@@ -114,7 +114,10 @@ struct CaptroCommerceDashboardView: View {
         if let message = purchase.recoveryMessage { Text(message).font(.footnote) }
       }
       Spacer(minLength: 8)
-      if let entitlement = purchase.entitlement {
+      if purchase.contentType == "creator_support" {
+        Button("Receipt") { NotificationCenter.default.post(name: .captroSupportReturned, object: purchase.id) }
+          .font(.subheadline).frame(minHeight: 44)
+      } else if let entitlement = purchase.entitlement {
         if let destinationId = entitlement.destinationId,
            ["membership", "group_access"].contains(entitlement.kind) {
           NavigationLink {
@@ -199,10 +202,10 @@ struct CaptroCommerceDashboardView: View {
   }
 
   private var myStuffSections: [(String, [CaptroCommercePurchase])] {
-    let order = ["ticket", "membership", "group_access", "attendance", "redemption", "order", "reservation"]
+    let order = ["ticket", "membership", "group_access", "attendance", "redemption", "order", "reservation", "creator_support"]
     let labels = ["ticket": "TICKETS", "membership": "CLUBS", "group_access": "GROUPS",
-      "attendance": "MEETUPS", "redemption": "DEALS", "order": "ORDERS", "reservation": "BOOKINGS"]
-    let grouped = Dictionary(grouping: dashboard.myStuff, by: \.fulfillmentType)
+      "attendance": "MEETUPS", "redemption": "DEALS", "order": "ORDERS", "reservation": "BOOKINGS", "creator_support": "CREATOR SUPPORT"]
+    let grouped = Dictionary(grouping: dashboard.myStuff) { $0.contentType == "creator_support" ? "creator_support" : $0.fulfillmentType }
     return order.compactMap { key in grouped[key].map { (labels[key] ?? key.uppercased(), $0) } }
   }
 

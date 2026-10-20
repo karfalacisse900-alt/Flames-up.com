@@ -1,0 +1,158 @@
+{
+  "checks": "PASS: outlined SVGs; shared two-path geometry; opaque RGB 1024 App Store icons; dimension/alpha inventory below",
+  "assets": [
+    {
+      "file": "captro-brand-preview.png",
+      "dimensions": [
+        1800,
+        1400
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "AppIcon.appiconset/AppIcon-1024.png",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "web/captro-icon-512.png",
+      "dimensions": [
+        512,
+        512
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "web/captro-icon-64.png",
+      "dimensions": [
+        64,
+        64
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "web/captro-icon-180.png",
+      "dimensions": [
+        180,
+        180
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "web/captro-icon-192.png",
+      "dimensions": [
+        192,
+        192
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "web/captro-icon-48.png",
+      "dimensions": [
+        48,
+        48
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "web/captro-icon-16.png",
+      "dimensions": [
+        16,
+        16
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "web/captro-icon-32.png",
+      "dimensions": [
+        32,
+        32
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "png/captro-symbol-white-2048.png",
+      "dimensions": [
+        2048,
+        1422
+      ],
+      "mode": "RGBA",
+      "has_alpha": true
+    },
+    {
+      "file": "png/captro-lockup-black-2400.png",
+      "dimensions": [
+        2400,
+        624
+      ],
+      "mode": "RGBA",
+      "has_alpha": true
+    },
+    {
+      "file": "png/captro-lockup-white-2400.png",
+      "dimensions": [
+        2400,
+        624
+      ],
+      "mode": "RGBA",
+      "has_alpha": true
+    },
+    {
+      "file": "png/captro-symbol-black-2048.png",
+      "dimensions": [
+        2048,
+        1422
+      ],
+      "mode": "RGBA",
+      "has_alpha": true
+    },
+    {
+      "file": "app-icons/captro-app-icon-light-1024.png",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "app-icons/captro-app-icon-dark-1024.png",
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "social/captro-avatar-dark-512.png",
+      "dimensions": [
+        512,
+        512
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    },
+    {
+      "file": "social/captro-avatar-light-512.png",
+      "dimensions": [
+        512,
+        512
+      ],
+      "mode": "RGB",
+      "has_alpha": false
+    }
+  ]
+}

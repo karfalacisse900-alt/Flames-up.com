@@ -17,8 +17,14 @@ struct CaptroPostDetailSections: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      CaptroDetailCreatorRow(post: post, api: model.api)
-        .padding(16)
+      HStack {
+        CaptroDetailCreatorRow(post: post, api: model.api)
+        Spacer(minLength: 12)
+        if let creatorID = post.userId {
+          CaptroSupportAction(creatorID: creatorID, name: post.detailCreatorHandle,
+            username: post.detailCreatorHandle, avatar: post.userProfileImage, api: model.api, originPostID: post.id)
+        }
+      }.padding(16)
       fullDescription
         .padding(.horizontal, 16)
         .padding(.bottom, post.detailCaption.isEmpty ? 0 : 16)

@@ -348,10 +348,9 @@ function LoginScreen({
     <main className="login-shell">
       <form className="login-card" onSubmit={submit}>
         <div className="login-hero">
-          <div className="brand-mark">C</div>
           <div>
             <span className="eyebrow">Production moderation access</span>
-            <h1>Captro Admin</h1>
+            <h1><img className="admin-brand-lockup" src="/brand/captro-lockup-black.svg" alt="Captro" width="166" height="43" /> Admin</h1>
             <p>Private moderation workspace for approved Captro staff only.</p>
           </div>
         </div>
@@ -450,9 +449,8 @@ function AdminLayout({
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-mark small">C</div>
           <div>
-            <strong>Captro Admin</strong>
+            <strong><img className="admin-brand-lockup" src="/brand/captro-lockup-black.svg" alt="Captro" width="142" height="37" /> Admin</strong>
             <span>Moderation console</span>
           </div>
         </div>

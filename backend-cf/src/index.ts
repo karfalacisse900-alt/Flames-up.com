@@ -9,6 +9,7 @@ import { currencyFeeUnits } from './currency';
 import { reconcileHostedHold } from './hosted-hold';
 import { runPurchaseReconciliation, requireReplayableProviderCreation, type ReconciliationOutcome } from './purchase-reconciliation';
 import { resolvePaymentRecovery } from './payment-recovery';
+import { registerCreatorSupportRoutes, supportTestEnabled, supportCheckoutParameters, SupportError } from './creator-support';
 import { validateMediaWritingOverlays } from './media-writing';
 import { validatePostMediaFraming } from './post-media-framing';
 import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody, newMediaStampWritingError } from './creation-intent';
@@ -52,6 +53,7 @@ type MediaModerationJobMessage = {
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface Env {
+  CAPTRO_CREATOR_SUPPORT?: string;
   CAPTRO_ACCOUNT_CLEANUP_MANIFEST?: string;
   CAPTRO_PAYMENT_RECOVERY_ACTIONS?: string;
   STRIPE_MODE?: string;
@@ -11039,6 +11041,33 @@ async function refundCommercePurchaseFromCharge(c: any, eventId: string, charge:
 async function createCommerceCheckoutSession(c: any, purchase: any, forExpiry = false) {
   if (forExpiry && !purchase.provider_checkout_id) requireReplayableProviderCreation(purchase);
   if (!forExpiry) await supabaseAdminRpc(c, 'captro_validate_checkout', { p_purchase_id: purchase.id });
+  if (purchase.content_type === 'creator_support') {
+    // Reconciliation continues for accepted payments even if creation is later
+    // disabled. Stripe/database mode and immutable snapshot checks still apply.
+    await requireStripeDatabaseMode(c);
+    if (getStripeConfig(c).liveMode) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 503);
+    await requireRetainedPlatform(c);
+    const validateSession = (session: any) => {
+      if (session?.livemode !== false || session?.mode !== 'payment' || session?.currency !== 'usd'
+        || session?.amount_total !== purchase.total_amount || session?.metadata?.source !== 'captro_commerce'
+        || session?.metadata?.captro_purchase_id !== purchase.id) throw new SupportError('CAPTRO_SUPPORT_CHECKOUT_INVALID', 503);
+      return session;
+    };
+    if (purchase.provider_checkout_id) {
+      const prior = await stripeApiGet(c, `/checkout/sessions/${encodeURIComponent(purchase.provider_checkout_id)}`);
+      if (!prior.ok) throw stripeProviderError(prior, 'STRIPE_CHECKOUT_READ_FAILED');
+      if (prior.data?.status !== 'open' || !prior.data?.url) throw new SupportError('CAPTRO_SUPPORT_CHECK_STATUS');
+      return validateSession(prior.data);
+    }
+    if (purchase.status !== 'payment_pending') throw new SupportError('CAPTRO_PURCHASE_NOT_PAYABLE');
+    const session = await stripeApiRequest(c, '/checkout/sessions', supportCheckoutParameters(purchase), `captro-commerce-${purchase.id}`);
+    if (!session.ok || !session.data?.id || !session.data?.url) throw stripeProviderError(session, 'STRIPE_CHECKOUT_FAILED');
+    validateSession(session.data);
+    await supabaseAdminPatchRows(c, 'app_purchases', { id: postgrestEqFilter(purchase.id), status: 'eq.payment_pending' }, {
+      payment_provider: 'stripe', provider_checkout_id: session.data.id, updated_at: now(),
+    });
+    return session.data;
+  }
   const purchasableRows = await supabaseAdminSelectRows(c, 'app_purchasables', {
     id: postgrestEqFilter(purchase?.purchasable_id),
   }, '*', 1);
@@ -20109,6 +20138,63 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
 
 // Captro commerce. Home receives only publicCommercePayload; purchases and
 // entitlements are private, authenticated resources.
+async function supportBuyer(c: any, appId: string, expectedAuthId?: string, issuedAt?: string) {
+  const row = await supabaseUserByAnyId(c, appId);
+  const metadata = parseJsonObject(row?.metadata);
+  if (!row || supabaseUserStatus(row) !== 'active' || !row.supabase_user_id
+    || (expectedAuthId && row.supabase_user_id !== expectedAuthId)
+    || (issuedAt && Date.parse(String(metadata.session_revoked_at || '')) >= Date.parse(issuedAt))) {
+    throw new SupportError('CAPTRO_SUPPORT_SESSION_EXPIRED', 401);
+  }
+  return row;
+}
+async function supportParties(c: any, buyerAppId: string, creatorAppId: string, issuedAt?: string) {
+  await requireStripeDatabaseMode(c);
+  if (getStripeConfig(c).liveMode) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 503);
+  const buyer = await supportBuyer(c, buyerAppId, undefined, issuedAt);
+  const creator = await supabaseUserByAnyId(c, creatorAppId);
+  if (!creator || creator.id === buyer.id || !creator.supabase_user_id || creator.supabase_user_id === buyer.supabase_user_id
+    || supabaseUserStatus(creator) !== 'active'
+    || await userHasActiveRestriction(c, buyer.id, 'commerce') || await userHasActiveRestriction(c, creator.id, 'commerce')) {
+    throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 403);
+  }
+  const access = await supabasePublicUserPayload(c, buyer.id, creator.id);
+  const profile: any = access.body;
+  if (access.status !== 200 || profile.privacy_locked || profile.viewer_has_blocked || profile.viewer_blocked_by) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 403);
+  const enrollment = await supabaseAdminSelectRows(c, 'app_creator_support_enrollments', {
+    creator_id: postgrestEqFilter(creator.supabase_user_id), enabled_for_test: 'eq.true',
+  }, 'creator_id', 1);
+  if (!enrollment.length) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE');
+  const account = await requireReadyConnectedAccount(c, creator.supabase_user_id);
+  return { buyerId: buyer.supabase_user_id, buyerAppId: buyer.id, creatorId: creator.supabase_user_id,
+    creatorAppId: creator.id, accountId: account.id,
+    profile: { id: creator.id, username: profile.username, display_name: profile.full_name || profile.username,
+      avatar_url: profile.profile_image || null } };
+}
+registerCreatorSupportRoutes(api, authMiddleware, {
+  enabled: c => supportTestEnabled(c.env), hash: sha256Hex, viewer: getUserId,
+  limit: (c, key) => enforceRateLimit(c, 'creator_support', key, 30, 60),
+  authorize: supportParties,
+  validateBuyer: async (c, appId, authId, issuedAt) => { await supportBuyer(c, appId, authId, issuedAt); },
+  rpc: supabaseAdminRpc,
+  handoff: async (c, hash) => (await supabaseAdminSelectRows(c, 'app_creator_support_handoffs', { token_hash: postgrestEqFilter(hash) }, '*', 1))[0],
+  handoffById: async (c, id) => (await supabaseAdminSelectRows(c, 'app_creator_support_handoffs', { id: postgrestEqFilter(id) }, '*', 1))[0],
+  purchase: async (c, id) => {
+    const p = (await supabaseAdminSelectRows(c, 'app_purchases', { id: postgrestEqFilter(id) }, '*', 1))[0];
+    if (!p || p.content_type !== 'creator_support') return null;
+    const [earning, recovery, handoffs] = await Promise.all([
+      supabaseAdminSelectRows(c, 'app_creator_earnings', { purchase_id: postgrestEqFilter(id), status: 'eq.disputed' }, 'id', 1),
+      supabaseAdminSelectRows(c, 'app_payment_recovery', { purchase_id: postgrestEqFilter(id), status: 'eq.needs_review' }, 'purchase_id', 1),
+      supabaseAdminSelectRows(c, 'app_creator_support_handoffs', { purchase_id: postgrestEqFilter(id) }, 'id', 1),
+    ]);
+    return { ...p, handoff_id: handoffs[0]?.id ?? null, status: recovery.length ? 'payment_received_under_review' : earning.length ? 'disputed' : p.status };
+  },
+  checkout: createCommerceCheckoutSession,
+  reconcile: async (c, p) => {
+    if (p?.status === 'payment_pending' && p?.provider_checkout_id) await reconcileHostedPurchase(c, p);
+  },
+});
+
 api.get('/commerce/posts/:postId', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_post_read', viewerId, 120, 60);
@@ -21094,7 +21180,7 @@ api.get('/admin/finance/records', authMiddleware, async(c)=>{
  try {
   await requireAdminRole(c,'payments:read');
   const category=cleanText(c.req.query('category'),40);
-  if(!['event','club','meetup','deal','group_access','local_offer','unassigned'].includes(category))return c.json({detail:'Choose a valid category.'},400);
+  if(!['event','club','meetup','deal','group_access','local_offer','creator_support','unassigned'].includes(category))return c.json({detail:'Choose a valid category.'},400);
   const currency=cleanText(c.req.query('currency'),3).toUpperCase();
   if(!/^[A-Z]{3}$/.test(currency))return c.json({detail:'Choose a currency.'},400);
   const objectId=c.req.query('objectId'); const sellerId=c.req.query('sellerId');

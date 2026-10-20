@@ -4,15 +4,25 @@ import SwiftUI
 
 /// Welcome-only geometry. The approved raster is never redrawn or aspect-filled.
 enum CaptroWelcomeLayout {
-  static let sourceSize = CGSize(width: 870, height: 932)
+  // Exact supplied logo-free raster. Export dimensions do not establish original detail.
+  static let sourceSize = CGSize(width: 1254, height: 1254)
   static let maximumWidth: CGFloat = 480
   static let maximumZoom: CGFloat = 1.03
   static func artworkHeight(width: CGFloat) -> CGFloat {
     min(maximumWidth, max(0, width)) * sourceSize.height / sourceSize.width * maximumZoom
   }
   static var requiredThreeXSource: CGSize {
-    CGSize(width: ceil(maximumWidth * 3 * maximumZoom),
-           height: ceil(artworkHeight(width: maximumWidth) * 3))
+    let base = fittedImageSize(width: maximumWidth, height: artworkHeight(width: maximumWidth))
+    return CGSize(width: ceil(base.width * maximumZoom * 3),
+                  height: ceil(base.height * maximumZoom * 3))
+  }
+  static func fittedImageSize(width: CGFloat, height: CGFloat) -> CGSize {
+    let ratio = sourceSize.height / sourceSize.width
+    // Reserve the zoom in BOTH axes. The final 1.03x image stays inside its
+    // frame, including on narrow phones; no stamp edge is clipped by the zoom.
+    let imageWidth = min(min(maximumWidth, max(0, width)) / maximumZoom,
+                         max(0, height) / (ratio * maximumZoom))
+    return CGSize(width: imageWidth, height: imageWidth * ratio)
   }
   static func fittedArtworkHeight(width: CGFloat, availableHeight: CGFloat, controlsHeight: CGFloat) -> CGFloat {
     min(artworkHeight(width: width), max(0, availableHeight - controlsHeight))
@@ -205,16 +215,25 @@ struct CaptroWelcomeView<AppleControl: View>: View {
   }
 
   private func artwork(width: CGFloat, height: CGFloat) -> some View {
-    let imageWidth = min(width, max(0, height) / (932.0 / 870.0 * CaptroWelcomeLayout.maximumZoom))
+    let imageSize = CaptroWelcomeLayout.fittedImageSize(width: width, height: height)
     return
-    Image("CaptroWelcomeHero", bundle: .module)
-      .resizable().interpolation(.high).scaledToFit()
-      .frame(width: imageWidth, height: imageWidth * 932 / 870)
-      .mask(LinearGradient(stops: [.init(color: .black, location: 0),
-        .init(color: .black, location: 0.985), .init(color: .clear, location: 1)],
-        startPoint: .top, endPoint: .bottom))
-      .scaleEffect(reduceMotion ? 1 : (zoomed ? CaptroWelcomeLayout.maximumZoom : 1), anchor: .top)
-      .opacity(reduceMotion || revealed ? 1 : 0)
+    ZStack(alignment: .top) {
+      Image("CaptroWelcomeHero", bundle: .module)
+        .resizable().interpolation(.high).scaledToFit()
+        .frame(width: imageSize.width, height: imageSize.height)
+        // The square supplied crop has only a few quiet pixels below the ribbon.
+        // Fade those final black pixels, not the ribbon or any ticket edge.
+        .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+          .init(color: .black, location: 0.997), .init(color: .clear, location: 1)],
+          startPoint: .top, endPoint: .bottom))
+        .scaleEffect(reduceMotion ? 1 : (zoomed ? CaptroWelcomeLayout.maximumZoom : 1), anchor: .top)
+        .opacity(reduceMotion || revealed ? 1 : 0)
+      // Separate supplied lockup in the cleared paper area. It does not move
+      // with the artwork, duplicate baked-in lettering, or affect control layout.
+      CaptroBrandLogo()
+        .frame(width: imageSize.width * 0.25, height: imageSize.width * 0.25 * 624 / 2400)
+        .padding(.top, imageSize.width * 0.045)
+    }
       .frame(width: width, height: height, alignment: .top)
       // Fade only the empty black margin below the ribbon; no stamp pixels are
       // changed. This joins the supplied printed black to the native black UI.
