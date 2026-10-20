@@ -69,6 +69,13 @@ Same launch metric driver also runs against the 655.1 baseline in a separate job
 that modified baseline is not release-attested. Results/screenshots remain pending.
 Further focused review changes must be validated at their final native source tree
 before any new TestFlight upload. A compiled archive alone does not satisfy this.
+Initial run failed compilation: the fixture attempted to write SwiftUI's read-only
+accessibilityReduceMotion environment value. Replaced it with a dedicated optional
+fixture override; production continues reading the real system preference.
+No native tests passed on that candidate. The separate baseline comparison did
+complete: three responsive-first-frame samples 6.944261 / 26.668286 / 12.414173s,
+mean 15.342s, relative standard deviation 54.192%. This noisy Debug simulator
+measurement is not physical launch acceptance or a stable performance baseline.
 
 PHYSICAL ACCEPTANCE STILL OPEN
 No attached physical iPhone or local Xcode/Instruments is available in this Windows

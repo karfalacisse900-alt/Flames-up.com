@@ -697,8 +697,18 @@ private struct MIRAPrivacyShieldView: View {
   }
 }
 
+private struct CaptroStartupMotionOverride: EnvironmentKey { static let defaultValue: Bool? = nil }
+extension EnvironmentValues {
+  var captroStartupReducedMotion: Bool? {
+    get { self[CaptroStartupMotionOverride.self] }
+    set { self[CaptroStartupMotionOverride.self] = newValue }
+  }
+}
+
 private struct CaptroStartupView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.captroStartupReducedMotion) private var motionOverride
+  private var still: Bool { motionOverride ?? reduceMotion }
   @State private var upper: CGFloat = 0
   @State private var lower: CGFloat = 0
   @State private var wordmark = false
@@ -708,8 +718,8 @@ private struct CaptroStartupView: View {
       Color("MIRALaunchBackground", bundle: .main).ignoresSafeArea()
       ZStack {
         // Same asset, scale, center and initial opacity as LaunchScreen.
-        logo("CaptroStartupLockup").opacity(reduceMotion ? 1 : 0.14)
-        if !reduceMotion {
+        logo("CaptroStartupLockup").opacity(still ? 1 : 0.14)
+        if !still {
           stroke("CaptroStartupUpper", progress: upper)
           stroke("CaptroStartupLower", progress: lower)
           logo("CaptroStartupWordmark").opacity(wordmark ? 1 : 0)
@@ -720,7 +730,7 @@ private struct CaptroStartupView: View {
     .accessibilityHidden(true)
     .allowsHitTesting(false)
     .onAppear {
-      guard !wordmark, !reduceMotion else { return }
+      guard !wordmark, !still else { return }
       withAnimation(.easeInOut(duration: 0.32)) { upper = 1 }
       withAnimation(.easeInOut(duration: 0.36).delay(0.10)) { lower = 1 }
       withAnimation(.easeOut(duration: 0.22).delay(0.34)) { wordmark = true }

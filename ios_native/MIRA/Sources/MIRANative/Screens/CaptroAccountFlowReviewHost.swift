@@ -27,7 +27,7 @@ public struct CaptroAccountFlowReviewHost: View {
   }
   public var body: some View {
     MIRANativeRootView(reviewSession: session, api: api)
-      .environment(\.accessibilityReduceMotion, ProcessInfo.processInfo.arguments.contains("--startup-reduce-motion"))
+      .environment(\.captroStartupReducedMotion, ProcessInfo.processInfo.arguments.contains("--startup-reduce-motion") ? true : nil)
       .overlay(alignment: .top) {
         VStack {
           Text(session.user?.id ?? (session.isGuest ? "guest" : "signed-out")).accessibilityIdentifier("account.fixture.identity")
