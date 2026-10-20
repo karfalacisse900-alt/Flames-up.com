@@ -8,7 +8,7 @@ valid. User subsequently authorized deployment and TestFlight distribution.
 SOURCE
 Initial baseline 5a52f78d4ad97243e7deba759cac3527c04a9ded.
 Branding/support implementation 0463b8cc5de978d9fb681da8a7500487ab98e361.
-Final native source 959f6e8d4c62a87683c2fd0377957f3b8039d818.
+Final native source 20f5cf1d1417d754bcc936a8b3575ccae974a251.
 Worker deployment source 57651a08303195b6e696dd1eff314a284ce928cc.
 Branch fix/additional-review-20261016. No merge or public App Store submission.
 Unrelated app-review document, Supabase local metadata and admin screenshots
@@ -17,9 +17,14 @@ are not part of these commits.
 DEPLOYED, NOT MERELY PREPARED
 - Existing admin Pages project: https://captro-admin.pages.dev
   Run 39353446178 succeeded. The live supplied black logo matches byte-for-byte.
+  Browser review confirmed the actual sign-in header renders the new lockup;
+  no sign-in, staff-role change or protected-data browsing was performed.
 - Existing Captro site Pages project: https://captro-site.pages.dev
-  Runs 39353437819 and 39355140927 succeeded. Logo exact-byte check passed.
+  Runs 39353437819, 39355140927 and 39356785491 succeeded.
+  Logo exact-byte check passed.
   Native/web/backend Support URLs now use this verified, owned HTTPS host.
+  Browser review confirmed the actual public header and the disabled Support
+  page: "Creator support is not available yet. No payment has been started."
   flames-up.com still serves a separate, older Expo website: HTTP 200 there
   was NOT evidence that a new Support page existed. That site was not replaced.
   No DNS change, new subscription, duplicate Pages project or domain purchase.
@@ -74,11 +79,11 @@ External acceptance blockers:
    recipient matched the required transfer/manual-payout readiness. No recipient
    account was created or mutated and no Checkout/charge/refund/transfer occurred.
    This is a BLOCKED provider test, not a successful end-to-end payment test.
-4. The actual signed 647.1 provisioning profile has application identifier
+4. The actual signed 649.1 provisioning profile has application identifier
    56C9MBK53P.com.captro.app and no associated-domains entitlement. No signing
-   settings/profile/identifier were changed. The server-side AASA is prepared
+   settings/profile/identifier were changed. The server-side AASA is deployed
    with this verified application identifier and only the receipt-return path;
-   its public serving check is recorded separately below. Verified Universal
+   HTTPS returned 200 application/json without redirection. Verified Universal
    Links still require capability/profile provisioning and physical acceptance.
    The web fallback is honest; universalLinksVerified remains false.
 5. Manual hosted Checkout completion, real signed success/late webhooks, actual
@@ -86,11 +91,17 @@ External acceptance blockers:
    have not been accepted. Automated fixtures are not that evidence.
 
 TESTS / ARTWORK
-- Backend: npm test -> 361 passed, 0 failed/skipped; npx tsc --noEmit passed.
+- Backend: npm test -> 362 passed, 0 failed/cancelled/skipped, 17.495 seconds;
+  npx tsc --noEmit passed. The deployment run had 361 tests before the added
+  exact AASA contract test; neither result is a live payment test.
 - Actual browser page: node scripts/test-support-browser.mjs -> six groups
   passed (amounts, delayed receipt, failure/retry, correct return identity,
   cancellation, keyboard/narrow layout, disabled public configuration).
 - Exact official and welcome asset validators passed. No redraw or upscaling.
+- Real rendered welcome screenshots revealed a thin outer canvas seam.
+  Commit 20f5cf1d feathers only that narrow outer edge using native masks;
+  the supplied image bytes, proportions, artwork details and controls remain
+  unchanged. Matching-source large/small iPhone validation: 39357195735.
 - Existing welcome hero remains the supplied 1254x1254 logo-free raster; the
   independent official lockup is 2400x624. The 480-point settled maximum still
   needs a genuine 1440x1440 source at 3x. Final native/device sharpness approval
@@ -98,9 +109,74 @@ TESTS / ARTWORK
 - No physical iPhone, real camera, Apple/Google callback, Instruments smoothness
   profile or real weak-network device run occurred on this Windows machine.
 
-Native cloud validation and TestFlight outcome will be appended after the
-matching-source checks and Apple processing complete. Never infer distribution
-from an archive attempt or report this entire feature as production-ready.
+Source 959f6e8d validation run 39355123499 completed successfully:
+- iPhone 17 Pro Max: 237 passed (224 unit + 13 UI), no failures/skips.
+- iPhone 13 mini: 12 UI passed, no failures/skips.
+- Both used iOS 26.4.1; actual Support-sheet screenshots at normal and large
+  text were visually inspected. The fixture deliberately fails browser launch
+  and verifies an honest retry, never successful payment. Final native source
+  subsequently adds only the welcome outer-edge mask described above.
+
+EXISTING BRAND PLACEMENTS UPDATED
+- iOS: existing AppIcon set, launch/loading/privacy shield, sign-in, welcome
+  (logo-free hero plus separate lockup), Capture utility row and existing
+  identity-flow brand asset reference. Functional icons remain unchanged.
+- Admin: sign-in/header/sidebar, compact sidebar symbol, favicon/touch icons.
+- Captro site: main, support, privacy choices, terms, privacy, safety,
+  community guidelines, password-reset heading, favicon/touch icons.
+- Supplied outlined lettering/raster lockups used unchanged; no Poppins UI font.
+- No separate About-logo, branded-email-image or share-card template found.
+  No pre-existing installed-web-app manifest found; 192/512 assets are prepared
+  without inventing a new PWA. Obsolete unreferenced image files were retained;
+  no historical user data or material files were removed.
+
+FINAL MATCHING-SOURCE VALIDATION
+Run 39357195735 succeeded at 20f5cf1d1417d754bcc936a8b3575ccae974a251.
+Attested native tree: 5b95f53da105728ae68631d875b9e14f34f5e275.
+Xcode 26.6 (17F113); iOS 26.4.1 simulator runtime.
+- iPhone 17 Pro Max: 237 passed (224 unit + 13 UI), zero failures/skips.
+- iPhone 13 mini: 12 UI passed, zero failures/skips.
+- Actual small settled and large still/fixed screenshots reviewed; exact logo,
+  preserved collage, native controls and reachable legal actions confirmed.
+  Artwork edge transition is softened; original-detail/physical sharpness
+  qualification remains open as stated above.
+- Screenshots, reveal recording, test summaries and logs:
+  %TEMP%/captro-welcome-39357195735
+  %TEMP%/captro-validation-source-39357195735/source.json
+
+TESTFLIGHT
+Signed Release build 649.1 (version 1.0.1), workflow 39360888003, started from
+the exact source above. Workflow completed successfully; Apple upload reported
+"UPLOAD SUCCEEDED with no errors" at 2026-10-20 02:59:44 UTC.
+This run independently passed 14 live read-only security schema checks and
+five coordinated reliability assertions before upload, as well as the exact
+native-tree gate and signed Apple/Google authentication configuration checks.
+Read-only inspection of the actual exported IPA confirms version 1.0.1/649.1,
+com.captro.app, AppIcon selected, Support flag false and existing Apple sign-in
+entitlement. No Associated Domains entitlement is present (Support gate above).
+First Apple availability read (39362002434 at 03:00:52 UTC) still listed the
+prior 647.1; upload acceptance is not yet proof of completed Apple processing.
+FINAL: read-only Apple verification 39362359187 at 2026-10-20 03:04:44 UTC
+confirmed 1.0.1 (649.1), processing VALID, expired false, IN_BETA_TESTING,
+autoNotifyEnabled true, assigned to Captro private and Captro private2.
+External state is READY_FOR_BETA_SUBMISSION; no public App Store submission
+or new external beta-review submission was performed.
+
+Evidence URLs:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39357195735
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39360888003
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39362359187
+
+REMAINING ACTIONABLE GATES
+The branding release is distributed, but "all production work completed" would
+be inaccurate. Before public Support activation: obtain Stripe model approval,
+approve fee/loss liability, complete an existing sandbox creator's onboarding,
+pass provider Checkout/webhook/ledger/refund/dispute acceptance, review the
+prepared migration, configure matching Associated Domains signing, and verify
+installed-app browser returns/storefront handling. No real-money action occurred.
+Physical media/scroll/camera acceptance and genuine 3x artwork quality remain
+open. The custom API domain's cloud-runner managed challenge also remains
+separate; production protections were not weakened to clear it.
 
 ADDITIONAL APP-HOSTED EVIDENCE
 Run 39353695005, account-recovery/native job, source 0463b8cc:
@@ -113,6 +189,30 @@ Fixture screenshots and logs downloaded to:
 %TEMP%/captro-native-evidence-39353695005
 These are real simulator app runs with isolated fixtures, not a reproduction
 of the user's unidentified live image request or physical-device smoothness.
+
+Run 39353695005 also completed camera-carousel/validate successfully at source
+0463b8cc: 12 interaction tests plus 229 regression tests, zero failures/skips.
+iPhone 13 mini simulator, iOS 26.4.1 (23E254a), macOS 26.6.2.
+Includes actual Capture controls and permission fallback, review/composer
+handoff, profile editor preservation, large text, carousel and feed navigation.
+The camera is unavailable in the simulator; test-chart playback is explicitly
+not a camera capture or proof of recording quality. Evidence retained in:
+%TEMP%/captro-camera-39353695005
+
+RELEASE ACCEPTANCE SEPARATION
+- Security: 14 live read-only privilege assertions and five reliability schema
+  checks passed; no existing authorization boundary was weakened.
+- Payments: support code/migration/mock/browser contracts implemented; provider
+  contract and business approval blocked as described above. Activation off.
+- Images: exact supplied branding validated; app-hosted Home fallback/retry
+  pixel and geometry tests pass. The user's live failed request is unidentified.
+- Accounts: simulator recovery and session tests pass; real Apple/Google sign-in
+  and another-account link/device acceptance were not performed this turn.
+- Physical scrolling/camera: open. No physical device or valid new Instruments
+  capture; simulator passes must not be represented as resolving that incident.
+- Distribution: matching-source validation and actual Apple processing/tester
+  availability confirmed for 649.1 as recorded above; this is not an assertion
+  that the user's iPhone has already installed the update.
 
 ROLLBACK / FORWARD REPAIR
 Keep new Support creation disabled until all independent gates above pass.
