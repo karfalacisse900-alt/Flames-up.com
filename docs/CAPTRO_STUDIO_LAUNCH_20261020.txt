@@ -60,22 +60,85 @@ full-width photo/video ratios and stable controls across repeated mode changes.
 Two new vector/static-launch contract tests pass and reject deliberately changed
 curve coordinates and wordmark transforms. These are asset tests, not runtime proof.
 
-NATIVE VERIFICATION — IN PROGRESS, NOT YET ACCEPTED
+NATIVE VERIFICATION — SIMULATOR PASSED, PHYSICAL ACCEPTANCE OPEN
 Initial candidate source: 39701fff895ee26807140f1aa6c63c7979643606.
 Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39505158001
-Actual root/Capture, small/large iPhone simulator, existing welcome/Favorites,
-Support entry fixtures, media recovery, carousel and scroll-restoration tests.
-Same launch metric driver also runs against the 655.1 baseline in a separate job;
-that modified baseline is not release-attested. Results/screenshots remain pending.
-Further focused review changes must be validated at their final native source tree
-before any new TestFlight upload. A compiled archive alone does not satisfy this.
 Initial run failed compilation: the fixture attempted to write SwiftUI's read-only
 accessibilityReduceMotion environment value. Replaced it with a dedicated optional
 fixture override; production continues reading the real system preference.
-No native tests passed on that candidate. The separate baseline comparison did
-complete: three responsive-first-frame samples 6.944261 / 26.668286 / 12.414173s,
-mean 15.342s, relative standard deviation 54.192%. This noisy Debug simulator
-measurement is not physical launch acceptance or a stable performance baseline.
+No native tests passed on that initial candidate; assertions were not skipped.
+
+Final validated source: 9a73dcadc9899994c942cb7100db27f477c95e70.
+Native tree: ce0b5a678fd2e9e40c16b93a0b56e03e9327a7d5.
+Passing run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39508227031
+Xcode 26.6 (17F113), iOS Simulator 26.4.1 (23E254a):
+- iPhone 17 Pro Max: 264 passed (233 unit + 31 app-hosted UI), 0 failed/skipped.
+- iPhone 13 mini: 30 app-hosted UI passed, 0 failed/skipped.
+Coverage includes actual Capture, repeated Photo/Video geometry, denied camera,
+settings, retained review/composer cancel, large-text review and Capture tab return;
+startup slow/offline/retry/background/Reduce Motion; root recovery fixtures; existing
+welcome/Favorites/Support entry fixtures; Home media recovery including correct-pixel
+and Retry geometry assertions; mixed-carousel and existing Home restoration checks.
+The existing Home tab-return test uses Me, not the new Capture navigation bar.
+The named warm-resume test verifies a retained draft and tappable Home, not every
+tab transition. Provider OAuth, OS notification delivery and real money were not tested.
+
+Reproducible commands are retained in .github/workflows/native-welcome-validation.yml:
+xcodegen generate --spec project.yml
+xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug
+  -destination "platform=iOS Simulator,id=<recorded simulator UUID>"
+  -derivedDataPath <WelcomeBuild> CODE_SIGNING_ALLOWED=NO build-for-testing
+xcodebuild ... -parallel-testing-enabled NO -resultBundlePath <WelcomeLarge.xcresult>
+  -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/WelcomeTests
+  -only-testing:CaptroLayoutUITests/CreatorSupportTests
+  -only-testing:CaptroLayoutUITests/FavoritesTests
+  -only-testing:CaptroLayoutUITests/CaptureCameraTests
+  -only-testing:CaptroLayoutUITests/StartupTests
+  -only-testing:CaptroLayoutUITests/AccountRecoveryTests
+  -only-testing:CaptroLayoutUITests/MediaRecoveryTests
+  -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame
+  -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands
+  CODE_SIGNING_ALLOWED=NO test-without-building
+Small repeats the UI suite without the unit bundle or Home tab-return case.
+The workflow contains complete paths, UUID creation and commands; raw logs retained.
+
+Artifacts downloaded and visually inspected:
+C:/Users/The-s/AppData/Local/Temp/captro-studio-native-39508227031/
+- WelcomeLarge-summary.json and WelcomeSmall-summary.json: actual counts above.
+- WelcomeSmall-evidence/49CB5B91-57F1-469C-9BD7-9B49D6658BC6.png: Photo chrome.
+- WelcomeSmall-evidence/700565D1-9D37-492E-9084-E9DDD7898B3C.png: Video chrome.
+- WelcomeSmall-evidence/61AF3E02-9F39-4966-A6FD-8A446BBB258D.png: large-text review.
+- WelcomeLarge-evidence/0B9F4BDC-F1C4-4880-B2CE-288C98FB6FAE.png: Photo chrome.
+- WelcomeLarge-evidence/BF09FCC6-CA08-4128-B2EA-9EE82C2B60C1.png: Video chrome.
+These show centered shutters, consistent anchored controls and compact navigation;
+the simulator's explicit denied/unavailable camera state is NOT a captured scene.
+Review images are labeled synthetic test charts, not evidence of sensor quality.
+Video's fine frame marker identifies actual bounds behind controls, not a rounded
+decorative container. No gallery control is present. The other pickers remain.
+
+startup-native-reveal.mp4 records actual root startup with deliberately delayed
+fixture identity. The exact artwork appears, then leaves for a useful loading state
+and the correct signed-in destination. It is not a physical launch recording.
+The recording begins with black pre-first-render frames, so it does NOT establish
+a flash-free system-launch handoff. The storyboard compiles/links and asset/geometry
+contracts pass, but a fresh physical install still needs visual launch acceptance.
+Fixture identity/debug buttons visible in this recording do not compile into Release.
+
+LAUNCH RESPONSIVENESS (DEBUG SIMULATOR; NOT A DEVICE PERFORMANCE CLAIM)
+Same XCTApplicationLaunchMetric(waitUntilResponsive: true), three iterations:
+- Baseline 5b0e2bf9 / large: 5.639694, 5.286956, 25.218382 seconds;
+  mean 12.048s, relative standard deviation 77.303%.
+- Candidate 9a73dcad / large: 4.224235, 4.488048, 3.736263 seconds;
+  mean 4.150s, relative standard deviation 7.505%.
+- Candidate / small: 4.575452, 3.764400, 4.484640 seconds;
+  mean 4.275s, relative standard deviation 8.488%; no matched small baseline.
+No regression is visible in these samples, but the highly variable cloud baseline
+does not support a reliable speedup claim. This metric includes launch infrastructure,
+not just the bounded artwork animation. Physical Release measurement remains open.
+
+RELEASE
+Matching-source simulator validation succeeded. TestFlight archive/upload and Apple
+processing/tester availability are recorded separately after they actually complete.
 
 PHYSICAL ACCEPTANCE STILL OPEN
 No attached physical iPhone or local Xcode/Instruments is available in this Windows
