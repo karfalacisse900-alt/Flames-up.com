@@ -6,20 +6,24 @@ import UIKit
 struct CaptroRecoveryPresenter: UIViewControllerRepresentable {
   @ObservedObject var session: MIRAAuthSession
   let api: MIRAAPIClient
+  var ready = true
   func makeUIViewController(context: Context) -> Anchor {
     let controller = Anchor()
     controller.session = session
     controller.api = api
+    controller.ready = ready
     return controller
   }
   func updateUIViewController(_ controller: Anchor, context: Context) {
     controller.session = session
     controller.api = api
+    controller.ready = ready
     Task { @MainActor [weak controller] in controller?.reconcile() }
   }
   @MainActor final class Anchor: UIViewController {
     weak var session: MIRAAuthSession?
     var api: MIRAAPIClient?
+    var ready = true
     private var host: UIHostingController<CaptroRecoveryForm>?
     private var waitingForTransition = false
     override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); reconcile() }
@@ -29,7 +33,7 @@ struct CaptroRecoveryPresenter: UIViewControllerRepresentable {
         if let host { self.host = nil; host.dismiss(animated: true) }
         return
       }
-      guard host == nil, !waitingForTransition else { return }
+      guard ready, host == nil, !waitingForTransition else { return }
       var top = root
       while let presented = top.presentedViewController { top = presented }
       if let transition = top.transitionCoordinator {

@@ -100,15 +100,8 @@
     <string>com.captro.app.background-refresh</string>
     <string>com.captro.app.cache-cleanup</string>
   </array>
-  <key>UILaunchScreen</key>
-  <dict>
-    <key>UIColorName</key>
-    <string>MIRALaunchBackground</string>
-    <key>UIImageName</key>
-    <string>CaptroLaunchLogo</string>
-    <key>UIImageRespectsSafeAreaInsets</key>
-    <true/>
-  </dict>
+  <key>UILaunchStoryboardName</key>
+  <string>LaunchScreen</string>
   <key>UISupportedInterfaceOrientations</key>
   <array>
     <string>UIInterfaceOrientationPortrait</string>

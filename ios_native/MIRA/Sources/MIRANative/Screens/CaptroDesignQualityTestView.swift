@@ -120,6 +120,8 @@ private struct CaptroCameraTabReviewHost: View {
     .tint(selection == 1 ? Color.white : MIRATheme.Color.textPrimary)
     .toolbarBackground(selection == 1 ? Color.black : MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
+    .modifier(CaptroStudioTabChrome(active: selection == 1,
+      home: { selection = 0 }, capture: { selection = 1 }, profile: { selection = 2 }))
   }
 }
 

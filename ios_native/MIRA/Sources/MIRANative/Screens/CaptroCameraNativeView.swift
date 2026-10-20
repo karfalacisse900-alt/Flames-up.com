@@ -1,8 +1,6 @@
 import AVFoundation
 import SwiftUI
 import UIKit
-import Photos
-import PhotosUI
 
 /// Propagates only the active camera's dark chrome preference. Presenting the
 /// ordinary composer or leaving Capture restores the user's appearance setting.
@@ -33,10 +31,7 @@ struct CaptroCameraNativeView: View {
   @State private var timerSeconds = 0
   @State private var countdown = 0
   @State private var countdownTask: Task<Void, Never>?
-  @State private var showLibrary = false
-  @State private var galleryItem: PhotosPickerItem?
-  @State private var galleryThumbnail: UIImage?
-  @State private var importing = false
+  @ScaledMetric(relativeTo: .caption2) private var formatHeight: CGFloat = 16
   private let accent = Color(red: 0.90, green: 0.98, blue: 0.20)
   @State private var destination: Destination?
   @State private var showDestination = false
@@ -58,10 +53,16 @@ struct CaptroCameraNativeView: View {
 
   var body: some View {
     GeometryReader { geometry in
-      VStack(spacing: 0) {
-        header
+      let canvas = CGSize(width: geometry.size.width,
+        height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom)
+      let layout = CaptroStudioLayout(size: canvas, top: geometry.safeAreaInsets.top,
+        bottom: geometry.safeAreaInsets.bottom, aspect: camera.previewAspectRatio,
+        controlsHeight: (reviewMedia == nil ? 120 : 178) + formatHeight)
+      let previewRect = reviewMedia == nil ? layout.preview : CGRect(x: 0, y: layout.header.maxY,
+        width: geometry.size.width, height: max(1, layout.controls.minY - layout.header.maxY))
+      ZStack(alignment: .topLeading) {
         ZStack {
-          Color(white: 0.035)
+          Color.black
           if let media = selectedMedia {
             CaptroCameraResultView(media: media, isActive: isActive && scenePhase == .active && destination == nil && !showFullReview)
               .accessibilityIdentifier("capture.review.media")
@@ -72,7 +73,6 @@ struct CaptroCameraNativeView: View {
               camera.focus(at: point); focused = true
             }, onOrientation: camera.setOrientation, zoom: camera.zoom,
               onZoom: camera.setZoom, interactionEnabled: camera.state == .ready || camera.state == .recording)
-              .aspectRatio(camera.previewAspectRatio, contentMode: .fit)
               .overlay { if showGrid { cameraGrid.allowsHitTesting(false) } }
               .accessibilityLabel("Live camera preview")
             cameraStatus
@@ -84,8 +84,14 @@ struct CaptroCameraNativeView: View {
             }
           }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: previewRect.width, height: previewRect.height)
         .clipped()
+        .overlay {
+          if reviewMedia == nil && layout.controlsOverlayFrame {
+            Rectangle().strokeBorder(.white.opacity(0.3), lineWidth: 1).allowsHitTesting(false)
+              .accessibilityHidden(true)
+          }
+        }
         .overlay(alignment: .bottom) {
           if reviewMedia == nil && (camera.state == .ready || camera.state == .recording) {
             VStack(spacing: 8) {
@@ -125,23 +131,33 @@ struct CaptroCameraNativeView: View {
                   }
                 }
               }
-            }.padding(.bottom, 12)
+            }.padding(.bottom, max(8, previewRect.maxY - layout.zoomBottom))
           }
         }
-        if let media = reviewMedia { reviewControls(media) } else { captureControls }
+        .position(x: previewRect.midX, y: previewRect.midY)
+        header.frame(width: layout.header.width, height: layout.header.height)
+          .background(Color.black.opacity(reviewMedia == nil && layout.controlsOverlayFrame ? 0.72 : 1))
+          .position(x: layout.header.midX, y: layout.header.midY)
+        Group {
+          if let media = reviewMedia { reviewControls(media) }
+          else { captureControls }
+        }
+        .frame(width: layout.controls.width, height: layout.controls.height)
+        .background(Color.black.opacity(reviewMedia == nil && layout.controlsOverlayFrame ? 0.72 : 1))
+        .position(x: layout.controls.midX, y: layout.controls.midY)
       }
-      .frame(width: geometry.size.width, height: geometry.size.height)
-      .background(Color(white: 0.035))
+      .frame(width: canvas.width, height: canvas.height)
+      .offset(y: -geometry.safeAreaInsets.top)
+      .background(Color.black)
       .foregroundStyle(.white)
     }
-    .background(Color(white: 0.035).ignoresSafeArea())
+    .background(Color.black.ignoresSafeArea())
     .preference(key: CaptroCameraDarkChromePreferenceKey.self, value: isActive && destination == nil)
     .onAppear { updateActivity() }
     .onDisappear { cancelCountdown(); camera.suspend() }
     .onChange(of: isActive) { _, _ in updateActivity() }
     .onChange(of: scenePhase) { _, _ in updateActivity() }
     .onChange(of: destination) { _, _ in updateActivity() }
-    .onChange(of: showLibrary) { _, _ in updateActivity() }
     .onChange(of: camera.state) { _, state in if state != .ready { cancelCountdown() } }
     .onChange(of: camera.isRecordingStarted) { _, started in
       if started { UIAccessibility.post(notification: .announcement, argument: "Recording started") }
@@ -153,22 +169,6 @@ struct CaptroCameraNativeView: View {
       camera.suspend()
     }
     .sheet(isPresented: $showSettings) { settingsSheet }
-    .photosPicker(isPresented: $showLibrary, selection: $galleryItem, matching: .any(of: [.images, .videos]), preferredItemEncoding: .current)
-    .task(id: galleryItem) {
-      guard let item = galleryItem else { return }
-      importing = true; camera.suspend()
-      defer { importing = false; updateActivity() }
-      do {
-        let media = try await CaptroPostMediaPicker.load(item)
-        guard !Task.isCancelled, galleryItem == item else { return }
-        reviewMedia = media; enhancedMedia = nil; showEnhanced = false
-      } catch { if !Task.isCancelled { reviewError = "That item could not be opened. Your existing capture is unchanged." } }
-    }
-    .task(id: isActive) {
-      guard isActive else { return }
-      let image = await Self.permittedGalleryThumbnail()
-      guard !Task.isCancelled else { return }; galleryThumbnail = image
-    }
     .confirmationDialog("Use capture", isPresented: $showDestination, titleVisibility: .visible) {
       Button("Create post") { destination = .post }
       Button("Create Story") { destination = .story }
@@ -238,7 +238,7 @@ struct CaptroCameraNativeView: View {
         Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
       }
     }
-    .padding(.horizontal, 16).padding(.vertical, 8)
+    .padding(.horizontal, 16)
     .onChange(of: flash) { _, value in camera.setFlash(value) }
   }
 
@@ -251,16 +251,14 @@ struct CaptroCameraNativeView: View {
       Text(title.uppercased()).font(.subheadline.weight(camera.mode == mode ? .semibold : .regular)).tracking(1)
         .padding(.horizontal, 14).frame(minHeight: 44)
         .foregroundStyle(camera.mode == mode ? accent : .white.opacity(0.8))
-    }.disabled(busy || recording || countdown > 0 || importing)
+    }.disabled(busy || recording || countdown > 0)
       .buttonStyle(CaptroCameraPressStyle())
       .accessibilityAddTraits(camera.mode == mode ? .isSelected : [])
       .accessibilityIdentifier("capture.mode." + title.lowercased())
   }
 
   @ViewBuilder private var cameraStatus: some View {
-    if importing {
-      ProgressView("Opening selected media").tint(.white).padding(16).background(.black.opacity(0.55))
-    } else if camera.state == .permissionNeeded || camera.state == .failed || camera.state == .interrupted {
+    if camera.state == .permissionNeeded || camera.state == .failed || camera.state == .interrupted {
       VStack(spacing: 12) {
         Image(systemName: "camera").font(.largeTitle)
         Text(camera.errorMessage ?? (camera.state == .interrupted
@@ -278,53 +276,52 @@ struct CaptroCameraNativeView: View {
     } else if busy {
       ProgressView(camera.state == .capturing ? "Capturing photo" : camera.state == .finalizing ? "Saving video" : "Starting camera")
         .tint(.white).padding(16).background(.black.opacity(0.55), in: Capsule())
+    } else if let notice = camera.notice {
+      VStack(spacing: 8) {
+        Text(notice).font(.callout).multilineTextAlignment(.center)
+        if camera.microphoneDenied {
+          Button("Microphone settings") {
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+          }.frame(minHeight: 44)
+        }
+      }.padding(16).background(.black.opacity(0.7)).padding(24)
     }
   }
 
   private var captureControls: some View {
-    VStack(spacing: 8) {
+    VStack(spacing: 0) {
       HStack(spacing: 20) {
         modeButton(.photo, title: "Photo")
         modeButton(.video, title: "Video")
       }
-      if let notice = camera.notice { Text(notice).font(.caption).multilineTextAlignment(.center) }
-      if camera.mode == .video && camera.microphoneDenied {
-        Button("Microphone off · Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
-          .font(.caption).frame(minHeight: 44)
-      }
-      HStack {
-        Button { galleryItem = nil; showLibrary = true } label: {
-          Group {
-            if let galleryThumbnail { Image(uiImage: galleryThumbnail).resizable().scaledToFill() }
-            else { Image(systemName: "photo.on.rectangle").font(.title3).foregroundStyle(.white.opacity(0.8)) }
-          }.frame(width: 48, height: 48).clipShape(RoundedRectangle(cornerRadius: 8))
-        }.disabled(busy || recording || countdown > 0 || importing)
-          .accessibilityLabel("Choose from Photos").accessibilityIdentifier("capture.library")
-        Spacer()
+      ZStack {
         Button {
           takeCapture()
         } label: {
           ZStack {
-            Circle().stroke(.white, lineWidth: 3).frame(width: 76, height: 76)
+            Circle().stroke(.white, lineWidth: 3).frame(width: 72, height: 72)
             if recording {
               RoundedRectangle(cornerRadius: 5).fill(.red).frame(width: 30, height: 30)
             } else {
               Circle().fill(camera.mode == .photo ? .white : .red).frame(width: 62, height: 62)
             }
-          }.frame(width: 88, height: 88)
-        }.disabled((camera.state != .ready && camera.state != .recording) || countdown > 0 || importing)
+          }.frame(width: 76, height: 76)
+        }.disabled((camera.state != .ready && camera.state != .recording) || countdown > 0)
           .buttonStyle(CaptroCameraPressStyle())
           .accessibilityLabel(recording ? "Stop recording" : camera.mode == .photo ? "Take photo" : "Record video")
           .accessibilityIdentifier("capture.shutter")
-        Spacer()
+      }.frame(maxWidth: .infinity).overlay(alignment: .trailing) {
         Button { focused = false; camera.flip() } label: {
-          Image(systemName: "arrow.triangle.2.circlepath.camera").font(.title3)
+          Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 22, weight: .regular))
             .frame(width: 52, height: 52).background(.white.opacity(0.1), in: Circle())
-        }.disabled(camera.state != .ready || countdown > 0 || importing).accessibilityLabel("Flip camera")
+        }.disabled(camera.state != .ready || countdown > 0).accessibilityLabel("Switch camera")
           .accessibilityIdentifier("capture.flip")
       }
-      if camera.mode == .video { Text(camera.videoQualityLabel + " · Up to 60 seconds").font(.caption2).foregroundStyle(.white.opacity(0.7)) }
-    }.padding(.horizontal, 26).padding(.vertical, 12)
+      Text(camera.mode == .video ? camera.videoQualityLabel + " · 60s max" : " ")
+        .font(.caption2).foregroundStyle(.white.opacity(0.7)).frame(height: formatHeight)
+        .accessibilityHidden(camera.mode == .photo)
+        .accessibilityIdentifier("capture.format")
+    }.padding(.horizontal, 26)
   }
 
   private func reviewControls(_ media: MIRAPickedMedia) -> some View {
@@ -369,6 +366,8 @@ struct CaptroCameraNativeView: View {
       Form {
         Section("Composition") {
           Toggle("Grid", isOn: $showGrid).accessibilityIdentifier("capture.grid")
+          Text("The outlined viewfinder shows the recording frame. On smaller screens, controls overlay its edges; they are not included in the saved photo or video.")
+            .font(.footnote).foregroundStyle(.secondary)
           if camera.mode == .photo {
             Picker("Photo timer", selection: $timerSeconds) {
               Text("Off").tag(0); Text("3 seconds").tag(3); Text("10 seconds").tag(10)
@@ -392,7 +391,7 @@ struct CaptroCameraNativeView: View {
   }
 
   private func takeCapture() {
-    guard countdownTask == nil, !importing else { return }
+    guard countdownTask == nil else { return }
     UIImpactFeedbackGenerator(style: .light).impactOccurred()
     focused = false
     guard camera.mode == .photo, timerSeconds > 0, camera.state == .ready else { camera.shutter(); return }
@@ -412,24 +411,6 @@ struct CaptroCameraNativeView: View {
     countdownTask?.cancel(); countdownTask = nil; countdown = 0
   }
 
-  private static func permittedGalleryThumbnail() async -> UIImage? {
-    // Never request/expand Photos permission merely to decorate this control.
-    await Task.detached(priority: .utility) { () -> UIImage? in
-      let authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-      guard authorization == .authorized || authorization == .limited else { return nil }
-      let options = PHFetchOptions()
-      options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-      options.fetchLimit = 1
-      guard let asset = PHAsset.fetchAssets(with: options).firstObject else { return nil }
-      let request = PHImageRequestOptions()
-      request.isSynchronous = true; request.isNetworkAccessAllowed = false
-      request.deliveryMode = .fastFormat; request.resizeMode = .fast
-      var thumbnail: UIImage?
-      PHImageManager.default().requestImage(for: asset, targetSize: CGSize(width: 144, height: 144),
-        contentMode: .aspectFill, options: request) { image, _ in thumbnail = image }
-      return thumbnail
-    }.value
-  }
   private var cameraGrid: some View {
     GeometryReader { geometry in
       Path { path in
@@ -443,7 +424,7 @@ struct CaptroCameraNativeView: View {
     }
   }
   private func updateActivity() {
-    if isActive && scenePhase == .active && destination == nil && reviewMedia == nil && !showLibrary && !importing {
+    if isActive && scenePhase == .active && destination == nil && reviewMedia == nil {
       MIRAPlaybackCoordinator.pauseAll(reason: "camera")
       camera.start()
     } else { cancelCountdown(); camera.suspend() }
@@ -477,6 +458,9 @@ private struct CaptroLiveCameraPreview: UIViewRepresentable {
   let interactionEnabled: Bool
   func makeUIView(context: Context) -> Preview {
     let view = Preview(); view.preview.session = session
+    view.isAccessibilityElement = true
+    view.accessibilityIdentifier = "capture.viewfinder"
+    view.accessibilityLabel = "Full capture frame; controls may overlay the edges"
     view.mirrored = mirrored
     view.captureOrientation = captureOrientation
     view.onFocus = onFocus; view.onOrientation = onOrientation
@@ -508,7 +492,9 @@ private struct CaptroLiveCameraPreview: UIViewRepresentable {
     var captureOrientation: AVCaptureVideoOrientation = .portrait
     private var orientation: UIInterfaceOrientation?
     override init(frame: CGRect) {
-      super.init(frame: frame); preview.videoGravity = .resizeAspect
+      // The view's frame already matches the selected output aspect ratio.
+      // Aspect-fill only covers preview clean-aperture rounding, never stretches.
+      super.init(frame: frame); preview.videoGravity = .resizeAspectFill
       addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(focus(_:))))
       addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinch(_:))))
       focusIndicator.fillColor = UIColor.clear.cgColor

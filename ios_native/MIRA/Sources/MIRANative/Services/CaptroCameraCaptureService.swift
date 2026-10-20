@@ -139,7 +139,10 @@ final class CaptroCameraCaptureService: NSObject, ObservableObject {
     queue.async { [weak self] in
       guard let self, !self.operation.isBusy, !self.hasResult, self.captureMode != value else { return }
       self.captureMode = value
-      self.publish { $0.mode = value; $0.notice = nil }
+      let orientation = self.physicalOrientation ?? CaptroCameraPolicy.captureOrientation(self.orientation)
+      let landscape = orientation == .landscapeLeft || orientation == .landscapeRight
+      let ratio: CGFloat = value == .video ? 16 / 9 : 4 / 3
+      self.publish { $0.mode = value; $0.notice = nil; $0.previewAspectRatio = landscape ? ratio : 1 / ratio }
       self.applyTorch(false)
       self.configured = false
       if self.wantsActive, AVCaptureDevice.authorizationStatus(for: .video) == .authorized {

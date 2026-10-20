@@ -411,8 +411,7 @@ test('retired receipt Capture has no new reward entry point while private histor
   assert.match(camera, /AVCapturePhotoOutput\(\)/);
   assert.match(camera, /AVCaptureMovieFileOutput\(\)/);
   assert.doesNotMatch(screen, /cameraImportControl|fileImporter/);
-  assert.match(screen, /\.photosPicker\(isPresented: \$showLibrary/);
-  assert.match(screen, /CaptroPostMediaPicker.load\(item\)/);
+  assert.doesNotMatch(screen, /photosPicker|showLibrary|galleryItem|CaptroPostMediaPicker\.load/);
   assert.doesNotMatch(screen, /PHPhotoLibrary.requestAuthorization/);
   assert.match(screen, /Text\("Review"\)/);
   assert.match(screen, /Button\("Retake"\)/);

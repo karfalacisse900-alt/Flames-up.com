@@ -2,6 +2,34 @@ import XCTest
 @testable import MIRANative
 
 @MainActor final class CaptroAccountSafetyTests: XCTestCase {
+  func testStartupBrandingDeadlineDoesNotRevealUnresolvedRouteOrEraseSession() async throws {
+    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let (auth, api, keychain) = await fixture()
+    let started = expectation(description: "Session request starts during animation")
+    let gate = AccountSafetyGate()
+    AccountSafetyProtocol.handler = { transport in
+      if transport.request.url?.path == "/auth/me" { gate.hold(transport); started.fulfill() }
+      else { transport.reply(200, Data("[]".utf8)) }
+    }
+    let startup = MIRAStartupCoordinator(api: api)
+    let task = Task { await startup.start(authSession: auth) }
+    await fulfillment(of: [started], timeout: 3)
+    try await Task.sleep(nanoseconds: 1_100_000_000)
+    XCTAssertFalse(startup.isSplashMounted)
+    XCTAssertFalse(startup.isRoutingReady)
+    let retained = await keychain.refreshToken()
+    XCTAssertEqual(retained, "refresh-a")
+    gate.release(status: 503, data: Data("{\"code\":\"UPSTREAM_UNAVAILABLE\"}".utf8))
+    await task.value
+    XCTAssertTrue(startup.isRoutingReady)
+    XCTAssertEqual(startup.phase, .failedWithRetry)
+    XCTAssertTrue(auth.needsSessionRetry)
+    startup.leaveForeground()
+    await startup.start(authSession: auth)
+    XCTAssertFalse(startup.isSplashMounted, "Warm resume cannot replay branding")
+    keychain.clearSession()
+  }
   func testColdBootstrapOutageOffersRetryWithoutErasingSession() async throws {
     MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
     defer { MIRALocalJSONCache.setAccountScope(userId: nil) }

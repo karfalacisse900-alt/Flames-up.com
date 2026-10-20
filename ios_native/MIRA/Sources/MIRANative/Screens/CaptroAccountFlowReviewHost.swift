@@ -27,6 +27,7 @@ public struct CaptroAccountFlowReviewHost: View {
   }
   public var body: some View {
     MIRANativeRootView(reviewSession: session, api: api)
+      .environment(\.accessibilityReduceMotion, ProcessInfo.processInfo.arguments.contains("--startup-reduce-motion"))
       .overlay(alignment: .top) {
         VStack {
           Text(session.user?.id ?? (session.isGuest ? "guest" : "signed-out")).accessibilityIdentifier("account.fixture.identity")
@@ -65,6 +66,7 @@ private final class AccountFlowFixtureStorage: MIRAAuthSessionStorage, @unchecke
   func clearSession() { lock.withLock { access=nil;refresh=nil } }
 }
 private final class AccountFlowFixtureProtocol: URLProtocol {
+  private var delayed: DispatchWorkItem?
   override class func canInit(with request: URLRequest) -> Bool { true } // isolate every fixture request
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
@@ -72,13 +74,22 @@ private final class AccountFlowFixtureProtocol: URLProtocol {
     var status=200, json="{}"
     if path == "/auth/me" {
       json="{\"id\":\"fixture-a\",\"username\":\"fixture_a\",\"username_required\":\(flags.contains("--account-onboarding")),\"status\":\"\(flags.contains("--account-deletion") ? "deletion_pending" : "active")\"}"
+      if flags.contains("--startup-offline") { status = 503; json = "{\"code\":\"UPSTREAM_UNAVAILABLE\"}" }
     } else if path == "/auth/login" || path == "/auth/password/reset/confirm" {
       if flags.contains("--recovery-expired") && path.hasSuffix("confirm") { status=401;json="{\"code\":\"PASSWORD_RESET_EXPIRED\",\"detail\":\"Recovery link expired. Request a new email.\"}" }
       else { json="{\"access_token\":\"fixture-b\",\"refresh_token\":\"fixture-refresh-b\",\"user\":{\"id\":\"fixture-b\",\"username\":\"fixture_b\"}}" }
     } else if path.contains("posts") || path.contains("statuses") { json="[]" }
-    client?.urlProtocol(self,didReceive:HTTPURLResponse(url:request.url!,statusCode:status,httpVersion:nil,headerFields:["Content-Type":"application/json"])!,cacheStoragePolicy:.notAllowed)
-    client?.urlProtocol(self,didLoad:Data(json.utf8));client?.urlProtocolDidFinishLoading(self)
+    let code = status, body = Data(json.utf8)
+    if flags.contains("--startup-slow") && path == "/auth/me" {
+      let work = DispatchWorkItem { [weak self] in self?.reply(code, body) }
+      delayed = work
+      DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
+    } else { reply(code, body) }
   }
-  override func stopLoading() {}
+  private func reply(_ code: Int, _ body: Data) {
+    client?.urlProtocol(self,didReceive:HTTPURLResponse(url:request.url!,statusCode:code,httpVersion:nil,headerFields:["Content-Type":"application/json"])!,cacheStoragePolicy:.notAllowed)
+    client?.urlProtocol(self,didLoad:body);client?.urlProtocolDidFinishLoading(self)
+  }
+  override func stopLoading() { delayed?.cancel(); delayed = nil }
 }
 #endif

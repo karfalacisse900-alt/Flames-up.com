@@ -4,9 +4,46 @@ on:
 permissions:
   contents: read
 jobs:
+  launch-baseline:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run the identical launch measurement driver against 655.1 native sources
+        run: |
+          cp ios_native/MIRA/LayoutUITests/StartupTests.swift "$RUNNER_TEMP/StartupTests.swift"
+          git fetch --depth=1 origin 5b0e2bf9298e17105b1d0200e2e5544677e8e834
+          git switch --detach 5b0e2bf9298e17105b1d0200e2e5544677e8e834
+          cp "$RUNNER_TEMP/StartupTests.swift" ios_native/MIRA/LayoutUITests/StartupTests.swift
+          # Comparison driver only. This changed baseline is NEVER release-attested.
+          git rev-parse HEAD > "$RUNNER_TEMP/launch-baseline-source.txt"
+          git status --short >> "$RUNNER_TEMP/launch-baseline-source.txt"
+          xcodebuild -version >> "$RUNNER_TEMP/launch-baseline-source.txt"
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Measure baseline launch on the same large simulator model
+        working-directory: ios_native/MIRA
+        run: |
+          set -euo pipefail
+          runtime=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; print(next(r for r in json.load(sys.stdin)["devices"] if r.endswith("iOS-26-4")))')
+          device=$(xcrun simctl create 'Launch baseline' com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max "$runtime")
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/BaselineBuild" -resultBundlePath "$RUNNER_TEMP/LaunchBaseline.xcresult" \
+            -only-testing:CaptroLayoutUITests/StartupTests/testColdLaunchResponsiveness \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/launch-baseline.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: startup-baseline-comparison-not-release-evidence
+          path: |
+            ${{ runner.temp }}/launch-baseline-source.txt
+            ${{ runner.temp }}/launch-baseline.log
+            ${{ runner.temp }}/LaunchBaseline.xcresult
   review:
     runs-on: macos-26
-    timeout-minutes: 65
+    timeout-minutes: 95
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
@@ -40,7 +77,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" CODE_SIGNING_ALLOWED=NO build-for-testing \
             2>&1 | tee "$RUNNER_TEMP/welcome-build.log"
       - name: Large iPhone welcome and existing safety unit tests
-        timeout-minutes: 20
+        timeout-minutes: 35
         working-directory: ios_native/MIRA
         run: |
           set -euo pipefail
@@ -63,12 +100,14 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeLarge.xcresult" \
             -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/WelcomeTests -only-testing:CaptroLayoutUITests/CreatorSupportTests \
             -only-testing:CaptroLayoutUITests/FavoritesTests \
+            -only-testing:CaptroLayoutUITests/CaptureCameraTests -only-testing:CaptroLayoutUITests/StartupTests \
+            -only-testing:CaptroLayoutUITests/AccountRecoveryTests -only-testing:CaptroLayoutUITests/MediaRecoveryTests \
             -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
             -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/welcome-large.log"
       - name: Small iPhone native welcome
         if: success()
-        timeout-minutes: 20
+        timeout-minutes: 35
         working-directory: ios_native/MIRA
         run: |
           set -euo pipefail
@@ -86,6 +125,8 @@ jobs:
             -destination "platform=iOS Simulator,id=$WELCOME_SMALL" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeSmall.xcresult" \
             -only-testing:CaptroLayoutUITests/WelcomeTests -only-testing:CaptroLayoutUITests/CreatorSupportTests -only-testing:CaptroLayoutUITests/FavoritesTests \
+            -only-testing:CaptroLayoutUITests/CaptureCameraTests -only-testing:CaptroLayoutUITests/StartupTests \
+            -only-testing:CaptroLayoutUITests/AccountRecoveryTests -only-testing:CaptroLayoutUITests/MediaRecoveryTests \
             -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
             CODE_SIGNING_ALLOWED=NO test-without-building \
             2>&1 | tee "$RUNNER_TEMP/welcome-small.log"

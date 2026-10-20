@@ -23,11 +23,9 @@ test('Capture opens the live native camera and does not reintroduce receipt or v
   assert.match(captureService, /AVCapturePhotoOutput\(\)/);
   assert.match(captureService, /AVCaptureMovieFileOutput\(\)/);
   assert.doesNotMatch(capture, /CaptroScanView|CaptroReceiptCameraView|CaptroCaptureAssistantView|fileImporter|hubMode\(/);
-  // Capture now explicitly supports the system picker; never expand permission
-  // merely to fill the gallery thumbnail or introduce a second media importer.
-  assert.match(capture, /\.photosPicker\(isPresented: \$showLibrary/);
-  assert.match(capture, /CaptroPostMediaPicker.load\(item\)/);
-  assert.match(capture, /authorization == \.authorized \|\| authorization == \.limited/);
+  // Approved live-only Capture removes the action, not just its visible icon.
+  assert.doesNotMatch(capture, /photosPicker|PhotosPicker|showLibrary|galleryItem|CaptroPostMediaPicker\.load|capture\.library/);
+  assert.match(read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift'), /\.photosPicker\(/);
   assert.doesNotMatch(capture, /PHPhotoLibrary.requestAuthorization|requestAuthorization\(for:/);
   assert.doesNotMatch(capture, /Looking for documents|Choose photo|Import document|Upload receipt/);
 });

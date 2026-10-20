@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 import StripePayments
-import Darwin
 import Foundation
 import GoogleSignIn
 
@@ -50,7 +49,7 @@ final class MIRAStartupCoordinator: ObservableObject {
   @Published private(set) var phase: MIRAStartupPhase = .launching
   @Published private(set) var isSplashMounted = true
   @Published private(set) var isSplashVisible = true
-  @Published private(set) var showSlowStartupCopy = false
+  @Published private(set) var isRoutingReady = false
 
   let feedModel: MainFeedModel
   let chatModel: ChatNativeModel
@@ -59,8 +58,8 @@ final class MIRAStartupCoordinator: ObservableObject {
 
   private let api: MIRAAPIClient
   private var didStart = false
-  private let minimumSplashDuration: TimeInterval = 0.15
   private let splashDismissDuration: TimeInterval = 0.18
+  private var brandingDeadline: Task<Void, Never>?
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -73,9 +72,13 @@ final class MIRAStartupCoordinator: ObservableObject {
   func start(authSession: MIRAAuthSession) async {
     guard !didStart else { return }
     didStart = true
-    let startedAt = Date()
     MIRAPerformanceTimeline.mark("startup_prepare_start")
-    beginSlowMessageTimer()
+    // A maximum, never a minimum wait. Session work starts concurrently and
+    // can outlive this decorative overlay without revealing the wrong route.
+    brandingDeadline = Task { [weak self] in
+      do { try await Task.sleep(nanoseconds: 720_000_000) } catch { return }
+      self?.dismissSplash()
+    }
 
     phase = .checkingSession
     await authSession.bootstrap(api: api)
@@ -83,15 +86,15 @@ final class MIRAStartupCoordinator: ObservableObject {
 
     guard !Task.isCancelled else { return }
     if authSession.user == nil {
-      phase = .readyUnauthenticated
-      await waitForMinimumSplash(since: startedAt)
+      phase = authSession.needsSessionRetry ? .failedWithRetry : .readyUnauthenticated
+      isRoutingReady = true
       dismissSplash()
       return
     }
 
     if authSession.user?.needsUsernameOnboarding == true {
       phase = .readyAuthenticated
-      await waitForMinimumSplash(since: startedAt)
+      isRoutingReady = true
       MIRAPerformanceTimeline.mark("startup_username_required")
       dismissSplash()
       return
@@ -106,7 +109,7 @@ final class MIRAStartupCoordinator: ObservableObject {
     await feedModel.prepareForStartup()
 
     phase = .readyAuthenticated
-    await waitForMinimumSplash(since: startedAt)
+    isRoutingReady = true
     MIRAPerformanceTimeline.mark("startup_prepare_ready", detail: "authenticated")
     dismissSplash()
     let accountID = authSession.user?.id
@@ -128,26 +131,16 @@ final class MIRAStartupCoordinator: ObservableObject {
     }
   }
 
-  private func beginSlowMessageTimer() {
-    Task { [weak self] in
-      try? await Task.sleep(nanoseconds: 1_650_000_000)
-      await MainActor.run {
-        guard let self, self.isSplashMounted else { return }
-        withAnimation(.easeInOut(duration: 0.20)) {
-          self.showSlowStartupCopy = true
-        }
-      }
-    }
-  }
-
-  private func waitForMinimumSplash(since startedAt: Date) async {
-    let elapsed = Date().timeIntervalSince(startedAt)
-    let remaining = max(0, minimumSplashDuration - elapsed)
-    guard remaining > 0 else { return }
-    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+  func leaveForeground() {
+    // Never leave an invisible touch-blocking overlay after interruption.
+    brandingDeadline?.cancel()
+    isSplashVisible = false
+    isSplashMounted = false
   }
 
   private func dismissSplash() {
+    guard isSplashVisible else { return }
+    brandingDeadline?.cancel()
     let delay = splashDismissDuration
     withAnimation(.easeInOut(duration: splashDismissDuration)) {
       isSplashVisible = false
@@ -157,7 +150,7 @@ final class MIRAStartupCoordinator: ObservableObject {
       await MainActor.run {
         guard let self else { return }
         self.isSplashMounted = false
-        self.showSlowStartupCopy = false
+        MIRAPerformanceTimeline.markOnce("startup_branding_dismissed")
       }
     }
   }
@@ -172,6 +165,7 @@ public struct MIRANativeRootView: View {
   @State private var featureStatusBarHidden = false
   @State private var cameraDarkChrome = false
   @State private var profileLink: CaptroProfileLink?
+  @State private var hasMountedDestination = false
   @StateObject private var supportReturns = CaptroSupportReturnStore()
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
   @StateObject private var authSession: MIRAAuthSession
@@ -214,9 +208,10 @@ public struct MIRANativeRootView: View {
         .animation(.easeInOut(duration: 0.28), value: startup.isSplashVisible)
 
       if startup.isSplashMounted {
-        CaptroStartupView(phase: startup.phase, showSlowMessage: startup.showSlowStartupCopy)
+        CaptroStartupView()
           .opacity(startup.isSplashVisible ? 1 : 0)
-          .scaleEffect(startup.isSplashVisible ? 1 : 0.985)
+          .allowsHitTesting(false)
+          .accessibilityHidden(true)
           .zIndex(10)
       }
 
@@ -227,10 +222,12 @@ public struct MIRANativeRootView: View {
       }
     }
     .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
-    .background(CaptroRecoveryPresenter(session: authSession, api: api).frame(width: 0, height: 0))
+    .background(CaptroRecoveryPresenter(session: authSession, api: api,
+      ready: startup.isRoutingReady && !startup.isSplashMounted).frame(width: 0, height: 0))
     .background(CaptroSupportReturnPresenter(store: supportReturns, session: authSession, api: api,
-      ready: !startup.isSplashMounted).frame(width: 0, height: 0))
-    .sheet(item: $profileLink) { route in
+      ready: startup.isRoutingReady && !startup.isSplashMounted).frame(width: 0, height: 0))
+    .sheet(item: Binding(get: { startup.isRoutingReady && !startup.isSplashMounted ? profileLink : nil },
+      set: { profileLink = $0 })) { route in
       NavigationStack {
         UserProfileNativeView(userId: route.id, api: api)
           .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { profileLink = nil } } }
@@ -260,19 +257,20 @@ public struct MIRANativeRootView: View {
       MIRAPerformanceTimeline.markOnce("time_to_first_screen")
     }
     .task {
-      await MIRAAppCacheStore.shared.clearPostDraftFromPreviousProcessIfNeeded()
+      async let draftCleanup: Void = MIRAAppCacheStore.shared.clearPostDraftFromPreviousProcessIfNeeded()
       await startup.start(authSession: authSession)
+      await draftCleanup
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { oldUserID, userID in
       if let oldUserID, oldUserID != userID { supportReturns.forget(accountID: oldUserID) }
       // A profile opened under the previous account must not retain its presentation.
-      profileLink = nil
+      if let oldUserID, oldUserID != userID { profileLink = nil }
       api.favorites.configure(accountID: userID ?? "")
       MIRAPlaybackCoordinator.pauseAll(reason: "account_changed")
       MIRAVideoPrewarmManager.shared.resetForAccountChange()
       MIRAMediaCacheMaintenance.clearMemoryForAccountChange()
-      if !startup.isSplashMounted {
+      if startup.isRoutingReady {
         startup.feedModel.resetForAccountChange()
         startup.profileModel.resetForAccountChange()
         startup.chatModel.configure(currentUserId: userID ?? "")
@@ -325,6 +323,7 @@ public struct MIRANativeRootView: View {
           Task { await startup.profileModel.revalidateIfStale() }
         }
       } else {
+        startup.leaveForeground()
         MIRAPlaybackCoordinator.pauseAll(reason: "app_inactive")
       }
     }
@@ -352,6 +351,24 @@ public struct MIRANativeRootView: View {
 
   @ViewBuilder
   private var destinationView: some View {
+    if !startup.isRoutingReady {
+      VStack(spacing: 16) {
+        ProgressView()
+        Text(startup.phase.statusText).font(.callout).foregroundStyle(.secondary)
+        Text("Your saved session and destination are being restored.")
+          .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+      }.padding(24).accessibilityElement(children: .combine)
+        .accessibilityIdentifier("startup.resolving")
+    } else if !hasMountedDestination && (profileLink != nil || authSession.passwordResetContext != nil) {
+      // The pending sheet owns this launch; do not flash Home or welcome first.
+      Color.clear.accessibilityHidden(true)
+    } else {
+      resolvedDestination.onAppear { hasMountedDestination = true }
+    }
+  }
+
+  @ViewBuilder
+  private var resolvedDestination: some View {
     if authSession.needsSessionRetry && authSession.user == nil && !authSession.isGuest {
       VStack(spacing: 20) {
         Text("Couldn’t restore your session").font(.title2)
@@ -428,6 +445,8 @@ public struct MIRANativeRootView: View {
     .tint(selectedTab == .scan && cameraDarkChrome ? Color.white : MIRATheme.Color.textPrimary)
     .toolbarBackground(selectedTab == .scan && cameraDarkChrome ? Color.black : MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
+    .modifier(CaptroStudioTabChrome(active: selectedTab == .scan && cameraDarkChrome,
+      home: { selectedTab = .main }, capture: { selectedTab = .scan }, profile: { selectedTab = .profile }))
     .background(MIRATheme.Color.appBackground)
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")
@@ -672,90 +691,50 @@ private struct MIRAPrivacyShieldView: View {
 
 private struct CaptroStartupView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  let phase: MIRAStartupPhase
-  let showSlowMessage: Bool
-  @State private var appeared = false
+  @State private var upper: CGFloat = 0
+  @State private var lower: CGFloat = 0
+  @State private var wordmark = false
 
   var body: some View {
     ZStack {
-      MIRATheme.Color.launchBackground.ignoresSafeArea()
-
-      VStack(spacing: MIRATheme.Space.xl) {
-        VStack(spacing: MIRATheme.Space.sm) {
-          CaptroWordmarkView()
-            .scaleEffect(reduceMotion ? 1 : (appeared ? 1 : 0.96))
-            .opacity(appeared ? 1 : 0)
-
-          Rectangle()
-            .fill(MIRATheme.Color.textSecondary)
-            .frame(width: 128, height: 1)
-            .opacity(appeared ? 1 : 0)
-
-          Text("capture moments")
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(MIRATheme.Color.textSecondary)
-            .opacity(appeared ? 1 : 0)
+      Color("MIRALaunchBackground", bundle: .main).ignoresSafeArea()
+      ZStack {
+        // Same asset, scale, center and initial opacity as LaunchScreen.
+        logo("CaptroStartupLockup").opacity(reduceMotion ? 1 : 0.14)
+        if !reduceMotion {
+          stroke("CaptroStartupUpper", progress: upper)
+          stroke("CaptroStartupLower", progress: lower)
+          logo("CaptroStartupWordmark").opacity(wordmark ? 1 : 0)
         }
-
-        VStack(spacing: MIRATheme.Space.sm) {
-          CaptroStartupPulse()
-            .opacity(appeared ? 1 : 0)
-
-          if showSlowMessage {
-            Text(phase.statusText)
-              .font(.system(size: 12, weight: .medium))
-              .foregroundStyle(MIRATheme.Color.textSecondary)
-              .transition(.opacity)
-          }
-        }
-        .frame(height: 38)
-      }
-      .padding(.horizontal, MIRATheme.Space.xxl)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }.frame(width: 292, height: 75.92)
     }
+    .ignoresSafeArea()
+    .accessibilityHidden(true)
+    .allowsHitTesting(false)
     .onAppear {
-      guard !appeared else { return }
-      withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.46)) {
-        appeared = true
-      }
+      guard !wordmark, !reduceMotion else { return }
+      withAnimation(.easeInOut(duration: 0.32)) { upper = 1 }
+      withAnimation(.easeInOut(duration: 0.36).delay(0.10)) { lower = 1 }
+      withAnimation(.easeOut(duration: 0.22).delay(0.34)) { wordmark = true }
     }
-    .contentShape(Rectangle())
+  }
+  private func logo(_ name: String) -> some View {
+    Image(name, bundle: .main).resizable().renderingMode(.template)
+      .scaledToFit().foregroundStyle(.primary)
+      .frame(width: 292, height: 75.92)
+  }
+  private func stroke(_ name: String, progress: CGFloat) -> some View {
+    logo(name).mask(alignment: .leading) {
+      // Exact supplied filled paths; reveal masks do not deform the two curves.
+      Rectangle().frame(width: 292 * 0.25 * progress)
+    }
   }
 }
 
 private struct CaptroWordmarkView: View {
   var body: some View {
     Image("CaptroLaunchLogo", bundle: .main)
-      .resizable()
-      .scaledToFit()
-      .frame(width: 292, height: 98)
-    .accessibilityLabel("Captro")
-  }
-}
-
-private struct CaptroStartupPulse: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
-      let now = timeline.date.timeIntervalSinceReferenceDate
-      HStack(spacing: 7) {
-        ForEach(0..<3, id: \.self) { index in
-          Circle()
-            .fill(MIRATheme.Color.textPrimary.opacity(dotOpacity(at: now, index: index)))
-            .frame(width: 5, height: 5)
-        }
-      }
-    }
-    .frame(height: 12)
-    .accessibilityHidden(true)
-  }
-
-  private func dotOpacity(at now: TimeInterval, index: Int) -> Double {
-    if reduceMotion {
-      return 0.34
-    }
-    let wave = Darwin.sin((now * 3.4) + Double(index) * 0.85)
-    return 0.22 + ((wave + 1) / 2) * 0.42
+      .resizable().scaledToFit().frame(width: 292, height: 98)
+      .accessibilityLabel("Captro")
   }
 }

@@ -13,7 +13,7 @@ final class CaptureCameraTests: XCTestCase {
     attachment.name = label + "-simulator-not-camera-quality"
     attachment.lifetime = .keepAlways; add(attachment)
   }
-  func testUnavailableCameraHasNoReceiptAndOffersSystemPhotoPicker() {
+  func testUnavailableCameraHasNoImportAndKeepsCenteredAccessibleControls() {
     let app = launch(review: false)
     XCTAssertTrue(app.buttons["capture.mode.photo"].waitForExistence(timeout: 15))
     XCTAssertTrue(app.buttons["capture.mode.video"].exists)
@@ -28,11 +28,15 @@ final class CaptureCameraTests: XCTestCase {
     XCTAssertFalse(app.buttons["Scan a receipt"].exists)
     XCTAssertFalse(app.buttons["Choose photo"].exists)
     XCTAssertFalse(app.buttons["Import document"].exists)
-    XCTAssertTrue(app.buttons["capture.library"].isHittable)
+    XCTAssertFalse(app.buttons["capture.library"].exists)
+    XCTAssertFalse(app.buttons["Open photo library"].exists)
+    XCTAssertEqual(app.buttons["capture.flip"].label, "Switch camera")
+    XCTAssertGreaterThanOrEqual(app.buttons["capture.flip"].frame.width, 44)
+    XCTAssertEqual(app.buttons["capture.shutter"].frame.midX, app.frame.midX, accuracy: 1)
     XCTAssertTrue(app.buttons["capture.flash"].exists)
     XCTAssertFalse(app.buttons["capture.flash"].isEnabled)
     let mode = app.buttons["capture.mode.photo"]
-    XCTAssertLessThan(mode.frame.maxY, app.buttons["capture.shutter"].frame.minY)
+    XCTAssertLessThanOrEqual(mode.frame.maxY, app.buttons["capture.shutter"].frame.minY + 1)
     XCTAssertGreaterThan(mode.frame.minY, app.buttons["capture.options"].frame.maxY)
     capture(app, "camera-unavailable-state")
   }
@@ -49,10 +53,31 @@ final class CaptureCameraTests: XCTestCase {
     XCTAssertTrue(app.descendants(matching: .any)["capture.timer"].firstMatch.exists)
     capture(app, "camera-compact-settings")
     app.buttons["Done"].tap()
+    let shutter = app.buttons["capture.shutter"].frame
+    let header = app.buttons["capture.options"].frame
+    let viewfinder = app.descendants(matching: .any)["capture.viewfinder"].firstMatch
+    XCTAssertTrue(viewfinder.exists)
+    XCTAssertEqual(viewfinder.frame.width, app.frame.width, accuracy: 1)
+    XCTAssertEqual(viewfinder.frame.height / viewfinder.frame.width, 4 / 3, accuracy: 0.01)
     app.buttons["capture.mode.video"].tap()
     XCTAssertTrue(app.buttons["capture.mode.video"].isSelected)
     XCTAssertFalse(app.buttons["capture.shutter"].isEnabled)
+    XCTAssertEqual(viewfinder.frame.width, app.frame.width, accuracy: 1)
+    XCTAssertEqual(viewfinder.frame.height / viewfinder.frame.width, 16 / 9, accuracy: 0.01)
+    XCTAssertEqual(app.buttons["capture.shutter"].frame.midY, shutter.midY, accuracy: 1)
+    XCTAssertEqual(app.buttons["capture.options"].frame.midY, header.midY, accuracy: 1)
+    XCTAssertFalse(app.buttons["capture.library"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["capture.recording.status"].exists)
     capture(app, "camera-video-unavailable-not-fake-preview")
+    for _ in 0..<3 {
+      app.buttons["capture.mode.photo"].tap()
+      app.buttons["capture.mode.video"].tap()
+    }
+    XCTAssertEqual(app.buttons["capture.shutter"].frame.midY, shutter.midY, accuracy: 1)
+    XCTAssertEqual(app.buttons["capture.shutter"].frame.midX, app.frame.midX, accuracy: 1)
+    XCUIDevice.shared.press(.home); app.activate()
+    XCTAssertTrue(app.buttons["capture.mode.video"].isSelected)
+    XCTAssertFalse(app.buttons["capture.shutter"].isEnabled)
   }
   func testReviewEnhanceCompareAndComposerCancellationKeepsCapture() {
     let app = launch(review: true)
@@ -82,13 +107,13 @@ final class CaptureCameraTests: XCTestCase {
     let app = launch(review: true, largeText: true)
     let use = app.buttons["capture.use"]
     XCTAssertTrue(use.waitForExistence(timeout: 15))
-    let tabs = app.tabBars.firstMatch
+    let tabs = app.descendants(matching: .any)["capture.navigation"].firstMatch
     XCTAssertTrue(tabs.exists)
     XCTAssertGreaterThanOrEqual(use.frame.height, 44)
     XCTAssertLessThanOrEqual(use.frame.maxY, tabs.frame.minY + 1,
       "Use capture must not be hidden beneath the retained bottom navigation")
     XCTAssertTrue(use.isHittable)
-    app.tabBars.buttons["Home"].tap()
+    app.buttons["capture.navigation.home"].tap()
     app.tabBars.buttons["Capture"].tap()
     XCTAssertTrue(use.waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["capture.retake"].isHittable)

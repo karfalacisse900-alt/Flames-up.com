@@ -5,6 +5,30 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCameraCaptureTests: XCTestCase {
+  func testStudioViewfindersKeepFullOutputRatioAndStableChromeOnSmallAndLargePhones() {
+    for size in [CGSize(width: 320, height: 568), CGSize(width: 375, height: 812), CGSize(width: 440, height: 956)] {
+      let photo = CaptroStudioLayout(size: size, top: 50, bottom: 86, aspect: 3 / 4, controlsHeight: 136)
+      let video = CaptroStudioLayout(size: size, top: 50, bottom: 86, aspect: 9 / 16, controlsHeight: 136)
+      XCTAssertEqual(photo.preview.width, size.width)
+      XCTAssertEqual(video.preview.width, size.width)
+      XCTAssertEqual(photo.preview.height, size.width * 4 / 3, accuracy: 0.01)
+      XCTAssertEqual(video.preview.height, size.width * 16 / 9, accuracy: 0.01)
+      XCTAssertEqual(photo.header, video.header)
+      XCTAssertEqual(photo.controls, video.controls)
+      XCTAssertEqual(photo.controls.midX, size.width / 2)
+      XCTAssertGreaterThanOrEqual(video.preview.minY, 0)
+      XCTAssertLessThanOrEqual(video.preview.maxY, size.height + 1)
+      XCTAssertTrue(video.controlsOverlayFrame)
+      XCTAssertLessThanOrEqual(video.zoomBottom, video.controls.minY)
+    }
+  }
+  func testStudioInvalidAspectFallsBackWithoutStretchingOrNarrowing() {
+    for aspect in [CGFloat.zero, -.infinity, .nan] {
+      let layout = CaptroStudioLayout(size: CGSize(width: 375, height: 812), top: 50, bottom: 86,
+        aspect: aspect, controlsHeight: 136)
+      XCTAssertEqual(layout.preview.size, CGSize(width: 375, height: 500))
+    }
+  }
   func testQualityLabelUsesConfiguredFormatAndNeverInventsDefaultResolution() {
     XCTAssertEqual(CaptroCameraPolicy.videoFormatLabel(dimensions: CMVideoDimensions(width: 1920, height: 1080),
       frameDuration: CMTime(value: 1, timescale: 30)), "1080p · 30 FPS")
