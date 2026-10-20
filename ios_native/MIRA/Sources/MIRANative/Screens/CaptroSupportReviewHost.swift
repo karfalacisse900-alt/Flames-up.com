@@ -51,6 +51,7 @@ private final class SupportReviewTransport: URLProtocol {
       body = "{\"id\":\"12345678-1234-4234-8234-123456789012\",\"url\":\"https://captro-site.pages.dev/support-creator/#handoff=\(String(repeating: "a", count: 64))\"}"
     } else if path == "/creator-support/eligibility/fixture-creator" {
       let attempt = Self.lock.withLock { Self.eligibilityCalls += 1; return Self.eligibilityCalls }
+      print("SUPPORT_FIXTURE eligibility request \(attempt)") // DEBUG-only synthetic transport, no URLs/tokens.
       if flags.contains("--support-eligibility-error") && attempt == 1 {
         status = 503; body = "{\"code\":\"CAPTRO_SUPPORT_RETRY\",\"detail\":\"Availability could not be checked\"}"
       } else { body = "{\"enabled\":\(flags.contains("--support-ineligible") ? "false" : "true")}" }

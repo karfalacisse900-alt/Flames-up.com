@@ -70,7 +70,10 @@ struct CaptroSupportAction: View {
   private var identity: String { "\(viewerID ?? "guest"):\(creatorID)" }
   private struct Eligibility: Decodable { let enabled: Bool }
   var body: some View {
-    Group {
+    // Group with no eligible child is EmptyView: its task may never mount.
+    // Keep a zero-size lifecycle anchor so eligibility can reveal the button.
+    ZStack {
+      Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
       if eligible || failed {
         Button(failed ? "Retry Support" : "Support") {
           if failed { retry += 1 } else { presented = true }
