@@ -77,10 +77,12 @@ type Services = {
 };
 export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
   const one = (value: any) => Array.isArray(value) ? value[0] : value;
-  const guard = (handler: (c: any) => Promise<any>) => async (c: any) => {
+  const guard = (handler: (c: any) => Promise<any>, createsPayment = true) => async (c: any) => {
     c.header('Cache-Control', 'private, no-store'); c.header('Referrer-Policy', 'no-referrer');
     try {
-      if (!s.enabled(c)) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 503);
+      // A rollout/incident switch stops new obligations, never authenticated
+      // reconciliation of existing ones. Read handlers retain ownership checks.
+      if (createsPayment && !s.enabled(c)) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 503);
       return await handler(c);
     } catch (error) {
       // Never return provider errors, token values, private metadata or stack traces.
@@ -124,7 +126,10 @@ export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
     c.header('Cache-Control', 'no-store');
     if (!s.enabled(c)) return c.json({ enabled: false });
     try { await s.authorize(c, s.viewer(c), c.req.param('creator')); return c.json({ enabled: true, ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE }); }
-    catch { return c.json({ enabled: false }); }
+    catch (error) {
+      if (error instanceof SupportError && [401, 403, 404, 409].includes(error.status)) return c.json({ enabled: false });
+      return c.json({ code: 'CAPTRO_SUPPORT_RETRY', detail: 'Could not check support availability. Please retry.' }, 503);
+    }
   });
   api.post('/creator-support/handoffs', auth, guard(async c => {
     const b = await body(c);
@@ -161,14 +166,14 @@ export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
     await s.reconcile(c, p);
     p = await s.purchase(c, h.purchase_id);
     return c.json(supportStatus(p));
-  }));
+  }, false));
   api.get('/creator-support/purchases/:id', auth, guard(async c => {
     if (!uuid.test(c.req.param('id'))) throw new SupportError('CAPTRO_SUPPORT_NOT_FOUND', 404);
     const p = await s.purchase(c, c.req.param('id'));
     if (!p || p.content_type !== 'creator_support' || p.buyer_app_user_id !== s.viewer(c)) throw new SupportError('CAPTRO_SUPPORT_NOT_FOUND', 404);
     await s.reconcile(c, p);
     return c.json(supportStatus(await s.purchase(c, p.id)));
-  }));
+  }, false));
   api.get('/creator-support/handoffs/:id/status', auth, guard(async c => {
     if (!uuid.test(c.req.param('id'))) throw new SupportError('CAPTRO_SUPPORT_NOT_FOUND', 404);
     const h = await s.handoffById(c, c.req.param('id'));
@@ -177,5 +182,5 @@ export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
     const p = await s.purchase(c, h.purchase_id);
     await s.reconcile(c, p);
     return c.json(supportStatus(await s.purchase(c, p.id)));
-  }));
+  }, false));
 }

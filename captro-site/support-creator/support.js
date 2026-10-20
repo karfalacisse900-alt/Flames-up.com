@@ -84,11 +84,16 @@ async function checkStatus() {
 }
 async function load() {
   $('retry').hidden = true; setBusy(true);
+  // Turning off new checkouts must not hide the outcome of an existing payment.
+  // The status API still requires the scoped bearer and revalidates its owner.
+  if (location.pathname === '/support-creator/return' && config.apiBaseURL) {
+    try { await checkStatus(); } finally { setBusy(false); }
+    return;
+  }
   if (!config.enabled || !config.apiBaseURL) {
     setStatus('Creator support is not available yet. No payment has been started.'); setBusy(false); return;
   }
   try {
-    if (location.pathname === '/support-creator/return') { await checkStatus(); return; }
     const data = await request('session');
     $('title').textContent = 'Support ' + data.creator.display_name;
     $('username').textContent = '@' + data.creator.username;

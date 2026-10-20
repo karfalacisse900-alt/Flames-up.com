@@ -33,7 +33,8 @@ function fixture() {
  const app=new Hono(); let row=null,h=null,blocked=false,revoked=false,providerFailure=false,paid=false,creates=0;
  const hash=async value=>createHash('sha256').update(value).digest('hex');
  const services={enabled:c=>supportTestEnabled(c.env),hash,viewer:c=>c.get('viewer'),limit:async()=>null,
-  authorize:async(c,buyer,creator)=>{if(blocked||buyer!=='buyer'||creator!=='creator')throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',403);
+  authorize:async(c,buyer,creator)=>{if(providerFailure)throw new Error('private provider diagnostic');
+   if(blocked||buyer!=='buyer'||creator!=='creator')throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',403);
    return {buyerId:'buyer-auth',buyerAppId:'buyer',creatorId:'creator-auth',creatorAppId:'creator',accountId:'trusted-account',profile:{id:'creator',username:'fixture',display_name:'Fixture creator',avatar_url:null}};},
   validateBuyer:async()=>{if(revoked)throw new SupportError('CAPTRO_SUPPORT_SESSION_EXPIRED',401);},
   handoff:async(c,tokenHash)=>h?.token_hash===tokenHash?h:null,handoffById:async(c,value)=>h?.id===value?h:null,
@@ -48,7 +49,8 @@ function fixture() {
  registerCreatorSupportRoutes(app,auth,services);
  const env={CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'test',JWT_SECRET:'s'.repeat(48)};
  const send=(path,body,headers={})=>app.request(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Origin:'https://captro-site.pages.dev',...headers},...(body?{body:JSON.stringify(body)}:{})},env);
- return {send,get row(){return row;},get h(){return h;},set blocked(v){blocked=v;},set revoked(v){revoked=v;},set paid(v){paid=v;},set providerFailure(v){providerFailure=v;}};
+ return {send,get row(){return row;},get h(){return h;},set enabled(v){env.CAPTRO_CREATOR_SUPPORT=v?'test':'blocked';},
+  set blocked(v){blocked=v;},set revoked(v){revoked=v;},set paid(v){paid=v;},set providerFailure(v){providerFailure=v;}};
 }
 async function handoff(f) {
  const response=await f.send('/creator-support/handoffs',{creator_id:'creator',request_key:id,storefront:'USA'},{Authorization:'buyer'});
@@ -79,4 +81,33 @@ test('expired handoff cannot create/replay checkout; non-US native handoff is de
  const f=fixture();const token=await handoff(f);f.h.expires_at='2000-01-01T00:00:00Z';
  assert.equal((await f.send('/creator-support/web/checkout',{token,amount:500,currency:'USD'})).status,401);
  assert.equal((await f.send('/creator-support/handoffs',{creator_id:'creator',request_key:id,storefront:'GBR'},{Authorization:'buyer'})).status,400);
+});
+test('creation kill switch never strands an existing buyer receipt or masks a paid outcome',async()=>{
+ const f=fixture(),token=await handoff(f);
+ await f.send('/creator-support/web/checkout',{token,amount:500,currency:'USD'});
+ f.enabled=false;f.paid=true;
+ assert.equal((await f.send('/creator-support/web/checkout',{token,amount:500,currency:'USD'})).status,503);
+ for(const [path,body,headers] of [
+  ['/creator-support/web/status',{token},{}],
+  ['/creator-support/purchases/'+id,null,{Authorization:'buyer'}],
+  ['/creator-support/handoffs/'+id+'/status',null,{Authorization:'buyer'}],
+ ]) {
+  const response=await f.send(path,body,headers);
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).status,'confirmed');
+ }
+ assert.equal((await f.send('/creator-support/purchases/'+id,null,{Authorization:'outsider'})).status,404);
+ f.revoked=true;
+ assert.equal((await f.send('/creator-support/web/status',{token})).status,401);
+});
+test('eligibility distinguishes disabled/restricted creators from retryable provider failures',async()=>{
+ const f=fixture();
+ f.providerFailure=true;
+ const failed=await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'});
+ assert.equal(failed.status,503);
+ assert.doesNotMatch(await failed.text(),/private provider diagnostic/);
+ f.providerFailure=false;f.blocked=true;
+ assert.deepEqual(await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json(),{enabled:false});
+ f.blocked=false;
+ assert.equal((await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json()).enabled,true);
 });

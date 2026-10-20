@@ -5,6 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID, randomBytes} from 'node:crypto';
 import {supportCheckoutParameters} from '../src/creator-support.ts';
+import {findSupportSandboxRecipient} from './support-sandbox-recipient.mjs';
 
 assert.equal(process.env.GITHUB_ACTIONS,'true');assert.equal(process.env.STRIPE_MODE,'test');
 const key=process.env.STRIPE_SECRET_KEY;
@@ -29,11 +30,11 @@ async function stripe(path,body,requestID) {
 let session;
 try {
   const platform=await stripe('/account');assert.equal(platform.id,process.env.STRIPE_EXPECTED_ACCOUNT_ID);
-  const accounts=await stripe('/accounts?limit=100');
   // Reuse an existing test account only; never create or update a recipient.
-  const recipient=accounts.data.find(a=>a.details_submitted&&a.payouts_enabled
-    &&a.capabilities?.transfers==='active'&&a.settings?.payouts?.schedule?.interval==='manual'
-    &&a.requirements?.currently_due?.length===0);
+  const {recipient,counts}=await findSupportSandboxRecipient(stripe,(path,version)=>request('https://api.stripe.com'+path,{
+    headers:{Authorization:'Bearer '+key,'Stripe-Version':version},
+  }));
+  console.log(JSON.stringify({test:'support_sandbox_recipient_readiness',counts,accountMutation:false}));
   assert.ok(recipient,'No existing ready sandbox recipient; manual sandbox onboarding is required');
   const createUser=()=>request(local.API_URL+'/auth/v1/admin/users',{method:'POST',headers:dbHeaders,
     body:JSON.stringify({email:'support-contract-'+randomUUID()+'@example.com',password:randomBytes(32).toString('hex'),email_confirm:true})});

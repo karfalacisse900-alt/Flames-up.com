@@ -79,5 +79,10 @@ try {
  enabled=false;await open();await page.getByText('Creator support is not available yet. No payment has been started.',{exact:true}).waitFor();
  assert.equal(await page.locator('#support-form').isVisible(),false);assert.deepEqual(errors,[]);
  console.log('PASS disabled production page; no fabricated payment UI');
+ paid=true;await page.goto('https://captro-site.pages.dev/support-creator/return?purchase_id='+id);
+ await page.getByText('Support confirmed: $5.01. Thank you.',{exact:true}).waitFor();
+ assert.equal(checkoutCalls,1);assert.equal(await page.locator('#support-form').isVisible(),false);
+ assert.deepEqual(errors,[]);
+ console.log('PASS creation-disabled browser return still reconciles the existing payment');
  console.log('Screenshots: '+output);
 } finally { await browser.close(); }
