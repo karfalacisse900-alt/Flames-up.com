@@ -31,18 +31,19 @@ final class CaptroCreatorSupportTests: XCTestCase {
   }
   func testOnlyScopedOwnedHTTPSHandoffOpens() {
     let token = String(repeating: "a", count: 64)
-    XCTAssertNotNil(CaptroSupportPolicy.handoffURL("https://flames-up.com/support-creator/#handoff=\(token)", amount: 500))
-    for url in ["http://flames-up.com/support-creator/#handoff=\(token)",
+    XCTAssertNotNil(CaptroSupportPolicy.handoffURL("https://captro-site.pages.dev/support-creator/#handoff=\(token)", amount: 500))
+    for url in ["http://captro-site.pages.dev/support-creator/#handoff=\(token)",
       "https://evil.test/support-creator/#handoff=\(token)",
-      "https://flames-up.com@evil.test/support-creator/#handoff=\(token)",
-      "https://flames-up.com/support-creator/?redirect=evil#handoff=\(token)"] {
+      "https://captro-site.pages.dev@evil.test/support-creator/#handoff=\(token)",
+      "https://captro-site.pages.dev/support-creator/?redirect=evil#handoff=\(token)",
+      "https://flames-up.com/support-creator/#handoff=\(token)"] {
       XCTAssertNil(CaptroSupportPolicy.handoffURL(url, amount: 500))
     }
   }
   func testReturnIsAReferenceNotProofOfPayment() {
     let id = UUID().uuidString
-    XCTAssertEqual(CaptroSupportPolicy.returnPurchase(URL(string: "https://flames-up.com/support-creator/return?purchase_id=\(id)")!), id)
+    XCTAssertEqual(CaptroSupportPolicy.returnPurchase(URL(string: "https://captro-site.pages.dev/support-creator/return?purchase_id=\(id)")!), id)
     XCTAssertNil(CaptroSupportPolicy.returnPurchase(URL(string: "https://evil.test/support-creator/return?purchase_id=\(id)")!))
-    XCTAssertNil(CaptroSupportPolicy.returnPurchase(URL(string: "https://flames-up.com/support-creator/return?purchase_id=\(id)&purchase_id=\(id)")!))
+    XCTAssertNil(CaptroSupportPolicy.returnPurchase(URL(string: "https://captro-site.pages.dev/support-creator/return?purchase_id=\(id)&purchase_id=\(id)")!))
   }
 }

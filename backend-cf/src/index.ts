@@ -209,6 +209,7 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'https://www.flames-up.com',
   'https://admin.flames-up.com',
   'https://captro-admin.pages.dev',
+  'https://captro-site.pages.dev',
 ];
 function isProductionEnv(c: any): boolean {
   return String(c?.env?.ENVIRONMENT || '').toLowerCase() === 'production';

@@ -1,6 +1,6 @@
 // Optional support uses the existing deferred marketplace ledger, not a new wallet.
 // Public/live activation is intentionally impossible in this development contract.
-export const SUPPORT_ORIGIN = 'https://flames-up.com';
+export const SUPPORT_ORIGIN = 'https://captro-site.pages.dev';
 export const SUPPORT_LIMITS = Object.freeze({ currency: 'USD', minimum: 200, maximum: 20000, suggested: [200, 500, 1000, 2000] });
 export const SUPPORT_DISCLOSURE = 'Captro takes 0%. Payment-processing fees apply.';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;

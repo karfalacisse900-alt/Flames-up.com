@@ -32,7 +32,9 @@ struct MIRAApp: App {
   @ViewBuilder
   private var appRoot: some View {
 #if DEBUG
-    if ProcessInfo.processInfo.arguments.contains("--captro-account-flow-review") {
+    if ProcessInfo.processInfo.arguments.contains("--captro-support-review") {
+      CaptroSupportReviewHost()
+    } else if ProcessInfo.processInfo.arguments.contains("--captro-account-flow-review") {
       CaptroAccountFlowReviewHost()
     } else if ProcessInfo.processInfo.arguments.contains("--captro-welcome-review") {
       CaptroWelcomeReviewHost()

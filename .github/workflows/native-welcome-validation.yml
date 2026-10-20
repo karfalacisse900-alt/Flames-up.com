@@ -61,7 +61,7 @@ jobs:
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$WELCOME_LARGE" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeLarge.xcresult" \
-            -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/WelcomeTests \
+            -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/WelcomeTests -only-testing:CaptroLayoutUITests/CreatorSupportTests \
             -only-testing:CaptroLayoutUITests/FavoritesTests \
             -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
             -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands \
@@ -85,7 +85,7 @@ jobs:
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$WELCOME_SMALL" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/WelcomeBuild" -resultBundlePath "$RUNNER_TEMP/WelcomeSmall.xcresult" \
-            -only-testing:CaptroLayoutUITests/WelcomeTests -only-testing:CaptroLayoutUITests/FavoritesTests \
+            -only-testing:CaptroLayoutUITests/WelcomeTests -only-testing:CaptroLayoutUITests/CreatorSupportTests -only-testing:CaptroLayoutUITests/FavoritesTests \
             -only-testing:CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame \
             CODE_SIGNING_ALLOWED=NO test-without-building \
             2>&1 | tee "$RUNNER_TEMP/welcome-small.log"

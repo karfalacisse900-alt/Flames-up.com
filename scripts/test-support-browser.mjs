@@ -16,7 +16,7 @@ await context.route('**/*',async route=>{
  if(url.hostname==='flames-up-api.karfalacisse900.workers.dev') {
   const b=request.method()==='POST'?request.postDataJSON():{};
   assert.equal(b.token,'a'.repeat(64));
-  const headers={'Access-Control-Allow-Origin':'https://flames-up.com','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
+  const headers={'Access-Control-Allow-Origin':'https://captro-site.pages.dev','Access-Control-Allow-Headers':'Content-Type','Cache-Control':'no-store'};
   if(request.method()==='OPTIONS')return route.fulfill({status:204,headers});
   if(fail)return route.fulfill({status:503,headers,json:{code:'CAPTRO_SUPPORT_RETRY'}});
   if(url.pathname.endsWith('/session'))return route.fulfill({headers,json:{creator:{display_name:'Fixture Creator',username:'fixture',avatar_url:'https://imagedelivery.net/fixture/missing'},purchase:null}});
@@ -25,7 +25,7 @@ await context.route('**/*',async route=>{
   throw Error('Unexpected API route '+url.pathname);
  }
  if(url.hostname==='imagedelivery.net')return route.fulfill({status:404,body:''});
- assert.equal(url.hostname,'flames-up.com','no external service in browser test');
+ assert.equal(url.hostname,'captro-site.pages.dev','no external service in browser test');
  if(url.pathname==='/support-creator/config.js')return route.fulfill({contentType:'text/javascript',body:`window.CAPTRO_SUPPORT_CONFIG={enabled:${enabled},apiBaseURL:'https://flames-up-api.karfalacisse900.workers.dev/api',universalLinksVerified:false};`});
  const path=url.pathname==='/support-creator/'||url.pathname==='/support-creator/return'?'/support-creator/index.html':url.pathname;
  const file=resolve(root,'.'+path);assert.ok(file.startsWith(root));
@@ -35,7 +35,7 @@ await context.route('**/*',async route=>{
 const page=await context.newPage();
 const errors=[];page.on('pageerror',error=>errors.push(error.message));
 let navigation=0;
-const open=()=>page.goto('https://flames-up.com/support-creator/?fixture='+ ++navigation +'#handoff='+'a'.repeat(64));
+const open=()=>page.goto('https://captro-site.pages.dev/support-creator/?fixture='+ ++navigation +'#handoff='+'a'.repeat(64));
 try {
  await open();await page.getByRole('heading',{name:'Support Fixture Creator'}).waitFor();
  assert.equal(new URL(page.url()).hash,'','bearer removed from address bar');
@@ -61,17 +61,17 @@ try {
  fail=false;await page.getByRole('button',{name:'Try again'}).click();await page.getByRole('heading',{name:'Support Fixture Creator'}).waitFor();
  await page.keyboard.press('Tab');assert.ok(await page.evaluate(()=>document.activeElement?.tagName!=='BODY'));
  console.log('PASS failed request retry and keyboard focus');
- await page.goto('https://flames-up.com/support-creator/?fixture=custom#handoff='+'a'.repeat(64)+'&amount=1234');
+ await page.goto('https://captro-site.pages.dev/support-creator/?fixture=custom#handoff='+'a'.repeat(64)+'&amount=1234');
  await page.getByRole('heading',{name:'Support Fixture Creator'}).waitFor();
  assert.equal(await page.getByLabel('Other amount (USD)').inputValue(),'12.34');
  assert.equal(await page.locator('#checkout').isDisabled(),false);
  console.log('PASS native custom amount preserved across browser handoff');
- await page.goto('https://flames-up.com/support-creator/return?purchase_id=22345678-1234-4234-8234-123456789012');
+ await page.goto('https://captro-site.pages.dev/support-creator/return?purchase_id=22345678-1234-4234-8234-123456789012');
  await page.getByText('This browser no longer has the matching checkout context. Return to Captro to check this payment.',{exact:true}).waitFor();
  assert.equal(await page.getByText(/Support confirmed/).count(),0);
  assert.equal(await page.locator('#support-form').isVisible(),false);
  console.log('PASS older checkout return cannot display another payment receipt');
- paid=false;await page.goto('https://flames-up.com/support-creator/return?purchase_id='+id+'&cancelled=1');
+ paid=false;await page.goto('https://captro-site.pages.dev/support-creator/return?purchase_id='+id+'&cancelled=1');
  await page.getByText('Checkout closed. No payment is confirmed yet.',{exact:true}).waitFor();
  assert.equal(await page.locator('#support-form').isVisible(),false);
  assert.equal(checkoutCalls,1);

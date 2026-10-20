@@ -20,7 +20,7 @@ enum CaptroSupportPolicy {
   }
   static func handoffURL(_ raw: String, amount: Int) -> URL? {
     guard (200...20_000).contains(amount), var parts = URLComponents(string: raw),
-      parts.scheme == "https", parts.host == "flames-up.com", parts.port == nil,
+parts.scheme == "https", parts.host == "captro-site.pages.dev", parts.port == nil,
       parts.user == nil, parts.password == nil, parts.path == "/support-creator/", parts.query == nil,
       let fragment = parts.fragment, fragment.hasPrefix("handoff="),
       fragment.dropFirst(8).count == 64,
@@ -29,7 +29,7 @@ enum CaptroSupportPolicy {
     return parts.url
   }
   static func returnPurchase(_ url: URL) -> String? {
-    guard url.scheme == "https", url.host == "flames-up.com", url.port == nil,
+guard url.scheme == "https", url.host == "captro-site.pages.dev", url.port == nil,
       url.user == nil, url.password == nil, url.path == "/support-creator/return",
       let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
     let ids = (parts.queryItems ?? []).filter { $0.name == "purchase_id" }
@@ -91,13 +91,15 @@ struct CaptroSupportAction: View {
   }
 }
 
-private struct CaptroSupportSheet: View {
+struct CaptroSupportSheet: View {
   let creatorID: String
   let name: String
   let username: String
   let avatar: String?
   let api: MIRAAPIClient
   let originPostID: String?
+  var currentStorefront: () async -> String? = { (await Storefront.current)?.countryCode }
+  var openBrowser: (URL) async -> Bool = { await UIApplication.shared.open($0) }
   @EnvironmentObject private var returns: CaptroSupportReturnStore
   @Environment(\.captroSupportViewerID) private var viewerID
   @Environment(\.dismiss) private var dismiss
@@ -137,12 +139,14 @@ private struct CaptroSupportSheet: View {
                 .buttonStyle(.bordered)
                 .tint(selected == value ? .primary : .secondary)
                 .accessibilityAddTraits(selected == value ? [.isSelected] : [])
+                .accessibilityIdentifier("support.amount.\(value)")
               }
             }
             Button("Other amount") { usesCustom = true }.buttonStyle(.bordered).frame(minHeight: 44)
             if usesCustom {
               TextField("2.00–200.00 USD", text: $custom).keyboardType(.decimalPad)
                 .textFieldStyle(.roundedBorder).accessibilityLabel("Custom support amount in US dollars")
+                .accessibilityIdentifier("support.custom")
             }
           }.disabled(busy || handoffID != nil)
           Text("Captro takes 0%. Payment-processing fees apply.").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -151,6 +155,7 @@ private struct CaptroSupportSheet: View {
             Group { if busy { ProgressView() } else { Text(handoffID == nil ? "Continue to secure checkout" : "Return to checkout") } }
               .frame(maxWidth: .infinity, minHeight: 44)
           }.buttonStyle(.borderedProminent).tint(.primary).disabled(selected == nil || busy || terminal)
+            .accessibilityIdentifier("support.checkout")
           Label("Opens in your browser", systemImage: "arrow.up.right.square").font(.footnote).foregroundStyle(.secondary)
           if handoffID != nil {
             Button("Check payment status") { Task { await checkStatus() } }.frame(minHeight: 44).disabled(busy)
@@ -166,7 +171,7 @@ private struct CaptroSupportSheet: View {
   private func continueInBrowser() async {
     guard !busy, let selected else { return }
     busy = true; notice = nil; defer { busy = false }
-    guard CaptroSupportPolicy.permits(storefront: (await Storefront.current)?.countryCode), !Task.isCancelled else {
+    guard CaptroSupportPolicy.permits(storefront: await currentStorefront()), !Task.isCancelled else {
       notice = "External support is not available for this App Store storefront."; return
     }
     do {
@@ -175,7 +180,7 @@ private struct CaptroSupportSheet: View {
       guard let viewerID else { throw MIRAAPIError.badURL }
       returns.remember(handoffID: handoff.id, buyerID: viewerID, creatorID: creatorID, postID: originPostID)
       // System browser, never PaymentSheet or an embedded web view.
-      guard await UIApplication.shared.open(url) else { throw MIRAAPIError.badURL }
+      guard await openBrowser(url) else { throw MIRAAPIError.badURL }
       handoffID = handoff.id
       notice = "Continue in your browser. Payment is not confirmed yet."
     } catch { notice = "Could not open secure checkout. Please try again." }

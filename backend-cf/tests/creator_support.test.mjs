@@ -18,7 +18,7 @@ test('USD integers, bounded amount, no fee/tax/transfer overrides, canonical ret
   const params=supportCheckoutParameters(base);
   assert.equal(params['line_items[0][price_data][unit_amount]'],500);
   assert.equal(params['payment_intent_data[transfer_group]'],'captro_purchase_'+id.replaceAll('-',''));
-  assert.ok(params.success_url.startsWith('https://flames-up.com/support-creator/return?purchase_id='));
+  assert.ok(params.success_url.startsWith('https://captro-site.pages.dev/support-creator/return?purchase_id='));
   assert.ok(!Object.keys(params).some(k=>/application_fee|transfer_data|line_items\[1\]|automatic_tax/.test(k)));
   for(const patch of [{platform_fee_amount:1},{stripe_mode:'live'},{creator_id:'buyer-auth'},{total_amount:500.5}]) assert.throws(()=>supportCheckoutParameters({...base,...patch}));
 });
@@ -47,7 +47,7 @@ function fixture() {
  const auth=async(c,next)=>{const user=c.req.header('Authorization');if(!user)return c.json({code:'INVALID_TOKEN'},401);c.set('viewer',user);await next();};
  registerCreatorSupportRoutes(app,auth,services);
  const env={CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'test',JWT_SECRET:'s'.repeat(48)};
- const send=(path,body,headers={})=>app.request(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Origin:'https://flames-up.com',...headers},...(body?{body:JSON.stringify(body)}:{})},env);
+ const send=(path,body,headers={})=>app.request(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Origin:'https://captro-site.pages.dev',...headers},...(body?{body:JSON.stringify(body)}:{})},env);
  return {send,get row(){return row;},get h(){return h;},set blocked(v){blocked=v;},set revoked(v){revoked=v;},set paid(v){paid=v;},set providerFailure(v){providerFailure=v;}};
 }
 async function handoff(f) {

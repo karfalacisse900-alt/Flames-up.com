@@ -46,7 +46,7 @@ async function request(path, data = {}) {
 function showReturn(id) {
   if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/i.test(id)) return;
   if (config.universalLinksVerified === true) {
-    $('app-return').href = 'https://flames-up.com/support-creator/return?purchase_id=' + encodeURIComponent(id);
+$('app-return').href = 'https://captro-site.pages.dev/support-creator/return?purchase_id=' + encodeURIComponent(id);
     $('app-return').hidden = false;
   } else $('manual-return').hidden = false;
 }
