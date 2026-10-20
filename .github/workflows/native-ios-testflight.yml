@@ -204,10 +204,14 @@ jobs:
 
           echo -n "$IOS_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > "$CERT_PATH"
           echo -n "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
-          # Same bundle and certificate, with the narrowly scoped app-return
-          # capability. This read never creates/revokes profiles or certificates.
-          node scripts/app-store/support-link-signing.mjs --download "$PROFILE_PATH"
-          IOS_PROVISIONING_PROFILE_NAME="Captro_App_Store_Support_Return_v1"
+          # If the source requests the capability, require the verified matching
+          # profile. Otherwise retain the existing profile; never silently strip
+          # a requested entitlement or recreate a signing certificate.
+          if /usr/libexec/PlistBuddy -c 'Print com.apple.developer.associated-domains' \
+            "$IOS_NATIVE_DIR/AppTarget/Captro.entitlements" >/dev/null 2>&1; then
+            node scripts/app-store/support-link-signing.mjs --download "$PROFILE_PATH"
+            IOS_PROVISIONING_PROFILE_NAME="Captro_App_Store_Support_Return_v1"
+          fi
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -303,8 +307,13 @@ jobs:
               info = plistlib.load(source)
           with open(os.path.join(runner_temp, "captro-release-entitlements.plist"), "rb") as source:
               entitlements = plistlib.load(source)
-          if entitlements.get("com.apple.developer.associated-domains") != ["applinks:captro-site.pages.dev"]:
-              raise SystemExit("Signed app must contain only the reviewed Support return association.")
+          with open(os.path.join(os.environ["IOS_NATIVE_DIR"], "AppTarget", "Captro.entitlements"), "rb") as source:
+              requested_entitlements = plistlib.load(source)
+          requested_domains = requested_entitlements.get("com.apple.developer.associated-domains", [])
+          if requested_domains not in ([], ["applinks:captro-site.pages.dev"]):
+              raise SystemExit("Unreviewed associated domain in source.")
+          if entitlements.get("com.apple.developer.associated-domains", []) != requested_domains:
+              raise SystemExit("Signed app return association differs from reviewed source.")
 
           expected_bundle = "com.captro.app"
           expected_google_ios = "702354172189-9gg83vd92n3s217n5pb4ddqqsnme8ocb.apps.googleusercontent.com"
