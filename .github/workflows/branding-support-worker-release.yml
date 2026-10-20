@@ -56,7 +56,7 @@ jobs:
           node --input-type=module <<'JS'
           for(const path of ['session','checkout','status']) {
             const r=await fetch('https://api.flames-up.com/api/creator-support/web/'+path, {
-method:'POST',headers:{'Content-Type':'application/json',Origin:'https://captro-site.pages.dev'},body:'{}',signal:AbortSignal.timeout(20000)
+              method:'POST',headers:{'Content-Type':'application/json',Origin:'https://captro-site.pages.dev'},body:'{}',signal:AbortSignal.timeout(20000)
             });
             const b=await r.json();
             if(r.status!==503||b.code!=='CAPTRO_SUPPORT_UNAVAILABLE')throw Error('Support must remain disabled: '+path);
