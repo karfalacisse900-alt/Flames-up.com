@@ -2,6 +2,10 @@ name: Stripe Sandbox Integration
 on:
   workflow_dispatch:
     inputs:
+      support_contract_only:
+        type: boolean
+        default: false
+        description: Verify support migration and real sandbox Checkout creation/expiry; no charge, refund, transfer or new account
       release_checks:
         type: boolean
         default: false
@@ -46,6 +50,8 @@ jobs:
         run: |
           supabase db dump --project-ref "$SUPABASE_PROJECT_REF" --schema public,private --file "$RUNNER_TEMP/captro-schema.sql"
       - name: Start an ephemeral local database, never a linked project
+        env:
+          CAPTRO_SUPPORT_CONTRACT: ${{ inputs.support_contract_only }}
         run: |
           mkdir "$RUNNER_TEMP/captro-sandbox"
           supabase init --workdir "$RUNNER_TEMP/captro-sandbox"
@@ -65,8 +71,18 @@ jobs:
           STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
         run: node scripts/stripe-sandbox-bootstrap.mjs
       - name: Install pinned Stripe webhook forwarding CLI
+        if: ${{ !inputs.support_contract_only }}
         run: npm install --global @stripe/cli@1.50.10
+      - name: Verify Support against real sandbox Checkout and isolated PostgreSQL
+        if: ${{ inputs.support_contract_only }}
+        working-directory: backend-cf
+        env:
+          STRIPE_MODE: ${{ vars.STRIPE_MODE }}
+          STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+        run: node scripts/creator-support-stripe-contract.mjs
       - name: Exercise payment, entitlement, earnings and payout against the real sandbox
+        if: ${{ !inputs.support_contract_only }}
         working-directory: backend-cf
         env:
           STRIPE_MODE: ${{ vars.STRIPE_MODE }}

@@ -32,6 +32,10 @@ const pending = [
 const pendingMigrations = await Promise.all(
   pending.map(([, path]) => readFile(new URL(path, import.meta.url), 'utf8'))
 );
+if (process.env.CAPTRO_SUPPORT_CONTRACT === 'true') {
+  assert.ok(!relationExists('app_creator_support_handoffs'), 'Review the support schema baseline before applying it twice');
+  pendingMigrations.push(await readFile(new URL('../../supabase/migrations/20261019234129_creator_support_test_contract.sql', import.meta.url), 'utf8'));
+}
 // Historical migrations omit the original baseline. Use the actual deployed DDL,
 // without rows, and apply the pending migrations to that empty isolated database.
 await writeFile(join(directory, files[0]), `${schema}\n${pendingMigrations.join('\n')}`);

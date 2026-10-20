@@ -6,6 +6,10 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      branding_support_code_only:
+        description: Deploy default-off Support code only, without migrations, payment settings or secret changes
+        type: boolean
+        default: false
       profile_release:
         description: Release only scoped profile routes against the verified deployed Worker baseline
         type: boolean
@@ -48,6 +52,12 @@ on:
         default: false
 
 jobs:
+  branding-support:
+    if: ${{ inputs.branding_support_code_only == true }}
+    uses: ./.github/workflows/branding-support-worker-release.yml
+    with:
+      deploy: ${{ inputs.reliability_dry_run == false }}
+    secrets: inherit
   scoped-profile:
     if: ${{ inputs.profile_release == true }}
     uses: ./.github/workflows/profile-worker-release.yml
@@ -93,7 +103,7 @@ jobs:
       worker_only: ${{ inputs.worker_only == true }}
     secrets: inherit
   deploy:
-    if: ${{ inputs.profile_release != true && inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
+    if: ${{ inputs.branding_support_code_only != true && inputs.profile_release != true && inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
