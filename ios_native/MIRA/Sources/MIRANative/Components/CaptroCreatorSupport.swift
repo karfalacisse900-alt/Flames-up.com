@@ -3,10 +3,20 @@ import StoreKit
 import UIKit
 
 private struct CaptroSupportViewerKey: EnvironmentKey { static let defaultValue: String? = nil }
+struct CaptroSupportRuntime {
+  var enabled = CaptroSupportPolicy.enabled
+  var currentStorefront: () async -> String? = { (await Storefront.current)?.countryCode }
+  var openBrowser: (URL) async -> Bool = { await UIApplication.shared.open($0) }
+}
+private struct CaptroSupportRuntimeKey: EnvironmentKey { static let defaultValue = CaptroSupportRuntime() }
 extension EnvironmentValues {
   var captroSupportViewerID: String? {
     get { self[CaptroSupportViewerKey.self] }
     set { self[CaptroSupportViewerKey.self] = newValue }
+  }
+  var captroSupportRuntime: CaptroSupportRuntime {
+    get { self[CaptroSupportRuntimeKey.self] }
+    set { self[CaptroSupportRuntimeKey.self] = newValue }
   }
 }
 enum CaptroSupportPolicy {
@@ -14,6 +24,10 @@ enum CaptroSupportPolicy {
   // domains and physical browser-return acceptance are independent release gates.
   static var enabled: Bool { Bundle.main.object(forInfoDictionaryKey: "CaptroCreatorSupportEnabled") as? Bool == true }
   static func permits(storefront: String?) -> Bool { storefront == "USA" }
+  static func recipientName(_ preferred: String?, fallback: String) -> String {
+    let clean = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return clean.isEmpty ? fallback : clean
+  }
   static func amount(_ text: String, locale: Locale = .current) -> Int? {
     guard let value = CaptroMoney.parse(text, currency: "USD", locale: locale), (200...20_000).contains(value) else { return nil }
     return value
@@ -48,13 +62,19 @@ struct CaptroSupportAction: View {
   let api: MIRAAPIClient
   var originPostID: String? = nil
   @Environment(\.captroSupportViewerID) private var viewerID
+  @Environment(\.captroSupportRuntime) private var runtime
   @State private var eligible = false
+  @State private var failed = false
+  @State private var retry = 0
   @State private var presented = false
+  private var identity: String { "\(viewerID ?? "guest"):\(creatorID)" }
   private struct Eligibility: Decodable { let enabled: Bool }
   var body: some View {
     Group {
-      if eligible {
-        Button("Support") { presented = true }
+      if eligible || failed {
+        Button(failed ? "Retry Support" : "Support") {
+          if failed { retry += 1 } else { presented = true }
+        }
           .font(.subheadline.weight(.semibold))
           .frame(minWidth: 64, minHeight: 44)
           .padding(.horizontal, 8)
@@ -63,31 +83,41 @@ struct CaptroSupportAction: View {
           .clipShape(RoundedRectangle(cornerRadius: 8))
           .overlay(RoundedRectangle(cornerRadius: 8).stroke(MIRATheme.Color.hairline))
           .accessibilityIdentifier("creator.support")
+          .accessibilityHint(failed ? "Availability could not be checked. Tries again without starting a payment." : "Opens one-time support options")
       }
     }
-    .task(id: "\(viewerID ?? "guest"):\(creatorID)") {
-      eligible = false; presented = false
-      guard CaptroSupportPolicy.enabled, let viewerID, viewerID != creatorID else { return }
-      await refreshEligibility()
+    .task(id: "\(identity):\(retry)") {
+      let expected = identity
+      eligible = false; failed = false; presented = false
+      guard runtime.enabled, let viewerID, viewerID != creatorID else { return }
+      await refreshEligibility(expected: expected)
       for await _ in Storefront.updates {
         guard !Task.isCancelled else { return }
-        await refreshEligibility()
+        await refreshEligibility(expected: expected)
       }
     }
     .sheet(isPresented: $presented) {
-      CaptroSupportSheet(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api, originPostID: originPostID)
+      CaptroSupportSheet(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api, originPostID: originPostID,
+        currentStorefront: runtime.currentStorefront, openBrowser: runtime.openBrowser)
+        .id(identity)
         .presentationDetents([.large]).presentationDragIndicator(.visible)
     }
   }
-  private func refreshEligibility() async {
-    guard CaptroSupportPolicy.permits(storefront: (await Storefront.current)?.countryCode) else {
-      eligible = false; presented = false; return
+  private func refreshEligibility(expected: String) async {
+    let storefront = await runtime.currentStorefront()
+    guard !Task.isCancelled, expected == identity else { return }
+    guard CaptroSupportPolicy.permits(storefront: storefront) else {
+      eligible = false; failed = false; presented = false; return
     }
     do {
       let result: Eligibility = try await api.get("/creator-support/eligibility/\(creatorID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")")
-      guard !Task.isCancelled else { return }; eligible = result.enabled
+      guard !Task.isCancelled, expected == identity else { return }
+      failed = false; eligible = result.enabled
       if !eligible { presented = false }
-    } catch { eligible = false; presented = false }
+    } catch {
+      guard !Task.isCancelled, expected == identity else { return }
+      eligible = false; failed = true; presented = false
+    }
   }
 }
 
@@ -136,17 +166,22 @@ struct CaptroSupportSheet: View {
                 Button { usesCustom = false; amount = value } label: {
                   Text(CaptroMoney.format(minorUnits: value, currency: "USD")).frame(maxWidth: .infinity, minHeight: 44)
                 }
-                .buttonStyle(.bordered)
-                .tint(selected == value ? .primary : .secondary)
+                .buttonStyle(CaptroSupportOptionStyle(selected: selected == value))
                 .accessibilityAddTraits(selected == value ? [.isSelected] : [])
                 .accessibilityIdentifier("support.amount.\(value)")
               }
             }
-            Button("Other amount") { usesCustom = true }.buttonStyle(.bordered).frame(minHeight: 44)
+            Button { usesCustom = true } label: { Text("Other amount").frame(maxWidth: .infinity, minHeight: 44) }
+              .buttonStyle(CaptroSupportOptionStyle(selected: usesCustom))
+              .accessibilityAddTraits(usesCustom ? [.isSelected] : [])
             if usesCustom {
               TextField("2.00–200.00 USD", text: $custom).keyboardType(.decimalPad)
                 .textFieldStyle(.roundedBorder).accessibilityLabel("Custom support amount in US dollars")
                 .accessibilityIdentifier("support.custom")
+              if !custom.isEmpty && selected == nil {
+                Text("Enter $2–$200 with no more than two decimal places.")
+                  .font(.footnote).foregroundStyle(.secondary)
+              }
             }
           }.disabled(busy || handoffID != nil)
           Text("Captro takes 0%. Payment-processing fees apply.").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -154,7 +189,7 @@ struct CaptroSupportSheet: View {
           Button { operationTask = Task { await continueInBrowser() } } label: {
             Group { if busy { ProgressView() } else { Text(handoffID == nil ? "Continue to secure checkout" : "Return to checkout") } }
               .frame(maxWidth: .infinity, minHeight: 44)
-          }.buttonStyle(.borderedProminent).tint(.primary).disabled(selected == nil || busy || terminal)
+          }.buttonStyle(CaptroSupportCheckoutStyle()).disabled(selected == nil || busy || terminal)
             .accessibilityIdentifier("support.checkout")
           Label("Opens in your browser", systemImage: "arrow.up.right.square").font(.footnote).foregroundStyle(.secondary)
           if handoffID != nil {
@@ -162,7 +197,10 @@ struct CaptroSupportSheet: View {
           }
         }.padding(24)
       }
-      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
+      .background(Color(uiColor: .systemBackground))
+      .toolbar { ToolbarItem(placement: .topBarTrailing) {
+        Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }.accessibilityLabel("Close")
+      } }
     }
     .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await checkStatus() } } }
     .onReceive(NotificationCenter.default.publisher(for: .captroSupportReturned)) { _ in Task { await checkStatus() } }
@@ -202,5 +240,26 @@ struct CaptroSupportSheet: View {
       default: notice = "Confirming payment. Please check again shortly."
       }
     } catch { notice = "Could not check payment status. Please retry before starting another payment." }
+  }
+}
+
+private struct CaptroSupportOptionStyle: ButtonStyle {
+  let selected: Bool
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label.font(.subheadline.weight(.semibold))
+      .foregroundStyle(Color.primary)
+      .background(selected ? Color.primary.opacity(0.06) : Color(uiColor: .systemBackground))
+      .clipShape(RoundedRectangle(cornerRadius: 8))
+      .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Color.primary : Color.secondary.opacity(0.3), lineWidth: selected ? 1.5 : 1))
+      .opacity(configuration.isPressed ? 0.7 : 1)
+  }
+}
+private struct CaptroSupportCheckoutStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var enabled
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label.font(.subheadline.weight(.semibold)).padding(.vertical, 4)
+      .foregroundStyle(enabled ? Color(uiColor: .systemBackground) : Color.secondary)
+      .background(enabled ? Color.primary : Color.secondary.opacity(0.16))
+      .clipShape(RoundedRectangle(cornerRadius: 8)).opacity(configuration.isPressed ? 0.7 : 1)
   }
 }

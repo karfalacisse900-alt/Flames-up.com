@@ -1,6 +1,47 @@
 import XCTest
 
 final class CreatorSupportTests: XCTestCase {
+  private func launchSurface(_ flags: [String]) -> XCUIApplication {
+    let app = XCUIApplication(); app.launchArguments = ["--captro-support-review"] + flags; app.launch()
+    XCTAssertTrue(app.staticTexts["Fixture Creator"].firstMatch.waitForExistence(timeout: 15)
+      || app.buttons["creator.support"].waitForExistence(timeout: 5))
+    return app
+  }
+  func testActualProfileSupportButtonOpensCorrectRecipientAndDismissesInPlace() {
+    let app = launchSurface(["--support-profile"])
+    let button = app.buttons["creator.support"]; XCTAssertTrue(button.waitForExistence(timeout: 10))
+    let before = button.frame
+    button.tap()
+    XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["support.checkout"].isEnabled)
+    let image = XCTAttachment(screenshot: app.screenshot()); image.name = "profile-support-sheet-fixture"; image.lifetime = .keepAlways; add(image)
+    app.buttons["Close"].tap()
+    XCTAssertTrue(button.waitForExistence(timeout: 5)); XCTAssertEqual(button.frame.minY, before.minY, accuracy: 2)
+    XCTAssertTrue(app.buttons["profile.follow"].exists)
+  }
+  func testActualDetailsSupportButtonOpensCorrectRecipient() {
+    let app = launchSurface(["--support-details"])
+    let button = app.buttons["creator.support"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); reach(button, app: app)
+    button.tap(); XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
+    app.buttons["support.amount.500"].tap()
+    XCTAssertTrue(app.buttons["support.checkout"].isEnabled)
+    app.buttons["Close"].tap(); XCTAssertTrue(button.waitForExistence(timeout: 5))
+  }
+  func testAvailabilityFailureOffersRetryWithoutOpeningPayment() {
+    let app = launchSurface(["--support-profile", "--support-eligibility-error"])
+    let retry = app.buttons["Retry Support"]; XCTAssertTrue(retry.waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["support.checkout"].exists)
+    retry.tap()
+    let button = app.buttons["Support"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()
+    XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
+  }
+  func testUnsupportedGuestSelfAndIneligibleProfilesNeverOfferCheckout() {
+    for flag in ["--support-non-us", "--support-guest", "--support-self", "--support-ineligible"] {
+      let app = launchSurface(["--support-profile", flag])
+      XCTAssertFalse(app.buttons["creator.support"].waitForExistence(timeout: 2), flag)
+      XCTAssertFalse(app.buttons["support.checkout"].exists, flag); app.terminate()
+    }
+  }
   private func launch(_ flags: [String] = []) -> XCUIApplication {
     let app = XCUIApplication(); app.launchArguments = ["--captro-support-review"] + flags; app.launch()
     XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 15)); return app

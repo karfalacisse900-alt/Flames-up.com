@@ -1510,7 +1510,7 @@ public struct UserProfileNativeView: View {
           .buttonStyle(CaptroProfileActionStyle())
           .disabled(isOpeningMessage || model.user == nil)
           if let user = model.user {
-            CaptroSupportAction(creatorID: model.userId, name: user.displayName,
+            CaptroSupportAction(creatorID: model.userId, name: CaptroSupportPolicy.recipientName(user.fullName, fallback: user.displayName),
               username: user.username ?? "", avatar: user.profileImage, api: model.api)
           }
         }

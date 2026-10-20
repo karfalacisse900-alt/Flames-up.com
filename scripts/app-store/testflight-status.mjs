@@ -30,7 +30,7 @@ for (const build of builds.data ?? []) {
 const bundleIDs = await get('bundleIds?' + new URLSearchParams({'filter[identifier]':'com.captro.app',limit:'2'}));
 if (bundleIDs.data?.length !== 1) throw Error('Expected one exact Captro bundle registration');
 const bundle = bundleIDs.data[0];
-const capabilities = await get(`bundleIds/${bundle.id}/bundleIdCapabilities?limit=200`);
+const capabilities = await get(`bundleIds/${bundle.id}/bundleIdCapabilities`);
 const profiles = await get(`bundleIds/${bundle.id}/profiles?limit=200`);
 console.log(JSON.stringify({signingAudit:{bundle:'com.captro.app',
   associatedDomainsRegistered:capabilities.data?.some(c=>c.attributes.capabilityType==='ASSOCIATED_DOMAINS'),

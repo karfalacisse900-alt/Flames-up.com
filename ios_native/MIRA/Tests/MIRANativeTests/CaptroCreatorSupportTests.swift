@@ -2,6 +2,11 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCreatorSupportTests: XCTestCase {
+  func testRecipientUsesDisplayNameAndNeverShowsBlankIdentity() {
+    XCTAssertEqual(CaptroSupportPolicy.recipientName("  Fixture Creator  ", fallback: "@fixture"), "Fixture Creator")
+    XCTAssertEqual(CaptroSupportPolicy.recipientName(" \n ", fallback: "@fixture"), "@fixture")
+    XCTAssertEqual(CaptroSupportPolicy.recipientName(nil, fallback: "@fixture"), "@fixture")
+  }
   @MainActor func testReturnOriginSurvivesRestartButNeverCrossesAccountsOrExpiry() {
     let defaults = UserDefaults(suiteName: "support-return-\(UUID().uuidString)")!
     let now = Date(timeIntervalSince1970: 1_800_000_000)

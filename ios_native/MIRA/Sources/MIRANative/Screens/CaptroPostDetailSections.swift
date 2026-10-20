@@ -21,7 +21,7 @@ struct CaptroPostDetailSections: View {
         CaptroDetailCreatorRow(post: post, api: model.api)
         Spacer(minLength: 12)
         if let creatorID = post.userId {
-          CaptroSupportAction(creatorID: creatorID, name: post.detailCreatorHandle,
+          CaptroSupportAction(creatorID: creatorID, name: CaptroSupportPolicy.recipientName(post.userFullName, fallback: post.detailCreatorHandle),
             username: post.detailCreatorHandle, avatar: post.userProfileImage, api: model.api, originPostID: post.id)
         }
       }.padding(16)
