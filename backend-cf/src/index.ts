@@ -21235,13 +21235,27 @@ registerCreatorEarningsRoutes(api, authMiddleware, {
     const enrolled = enabled ? (await supabaseAdminSelectRows(c,'app_creator_support_enrollments',{
       creator_id:postgrestEqFilter(sellerId),enabled_for_test:'eq.true'},'creator_id',1)).length > 0 : null;
     const identityRequired = sellerIdentityUsesStripeIdentity(c);
-    let identity = identityRequired ? await sellerIdentityRow(c,sellerId) : null;
-    if (identity?.provider_session_id) identity = await syncSellerIdentityFromStripe(c,identity);
+    const identity = identityRequired ? await sellerIdentityRow(c,sellerId) : null;
+    let identityStatus = identity?.status || null;
+    if (identity?.provider_session_id) {
+      // Read diagnostics stay read-only. Checkout performs the existing durable
+      // identity synchronization; this endpoint only explains its current state.
+      const sessionId = cleanText(identity.provider_session_id,180);
+      if (!sessionId.startsWith('vs_')) throw new Error('STRIPE_IDENTITY_READ_FAILED');
+      const response = await stripeApiGet(c,`/identity/verification_sessions/${encodeURIComponent(sessionId)}`);
+      if (!response.ok) throw stripeProviderError(response,'STRIPE_IDENTITY_READ_FAILED');
+      const session = response.data;
+      if (session?.id !== sessionId || session?.livemode !== getStripeConfig(c).liveMode
+          || session?.metadata?.captro_auth_user_id !== identity.user_id
+          || session?.metadata?.captro_connected_account_id !== identity.connected_account_id
+          || session?.metadata?.captro_mode !== identity.stripe_mode) throw new Error('STRIPE_IDENTITY_OWNER_MISMATCH');
+      identityStatus = ['requires_input','processing','verified','canceled'].includes(session.status) ? session.status : 'processing';
+    }
     return supportReadiness({mode:configuredStripeMode(c),enabled,account,providerVerified,enrolled,
       // The existing Support SQL contract requires manual scheduling even if
       // another commerce flow relaxes the configurable seller gate.
       manualRequired:true,identityRequired,
-      identityVerified:identity?.status === 'verified' && identity?.connected_account_id === account?.id});
+      identityVerified:identityStatus === 'verified' && identity?.connected_account_id === account?.id});
   },
 });
 
