@@ -2,6 +2,10 @@ name: Validate Native Payments
 on:
   workflow_dispatch:
     inputs:
+      earnings_only:
+        description: Focused earnings build/tests and GET-only sandbox account diagnostics; no deployment or payment
+        type: boolean
+        default: false
       additional_review:
         description: Isolated native review regressions; no production credentials or distribution
         type: boolean
@@ -20,11 +24,53 @@ on:
 permissions:
   contents: read
 jobs:
+  earnings:
+    if: ${{ inputs.earnings_only }}
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Compile the real app and run only Support model contracts
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath "$RUNNER_TEMP/EarningsBuild" -resultBundlePath "$RUNNER_TEMP/Earnings.xcresult" \
+            -only-testing:CaptroStampTests/CaptroCreatorSupportTests \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/earnings-build.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: support-earnings-native-check
+          path: |
+            ${{ runner.temp }}/earnings-build.log
+            ${{ runner.temp }}/Earnings.xcresult
+  earnings-diagnostics:
+    if: ${{ inputs.earnings_only }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: captro-payments-test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Read-only existing sandbox account requirements
+        working-directory: backend-cf
+        env:
+          STRIPE_MODE: ${{ vars.STRIPE_MODE }}
+          STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+        run: node --experimental-strip-types scripts/support-readiness-inspect.mjs
   additional-review:
-    if: ${{ inputs.additional_review }}
+    if: ${{ inputs.additional_review && !inputs.earnings_only }}
     uses: ./.github/workflows/additional-review-validation.yml
   validate:
-    if: ${{ !inputs.additional_review }}
+    if: ${{ !inputs.additional_review && !inputs.earnings_only }}
     runs-on: macos-26
     timeout-minutes: 45
     steps:

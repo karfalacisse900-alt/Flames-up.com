@@ -2,6 +2,33 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroCreatorSupportTests: XCTestCase {
+  func testCreatorPoolsDecodeUnknownFeesWithoutInventingAvailableMoney() throws {
+    let data = Data(#"{"mode":"test","payoutScope":"creator_currency_all_categories_fifo","pools":[{"category":"creator_support","currency":"USD","transactions":1,"grossReceived":500,"refunded":0,"captroFee":0,"processingFees":null,"creatorNet":null,"pending":500,"available":0,"paidOut":0,"held":0}]}"#.utf8)
+    let response = try JSONDecoder().decode(CaptroEarningsPoolsResponse.self, from: data)
+    let pool = try XCTUnwrap(response.pools.first)
+    XCTAssertEqual(pool.title, "Support")
+    XCTAssertEqual(pool.id, "creator_support:USD")
+    XCTAssertNil(pool.processingFees)
+    XCTAssertNil(pool.creatorNet)
+    XCTAssertEqual(pool.available, 0)
+    XCTAssertEqual(pool.money(nil), "Awaiting Stripe fees")
+  }
+
+  func testCategoryPayoutAttributionIsNotAnotherPayoutOrFee() throws {
+    let data = Data(#"{"category":"creator_support","currency":"USD","section":"payouts","items":[{"id":"payout-1","status":"paid","attributedAmount":441,"payoutAmount":1381,"payoutFee":0,"currency":"USD"}],"nextOffset":null}"#.utf8)
+    let page = try JSONDecoder().decode(CaptroEarningsPoolPage<CaptroPoolPayout>.self, from: data)
+    XCTAssertEqual(page.items.first?.attributedAmount, 441)
+    XCTAssertEqual(page.items.first?.payoutAmount, 1381)
+    XCTAssertEqual(page.items.first?.payoutFee, 0)
+    XCTAssertNil(page.nextOffset)
+  }
+
+  func testReadinessKeepsCaptroFlagsDistinctFromStripeRequirements() throws {
+    let data = Data(#"{"status":"blocked","retryable":false,"blockers":[{"source":"captro","code":"rollout_disabled","message":"Test only"},{"source":"stripe","code":"transfers_inactive","message":"Transfers inactive"}]}"#.utf8)
+    let readiness = try JSONDecoder().decode(CaptroSupportReadiness.self, from: data)
+    XCTAssertEqual(readiness.blockers.map(\.sourceLabel), ["Captro", "Stripe"])
+    XCTAssertNotEqual(readiness.blockers[0].id, readiness.blockers[1].id)
+  }
   func testRecipientUsesDisplayNameAndNeverShowsBlankIdentity() {
     XCTAssertEqual(CaptroSupportPolicy.recipientName("  Fixture Creator  ", fallback: "@fixture"), "Fixture Creator")
     XCTAssertEqual(CaptroSupportPolicy.recipientName(" \n ", fallback: "@fixture"), "@fixture")

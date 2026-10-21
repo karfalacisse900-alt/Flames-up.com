@@ -10,6 +10,8 @@ import { reconcileHostedHold } from './hosted-hold';
 import { runPurchaseReconciliation, requireReplayableProviderCreation, type ReconciliationOutcome } from './purchase-reconciliation';
 import { resolvePaymentRecovery } from './payment-recovery';
 import { registerCreatorSupportRoutes, supportTestEnabled, supportCheckoutParameters, SupportError } from './creator-support';
+import { registerCreatorEarningsRoutes, EarningsError } from './creator-earnings';
+import { supportReadiness } from './support-readiness';
 import { validateMediaWritingOverlays } from './media-writing';
 import { validatePostMediaFraming } from './post-media-framing';
 import { normalizeCreationIntent, normalizeCreationTime, compositionCharacterCount, compositionHeadline, compositionBody, newMediaStampWritingError } from './creation-intent';
@@ -10312,13 +10314,14 @@ function creatorEarningPayload(row: any, purchase?: any, buyer?: any, finance?: 
     contentType: cleanText(row?.content_type, 40),
     title: cleanText(purchase?.item_title, 180) || 'Captro sale',
     priceLabel: cleanText(purchase?.price_label, 80) || null,
-    buyerHandle: cleanText(buyer?.username, 80) || null,
+    buyerHandle: row?.content_type === 'creator_support' ? null : cleanText(buyer?.username, 80) || null,
     financeStatus: finance ? (Number(finance.pending)>0 ? 'pending' : Number(finance.available)>0 ? 'available' : Number(finance.paid_out)>0 ? 'paid_out' : 'pending') : null,
     currency: cleanText(row?.currency || 'USD', 3).toUpperCase(),
     itemAmount: Math.max(0, Number(row?.item_amount || 0)),
     creatorAmount: Math.max(0, Number(row?.creator_amount || 0)),
     platformFee: Math.max(0, Number(row?.platform_fee || 0)),
     processingAmount: Math.max(0, Number(row?.processing_amount || 0)),
+    actualProcessingFees: row?.processing_cost_known === true ? Math.max(0, Number(row.processing_amount || 0)) : null,
     taxAmount: Math.max(0, Number(row?.tax_amount || 0)),
     buyerTotal: Math.max(0, Number(row?.buyer_total || 0)),
     refundedAmount: Math.max(0, Number(row?.refunded_amount || 0)),
@@ -21209,6 +21212,39 @@ api.get('/admin/finance/orders/:orderId',authMiddleware,async(c)=>{
  }catch(error){return c.json({detail:getErrorCode(error)==='FORBIDDEN'?'Finance access required.':'Could not read order ledger.'},getErrorCode(error)==='FORBIDDEN'?403:500);}
 });
 
+// Register before the legacy /:earningId route. Only the authenticated creator's
+// identity can scope these projections; request parameters cannot select a seller.
+registerCreatorEarningsRoutes(api, authMiddleware, {
+  identity: async c => {
+    const sellerId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
+    if (!sellerId) throw new EarningsError('COMMERCE_ACCOUNT_REQUIRED',409);
+    const account = await connectedAccountForUser(c,sellerId,false);
+    return {sellerId,mode:configuredStripeMode(c),currency:cleanText(account?.default_currency || 'USD',3).toUpperCase()};
+  },
+  limit: c => enforceRateLimit(c,'creator_earnings_pools',getUserId(c),90,60),
+  query: supabaseAdminQueryRows,
+  eq: postgrestEqFilter,
+  readiness: async (c,sellerId) => {
+    let account = await connectedAccountForUser(c,sellerId,false);
+    let providerVerified = false;
+    if (account) {
+      try { account = await refreshConnectedAccount(c,account); providerVerified = true; }
+      catch { /* Retain the existing account. A failed provider read is not rejection. */ }
+    }
+    const enabled = supportTestEnabled(c.env);
+    const enrolled = enabled ? (await supabaseAdminSelectRows(c,'app_creator_support_enrollments',{
+      creator_id:postgrestEqFilter(sellerId),enabled_for_test:'eq.true'},'creator_id',1)).length > 0 : null;
+    const identityRequired = sellerIdentityUsesStripeIdentity(c);
+    let identity = identityRequired ? await sellerIdentityRow(c,sellerId) : null;
+    if (identity?.provider_session_id) identity = await syncSellerIdentityFromStripe(c,identity);
+    return supportReadiness({mode:configuredStripeMode(c),enabled,account,providerVerified,enrolled,
+      // The existing Support SQL contract requires manual scheduling even if
+      // another commerce flow relaxes the configurable seller gate.
+      manualRequired:true,identityRequired,
+      identityVerified:identity?.status === 'verified' && identity?.connected_account_id === account?.id});
+  },
+});
+
 api.get('/commerce/earnings', authMiddleware, async (c) => {
   const appUserId = getUserId(c);
   const limited = await enforceRateLimit(c, 'commerce_earnings', appUserId, 120, 60);
@@ -21229,7 +21265,7 @@ api.get('/commerce/earnings', authMiddleware, async (c) => {
     const purchases = purchaseIds.length ? await supabaseAdminQueryRows(c, 'app_purchases', {
       filters: { id: postgrestInFilter(purchaseIds) }, limit: 200,
     }) : [];
-    const buyerIds = Array.from(new Set(purchases.map(row => publicId(row.buyer_app_user_id, 120)).filter(Boolean)));
+    const buyerIds = Array.from(new Set(purchases.filter(row => row.content_type !== 'creator_support').map(row => publicId(row.buyer_app_user_id, 120)).filter(Boolean)));
     const buyers = buyerIds.length ? await supabaseAdminQueryRows(c, 'app_users', {
       filters: { id: postgrestInFilter(buyerIds) }, select: 'id,username', limit: 200,
     }) : [];
@@ -21290,7 +21326,7 @@ api.get('/commerce/earnings/:earningId', authMiddleware, async (c) => {
     const orderFunds=await supabaseAdminQueryRows(c,'app_finance_order_totals',{
       filters:{order_id:postgrestEqFilter(purchase.id),seller_id:postgrestEqFilter(authUserId),stripe_mode:postgrestEqFilter(configuredStripeMode(c))},limit:1,
     });
-    const buyers = purchase?.buyer_app_user_id ? await supabaseAdminSelectRows(c, 'app_users', {
+    const buyers = purchase?.buyer_app_user_id && purchase.content_type !== 'creator_support' ? await supabaseAdminSelectRows(c, 'app_users', {
       id: postgrestEqFilter(purchase.buyer_app_user_id),
     }, 'id,username', 1) : [];
     const refunds = await supabaseAdminQueryRows(c, 'app_refunds', {
@@ -21299,7 +21335,7 @@ api.get('/commerce/earnings/:earningId', authMiddleware, async (c) => {
     c.header('Cache-Control', 'private, no-store');
     return c.json({
       earning: creatorEarningPayload(earning, purchase, buyers[0], orderFunds[0]),
-      purchase: commercePurchasePayload(purchase),
+      purchase: { ...commercePurchasePayload(purchase), ...(purchase.content_type === 'creator_support' ? {receiptPaymentMethod:null} : {}) },
       purchaseReference: `CAP-${String(purchase.id).replace(/-/g, '').slice(0, 8).toUpperCase()}`,
       refunds: refunds.map(row => ({
         id: publicId(row.id, 120),

@@ -444,13 +444,19 @@ private final class CaptroQRScannerController: UIViewController, AVCaptureMetada
 @MainActor
 final class CaptroEarningsModel: ObservableObject {
   @Published var response: CaptroEarningsResponse?
+  @Published var pools: CaptroEarningsPoolsResponse?
+  @Published var poolsError: String?
+  @Published var isLoadingPools = false
+  @Published var supportReadiness: CaptroSupportReadiness?
+  private var isLoadingSupportReadiness = false
   @Published var payoutHistory: CaptroPayoutsResponse?
   @Published var isLoading = false
   @Published var isLoadingPayouts = false
   @Published var errorMessage: String?
   @Published var payoutError: String?
   private let api: MIRAAPIClient
-  private var currentUserId = ""
+  private(set) var currentUserId = ""
+  private var lastPoolsAttemptAt: Date?
   private var lastEarningsAttemptAt: Date?
   private var lastPayoutsAttemptAt: Date?
   private(set) var lastConfirmedAt: Date?
@@ -461,6 +467,12 @@ final class CaptroEarningsModel: ObservableObject {
     guard self.currentUserId != currentUserId else { return }
     self.currentUserId = currentUserId
     response = nil
+    pools = nil
+    poolsError = nil
+    isLoadingPools = false
+    lastPoolsAttemptAt = nil
+    supportReadiness = nil
+    isLoadingSupportReadiness = false
     payoutHistory = nil
     isLoading = false
     isLoadingPayouts = false
@@ -474,6 +486,46 @@ final class CaptroEarningsModel: ObservableObject {
   var isBalanceFresh: Bool {
     guard let lastConfirmedAt else { return false }
     return !isLoading && errorMessage == nil && Date().timeIntervalSince(lastConfirmedAt) < 30
+  }
+
+  func loadPools(forceRefresh: Bool = false) async {
+    guard !isLoadingPools else { return }
+    if !forceRefresh, let lastPoolsAttemptAt, Date().timeIntervalSince(lastPoolsAttemptAt) < 30 { return }
+    lastPoolsAttemptAt = Date()
+    let accountID = currentUserId
+    isLoadingPools = true
+    defer { if accountID == currentUserId { isLoadingPools = false } }
+    do {
+      let fresh = try await api.loadCreatorEarningsPools()
+      guard accountID == currentUserId, !Task.isCancelled else { return }
+      pools = fresh
+      poolsError = nil
+    } catch {
+      guard accountID == currentUserId, !Task.isCancelled else { return }
+      poolsError = "Could not refresh earnings categories. Your recorded balance has not changed."
+    }
+  }
+
+  func loadAll(forceRefresh: Bool = false) async {
+    async let balance: () = load(forceRefresh: forceRefresh)
+    async let categories: () = loadPools(forceRefresh: forceRefresh)
+    async let readiness: () = loadSupportReadiness()
+    _ = await (balance, categories, readiness)
+  }
+
+  func loadSupportReadiness() async {
+    guard !isLoadingSupportReadiness else { return }
+    let accountID = currentUserId
+    isLoadingSupportReadiness = true
+    defer { if accountID == currentUserId { isLoadingSupportReadiness = false } }
+    do {
+      let result = try await api.loadSupportReadiness()
+      guard accountID == currentUserId, !Task.isCancelled else { return }
+      supportReadiness = result
+    } catch {
+      guard accountID == currentUserId, !Task.isCancelled else { return }
+      supportReadiness = CaptroSupportReadiness(status: "unavailable", retryable: true, blockers: [])
+    }
   }
 
   func load(forceRefresh: Bool = false) async {
@@ -549,6 +601,9 @@ struct CaptroEarningsView: View {
           }
           balanceSection(response)
           divider
+          CaptroEarningsPoolsSection(api: api, model: model)
+            .id(model.currentUserId)
+          divider
           payoutAccountSection(response.account)
           divider
           recentSection(response.recent)
@@ -573,9 +628,9 @@ struct CaptroEarningsView: View {
     .onAppear {
       MIRAPerformanceTimeline.mark("earnings_screen_visible", detail: model.response == nil ? "empty" : "retained")
     }
-    .refreshable { await model.load(forceRefresh: true) }
-    .task { await model.load() }
-    .sheet(isPresented: $showingWithdrawal, onDismiss: { Task { await model.load(forceRefresh: true) } }) {
+    .refreshable { await model.loadAll(forceRefresh: true) }
+    .task { await model.loadAll() }
+    .sheet(isPresented: $showingWithdrawal, onDismiss: { Task { await model.loadAll(forceRefresh: true) } }) {
       CaptroWithdrawView(api: api)
     }
     .alert("Couldn't open payouts", isPresented: Binding(
@@ -816,7 +871,7 @@ struct CaptroEarningsView: View {
   }
 }
 
-private struct CaptroPayoutsView: View {
+struct CaptroPayoutsView: View {
   @ObservedObject var model: CaptroEarningsModel
 
   var body: some View {
@@ -877,7 +932,7 @@ private struct CaptroPayoutsView: View {
   }
 }
 
-private struct CaptroEarningDetailView: View {
+struct CaptroEarningDetailView: View {
   let api: MIRAAPIClient
   let earningID: String
   @State private var response: CaptroEarningDetailResponse?
@@ -891,9 +946,13 @@ private struct CaptroEarningDetailView: View {
           Text(response.earning.contentType.replacingOccurrences(of: "_", with: " ").capitalized + " purchase")
             .font(.system(size: 13)).foregroundStyle(CaptroDetailStyle.secondary)
           Rectangle().fill(CaptroDetailStyle.divider).frame(height: 0.5)
-          earningRow("Buyer", response.earning.buyerHandle.map { "@\($0.trimmingCharacters(in: CharacterSet(charactersIn: "@")))" } ?? "Captro user")
+          if response.earning.contentType != "creator_support" {
+            earningRow("Buyer", response.earning.buyerHandle.map { "@\($0.trimmingCharacters(in: CharacterSet(charactersIn: "@")))" } ?? "Captro user")
+          }
           earningRow("Item price", CaptroMoney.format(minorUnits: response.earning.itemAmount, currency: response.earning.currency))
-          earningRow("Creator earnings", CaptroMoney.format(minorUnits: response.earning.netCreatorAmount, currency: response.earning.currency))
+          earningRow("Processing fees", response.earning.actualProcessingFees.map { CaptroMoney.format(minorUnits: $0, currency: response.earning.currency) } ?? "Awaiting Stripe fees")
+          earningRow("Captro fee", CaptroMoney.format(minorUnits: response.earning.platformFee, currency: response.earning.currency))
+          earningRow("Creator earnings", response.earning.actualProcessingFees == nil ? "Awaiting Stripe fees" : CaptroMoney.format(minorUnits: response.earning.netCreatorAmount, currency: response.earning.currency))
           earningRow("Purchased", CaptroCommerceDate.long(response.earning.purchasedAt))
           earningRow("Payment", response.purchase.status.replacingOccurrences(of: "_", with: " ").capitalized)
           earningRow("Purchase ID", response.purchaseReference)
@@ -939,7 +998,7 @@ private struct CaptroOutlineButtonStyle: ButtonStyle {
   }
 }
 
-private enum CaptroCommerceDate {
+enum CaptroCommerceDate {
   static func short(_ value: String?) -> String { format(value, style: "MMM d") }
   static func day(_ value: String?) -> String { format(value, style: "MMM d") }
   static func long(_ value: String?) -> String { format(value, style: "MMM d, yyyy · h:mm a") }

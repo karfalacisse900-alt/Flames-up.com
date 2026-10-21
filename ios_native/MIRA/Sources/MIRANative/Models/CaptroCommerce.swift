@@ -674,6 +674,7 @@ public struct CaptroCreatorEarning: Decodable, Hashable, Identifiable {
   public let creatorAmount: Int
   public let platformFee: Int
   public let processingAmount: Int
+  public let actualProcessingFees: Int?
   public let taxAmount: Int
   public let buyerTotal: Int
   public let refundedAmount: Int
