@@ -137,8 +137,28 @@ does not support a reliable speedup claim. This metric includes launch infrastru
 not just the bounded artwork animation. Physical Release measurement remains open.
 
 RELEASE
-Matching-source simulator validation succeeded. TestFlight archive/upload and Apple
-processing/tester availability are recorded separately after they actually complete.
+Matching-source simulator validation succeeded. Authorized TestFlight run:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39516170801
+Signed source: 026c2247b5cbdf9edfde41de2597b35c8fafe90c (report-only descendant
+of validated 9a73dcad; identical native tree ce0b5a678fd2e9e40c16b93a0b56e03e9327a7d5).
+Archive, Release authentication validation, export and upload all succeeded.
+Fresh read-only production gates at 23:50 UTC: 14 security checks and five
+coordinated reliability schema assertions passed. These are not full runtime audits.
+Apple uploader reported UPLOAD SUCCEEDED with no errors at 23:52:08 UTC October 20.
+Read-only exported-IPA inspection independently confirms version 1.0.1, build 658.1,
+bundle com.captro.app, compiled LaunchScreen.storyboardc and the asset catalog.
+CaptroCreatorSupportEnabled remains false. No signing capability or payment change.
+IPA retained at C:/Users/The-s/AppData/Local/Temp/captro-studio-ipa-39516170801/Captro.ipa.
+The first Apple status check (run 39517995513, 23:54:29 UTC) still listed 655.1;
+this was NOT reported as new-build availability. It also independently confirmed
+Associated Domains is still absent from the registered bundle/distribution profile.
+Final read-only Apple verification:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/39518321423
+At 2026-10-20 23:57:41 UTC Apple confirmed 1.0.1 (658.1), processing VALID,
+expired false, internal state IN_BETA_TESTING, autoNotifyEnabled true, assigned to
+Captro private and Captro private2. External state READY_FOR_BETA_SUBMISSION.
+No external beta-review submission or public App Store release was performed.
+This proves availability to those tester groups, not installation on the user's phone.
 
 PHYSICAL ACCEPTANCE STILL OPEN
 No attached physical iPhone or local Xcode/Instruments is available in this Windows
@@ -166,3 +186,39 @@ https://stripe.com/legal/restricted-businesses (Content creation platforms)
 https://developer.apple.com/app-store/review/guidelines/ (3.1.1 and 3.1.1(a))
 Apple's US external-link permission is not a substitute for Stripe eligibility,
 recipient verification, correct financial accounting or associated-domain signing.
+
+CHANGED FILE GROUPS
+- Screens/CaptroCameraNativeView.swift: full-width live viewfinder/chrome; remove
+  Capture-only import, curved-arrow switch and reserved format/control geometry.
+- Services/CaptroCameraCaptureService.swift: publish configured mode dimensions
+  after the existing serialized live-session reconfiguration.
+- Components/CaptroStudioLayout.swift: pure geometry and Capture-only tab chrome.
+- App/MIRANativeRootView.swift: bounded startup/routing and compact Capture tab bar.
+- Components/CaptroRecoveryPresenter.swift: defer recovery/support sheet presentation
+  during initial route resolution without replacing an already-mounted warm draft.
+- Screens/CaptroDesignQualityTestView.swift and CaptroAccountFlowReviewHost.swift:
+  isolated actual-component test hosts, not Release routes.
+- AppTarget/LaunchScreen.storyboard, Info.plist, MIRALaunchBackground.colorset and
+  CaptroStartup{Lockup,Upper,Lower,Wordmark}.imageset: exact supplied vector branding.
+- LayoutUITests/CaptureCameraTests.swift, StartupTests.swift;
+  Tests/MIRANativeTests/CaptroCameraCaptureTests.swift, CaptroAccountSafetyTests.swift.
+- backend-cf/tests/capture_assistant_guard.test.mjs, scan_verification.test.mjs,
+  startup_brand_assets.test.mjs: import isolation and exact-asset safeguards.
+- .github/workflows/native-welcome-validation.yml: matching-source small/large tests,
+  baseline launch comparison and independent startup recording/evidence export.
+- This report. No backend implementation, migration or payment flag changed.
+Native paths above are relative to ios_native/MIRA/Sources/MIRANative unless they
+begin AppTarget, LayoutUITests or Tests (relative to ios_native/MIRA).
+
+REMAINING ACCEPTANCE CHECKLIST
+[PASS] Exact bundled vector logo paths and outlined lettering; no welcome redraw.
+[PASS] Small/large simulator geometry, anchored shutter/modes and no Capture import.
+[PASS] Existing review/retake/composer and supported-control paths retained/tested.
+[PASS] App-hosted startup timeout, retry, recovery, Reduce Motion and warm draft tests.
+[PASS] App-hosted Home fallback/Retry pixel tests and selected carousel/restoration tests.
+[OPEN] Physical front/rear capture, all four saved edges, focus/exposure, zoom,
+       repeated live mode changes, audio interruption, low storage and thermal state.
+[OPEN] Fresh physical static-launch/animated handoff with no flash or geometry jump,
+       physical Release launch measurement, real deep-link/notification delivery.
+[OPEN] Real Support provider/fee/return acceptance and production rollout eligibility.
+No real customer content, relationships, payment or entitlement was changed to test UI.
