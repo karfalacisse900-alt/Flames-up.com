@@ -8,6 +8,19 @@ struct CaptroSupportRuntime {
   var currentStorefront: () async -> String? = { (await Storefront.current)?.countryCode }
   var openBrowser: (URL) async -> Bool = { await UIApplication.shared.open($0) }
 }
+struct CaptroSupportPresentation: Identifiable {
+  let id = UUID()
+  let creatorID: String
+  let name: String
+  let username: String
+  let avatar: String?
+  let api: MIRAAPIClient
+  let originPostID: String?
+  let checkoutAvailable: Bool
+  let unavailableMessage: String
+  let currentStorefront: () async -> String?
+  let openBrowser: (URL) async -> Bool
+}
 private struct CaptroSupportRuntimeKey: EnvironmentKey { static let defaultValue = CaptroSupportRuntime() }
 extension EnvironmentValues {
   var captroSupportViewerID: String? {
@@ -62,6 +75,7 @@ struct CaptroSupportAction: View {
   let avatar: String?
   let api: MIRAAPIClient
   var originPostID: String? = nil
+  var onPresentSheet: ((CaptroSupportPresentation) -> Void)? = nil
   @Environment(\.captroSupportViewerID) private var viewerID
   @Environment(\.captroSupportRuntime) private var runtime
   @State private var canCheckout = false
@@ -73,7 +87,7 @@ struct CaptroSupportAction: View {
   @State private var unavailableMessage = "No payment was started."
   private var identity: String { "\(viewerID ?? "guest"):\(creatorID)" }
   private struct Eligibility: Decodable { let enabled: Bool }
-  var body: some View {
+  private var actionContent: some View {
     // The task decides visibility from the real storefront and viewer identity.
     ZStack {
       Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
@@ -81,6 +95,7 @@ struct CaptroSupportAction: View {
         Button(failed ? "Retry Support" : "Support") {
           CaptroHaptics.light()
           if failed { retry += 1 }
+          else if let onPresentSheet { onPresentSheet(presentation) }
           else { presented = true }
         }
           .font(.subheadline.weight(.semibold))
@@ -95,6 +110,15 @@ struct CaptroSupportAction: View {
           .accessibilityHint(failed ? "Availability could not be checked. Tries again without starting a payment." :
             canCheckout ? "Opens one-time support options" : "Support checkout is not available yet. No payment will be started.")
           .disabled(checking)
+      }
+    }
+  }
+  var body: some View {
+    Group {
+      if onPresentSheet == nil {
+        actionContent.sheet(isPresented: $presented) { sheet }
+      } else {
+        actionContent
       }
     }
     .task(id: "\(identity):\(retry)") {
@@ -120,13 +144,18 @@ struct CaptroSupportAction: View {
         await refreshEligibility(expected: expected)
       }
     }
-    .sheet(isPresented: $presented) {
-      CaptroSupportSheet(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api, originPostID: originPostID,
-        checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage,
-        currentStorefront: runtime.currentStorefront, openBrowser: runtime.openBrowser)
-        .id(identity)
-        .presentationDetents([.large]).presentationDragIndicator(.visible)
-    }
+  }
+  private var presentation: CaptroSupportPresentation {
+    CaptroSupportPresentation(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api,
+      originPostID: originPostID, checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage,
+      currentStorefront: runtime.currentStorefront, openBrowser: runtime.openBrowser)
+  }
+  private var sheet: some View {
+    CaptroSupportSheet(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api, originPostID: originPostID,
+      checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage,
+      currentStorefront: runtime.currentStorefront, openBrowser: runtime.openBrowser)
+      .id(identity)
+      .presentationDetents([.large]).presentationDragIndicator(.visible)
   }
   private func refreshEligibility(expected: String) async {
     checking = true

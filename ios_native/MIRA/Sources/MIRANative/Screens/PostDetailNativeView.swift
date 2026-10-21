@@ -588,6 +588,7 @@ public struct PostDetailNativeView: View {
   @State private var isReportSheetPresented = false
   @State private var isPostOptionsPresented = false
   @State private var isEditingEvent = false
+  @State private var supportPresentation: CaptroSupportPresentation?
   @FocusState private var isCommentFocused: Bool
 
   public init(post: MIRAPost, api: MIRAAPIClient) {
@@ -618,7 +619,8 @@ public struct PostDetailNativeView: View {
               }
 
               CaptroPostDetailSections(model: model, onOpenOptions: { isPostOptionsPresented = true },
-                onEditEvent: { isEditingEvent = true }, onReply: { isCommentFocused = true })
+                onEditEvent: { isEditingEvent = true }, onReply: { isCommentFocused = true },
+                onPresentSupport: { supportPresentation = $0 })
               if model.isLoadingObject {
                 ProgressView().frame(maxWidth: .infinity).padding(16)
               } else if let error = model.objectError {
@@ -671,6 +673,14 @@ public struct PostDetailNativeView: View {
     }) { destination in
       CaptroCheckoutBrowser(url: destination.url)
         .ignoresSafeArea()
+    }
+    .sheet(item: $supportPresentation) { presentation in
+      CaptroSupportSheet(creatorID: presentation.creatorID, name: presentation.name, username: presentation.username,
+        avatar: presentation.avatar, api: presentation.api, originPostID: presentation.originPostID,
+        checkoutAvailable: presentation.checkoutAvailable, unavailableMessage: presentation.unavailableMessage,
+        currentStorefront: presentation.currentStorefront, openBrowser: presentation.openBrowser)
+        .id(presentation.id)
+        .presentationDetents([.large]).presentationDragIndicator(.visible)
     }
     .alert("Couldn't complete that action", isPresented: Binding(
       get: { model.actionError != nil },

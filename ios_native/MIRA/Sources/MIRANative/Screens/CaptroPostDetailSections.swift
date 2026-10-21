@@ -12,6 +12,7 @@ struct CaptroPostDetailSections: View {
   let onOpenOptions: () -> Void
   let onEditEvent: () -> Void
   let onReply: () -> Void
+  let onPresentSupport: (CaptroSupportPresentation) -> Void
 
   private var post: MIRAPost { model.post }
 
@@ -22,7 +23,8 @@ struct CaptroPostDetailSections: View {
         Spacer(minLength: 12)
         if let creatorID = post.userId {
           CaptroSupportAction(creatorID: creatorID, name: CaptroSupportPolicy.recipientName(post.userFullName, fallback: post.detailCreatorHandle),
-            username: post.detailCreatorHandle, avatar: post.userProfileImage, api: model.api, originPostID: post.id)
+            username: post.detailCreatorHandle, avatar: post.userProfileImage, api: model.api, originPostID: post.id,
+            onPresentSheet: onPresentSupport)
         }
       }.padding(16)
       fullDescription

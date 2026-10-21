@@ -22,7 +22,8 @@ public struct CaptroSupportReviewHost: View {
         NavigationStack { PostDetailNativeView(post: SupportReviewTransport.post, api: api) }
       } else {
         CaptroSupportSheet(creatorID: "fixture-creator", name: "Fixture Creator", username: "fixture", avatar: nil,
-          api: api, originPostID: "fixture-post", currentStorefront: { "USA" }, openBrowser: { _ in false })
+          api: api, originPostID: "fixture-post", checkoutAvailable: !flags.contains("--support-live-disabled"),
+          currentStorefront: { "USA" }, openBrowser: { _ in false })
       }
     }
       .environmentObject(returns).environmentObject(MIRALocalization.shared)
