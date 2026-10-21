@@ -1,3 +1,4 @@
+-- Production migration version recorded by Supabase: 20261021224216.
 -- REVIEW ONLY: read models over the existing immutable ledger. No money movement,
 -- balance rewrite, payout-policy change, account creation or Support activation.
 begin;

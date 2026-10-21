@@ -53,7 +53,8 @@ guard url.scheme == "https", url.host == "captro-site.pages.dev", url.port == ni
 }
 extension Notification.Name { static let captroSupportReturned = Notification.Name("captro.support.returned") }
 
-/// Hidden unless native storefront AND server eligibility both allow it. No Home integration.
+/// The entry point stays discoverable in supported storefronts. Checkout itself
+/// remains disabled unless the build and server both authorize the test flow.
 struct CaptroSupportAction: View {
   let creatorID: String
   let name: String
@@ -63,20 +64,24 @@ struct CaptroSupportAction: View {
   var originPostID: String? = nil
   @Environment(\.captroSupportViewerID) private var viewerID
   @Environment(\.captroSupportRuntime) private var runtime
-  @State private var eligible = false
+  @State private var canCheckout = false
+  @State private var checking = false
+  @State private var visibleInStorefront = false
   @State private var failed = false
   @State private var retry = 0
   @State private var presented = false
+  @State private var unavailableMessage = "No payment was started."
   private var identity: String { "\(viewerID ?? "guest"):\(creatorID)" }
   private struct Eligibility: Decodable { let enabled: Bool }
   var body: some View {
-    // Group with no eligible child is EmptyView: its task may never mount.
-    // Keep a zero-size lifecycle anchor so eligibility can reveal the button.
+    // The task decides visibility from the real storefront and viewer identity.
     ZStack {
       Color.clear.frame(width: 0, height: 0).accessibilityHidden(true)
-      if eligible || failed {
+      if visibleInStorefront {
         Button(failed ? "Retry Support" : "Support") {
-          if failed { retry += 1 } else { presented = true }
+          CaptroHaptics.light()
+          if failed { retry += 1 }
+          else { presented = true }
         }
           .font(.subheadline.weight(.semibold))
           .frame(minWidth: 64, minHeight: 44)
@@ -86,13 +91,29 @@ struct CaptroSupportAction: View {
           .clipShape(RoundedRectangle(cornerRadius: 8))
           .overlay(RoundedRectangle(cornerRadius: 8).stroke(MIRATheme.Color.hairline))
           .accessibilityIdentifier("creator.support")
-          .accessibilityHint(failed ? "Availability could not be checked. Tries again without starting a payment." : "Opens one-time support options")
+          .accessibilityValue(canCheckout ? "Available" : "Not available")
+          .accessibilityHint(failed ? "Availability could not be checked. Tries again without starting a payment." :
+            canCheckout ? "Opens one-time support options" : "Support checkout is not available yet. No payment will be started.")
+          .disabled(checking)
       }
     }
     .task(id: "\(identity):\(retry)") {
       let expected = identity
-      eligible = false; failed = false; presented = false
-      guard runtime.enabled, let viewerID, viewerID != creatorID else { return }
+      canCheckout = false; failed = false; presented = false; checking = false
+      visibleInStorefront = false
+      guard let viewerID, viewerID != creatorID else { return }
+      let storefront = await runtime.currentStorefront()
+      guard !Task.isCancelled, expected == identity, CaptroSupportPolicy.permits(storefront: storefront) else { return }
+      // Live payment remains off. Keep the real entry point visible and tell the
+      // user plainly instead of silently removing it from the profile/Details UI.
+      guard runtime.enabled else {
+        visibleInStorefront = true
+        unavailableMessage = "Captro has not enabled Support checkout yet. No payment can be made right now."
+        return
+      }
+      // Keep the layout stable while the server verifies the creator. The
+      // button is visible but temporarily disabled until that answer arrives.
+      visibleInStorefront = true
       await refreshEligibility(expected: expected)
       for await _ in Storefront.updates {
         guard !Task.isCancelled else { return }
@@ -101,25 +122,28 @@ struct CaptroSupportAction: View {
     }
     .sheet(isPresented: $presented) {
       CaptroSupportSheet(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api, originPostID: originPostID,
+        checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage,
         currentStorefront: runtime.currentStorefront, openBrowser: runtime.openBrowser)
         .id(identity)
         .presentationDetents([.large]).presentationDragIndicator(.visible)
     }
   }
   private func refreshEligibility(expected: String) async {
-    let storefront = await runtime.currentStorefront()
+    checking = true
+    defer { checking = false }
     guard !Task.isCancelled, expected == identity else { return }
-    guard CaptroSupportPolicy.permits(storefront: storefront) else {
-      eligible = false; failed = false; presented = false; return
-    }
     do {
       let result: Eligibility = try await api.get("/creator-support/eligibility/\(creatorID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")")
       guard !Task.isCancelled, expected == identity else { return }
-      failed = false; eligible = result.enabled
-      if !eligible { presented = false }
+      failed = false; canCheckout = result.enabled
+      if !canCheckout {
+        presented = false
+        unavailableMessage = "This creator can’t receive Support through Captro yet. They can check their exact setup requirements in Earnings. No payment was started."
+      }
     } catch {
       guard !Task.isCancelled, expected == identity else { return }
-      eligible = false; failed = true; presented = false
+      canCheckout = false; failed = true; presented = false
+      unavailableMessage = "Support availability couldn’t be checked. Please retry; no payment was started."
     }
   }
 }
@@ -131,6 +155,8 @@ struct CaptroSupportSheet: View {
   let avatar: String?
   let api: MIRAAPIClient
   let originPostID: String?
+  var checkoutAvailable = false
+  var unavailableMessage = "Support checkout is not available yet. No payment will be taken."
   var currentStorefront: () async -> String? = { (await Storefront.current)?.countryCode }
   var openBrowser: (URL) async -> Bool = { await UIApplication.shared.open($0) }
   @EnvironmentObject private var returns: CaptroSupportReturnStore
@@ -161,7 +187,8 @@ struct CaptroSupportSheet: View {
             Text(username.hasPrefix("@") ? username : "@\(username)").foregroundStyle(.secondary)
           }
           Text("Send one-time support for their work.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-          Text("Test environment — no real payments.").font(.caption).foregroundStyle(.secondary)
+          Text(checkoutAvailable ? "Test environment — no real payments." : unavailableMessage)
+            .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
           VStack(alignment: .leading, spacing: 10) {
             Text("Amount (USD)").font(.subheadline)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: textSize.isAccessibilitySize ? 2 : 4), spacing: 10) {
@@ -192,7 +219,7 @@ struct CaptroSupportSheet: View {
           Button { operationTask = Task { await continueInBrowser() } } label: {
             Group { if busy { ProgressView() } else { Text(handoffID == nil ? "Continue to secure checkout" : "Return to checkout") } }
               .frame(maxWidth: .infinity, minHeight: 44)
-          }.buttonStyle(CaptroSupportCheckoutStyle()).disabled(selected == nil || busy || terminal)
+          }.buttonStyle(CaptroSupportCheckoutStyle()).disabled(selected == nil || busy || terminal || !checkoutAvailable)
             .accessibilityIdentifier("support.checkout")
           Label("Opens in your browser", systemImage: "arrow.up.right.square").font(.footnote).foregroundStyle(.secondary)
           if handoffID != nil {
@@ -212,6 +239,7 @@ struct CaptroSupportSheet: View {
   private func continueInBrowser() async {
     guard !busy, let selected else { return }
     busy = true; notice = nil; defer { busy = false }
+    guard checkoutAvailable else { notice = unavailableMessage; return }
     guard CaptroSupportPolicy.permits(storefront: await currentStorefront()), !Task.isCancelled else {
       notice = "External support is not available for this App Store storefront."; return
     }

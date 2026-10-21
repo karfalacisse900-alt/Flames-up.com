@@ -10,6 +10,7 @@ final class CreatorSupportTests: XCTestCase {
   func testActualProfileSupportButtonOpensCorrectRecipientAndDismissesInPlace() {
     let app = launchSurface(["--support-profile"])
     let button = app.buttons["creator.support"]; XCTAssertTrue(button.waitForExistence(timeout: 10))
+    waitUntilEnabled(button)
     let before = button.frame
     button.tap()
     XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
@@ -21,7 +22,9 @@ final class CreatorSupportTests: XCTestCase {
   }
   func testActualDetailsSupportButtonOpensCorrectRecipient() {
     let app = launchSurface(["--support-details"])
-    let button = app.buttons["creator.support"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); reach(button, app: app)
+    let button = app.buttons["creator.support"]; XCTAssertTrue(button.waitForExistence(timeout: 10))
+    waitUntilEnabled(button)
+    reach(button, app: app)
     button.tap(); XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
     app.buttons["support.amount.500"].tap()
     XCTAssertTrue(app.buttons["support.checkout"].isEnabled)
@@ -32,15 +35,40 @@ final class CreatorSupportTests: XCTestCase {
     let retry = app.buttons["Retry Support"]; XCTAssertTrue(retry.waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["support.checkout"].exists)
     retry.tap()
-    let button = app.buttons["Support"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()
+    let button = app.buttons["Support"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); waitUntilEnabled(button); button.tap()
     XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
   }
-  func testUnsupportedGuestSelfAndIneligibleProfilesNeverOfferCheckout() {
-    for flag in ["--support-non-us", "--support-guest", "--support-self", "--support-ineligible"] {
+  func testUnsupportedStorefrontGuestAndSelfNeverOfferSupportAction() {
+    for flag in ["--support-non-us", "--support-guest", "--support-self"] {
       let app = launchSurface(["--support-profile", flag])
       XCTAssertFalse(app.buttons["creator.support"].waitForExistence(timeout: 2), flag)
       XCTAssertFalse(app.buttons["support.checkout"].exists, flag); app.terminate()
     }
+  }
+  func testIneligibleCreatorKeepsVisibleSupportEntryButNeverOpensCheckout() {
+    let app = launchSurface(["--support-profile", "--support-ineligible"])
+    let button = app.buttons["creator.support"]
+    XCTAssertTrue(button.waitForExistence(timeout: 10))
+    waitUntilEnabled(button)
+    XCTAssertEqual(button.value as? String, "Not available")
+    button.tap()
+    XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Earnings")).firstMatch.exists)
+    XCTAssertFalse(app.buttons["support.checkout"].isEnabled)
+  }
+  private func waitUntilEnabled(_ element: XCUIElement, timeout: TimeInterval = 10) {
+    let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: element)
+    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: timeout), .completed)
+  }
+  func testProductionGateKeepsSupportVisibleButCannotStartCheckout() {
+    let app = launchSurface(["--support-profile", "--support-live-disabled"])
+    let button = app.buttons["creator.support"]
+    XCTAssertTrue(button.waitForExistence(timeout: 10))
+    XCTAssertEqual(button.value as? String, "Not available")
+    button.tap()
+    XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Captro has not enabled Support checkout yet. No payment can be made right now."].exists)
+    XCTAssertFalse(app.buttons["support.checkout"].isEnabled)
   }
   private func launch(_ flags: [String] = []) -> XCUIApplication {
     let app = XCUIApplication(); app.launchArguments = ["--captro-support-review"] + flags; app.launch()

@@ -27,7 +27,7 @@ public struct CaptroSupportReviewHost: View {
     }
       .environmentObject(returns).environmentObject(MIRALocalization.shared)
       .environment(\.captroSupportViewerID, flags.contains("--support-guest") ? nil : flags.contains("--support-self") ? "fixture-creator" : "fixture-buyer")
-      .environment(\.captroSupportRuntime, CaptroSupportRuntime(enabled: true,
+      .environment(\.captroSupportRuntime, CaptroSupportRuntime(enabled: !flags.contains("--support-live-disabled"),
         currentStorefront: { flags.contains("--support-non-us") ? "GBR" : "USA" }, openBrowser: { _ in false }))
       .environment(\.dynamicTypeSize, flags.contains("--support-large-text") ? .accessibility3 : .large)
   }

@@ -86,6 +86,10 @@ on:
         description: Clean only one exact disposable Cover test account after an interrupted cleanup
         type: string
         default: ''
+      creator_support_review:
+        description: Focused app-hosted Support UI and earnings model checks with isolated fixtures; no real payment
+        type: boolean
+        default: false
   push:
     branches: [feature/recorded-voice-moderation]
     paths:
@@ -128,8 +132,41 @@ jobs:
   account-recovery:
     if: ${{ inputs.camera_carousel && inputs.small_review_only && !inputs.carousel_baseline }}
     uses: ./.github/workflows/additional-review-validation.yml
+  creator-support:
+    if: ${{ inputs.creator_support_review }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Record actual source for release validation
+        run: node scripts/app-store/native-validation-source.mjs
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Run focused Support UI and model tests in the app host
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/SupportBuild" -resultBundlePath "$RUNNER_TEMP/Support.xcresult" \
+            -only-testing:CaptroStampTests/CaptroCreatorSupportTests \
+            -only-testing:CaptroLayoutUITests/CreatorSupportTests \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/support-review.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-validation-source
+          path: ${{ runner.temp }}/native-validation-source/source.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: creator-support-validation
+          path: |
+            ${{ runner.temp }}/support-review.log
+            ${{ runner.temp }}/Support.xcresult
   stamps:
-    if: ${{ inputs.cleanup_user_id == '' && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review && !inputs.release_scroll_profile }}
+    if: ${{ inputs.cleanup_user_id == '' && !inputs.creator_support_review && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review && !inputs.release_scroll_profile }}
     runs-on: macos-26
     environment: captro-payments-live
     timeout-minutes: 65

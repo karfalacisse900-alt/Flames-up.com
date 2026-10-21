@@ -1,5 +1,11 @@
 name: Release default-off creator support API
 on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy the default-off Support and creator-earnings API after all production checks pass
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       deploy:
@@ -38,6 +44,7 @@ jobs:
         run: |
           node scripts/app-store/verify-security-schema.mjs
           node backend-cf/scripts/verify-reliability-schema.mjs
+          node backend-cf/scripts/verify-creator-earnings-schema.mjs
       - name: Compile only the default-off Worker
         working-directory: backend-cf
         run: npx wrangler deploy --env production --dry-run --outdir "$RUNNER_TEMP/support-worker" --define 'CAPTRO_RELIABILITY_RELEASE_MODE:"ready"'

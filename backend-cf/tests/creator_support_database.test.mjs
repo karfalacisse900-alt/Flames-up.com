@@ -15,7 +15,7 @@ test('support shares durable payment ledger, zero commission and no entitlement'
    '20260926222000_marketplace_release_controls.sql','20260926235356_finance_category_reports.sql',
    '20260927012001_commerce_ended_event_guard.sql','20261016214657_additional_commerce_lifecycle.sql',
    '20261017002255_reliable_payment_reconciliation.sql','20261017002807_payment_recovery_resolution.sql',
-   '20261019234129_creator_support_test_contract.sql','20261021000708_creator_earnings_categories.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+   '20261019234129_creator_support_test_contract.sql','20261021224216_creator_earnings_categories.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
   const one=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
   const seller=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
   const buyer=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
