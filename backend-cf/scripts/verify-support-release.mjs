@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {supportTestEnabled} from '../src/creator-support.ts';
-// Verified deployed Worker from 39403872227 at 9cd2ead96ace00ea8b68758094502c566c8c9c84.
+// Verified default-off deployment from 39691085231 at 3a2f9ed2f0d6ef32cd33818119d8e595f7bf180c.
 // Never silently overwrite a newer deployment or apply the test-only migration
 // to a live ledger.
 const baseline='57651a08303195b6e696dd1eff314a284ce928cc';
-const expected='65023099-b270-4378-bac4-8a0ad6f84472';
+const expected='20e5ada3-a21b-46eb-9ee6-407048fa0da9';
 const changed=execFileSync('git',['diff','--name-only',baseline,'HEAD','--','backend-cf/src','backend-cf/wrangler.toml','backend-cf/package.json','backend-cf/package-lock.json'],{encoding:'utf8'}).trim().split('\n').filter(Boolean);
 assert.ok(changed.length>0);
 assert.deepEqual(changed,[
