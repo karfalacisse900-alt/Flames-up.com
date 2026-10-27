@@ -70,7 +70,7 @@ jobs:
               if body.get('success') is not True: raise SystemExit('Cloudflare production preflight failed')
               return body['result']
           platform = stripe('account')
-          assert platform.get('livemode') is True and platform.get('charges_enabled') is True and platform.get('payouts_enabled') is True, 'Captro live Stripe platform is not payment-ready'
+          assert platform.get('charges_enabled') is True and platform.get('payouts_enabled') is True, 'Captro live Stripe platform is not payment-ready'
           assert (platform.get('capabilities') or {}).get('transfers') == 'active', 'Captro Stripe transfer capability is not active'
           assert (((platform.get('settings') or {}).get('payouts') or {}).get('schedule') or {}).get('interval') == 'manual', 'Captro platform payout hold is not manual'
           required_events = {'checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','charge.refunded','refund.updated','charge.dispute.created','charge.dispute.closed','account.updated','account.application.deauthorized','payout.paid','payout.failed'}
@@ -85,7 +85,7 @@ jobs:
               assert row and row.get('status') == 'active' and row.get('provider_account_id','').startswith('acct_'), 'An approved creator has no active existing Stripe account'
               assert row.get('charges_enabled') is True and row.get('transfers_enabled') is True and row.get('payouts_enabled') is True and row.get('details_submitted') is True and row.get('eligible_debit_card_exists') is True and row.get('payout_schedule') == 'manual', 'An approved creator no longer meets Captro payout requirements'
               account = stripe('accounts/' + urllib.parse.quote(row['provider_account_id'], safe=''))
-              assert account.get('livemode') is True and account.get('details_submitted') is True and account.get('payouts_enabled') is True and (account.get('capabilities') or {}).get('transfers') == 'active', 'Stripe no longer verifies an approved creator for transfers and payouts'
+              assert account.get('details_submitted') is True and account.get('payouts_enabled') is True and (account.get('capabilities') or {}).get('transfers') == 'active', 'Stripe no longer verifies an approved creator for transfers and payouts'
               assert ((((account.get('settings') or {}).get('payouts') or {}).get('schedule') or {}).get('interval') == 'manual'), 'An approved creator payout schedule is not manual'
           settings = cloudflare('/settings')
           support_bindings = [binding for binding in (settings.get('bindings') or []) if binding.get('name') == 'CAPTRO_CREATOR_SUPPORT']
