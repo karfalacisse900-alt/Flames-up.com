@@ -1075,7 +1075,8 @@ public struct ConversationNativeView: View {
           .transition(.move(edge: .bottom).combined(with: .opacity))
       }
 
-      HStack(spacing: 10) {
+      let hasDraft = !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      HStack(spacing: 8) {
         Button {
           CaptroHaptics.light()
           withAnimation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion)) {
@@ -1083,28 +1084,51 @@ public struct ConversationNativeView: View {
           }
         } label: {
           Image(systemName: showAttachmentTray ? "xmark" : "plus")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(MIRATheme.Color.textPrimary)
-            .frame(width: 44, height: 44)
-            .background(ChatRoomPalette.input)
-            .clipShape(Circle())
+            .font(.system(size: 22, weight: .regular))
+            .foregroundStyle(MIRATheme.Color.textSecondary)
+            .frame(width: 40, height: 48)
         }
         .buttonStyle(.miraPress)
         .accessibilityLabel(showAttachmentTray ? "Close attachments" : "Add attachment")
 
-        TextField(model.isGroup ? "Message the club..." : "Message", text: $model.draft, axis: .vertical)
-          .lineLimit(1...5)
-          .font(.body)
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .padding(.vertical, 8)
-          .onChange(of: model.draft) { value in
-            model.updateTyping(!value.isEmpty)
-          }
+        HStack(spacing: 4) {
+          TextField(model.isGroup ? "Message the club…" : "Message", text: $model.draft, axis: .vertical)
+            .lineLimit(1...4)
+            .font(.body)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
+            .padding(.vertical, 8)
+            .onChange(of: model.draft) { value in
+              model.updateTyping(!value.isEmpty)
+            }
 
-        composerPrimaryButton
+          if !hasDraft {
+            PhotosPicker(selection: $pickerItem, matching: .any(of: [.images, .videos]), preferredItemEncoding: .current) {
+              Image(systemName: "camera")
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(MIRATheme.Color.textSecondary)
+                .frame(width: 42, height: 44)
+                .contentShape(Rectangle())
+            }
+            .disabled(model.isUploading)
+            .accessibilityLabel("Add photo or video")
+          }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 4)
+        .padding(.vertical, 3)
+        .frame(minHeight: 48)
+        .background(ChatRoomPalette.input, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 24, style: .continuous)
+            .stroke(ChatRoomPalette.hairline, lineWidth: 1)
+        }
+
+        if hasDraft {
+          composerPrimaryButton
+        }
       }
-      .padding(.horizontal, 14)
-      .padding(.vertical, 9)
+      .padding(.horizontal, 12)
+      .padding(.vertical, 7)
     }
     .background(ChatRoomPalette.composer)
     .overlay(alignment: .top) {
