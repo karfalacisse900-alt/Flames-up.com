@@ -4314,12 +4314,9 @@ public struct CreateStoryNativeView: View {
   @State private var storyUploadStage = "Posting status"
   @State private var storyUploadFraction: Double?
   @State private var errorMessage: String?
-  @State private var editingMedia: MIRAEditorPresentation?
-  @State private var editedStoryCameraMedia: MIRAPickedMedia?
   @State private var pendingStoryMedia: MIRAPickedMedia?
   @State private var selectedAudioTrack: MIRAAudiusTrack?
   @State private var showMusicPicker = false
-  @State private var isTextStory = false
   @State private var storyCaption = ""
   @FocusState private var isStoryCaptionFocused: Bool
   @State private var storyLocation = ""
@@ -4342,7 +4339,7 @@ public struct CreateStoryNativeView: View {
     ZStack {
       Color.black.ignoresSafeArea()
 
-      if pendingStoryMedia != nil || isTextStory {
+      if pendingStoryMedia != nil {
         storyPublishPage(media: pendingStoryMedia)
       } else {
         VStack {
@@ -4409,58 +4406,27 @@ public struct CreateStoryNativeView: View {
     }
     .miraFullScreenOverlay(isPresented: $showCamera, background: .black) { closeCamera in
       MIRAStoryLiveCameraView(
-        editedMedia: editedStoryCameraMedia,
         captureMode: .photoAndVideo,
         showsMusicButton: false,
         showsGridOverlay: false,
+        showsEditButton: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
         onCapture: { media in
           closeCamera()
-          editedStoryCameraMedia = nil
           pendingStoryMedia = media
         },
         onCancel: {
           closeCamera()
           DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0.08 : MIRATransitionTiming.fullScreenClose)) {
-            if pendingStoryMedia == nil && !isTextStory { close() }
+            if pendingStoryMedia == nil { close() }
           }
         },
         onMusic: {
           showMusicPicker = true
-        },
-        onEdit: { media, _ in
-          editingMedia = MIRAEditorPresentation(media: media, returnsToCamera: true)
         }
       )
       .ignoresSafeArea()
-      .overlay(alignment: .bottomTrailing) {
-        Button("TEXT") {
-          closeCamera()
-          isTextStory = true
-          pendingStoryMedia = nil
-        }
-        .font(.system(size: 13, weight: .semibold))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18)
-        .frame(height: 44)
-        .background(.black.opacity(0.48), in: Capsule())
-        .padding(.trailing, 24)
-        .padding(.bottom, 56)
-      }
-    }
-    .miraFullScreenOverlay(item: $editingMedia, background: .black) { item, closeEditor in
-      MIRANativeMediaEditorView(media: item.media, mode: .story, onClose: closeEditor) { edited in
-        if item.returnsToCamera {
-          editedStoryCameraMedia = edited
-        } else {
-          pendingStoryMedia = edited
-        }
-        closeEditor()
-      }
-      .ignoresSafeArea()
-      .statusBarHidden(true)
-      .miraStatusBarHidden(true)
     }
     .miraBottomSheet(isPresented: $showMusicPicker, preferredHeightFraction: 0.78) { closeSheet in
       MIRAAudiusMusicPickerSheet(api: api, selectedTrack: $selectedAudioTrack, onClose: closeSheet)
