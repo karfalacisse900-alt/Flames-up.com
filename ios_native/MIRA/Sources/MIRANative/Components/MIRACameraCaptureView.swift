@@ -30,6 +30,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   var dismissesOnCapture = true
   var dismissesOnCancel = true
   var simpleCaptureUI = false
+  var showsEditButton = true
   let onCapture: (MIRAPickedMedia) -> Void
   let onCancel: () -> Void
   let onMusic: () -> Void
@@ -47,6 +48,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     dismissesOnCapture: Bool = true,
     dismissesOnCancel: Bool = true,
     simpleCaptureUI: Bool = false,
+    showsEditButton: Bool = true,
     onCapture: @escaping (MIRAPickedMedia) -> Void,
     onCancel: @escaping () -> Void = {},
     onMusic: @escaping () -> Void = {},
@@ -61,6 +63,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     self.dismissesOnCapture = dismissesOnCapture
     self.dismissesOnCancel = dismissesOnCancel
     self.simpleCaptureUI = simpleCaptureUI
+    self.showsEditButton = showsEditButton
     self.onCapture = onCapture
     self.onCancel = onCancel
     self.onMusic = onMusic
@@ -75,6 +78,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
     controller.showsMusicButton = showsMusicButton
     controller.showsGridOverlay = showsGridOverlay
     controller.simpleCaptureUI = simpleCaptureUI
+    controller.showsEditButton = showsEditButton
     controller.delegate = context.coordinator
     return controller
   }
@@ -82,6 +86,7 @@ struct MIRAStoryLiveCameraView: UIViewControllerRepresentable {
   func updateUIViewController(_ uiViewController: MIRAStoryCameraViewController, context: Context) {
     uiViewController.showsMusicButton = showsMusicButton
     uiViewController.showsGridOverlay = showsGridOverlay
+    uiViewController.showsEditButton = showsEditButton
     if let editedMedia {
       uiViewController.applyEditedMedia(editedMedia)
     }
@@ -224,6 +229,9 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
     didSet { updateGridOverlayVisibility() }
   }
   var simpleCaptureUI = false
+  var showsEditButton = true {
+    didSet { if isViewLoaded { editRailButton.isHidden = simpleCaptureUI || !showsEditButton } }
+  }
 
   private enum CameraMode: String, CaseIterable {
     case photo = "Photo"
@@ -855,7 +863,7 @@ final class MIRAStoryCameraViewController: UIViewController, PHPickerViewControl
     flashButton.isHidden = false
     rawButton.isHidden = isReviewing || !rawCaptureSupported || selectedMode != .photo || captureMode == .videoOnly
     updateMusicButtonVisibility()
-    editRailButton.isHidden = simpleCaptureUI
+    editRailButton.isHidden = simpleCaptureUI || !showsEditButton
     editRailButton.alpha = capturedMedia == nil ? 0.62 : 1
     shutterButton.isHidden = false
     shutterFill.isHidden = false
