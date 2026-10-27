@@ -14,6 +14,8 @@ final class CreatorSupportTests: XCTestCase {
     let before = button.frame
     button.tap()
     XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Secure Stripe checkout opens in your browser."].exists,
+      "The profile sheet must preserve the server-confirmed live payment mode.")
     XCTAssertFalse(app.buttons["support.checkout"].isEnabled)
     let image = XCTAttachment(screenshot: app.screenshot()); image.name = "profile-support-sheet-fixture"; image.lifetime = .keepAlways; add(image)
     app.buttons["Close"].tap()
