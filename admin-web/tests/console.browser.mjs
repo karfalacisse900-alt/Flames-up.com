@@ -81,6 +81,12 @@ let denied = false,
   delayFirst = false,
   lostResponse = false,
   operationCount = 0,
+  supportReleaseCount = 0,
+  supportReleaseBody = null,
+  supportTransferID = null,
+  supportEnrollmentReadCount = 0,
+  supportEnrollmentWriteCount = 0,
+  supportEnrollmentBody = null,
   role = "owner";
 const requests = [];
 const operations = new Map();
@@ -118,6 +124,26 @@ await context.route("https://api.flames-up.com/api/**", async (route) => {
       cards: { open_reports: 12, high_priority: 3, in_review: 6, appeals: 2 },
       errors: {},
     });
+  if (/^\/admin\/creator-support\/enrollments\//.test(path) && req.method()==="GET") {
+    supportEnrollmentReadCount++;
+    return reply({creator:{id:"creator-auth-fixture",username:"creator-fixture"},mode:"test",enabled:false,checkoutEnabled:false,reviewedAt:null,readiness:{status:"ready",retryable:false,blockers:[]}});
+  }
+  if (/^\/admin\/creator-support\/enrollments\//.test(path) && req.method()==="POST") {
+    supportEnrollmentWriteCount++;supportEnrollmentBody=req.postDataJSON();
+    return reply({creator:{id:"creator-auth-fixture",username:"creator-fixture"},mode:"test",enabled:true,checkoutEnabled:false,reviewedAt:"2026-10-26T16:05:00Z",readiness:{status:"ready",retryable:false,blockers:[]}});
+  }
+  if (path === "/admin/finance/pools")
+    return reply({mode:"test",asOf:"2026-10-26T16:00:00Z",platform:null,pools:[{category:"creator_support",currency:"USD",orders:1,gross:500,pending:441,available:0,paid_out:0,captro_fee:0,processing_fee:59,seller_id:"creator-fixture"}]});
+  if (path === "/admin/finance/recovery")
+    return reply({cases:[],alerts:[],actionsEnabled:false});
+  if (path === "/admin/finance/records")
+    return reply({items:[{category:"creator_support",currency:"USD",seller_id:"creator-fixture",order_id:"11111111-1111-4111-8111-111111111111",item_title:"Creator support",gross:500,pending:441,available:0,paid_out:0,captro_fee:0,processing_fee:59}],nextOffset:null});
+  if (/^\/admin\/finance\/orders\//.test(path))
+    return reply({order:{category:"creator_support",currency:"USD",seller_id:"creator-fixture",buyer_id:"buyer-fixture",order_id:"11111111-1111-4111-8111-111111111111",item_title:"Creator support",gross:500,pending:441,available:0,paid_out:0,captro_fee:0,processing_fee:59,stripe_mode:"test",stripe_payment_intent_id:"pi_test_support",purchase:{contentType:"creator_support",status:"confirmed",stripeMode:"test",settlementModel:"deferred",transferId:supportTransferID,supportReleaseEnabled:true}},entries:[],nextOffset:null});
+  if (path.startsWith("/admin/commerce/purchases/") && path.endsWith("/release") && req.method()==="POST") {
+    supportReleaseCount++;supportReleaseBody=req.postDataJSON();supportTransferID="tr_test_support";
+    return reply({status:"transferred",transferId:"tr_test_support"});
+  }
   if (path === "/admin/reports") {
     if (failList)
       return reply({ detail: "Fixture: report service unavailable" }, 503);
@@ -344,8 +370,36 @@ assert.equal(
 console.log(
   "PASS tablet layout no horizontal page overflow and cached image visible",
 );
+role = "owner";
+await page.setViewportSize({ width: 1586, height: 992 });
+await page.goto("http://127.0.0.1:4173/?section=finance");
+await page.getByRole("heading", { name: "Captro Funds" }).first().waitFor();
+await page.getByLabel("Canonical creator ID").fill("11111111-1111-4111-8111-111111111111");
+await page.getByRole("button", { name: "Check creator" }).click();
+await page.getByText("Global checkout remains off.").waitFor();
+await page.getByLabel("Review reason").fill("Stripe payout readiness reviewed for isolated test eligibility.");
+page.once("dialog", (dialog) => dialog.accept());
+await page.getByRole("button", { name: "Approve Support" }).click();
+await page.getByText("Creator approved for the current mode.").waitFor();
+assert.equal(supportEnrollmentReadCount, 1);assert.equal(supportEnrollmentWriteCount, 1);
+assert.equal(supportEnrollmentBody.enabled, true);assert.match(supportEnrollmentBody.reason, /payout readiness reviewed/);
+await page.getByRole("button", { name: "View records" }).click();
+await page.getByRole("button", { name: "View order" }).click();
+await page.getByRole("heading", { name: "Support release review" }).waitFor();
+await page.getByLabel("Review reason (required)").fill("Provider charge verified; clear confirmed support to creator.");
+page.once("dialog", (dialog) => dialog.accept());
+await page.getByRole("button", { name: "Approve and release Support earnings" }).click();
+await page.getByRole("status").filter({ hasText: "Stripe transfer confirmed" }).waitFor();
+assert.equal(supportReleaseCount, 1);
+assert.match(supportReleaseBody.note, /Provider charge verified/);
+await page.getByText("Stripe transfer recorded:").waitFor();
+assert.equal(await page.getByRole("button", { name: "Approve and release Support earnings" }).count(), 0);
+assert.match(page.url(), /section=finance/);
+await page.screenshot({ path: resolve(output, "support-release-review.png"), fullPage: false });
+console.log("PASS owner pre-approves creator while checkout remains globally disabled");
+console.log("PASS Admin Funds Support review confirms creator transfer with required note");
 role = "support";
-await page.reload();
+await page.goto("http://127.0.0.1:4173/?section=reports&case=1042");
 await page
   .getByText("Read-only access. Case changes require a moderator.")
   .waitFor();
@@ -359,6 +413,12 @@ assert.notEqual(
   "BODY",
 );
 console.log("PASS read-only UI and keyboard focus");
+const financeReadCount = requests.filter((x) => x.startsWith("/admin/finance/")).length;
+await page.goto("http://127.0.0.1:4173/?section=finance");
+await page.getByRole("alert").filter({ hasText: "Finance access is required" }).waitFor();
+assert.equal(requests.filter((x) => x.startsWith("/admin/finance/")).length, financeReadCount);
+console.log("PASS finance route denies read-only role before querying funds");
+await page.goto("http://127.0.0.1:4173/?section=reports");
 role = "revoked";
 await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 await page.getByRole("button", { name: /sign in/i }).waitFor();

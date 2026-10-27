@@ -35,6 +35,8 @@ const pendingMigrations = await Promise.all(
 if (process.env.CAPTRO_SUPPORT_CONTRACT === 'true') {
   assert.ok(!relationExists('app_creator_support_handoffs'), 'Review the support schema baseline before applying it twice');
   pendingMigrations.push(await readFile(new URL('../../supabase/migrations/20261019234129_creator_support_test_contract.sql', import.meta.url), 'utf8'));
+  pendingMigrations.push(await readFile(new URL('../../supabase/migrations/20261026230000_creator_support_live_mode.sql', import.meta.url), 'utf8'));
+  pendingMigrations.push(await readFile(new URL('../../supabase/migrations/20261026232009_creator_support_admin_release.sql', import.meta.url), 'utf8'));
 }
 // Historical migrations omit the original baseline. Use the actual deployed DDL,
 // without rows, and apply the pending migrations to that empty isolated database.

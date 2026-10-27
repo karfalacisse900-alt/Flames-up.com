@@ -678,7 +678,7 @@ public struct PostDetailNativeView: View {
       CaptroSupportSheet(creatorID: presentation.creatorID, name: presentation.name, username: presentation.username,
         avatar: presentation.avatar, api: presentation.api, originPostID: presentation.originPostID,
         checkoutAvailable: presentation.checkoutAvailable, unavailableMessage: presentation.unavailableMessage,
-        currentStorefront: presentation.currentStorefront, openBrowser: presentation.openBrowser)
+        paymentMode: presentation.paymentMode, currentStorefront: presentation.currentStorefront, openBrowser: presentation.openBrowser)
         .id(presentation.id)
         .presentationDetents([.large]).presentationDragIndicator(.visible)
     }

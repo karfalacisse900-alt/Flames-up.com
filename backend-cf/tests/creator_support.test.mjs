@@ -2,14 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {Hono} from 'hono';
-import {supportAmount,supportCheckoutParameters,supportTestEnabled,supportToken,registerCreatorSupportRoutes,SupportError} from '../src/creator-support.ts';
+import {supportAmount,supportCheckoutParameters,supportTestEnabled,supportModeEnabled,supportToken,registerCreatorSupportRoutes,SupportError} from '../src/creator-support.ts';
 const id='12345678-1234-4234-8234-123456789012';
 const base={id,content_type:'creator_support',stripe_mode:'test',payment_interface:'checkout',settlement_model:'deferred',
   service_fee_amount:0,platform_fee_amount:0,tax_amount:0,buyer_id:'buyer-auth',buyer_app_user_id:'buyer',creator_id:'creator-auth',
   total_amount:500,currency:'USD',stripe_destination_account_id:'acct_server',hold_expires_at:'2030-01-01T00:35:00Z',status:'payment_pending'};
-test('support never enables live mode, production, or an unknown configuration',()=>{
+test('Support creation requires a matching explicit environment flag and production mode',()=>{
+  assert.equal(supportModeEnabled({CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'test'}),true);
+  assert.equal(supportModeEnabled({CAPTRO_CREATOR_SUPPORT:'live',STRIPE_MODE:'live',ENVIRONMENT:'production'}),true);
   assert.equal(supportTestEnabled({CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'test'}),true);
-  for(const env of [{},{CAPTRO_CREATOR_SUPPORT:'live',STRIPE_MODE:'live'},{CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'production'}]) assert.equal(supportTestEnabled(env),false);
+  for(const env of [{},{CAPTRO_CREATOR_SUPPORT:'live',STRIPE_MODE:'live',ENVIRONMENT:'test'},
+    {CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'production'},
+    {CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'live',ENVIRONMENT:'production'},
+    {CAPTRO_CREATOR_SUPPORT:'true',STRIPE_MODE:'live',ENVIRONMENT:'production'}])
+    assert.equal(supportModeEnabled(env),false);
+  assert.equal(supportTestEnabled({CAPTRO_CREATOR_SUPPORT:'live',STRIPE_MODE:'live',ENVIRONMENT:'production'}),false);
 });
 test('USD integers, bounded amount, no fee/tax/transfer overrides, canonical return',()=>{
   for(const value of [200,500,1000,2000,20000]) assert.equal(supportAmount(value,'USD'),value);
@@ -20,7 +27,10 @@ test('USD integers, bounded amount, no fee/tax/transfer overrides, canonical ret
   assert.equal(params['payment_intent_data[transfer_group]'],'captro_purchase_'+id.replaceAll('-',''));
   assert.ok(params.success_url.startsWith('https://captro-site.pages.dev/support-creator/return?purchase_id='));
   assert.ok(!Object.keys(params).some(k=>/application_fee|transfer_data|line_items\[1\]|automatic_tax/.test(k)));
-  for(const patch of [{platform_fee_amount:1},{stripe_mode:'live'},{creator_id:'buyer-auth'},{total_amount:500.5}]) assert.throws(()=>supportCheckoutParameters({...base,...patch}));
+  for(const patch of [{platform_fee_amount:1},{stripe_mode:'preview'},{creator_id:'buyer-auth'},{total_amount:500.5}]) assert.throws(()=>supportCheckoutParameters({...base,...patch}));
+  const live=supportCheckoutParameters({...base,stripe_mode:'live'});
+  assert.equal(live['line_items[0][price_data][unit_amount]'],500);
+  assert.ok(!Object.keys(live).some(k=>/application_fee|transfer_data/.test(k)));
 });
 test('handoff is deterministic per request but isolated by recipient, account and signing key',async()=>{
   const secret='s'.repeat(48),first=await supportToken(secret,'a','b',id);
@@ -32,7 +42,7 @@ test('handoff is deterministic per request but isolated by recipient, account an
 function fixture() {
  const app=new Hono(); let row=null,h=null,blocked=false,revoked=false,providerFailure=false,paid=false,creates=0;
  const hash=async value=>createHash('sha256').update(value).digest('hex');
- const services={enabled:c=>supportTestEnabled(c.env),hash,viewer:c=>c.get('viewer'),limit:async()=>null,
+ const services={enabled:c=>supportTestEnabled(c.env),mode:c=>c.env.STRIPE_MODE,hash,viewer:c=>c.get('viewer'),limit:async()=>null,
   authorize:async(c,buyer,creator)=>{if(providerFailure)throw new Error('private provider diagnostic');
    if(blocked||buyer!=='buyer'||creator!=='creator')throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',403);
    return {buyerId:'buyer-auth',buyerAppId:'buyer',creatorId:'creator-auth',creatorAppId:'creator',accountId:'trusted-account',profile:{id:'creator',username:'fixture',display_name:'Fixture creator',avatar_url:null}};},
@@ -107,7 +117,7 @@ test('eligibility distinguishes disabled/restricted creators from retryable prov
  assert.equal(failed.status,503);
  assert.doesNotMatch(await failed.text(),/private provider diagnostic/);
  f.providerFailure=false;f.blocked=true;
- assert.deepEqual(await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json(),{enabled:false});
+ assert.deepEqual(await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json(),{enabled:false,mode:'test',reason:'creator_unavailable'});
  f.blocked=false;
  assert.equal((await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json()).enabled,true);
 });

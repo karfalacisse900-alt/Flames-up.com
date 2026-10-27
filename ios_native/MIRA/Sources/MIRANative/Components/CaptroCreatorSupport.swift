@@ -18,6 +18,7 @@ struct CaptroSupportPresentation: Identifiable {
   let originPostID: String?
   let checkoutAvailable: Bool
   let unavailableMessage: String
+  let paymentMode: String
   let currentStorefront: () async -> String?
   let openBrowser: (URL) async -> Bool
 }
@@ -33,9 +34,9 @@ extension EnvironmentValues {
   }
 }
 enum CaptroSupportPolicy {
-  // No enabled value is shipped. Provider approval, storefront review, associated
-  // domains and physical browser-return acceptance are independent release gates.
-  static var enabled: Bool { Bundle.main.object(forInfoDictionaryKey: "CaptroCreatorSupportEnabled") as? Bool == true }
+  // Client configuration only controls whether the UI asks the API. The backend
+  // remains authoritative for rollout, eligibility, pricing and checkout creation.
+  static var enabled: Bool { Bundle.main.object(forInfoDictionaryKey: "CaptroCreatorSupportEnabled") as? Bool ?? true }
   static func permits(storefront: String?) -> Bool { storefront == "USA" }
   static func recipientName(_ preferred: String?, fallback: String) -> String {
     let clean = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -86,7 +87,8 @@ struct CaptroSupportAction: View {
   @State private var presented = false
   @State private var unavailableMessage = "No payment was started."
   private var identity: String { "\(viewerID ?? "guest"):\(creatorID)" }
-  private struct Eligibility: Decodable { let enabled: Bool }
+  private struct Eligibility: Decodable { let enabled: Bool; let mode: String?; let reason: String? }
+  @State private var paymentMode = "unknown"
   private var actionContent: some View {
     // The task decides visibility from the real storefront and viewer identity.
     ZStack {
@@ -147,7 +149,7 @@ struct CaptroSupportAction: View {
   }
   private var presentation: CaptroSupportPresentation {
     CaptroSupportPresentation(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api,
-      originPostID: originPostID, checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage,
+      originPostID: originPostID, checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage, paymentMode: paymentMode,
       currentStorefront: runtime.currentStorefront, openBrowser: runtime.openBrowser)
   }
   private var sheet: some View {
@@ -164,10 +166,13 @@ struct CaptroSupportAction: View {
     do {
       let result: Eligibility = try await api.get("/creator-support/eligibility/\(creatorID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")")
       guard !Task.isCancelled, expected == identity else { return }
+      paymentMode = result.mode ?? "unknown"
       failed = false; canCheckout = result.enabled
       if !canCheckout {
         presented = false
-        unavailableMessage = "This creator can’t receive Support through Captro yet. They can check their exact setup requirements in Earnings. No payment was started."
+        unavailableMessage = result.reason == "rollout_disabled"
+        ? (paymentMode == "live" ? "Live Support is disabled by Captro. No payment was started." : "Support checkout is disabled in this environment. No payment was started.")
+        : "This creator can’t receive Support through Captro yet. They can check their exact setup requirements in Earnings. No payment was started."
       }
     } catch {
       guard !Task.isCancelled, expected == identity else { return }
@@ -186,6 +191,7 @@ struct CaptroSupportSheet: View {
   let originPostID: String?
   var checkoutAvailable = false
   var unavailableMessage = "Support checkout is not available yet. No payment will be taken."
+  var paymentMode = "test"
   var currentStorefront: () async -> String? = { (await Storefront.current)?.countryCode }
   var openBrowser: (URL) async -> Bool = { await UIApplication.shared.open($0) }
   @EnvironmentObject private var returns: CaptroSupportReturnStore
@@ -216,7 +222,8 @@ struct CaptroSupportSheet: View {
             Text(username.hasPrefix("@") ? username : "@\(username)").foregroundStyle(.secondary)
           }
           Text("Send one-time support for their work.").foregroundStyle(.secondary).multilineTextAlignment(.center)
-          Text(checkoutAvailable ? "Test environment — no real payments." : unavailableMessage)
+          Text(checkoutAvailable && paymentMode == "test" ? "Test environment — no real payments." :
+          checkoutAvailable ? "Secure Stripe checkout opens in your browser." : unavailableMessage)
             .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
           VStack(alignment: .leading, spacing: 10) {
             Text("Amount (USD)").font(.subheadline)

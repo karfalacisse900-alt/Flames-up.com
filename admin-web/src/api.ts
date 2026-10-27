@@ -1,5 +1,5 @@
 import type {
-  FinanceSummary, FinanceRecord, FinanceOrder,
+  FinanceSummary, FinanceRecord, FinanceOrder, CreatorSupportEnrollment,
   AdminComment,
   AdminPost,
   AdminSession,
@@ -153,6 +153,9 @@ export const AdminApi = {
     request<{status:string}>('/admin/finance/recovery/'+encodeURIComponent(id)+'/resolve',token,{method:'POST',body:JSON.stringify(body)}),
   financeRecords: (token:string,query:string)=>request<{items:FinanceRecord[];nextOffset:number|null}>('/admin/finance/records'+query,token),
   financeOrder: (token:string,id:string,offset=0)=>request<FinanceOrder>('/admin/finance/orders/'+encodeURIComponent(id)+'?offset='+offset,token),
+  releaseEarning: (token:string,id:string,body:{releaseAfter:string;note:string})=>request<{status:string;transferId?:string}>('/admin/commerce/purchases/'+encodeURIComponent(id)+'/release',token,{method:'POST',body:JSON.stringify(body)}),
+  creatorSupportEnrollment: (token:string,id:string)=>request<CreatorSupportEnrollment>('/admin/creator-support/enrollments/'+encodeURIComponent(id),token),
+  setCreatorSupportEnrollment: (token:string,id:string,body:{enabled:boolean;expectedReviewedAt:string|null;reason:string})=>request<CreatorSupportEnrollment>('/admin/creator-support/enrollments/'+encodeURIComponent(id),token,{method:'POST',body:JSON.stringify(body)}),
   me: (token: string) => request<AdminSession>('/admin/me', token),
   health: (token: string) => request<Record<string, string>>('/admin/health', token),
   dashboard: (token: string) => request<DashboardResponse>('/admin/dashboard', token),

@@ -1074,7 +1074,6 @@ function Records({
     section === "users" && !!selected,
   );
   const [action, setAction] = useState("");
-  const [finance, setFinance] = useState(false);
   const [grantTarget, setGrantTarget] = useState("");
   const row =
     section === "users" ? (user.data?.user as unknown as Row) : selectedRow;
@@ -1150,15 +1149,6 @@ function Records({
           </button>
         </form>
       ) : null}
-      {section === "operations" && can(session, "payments:read") ? (
-        <button
-          className="secondary-button"
-          onClick={() => setFinance((x) => !x)}
-        >
-          {finance ? "Close" : "Open"} financial support
-        </button>
-      ) : null}
-      {finance ? <FinancePage token={token} canResolve={false} /> : null}
       <div className={`records-layout ${selected ? "with-inspector" : ""}`}>
         <section className="console-panel">
           <div className="records-toolbar">
@@ -1490,6 +1480,7 @@ export function Console({
   const title = sections.find((x) => x.key === url.section)?.label || "Reports";
   const subtitles: Partial<Record<ConsoleSection, string>> = {
     reports: "Review reports and manage community safety.",
+    finance: "Review creator earnings, Support releases and payout accounting.",
     dashboard: "A clear view of community safety and operational health.",
     users: "Find accounts and review their moderation history.",
     posts: "Review content without changing Captro’s creative identity.",
@@ -1521,7 +1512,7 @@ export function Console({
           </div>
         </a>
         <nav aria-label="Admin navigation">
-          {sections.map((s) => (
+          {sections.filter((s) => s.key !== "finance" || can(session, "payments:read")).map((s) => (
             <a
               key={s.key}
               href={`?section=${s.key}`}
@@ -1605,7 +1596,9 @@ export function Console({
               {sessionError}
             </p>
           ) : null}
-          {url.section === "reports" ? (
+          {url.section === "finance" ? (
+            can(session, "payments:read") ? <FinancePage token={token} canResolve={can(session, "payments:refund")} canRelease={can(session, "payments:release")} canManageSupport={can(session, "payments:support:manage")} /> : <div className="console-error" role="alert"><strong>Access restricted</strong><p>Finance access is required.</p></div>
+          ) : url.section === "reports" ? (
             <Reports
               token={token}
               session={session}

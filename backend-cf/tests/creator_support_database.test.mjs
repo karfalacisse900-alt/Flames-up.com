@@ -8,6 +8,9 @@ test('support shares durable payment ledger, zero commission and no entitlement'
  try {
   await db.exec(`create role anon; create role authenticated; create role service_role; create schema auth;
     create table auth.users(id uuid primary key); create table app_posts(id uuid primary key);
+    create table app_audit_logs(id text primary key,actor_admin_user_id text not null,actor_role text not null,action_type text not null,
+      target_type text not null,target_id text not null,target_user_id text,reason text not null,internal_note text not null,
+      before_state jsonb not null,after_state jsonb not null,request_id text,metadata jsonb not null,legacy_created_at timestamptz,created_at timestamptz not null);
     create table app_group_chat_members(id text,group_id text,user_id text,role text,legacy_created_at timestamptz,created_at timestamptz,updated_at timestamptz,primary key(group_id,user_id));`);
   for(const file of ['20260904193517_captro_commerce_entitlements.sql','20260904221545_stripe_connect_creator_earnings.sql',
    '20260904231905_stripe_native_payments.sql','20260908224758_isolate_stripe_connected_accounts_by_mode.sql',
@@ -15,14 +18,14 @@ test('support shares durable payment ledger, zero commission and no entitlement'
    '20260926222000_marketplace_release_controls.sql','20260926235356_finance_category_reports.sql',
    '20260927012001_commerce_ended_event_guard.sql','20261016214657_additional_commerce_lifecycle.sql',
    '20261017002255_reliable_payment_reconciliation.sql','20261017002807_payment_recovery_resolution.sql',
-   '20261019234129_creator_support_test_contract.sql','20261021224216_creator_earnings_categories.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+   '20261019234129_creator_support_test_contract.sql','20261021224216_creator_earnings_categories.sql','20261026230000_creator_support_live_mode.sql','20261026232009_creator_support_admin_release.sql']) await db.exec(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
   const one=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
   const seller=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
   const buyer=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
   await db.exec("insert into app_payment_environment(id,stripe_mode) values(true,'test')");
   const account=await one(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,
     transfers_enabled,payouts_enabled,payout_schedule) values($1,'seller','acct_support','test','ready',true,true,true,'manual') returning *`,[seller]);
-  await db.query("insert into app_creator_support_enrollments(creator_id,enabled_for_test,reviewed_by) values($1,true,'isolated-test')",[seller]);
+  const initialEnrollment=await one("insert into app_creator_support_enrollments(creator_id,enabled_for_test,reviewed_by) values($1,true,'isolated-test') returning *",[seller]);
   const key='12345678-1234-4234-8234-123456789012',hash='a'.repeat(64);
   const issue=()=>one("select * from captro_issue_support_handoff($1,'buyer',$2,'seller',$3,$4)",[buyer,seller,key,hash]);
   const h=await issue(); assert.equal((await issue()).id,h.id);
@@ -60,8 +63,32 @@ test('support shares durable payment ledger, zero commission and no entitlement'
     assert.equal(Number((await pool()).available),0);
     await db.query('update app_creator_earnings set processing_cost_known=true where purchase_id=$1',[p.id]);
   });
-  await assert.rejects(db.query("update app_purchases set platform_fee_amount=1 where id=$1",[p.id]),/captro_support_snapshot/);
-  await assert.rejects(db.query("update app_purchases set stripe_mode='live' where id=$1",[p.id]),/captro_support_snapshot/);
+  await assert.rejects(db.query("update app_purchases set platform_fee_amount=1 where id=$1",[p.id]),/CAPTRO_SUPPORT_SNAPSHOT_IMMUTABLE/);
+  await assert.rejects(db.query("update app_purchases set stripe_mode='live' where id=$1",[p.id]),/CAPTRO_SUPPORT_SNAPSHOT_IMMUTABLE/);
+  await t.test('live Support requires an explicit per-creator opt-in, preserves its immutable mode and enters its own ledger category',async()=>{
+    await db.query("update app_payment_environment set stripe_mode='live' where id");
+    const liveKey='22345678-1234-4234-8234-123456789012',liveHash='b'.repeat(64);
+    const issueLive=()=>one("select * from captro_issue_support_handoff($1,'buyer',$2,'seller',$3,$4)",[buyer,seller,liveKey,liveHash]);
+    await assert.rejects(issueLive(),/CAPTRO_SUPPORT_UNAVAILABLE/,'live enrollment defaults off');
+    const liveAccount=await one(`insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode,status,details_submitted,
+      transfers_enabled,payouts_enabled,payout_schedule) values($1,'seller','acct_support_live','live','ready',true,true,true,'manual') returning *`,[seller]);
+    const approval=await one("select * from captro_admin_set_creator_support_enrollment($1,'live',true,'owner-fixture','owner',$2,'Approved after isolated readiness checks.','request-support-approval')",[seller,initialEnrollment.reviewed_at]);
+    assert.equal(approval.enabled_for_live,true);
+    await assert.rejects(one("select * from captro_admin_set_creator_support_enrollment($1,'live',false,'owner-fixture','owner',null,'Stale retry must not overwrite.','request-stale')",[seller]),/CAPTRO_SUPPORT_ENROLLMENT_STALE/);
+    assert.equal(Number((await one("select count(*)::int n from app_audit_logs where action_type='creator_support_enrollment_changed'")).n),1);
+    const liveHandoff=await issueLive();assert.ok(liveHandoff.id);
+    const beginLive=()=>one('select * from captro_begin_creator_support($1,500,$2)',[liveHash,liveAccount.id]);
+    const livePurchase=await beginLive();assert.equal(livePurchase.stripe_mode,'live');
+    assert.equal(livePurchase.connected_account_id,liveAccount.id);assert.equal(livePurchase.platform_fee_amount,0);
+    await assert.rejects(begin(500),/CAPTRO_IDEMPOTENCY_CONFLICT/,'test purchase snapshot cannot be reused after switching Stripe mode');
+    await db.query("update app_purchases set provider_checkout_id='cs_support_live' where id=$1",[livePurchase.id]);
+    await one("select * from captro_confirm_marketplace_purchase($1,'evt_support_live','cs_support_live','pi_support_live','ch_support_live',null,500,59,0,'USD',null,'digest-live')",[livePurchase.id]);
+    const livePool=await one("select * from app_creator_finance_pools where seller_id=$1 and category='creator_support' and stripe_mode='live' and currency='USD'",[seller]);
+    assert.equal(Number(livePool.gross_received),500);assert.equal(Number(livePool.processing_fee),59);
+    assert.equal(Number(livePool.creator_net),441);assert.equal(Number(livePool.pending),441);assert.equal(Number(livePool.available),0);
+    assert.equal(Number((await one("select count(*)::int n from app_entitlements where purchase_id=$1",[livePurchase.id])).n),0);
+    await db.query("update app_payment_environment set stripe_mode='test' where id");
+  });
   await t.test('existing dispute hold moves net earnings once and prevents payout release',async()=>{
     await db.query("update app_creator_earnings set status='disputed',disputed_amount=441 where purchase_id=$1",[p.id]);
     await db.query("update app_creator_earnings set status='disputed',disputed_amount=441 where purchase_id=$1",[p.id]);
@@ -82,13 +109,15 @@ test('support shares durable payment ledger, zero commission and no entitlement'
     const item=await one("insert into app_purchasables(post_id,creator_id,creator_app_user_id,content_type,fulfillment_type,payment_model,title) values($1,$2,'seller','event','ticket','paid','Paid event') returning *",[post,seller]);
     const price=await one("insert into app_prices(purchasable_id,unit_amount,currency) values($1,1000,'USD') returning *",[item.id]);
     const event=await one("select * from captro_begin_marketplace_purchase_v2($1,'buyer',$2,$3,1,'event-payout','{}',0,0,0,'checkout')",[buyer,item.id,price.id]);
+    assert.equal(event.content_type,'event');
+    assert.equal((await one("select captro_finance_category('event') category")).category,'event');
     await db.query("update app_purchases set provider_checkout_id='cs_event' where id=$1",[event.id]);
     await one("select * from captro_confirm_marketplace_purchase($1,'evt_event','cs_event','pi_event','ch_event',null,1000,60,0,'USD',null,'digest')",[event.id]);
     await db.query("update app_creator_earnings set status='transferred' where purchase_id in ($1,$2)",[p.id,event.id]);
     assert.equal(Number((await pool()).available),441);
     const other=(await one('insert into auth.users values(gen_random_uuid()) returning id')).id;
     const otherAccount=await one("insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode) values($1,'other','acct_other','test') returning *",[other]);
-    const liveAccount=await one("insert into app_connected_accounts(user_id,app_user_id,provider_account_id,stripe_mode) values($1,'seller','acct_live','live') returning *",[seller]);
+    const liveAccount=await one("select * from app_connected_accounts where user_id=$1 and stripe_mode='live'",[seller]);
     for(const [owner,acct,provider] of [[other,otherAccount.id,'po_other'],[seller,liveAccount.id,'po_live']])
       await db.query("insert into app_payouts(creator_id,connected_account_id,provider_payout_id,currency,amount,status) values($1,$2,$3,'USD',50,'paid')",[owner,acct,provider]);
     const payout=await one("insert into app_payouts(creator_id,connected_account_id,provider_payout_id,currency,amount,fee_amount,status) values($1,$2,'po_combined','USD',1381,17,'pending') returning *",[seller,account.id]);
@@ -138,6 +167,8 @@ test('support shares durable payment ledger, zero commission and no entitlement'
     await assert.rejects(begin(500),/permission denied/);
     await assert.rejects(db.exec('select * from app_creator_support_handoffs'),/permission denied/);
     await assert.rejects(db.exec('update app_creator_support_enrollments set enabled_for_test=true'),/permission denied/);
+    await assert.rejects(db.exec('update app_creator_support_enrollments set enabled_for_live=true'),/permission denied/);
+    await assert.rejects(db.query("select * from captro_admin_set_creator_support_enrollment(gen_random_uuid(),'test',true,'attacker','owner',null,'not allowed from client','request-client')"),/permission denied/);
     for(const view of ['app_creator_finance_orders','app_creator_finance_pools','app_creator_finance_payouts'])
       await assert.rejects(db.exec('select * from '+view),/permission denied/);
     await db.exec('reset role');

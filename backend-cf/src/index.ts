@@ -9,7 +9,7 @@ import { currencyFeeUnits } from './currency';
 import { reconcileHostedHold } from './hosted-hold';
 import { runPurchaseReconciliation, requireReplayableProviderCreation, type ReconciliationOutcome } from './purchase-reconciliation';
 import { resolvePaymentRecovery } from './payment-recovery';
-import { registerCreatorSupportRoutes, supportTestEnabled, supportCheckoutParameters, SupportError } from './creator-support';
+import { registerCreatorSupportRoutes, supportModeEnabled, supportCheckoutParameters, SupportError } from './creator-support';
 import { registerCreatorEarningsRoutes, EarningsError } from './creator-earnings';
 import { supportReadiness } from './support-readiness';
 import { validateMediaWritingOverlays } from './media-writing';
@@ -11049,10 +11049,10 @@ async function createCommerceCheckoutSession(c: any, purchase: any, forExpiry = 
     // Reconciliation continues for accepted payments even if creation is later
     // disabled. Stripe/database mode and immutable snapshot checks still apply.
     await requireStripeDatabaseMode(c);
-    if (getStripeConfig(c).liveMode) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 503);
+    if (purchase.stripe_mode !== configuredStripeMode(c)) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',503);
     await requireRetainedPlatform(c);
     const validateSession = (session: any) => {
-      if (session?.livemode !== false || session?.mode !== 'payment' || session?.currency !== 'usd'
+      if (session?.livemode !== getStripeConfig(c).liveMode || session?.mode !== 'payment' || session?.currency !== 'usd'
         || session?.amount_total !== purchase.total_amount || session?.metadata?.source !== 'captro_commerce'
         || session?.metadata?.captro_purchase_id !== purchase.id) throw new SupportError('CAPTRO_SUPPORT_CHECKOUT_INVALID', 503);
       return session;
@@ -11064,6 +11064,7 @@ async function createCommerceCheckoutSession(c: any, purchase: any, forExpiry = 
       return validateSession(prior.data);
     }
     if (purchase.status !== 'payment_pending') throw new SupportError('CAPTRO_PURCHASE_NOT_PAYABLE');
+    if (!supportModeEnabled(c.env)) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',503);
     const session = await stripeApiRequest(c, '/checkout/sessions', supportCheckoutParameters(purchase), `captro-commerce-${purchase.id}`);
     if (!session.ok || !session.data?.id || !session.data?.url) throw stripeProviderError(session, 'STRIPE_CHECKOUT_FAILED');
     validateSession(session.data);
@@ -20154,7 +20155,7 @@ async function supportBuyer(c: any, appId: string, expectedAuthId?: string, issu
 }
 async function supportParties(c: any, buyerAppId: string, creatorAppId: string, issuedAt?: string) {
   await requireStripeDatabaseMode(c);
-  if (getStripeConfig(c).liveMode) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 503);
+
   const buyer = await supportBuyer(c, buyerAppId, undefined, issuedAt);
   const creator = await supabaseUserByAnyId(c, creatorAppId);
   if (!creator || creator.id === buyer.id || !creator.supabase_user_id || creator.supabase_user_id === buyer.supabase_user_id
@@ -20165,8 +20166,10 @@ async function supportParties(c: any, buyerAppId: string, creatorAppId: string, 
   const access = await supabasePublicUserPayload(c, buyer.id, creator.id);
   const profile: any = access.body;
   if (access.status !== 200 || profile.privacy_locked || profile.viewer_has_blocked || profile.viewer_blocked_by) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 403);
+  const mode = configuredStripeMode(c);
+  const enrollmentField = mode === 'test' ? 'enabled_for_test' : 'enabled_for_live';
   const enrollment = await supabaseAdminSelectRows(c, 'app_creator_support_enrollments', {
-    creator_id: postgrestEqFilter(creator.supabase_user_id), enabled_for_test: 'eq.true',
+    creator_id: postgrestEqFilter(creator.supabase_user_id), [enrollmentField]: 'eq.true',
   }, 'creator_id', 1);
   if (!enrollment.length) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE');
   const account = await requireReadyConnectedAccount(c, creator.supabase_user_id);
@@ -20176,7 +20179,7 @@ async function supportParties(c: any, buyerAppId: string, creatorAppId: string, 
       avatar_url: profile.profile_image || null } };
 }
 registerCreatorSupportRoutes(api, authMiddleware, {
-  enabled: c => supportTestEnabled(c.env), hash: sha256Hex, viewer: getUserId,
+  enabled: c => supportModeEnabled(c.env), mode: c => configuredStripeMode(c), hash: sha256Hex, viewer: getUserId,
   limit: (c, key) => enforceRateLimit(c, 'creator_support', key, 30, 60),
   authorize: supportParties,
   validateBuyer: async (c, appId, authId, issuedAt) => { await supportBuyer(c, appId, authId, issuedAt); },
@@ -21072,11 +21075,20 @@ api.post('/commerce/purchases/:purchaseId/complete',authMiddleware,async(c)=>{
 
 api.post('/admin/commerce/purchases/:purchaseId/release',authMiddleware,async(c)=>{
   try {
-    const admin=await requireAdminRole(c,'payments:refund');
+    const admin=await requireAdminRole(c,'payments:release');
     const limited=await requireAdminWriteRateLimit(c,admin,'earning_release');if(limited)return limited;
     const body:any=await c.req.json();const purchaseId=isUuidText(c.req.param('purchaseId'));
     const releaseAfter=cleanText(body.releaseAfter,80);const note=cleanText(body.note,500);
     if(!purchaseId || !Number.isFinite(Date.parse(releaseAfter)) || note.length<10) return c.json({code:'CAPTRO_RELEASE_REVIEW_REQUIRED'},400);
+    const purchase=(await supabaseAdminSelectRows(c,'app_purchases',{id:postgrestEqFilter(purchaseId)},'id,content_type,stripe_mode,status',1))[0];
+    if(!purchase)return c.json({detail:'Purchase not found.',code:'CAPTRO_RELEASE_NOT_ELIGIBLE'},404);
+    // The creation flag stops new Support payments only. A confirmed payment
+    // remains reviewable if an incident switch is later turned off; the release
+    // path still re-verifies its Stripe mode, charge, fee, balance and account.
+    if(purchase.content_type==='creator_support' && purchase.stripe_mode!==configuredStripeMode(c))
+      return c.json({detail:'This Support payment belongs to a different Stripe environment.',code:'CAPTRO_SUPPORT_MODE_MISMATCH'},409);
+    if(purchase.content_type==='creator_support' && purchase.status!=='confirmed')
+      return c.json({detail:'Only a provider-confirmed Support payment can be reviewed for release.',code:'CAPTRO_RELEASE_NOT_ELIGIBLE'},409);
     await supabaseAdminRpc(c,'captro_review_earning_release',{p_purchase_id:purchaseId,p_admin_id:admin.userId,p_note:note,p_release_after:releaseAfter});
     await writeAdminAuditLog(c,admin,{actionType:'earning_release_reviewed',targetType:'purchase',targetId:purchaseId,reason:'fulfillment_completed',note,afterState:{releaseAfter}});
     if(Date.parse(releaseAfter)>Date.now())return c.json({status:'clearing'});
@@ -21193,7 +21205,9 @@ api.get('/admin/finance/records', authMiddleware, async(c)=>{
   const filters:Record<string,string>={category:postgrestEqFilter(category),currency:postgrestEqFilter(currency),stripe_mode:postgrestEqFilter(configuredStripeMode(c))};
   if(objectId)filters.object_id=postgrestEqFilter(objectId);
   if(sellerId)filters.seller_id=postgrestEqFilter(sellerId);
-  const items=await supabaseAdminQueryRows(c,objectId?'app_finance_order_totals':'app_finance_object_totals',{filters,order:objectId?'created_at.desc,order_id.asc':'object_id.asc,seller_id.asc',limit:51,offset});
+  const supportOrders=category==='creator_support';
+  const items=await supabaseAdminQueryRows(c,(objectId||supportOrders)?'app_finance_order_totals':'app_finance_object_totals',{
+    filters,order:(objectId||supportOrders)?'created_at.desc,order_id.asc':'object_id.asc,seller_id.asc',limit:51,offset});
   c.header('Cache-Control','private, no-store');
   return c.json({items:items.slice(0,50),nextOffset:items.length>50?offset+50:null});
  }catch(error){return c.json({detail:getErrorCode(error)==='FORBIDDEN'?'Finance access required.':'Could not read finance records.'},getErrorCode(error)==='FORBIDDEN'?403:500);}
@@ -21206,14 +21220,122 @@ api.get('/admin/finance/orders/:orderId',authMiddleware,async(c)=>{
   const orders=await supabaseAdminQueryRows(c,'app_finance_order_totals',{filters,limit:1});
   if(!orders[0])return c.json({detail:'Order not found.'},404);
   const offset=Math.max(0,Math.min(100000,Math.trunc(Number(c.req.query('offset'))||0)));
+  const purchase=(await supabaseAdminSelectRows(c,'app_purchases',{id:postgrestEqFilter(id),stripe_mode:postgrestEqFilter(configuredStripeMode(c))},'id,content_type,status,stripe_mode,settlement_model,provider_transfer_id',1))[0]||null;
   const entries=await supabaseAdminQueryRows(c,'app_finance_ledger',{filters,order:'created_at.asc,id.asc',limit:101,offset});
   c.header('Cache-Control','private, no-store');
-  return c.json({order:orders[0],entries:entries.slice(0,100),nextOffset:entries.length>100?offset+100:null});
+  return c.json({order:{...orders[0],purchase:purchase?{contentType:purchase.content_type,status:purchase.status,stripeMode:purchase.stripe_mode,
+    settlementModel:purchase.settlement_model,transferId:purchase.provider_transfer_id||null,
+    supportReleaseEnabled:purchase.content_type==='creator_support' && purchase.status==='confirmed'
+      && !purchase.provider_transfer_id && purchase.stripe_mode===configuredStripeMode(c)}:null},
+    entries:entries.slice(0,100),nextOffset:entries.length>100?offset+100:null});
  }catch(error){return c.json({detail:getErrorCode(error)==='FORBIDDEN'?'Finance access required.':'Could not read order ledger.'},getErrorCode(error)==='FORBIDDEN'?403:500);}
+});
+
+api.get('/admin/creator-support/enrollments/:creatorId',authMiddleware,async(c)=>{
+ try {
+  await requireAdminRole(c,'payments:support:manage');
+  await requireStripeDatabaseMode(c);
+  const requestedId=isUuidText(c.req.param('creatorId'));
+  if(!requestedId)return c.json({detail:'Enter a valid canonical creator ID.'},400);
+  const creator=await supabaseUserByAnyId(c,requestedId);
+  if(!creator || !isUuidText(creator.supabase_user_id) || supabaseUserStatus(creator)!=='active')
+    return c.json({detail:'Active creator account not found.'},404);
+  const mode=configuredStripeMode(c),field=mode==='test'?'enabled_for_test':'enabled_for_live';
+  const row=(await supabaseAdminSelectRows(c,'app_creator_support_enrollments',{
+    creator_id:postgrestEqFilter(creator.supabase_user_id)},'creator_id,enabled_for_test,enabled_for_live,reviewed_by,reviewed_at',1))[0]||null;
+  const readiness=await loadCreatorSupportReadiness(c,creator.supabase_user_id,true,true);
+  c.header('Cache-Control','private, no-store');
+  return c.json({creator:{id:creator.supabase_user_id,username:cleanText(creator.username,80)||null},mode,
+    enabled:row?.[field]===true,checkoutEnabled:supportModeEnabled(c.env),reviewedAt:row?.reviewed_at||null,readiness});
+ }catch(error){
+  const code=getErrorCode(error);
+  return c.json({detail:code==='FORBIDDEN'?'Owner access is required.':'Support approval could not be loaded. Apply the reviewed Support migrations and retry.'},code==='FORBIDDEN'?403:503);
+ }
+});
+
+api.post('/admin/creator-support/enrollments/:creatorId',authMiddleware,async(c)=>{
+ let admin:AdminContext|null=null;let creator:any=null;let reason='';
+ try {
+  admin=await requireAdminRole(c,'payments:support:manage');
+  await requireStripeDatabaseMode(c);
+  const requestedId=isUuidText(c.req.param('creatorId'));
+  if(!requestedId)return c.json({detail:'Enter a valid canonical creator ID.'},400);
+  const body:any=await c.req.json();
+  if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!['enabled','expectedReviewedAt','reason'].includes(k))
+    ||typeof body.enabled!=='boolean'||typeof body.reason!=='string'||body.reason.trim().length<10||body.reason.length>800
+    ||(body.expectedReviewedAt!==null&&body.expectedReviewedAt!==undefined&&
+      (typeof body.expectedReviewedAt!=='string'||body.expectedReviewedAt.length>80||!Number.isFinite(Date.parse(body.expectedReviewedAt)))))
+    return c.json({detail:'A valid decision, current review version and reason of at least 10 characters are required.'},400);
+  reason=body.reason.trim();
+  creator=await supabaseUserByAnyId(c,requestedId);
+  if(!creator || !isUuidText(creator.supabase_user_id) || supabaseUserStatus(creator)!=='active')
+    return c.json({detail:'Active creator account not found.'},404);
+  const mode=configuredStripeMode(c),field=mode==='test'?'enabled_for_test':'enabled_for_live';
+  const before=(await supabaseAdminSelectRows(c,'app_creator_support_enrollments',{
+    creator_id:postgrestEqFilter(creator.supabase_user_id)},'creator_id,enabled_for_test,enabled_for_live,reviewed_by,reviewed_at',1))[0]||null;
+  if(body.enabled){
+    if(await userHasActiveRestriction(c,creator.supabase_user_id,'commerce'))
+      return c.json({detail:'This creator has an active commerce restriction. No enrollment was changed.'},409);
+    const readiness=await loadCreatorSupportReadiness(c,creator.supabase_user_id,true,true);
+    if(readiness.status!=='ready')return c.json({detail:'Creator payout readiness is not verified. No enrollment was changed.',readiness},409);
+  }
+  const expected=body.expectedReviewedAt==null?null:body.expectedReviewedAt;
+  const updated=await supabaseAdminRpc(c,'captro_admin_set_creator_support_enrollment',{
+    p_creator_id:creator.supabase_user_id,p_mode:mode,p_enabled:body.enabled,p_admin_id:admin.userId,
+    p_actor_role:admin.role,p_expected_reviewed_at:expected,p_reason:reason,
+    p_request_id:cleanText(c.get?.('requestId')||c.req.header('X-Request-ID')||'',120),
+  });
+  const row=Array.isArray(updated)?updated[0]:updated;
+  c.header('Cache-Control','private, no-store');
+  return c.json({creator:{id:creator.supabase_user_id,username:cleanText(creator.username,80)||null},mode,
+    enabled:row?.[field]===true,reviewedAt:row?.reviewed_at||null,
+    checkoutEnabled:supportModeEnabled(c.env),
+    readiness:await loadCreatorSupportReadiness(c,creator.supabase_user_id,true,true)});
+ }catch(error){
+  const code=getErrorCode(error).slice(0,120)||'SUPPORT_ENROLLMENT_FAILED';
+  if(admin && creator?.supabase_user_id){
+    try{await writeAdminAuditLog(c,admin,{actionType:'creator_support_enrollment_failed',targetType:'creator_support_enrollment',
+      targetId:creator.supabase_user_id,targetUserId:creator.supabase_user_id,reason,afterState:{result:'failed',code}});}catch{}
+  }
+  const stale=code==='CAPTRO_SUPPORT_ENROLLMENT_STALE';
+  return c.json({detail:stale?'Another owner changed this approval. Reload the current state before deciding again.':'Support approval was not confirmed. Reload the creator state before retrying.',code},stale?409:code==='FORBIDDEN'?403:409);
+ }
 });
 
 // Register before the legacy /:earningId route. Only the authenticated creator's
 // identity can scope these projections; request parameters cannot select a seller.
+async function loadCreatorSupportReadiness(c:any,sellerId:string,enrollmentOverride?:boolean,ignoreGlobalRolloutForAdminReview=false) {
+  let account = await connectedAccountForUser(c,sellerId,false);
+  let providerVerified = false;
+  if (account) {
+    try { account = await refreshConnectedAccount(c,account); providerVerified = true; }
+    catch { /* Retain the existing account. A failed provider read is not rejection. */ }
+  }
+  const enabled = supportModeEnabled(c.env) || ignoreGlobalRolloutForAdminReview;
+  const enrollmentField = configuredStripeMode(c)==='test' ? 'enabled_for_test' : 'enabled_for_live';
+  let enrolled:boolean|null = typeof enrollmentOverride === 'boolean' ? enrollmentOverride : null;
+  if (enrolled === null && enabled) enrolled = (await supabaseAdminSelectRows(c,'app_creator_support_enrollments',{
+    creator_id:postgrestEqFilter(sellerId),[enrollmentField]:'eq.true'},'creator_id',1)).length > 0;
+  const identityRequired = sellerIdentityUsesStripeIdentity(c);
+  const identity = identityRequired ? await sellerIdentityRow(c,sellerId) : null;
+  let identityStatus = identity?.status || null;
+  if (identity?.provider_session_id) {
+    const sessionId = cleanText(identity.provider_session_id,180);
+    if (!sessionId.startsWith('vs_')) throw new Error('STRIPE_IDENTITY_READ_FAILED');
+    const response = await stripeApiGet(c,`/identity/verification_sessions/${encodeURIComponent(sessionId)}`);
+    if (!response.ok) throw stripeProviderError(response,'STRIPE_IDENTITY_READ_FAILED');
+    const session = response.data;
+    if (session?.id !== sessionId || session?.livemode !== getStripeConfig(c).liveMode
+        || session?.metadata?.captro_auth_user_id !== identity.user_id
+        || session?.metadata?.captro_connected_account_id !== identity.connected_account_id
+        || session?.metadata?.captro_mode !== identity.stripe_mode) throw new Error('STRIPE_IDENTITY_OWNER_MISMATCH');
+    identityStatus = ['requires_input','processing','verified','canceled'].includes(session.status) ? session.status : 'processing';
+  }
+  return supportReadiness({mode:configuredStripeMode(c),enabled,account,providerVerified,enrolled,
+    manualRequired:true,identityRequired,
+    identityVerified:identityStatus === 'verified' && identity?.connected_account_id === account?.id});
+}
+
 registerCreatorEarningsRoutes(api, authMiddleware, {
   identity: async c => {
     const sellerId = await supabaseAuthUserIdForAppUserId(c, getUserId(c));
@@ -21224,39 +21346,7 @@ registerCreatorEarningsRoutes(api, authMiddleware, {
   limit: c => enforceRateLimit(c,'creator_earnings_pools',getUserId(c),90,60),
   query: supabaseAdminQueryRows,
   eq: postgrestEqFilter,
-  readiness: async (c,sellerId) => {
-    let account = await connectedAccountForUser(c,sellerId,false);
-    let providerVerified = false;
-    if (account) {
-      try { account = await refreshConnectedAccount(c,account); providerVerified = true; }
-      catch { /* Retain the existing account. A failed provider read is not rejection. */ }
-    }
-    const enabled = supportTestEnabled(c.env);
-    const enrolled = enabled ? (await supabaseAdminSelectRows(c,'app_creator_support_enrollments',{
-      creator_id:postgrestEqFilter(sellerId),enabled_for_test:'eq.true'},'creator_id',1)).length > 0 : null;
-    const identityRequired = sellerIdentityUsesStripeIdentity(c);
-    const identity = identityRequired ? await sellerIdentityRow(c,sellerId) : null;
-    let identityStatus = identity?.status || null;
-    if (identity?.provider_session_id) {
-      // Read diagnostics stay read-only. Checkout performs the existing durable
-      // identity synchronization; this endpoint only explains its current state.
-      const sessionId = cleanText(identity.provider_session_id,180);
-      if (!sessionId.startsWith('vs_')) throw new Error('STRIPE_IDENTITY_READ_FAILED');
-      const response = await stripeApiGet(c,`/identity/verification_sessions/${encodeURIComponent(sessionId)}`);
-      if (!response.ok) throw stripeProviderError(response,'STRIPE_IDENTITY_READ_FAILED');
-      const session = response.data;
-      if (session?.id !== sessionId || session?.livemode !== getStripeConfig(c).liveMode
-          || session?.metadata?.captro_auth_user_id !== identity.user_id
-          || session?.metadata?.captro_connected_account_id !== identity.connected_account_id
-          || session?.metadata?.captro_mode !== identity.stripe_mode) throw new Error('STRIPE_IDENTITY_OWNER_MISMATCH');
-      identityStatus = ['requires_input','processing','verified','canceled'].includes(session.status) ? session.status : 'processing';
-    }
-    return supportReadiness({mode:configuredStripeMode(c),enabled,account,providerVerified,enrolled,
-      // The existing Support SQL contract requires manual scheduling even if
-      // another commerce flow relaxes the configurable seller gate.
-      manualRequired:true,identityRequired,
-      identityVerified:identityStatus === 'verified' && identity?.connected_account_id === account?.id});
-  },
+  readiness: (c,sellerId) => loadCreatorSupportReadiness(c,sellerId),
 });
 
 api.get('/commerce/earnings', authMiddleware, async (c) => {
@@ -21861,6 +21951,7 @@ const ADMIN_PERMISSIONS: Record<AdminRole, Set<string>> = {
     'messages:reported:write',
     'audit:read',
     'payments:refund',
+    'payments:release',
     'payments:read',
     'roles:write',
   ]),

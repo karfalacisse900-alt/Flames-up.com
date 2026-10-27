@@ -8,9 +8,10 @@ export function supportReadiness(input: {
   const blockers: { source: string; code: string; message: string }[] = [];
   const add = (source: string, code: string, message: string) => blockers.push({source,code,message});
   if (!input.enabled) add('captro','rollout_disabled', input.mode === 'live'
-    ? 'Live Support is disabled by Captro. The current payment contract is test-only; this is not a Stripe account rejection.'
+    ? 'Live Support is disabled by Captro’s server-side rollout switch; this is not a Stripe account rejection.'
     : 'Support checkout is disabled by Captro in this environment.');
-  if (input.enrolled === false) add('captro','test_enrollment_required','This creator is not enrolled in the isolated Support test rollout.');
+  if (input.enrolled === false) add('captro','creator_enrollment_required',
+    'An administrator must approve this creator for Support in the current Stripe environment.');
   const a = input.account;
   if (!a) add('captro','payout_setup_required','No existing payout account was found in this Stripe mode. Use the payout setup below.');
   else if (!input.providerVerified) add('verification','provider_unavailable','The current Stripe account requirements could not be verified. Retry; your existing payout account is retained.');

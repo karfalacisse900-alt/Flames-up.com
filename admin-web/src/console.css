@@ -1199,6 +1199,10 @@
     padding: 0 14px 16px;
   }
 }
+.support-release-review { margin-top: 18px; padding: 18px; border-color: #d9e0e8; background: #f8fafc; }
+.support-release-review h3 { margin-top: 0; }
+.support-release-review textarea { display: block; width: 100%; min-height: 88px; margin-top: 8px; padding: 10px 12px; border: 1px solid #d3dae4; border-radius: 8px; color: #17191d; font: inherit; resize: vertical; }
+.support-release-review label { display: block; margin: 12px 0; font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   .console-app *,
   .console-dialog * {

@@ -40,8 +40,10 @@ async function request(path, data = {}) {
     method: 'POST', credentials: 'omit', referrerPolicy: 'no-referrer', cache: 'no-store',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, ...data }), signal: AbortSignal.timeout(15000),
   });
-  if (!response.ok) throw new Error(response.status === 401 ? 'link' : 'request');
-  return response.json();
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(response.status === 401 ? 'link' :
+    response.status === 503 && data.code === 'CAPTRO_SUPPORT_UNAVAILABLE' ? 'unavailable' : 'request');
+  return data;
 }
 function showReturn(id) {
   if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/i.test(id)) return;
@@ -55,6 +57,7 @@ async function checkStatus() {
   checking = true; $('check-status').disabled = true;
   try {
     const result = await request('status');
+    showEnvironment(result.mode);
     // A different creator handoff can replace this tab's short-lived context.
     // Never show its receipt as the outcome of an older checkout return.
     if (location.pathname === '/support-creator/return') {
@@ -82,6 +85,12 @@ async function checkStatus() {
     setStatus(error.message === 'link' ? 'This secure link has expired. Return to Captro to check your payment.' : 'Could not verify payment. Check again before starting another payment.');
   } finally { checking = false; $('check-status').disabled = false; $('check-status').hidden = false; }
 }
+function showEnvironment(mode) {
+  const note = $('environment-note');
+  if (mode === 'test') { note.textContent = 'Test environment — no real payments.'; note.hidden = false; }
+  else if (mode === 'live') { note.textContent = 'Secure Stripe checkout. Payment confirmation is verified by Captro.'; note.hidden = false; }
+  else { note.hidden = true; }
+}
 async function load() {
   $('retry').hidden = true; setBusy(true);
   // Turning off new checkouts must not hide the outcome of an existing payment.
@@ -90,11 +99,12 @@ async function load() {
     try { await checkStatus(); } finally { setBusy(false); }
     return;
   }
-  if (!config.enabled || !config.apiBaseURL) {
-    setStatus('Creator support is not available yet. No payment has been started.'); setBusy(false); return;
+  if (!config.apiBaseURL) {
+    setStatus('Secure checkout is unavailable. No payment has been started.'); $('retry').hidden = false; setBusy(false); return;
   }
   try {
     const data = await request('session');
+    showEnvironment(data.mode);
     $('title').textContent = 'Support ' + data.creator.display_name;
     $('username').textContent = '@' + data.creator.username;
     $('avatar-fallback').textContent = Array.from(data.creator.display_name || '?')[0];
@@ -119,7 +129,9 @@ async function load() {
     }
     if (purchaseId && currentStatus === 'confirming') { $('support-form').hidden = false; select(data.purchase.amount); }
   } catch (error) {
-    setStatus(error.message === 'link' ? 'This secure link has expired. Open Support again in Captro.' : 'Could not load secure support. Please retry.');
+    setStatus(error.message === 'link' ? 'This secure link has expired. Open Support again in Captro.' :
+      error.message === 'unavailable' ? 'Creator Support is disabled or unavailable in this environment. No payment has been started.' :
+      'Could not load secure support. Please retry.');
     $('retry').hidden = false;
   } finally { setBusy(false); }
 }

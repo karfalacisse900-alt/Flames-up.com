@@ -12,6 +12,7 @@ const deployWorkflow = read('../../.github/workflows/deploy-worker.yml');
 const sandboxWorkflow = read('../../.github/workflows/stripe-sandbox-integration.yml');
 const sandboxRuntime = read('../scripts/stripe-sandbox-runtime.mjs');
 const sandboxSchema = read('../scripts/stripe-sandbox-schema.mjs');
+const supportSandboxContract = read('../scripts/creator-support-stripe-contract.mjs');
 const connectSmoke = read('../scripts/verify-stripe-connect.mjs');
 const wranglerConfig = read('../wrangler.toml');
 const paymentEnvironmentMigration = read('../../supabase/migrations/20260905205251_configure_stripe_payment_environment.sql');
@@ -112,6 +113,13 @@ test('protected sandbox acceptance is pinned to its configured test account and 
   assert.match(sandboxSchema, /columnExists\('app_connected_accounts', 'stripe_mode'\)/);
   assert.match(sandboxSchema, /20260908224758_isolate_stripe_connected_accounts_by_mode\.sql/);
   assert.doesNotMatch(sandboxSchema, /Production baseline changed/);
+  assert.match(sandboxSchema, /20261019234129_creator_support_test_contract\.sql/);
+  assert.match(sandboxSchema, /20261026230000_creator_support_live_mode\.sql/);
+  assert.match(sandboxSchema, /20261026232009_creator_support_admin_release\.sql/);
+  assert.match(supportSandboxContract, /captro_admin_set_creator_support_enrollment/);
+  assert.ok(!supportSandboxContract.includes("stripe('/accounts"));
+  assert.ok(!supportSandboxContract.includes("stripe('/v1/accounts"));
+  assert.match(supportSandboxContract, /hostedPaymentCompleted:false/);
 });
 
 test('the production bootstrap binds one Stripe mode and provisions both signed webhook destinations', () => {

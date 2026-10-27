@@ -1,5 +1,5 @@
-// Optional support uses the existing deferred marketplace ledger, not a new wallet.
-// Public/live activation is intentionally impossible in this development contract.
+// Support reuses the existing deferred marketplace ledger and Connect payout flow.
+// Live mode remains fail-closed unless explicitly enabled for production.
 export const SUPPORT_ORIGIN = 'https://captro-site.pages.dev';
 export const SUPPORT_LIMITS = Object.freeze({ currency: 'USD', minimum: 200, maximum: 20000, suggested: [200, 500, 1000, 2000] });
 export const SUPPORT_DISCLOSURE = 'Captro takes 0%. Payment-processing fees apply.';
@@ -8,10 +8,14 @@ export class SupportError extends Error {
   status: number;
   constructor(code: string, status = 409) { super(code); this.status = status; }
 }
-export function supportTestEnabled(env: any) {
-  return env.CAPTRO_CREATOR_SUPPORT === 'test' && env.STRIPE_MODE === 'test'
-    && env.ENVIRONMENT !== 'production';
+export function supportModeEnabled(env: any) {
+  const mode = env.STRIPE_MODE;
+  if (env.CAPTRO_CREATOR_SUPPORT !== mode) return false;
+  if (mode === 'test') return env.ENVIRONMENT !== 'production';
+  if (mode === 'live') return env.ENVIRONMENT === 'production';
+  return false;
 }
+export function supportTestEnabled(env: any) { return supportModeEnabled(env) && env.STRIPE_MODE === 'test'; }
 export function supportAmount(value: unknown, currency: unknown) {
   if (currency !== 'USD' || !Number.isSafeInteger(value) || Number(value) < SUPPORT_LIMITS.minimum
     || Number(value) > SUPPORT_LIMITS.maximum) throw new SupportError('CAPTRO_SUPPORT_AMOUNT_INVALID', 400);
@@ -19,7 +23,7 @@ export function supportAmount(value: unknown, currency: unknown) {
 }
 export function supportCheckoutParameters(p: any) {
   supportAmount(p.total_amount, p.currency);
-  if (p.content_type !== 'creator_support' || p.stripe_mode !== 'test' || p.payment_interface !== 'checkout'
+  if (p.content_type !== 'creator_support' || !['test', 'live'].includes(p.stripe_mode) || p.payment_interface !== 'checkout'
     || p.settlement_model !== 'deferred' || p.service_fee_amount !== 0 || p.platform_fee_amount !== 0 || p.tax_amount !== 0
     || p.buyer_id === p.creator_id || !uuid.test(p.id) || !p.stripe_destination_account_id?.startsWith('acct_')) {
     throw new SupportError('CAPTRO_SUPPORT_SNAPSHOT_INVALID');
@@ -51,7 +55,7 @@ export function supportStatus(p: any) {
   const statuses: Record<string, string> = { confirmed: 'confirmed', refunded: 'refunded', partially_refunded: 'partially_refunded',
     cancelled: 'cancelled', expired: 'expired', rejected: 'unavailable', disputed: 'disputed', payment_received_under_review: 'under_review' };
   return { id: p.id, status: statuses[p.status] || 'confirming', amount: p.total_amount, currency: p.currency,
-    disclosure: SUPPORT_DISCLOSURE, platform_fee: 0, handoff_id: p.handoff_id ?? null };
+    disclosure: SUPPORT_DISCLOSURE, platform_fee: 0, mode: p.stripe_mode || null, handoff_id: p.handoff_id ?? null };
 }
 export async function supportToken(secret: string, buyer: string, creator: string, request: string) {
   if (!secret || secret.length < 32) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 503);
@@ -63,6 +67,7 @@ export async function supportToken(secret: string, buyer: string, creator: strin
 
 type Services = {
   enabled(c: any): boolean;
+  mode(c: any): string;
   hash(token: string): Promise<string>;
   viewer(c: any): string;
   limit(c: any, key: string): Promise<Response | null>;
@@ -124,10 +129,10 @@ export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
   };
   api.get('/creator-support/eligibility/:creator', auth, async (c: any) => {
     c.header('Cache-Control', 'no-store');
-    if (!s.enabled(c)) return c.json({ enabled: false });
-    try { await s.authorize(c, s.viewer(c), c.req.param('creator')); return c.json({ enabled: true, ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE }); }
+    if (!s.enabled(c)) return c.json({ enabled: false, mode: s.mode(c), reason: 'rollout_disabled' });
+    try { await s.authorize(c, s.viewer(c), c.req.param('creator')); return c.json({ enabled: true, mode: s.mode(c), ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE }); }
     catch (error) {
-      if (error instanceof SupportError && [401, 403, 404, 409].includes(error.status)) return c.json({ enabled: false });
+      if (error instanceof SupportError && [401, 403, 404, 409].includes(error.status)) return c.json({ enabled: false, mode: s.mode(c), reason: 'creator_unavailable' });
       return c.json({ code: 'CAPTRO_SUPPORT_RETRY', detail: 'Could not check support availability. Please retry.' }, 503);
     }
   });
@@ -145,7 +150,7 @@ export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
   api.post('/creator-support/web/session', guard(async c => {
     const { h, who } = await webContext(c, await body(c));
     const p = h.purchase_id ? await s.purchase(c, h.purchase_id) : null;
-    return c.json({ creator: who.profile, ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE, purchase: p ? supportStatus(p) : null });
+    return c.json({ creator: who.profile, mode: s.mode(c), ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE, purchase: p ? supportStatus(p) : null });
   }));
   api.post('/creator-support/web/checkout', guard(async c => {
     const b = await body(c);

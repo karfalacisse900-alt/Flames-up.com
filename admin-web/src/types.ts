@@ -33,6 +33,15 @@ export type AdminSession = {
   environment: string;
 };
 
+export type CreatorSupportEnrollment = {
+  creator: { id: string; username: string | null };
+  mode: string;
+  enabled: boolean;
+  checkoutEnabled: boolean;
+  reviewedAt: string | null;
+  readiness: { status: string; retryable: boolean; blockers: Array<{ source: string; code: string; message: string }> };
+};
+
 export type DashboardResponse = {
   cards: Record<string, number | null>;
   errors?: Record<string, string>;
@@ -245,4 +254,4 @@ export interface FinanceRecord {
  captro_fee?:number;processing_fee?:number|null;stripe_payment_intent_id?:string;stripe_transfer_id?:string;
 }
 export interface FinanceSummary {mode:string;asOf:string;pools:FinanceRecord[];platform:null|{observedAt:string;available:{currency:string;amount:number}[];pending:{currency:string;amount:number}[]};}
-export interface FinanceOrder {order:FinanceRecord;entries:{id:string;event_type:string;account:string;amount:number;currency:string;stripe_object_id?:string;created_at:string}[];nextOffset:number|null;}
+export interface FinanceOrder {order:FinanceRecord & {purchase?:{contentType:string;status:string;stripeMode:string;settlementModel:string;transferId:string|null;supportReleaseEnabled?:boolean}|null};entries:{id:string;event_type:string;account:string;amount:number;currency:string;stripe_object_id?:string;created_at:string}[];nextOffset:number|null;}

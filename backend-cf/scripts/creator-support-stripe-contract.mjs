@@ -41,7 +41,11 @@ try {
   const [seller,buyer]=await Promise.all([createUser(),createUser()]);
   const account=first(await db('app_connected_accounts',{user_id:seller.id,app_user_id:'contract-seller',provider_account_id:recipient.id,
     stripe_mode:'test',status:'ready',details_submitted:true,transfers_enabled:true,payouts_enabled:true,payout_schedule:'manual'}));
-  await db('app_creator_support_enrollments',{creator_id:seller.id,enabled_for_test:true,reviewed_by:'isolated-contract-fixture'});
+  const enrollment=await rpc('captro_admin_set_creator_support_enrollment',{p_creator_id:seller.id,p_mode:'test',p_enabled:true,
+    p_admin_id:'isolated-contract-fixture',p_actor_role:'owner',p_expected_reviewed_at:null,
+    p_reason:'Verified existing ready sandbox Connect recipient.',p_request_id:'support-sandbox-'+process.env.GITHUB_RUN_ID});
+  assert.equal(enrollment.enabled_for_test,true);
+  assert.equal((await db('app_audit_logs?action_type=eq.creator_support_enrollment_changed&target_id=eq.'+seller.id,undefined,'GET')).length,1);
   const hash=randomBytes(32).toString('hex');
   const handoffArgs={p_buyer_id:buyer.id,p_buyer_app_user_id:'contract-buyer',p_creator_id:seller.id,p_creator_app_user_id:'contract-seller',p_request_key:randomUUID(),p_token_hash:hash};
   const h=await rpc('captro_issue_support_handoff',handoffArgs);

@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {createHmac} from 'node:crypto';
 import {cents} from '../src/stripe-money.ts';
-import {supportCheckoutParameters,SupportError} from '../src/creator-support.ts';
+import {supportCheckoutParameters,supportModeEnabled,SupportError} from '../src/creator-support.ts';
 const source=readFileSync(new URL('../src/index.ts',import.meta.url),'utf8');
 function actual(name,next,deps) {
   const code=stripTypeScriptTypes(source.slice(source.indexOf(`async function ${name}(`),source.indexOf(next)));
@@ -15,7 +15,8 @@ const purchase=(currency='USD')=>({id:'10000000-0000-4000-8000-000000000001',sta
   item_amount:1000,service_fee_amount:80,tax_amount:0,price_id:'price-fixture',purchasable_id:'item-fixture',
   buyer_id:'buyer-fixture',hold_expires_at:'2035-01-01T12:35:00Z'});
 const base={cents,cleanText:value=>String(value??''),postgrestEqFilter:x=>x,now:()=>new Date().toISOString(),
-  requireRetainedPlatform:async()=>{},paymentTrace:()=>{},commerceErrorCode:e=>e.message,
+  requireRetainedPlatform:async()=>{},paymentTrace:()=>{},commerceErrorCode:e=>e.message,configuredStripeMode:()=> 'test',
+  supportModeEnabled,
   getStripeConfig:()=>({configured:true,webhookConfigured:true,mode:'test',liveMode:false,publishableKey:'pk_test_fixture'}),
   buyerStripeCustomerForUser:async()=>({provider_customer_id:null}),supabaseAdminPatchRows:async()=>{},
   marketplaceTransferGroup:id=>'fixture-'+id,stripeProviderError:()=>Error('provider rejected')};
@@ -32,7 +33,8 @@ test('actual Support checkout bypasses marketplace pricing and retries the same 
         metadata:{source:'captro_commerce',captro_purchase_id:row.id}}};
     }};
   const create=actual('createCommerceCheckoutSession','function sanitizeCommerceSelection(',deps);
-  await assert.rejects(create({env:{}},row),/response lost/);fail=false;await create({env:{}},row);
+  const context={env:{CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'test'}};
+  await assert.rejects(create(context,row),/response lost/);fail=false;await create(context,row);
   assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1]);
   assert.equal(calls[0].params['line_items[0][price_data][unit_amount]'],500);
   assert.ok(!Object.keys(calls[0].params).some(key=>key.includes('application_fee')||key.includes('line_items[1]')));
