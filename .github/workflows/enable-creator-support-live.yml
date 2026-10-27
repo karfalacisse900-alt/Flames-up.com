@@ -92,10 +92,13 @@ jobs:
           settings = cloudflare('/settings')
           support_bindings = [binding for binding in (settings.get('bindings') or []) if binding.get('name') == 'CAPTRO_CREATOR_SUPPORT']
           assert len(support_bindings) <= 1 and not any(binding.get('type') == 'secret_text' for binding in support_bindings), 'Support gate has an unexpected secret binding; no deployment made'
+          with urllib.request.urlopen('https://flames-up-api.karfalacisse900.workers.dev/api/health', timeout=20) as response:
+              current_health = json.load(response)
+          assert current_health.get('status') == 'healthy' and current_health.get('environment') == 'production' and current_health.get('commit') == '5eee1c0df73f56ce02a4e48f375167d135db7798', 'Production API source changed since this reviewed rollout; no deployment made'
           versions = cloudflare('/deployments').get('deployments', [])
           active = versions[0].get('versions', []) if versions else []
-          print(json.dumps({'current_production_worker_versions': [{'version_id': version.get('version_id'), 'percentage': version.get('percentage')} for version in active]}))
-          assert len(active) == 1 and active[0].get('version_id') == '20e5ada3-a21b-46eb-9ee6-407048fa0da9' and active[0].get('percentage') == 100, 'Production Worker changed since the reviewed Support baseline; no deployment made'
+          print(json.dumps({'current_production_worker_versions': [{'version_id': version.get('version_id'), 'percentage': version.get('percentage')} for version in active], 'current_api_commit': current_health.get('commit')}))
+          assert len(active) == 1 and active[0].get('version_id') == '66658b31-1fb8-4423-94fd-cd44bc5f7192' and active[0].get('percentage') == 100, 'Production Worker deployment changed since read-only verification; no deployment made'
           print(json.dumps({'platform_ready': True, 'webhook_ready': True, 'approved_live_creators_verified': len(approved), 'unapproved_live_accounts_not_enabled': len(live_rows) - len(approved), 'worker_baseline_verified': True, 'no_payment_created': True}))
           PY
       - name: Enable only the server-side live Support gate
