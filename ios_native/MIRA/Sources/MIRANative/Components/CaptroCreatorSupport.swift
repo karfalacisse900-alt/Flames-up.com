@@ -67,8 +67,8 @@ guard url.scheme == "https", url.host == "captro-site.pages.dev", url.port == ni
 }
 extension Notification.Name { static let captroSupportReturned = Notification.Name("captro.support.returned") }
 
-/// The entry point stays discoverable in supported storefronts. Checkout itself
-/// remains disabled unless the build and server both authorize the test flow.
+/// The entry point stays discoverable in supported storefronts. The server
+/// verifies live rollout, creator approval, and payout readiness before checkout.
 struct CaptroSupportAction: View {
   let creatorID: String
   let name: String
@@ -130,8 +130,8 @@ struct CaptroSupportAction: View {
       guard let viewerID, viewerID != creatorID else { return }
       let storefront = await runtime.currentStorefront()
       guard !Task.isCancelled, expected == identity, CaptroSupportPolicy.permits(storefront: storefront) else { return }
-      // Live payment remains off. Keep the real entry point visible and tell the
-      // user plainly instead of silently removing it from the profile/Details UI.
+      // This local guard controls presentation only; the server remains the
+      // authority for live rollout, creator approval, and payout readiness.
       guard runtime.enabled else {
         visibleInStorefront = true
         unavailableMessage = "Captro has not enabled Support checkout yet. No payment can be made right now."
@@ -154,7 +154,7 @@ struct CaptroSupportAction: View {
   }
   private var sheet: some View {
     CaptroSupportSheet(creatorID: creatorID, name: name, username: username, avatar: avatar, api: api, originPostID: originPostID,
-      checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage,
+      checkoutAvailable: canCheckout, unavailableMessage: unavailableMessage, paymentMode: paymentMode,
       currentStorefront: runtime.currentStorefront, openBrowser: runtime.openBrowser)
       .id(identity)
       .presentationDetents([.large]).presentationDragIndicator(.visible)
