@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {supportTestEnabled} from '../src/creator-support.ts';
+import {supportModeEnabled} from '../src/creator-support.ts';
 // Verified default-off deployment from 39691085231 at 3a2f9ed2f0d6ef32cd33818119d8e595f7bf180c.
 // Never silently overwrite a newer deployment or apply the test-only migration
 // to a live ledger.
@@ -26,7 +26,8 @@ assert.deepEqual(versions?.map(v=>({id:v.version_id,percent:v.percentage})),[{id
 const bindings=(await read('/settings')).bindings;assert.ok(Array.isArray(bindings));
 const variables=Object.fromEntries(bindings.filter(b=>b.type==='plain_text').map(b=>[b.name,b.text]));
 assert.equal(variables.ENVIRONMENT,'production');assert.equal(variables.STRIPE_MODE,'live');
-assert.equal(supportTestEnabled(variables),false);
+assert.notEqual(variables.CAPTRO_CREATOR_SUPPORT,'live','Live Support must remain disabled during the default-off code rollout');
+assert.equal(supportModeEnabled(variables),false,'Support must remain disabled for the currently configured production Stripe mode');
 for(const name of ['CAPTRO_ACCOUNT_CLEANUP_MANIFEST','CAPTRO_PAYMENT_RECOVERY_ACTIONS'])
   assert.ok(!bindings.some(b=>b.name===name&&(b.type!=='plain_text'||b.text!=='blocked')),'Sensitive action gate changed');
 console.log(JSON.stringify({productionVersion:expected,sourceBaseline:baseline,changed,liveSupportEnabled:false,migrationsApplied:false,paymentSettingsChanged:false}));
