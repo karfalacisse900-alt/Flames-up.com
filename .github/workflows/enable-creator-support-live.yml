@@ -73,10 +73,12 @@ jobs:
           assert platform.get('charges_enabled') is True and platform.get('payouts_enabled') is True, 'Captro live Stripe platform is not payment-ready'
           assert (platform.get('capabilities') or {}).get('transfers') == 'active', 'Captro Stripe transfer capability is not active'
           assert (((platform.get('settings') or {}).get('payouts') or {}).get('schedule') or {}).get('interval') == 'manual', 'Captro platform payout hold is not manual'
-          required_events = {'checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','charge.refunded','refund.updated','charge.dispute.created','charge.dispute.closed','account.updated','account.application.deauthorized','payout.paid','payout.failed'}
+          checkout_events = {'checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','charge.refunded','refund.updated','charge.dispute.created','charge.dispute.closed'}
+          connect_events = {'account.updated','account.application.deauthorized','payout.paid','payout.failed'}
           hooks = stripe('webhook_endpoints?limit=100').get('data', [])
           candidates = [hook for hook in hooks if hook.get('status') == 'enabled' and hook.get('livemode') is True and ('flames-up-api.karfalacisse900.workers.dev' in hook.get('url','') or 'api.flames-up.com' in hook.get('url',''))]
-          assert candidates and any(required_events.issubset(set(hook.get('enabled_events') or [])) for hook in candidates), 'Live Stripe webhook is not wired for payment, refund, dispute, Connect, and payout events'
+          available_event_sets = [set(hook.get('enabled_events') or []) for hook in candidates]
+          assert any(checkout_events.issubset(events) for events in available_event_sets) and any(connect_events.issubset(events) for events in available_event_sets), 'Live Stripe endpoints do not separately cover checkout/refund/dispute and Connect/payout events'
           live_rows = supabase('app_connected_accounts?stripe_mode=eq.live&select=app_user_id,provider_account_id,status,charges_enabled,transfers_enabled,payouts_enabled,details_submitted,eligible_debit_card_exists,payout_schedule')
           approved = supabase('app_creator_support_enrollments?enabled_for_live=eq.true&select=creator_id')
           by_creator = {str(row.get('app_user_id')): row for row in live_rows}
