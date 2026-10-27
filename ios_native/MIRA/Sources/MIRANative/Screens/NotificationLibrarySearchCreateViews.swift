@@ -4409,9 +4409,9 @@ public struct CreateStoryNativeView: View {
         captureMode: .photoAndVideo,
         showsMusicButton: false,
         showsGridOverlay: false,
-        showsEditButton: false,
         dismissesOnCapture: false,
         dismissesOnCancel: false,
+        showsEditButton: false,
         onCapture: { media in
           closeCamera()
           pendingStoryMedia = media
