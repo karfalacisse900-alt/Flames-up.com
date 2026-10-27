@@ -55,7 +55,7 @@ private final class SupportReviewTransport: URLProtocol {
       print("SUPPORT_FIXTURE eligibility request \(attempt)") // DEBUG-only synthetic transport, no URLs/tokens.
       if flags.contains("--support-eligibility-error") && attempt == 1 {
         status = 503; body = "{\"code\":\"CAPTRO_SUPPORT_RETRY\",\"detail\":\"Availability could not be checked\"}"
-      } else { body = "{\"enabled\":\(flags.contains("--support-ineligible") ? "false" : "true")}" }
+      } else { body = "{\"enabled\":\(flags.contains("--support-ineligible") ? "false" : "true"),\"mode\":\"live\"}" }
     } else if path == "/users/fixture-creator" {
       body = "{\"id\":\"fixture-creator\",\"username\":\"fixture\",\"full_name\":\"Fixture Creator\",\"bio\":\"Isolated profile fixture\",\"followers_count\":2,\"following_count\":1,\"is_private\":false,\"privacy_locked\":false}"
     } else if path == "/users/fixture-creator/showcase" { body = "{\"clubs\":[]}" }
