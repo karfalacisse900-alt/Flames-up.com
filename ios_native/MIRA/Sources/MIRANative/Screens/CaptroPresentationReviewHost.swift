@@ -87,7 +87,9 @@ enum CaptroPresentationReviewFixture {
   static var group: MIRAStoryGroup {
     var story: [String: Any] = [
       "id": "review-story", "userId": "review-author", "image": mediaURL,
-      "createdAt": "2026-10-12T14:00:00Z", "locationName": "Manhattan",
+      "createdAt": "2026-10-12T14:00:00Z",
+      "expiresAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(3_600)),
+      "locationName": "Manhattan",
       "content": "A quiet afternoon", "likesCount": 0, "likedByMe": false
     ]
     if kind != "general" {
