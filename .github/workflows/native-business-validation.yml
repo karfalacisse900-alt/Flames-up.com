@@ -1,6 +1,11 @@
 name: Validate Captro Business
 on:
   workflow_dispatch:
+  push:
+    branches: [feature/captro-business-ordering]
+    paths:
+      - '.github/workflows/native-business-validation.yml'
+      - 'ios_native/MIRA/**'
 permissions:
   contents: read
 jobs:
