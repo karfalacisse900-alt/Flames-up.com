@@ -303,10 +303,12 @@ struct CaptroBusinessOrders: View {
 struct CaptroBusinessOrderDetail: View {
   let api: MIRAAPIClient
   let vendor: Bool
+  @Environment(\.scenePhase) private var phase
   @State private var order: CaptroBusinessOrder
   @State private var error: String?
   @State private var working = false
   @State private var refundAction: String?
+  @State private var confirmsCancellation = false
 
   init(api: MIRAAPIClient, order: CaptroBusinessOrder, vendor: Bool) {
     self.api = api
@@ -356,6 +358,9 @@ struct CaptroBusinessOrderDetail: View {
           if order.status == "refund_pending" { refundButton("Retry refund", "reject") }
         } else {
           Button("Refresh order status") { Task { await refresh() } }.disabled(working)
+          if order.status == "awaiting_payment" {
+            Button("Cancel unpaid order", role: .destructive) { confirmsCancellation = true }.disabled(working)
+          }
           if order.status == "received" { refundButton("Cancel and refund", "cancel") }
           if order.status == "refund_pending" { refundButton("Retry refund", "cancel") }
         }
@@ -364,7 +369,17 @@ struct CaptroBusinessOrderDetail: View {
     .navigationTitle("Order #\(order.number)")
     .navigationBarTitleDisplayMode(.inline)
     .refreshable { await refresh() }
-    .task { await refresh() }
+    .task(id: phase) {
+      guard phase == .active else { return }
+      await refresh()
+      while !Task.isCancelled && !vendor && !["completed", "cancelled", "refunded"].contains(order.status) {
+        do { try await Task.sleep(for: .seconds(20)) } catch { return }
+        await refresh()
+      }
+    }
+    .confirmationDialog("Cancel this unpaid order?", isPresented: $confirmsCancellation, titleVisibility: .visible) {
+      Button("Cancel order", role: .destructive) { Task { await change("cancel_payment") } }
+    }
     .confirmationDialog("Refund this order?", isPresented: Binding(
       get: { refundAction != nil }, set: { if !$0 { refundAction = nil } }
     ), titleVisibility: .visible) {
@@ -400,7 +415,7 @@ struct CaptroBusinessOrderDetail: View {
     do {
       if vendor {
         order = try await api.get("/business-owner/\(order.businessId)/orders/\(order.id)")
-      } else if order.status == "awaiting_payment" {
+      } else if order.status == "awaiting_payment" || order.status == "refund_pending" {
         order = try await api.post("/business-orders/\(order.id)/verify", body: CaptroBusinessEmpty())
       } else { order = try await api.get("/business-orders/\(order.id)") }
     } catch { self.error = error.localizedDescription }

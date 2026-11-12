@@ -77,7 +77,7 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
   };
   const api = new Hono();
   let creationCount = 0, refundCount = 0;
-  const intents = new Map(), charges = new Map(), paymentIds = [];
+  const intents = new Map(), charges = new Map(), refunds = new Map(), paymentIds = [];
   const webhook = makeBusinessOrdering(api, async (c, next) => {
     if (!c.req.header('fixture-actor')) return c.json({}, 401);
     await next();
@@ -104,6 +104,10 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     limit: async () => null,
     getStripe: async (_, path) => {
       if (realStripe) return sandboxStripe(path);
+      if (path.startsWith('/refunds?')) {
+        const charge = new URL('https://fixture.invalid' + path).searchParams.get('charge');
+        return { ok: true, data: { data: refunds.has(charge) ? [refunds.get(charge)] : [], has_more: false } };
+      }
       const id = path.split('/').pop().split('?')[0];
       const data = path.startsWith('/charges/') ? charges.get(id) : intents.get(id);
       return { ok: Boolean(data), data };
@@ -115,17 +119,25 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
           refundCount++;
           assert.equal(result.data.payment_intent, fields.payment_intent);
           assert.equal(result.data.status, 'succeeded');
-        } else {
+        } else if (path === '/payment_intents') {
           creationCount++;
           paymentIds.push(result.data.id);
         }
         return result;
       }
+      if (path.endsWith('/cancel')) {
+        const intent = intents.get(path.split('/')[2]);
+        intent.status = 'canceled';
+        return { ok: true, data: intent };
+      }
       if (path === '/refunds') {
         refundCount++;
         const intent = intents.get(fields.payment_intent);
         charges.get(intent.latest_charge).amount_refunded = intent.amount;
-        return { ok: true, data: { id: 're_fixture', payment_intent: intent.id } };
+        const refund = { id: 're_fixture', payment_intent: intent.id, charge: intent.latest_charge,
+          amount: intent.amount, currency: 'usd', status: 'succeeded' };
+        refunds.set(intent.latest_charge, refund);
+        return { ok: true, data: refund };
       }
       creationCount++;
       const id = 'pi_' + String(creationCount);
@@ -235,6 +247,19 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     await webhook({}, event);
     assert.equal(refundCount, 1);
     assert.equal((await one("select count(*)::int n from app_marketplace_ledger where event_type='BUSINESS_REFUND'")).n, 1);
+  });
+  await t.test('buyer can cancel an unpaid intent; vendor summary includes only confirmed charges', async () => {
+    const next = await (await call('/businesses/' + hotdogs + '/checkout', buyer, {
+      lines: [{ product_id: dog, quantity: 1, option_ids: [] }], total: 432,
+      request_id: '60000000-0000-4000-8000-000000000003',
+    })).json();
+    const cancellation = { action: 'cancel_payment' };
+    assert.equal((await call('/business-orders/' + next.order.id + '/action', stranger, cancellation)).status, 404);
+    assert.equal((await (await call('/business-orders/' + next.order.id + '/action', buyer, cancellation)).json()).status, 'cancelled');
+    const totals = await (await call('/business-owner/' + hotdogs + '/earnings', owner)).json();
+    assert.equal(totals.gross, 432);
+    assert.equal(totals.refunded, 432);
+    assert.equal((await call('/business-owner/' + hotdogs + '/earnings', stranger)).status, 404);
   });
   await t.test('PostgREST client roles cannot access business financial tables or settlement functions', async () => {
     for (const role of ['anon', 'authenticated']) {

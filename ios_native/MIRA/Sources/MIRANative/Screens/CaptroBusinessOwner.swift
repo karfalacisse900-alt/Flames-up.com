@@ -1,3 +1,4 @@
+import CoreLocation
 import PhotosUI
 import SwiftUI
 
@@ -62,6 +63,7 @@ private struct CaptroBusinessManageShop: View {
       }
       NavigationLink("Menu and products") { CaptroBusinessMenuEditor(api: api, business: shop) }
       NavigationLink("Orders and pickup") { CaptroBusinessVendorQueue(api: api, business: shop) }
+      NavigationLink("Earnings") { CaptroBusinessEarnings(api: api, business: shop) }
     }.navigationTitle(shop.name)
   }
 }
@@ -79,6 +81,7 @@ private struct CaptroBusinessShopEditor: View {
   let saved: (CaptroBusiness) -> Void
   @Environment(\.dismiss) private var dismiss
   @State private var shop: CaptroBusiness
+  @StateObject private var location = CaptroBusinessLocation()
   @State private var latitude: String
   @State private var longitude: String
   @State private var avatar: PhotosPickerItem?
@@ -110,6 +113,8 @@ private struct CaptroBusinessShopEditor: View {
         TextField("Pickup address or meeting point", text: $shop.pickupAddress)
         TextField("Latitude", text: $latitude).keyboardType(.numbersAndPunctuation)
         TextField("Longitude", text: $longitude).keyboardType(.numbersAndPunctuation)
+        Button("Use current pickup coordinates") { location.request() }
+        if location.unavailable { Text("Location is unavailable. You can enter coordinates manually.").font(.footnote) }
         TextField("Hours and pickup notes", text: $shop.hours, axis: .vertical)
         Text("Orders stay open until paused. Keep your hours and pickup location current.").font(.footnote)
       }
@@ -130,6 +135,11 @@ private struct CaptroBusinessShopEditor: View {
       Button("Save business") { Task { await save() } }.disabled(saving)
     }
     .navigationTitle(shop.name.isEmpty ? "Register Business" : "Edit Business")
+    .onReceive(location.$location) { coordinate in
+      guard let coordinate else { return }
+      latitude = String(coordinate.latitude)
+      longitude = String(coordinate.longitude)
+    }
     .disabled(saving)
   }
 
@@ -225,6 +235,7 @@ private struct CaptroBusinessProductEditor: View {
     let available: Bool
     let groups: [CaptroBusinessGroup]
     let mediaId: String?
+    let optionImageIds: [String: String]
   }
 
   let api: MIRAAPIClient
@@ -234,6 +245,7 @@ private struct CaptroBusinessProductEditor: View {
   @State private var product: CaptroBusinessProduct
   @State private var price: String
   @State private var photo: PhotosPickerItem?
+  @State private var optionPhotos: [String: PhotosPickerItem] = [:]
   @State private var saving = false
   @State private var error: String?
 
@@ -270,9 +282,17 @@ private struct CaptroBusinessProductEditor: View {
                 TextField("Extra cents", value: $option.extra, format: .number.grouping(.never))
                   .keyboardType(.numberPad).frame(maxWidth: 88)
               }
+              PhotosPicker(selection: Binding(
+                get: { optionPhotos[option.id] }, set: { optionPhotos[option.id] = $0 }
+              ), matching: .images) {
+                Text(optionPhotos[option.id] == nil ? "Choose option photo" : "Option photo selected").font(.footnote)
+              }
             }.onDelete { group.options.remove(atOffsets: $0) }
             Button("Add option") { group.options.append(CaptroBusinessOption()) }.disabled(group.options.count >= 30)
-            Button("Remove group", role: .destructive) { product.groups.removeAll { $0.id == group.id } }
+            Button("Remove group", role: .destructive) {
+              let id = group.id
+              product.groups.removeAll { $0.id == id }
+            }
           }
         }
         Button("Add option group") { product.groups.append(CaptroBusinessGroup()) }.disabled(product.groups.count >= 12)
@@ -302,11 +322,18 @@ private struct CaptroBusinessProductEditor: View {
     error = nil
     defer { saving = false }
     do {
+      let uploader = MIRAMediaUploadService(api: api)
       var imageId: String?
-      if let photo { imageId = try await captroBusinessUpload(photo, uploader: MIRAMediaUploadService(api: api)) }
+      if let photo { imageId = try await captroBusinessUpload(photo, uploader: uploader) }
+      var optionImageIds: [String: String] = [:]
+      for option in groups.flatMap(\.options) {
+        if let item = optionPhotos[option.id] {
+          optionImageIds[option.id] = try await captroBusinessUpload(item, uploader: uploader)
+        }
+      }
       let result: CaptroBusinessProduct = try await api.post("/business-owner/\(business.id)/products", body: Input(
         id: product.id, name: product.name, category: product.category, mode: product.mode, unitAmount: amount,
-        available: product.available, groups: groups, mediaId: imageId
+        available: product.available, groups: groups, mediaId: imageId, optionImageIds: optionImageIds
       ))
       saved(result)
       dismiss()
@@ -396,6 +423,41 @@ private struct CaptroBusinessVendorQueue: View {
       notice = "Order #\(order.number) picked up."
       await load()
     } catch { self.error = error.localizedDescription }
+  }
+}
+
+private struct CaptroBusinessEarnings: View {
+  struct Totals: Decodable {
+    let gross, tax, refunded, processingFee, pendingFees: Int
+  }
+  let api: MIRAAPIClient
+  let business: CaptroBusiness
+  @State private var totals: Totals?
+  @State private var error: String?
+
+  var body: some View {
+    List {
+      Section("Stripe test orders") {
+        if let totals {
+          LabeledContent("Gross received", value: captroBusinessPrice(totals.gross))
+          LabeledContent("Tax collected", value: captroBusinessPrice(totals.tax))
+          LabeledContent("Confirmed refunds", value: captroBusinessPrice(totals.refunded))
+          LabeledContent("Reported Stripe fees", value: captroBusinessPrice(totals.processingFee))
+          if totals.pendingFees > 0 { Text("Stripe fees pending for \(totals.pendingFees) orders.").font(.footnote) }
+        } else if error == nil { ProgressView() }
+        if let error {
+          Text(error)
+          Button("Retry") { Task { await load() } }
+        }
+        Text("Stripe sandbox earnings are for testing. Payouts are unavailable.").font(.footnote)
+      }
+    }.navigationTitle("Business Earnings").task { await load() }.refreshable { await load() }
+  }
+
+  @MainActor private func load() async {
+    error = nil
+    do { totals = try await api.get("/business-owner/\(business.id)/earnings") }
+    catch { self.error = error.localizedDescription }
   }
 }
 

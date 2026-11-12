@@ -22,6 +22,7 @@ struct CaptroBusinessOption: Codable, Identifiable, Hashable {
   var id = UUID().uuidString.lowercased()
   var name = ""
   var extra = 0
+  var imageUrl: String?
 }
 
 struct CaptroBusinessGroup: Codable, Identifiable, Hashable {

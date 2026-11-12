@@ -32,6 +32,17 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
       ["id": id, "name": name, "category": groups.isEmpty ? "Food" : "Coffee", "unit_amount": price,
        "image_url": image, "mode": groups.isEmpty ? "QUICK_ADD" : "CUSTOMIZE", "available": true, "groups": groups]
     }
+    func order(_ status: String) -> [String: Any] {
+      var row: [String: Any] = [
+        "id": "sample-order", "business_id": vendor, "business_name": "NYC Hot Dogs",
+        "pickup_address": "Sample vendor pickup", "latitude": 40.76, "longitude": -74,
+        "location_updated_at": "2026-11-01T20:00:00Z", "status": status,
+        "subtotal": 400, "tax": 32, "fee": 0, "total": 432, "refunded_amount": 0,
+        "lines": [["product_id": "dog", "name": "Hotdog", "quantity": 1, "unit_amount": 400, "options": []]],
+      ]
+      if status == "ready" { row["pickup_token"] = "sample-pickup-token" }
+      return row
+    }
     switch path {
     case "/api/businesses":
       status = 200
@@ -61,6 +72,15 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
       }
       let tax = (subtotal * 8 + 50) / 100
       payload = ["subtotal": subtotal, "tax": tax, "fee": 0, "total": subtotal + tax]
+    case "/api/businesses/\(vendor)/checkout":
+      status = 200
+      payload = ["order": order("awaiting_payment")]
+    case "/api/business-orders/sample-order/verify":
+      status = 200
+      payload = order("received")
+    case "/api/business-orders/sample-order":
+      status = 200
+      payload = order("ready")
     default:
       status = 503
       payload = ["detail": "Payments are disabled in this UI fixture."]

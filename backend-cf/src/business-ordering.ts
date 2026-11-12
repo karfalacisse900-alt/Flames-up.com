@@ -142,6 +142,9 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
       intent.transfer_group !== 'business_' + order.id || intent.transfer_data || intent.on_behalf_of) {
       throw new Error('PAYMENT_MISMATCH');
     }
+    if (intent.status === 'canceled') {
+      return deps.rpc(c, 'captro_business_cancel_payment', { p_order: order.id, p_intent: paymentId });
+    }
     if (intent.status !== 'succeeded') return order;
     const chargeId = typeof intent.latest_charge === 'string' ? intent.latest_charge : intent.latest_charge?.id;
     if (intent.amount_received !== order.total || !/^ch_[A-Za-z0-9]+$/.test(chargeId ?? '')) throw new Error('PAYMENT_MISMATCH');
@@ -152,12 +155,26 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     }
     if (charge.id !== chargeId || charge.payment_intent !== paymentId || charge.currency !== 'usd' ||
       charge.amount !== order.total || !charge.paid || !charge.captured) throw new Error('PAYMENT_MISMATCH');
+    let refunded = 0;
+    if (charge.amount_refunded > 0 || order.status === 'refund_pending') {
+      const refunds = await deps.getStripe(c, '/refunds?charge=' + chargeId + '&limit=100');
+      if (!refunds.ok || !Array.isArray(refunds.data?.data) || refunds.data.has_more) {
+        throw new Error('BUSINESS_PROVIDER_PENDING');
+      }
+      for (const item of refunds.data.data) {
+        if (item.charge !== chargeId || item.payment_intent !== paymentId ||
+          item.currency !== 'usd' || !Number.isInteger(item.amount) || item.amount < 0) {
+          throw new Error('PAYMENT_MISMATCH');
+        }
+        if (item.status === 'succeeded') refunded += item.amount;
+      }
+    }
     const balance = charge.balance_transaction;
     const fee = balance?.currency === 'usd' && Number.isInteger(balance.fee) ? balance.fee : null;
     return deps.rpc(c, 'captro_business_payment', {
       p_order: order.id, p_intent: paymentId, p_charge: chargeId, p_total: intent.amount_received,
       p_currency: 'USD', p_mode: order.stripe_mode, p_fee: fee,
-      p_refunded: charge.amount_refunded, p_disputed: charge.disputed === true,
+      p_refunded: refunded, p_disputed: charge.disputed === true,
     });
   }
 
@@ -208,7 +225,9 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     if (!result.ok || !/^pi_[A-Za-z0-9]+$/.test(intent?.id || '') || intent.amount !== order.total ||
       intent.metadata?.business_order_id !== order.id || intent.metadata?.source !== source || intent.livemode !== false ||
       intent.transfer_group !== 'business_' + order.id || intent.currency !== 'usd') throw new Error('BUSINESS_PROVIDER_PENDING');
-    if (intent.status === 'succeeded') return c.json({ order: orderView(await verify(c, order, intent.id), true) });
+    if (['succeeded','canceled'].includes(intent.status)) {
+      return c.json({ order: orderView(await verify(c, order, intent.id), true) });
+    }
     if (!['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(intent.status) ||
       typeof intent.client_secret !== 'string' || !intent.client_secret.startsWith(intent.id + '_secret_')) {
       throw new Error('BUSINESS_PROVIDER_PENDING');
@@ -237,13 +256,26 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
   api.post('/business-orders/:id/verify', auth, wrap(async c => {
     const row = await get(c, orders, token(c.req.param('id')), { buyer_id: eq(deps.actor(c)) });
     if (!row) throw new Error('ORDER_NOT_FOUND');
-    const checked = row.intent_id && (row.status === 'awaiting_payment' || row.processing_fee == null)
+    const checked = row.intent_id && (row.status === 'awaiting_payment' || row.status === 'refund_pending' || row.processing_fee == null)
       ? await verify(c, row, row.intent_id) : row;
     return c.json(orderView(checked, true));
   }, true));
   api.post('/business-orders/:id/action', auth, wrap(async c => {
     const input = await body(c);
     const action = string(input?.action, 20);
+    if (action === 'cancel_payment') {
+      const row = await get(c, orders, token(c.req.param('id')), { buyer_id: eq(deps.actor(c)) });
+      if (!row) throw new Error('ORDER_NOT_FOUND');
+      if (row.status === 'cancelled') return c.json(orderView(row, true));
+      if (row.status !== 'awaiting_payment' || !row.intent_id || row.stripe_mode !== deps.stripe(c).mode) {
+        throw new Error('INVALID_ORDER_ACTION');
+      }
+      const result = await deps.postStripe(c, '/payment_intents/' + row.intent_id + '/cancel', {},
+        'business-cancel:' + row.id);
+      const updated = await verify(c, row, row.intent_id);
+      if (!result.ok && updated.status === 'awaiting_payment') throw new Error('BUSINESS_PROVIDER_PENDING');
+      return c.json(orderView(updated, true));
+    }
     if (!['accept','prepare','ready','reject','cancel','pickup'].includes(action)) invalid();
     let row = await deps.rpc(c, 'captro_business_transition', {
       p_order: token(c.req.param('id')), p_actor: deps.actor(c), p_action: action,
@@ -257,7 +289,8 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
       }
       const result = row.refund_id ? await deps.getStripe(c, '/refunds/' + row.refund_id) :
         await deps.postStripe(c, '/refunds', { payment_intent: row.intent_id }, 'business-refund:' + row.id);
-      if (!result.ok || !/^re_[A-Za-z0-9]+$/.test(result.data?.id || '')) throw new Error('BUSINESS_PROVIDER_PENDING');
+      if (!result.ok || !/^re_[A-Za-z0-9]+$/.test(result.data?.id || '') ||
+        result.data.payment_intent !== row.intent_id) throw new Error('BUSINESS_PROVIDER_PENDING');
       await deps.patch(c, orders, { id: eq(row.id), refund_id: 'is.null' }, { refund_id: result.data.id });
       row = await verify(c, row, row.intent_id);
     }
@@ -304,13 +337,33 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     const mode = string(input?.mode, 16);
     if (!['QUICK_ADD', 'CUSTOMIZE'].includes(mode) || typeof input?.available !== 'boolean') invalid();
     const image = input?.media_id ? (await deps.media(c, [token(input.media_id)]))[0] : undefined;
+    const groups = businessGroups(input?.groups, mode);
+    const requested = input?.option_image_ids ?? {};
+    if (typeof requested !== 'object' || Array.isArray(requested) || Object.keys(requested).length > 30) invalid();
+    const options = groups.flatMap(group => group.options);
+    const optionIds = new Set(options.map(option => option.id));
+    const updates = Object.entries(requested).map(([id, value]) => {
+      if (!optionIds.has(id)) invalid();
+      return [id, token(value)] as const;
+    });
+    const uploaded = updates.length ? await deps.media(c, updates.map(([, asset]) => asset)) : [];
+    const newImages = new Map(updates.map(([id], index) => [id, uploaded[index]]));
+    const currentImages = new Map<string, string>((current?.groups ?? []).flatMap((group: any) =>
+      group.options.filter((option: any) => option.image_url).map((option: any) => [option.id, option.image_url])));
+    const groupsWithImages = groups.map(group => ({ ...group, options: group.options.map(option => ({
+      ...option, image_url: newImages.get(option.id) ?? currentImages.get(option.id) ?? null,
+    })) }));
     const fields = { name: string(input?.name, 80), category: string(input?.category, 48),
       unit_amount: integer(input?.unit_amount, 50, 100000), available: input.available,
-      mode, groups: businessGroups(input?.groups, mode), ...(image ? { image_url: image } : {}) };
+      mode, groups: groupsWithImages, ...(image ? { image_url: image } : {}) };
     if (current) await deps.patch(c, products, { id: eq(id), business_id: eq(shop.id) }, fields);
     else await deps.insert(c, products, [{ ...fields, id, business_id: shop.id }]);
     return c.json(await get(c, products, id));
   }, true));
+  api.get('/business-owner/:id/earnings', auth, wrap(async c => {
+    const shop = await owner(c, token(c.req.param('id')));
+    return c.json(await deps.rpc(c, 'captro_business_earnings', { p_business: shop.id, p_owner: deps.actor(c) }));
+  }));
   api.get('/business-owner/:id/orders', auth, wrap(async c => {
     const shop = await owner(c, token(c.req.param('id')));
     const rows = await deps.query(c, orders, { filters: { business_id: eq(shop.id), status: 'neq.awaiting_payment' },
@@ -339,7 +392,7 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     if (event.account) return false;
     const object = event.data?.object;
     if (event.type.startsWith('payment_intent.') && object?.metadata?.source === source) {
-      if (event.type === 'payment_intent.succeeded') {
+      if (['payment_intent.succeeded','payment_intent.canceled'].includes(event.type)) {
         const row = await get(c, orders, token(object.metadata.business_order_id));
         if (!row) throw new Error('ORDER_NOT_FOUND');
         await verify(c, row, object.id);

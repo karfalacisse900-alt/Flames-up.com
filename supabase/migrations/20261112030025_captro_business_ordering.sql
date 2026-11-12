@@ -250,6 +250,42 @@ begin
 end;
 $$;
 
+create function public.captro_business_cancel_payment(p_order uuid, p_intent text)
+returns jsonb language plpgsql set search_path = '' as $$
+declare o public.app_business_orders;
+begin
+  select * into o from public.app_business_orders where id=p_order for update;
+  if not found or p_intent is null or (o.intent_id is not null and o.intent_id<>p_intent) then
+    raise exception 'PAYMENT_MISMATCH';
+  end if;
+  if o.status='awaiting_payment' then
+    update public.app_business_orders set status='cancelled', intent_id=p_intent
+      where id=o.id returning * into o;
+    insert into public.app_business_order_events(order_id,status) values(o.id,o.status);
+  end if;
+  return to_jsonb(o);
+end;
+$$;
+
+create function public.captro_business_earnings(p_business uuid, p_owner uuid)
+returns jsonb language plpgsql stable set search_path = '' as $$
+begin
+  if not exists(select 1 from public.app_businesses where id=p_business and owner_id=p_owner) then
+    raise exception 'ORDER_NOT_FOUND';
+  end if;
+  return (select jsonb_build_object(
+    'gross', coalesce(sum(total),0), 'tax', coalesce(sum(tax),0),
+    'refunded', coalesce(sum(refunded_amount),0), 'processing_fee', coalesce(sum(processing_fee),0),
+    'pending_fees', count(*) filter(where processing_fee is null)
+  ) from public.app_business_orders where business_id=p_business and stripe_mode='test' and charge_id is not null);
+end;
+$$;
+
+revoke execute on function public.captro_business_cancel_payment(uuid,text),
+  public.captro_business_earnings(uuid,uuid) from public,anon,authenticated;
+grant execute on function public.captro_business_cancel_payment(uuid,text),
+  public.captro_business_earnings(uuid,uuid) to service_role;
+
 revoke execute on function public.captro_business_discover(double precision,double precision,integer),
   public.captro_business_price(uuid,jsonb), public.captro_business_begin(uuid,uuid,uuid,jsonb,integer,text,text),
   public.captro_business_transition(uuid,uuid,text,uuid),

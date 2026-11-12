@@ -35,7 +35,7 @@ struct CaptroBusinessPrimary: ButtonStyle {
   }
 }
 
-private final class CaptroBusinessLocation: NSObject, ObservableObject, CLLocationManagerDelegate {
+final class CaptroBusinessLocation: NSObject, ObservableObject, CLLocationManagerDelegate {
   @Published private(set) var location: CLLocationCoordinate2D?
   @Published private(set) var unavailable = false
   private let manager = CLLocationManager()
@@ -127,7 +127,11 @@ struct CaptroBusinessDirectory: View {
     defer { if !Task.isCancelled { loading = false } }
     error = nil
     let coords = location.location
-    let parameters = coords.map { "&lat=\($0.latitude)&lon=\($0.longitude)" } ?? ""
+    let parameters = coords.map {
+      let lat = ($0.latitude * 100).rounded() / 100
+      let lon = ($0.longitude * 100).rounded() / 100
+      return "&lat=\(lat)&lon=\(lon)"
+    } ?? ""
     do {
       let page: [CaptroBusiness] = try await api.get("/businesses?offset=\(reset ? 0 : businesses.count)\(parameters)")
       try Task.checkCancellation()
@@ -370,6 +374,8 @@ struct CaptroBusinessCustomize: View {
               Button("Choose \(group.name.lowercased())") { sheetGroup = group }.frame(minHeight: 44)
               let selected = group.options.filter { choices.contains($0.id) }.map(\.name)
               if !selected.isEmpty { Text(selected.joined(separator: ", ")).font(.caption) }
+            } else if group.maximum == 1 && group.name.caseInsensitiveCompare("Size") == .orderedSame {
+              sizeChoices(group)
             } else { optionRows(group) }
           }
         }
@@ -397,6 +403,27 @@ struct CaptroBusinessCustomize: View {
     }
   }
 
+  private func sizeChoices(_ group: CaptroBusinessGroup) -> some View {
+    HStack(spacing: 7) {
+      ForEach(group.options) { option in
+        let selected = choices.contains(option.id)
+        Button {
+          choices.subtract(group.options.map(\.id))
+          if !selected { choices.insert(option.id) }
+        } label: {
+          VStack(spacing: 1) {
+            Text(option.name)
+            if option.extra > 0 { Text("+\(captroBusinessPrice(option.extra))").font(.caption2) }
+          }.font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
+            .padding(.horizontal, 5).foregroundStyle(selected ? Color.white : Color.primary)
+            .background(selected ? Color.black : Color(uiColor: .secondarySystemBackground), in: Capsule())
+        }.buttonStyle(.plain).accessibilityLabel(option.name)
+          .accessibilityValue(option.extra > 0 ? captroBusinessPrice(option.extra) + " extra" : "")
+          .accessibilityAddTraits(selected ? .isSelected : [])
+      }
+    }
+  }
+
   private func optionRows(_ group: CaptroBusinessGroup) -> some View {
     ForEach(group.options) { option in
       let selected = choices.contains(option.id)
@@ -411,6 +438,9 @@ struct CaptroBusinessCustomize: View {
       } label: {
         HStack {
           Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+          if let url = option.imageUrl {
+            CaptroBusinessPhoto(url: url).frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 6))
+          }
           Text(option.name)
           Spacer()
           if option.extra > 0 { Text("+\(captroBusinessPrice(option.extra))").foregroundStyle(.secondary) }

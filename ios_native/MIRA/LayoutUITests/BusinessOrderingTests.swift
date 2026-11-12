@@ -10,6 +10,7 @@ final class BusinessOrderingTests: XCTestCase {
 
   func testQuickAddUsesSameStorefrontAndChangesQuantityInline() {
     let app = launch()
+    XCTAssertTrue(app.staticTexts["NYC Hot Dogs"].waitForExistence(timeout: 10))
     app.staticTexts["NYC Hot Dogs"].tap()
     let add = app.buttons["Add Hotdog"]
     XCTAssertTrue(add.waitForExistence(timeout: 12))
@@ -26,6 +27,7 @@ final class BusinessOrderingTests: XCTestCase {
 
   func testCustomizeAndEditOptionsInBag() {
     let app = launch()
+    XCTAssertTrue(app.staticTexts["Captro Coffee"].waitForExistence(timeout: 10))
     app.staticTexts["Captro Coffee"].tap()
     let customize = app.buttons["Customize Iced Latte"]
     XCTAssertTrue(customize.waitForExistence(timeout: 12))
@@ -46,6 +48,29 @@ final class BusinessOrderingTests: XCTestCase {
     XCTAssertTrue(add.label.contains("6.40"))
     add.tap()
     XCTAssertTrue(app.staticTexts["Large · Oat milk"].waitForExistence(timeout: 5))
+  }
+
+  func testConfirmationWaitsForVerificationAndPickupShowsTheCodeWhenReady() {
+    let app = launch()
+    XCTAssertTrue(app.staticTexts["NYC Hot Dogs"].waitForExistence(timeout: 10))
+    app.staticTexts["NYC Hot Dogs"].tap()
+    let add = app.buttons["Add Hotdog"]
+    XCTAssertTrue(add.waitForExistence(timeout: 10))
+    add.tap()
+    app.buttons["View Bag · 1"].tap()
+    XCTAssertTrue(app.buttons["Checkout"].waitForExistence(timeout: 8))
+    app.buttons["Checkout"].tap()
+    app.buttons["Confirm pickup and continue"].tap()
+    let verify = app.buttons["Check order status"]
+    XCTAssertTrue(verify.waitForExistence(timeout: 8))
+    XCTAssertFalse(app.staticTexts["Order Placed!"].exists)
+    verify.tap()
+    XCTAssertTrue(app.staticTexts["Order Placed!"].waitForExistence(timeout: 8))
+    XCTAssertFalse(app.staticTexts["Ready for pickup"].exists)
+    attach("business-order-received", from: app)
+    app.buttons["View Order"].tap()
+    XCTAssertTrue(app.staticTexts["Ready for pickup"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.images["Pickup QR code"].exists)
   }
 
   private func attach(_ name: String, from app: XCUIApplication) {
