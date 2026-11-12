@@ -1827,7 +1827,7 @@ public struct MainFeedView: View {
   }
 
   private var isViewportSuspended: Bool {
-    !isTabActive || scenePhase != .active || detailPost != nil || isShowingCreatePost || selectedStoryGroup != nil
+    !isTabActive || scenePhase != .active || detailPost != nil || isShowingCreatePost || showsBusinessOrdering || selectedStoryGroup != nil
   }
 
   private var isFeedOverlayPresented: Bool {
@@ -1836,6 +1836,7 @@ public struct MainFeedView: View {
       isReportSheetPresented ||
       reportTarget != nil ||
       isShowingCreatePost ||
+      showsBusinessOrdering ||
       selectedStoryGroup != nil
   }
 }

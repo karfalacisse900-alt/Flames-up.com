@@ -19,6 +19,9 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
     let vendor = "20000000-0000-4000-8000-000000000002"
     let coffeePhoto = "https://images.unsplash.com/photo-1461023058943-07fcbe16d735?fit=crop&w=640&q=80"
     let coffeeShop = "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?fit=crop&w=560&q=80"
+    let espressoPhoto = "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?fit=crop&w=500&q=80"
+    let cappuccinoPhoto = "https://images.unsplash.com/photo-1541167760496-1628856ab772?fit=crop&w=500&q=80"
+    let pastryPhoto = "https://images.unsplash.com/photo-1555507036-ab1f4038808a?fit=crop&w=500&q=80"
     let dogPhoto = "https://images.unsplash.com/photo-1612392062422-ef19b42f74df?fit=crop&w=500&q=80"
     let path = url.path
     let status: Int
@@ -28,8 +31,8 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
        "latitude": 40.73, "longitude": -73.99, "hours": "Development sample", "paused": false, "published": true,
        "photos": photos, "distance_miles": 0.3]
     }
-    func product(_ id: String, _ name: String, _ price: Int, _ image: String, _ groups: [[String: Any]] = []) -> [String: Any] {
-      ["id": id, "name": name, "category": groups.isEmpty ? "Food" : "Coffee", "unit_amount": price,
+    func product(_ id: String, _ name: String, _ price: Int, _ image: String, _ groups: [[String: Any]] = [], category: String = "Coffee") -> [String: Any] {
+      ["id": id, "name": name, "category": category, "unit_amount": price,
        "image_url": image, "mode": groups.isEmpty ? "QUICK_ADD" : "CUSTOMIZE", "available": true, "groups": groups]
     }
     func order(_ status: String) -> [String: Any] {
@@ -57,17 +60,30 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
         ["id": "milk", "name": "Milk", "minimum": 0, "maximum": 1, "options": [
           ["id": "whole", "name": "Whole milk", "extra": 0], ["id": "oat", "name": "Oat milk", "extra": 50],
           ["id": "almond", "name": "Almond milk", "extra": 50], ["id": "soy", "name": "Soy milk", "extra": 50]]],
-      ])]
+        ["id": "flavor", "name": "Flavor", "minimum": 0, "maximum": 1, "options": [
+          ["id": "vanilla", "name": "Vanilla", "extra": 25], ["id": "caramel", "name": "Caramel", "extra": 25],
+          ["id": "hazelnut", "name": "Hazelnut", "extra": 25], ["id": "pistachio", "name": "Pistachio", "extra": 50],
+          ["id": "coconut", "name": "Coconut", "extra": 25]]],
+        ["id": "extras", "name": "Extras", "minimum": 0, "maximum": 2, "options": [
+          ["id": "shot", "name": "Extra espresso shot", "extra": 75], ["id": "cream", "name": "Whipped cream", "extra": 40]]],
+      ]),
+      product("espresso", "Iced Coffee", 350, espressoPhoto),
+      product("cappuccino", "Cappuccino", 450, cappuccinoPhoto),
+      product("croissant", "Croissant", 390, pastryPhoto, category: "Pastries")]
     case "/api/businesses/\(vendor)/menu":
       status = 200
-      payload = [product("dog", "Hotdog", 400, dogPhoto)]
+      payload = [product("dog", "Hotdog", 400, dogPhoto, category: "Food")]
     case "/api/businesses/\(coffee)/quote", "/api/businesses/\(vendor)/quote":
       status = 200
       let lines = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any]
       let items = lines?["lines"] as? [[String: Any]] ?? []
       let subtotal = items.reduce(0) { subtotal, line in
         let options = line["option_ids"] as? [String] ?? []
-        let unit = path.contains(coffee) ? 490 + (options.contains("oat") ? 50 : 0) + (options.contains("large") ? 100 : 0) : 400
+        let prices = ["latte": 490, "espresso": 350, "cappuccino": 450, "croissant": 390, "dog": 400]
+        let extras = ["oat": 50, "almond": 50, "soy": 50, "large": 100, "vanilla": 25, "caramel": 25,
+                      "hazelnut": 25, "pistachio": 50, "coconut": 25, "shot": 75, "cream": 40]
+        let base = prices[line["product_id"] as? String ?? ""] ?? 0
+        let unit = base + options.reduce(0) { $0 + (extras[$1] ?? 0) }
         return subtotal + unit * (line["quantity"] as? Int ?? 0)
       }
       let tax = (subtotal * 8 + 50) / 100

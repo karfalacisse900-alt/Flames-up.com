@@ -155,6 +155,7 @@ private struct CaptroBusinessStorefront: View {
   @State private var more = false
   @State private var error: String?
   @State private var editing: CaptroBusinessProduct?
+  @State private var openBagAfterProduct = false
   @State private var showsBag = false
 
   private var isFixture: Bool {
@@ -174,11 +175,13 @@ private struct CaptroBusinessStorefront: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         header
-        if !business.photos.isEmpty {
+        if business.photos.count == 1 {
+          CaptroBusinessPhoto(url: business.photos[0]).frame(height: 96).clipShape(RoundedRectangle(cornerRadius: 9))
+        } else if !business.photos.isEmpty {
           ScrollView(.horizontal) {
             HStack(spacing: 8) {
               ForEach(Array(business.photos.enumerated()), id: \.offset) { _, photo in
-                CaptroBusinessPhoto(url: photo).frame(width: business.photos.count == 1 ? 280 : 130, height: 96)
+                CaptroBusinessPhoto(url: photo).frame(width: 130, height: 96)
                   .clipShape(RoundedRectangle(cornerRadius: 9))
               }
             }
@@ -229,13 +232,26 @@ private struct CaptroBusinessStorefront: View {
     .navigationDestination(isPresented: $showsBag) {
       CaptroBusinessBagView(api: api, business: business, bag: $bag, isGuest: isGuest) { showsBag = false }
     }
-    .sheet(item: $editing) { product in
+    .sheet(item: $editing, onDismiss: {
+      if openBagAfterProduct {
+        openBagAfterProduct = false
+        showsBag = true
+      }
+    }) { product in
       NavigationStack {
         CaptroBusinessCustomize(product: product, initial: [], quantity: 1) { choices, count in
           let current = bag.lines.first { $0.product.id == product.id && $0.selection == choices }?.quantity ?? 0
           bag.set(product: product, selection: choices, quantity: current + count)
         }
-        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { editing = nil } } }
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) { Button("Back") { editing = nil } }
+          ToolbarItem(placement: .primaryAction) {
+            Button {
+              openBagAfterProduct = true
+              editing = nil
+            } label: { Label("Your Bag", systemImage: "bag") }
+          }
+        }
       }
     }
     .task {
@@ -284,16 +300,11 @@ private struct CaptroBusinessStorefront: View {
   private func tile(_ product: CaptroBusinessProduct) -> some View {
     let current = bag.lines.first { $0.product.id == product.id && $0.selection.isEmpty }?.quantity ?? 0
     return VStack(alignment: .leading, spacing: 4) {
-      Button {
-        if product.isCustom { editing = product }
-        else { bag.set(product: product, selection: [], quantity: current + 1) }
-      } label: {
-        VStack(alignment: .leading, spacing: 4) {
-          CaptroBusinessPhoto(url: product.imageUrl, fill: false).frame(height: 99)
-          Text(product.name).font(.subheadline.bold()).lineLimit(2)
-          Text(captroBusinessPrice(product.unitAmount)).font(.subheadline)
-        }.frame(maxWidth: .infinity, alignment: .leading)
-      }.buttonStyle(.plain).disabled(business.paused && !product.isCustom)
+      if product.isCustom {
+        Button { editing = product } label: { tileContent(product) }.buttonStyle(.plain)
+      } else {
+        tileContent(product)
+      }
       HStack {
         Spacer(minLength: 0)
         if product.isCustom || current == 0 {
@@ -312,6 +323,14 @@ private struct CaptroBusinessStorefront: View {
     }.padding(7).background {
       RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary)
     }
+  }
+
+  private func tileContent(_ product: CaptroBusinessProduct) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      CaptroBusinessPhoto(url: product.imageUrl, fill: false).frame(height: 99)
+      Text(product.name).font(.subheadline.bold()).lineLimit(2)
+      Text(captroBusinessPrice(product.unitAmount)).font(.subheadline)
+    }.frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @MainActor private func load(reset: Bool) async {

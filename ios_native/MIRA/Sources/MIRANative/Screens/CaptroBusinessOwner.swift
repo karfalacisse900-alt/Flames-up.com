@@ -1,6 +1,7 @@
 import CoreLocation
 import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CaptroBusinessOwner: View {
   let api: MIRAAPIClient

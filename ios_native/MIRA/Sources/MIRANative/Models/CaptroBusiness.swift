@@ -102,7 +102,9 @@ struct CaptroBusinessBag: Codable {
 }
 
 struct CaptroBusinessQuote: Decodable {
+  struct Line: Decodable { let unitAmount: Int }
   let subtotal, tax, fee, total: Int
+  var lines: [Line]? = nil
 }
 
 struct CaptroBusinessOrder: Decodable, Identifiable {

@@ -30,7 +30,10 @@ struct CaptroBusinessBagView: View {
             CaptroBusinessPhoto(url: line.product.imageUrl, fill: false).frame(width: 54, height: 61)
             VStack(alignment: .leading, spacing: 3) {
               Text(line.product.name).font(.subheadline.bold())
-              Text(captroBusinessPrice(line.product.price(line.selection))).font(.subheadline)
+              let priced = quoteKey == bag.requestId ? quote?.lines : nil
+              let index = bag.lines.firstIndex { $0.id == line.id }
+              let amount = index.flatMap { index in priced.flatMap { $0.indices.contains(index) ? $0[index].unitAmount : nil } }
+              Text(captroBusinessPrice(amount ?? line.product.price(line.selection))).font(.subheadline)
               let names = line.product.groups.flatMap(\.options).filter { line.selection.contains($0.id) }.map(\.name)
               if !names.isEmpty { Text(names.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
               if line.product.isCustom {
