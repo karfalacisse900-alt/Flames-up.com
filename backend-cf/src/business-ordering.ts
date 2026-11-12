@@ -147,15 +147,16 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     if (intent.amount_received !== order.total || !/^ch_[A-Za-z0-9]+$/.test(chargeId ?? '')) throw new Error('PAYMENT_MISMATCH');
     const chargeResult = await deps.getStripe(c, '/charges/' + chargeId + '?expand[]=balance_transaction');
     const charge = chargeResult.data;
-    if (!chargeResult.ok || !charge.balance_transaction || typeof charge.balance_transaction !== 'object') {
+    if (!chargeResult.ok) {
       throw new Error('BUSINESS_PROVIDER_PENDING');
     }
     if (charge.id !== chargeId || charge.payment_intent !== paymentId || charge.currency !== 'usd' ||
-      charge.amount !== order.total || !charge.paid || !charge.captured ||
-      charge.balance_transaction.currency !== 'usd') throw new Error('PAYMENT_MISMATCH');
+      charge.amount !== order.total || !charge.paid || !charge.captured) throw new Error('PAYMENT_MISMATCH');
+    const balance = charge.balance_transaction;
+    const fee = balance?.currency === 'usd' && Number.isInteger(balance.fee) ? balance.fee : null;
     return deps.rpc(c, 'captro_business_payment', {
       p_order: order.id, p_intent: paymentId, p_charge: chargeId, p_total: intent.amount_received,
-      p_currency: 'USD', p_mode: order.stripe_mode, p_fee: charge.balance_transaction.fee,
+      p_currency: 'USD', p_mode: order.stripe_mode, p_fee: fee,
       p_refunded: charge.amount_refunded, p_disputed: charge.disputed === true,
     });
   }
@@ -236,7 +237,8 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
   api.post('/business-orders/:id/verify', auth, wrap(async c => {
     const row = await get(c, orders, token(c.req.param('id')), { buyer_id: eq(deps.actor(c)) });
     if (!row) throw new Error('ORDER_NOT_FOUND');
-    const checked = row.intent_id && row.status === 'awaiting_payment' ? await verify(c, row, row.intent_id) : row;
+    const checked = row.intent_id && (row.status === 'awaiting_payment' || row.processing_fee == null)
+      ? await verify(c, row, row.intent_id) : row;
     return c.json(orderView(checked, true));
   }, true));
   api.post('/business-orders/:id/action', auth, wrap(async c => {
@@ -344,7 +346,7 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
       }
       return true;
     }
-    if (!['charge.refunded','refund.created','refund.updated','charge.dispute.created','charge.dispute.closed'].includes(event.type)) return false;
+    if (!['charge.updated','charge.refunded','refund.created','refund.updated','charge.dispute.created','charge.dispute.closed'].includes(event.type)) return false;
     const id = object?.payment_intent;
     if (!/^pi_[A-Za-z0-9]+$/.test(id || '')) return false;
     const rows = await deps.select(c, orders, { intent_id: eq(id) }, '*', 1);

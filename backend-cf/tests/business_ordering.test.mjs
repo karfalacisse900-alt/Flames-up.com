@@ -150,6 +150,7 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
   ];
   const checkout = { lines, total: 1696, request_id: '60000000-0000-4000-8000-000000000001' };
   let paidOrder;
+  let expectedFee;
   const success = async (id, chargeId) => {
     if (realStripe) {
       const { data: intent } = await sandboxStripe('/payment_intents/' + id + '/confirm', { payment_method: 'pm_card_visa' });
@@ -158,9 +159,10 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
       assert.equal(charge.payment_intent, intent.id);
       assert.equal(charge.amount, intent.amount);
       assert.equal(charge.paid, true);
-      assert.ok(charge.balance_transaction?.fee > 0);
+      expectedFee = charge.balance_transaction?.currency === 'usd' ? charge.balance_transaction.fee : undefined;
       return { type: 'payment_intent.succeeded', data: { object: intent } };
     }
+    expectedFee = 53;
     const intent = intents.get(id);
     Object.assign(intent, { status: 'succeeded', amount_received: intent.amount, latest_charge: chargeId });
     charges.set(chargeId, { id: chargeId, amount: intent.amount, payment_intent: id, currency: 'usd',
@@ -198,11 +200,15 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     await webhook({}, event);
     await webhook({}, event);
     assert.equal((await (await call('/business-orders/' + paidOrder, buyer)).json()).status, 'received');
-    assert.equal((await one('select count(*)::int as n from app_marketplace_ledger')).n, 2);
+
     const journal = (await db.query("select seller_id, account, amount::int from app_marketplace_ledger")).rows;
     assert.ok(journal.every(row => row.seller_id === owner));
     assert.equal(journal.find(row => row.account === 'gross').amount, 1696);
-    assert.ok(journal.find(row => row.account === 'processing_fee').amount > 0);
+    const fees = journal.filter(row => row.account === 'processing_fee');
+    assert.ok(fees.length <= 1);
+    if (expectedFee !== undefined) assert.equal(fees[0]?.amount, expectedFee);
+    assert.ok(fees.every(row => Number.isInteger(row.amount) && row.amount >= 0));
+    assert.equal(journal.filter(row => row.account === 'gross').length, 1);
     assert.equal((await call('/business-orders/' + paidOrder + '/action', stranger, { action: 'accept' })).status, 409);
     assert.equal((await call('/business-orders/' + paidOrder + '/action', owner, { action: 'ready' })).status, 409);
     for (const [action, status] of [['accept','accepted'],['prepare','preparing'],['ready','ready']]) {

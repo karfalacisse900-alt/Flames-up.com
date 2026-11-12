@@ -215,7 +215,7 @@ begin
   if not found or o.total<>p_total or o.currency<>p_currency or o.stripe_mode<>p_mode
     or (o.intent_id is not null and o.intent_id<>p_intent)
     or (o.charge_id is not null and o.charge_id<>p_charge)
-    or p_fee is null or p_refunded is null or p_fee not between 0 and o.total or p_refunded not between 0 and o.total then
+    or p_refunded is null or p_fee not between 0 and o.total or p_refunded not between 0 and o.total then
     raise exception 'PAYMENT_MISMATCH';
   end if;
   select owner_id into seller from public.app_businesses where id=o.business_id;
@@ -227,10 +227,14 @@ begin
     else o.status end;
   insert into public.app_marketplace_ledger(entry_key,seller_id,event_type,account,amount,currency,stripe_object_id,metadata)
     values ('business:'||o.id||':gross',seller,'BUSINESS_CUSTOMER_PAYMENT','gross',o.total,o.currency,p_charge,
-      jsonb_build_object('business_order_id',o.id,'stripe_mode',o.stripe_mode)),
-    ('business:'||o.id||':fee',seller,'BUSINESS_PROCESSING_FEE','processing_fee',p_fee,o.currency,p_charge,
       jsonb_build_object('business_order_id',o.id,'stripe_mode',o.stripe_mode))
     on conflict(entry_key) do nothing;
+  if p_fee is not null then
+    insert into public.app_marketplace_ledger(entry_key,seller_id,event_type,account,amount,currency,stripe_object_id,metadata)
+    values ('business:'||o.id||':fee',seller,'BUSINESS_PROCESSING_FEE','processing_fee',p_fee,o.currency,p_charge,
+      jsonb_build_object('business_order_id',o.id,'stripe_mode',o.stripe_mode))
+    on conflict(entry_key) do nothing;
+  end if;
   if p_refunded>o.refunded_amount then
     insert into public.app_marketplace_ledger(entry_key,seller_id,event_type,account,amount,currency,stripe_object_id,metadata)
     values ('business:'||o.id||':refund:'||p_refunded,seller,'BUSINESS_REFUND','gross',o.refunded_amount-p_refunded,
@@ -241,7 +245,7 @@ begin
     insert into public.app_business_order_events(order_id,status) values(o.id,next_status);
   end if;
   update public.app_business_orders set status=next_status,intent_id=p_intent,charge_id=p_charge,
-    processing_fee=p_fee,refunded_amount=greatest(p_refunded,refunded_amount) where id=o.id returning * into o;
+    processing_fee=coalesce(processing_fee,p_fee),refunded_amount=greatest(p_refunded,refunded_amount) where id=o.id returning * into o;
   return to_jsonb(o);
 end;
 $$;
