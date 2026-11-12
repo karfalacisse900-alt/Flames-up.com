@@ -1,0 +1,71 @@
+name: Release Captro Tea API
+on:
+  push:
+    branches: [release/captro-tea-api]
+    paths:
+      - '.github/workflows/tea-api-release.yml'
+      - 'backend-cf/**'
+concurrency:
+  group: captro-production-reliability
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: captro-payments-live
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: backend-cf
+      - run: npx tsc --noEmit && npm test
+        working-directory: backend-cf
+      - name: Verify the live database contract
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          node scripts/app-store/verify-security-schema.mjs
+          node backend-cf/scripts/verify-reliability-schema.mjs
+          node backend-cf/scripts/verify-creator-earnings-schema.mjs
+      - name: Upload and promote only the Tea Worker changes
+        shell: bash
+        working-directory: backend-cf
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node scripts/verify-tea-release.mjs
+          npx wrangler versions upload --env production --keep-vars --define 'CAPTRO_RELIABILITY_RELEASE_MODE:"ready"' --message "Tea API $GITHUB_SHA" | tee "$RUNNER_TEMP/tea-version.log"
+          version="$(sed -nE 's/.*Worker Version ID:[[:space:]]*([a-f0-9-]{36}).*/\1/p' "$RUNNER_TEMP/tea-version.log")"
+          [[ "$version" =~ ^[a-f0-9-]{36}$ ]]
+          node scripts/verify-tea-release.mjs
+          npx wrangler versions deploy --env production --yes "$version@100%" --message "Tea API $GITHUB_SHA"
+          node scripts/verify-tea-release.mjs "$version"
+      - name: Verify the production list, detail, cursor handling and feed
+        run: |
+          node backend-cf/scripts/verify-feed-pagination.mjs
+          node backend-cf/scripts/verify-reliability-http.mjs
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          const endpoint = 'https://flames-up-api.karfalacisse900.workers.dev/api/tea';
+          const get = (path = '') => fetch(endpoint + path, {signal: AbortSignal.timeout(20000)});
+          const list = await get();
+          assert.equal(list.status, 200);
+          assert.match(list.headers.get('Cache-Control') ?? '', /no-store/);
+          const page = await list.json();
+          assert.ok(Array.isArray(page.items) && page.items.length > 0);
+          const {destination} = page.items[0];
+          const details = await get('/' + encodeURIComponent(destination.source) + '/' + encodeURIComponent(destination.id));
+          assert.equal(details.status, 200);
+          assert.deepEqual((await details.json()).item.destination, destination);
+          assert.equal((await get('/activity/not-an-id')).status, 404);
+          assert.equal((await get('?cursor=invalid')).status, 400);
+          console.log('Verified production Tea list, canonical details, unavailable target and invalid cursor.');
+          JS

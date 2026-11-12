@@ -1,3 +1,4 @@
+import { teaPage, teaDetail, TeaInputError, TeaUnavailable } from './tea';
 import { runAccountCleanup } from './account-cleanup';
 import { reliabilityRolloutBlocks, reliabilityReleaseMode } from './reliability-rollout';
 import { chatOperationID, sameChatOperation, persistChatOperation } from './chat-idempotency';
@@ -9381,6 +9382,10 @@ async function commerceDetailsForVisiblePost(c: any, post: any, viewerAppUserId:
   const rows = await supabaseAdminSelectRows(c, 'app_purchasables', { post_id: postgrestEqFilter(post.supabase_post_id) }, '*', 1);
   const purchasable = rows[0];
   if (!purchasable) return null;
+  return commerceDetailsForPurchasable(c, purchasable, viewerAppUserId);
+}
+
+async function commerceDetailsForPurchasable(c: any, purchasable: any, viewerAppUserId: string) {
   c.set('commerceStage', 'access_buyer_identity');
   const authUserId = await supabaseAuthUserIdForAppUserId(c, viewerAppUserId);
   c.set('commerceStage', 'access_prices_and_entitlements');
@@ -20201,6 +20206,75 @@ registerCreatorSupportRoutes(api, authMiddleware, {
     if (p?.status === 'payment_pending' && p?.provider_checkout_id) await reconcileHostedPurchase(c, p);
   },
 });
+
+function teaDependencies(c: any, viewerId: string) {
+  return {
+    query: (table: string, input: Parameters<typeof supabaseAdminQueryRows>[2]) =>
+      supabaseAdminQueryRows(c, table, input),
+    async access(postIds: string[], ownerIds: string[]) {
+      const [posts, owners, aliases] = await Promise.all([
+        postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
+          select: 'id,legacy_post_id,app_user_id,user_id,status,visibility,metadata',
+          filters: { id: postgrestInFilter(postIds) }, limit: postIds.length,
+        }) : Promise.resolve([]),
+        ownerIds.length ? supabaseAdminQueryRows(c, 'app_users', {
+          select: 'id,supabase_user_id,is_private,metadata',
+          filters: { supabase_user_id: postgrestInFilter(ownerIds) }, limit: ownerIds.length,
+        }) : Promise.resolve([]),
+        viewerId ? supabaseRelatedInteractionUserIds(c, viewerId) : Promise.resolve([]),
+      ]);
+      if (viewerId && !aliases.length) throw new Error('TEA_VIEWER_IDENTITY_UNAVAILABLE');
+      const targets = Array.from(new Set(owners.flatMap((owner: any) => [owner.id, owner.supabase_user_id]).filter(Boolean)));
+      const blocked = new Set<string>();
+      if (targets.length && aliases.length) {
+        const audience = postgrestInFilter(aliases);
+        const candidates = postgrestInFilter(targets);
+        const pairs = '(and(blocker_id.' + audience + ',blocked_id.' + candidates +
+          '),and(blocked_id.' + audience + ',blocker_id.' + candidates + '))';
+        const rows = await supabaseAdminQueryRows(c, 'app_blocks', {
+          select: 'blocker_id,blocked_id', filters: { or: pairs }, limit: 1000,
+        });
+        if (rows.length >= 1000) throw new Error('TEA_BLOCK_CHECK_INCOMPLETE');
+        for (const row of rows) {
+          if (aliases.includes(row.blocker_id)) blocked.add(row.blocked_id);
+          if (aliases.includes(row.blocked_id)) blocked.add(row.blocker_id);
+        }
+      }
+      return { posts: new Map<string, any>(posts.map(row => [row.id, row])),
+        owners: new Map<string, any>(owners.map(row => [row.supabase_user_id, row])), blocked };
+    },
+    isActiveUser: (user: any) => supabaseUserStatus(user) === 'active',
+    commerce: (purchasable: any) => commerceDetailsForPurchasable(c, purchasable, viewerId),
+  };
+}
+
+async function handleTea(c: any, request: (viewer: string, deps: ReturnType<typeof teaDependencies>) => Promise<unknown>) {
+  const viewer = getUserId(c);
+  const limited = await enforceRateLimit(c, 'tea_read', viewer || clientIp(c), 120, 60);
+  if (limited) return limited;
+  c.header('Cache-Control', 'private, no-store');
+  try {
+    return c.json(await request(viewer, teaDependencies(c, viewer)));
+  } catch (error) {
+    if (error instanceof FeedCursorError || error instanceof TeaInputError) {
+      return c.json({ detail: 'Refresh Tea to start again.', code: 'TEA_INVALID_PAGE' }, 400);
+    }
+    if (error instanceof TeaUnavailable) {
+      return c.json({ detail: 'This activity is no longer available in Tea.', code: 'TEA_UNAVAILABLE' }, 404);
+    }
+    console.warn(JSON.stringify({ event: 'tea_read_failed', request_id: c.get('requestId') }));
+    return c.json({ detail: 'Could not load Tea. Try again.', code: 'TEA_READ_FAILED' }, 503);
+  }
+}
+
+const teaAuth = async (c: any, next: () => Promise<void>) =>
+  c.req.header('Authorization') === undefined ? next() : authMiddleware(c, next);
+
+api.get('/tea', teaAuth, c => handleTea(c, (viewer, deps) =>
+  teaPage(deps, c.env.JWT_SECRET, viewer, { cursor: c.req.query('cursor'), city: c.req.query('city'),
+    lat: c.req.query('lat'), lon: c.req.query('lon') })));
+api.get('/tea/:source/:id', teaAuth, c => handleTea(c, (_, deps) =>
+  teaDetail(deps, c.req.param('source'), c.req.param('id'))));
 
 api.get('/commerce/posts/:postId', authMiddleware, async (c) => {
   const viewerId = getUserId(c);
