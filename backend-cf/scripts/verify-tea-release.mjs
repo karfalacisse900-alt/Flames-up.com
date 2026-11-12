@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {supportModeEnabled} from '../src/creator-support.ts';
 
 const baseline = '0395767084a3642d764ecd5d9479c0b502ea108b';
 const productionVersion = '66658b31-1fb8-4423-94fd-cd44bc5f7192';
 const changed = execFileSync('git', ['diff', '--name-only', baseline, 'HEAD', '--',
   'backend-cf/src', 'backend-cf/wrangler.toml', 'backend-cf/package.json', 'backend-cf/package-lock.json',
-], {encoding: 'utf8'}).trim().split('\n');
+], {cwd: fileURLToPath(new URL('../../', import.meta.url)), encoding: 'utf8'}).trim().split('\n');
 assert.deepEqual(changed, [
   'backend-cf/src/feed-pagination.ts',
   'backend-cf/src/index.ts',
