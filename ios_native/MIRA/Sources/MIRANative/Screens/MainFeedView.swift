@@ -1122,6 +1122,7 @@ public struct MainFeedView: View {
   @State private var selectedPostFallbackIndex = 0
   @State private var selectedFeedSection: MainFeedSection = .forYou
   @State private var isFeedSelectorPresented = false
+  @State private var showsBusinessOrdering = false
   @State private var isShowingCreatePost = false
   @State private var detailPost: MIRAPost?
   @State private var postOptionsTarget: MIRAPost?
@@ -1326,6 +1327,9 @@ public struct MainFeedView: View {
   public var body: some View {
     NavigationStack {
       activeFeed.onAppear(perform: feedDidAppear)
+      .sheet(isPresented: $showsBusinessOrdering) {
+        NavigationStack { CaptroBusinessDirectory(api: model.api, isGuest: isGuest) }
+      }
       .overlay(alignment: .top) {
         VStack(spacing: 4) {
           CaptroFavoriteNotice(store: model.api.favorites)
@@ -1410,6 +1414,10 @@ public struct MainFeedView: View {
                 selectedFeedSection = section
               }
               .disabled(isGuest && section != .forYou)
+            }
+            CaptroEditorialMenuRow(title: "Captro Business", selected: false) {
+              isFeedSelectorPresented = false
+              showsBusinessOrdering = true
             }
           }
         }

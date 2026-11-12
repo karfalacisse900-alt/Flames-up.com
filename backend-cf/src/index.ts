@@ -1,3 +1,4 @@
+import { makeBusinessOrdering } from './business-ordering';
 import { runAccountCleanup } from './account-cleanup';
 import { reliabilityRolloutBlocks, reliabilityReleaseMode } from './reliability-rollout';
 import { chatOperationID, sameChatOperation, persistChatOperation } from './chat-idempotency';
@@ -21734,6 +21735,24 @@ api.post('/stripe/checkout/sessions', authMiddleware, async (c) => {
   }
 });
 
+const businessWebhook = makeBusinessOrdering(api, authMiddleware, {
+  rpc: supabaseAdminRpc, select: supabaseAdminSelectRows, query: supabaseAdminQueryRows,
+  insert: supabaseAdminInsertRows, patch: supabaseAdminPatchRows,
+  getStripe: stripeApiGet, postStripe: stripeApiRequest, stripe: getStripeConfig,
+  actor: c => c.get('jwtPayload')?.supabase_sub,
+  seller: requireReadyConnectedAccount,
+  media: async (c, ids) => {
+    const result = await approvedMediaAssetsForPost(c, getUserId(c), ids, []);
+    if (!result.ok || result.assets.length !== ids.length ||
+      result.assets.some(asset => asset.storage_provider !== 'images')) throw new Error('INVALID_BUSINESS_INPUT');
+    const urls = result.assets.map(asset => mediaAssetPublicUrl(c.env, asset));
+    if (urls.some(url => !url.startsWith('https://'))) throw new Error('INVALID_BUSINESS_INPUT');
+    return urls;
+  },
+  limit: async (c, key) => rejectLargeRequest(c, 64_000)
+    || await enforceRateLimit(c, key, getUserId(c), 60, 60),
+});
+
 const stripeWebhookHandler = async (c: any) => {
   const bodyTooLarge = rejectLargeRequest(c, 500_000);
   if (bodyTooLarge) return bodyTooLarge;
@@ -21771,7 +21790,9 @@ const stripeWebhookHandler = async (c: any) => {
     const object = event?.data?.object || {};
     paymentTrace(c, 'webhook_received', { eventId: event.id, eventType: event.type,
       paymentIntentId: String(object.id || '').startsWith('pi_') ? object.id : null });
-    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+    if (await businessWebhook(c, event)) {
+      // Business orders use the same signed webhook and processed-event journal.
+    } else if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
       const source = cleanText(object?.metadata?.source, 80);
       if (source === 'captro_commerce') {
         await completeCommercePurchaseFromSession(c, cleanText(event?.id, 180), object);

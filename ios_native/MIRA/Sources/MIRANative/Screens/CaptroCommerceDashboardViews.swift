@@ -378,13 +378,13 @@ private struct CaptroPassScannerSheet: View {
   }
 }
 
-private struct CaptroQRScanner: UIViewControllerRepresentable {
+struct CaptroQRScanner: UIViewControllerRepresentable {
   let onCode: (String) -> Void
   func makeUIViewController(context: Context) -> CaptroQRScannerController { CaptroQRScannerController(onCode: onCode) }
   func updateUIViewController(_ uiViewController: CaptroQRScannerController, context: Context) {}
 }
 
-private final class CaptroQRScannerController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+final class CaptroQRScannerController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
   private let session = AVCaptureSession()
   private let onCode: (String) -> Void
   private var preview: AVCaptureVideoPreviewLayer?

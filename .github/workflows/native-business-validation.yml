@@ -1,0 +1,30 @@
+name: Validate Captro Business
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Test native storefront and shopping bag
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/Business.xcresult" \
+            -only-testing:CaptroLayoutUITests/BusinessOrderingTests \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/business-simulator.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: business-simulator
+          path: |
+            ${{ runner.temp }}/Business.xcresult
+            ${{ runner.temp }}/business-simulator.log
