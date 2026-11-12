@@ -10,6 +10,7 @@ struct CaptroCheckoutDestination: Identifiable, Equatable {
 
 struct CaptroCommerceDetailSection: View {
   @ObservedObject var model: PostDetailModel
+  var teaStyle = false
   @State private var selectedPriceID = ""
   @State private var quantity = 1
   @State private var fulfillmentMethod = ""
@@ -28,6 +29,11 @@ struct CaptroCommerceDetailSection: View {
   var body: some View {
     if let commerce {
       VStack(alignment: .leading, spacing: 18) {
+        if teaStyle {
+          if commerce.fulfillmentType == "reservation" {
+            DatePicker("Choose a time", selection: $bookingStart, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+          }
+        } else {
         VStack(alignment: .leading, spacing: 12) {
           heading(commerce)
           typeSpecificFacts(commerce)
@@ -42,11 +48,12 @@ struct CaptroCommerceDetailSection: View {
         if !commerce.description.isEmpty && commerce.description != model.post.detailCaption {
           factBlock("ABOUT", commerce.description)
         }
+        }
         purchaseControls(commerce)
       }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 20)
-      .background(MIRATheme.Color.surface)
+      .padding(.horizontal, teaStyle ? 0 : 16)
+      .padding(.vertical, teaStyle ? 0 : 20)
+      .background(teaStyle ? Color.clear : MIRATheme.Color.surface)
       .sheet(isPresented: $isShowingPass) {
         if let pass = model.commercePass {
           CaptroCommercePassView(post: model.post, commerce: commerce, pass: pass)
@@ -189,7 +196,7 @@ struct CaptroCommerceDetailSection: View {
 
   private func purchaseControls(_ commerce: CaptroCommerceDetails) -> some View {
     VStack(alignment: .leading, spacing: 14) {
-      thinDivider
+      if !teaStyle { thinDivider }
       if commerce.prices.count > 1 {
         Picker("Ticket type", selection: $selectedPriceID) {
           ForEach(commerce.prices) { price in
@@ -197,7 +204,7 @@ struct CaptroCommerceDetailSection: View {
           }
         }
         .pickerStyle(.menu)
-      } else if let price = selectedPrice {
+      } else if !teaStyle, let price = selectedPrice {
         HStack {
           Text(price.label).font(.system(size: 14, weight: .semibold))
           Spacer()
@@ -212,12 +219,12 @@ struct CaptroCommerceDetailSection: View {
         .pickerStyle(.segmented)
       }
 
-      if ["offer", "deal", "event", "party", "ticket", "access_pass"].contains(commerce.contentType) {
+      if !teaStyle && ["offer", "deal", "event", "party", "ticket", "access_pass"].contains(commerce.contentType) {
         Stepper("Quantity · \(quantity)", value: $quantity, in: 1...maxQuantity)
           .font(.system(size: 14, weight: .medium))
       }
 
-      if selectedPrice?.unitAmount ?? 0 > 0 {
+      if !teaStyle && (selectedPrice?.unitAmount ?? 0) > 0 {
         orderSummary(commerce)
       }
 
@@ -242,9 +249,10 @@ struct CaptroCommerceDetailSection: View {
         }
         .buttonStyle(.plain)
         .disabled(actionDisabled(commerce) || model.isUpdatingCommerce)
+        .accessibilityIdentifier(teaStyle ? "tea.primary-action" : "commerce.primary-action")
       }
 
-      if isCreator {
+      if isCreator && !teaStyle {
         Text("Manage buyers, approvals, passes, and totals in Me.")
           .font(.system(size: 12))
           .foregroundStyle(CaptroDetailStyle.secondary)
@@ -322,9 +330,9 @@ struct CaptroCommerceDetailSection: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
     .frame(maxWidth: .infinity, minHeight: 48)
-    .foregroundStyle(disabled ? MIRATheme.Color.textSecondary : MIRATheme.Color.onPrimary)
-    .background(disabled ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
-    .clipShape(RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
+    .foregroundStyle(disabled ? MIRATheme.Color.textSecondary : (teaStyle ? Color.white : MIRATheme.Color.onPrimary))
+    .background(disabled ? MIRATheme.Color.surfaceSoft : (teaStyle ? Color(white: 0.12) : MIRATheme.Color.forest))
+    .clipShape(RoundedRectangle(cornerRadius: teaStyle ? 15 : MIRATheme.Radius.small))
   }
 
   private func actionDisabled(_ commerce: CaptroCommerceDetails) -> Bool {
@@ -350,6 +358,15 @@ struct CaptroCommerceDetailSection: View {
     if commerce.remaining == 0 || selectedPrice?.remaining == 0 { return "SOLD OUT" }
     if commerce.needsApproval { return "REQUEST PENDING" }
     if commerce.requiresPaymentContinuation { return "CONTINUE CHECKOUT" }
+    if teaStyle {
+      switch commerce.contentType {
+      case "club", "group", "meetup": return "Join"
+      case "booking", "reservation": return "Reserve"
+      case "deal": return "Claim"
+      case "offer": return commerce.fulfillmentType == "redemption" ? "Claim" : "Order"
+      default: return (selectedPrice?.unitAmount ?? 0) > 0 ? "Buy Ticket" : "Attend"
+      }
+    }
     let base = commerce.primaryActionTitle.components(separatedBy: " — ").first ?? commerce.primaryActionTitle
     guard let price = selectedPrice, price.unitAmount > 0 else { return base }
     return "\(base) — \(CaptroMoney.format(minorUnits: price.unitAmount * quantity, currency: price.currency))"

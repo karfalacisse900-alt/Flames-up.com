@@ -1,0 +1,46 @@
+name: Validate Captro Tea
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/captro-tea]
+    paths:
+      - 'ios_native/MIRA/**'
+      - '.github/workflows/native-tea-validation.yml'
+permissions:
+  contents: read
+concurrency:
+  group: captro-tea-simulator-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Test Tea from the Captro tab bar
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17' -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/Tea.xcresult" \
+            -only-testing:CaptroLayoutUITests/TeaTests \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/tea-simulator.log"
+      - name: Export screenshots
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/Tea.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Tea.xcresult" \
+              --output-path "$RUNNER_TEMP/tea-screenshots"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tea-simulator
+          path: |
+            ${{ runner.temp }}/Tea.xcresult
+            ${{ runner.temp }}/tea-simulator.log
+            ${{ runner.temp }}/tea-screenshots

@@ -142,7 +142,7 @@ struct CaptroBusinessDirectory: View {
   }
 }
 
-private struct CaptroBusinessStorefront: View {
+struct CaptroBusinessStorefront: View {
   let api: MIRAAPIClient
   let business: CaptroBusiness
   let isGuest: Bool

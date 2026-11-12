@@ -14,7 +14,9 @@ public struct CaptroDesignQualityTestView: View {
 
   public var body: some View {
     Group {
-      if ProcessInfo.processInfo.arguments.contains("--captro-business-review") {
+      if ProcessInfo.processInfo.arguments.contains("--captro-tea-review") {
+        CaptroTeaReviewHost()
+      } else if ProcessInfo.processInfo.arguments.contains("--captro-business-review") {
         NavigationStack { CaptroBusinessDirectory(api: CaptroBusinessReviewAPI.make(), isGuest: false) }
       } else if ProcessInfo.processInfo.arguments.contains("--captro-favorites-review") {
         CaptroFavoritesReviewHost()
