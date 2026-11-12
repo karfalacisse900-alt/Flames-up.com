@@ -53,6 +53,7 @@ final class TeaTests: XCTestCase {
     let join = app.buttons["tea.primary-action"]
     XCTAssertTrue(join.waitForExistence(timeout: 8))
     XCTAssertEqual(join.label, "Join")
+    XCTAssertTrue(app.descendants(matching: .any)["tea.linked.activity:00000000-0000-4000-8000-000000000003"].exists)
     join.tap()
     XCTAssertTrue(app.buttons["tea.primary-action"].matchingLabel("MEMBERSHIP ACTIVE", in: 10))
     back(app)

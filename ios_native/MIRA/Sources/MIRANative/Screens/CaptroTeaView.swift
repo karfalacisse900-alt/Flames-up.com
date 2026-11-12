@@ -57,6 +57,7 @@ struct CaptroTeaDetails: Decodable {
   let post: MIRAPost?
   let commerce: CaptroCommerceDetails?
   let business: CaptroBusiness?
+  let linkedEvents: [CaptroTeaEntry]?
 }
 
 enum CaptroTeaPalette: String {
@@ -268,6 +269,14 @@ private struct CaptroTeaDetailView: View {
           }.buttonStyle(.plain)
         } else if let commerceModel {
           TeaActivityContent(entry: detail?.item ?? entry, model: commerceModel, viewerID: viewerID, signIn: signIn)
+          if let events = detail?.linkedEvents, !events.isEmpty {
+            Text("Club events").font(.headline).accessibilityAddTraits(.isHeader)
+            ForEach(events) { event in
+              NavigationLink(value: event) { CaptroTeaRow(entry: event) }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("tea.linked." + event.id)
+            }
+          }
         } else {
           TeaEntityCard(entry: entry, location: nil)
           if loading { ProgressView("Loading details").padding(.top, 8) }

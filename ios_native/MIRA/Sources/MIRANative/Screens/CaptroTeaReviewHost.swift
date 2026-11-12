@@ -119,7 +119,7 @@ private final class TeaReviewProtocol: URLProtocol {
         ]]
       } else {
         payload = ["item": entry(number), "post": ["id": "tea-post-\(number)", "userId": "tea-fixture-owner"],
-                   "commerce": commerce(number)]
+                   "commerce": commerce(number), "linkedEvents": number == 1 ? [entry(3)] : []]
       }
     } else if path.hasPrefix("/commerce/posts/"), let number = Int(url.lastPathComponent.split(separator: "-").last ?? "") {
       payload = ["commerce": commerce(number)]

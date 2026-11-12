@@ -16,7 +16,7 @@ function fixture() {
   const rows = { app_purchasables: [], app_businesses: [] };
   const user = (n, extra = {}) => ({ id: 'user-' + n, supabase_user_id: id(200 + n), is_private: false, metadata: {}, ...extra });
   function activity(n, contentType, overrides = {}) {
-    const owner = user(n, overrides.owner);
+    const owner = overrides.linkedOwner ?? user(n, overrides.owner);
     owners.set(owner.supabase_user_id, owner);
     const post = { id: id(500 + n), legacy_post_id: 'post-' + n, status: 'active',
       user_id: owner.supabase_user_id, app_user_id: owner.id, visibility: 'public', metadata: {}, ...overrides.post };
@@ -39,7 +39,8 @@ function fixture() {
     async query(table, query) {
       calls.push([table, query]);
       const time = table === 'app_purchasables' ? 'created_at' : 'location_updated_at';
-      if (query.filters.id) return rows[table].filter(row => 'eq.' + row.id === query.filters.id);
+      if (query.filters.id?.startsWith('eq.')) return rows[table].filter(row => 'eq.' + row.id === query.filters.id);
+      if (query.filters.id?.startsWith('in.(')) return rows[table].filter(row => query.filters.id.includes(row.id));
       let results = rows[table];
       if (query.filters.or) {
         const [, timestamp, compare, boundary] = query.filters.or.match(/\((?:created_at|location_updated_at)\.lt\.([^,]+),and\([^.]+\.eq\.[^,]+,id\.(lt|lte)\.([^)]+)\)\)/);
@@ -132,6 +133,19 @@ test('Tea uses coarse locality and handles the pending Business migration withou
   await assert.rejects(teaDetail(f.deps, 'business', id(3), now), TeaUnavailable);
   f.deps.query = async () => { throw new Error('database unavailable'); };
   await assert.rejects(teaPage(f.deps, key, viewer, {}, now), /database unavailable/);
+});
+
+test('Tea follows only explicitly linked public events by the same club owner', async () => {
+  const f = fixture();
+  const club = f.activity(1, 'club', { row: { private_config: { tea_linked_event_ids: [id(2), id(3), id(4), id(5), id(2)] } } });
+  const owner = f.owners.get(club.creator_id);
+  f.activity(2, 'event', { linkedOwner: owner });
+  f.activity(3, 'event', { linkedOwner: owner, post: { visibility: 'private' } });
+  f.activity(4, 'event');
+  f.activity(5, 'deal', { linkedOwner: owner });
+  f.activity(6, 'event', { linkedOwner: owner });
+  const result = await teaDetail(f.deps, 'activity', club.id, now);
+  assert.deepEqual(result.linkedEvents.map(item => item.id), ['activity:' + id(2)]);
 });
 
 test('Tea continues beyond an empty scan window without disclosing a hidden record ID', async () => {

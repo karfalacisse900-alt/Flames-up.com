@@ -192,6 +192,28 @@ export async function teaPage(deps: Dependencies, secret: string, viewer: string
   return { items, nextCursor: more ? await writeFeedCursor(secret, cursor) : null };
 }
 
+async function linkedEvents(deps: Dependencies, club: any, now: number) {
+  // Optional links are curated on the canonical club by trusted server tooling.
+  const configured = club.private_config?.tea_linked_event_ids;
+  const ids = Array.isArray(configured)
+    ? [...new Set(configured.filter((id): id is string => typeof id === 'string' && uuid.test(id)))].slice(0, 12)
+    : [];
+  if (!ids.length) return [];
+  const rows = await deps.query('app_purchasables', {
+    select: listing, filters: { id: 'in.(' + ids.join(',') + ')', creator_id: 'eq.' + club.creator_id },
+    order: 'starts_at.asc.nullslast,id.asc', limit: ids.length,
+  });
+  const candidates: Candidate[] = rows
+    .filter(row => row.creator_id === club.creator_id && types[row.content_type] === 'event' && ids.includes(row.id))
+    .map(row => ({ source: 'activity', row, timestamp: row.created_at }));
+  if (!candidates.length) return [];
+  const access = await loadAccess(candidates, deps);
+  return candidates.flatMap(candidate => {
+    const visible = eligibility(candidate, access, deps, scope({}), now);
+    return visible && typeof visible.name === 'string' && visible.name.trim() ? [item(candidate, visible)] : [];
+  });
+}
+
 export async function teaDetail(deps: Dependencies, source: string, id: string, now = Date.now()) {
   if ((source !== 'activity' && source !== 'business') || !uuid.test(id)) throw new TeaUnavailable();
   let row;
@@ -213,9 +235,13 @@ export async function teaDetail(deps: Dependencies, source: string, id: string, 
     return { item: item(candidate, visible), business };
   }
   const post = access.posts.get(row.post_id);
+  const [commerce, events] = await Promise.all([
+    deps.commerce(row), visible.kind === 'club' ? linkedEvents(deps, row, now) : Promise.resolve([]),
+  ]);
   return {
     item: item(candidate, visible),
     post: { id: post.legacy_post_id || post.id, userId: access.owners.get(row.creator_id).id, title: visible.name },
-    commerce: await deps.commerce(row),
+    commerce,
+    linkedEvents: events,
   };
 }
