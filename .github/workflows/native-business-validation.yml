@@ -8,6 +8,9 @@ on:
       - 'ios_native/MIRA/**'
 permissions:
   contents: read
+concurrency:
+  group: captro-business-simulator-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   simulator:
     runs-on: macos-26
@@ -26,6 +29,13 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/Business.xcresult" \
             -only-testing:CaptroLayoutUITests/BusinessOrderingTests \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/business-simulator.log"
+      - name: Export screenshots from simulator checks
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/Business.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Business.xcresult" \
+              --output-path "$RUNNER_TEMP/business-screenshots"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -33,3 +43,4 @@ jobs:
           path: |
             ${{ runner.temp }}/Business.xcresult
             ${{ runner.temp }}/business-simulator.log
+            ${{ runner.temp }}/business-screenshots

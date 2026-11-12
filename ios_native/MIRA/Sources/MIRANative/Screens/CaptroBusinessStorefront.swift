@@ -100,7 +100,7 @@ struct CaptroBusinessDirectory: View {
               Text(miles, format: .number.precision(.fractionLength(1))) + Text(" mi")
             }
           }
-        }
+        }.accessibilityIdentifier("business.shop.\(business.id)")
       }
       if more { Button("Load more businesses") { Task { await load(reset: false) } }.disabled(loading) }
     }

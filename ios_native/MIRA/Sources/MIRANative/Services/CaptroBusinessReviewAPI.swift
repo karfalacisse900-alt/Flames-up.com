@@ -5,12 +5,12 @@ enum CaptroBusinessReviewAPI {
   static func make() -> MIRAAPIClient {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [CaptroBusinessReviewProtocol.self]
-    return MIRAAPIClient(baseURL: URL(string: "https://business-fixture.invalid/api")!, session: URLSession(configuration: config))
+    return MIRAAPIClient(baseURL: URL(string: "https://localhost/api")!, session: URLSession(configuration: config))
   }
 }
 
 private final class CaptroBusinessReviewProtocol: URLProtocol {
-  override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "business-fixture.invalid" }
+  override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "localhost" }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
   override func startLoading() {

@@ -10,8 +10,7 @@ final class BusinessOrderingTests: XCTestCase {
 
   func testQuickAddUsesSameStorefrontAndChangesQuantityInline() {
     let app = launch()
-    XCTAssertTrue(app.staticTexts["NYC Hot Dogs"].waitForExistence(timeout: 10))
-    app.staticTexts["NYC Hot Dogs"].tap()
+    openShop("20000000-0000-4000-8000-000000000002", in: app)
     let add = app.buttons["Add Hotdog"]
     XCTAssertTrue(add.waitForExistence(timeout: 12))
     add.tap()
@@ -27,8 +26,7 @@ final class BusinessOrderingTests: XCTestCase {
 
   func testCustomizeAndEditOptionsInBag() {
     let app = launch()
-    XCTAssertTrue(app.staticTexts["Captro Coffee"].waitForExistence(timeout: 10))
-    app.staticTexts["Captro Coffee"].tap()
+    openShop("20000000-0000-4000-8000-000000000001", in: app)
     let customize = app.buttons["Customize Iced Latte"]
     XCTAssertTrue(customize.waitForExistence(timeout: 12))
     attach("business-coffee-storefront", from: app)
@@ -52,8 +50,7 @@ final class BusinessOrderingTests: XCTestCase {
 
   func testConfirmationWaitsForVerificationAndPickupShowsTheCodeWhenReady() {
     let app = launch()
-    XCTAssertTrue(app.staticTexts["NYC Hot Dogs"].waitForExistence(timeout: 10))
-    app.staticTexts["NYC Hot Dogs"].tap()
+    openShop("20000000-0000-4000-8000-000000000002", in: app)
     let add = app.buttons["Add Hotdog"]
     XCTAssertTrue(add.waitForExistence(timeout: 10))
     add.tap()
@@ -71,6 +68,12 @@ final class BusinessOrderingTests: XCTestCase {
     app.buttons["View Order"].tap()
     XCTAssertTrue(app.staticTexts["Ready for pickup"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.images["Pickup QR code"].exists)
+  }
+
+  private func openShop(_ id: String, in app: XCUIApplication) {
+    let shop = app.descendants(matching: .any).matching(identifier: "business.shop.\(id)").firstMatch
+    XCTAssertTrue(shop.waitForExistence(timeout: 12), app.debugDescription)
+    if shop.exists { shop.tap() }
   }
 
   private func attach(_ name: String, from app: XCUIApplication) {
