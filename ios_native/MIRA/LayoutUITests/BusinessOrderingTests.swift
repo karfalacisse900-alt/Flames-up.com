@@ -21,6 +21,8 @@ final class BusinessOrderingTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Hotdog"].exists)
     app.buttons["Decrease quantity"].tap()
     XCTAssertTrue(app.staticTexts["Quantity 1"].exists)
+    XCTAssertTrue(app.staticTexts["$0.32"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["$4.32"].exists)
     attach("business-quick-add-bag", from: app)
   }
 
@@ -56,6 +58,7 @@ final class BusinessOrderingTests: XCTestCase {
     add.tap()
     app.buttons["View Bag · 1"].tap()
     XCTAssertTrue(app.buttons["Checkout"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["$4.32"].exists)
     app.buttons["Checkout"].tap()
     app.buttons["Confirm pickup and continue"].tap()
     let verify = app.buttons["Check order status"]

@@ -3,7 +3,7 @@ import MapKit
 import SwiftUI
 
 func captroBusinessPrice(_ amount: Int) -> String {
-  CaptroMoney.format(minorUnits: amount, currency: "USD")
+  CaptroMoney.format(minorUnits: amount, currency: "USD", fixedPrecision: true)
 }
 
 struct CaptroBusinessPhoto: View {
@@ -216,6 +216,7 @@ private struct CaptroBusinessStorefront: View {
       }.padding(.horizontal, 16).padding(.bottom, 14)
     }
     .navigationBarTitleDisplayMode(.inline)
+    .tint(.primary)
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button { showsBag = true } label: {
@@ -305,31 +306,43 @@ private struct CaptroBusinessStorefront: View {
       } else {
         tileContent(product)
       }
-      HStack {
-        Spacer(minLength: 0)
-        if product.isCustom || current == 0 {
-          Button {
-            if product.isCustom { editing = product }
-            else { bag.set(product: product, selection: [], quantity: 1) }
-          } label: {
-            Image(systemName: "plus").font(.subheadline.bold()).frame(width: 28, height: 28)
-              .background(.quaternary, in: Circle()).frame(width: 44, height: 44)
-          }.accessibilityLabel(product.isCustom ? "Customize \(product.name)" : "Add \(product.name)")
-            .disabled(business.paused && !product.isCustom)
-        } else {
-          CaptroBusinessStepper(quantity: current) { bag.set(product: product, selection: [], quantity: $0) }
+      ViewThatFits(in: .horizontal) {
+        HStack {
+          Text(captroBusinessPrice(product.unitAmount)).font(.subheadline)
+          Spacer(minLength: 0)
+          tileQuantity(product, current: current)
         }
-      }.buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 1) {
+          Text(captroBusinessPrice(product.unitAmount)).font(.subheadline)
+          tileQuantity(product, current: current)
+        }
+      }
     }.padding(7).background {
       RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary)
     }
   }
 
+  @ViewBuilder
+  private func tileQuantity(_ product: CaptroBusinessProduct, current: Int) -> some View {
+    if product.isCustom || current == 0 {
+      Button {
+        if product.isCustom { editing = product }
+        else { bag.set(product: product, selection: [], quantity: 1) }
+      } label: {
+        Image(systemName: "plus").font(.subheadline.bold()).frame(width: 28, height: 28)
+          .background(.quaternary, in: Circle()).frame(width: 44, height: 44)
+      }.buttonStyle(.plain)
+        .accessibilityLabel(product.isCustom ? "Customize \(product.name)" : "Add \(product.name)")
+        .disabled(business.paused && !product.isCustom)
+    } else {
+      CaptroBusinessStepper(quantity: current) { bag.set(product: product, selection: [], quantity: $0) }
+    }
+  }
+
   private func tileContent(_ product: CaptroBusinessProduct) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      CaptroBusinessPhoto(url: product.imageUrl, fill: false).frame(height: 99)
+      CaptroBusinessPhoto(url: product.imageUrl, fill: false).frame(height: 90)
       Text(product.name).font(.subheadline.bold()).lineLimit(2)
-      Text(captroBusinessPrice(product.unitAmount)).font(.subheadline)
     }.frame(maxWidth: .infinity, alignment: .leading)
   }
 

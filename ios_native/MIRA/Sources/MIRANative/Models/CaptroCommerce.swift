@@ -198,14 +198,14 @@ enum CaptroMoney {
     let fraction = String(minorUnits % scale)
     return "\(minorUnits / scale)." + String(repeating: "0", count: rule.exponent - fraction.count) + fraction
   }
-  static func format(minorUnits: Int, currency: String) -> String {
+  static func format(minorUnits: Int, currency: String, fixedPrecision: Bool = false) -> String {
     let code = currency.uppercased()
     guard let rule = contract?.currencies[code] else { return "\(code) \(minorUnits) provider units" }
     let scale = (0..<rule.exponent).reduce(1) { result, _ in result * 10 }
     let formatter = NumberFormatter()
     formatter.numberStyle = .currency
     formatter.currencyCode = code
-    formatter.minimumFractionDigits = minorUnits % scale == 0 ? 0 : rule.exponent
+    formatter.minimumFractionDigits = fixedPrecision || minorUnits % scale != 0 ? rule.exponent : 0
     formatter.maximumFractionDigits = rule.exponent
     let value = NSDecimalNumber(decimal: Decimal(minorUnits) / Decimal(scale))
     return formatter.string(from: value) ?? "\(code) \(value.stringValue)"

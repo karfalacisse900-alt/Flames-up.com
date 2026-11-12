@@ -29,7 +29,7 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
     func shop(_ id: String, _ name: String, _ category: String, _ photos: [String]) -> [String: Any] {
       ["id": id, "name": name, "category": category, "pickup_address": "Sample pickup location",
        "latitude": 40.73, "longitude": -73.99, "hours": "Development sample", "paused": false, "published": true,
-       "photos": photos, "distance_miles": 0.3]
+       "photos": photos, "avatar_url": category == "street_food" ? dogPhoto : coffeeShop, "distance_miles": 0.3]
     }
     func product(_ id: String, _ name: String, _ price: Int, _ image: String, _ groups: [[String: Any]] = [], category: String = "Coffee") -> [String: Any] {
       ["id": id, "name": name, "category": category, "unit_amount": price,
@@ -67,16 +67,20 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
         ["id": "extras", "name": "Extras", "minimum": 0, "maximum": 2, "options": [
           ["id": "shot", "name": "Extra espresso shot", "extra": 75], ["id": "cream", "name": "Whipped cream", "extra": 40]]],
       ]),
-      product("espresso", "Iced Coffee", 350, espressoPhoto),
+      product("espresso", "Black Coffee", 350, espressoPhoto),
       product("cappuccino", "Cappuccino", 450, cappuccinoPhoto),
       product("croissant", "Croissant", 390, pastryPhoto, category: "Pastries")]
     case "/api/businesses/\(vendor)/menu":
       status = 200
       payload = [product("dog", "Hotdog", 400, dogPhoto, category: "Food")]
     case "/api/businesses/\(coffee)/quote", "/api/businesses/\(vendor)/quote":
+      guard let data = bodyData(),
+            let lines = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let items = lines["lines"] as? [[String: Any]], !items.isEmpty else {
+        respond(status: 400, payload: ["detail": "The fixture could not read the bag."])
+        return
+      }
       status = 200
-      let lines = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any]
-      let items = lines?["lines"] as? [[String: Any]] ?? []
       let subtotal = items.reduce(0) { subtotal, line in
         let options = line["option_ids"] as? [String] ?? []
         let prices = ["latte": 490, "espresso": 350, "cappuccino": 450, "croissant": 390, "dog": 400]
@@ -101,7 +105,27 @@ private final class CaptroBusinessReviewProtocol: URLProtocol {
       status = 503
       payload = ["detail": "Payments are disabled in this UI fixture."]
     }
-    guard let data = try? JSONSerialization.data(withJSONObject: payload),
+    respond(status: status, payload: payload)
+  }
+
+  private func bodyData() -> Data? {
+    if let body = request.httpBody { return body }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    let capacity = 4096
+    var bytes = [UInt8](repeating: 0, count: capacity)
+    var data = Data()
+    while true {
+      let count = stream.read(&bytes, maxLength: capacity)
+      if count < 0 { return nil }
+      if count == 0 { return data }
+      data.append(contentsOf: bytes.prefix(count))
+    }
+  }
+
+  private func respond(status: Int, payload: Any) {
+    guard let url = request.url, let data = try? JSONSerialization.data(withJSONObject: payload),
           let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil,
                                          headerFields: ["Content-Type": "application/json"]) else { return }
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
