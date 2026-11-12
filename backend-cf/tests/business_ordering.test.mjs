@@ -15,8 +15,34 @@ const dog = '30000000-0000-4000-8000-000000000002';
 const oat = '40000000-0000-4000-8000-000000000001';
 const whole = '40000000-0000-4000-8000-000000000002';
 const group = '50000000-0000-4000-8000-000000000001';
+const realStripe = process.env.CAPTRO_BUSINESS_REAL_STRIPE === '1';
+
+async function sandboxStripe(path, fields, idempotencyKey) {
+  const response = await fetch('https://api.stripe.com/v1' + path, {
+    method: fields ? 'POST' : 'GET',
+    headers: {
+      Authorization: 'Bearer ' + process.env.STRIPE_SECRET_KEY,
+      ...(fields ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
+    ...(fields ? { body: new URLSearchParams(fields) } : {}),
+    signal: AbortSignal.timeout(20000),
+  });
+  const data = await response.json();
+  assert.ok(response.ok, 'Stripe sandbox request failed: ' + response.status + ' ' + (data.error?.code ?? ''));
+  assert.notEqual(data.livemode, true, 'Stripe returned a live-mode object');
+  return { ok: true, data };
+}
 
 test('Captro Business API and Postgres complete a pickup order using isolated Stripe objects', async t => {
+  if (realStripe) {
+    assert.equal(process.env.STRIPE_MODE, 'test');
+    assert.match(process.env.STRIPE_SECRET_KEY ?? '', /^sk_test_/);
+    assert.match(process.env.STRIPE_PUBLISHABLE_KEY ?? '', /^pk_test_/);
+    assert.match(process.env.STRIPE_EXPECTED_ACCOUNT_ID ?? '', /^acct_[A-Za-z0-9]+$/);
+    const account = await sandboxStripe('/account');
+    assert.equal(account.data.id, process.env.STRIPE_EXPECTED_ACCOUNT_ID, 'Unexpected sandbox platform account');
+  }
   const db = new PGlite();
   t.after(() => db.close());
   const one = async (statement, params = []) => (await db.query(statement, params)).rows[0];
@@ -51,7 +77,7 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
   };
   const api = new Hono();
   let creationCount = 0, refundCount = 0;
-  const intents = new Map(), charges = new Map();
+  const intents = new Map(), charges = new Map(), paymentIds = [];
   const webhook = makeBusinessOrdering(api, async (c, next) => {
     if (!c.req.header('fixture-actor')) return c.json({}, 401);
     await next();
@@ -70,17 +96,31 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
       await db.query('update ' + table + ' set ' + key + '=$2 where id=$1 and ' + key + ' is null',
         [filters.id.slice(3), value]);
     },
-    stripe: () => ({ mode: 'test', configured: true, webhookConfigured: true, publishableKey: 'pk_test_fixture' }),
+    stripe: () => ({ mode: 'test', configured: true, webhookConfigured: true,
+      publishableKey: realStripe ? process.env.STRIPE_PUBLISHABLE_KEY : 'pk_test_fixture' }),
     actor: c => c.req.header('fixture-actor'),
     seller: async () => ({ provider_account_id: 'acct_fixture' }),
     media: async () => [],
     limit: async () => null,
     getStripe: async (_, path) => {
+      if (realStripe) return sandboxStripe(path);
       const id = path.split('/').pop().split('?')[0];
       const data = path.startsWith('/charges/') ? charges.get(id) : intents.get(id);
       return { ok: Boolean(data), data };
     },
     postStripe: async (_, path, fields, key) => {
+      if (realStripe) {
+        const result = await sandboxStripe(path, fields, key);
+        if (path === '/refunds') {
+          refundCount++;
+          assert.equal(result.data.payment_intent, fields.payment_intent);
+          assert.equal(result.data.status, 'succeeded');
+        } else {
+          creationCount++;
+          paymentIds.push(result.data.id);
+        }
+        return result;
+      }
       if (path === '/refunds') {
         refundCount++;
         const intent = intents.get(fields.payment_intent);
@@ -94,6 +134,7 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
         transfer_group: fields.transfer_group, client_secret: id + '_secret_fixture', status: 'requires_payment_method',
         metadata: { source: fields['metadata[source]'], business_order_id: fields['metadata[business_order_id]'] } };
       intents.set(id, data);
+      paymentIds.push(id);
       return { ok: true, data };
     },
   });
@@ -110,6 +151,16 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
   const checkout = { lines, total: 1696, request_id: '60000000-0000-4000-8000-000000000001' };
   let paidOrder;
   const success = async (id, chargeId) => {
+    if (realStripe) {
+      const { data: intent } = await sandboxStripe('/payment_intents/' + id + '/confirm', { payment_method: 'pm_card_visa' });
+      assert.equal(intent.status, 'succeeded');
+      const { data: charge } = await sandboxStripe('/charges/' + intent.latest_charge + '?expand[]=balance_transaction');
+      assert.equal(charge.payment_intent, intent.id);
+      assert.equal(charge.amount, intent.amount);
+      assert.equal(charge.paid, true);
+      assert.ok(charge.balance_transaction?.fee > 0);
+      return { type: 'payment_intent.succeeded', data: { object: intent } };
+    }
     const intent = intents.get(id);
     Object.assign(intent, { status: 'succeeded', amount_received: intent.amount, latest_charge: chargeId });
     charges.set(chargeId, { id: chargeId, amount: intent.amount, payment_intent: id, currency: 'usd',
@@ -143,11 +194,15 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     assert.equal((await call('/business-owner/' + coffee + '/orders', stranger)).status, 404);
   });
   await t.test('trusted provider payment, replay, vendor progression and one-time QR pickup', async () => {
-    const event = await success('pi_1', 'ch_fixture1');
+    const event = await success(paymentIds[0], 'ch_fixture1');
     await webhook({}, event);
     await webhook({}, event);
     assert.equal((await (await call('/business-orders/' + paidOrder, buyer)).json()).status, 'received');
     assert.equal((await one('select count(*)::int as n from app_marketplace_ledger')).n, 2);
+    const journal = (await db.query("select seller_id, account, amount::int from app_marketplace_ledger")).rows;
+    assert.ok(journal.every(row => row.seller_id === owner));
+    assert.equal(journal.find(row => row.account === 'gross').amount, 1696);
+    assert.ok(journal.find(row => row.account === 'processing_fee').amount > 0);
     assert.equal((await call('/business-orders/' + paidOrder + '/action', stranger, { action: 'accept' })).status, 409);
     assert.equal((await call('/business-orders/' + paidOrder + '/action', owner, { action: 'ready' })).status, 409);
     for (const [action, status] of [['accept','accepted'],['prepare','preparing'],['ready','ready']]) {
@@ -167,7 +222,7 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
       lines: [{ product_id: dog, quantity: 1, option_ids: [] }], total: 432,
       request_id: '60000000-0000-4000-8000-000000000002',
     })).json();
-    const event = await success('pi_2', 'ch_fixture2');
+    const event = await success(paymentIds[1], 'ch_fixture2');
     await webhook({}, event);
     const rejection = await call('/business-orders/' + next.order.id + '/action', owner, { action: 'reject' });
     assert.equal((await rejection.json()).status, 'refunded');

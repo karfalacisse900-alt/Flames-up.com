@@ -2,6 +2,10 @@ name: Stripe Sandbox Integration
 on:
   workflow_dispatch:
     inputs:
+      business_ordering:
+        type: boolean
+        default: false
+        description: Verify food orders and refunds using sandbox cards and a disposable database
       support_contract_only:
         type: boolean
         default: false
@@ -27,7 +31,31 @@ concurrency:
   group: captro-stripe-sandbox-integration
   cancel-in-progress: false
 jobs:
+  business:
+    if: ${{ inputs.business_ordering }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: captro-payments-test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: backend-cf/package-lock.json
+      - run: npm ci
+        working-directory: backend-cf
+      - name: Verify test card payments, pickup and a refund in the Stripe sandbox
+        working-directory: backend-cf
+        env:
+          CAPTRO_BUSINESS_REAL_STRIPE: '1'
+          STRIPE_MODE: ${{ vars.STRIPE_MODE }}
+          STRIPE_EXPECTED_ACCOUNT_ID: ${{ vars.STRIPE_EXPECTED_ACCOUNT_ID }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY }}
+        run: node --experimental-strip-types --test tests/business_ordering.test.mjs
   sandbox:
+    if: ${{ !inputs.business_ordering }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     environment: captro-payments-test
