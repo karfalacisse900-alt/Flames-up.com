@@ -34,20 +34,20 @@ struct CaptroCommerceDetailSection: View {
             DatePicker("Choose a time", selection: $bookingStart, in: Date()..., displayedComponents: [.date, .hourAndMinute])
           }
         } else {
-        VStack(alignment: .leading, spacing: 12) {
-          heading(commerce)
-          typeSpecificFacts(commerce)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(MIRATheme.Color.editorialCream)
-        .overlay(Rectangle().strokeBorder(CaptroDetailStyle.divider, lineWidth: 0.7))
-        if !commerce.refundPolicy.isEmpty {
-          factBlock("REFUND / CANCELLATION", commerce.refundPolicy)
-        }
-        if !commerce.description.isEmpty && commerce.description != model.post.detailCaption {
-          factBlock("ABOUT", commerce.description)
-        }
+          VStack(alignment: .leading, spacing: 12) {
+            heading(commerce)
+            typeSpecificFacts(commerce)
+          }
+          .padding(12)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(MIRATheme.Color.editorialCream)
+          .overlay(Rectangle().strokeBorder(CaptroDetailStyle.divider, lineWidth: 0.7))
+          if !commerce.refundPolicy.isEmpty {
+            factBlock("REFUND / CANCELLATION", commerce.refundPolicy)
+          }
+          if !commerce.description.isEmpty && commerce.description != model.post.detailCaption {
+            factBlock("ABOUT", commerce.description)
+          }
         }
         purchaseControls(commerce)
       }

@@ -33,7 +33,7 @@ final class TeaTests: XCTestCase {
     attach("tea-list", from: app)
     tapRow(3, in: app)
     XCTAssertTrue(app.staticTexts["Rooftop Session"].waitForExistence(timeout: 8))
-    XCTAssertTrue(app.staticTexts["$20"].exists)
+    XCTAssertTrue(app.staticTexts["$20 Entry"].exists)
     XCTAssertFalse(app.staticTexts["Comments"].exists)
     let buy = app.buttons["tea.primary-action"]
     XCTAssertTrue(buy.exists)

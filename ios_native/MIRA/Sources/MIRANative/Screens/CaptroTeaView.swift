@@ -1,5 +1,5 @@
-import MapKit
 import SwiftUI
+import UIKit
 
 struct CaptroTeaDestination: Decodable, Hashable {
   let source: String
@@ -104,7 +104,7 @@ struct CaptroTeaView: View {
         }
         ForEach(entries) { entry in
           listRow {
-            Button { path.append(entry) } label: { CaptroTeaRow(entry: entry) }
+            Button { if path.isEmpty { path.append(entry) } } label: { CaptroTeaRow(entry: entry) }
               .buttonStyle(.plain)
               .accessibilityHint("Opens \(entry.typeLabel.lowercased()) details")
               .accessibilityIdentifier("tea.row." + entry.id)
@@ -342,8 +342,10 @@ private struct TeaActivityContent: View {
       }
       if commerce.paymentModel == "free" {
         TeaFact(symbol: "ticket", value: "Free", palette: .sand)
-      } else if let price = commerce.resolvedLowestPrice?.stampPrice {
-        TeaFact(symbol: "ticket", value: commerce.prices.count > 1 ? "From \(price)" : price, palette: .sand)
+      } else if let price = commerce.resolvedLowestPrice, let terms = price.stampPrice {
+        let amount = ["one_time", "one-time", "once"].contains(price.billingPeriod) ? price.money : terms
+        let label = commerce.prices.count > 1 ? "From \(amount)" : (entry.kind == "event" ? "\(amount) Entry" : amount)
+        TeaFact(symbol: "ticket", value: label, palette: .sand)
       }
       if commerce.joinedCount > 0 && ["event", "meetup", "club"].contains(entry.kind) {
         TeaFact(symbol: "person.3.fill", value: "\(commerce.joinedCount.formatted()) \(entry.kind == "club" ? "joined" : "going")", palette: .sky)
