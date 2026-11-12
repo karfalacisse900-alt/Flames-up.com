@@ -45,4 +45,18 @@ for (const name of ['CAPTRO_ACCOUNT_CLEANUP_MANIFEST', 'CAPTRO_PAYMENT_RECOVERY_
   assert.ok(!bindings.some(binding =>
     binding.name === name && (binding.type !== 'plain_text' || binding.text !== 'blocked')), 'Sensitive action gate changed');
 }
+const backupBindings = bindings.filter(binding => ['MEDIA_BACKUP', 'VOICE_RECORDINGS'].includes(binding.name));
+assert.equal(backupBindings.length, 2, 'Production is missing its media backup bindings');
+assert.ok(backupBindings.every(binding => binding.type === 'r2_bucket' && binding.bucket_name === 'flames-up-media-backup'),
+  'Production media bucket bindings differ from the version configuration');
+if (process.argv.length === 2) {
+  const bucketResponse = await fetch('https://api.cloudflare.com/client/v4/accounts/' + account +
+    '/r2/buckets/flames-up-media-backup', {
+    headers: {Authorization: 'Bearer ' + token},
+    signal: AbortSignal.timeout(20000),
+  });
+  const bucket = await bucketResponse.json();
+  console.log(JSON.stringify({r2BucketRead: bucketResponse.status, exists: bucket.success === true,
+    cloudflareErrorCodes: (bucket.errors ?? []).map(error => error.code)}));
+}
 console.log('Verified Worker version ' + expectedVersion + ' and existing release flags.');
