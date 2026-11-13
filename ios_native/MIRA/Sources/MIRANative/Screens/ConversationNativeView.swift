@@ -732,15 +732,17 @@ public struct ConversationNativeView: View {
 
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.system(size: 15, weight: .semibold))
+          .font(.headline)
           .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(1)
+          .lineLimit(2)
           .truncationMode(.tail)
+        if let statusText {
         Text(statusText)
-          .font(.system(size: 11, weight: .regular))
+          .font(.caption)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
           .truncationMode(.tail)
+        }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -771,11 +773,11 @@ public struct ConversationNativeView: View {
     }
   }
 
-  private var statusText: String {
+  private var statusText: String? {
     if model.isGroup { return "group chat" }
     if model.presence?.isTyping == true { return "typing..." }
     if model.presence?.isOnline == true { return "online" }
-    return "chat"
+    return nil
   }
 
   private func presentProfileReport() {
@@ -1093,7 +1095,7 @@ public struct ConversationNativeView: View {
           Image(systemName: showAttachmentTray ? "xmark" : "plus")
             .font(.system(size: 22, weight: .regular))
             .foregroundStyle(MIRATheme.Color.textSecondary)
-            .frame(width: 40, height: 48)
+            .frame(width: 44, height: 48)
         }
         .buttonStyle(.miraPress)
         .accessibilityLabel(showAttachmentTray ? "Close attachments" : "Add attachment")
@@ -1113,7 +1115,7 @@ public struct ConversationNativeView: View {
               Image(systemName: "camera")
                 .font(.system(size: 20, weight: .regular))
                 .foregroundStyle(MIRATheme.Color.textSecondary)
-                .frame(width: 42, height: 44)
+                .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
             }
             .disabled(model.isUploading)
@@ -1175,7 +1177,7 @@ public struct ConversationNativeView: View {
         .font(.system(size: 15, weight: .bold))
         .foregroundStyle(MIRATheme.Color.onPrimary)
         .frame(width: 44, height: 44)
-        .background(hasDraft ? (model.isGroup ? MIRATheme.Color.textPrimary : ChatRoomPalette.accent) : MIRATheme.Color.textMuted.opacity(0.3))
+        .background(hasDraft ? ChatRoomPalette.accent : MIRATheme.Color.textMuted.opacity(0.3))
         .clipShape(Circle())
     }
     .buttonStyle(.miraPress)
@@ -1290,7 +1292,7 @@ private struct MessageBubbleContent: View {
       }
       if let timestamp, !timestamp.isEmpty {
         Text(timestamp)
-          .font(.system(size: 10.5, weight: .semibold))
+          .font(.caption2.weight(.medium))
           .foregroundStyle(outgoing ? ChatRoomPalette.outgoingTimestamp : ChatRoomPalette.incomingTimestamp)
           .lineLimit(1)
           .padding(.top, hasLargeMedia ? 0 : 1)

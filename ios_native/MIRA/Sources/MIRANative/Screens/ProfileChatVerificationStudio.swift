@@ -2535,7 +2535,7 @@ private struct ChatConversationRow: View {
         if let unread = conversation.unreadCount, unread > 0 {
           Text("\(min(unread, 99))")
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(MIRATheme.Color.onPrimary)
             .frame(minWidth: 22, minHeight: 22)
             .background(MIRATheme.Color.forest)
             .clipShape(Capsule())

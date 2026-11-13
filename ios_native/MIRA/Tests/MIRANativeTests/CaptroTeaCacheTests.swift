@@ -107,4 +107,26 @@ final class CaptroTeaCacheTests: XCTestCase {
     store.invalidate(discard: true)
     XCTAssertNil(store.snapshot(for: entry(25)))
   }
+
+  func testInvalidatedInFlightResultCannotOverwriteNewRead() async throws {
+    let item = entry(); let response = details(item)
+    var pending: CheckedContinuation<CaptroTeaDetails, Error>?
+    var requests = 0
+    let started = expectation(description: "First read is held")
+    let store = CaptroTeaDetailStore(scope: { "a" }) { _ in
+      requests += 1
+      if requests == 1 {
+        return try await withCheckedThrowingContinuation { pending = $0; started.fulfill() }
+      }
+      return response
+    }
+    let old = Task { try await store.load(item) }
+    await fulfillment(of: [started], timeout: 2)
+    store.invalidate()
+    _ = try await store.load(item)
+    pending?.resume(returning: response)
+    do { _ = try await old.value; XCTFail("Invalidated completion accepted") } catch {}
+    XCTAssertEqual(requests, 2)
+    XCTAssertEqual(store.snapshot(for: item)?.item.id, item.id)
+  }
 }

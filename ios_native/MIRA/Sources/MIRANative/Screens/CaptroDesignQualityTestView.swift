@@ -10,7 +10,12 @@ public struct CaptroDesignQualityTestView: View {
   @State private var cameraDarkChrome = false
   private let api = MIRAAPIClient()
 
-  public init() {}
+  public init() {
+    if ProcessInfo.processInfo.arguments.contains("--captro-polish-chat") {
+      // Each UI run gets a separate local namespace; production caches are untouched.
+      MIRALocalJSONCache.setAccountScope(userId: "polish-chat-\(UUID())")
+    }
+  }
 
   public var body: some View {
     Group {

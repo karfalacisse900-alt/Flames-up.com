@@ -358,6 +358,7 @@ private struct CaptroTeaDetailView: View {
       unavailable = false
       detail = response
     } catch is CancellationError {
+      if !Task.isCancelled && detail == nil { error = "Details changed. Try again." }
     } catch MIRAAPIError.server(let status, _, _) where [401, 403, 404, 410].contains(status) {
       detail = nil; commerceModel = nil; unavailable = true
     } catch MIRAAPIError.badStatus(let status) where [401, 403, 404, 410].contains(status) {

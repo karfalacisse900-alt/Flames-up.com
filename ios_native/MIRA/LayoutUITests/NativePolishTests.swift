@@ -39,4 +39,32 @@ final class NativePolishTests: XCTestCase {
       capture("profile-\(suffix)", app); app.terminate()
     }
   }
+
+  func testChatFailureRetryAndAccessibleComposer() {
+    let app = launch(["--captro-design-quality-test", "--captro-quality-chat", "--captro-polish-chat",
+                      "--captro-polish-chat-error", "--captro-quality-large-text"], dark: true)
+    let conversation = app.buttons.containing(.staticText, identifier: "alex").firstMatch
+    XCTAssertTrue(conversation.waitForExistence(timeout: 15)); conversation.tap()
+    let retry = app.buttons["chat.retry"]
+    XCTAssertTrue(retry.waitForExistence(timeout: 5))
+    XCTAssertFalse(app.staticTexts["Start the chat"].exists)
+    capture("chat-error-dark-large-text", app)
+    retry.tap()
+    XCTAssertTrue(app.staticTexts["Are you joining the photo walk?"].waitForExistence(timeout: 8))
+    let add = app.buttons["Add attachment"]
+    XCTAssertTrue(add.isHittable)
+    XCTAssertGreaterThanOrEqual(add.frame.width, 44)
+    XCTAssertGreaterThanOrEqual(add.frame.height, 44)
+    add.tap()
+    XCTAssertTrue(app.buttons["Close attachments"].exists)
+    capture("chat-attachments-dark-large-text", app)
+    app.buttons["Close attachments"].tap()
+    let field = app.textFields["Message"]
+    if field.exists { field.tap(); field.typeText("Draft retained") }
+    else {
+      let editor = app.textViews.firstMatch
+      XCTAssertTrue(editor.exists); editor.tap(); editor.typeText("Draft retained")
+    }
+    capture("chat-keyboard-dark-large-text", app)
+  }
 }

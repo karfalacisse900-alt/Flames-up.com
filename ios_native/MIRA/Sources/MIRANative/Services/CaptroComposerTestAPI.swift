@@ -11,6 +11,8 @@ enum CaptroComposerTestAPI {
   }
 }
 private final class CaptroComposerTestProtocol: URLProtocol {
+  private static let lock = NSLock()
+  private static var failedChat = false
   override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "localhost" }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
@@ -43,7 +45,15 @@ private final class CaptroComposerTestProtocol: URLProtocol {
     } else if ProcessInfo.processInfo.arguments.contains("--captro-polish-chat"), path.hasSuffix("/conversations") {
       body = #"[{"id":"polish-conversation","other_user_id":"polish-peer","other_username":"alex","last_message":"See you at the photo walk.","unread_count":1}]"#; status = 200
     } else if ProcessInfo.processInfo.arguments.contains("--captro-polish-chat"), path.hasSuffix("/messages/polish-peer") {
+      let shouldFail = ProcessInfo.processInfo.arguments.contains("--captro-polish-chat-error") && Self.lock.withLock {
+        guard !Self.failedChat else { return false }
+        Self.failedChat = true; return true
+      }
+      if shouldFail {
+        body = #"{"detail":"Isolated chat load failure"}"#; status = 503
+      } else {
       body = #"[{"id":"polish-incoming","sender_id":"polish-peer","receiver_id":"composer-ui-test","content":"Are you joining the photo walk?","created_at":"2026-11-13T12:00:00Z","status":"read"},{"id":"polish-outgoing","sender_id":"composer-ui-test","receiver_id":"polish-peer","content":"See you at the photo walk.","created_at":"2026-11-13T12:01:00Z","status":"sent"}]"#; status = 200
+      }
     } else if path.hasSuffix("/showcase") {
       body = #"{"pinned":null,"clubs":[]}"#; status = 200
     } else if path.hasSuffix("/posts/creation-capabilities") {
