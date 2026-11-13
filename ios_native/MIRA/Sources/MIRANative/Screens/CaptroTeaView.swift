@@ -82,6 +82,7 @@ struct CaptroTeaView: View {
   let viewerID: String?
   let city: String?
   let signIn: () -> Void
+  let close: () -> Void
 
   @State private var entries: [CaptroTeaEntry] = []
   @State private var path: [CaptroTeaEntry] = []
@@ -127,6 +128,15 @@ struct CaptroTeaView: View {
       .navigationTitle("Tea")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar(.visible, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button(action: close) {
+            Image(systemName: "chevron.backward").frame(minWidth: 44, minHeight: 44)
+          }
+          .accessibilityLabel("Back to Home")
+          .accessibilityIdentifier("tea.back.home")
+        }
+      }
       .navigationDestination(for: CaptroTeaEntry.self) { entry in
         CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn)
       }

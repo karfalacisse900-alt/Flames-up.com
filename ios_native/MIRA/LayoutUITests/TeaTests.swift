@@ -5,9 +5,14 @@ final class TeaTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-design-quality-test", "--captro-tea-review"] + extra
     app.launch()
-    let tab = app.tabBars.buttons["Tea"]
-    XCTAssertTrue(tab.waitForExistence(timeout: 20), app.debugDescription)
-    if tab.exists { tab.tap() }
+    let menu = app.buttons["home.feed.selector"]
+    XCTAssertTrue(menu.waitForExistence(timeout: 20), app.debugDescription)
+    XCTAssertTrue(app.buttons["home.create.post"].exists)
+    XCTAssertFalse(app.tabBars.buttons["Tea"].exists)
+    menu.tap()
+    let tea = app.buttons["home.menu.tea"]
+    XCTAssertTrue(tea.waitForExistence(timeout: 8), app.debugDescription)
+    tea.tap()
     return app
   }
 
@@ -27,7 +32,7 @@ final class TeaTests: XCTestCase {
     nav.buttons.firstMatch.tap()
   }
 
-  func testTeaTabOpensIndividualEventAndExistingCheckout() {
+  func testHomeMenuOpensIndividualEventAndExistingCheckout() {
     let app = launch()
     XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 10))
     attach("tea-list", from: app)
@@ -45,6 +50,8 @@ final class TeaTests: XCTestCase {
     app.buttons["Close"].tap()
     back(app)
     XCTAssertTrue(row(3, in: app).waitForExistence(timeout: 8))
+    app.buttons["tea.back.home"].tap()
+    XCTAssertTrue(app.buttons["home.create.post"].waitForExistence(timeout: 8))
   }
 
   func testJoinUsesCommerceAndBusinessOpensExistingMenu() {

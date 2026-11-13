@@ -1111,6 +1111,9 @@ public struct MainFeedView: View {
   @StateObject private var model: MainFeedModel
   private let isTabActive: Bool
   private let isGuest: Bool
+  private let teaViewerID: String?
+  private let teaCity: String?
+  private let signInForTea: (() -> Void)?
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
@@ -1123,6 +1126,7 @@ public struct MainFeedView: View {
   @State private var selectedFeedSection: MainFeedSection = .forYou
   @State private var isFeedSelectorPresented = false
   @State private var showsBusinessOrdering = false
+  @State private var showsTea = false
   @State private var isShowingCreatePost = false
   @State private var detailPost: MIRAPost?
   @State private var postOptionsTarget: MIRAPost?
@@ -1138,12 +1142,26 @@ public struct MainFeedView: View {
     _model = StateObject(wrappedValue: MainFeedModel(api: api))
     self.isTabActive = true
     self.isGuest = isGuest
+    self.teaViewerID = nil
+    self.teaCity = nil
+    self.signInForTea = nil
   }
 
-  init(api: MIRAAPIClient, model: MainFeedModel, isTabActive: Bool = true, isGuest: Bool = false) {
+  init(
+    api: MIRAAPIClient,
+    model: MainFeedModel,
+    isTabActive: Bool = true,
+    isGuest: Bool = false,
+    teaViewerID: String? = nil,
+    teaCity: String? = nil,
+    signInForTea: (() -> Void)? = nil
+  ) {
     _model = StateObject(wrappedValue: model)
     self.isTabActive = isTabActive
     self.isGuest = isGuest
+    self.teaViewerID = teaViewerID
+    self.teaCity = teaCity
+    self.signInForTea = signInForTea
   }
 
   private var presentedFeed: some View {
@@ -1327,6 +1345,20 @@ public struct MainFeedView: View {
   public var body: some View {
     NavigationStack {
       activeFeed.onAppear(perform: feedDidAppear)
+      .fullScreenCover(isPresented: $showsTea) {
+        CaptroTeaView(
+          api: model.api,
+          viewerID: teaViewerID,
+          city: teaCity,
+          signIn: {
+            showsTea = false
+            signInForTea?()
+          },
+          close: { showsTea = false }
+        )
+        .id(teaViewerID)
+      }
+      .onChange(of: teaViewerID) { _, _ in showsTea = false }
       .sheet(isPresented: $showsBusinessOrdering) {
         NavigationStack { CaptroBusinessDirectory(api: model.api, isGuest: isGuest) }
       }
@@ -1407,7 +1439,14 @@ public struct MainFeedView: View {
         .accessibilityLabel("Feed selection, \(selectedFeedSection.title)")
         .accessibilityIdentifier("home.feed.selector")
         .popover(isPresented: $isFeedSelectorPresented, attachmentAnchor: .point(.bottomLeading), arrowEdge: .top) {
-          CaptroEditorialMenu(title: "Feed") {
+          CaptroEditorialMenu(title: "Menu") {
+            if signInForTea != nil {
+              CaptroEditorialMenuRow(title: "Tea", disclosure: true) {
+                isFeedSelectorPresented = false
+                showsTea = true
+              }
+              .accessibilityIdentifier("home.menu.tea")
+            }
             ForEach(MainFeedSection.allCases, id: \.self) { section in
               CaptroEditorialMenuRow(title: section.title, selected: selectedFeedSection == section) {
                 isFeedSelectorPresented = false
@@ -1434,6 +1473,7 @@ public struct MainFeedView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Create post")
+        .accessibilityIdentifier("home.create.post")
       }
       .frame(width: 96, alignment: .leading)
       .padding(.leading, 8)
@@ -1827,7 +1867,7 @@ public struct MainFeedView: View {
   }
 
   private var isViewportSuspended: Bool {
-    !isTabActive || scenePhase != .active || detailPost != nil || isShowingCreatePost || showsBusinessOrdering || selectedStoryGroup != nil
+    !isTabActive || scenePhase != .active || detailPost != nil || isShowingCreatePost || showsBusinessOrdering || showsTea || selectedStoryGroup != nil
   }
 
   private var isFeedOverlayPresented: Bool {
@@ -1837,6 +1877,7 @@ public struct MainFeedView: View {
       reportTarget != nil ||
       isShowingCreatePost ||
       showsBusinessOrdering ||
+      showsTea ||
       selectedStoryGroup != nil
   }
 }

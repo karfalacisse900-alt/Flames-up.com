@@ -29,13 +29,11 @@ struct CaptroStudioLayout {
 /// selection and cached destinations; these are ordinary native 44pt buttons.
 struct CaptroStudioNavigation: View {
   let home: () -> Void
-  var tea: (() -> Void)? = nil
   let capture: () -> Void
   let profile: () -> Void
   var body: some View {
     HStack(spacing: 0) {
       item("Home", symbol: "house.fill", selected: false, action: home)
-      if let tea { item("Tea", symbol: "cup.and.saucer", selected: false, action: tea) }
       item("Capture", symbol: "viewfinder", selected: true, action: capture)
       item("Me", symbol: "person.fill", selected: false, action: profile)
     }
@@ -60,13 +58,12 @@ struct CaptroStudioNavigation: View {
 struct CaptroStudioTabChrome: ViewModifier {
   let active: Bool
   let home: () -> Void
-  var tea: (() -> Void)? = nil
   let capture: () -> Void
   let profile: () -> Void
   func body(content: Content) -> some View {
     content.toolbar(active ? .hidden : .visible, for: .tabBar)
       .safeAreaInset(edge: .bottom, spacing: 0) {
-        if active { CaptroStudioNavigation(home: home, tea: tea, capture: capture, profile: profile) }
+        if active { CaptroStudioNavigation(home: home, capture: capture, profile: profile) }
       }
   }
 }

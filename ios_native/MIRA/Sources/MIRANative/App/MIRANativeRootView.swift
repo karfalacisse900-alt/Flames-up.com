@@ -6,7 +6,6 @@ import GoogleSignIn
 
 public enum MIRATab: Hashable {
   case main
-  case tea
   case scan
   case chat
   case profile
@@ -408,19 +407,14 @@ public struct MIRANativeRootView: View {
           api: api,
           model: startup.feedModel,
           isTabActive: selectedTab == .main,
-          isGuest: authSession.isGuest
+          isGuest: authSession.isGuest,
+          teaViewerID: authSession.user?.id,
+          teaCity: authSession.user?.city,
+          signInForTea: leaveGuestModeForSignIn
         )
       }
         .tag(MIRATab.main)
         .tabItem { Label("Home", systemImage: "house.fill") }
-
-      lazyTab(.tea) {
-        CaptroTeaView(api: api, viewerID: authSession.user?.id, city: authSession.user?.city,
-          signIn: leaveGuestModeForSignIn)
-          .id("tea-account-\(authSession.user?.id ?? "guest")")
-      }
-      .tag(MIRATab.tea)
-      .tabItem { Label("Tea", systemImage: "cup.and.saucer") }
 
       lazyTab(.scan) {
         if authSession.isGuest {
@@ -463,7 +457,7 @@ public struct MIRANativeRootView: View {
     .toolbarBackground(selectedTab == .scan && cameraDarkChrome ? Color.black : MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
     .modifier(CaptroStudioTabChrome(active: selectedTab == .scan && cameraDarkChrome,
-      home: { selectedTab = .main }, tea: { selectedTab = .tea }, capture: { selectedTab = .scan }, profile: { selectedTab = .profile }))
+      home: { selectedTab = .main }, capture: { selectedTab = .scan }, profile: { selectedTab = .profile }))
     .background(MIRATheme.Color.appBackground)
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")

@@ -109,6 +109,18 @@ try {
   const form = new FormData();
   form.append('file', new Blob([data], { type: 'image/png' }), 'captro-story-smoke.png');
   const uploaded = await request(intent.body.upload_url, { method: 'POST', body: form });
+  if (!uploaded.response.ok) {
+    const providerError = uploaded.body.errors?.[0];
+    const providerMessage = String(providerError?.message || uploaded.body.message || '')
+      .replace(/https?:\/\/\S+|[A-Za-z0-9_-]{40,}/g, '[redacted]').slice(0, 220);
+    console.log(JSON.stringify({ event: 'image_direct_upload_rejected', status: uploaded.response.status,
+      code: providerError?.code ?? uploaded.body.code ?? null, message: providerMessage }));
+    const stats = await request(`https://api.cloudflare.com/client/v4/accounts/${account}/images/v1/stats`, {
+      headers: { Authorization: `Bearer ${imagesToken}` },
+    });
+    console.log(JSON.stringify({ event: 'images_capacity', status: stats.response.status,
+      allowed: stats.body.result?.count?.allowed ?? null, current: stats.body.result?.count?.current ?? null }));
+  }
   assert.ok(uploaded.response.ok, `Synthetic photo upload failed: HTTP ${uploaded.response.status}`);
   let media = await request(`${api}/media/complete`, {
     method: 'POST', headers: { ...bearer, 'Content-Type': 'application/json' },

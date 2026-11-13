@@ -20,7 +20,7 @@ jobs:
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
-      - name: Test Tea from the Captro tab bar
+      - name: Test Tea from the Captro Home menu
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
