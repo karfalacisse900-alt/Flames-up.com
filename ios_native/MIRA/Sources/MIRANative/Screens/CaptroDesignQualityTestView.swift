@@ -139,7 +139,12 @@ private struct CaptroCameraTabReviewHost: View {
 private struct CaptroStoryPresentationTestHost: View {
   @State private var open = false
   private let api = CaptroComposerTestAPI.make()
-  private let group = try! JSONDecoder().decode(MIRAStoryGroup.self, from: Data(#"{"userId":"composer-ui-test","userFullName":"Test Creator","statuses":[{"id":"story-ui-test","userId":"composer-ui-test"}]}"#.utf8))
+  private let group: MIRAStoryGroup = {
+    let expiry = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+    let object: [String: Any] = ["userId": "composer-ui-test", "userFullName": "Test Creator",
+      "statuses": [["id": "story-ui-test", "userId": "composer-ui-test", "expiresAt": expiry, "text": "Isolated Story fixture"]]]
+    return try! JSONDecoder().decode(MIRAStoryGroup.self, from: JSONSerialization.data(withJSONObject: object))
+  }()
   var body: some View {
     Button("Open test Story") { open = true }
       .fullScreenCover(isPresented: $open) {

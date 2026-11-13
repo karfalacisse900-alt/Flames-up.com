@@ -3,8 +3,20 @@ import Foundation
 import SwiftUI
 
 struct CaptroTeaReviewHost: View {
-  @StateObject private var session: MIRAAuthSession
-  private let api: MIRAAPIClient
+  @StateObject private var context = TeaReviewContext()
+
+  var body: some View {
+    MIRANativeRootView(reviewSession: context.session, api: context.api)
+      .environment(\.captroStartupReducedMotion, true)
+  }
+}
+
+/// Keep the transport and account namespace stable through scene updates,
+/// just as the production App owns its API client across foreground resumes.
+@MainActor
+private final class TeaReviewContext: ObservableObject {
+  let session: MIRAAuthSession
+  let api: MIRAAPIClient
 
   init() {
     let storage = TeaReviewStorage()
@@ -14,15 +26,11 @@ struct CaptroTeaReviewHost: View {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [TeaReviewProtocol.self]
     MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
-    _session = StateObject(wrappedValue: auth)
+    session = auth
     api = MIRAAPIClient(baseURL: URL(string: "https://localhost/api")!, sessionProvider: auth,
                        session: URLSession(configuration: config))
   }
 
-  var body: some View {
-    MIRANativeRootView(reviewSession: session, api: api)
-      .environment(\.captroStartupReducedMotion, true)
-  }
 }
 
 private final class TeaReviewStorage: MIRAAuthSessionStorage, @unchecked Sendable {
