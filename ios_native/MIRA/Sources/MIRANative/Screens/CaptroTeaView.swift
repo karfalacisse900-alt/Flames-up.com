@@ -259,6 +259,7 @@ private struct CaptroTeaDetailView: View {
   @State private var unavailable = false
   @State private var loading = false
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.colorScheme) private var colorScheme
 
   init(entry: CaptroTeaEntry, api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void) {
     self.entry = entry; self.api = api; self.viewerID = viewerID; self.signIn = signIn
@@ -326,6 +327,7 @@ private struct CaptroTeaDetailView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
+    .toolbarColorScheme(colorScheme, for: .navigationBar)
     .miraHideTabBarOnAppear()
     .task(id: entry.destination) { await load() }
     .onChange(of: scenePhase) { _, phase in

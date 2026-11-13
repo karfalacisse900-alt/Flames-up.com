@@ -1100,7 +1100,11 @@ final class UserProfileNativeModel: ObservableObject {
   func revalidateIfStale() async {
     let scope = api.presentationScope
     if scope != lastLoadScope {
+      generation += 1; isLoading = false; isLoadingMore = false
+      lastLoadScope = scope
       user = nil; posts = []; showcase = CaptroProfileShowcase(); lastSuccessfulLoadAt = .distantPast
+      isFollowing = false; followPending = false; followersCount = 0
+      isBlocked = false; isBlockedBy = false; canLoadMore = false; nextOffset = 0
     }
     guard !isLoading, Date().timeIntervalSince(lastSuccessfulLoadAt) >= 30 else { return }
     await load()
@@ -1116,14 +1120,14 @@ final class UserProfileNativeModel: ObservableObject {
     defer { if request == generation { isLoading = false } }
     do {
       let fresh: MIRAUser = try await api.get("/users/\(userId)")
-      guard request == generation, !Task.isCancelled else { return }
+      guard request == generation, !Task.isCancelled, owner == api.presentationScope else { return }
       apply(user: fresh)
       guard fresh.privacyLocked != true, !isBlocked, !isBlockedBy else {
         posts = []; showcase = CaptroProfileShowcase(); canLoadMore = false; nextOffset = 0
         return
       }
       let page: [MIRAPost] = try await api.get("/users/\(userId)/posts?limit=60&skip=0")
-      guard request == generation, !Task.isCancelled else { return }
+      guard request == generation, !Task.isCancelled, owner == api.presentationScope else { return }
       let visible = profileVisiblePosts(page)
       if posts.isEmpty {
         posts = visible; nextOffset = page.count; canLoadMore = page.count == 60
@@ -1141,7 +1145,7 @@ final class UserProfileNativeModel: ObservableObject {
       showcase = selected
       lastSuccessfulLoadAt = Date()
     } catch {
-      guard request == generation, !Task.isCancelled else { return }
+      guard request == generation, !Task.isCancelled, owner == api.presentationScope else { return }
       if let apiError = error as? MIRAAPIError, case .server(let status, _, _) = apiError {
         requiresSignIn = status == 401
         if [401,403,404,410].contains(status) { posts = []; user = nil; showcase = CaptroProfileShowcase(); canLoadMore = false }
@@ -1274,7 +1278,9 @@ public struct UserProfileNativeView: View {
           }.buttonStyle(.plain).padding(.horizontal, 20)
         }
         CaptroProfileTabs(selection: $selectedSection)
-        if model.posts.isEmpty && model.isLoading {
+        if model.user == nil && model.errorMessage == nil {
+          ProgressView("Loading profile…").frame(minHeight: 100)
+        } else if model.posts.isEmpty && model.isLoading {
           ProfileGridSkeleton()
         } else if let error = model.errorMessage, model.posts.isEmpty {
           VStack(spacing: 12) {

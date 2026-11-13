@@ -1096,6 +1096,7 @@ public struct ConversationNativeView: View {
             .font(.system(size: 22, weight: .regular))
             .foregroundStyle(MIRATheme.Color.textSecondary)
             .frame(width: 44, height: 48)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.miraPress)
         .accessibilityLabel(showAttachmentTray ? "Close attachments" : "Add attachment")
