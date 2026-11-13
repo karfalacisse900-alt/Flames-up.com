@@ -26,11 +26,11 @@ for (const build of builds.data ?? []) {
   console.log(JSON.stringify({build:build.attributes.version,version:version?.attributes?.version,uploaded:build.attributes.uploadedDate,processing:build.attributes.processingState,expired:build.attributes.expired,beta:detail?.attributes,groups:groups.map(g=>included.find(item=>item.type==='betaGroups'&&item.id===g.id)?.attributes?.name ?? 'assigned group')}));
 }
 const uploads = await get('apps/' + app.id + '/buildUploads?' + new URLSearchParams({
-  'filter[cfBundleVersion]': '674.1',
+  'filter[cfBundleVersion]': '680.1',
   'fields[buildUploads]': 'cfBundleShortVersionString,cfBundleVersion,state,uploadedDate',
   limit: '5',
 }));
-console.log(JSON.stringify({deliveryBuild: '674.1', uploads: uploads.data.map(({attributes}) => ({
+console.log(JSON.stringify({deliveryBuild: '680.1', uploads: uploads.data.map(({attributes}) => ({
   build: attributes.cfBundleVersion,
   version: attributes.cfBundleShortVersionString,
   uploaded: attributes.uploadedDate,
