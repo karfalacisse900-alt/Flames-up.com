@@ -213,11 +213,12 @@ private struct CaptroTeaRow: View {
       }
       Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).accessibilityHidden(true)
     }
-    .foregroundStyle(entry.palette.ink)
+    .foregroundStyle(MIRATheme.Color.textPrimary)
     .padding(.horizontal, 12)
     .padding(.vertical, 7)
     .frame(minHeight: 48)
-    .background(entry.palette.color, in: RoundedRectangle(cornerRadius: 13))
+    .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 10))
+    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(MIRATheme.Color.divider))
     .contentShape(Rectangle())
   }
 }
@@ -229,7 +230,7 @@ private struct TeaIcon: View {
     Image(systemName: symbol).font(.subheadline.weight(.semibold))
       .foregroundStyle(palette.ink)
       .frame(width: 29, height: 29)
-      .background(palette.iconBackground, in: Circle())
+      .background(palette.color, in: Circle())
       .accessibilityHidden(true)
   }
 }
@@ -246,6 +247,7 @@ private struct TeaTimestamp: View {
   }
 }
 
+@MainActor
 private struct CaptroTeaDetailView: View {
   let entry: CaptroTeaEntry
   let api: MIRAAPIClient
@@ -255,7 +257,22 @@ private struct CaptroTeaDetailView: View {
   @State private var commerceModel: PostDetailModel?
   @State private var error: String?
   @State private var unavailable = false
-  @State private var loading = true
+  @State private var loading = false
+  @Environment(\.scenePhase) private var scenePhase
+
+  init(entry: CaptroTeaEntry, api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void) {
+    self.entry = entry; self.api = api; self.viewerID = viewerID; self.signIn = signIn
+    let cached = api.teaDetails.snapshot(for: entry)
+    _detail = State(initialValue: cached)
+    _commerceModel = State(initialValue: cached.flatMap { Self.model(for: $0, api: api, viewerID: viewerID) })
+  }
+
+  private static func model(for detail: CaptroTeaDetails, api: MIRAAPIClient, viewerID: String?) -> PostDetailModel? {
+    guard let post = detail.post, let commerce = detail.commerce else { return nil }
+    let model = PostDetailModel(post: post, api: api)
+    model.commerce = commerce; model.currentUserId = viewerID; model.didAttemptCurrentUserLoad = true
+    return model
+  }
 
   var body: some View {
     ScrollView {
@@ -264,13 +281,17 @@ private struct CaptroTeaDetailView: View {
           Text("This activity is no longer available.").foregroundStyle(.secondary).padding(.top, 12)
         } else if let business = detail?.business {
           TeaEntityCard(entry: detail?.item ?? entry, location: nil, typeLabel: business.categoryName)
+          VStack(spacing: 0) {
+          if !business.pickupAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
           Button {
             captroBusinessDirections(business.name, business.latitude, business.longitude)
           } label: {
             TeaFact(symbol: "location", value: business.pickupAddress, palette: .sky, link: true)
           }.buttonStyle(.plain).accessibilityHint("Opens walking directions")
+          }
           if !business.hours.isEmpty {
             TeaFact(symbol: "clock", value: business.hours, palette: .sand)
+          }
           }
           NavigationLink {
             CaptroBusinessStorefront(api: api, business: business, isGuest: viewerID == nil)
@@ -290,10 +311,11 @@ private struct CaptroTeaDetailView: View {
         } else {
           TeaEntityCard(entry: entry, location: nil)
           if loading { ProgressView("Loading details").padding(.top, 8) }
-          if let error {
-            Text(error).font(.subheadline).foregroundStyle(.secondary)
-            Button("Retry") { Task { await load() } }.frame(minHeight: 44)
-          }
+        }
+        if let error, !unavailable {
+          Text(error).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
+          Button("Retry") { Task { await load(force: true) } }.frame(minHeight: 44)
+            .accessibilityIdentifier("tea.detail.retry")
         }
       }
       .padding(.horizontal, 14)
@@ -302,38 +324,46 @@ private struct CaptroTeaDetailView: View {
     .background(MIRATheme.Color.appBackground)
     .navigationTitle("Tea")
     .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
     .miraHideTabBarOnAppear()
-    .task { if detail == nil && !unavailable { await load() } }
+    .task(id: entry.destination) { await load() }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active { Task { await load() } }
+    }
+    .refreshable { await load(force: true) }
+    #if DEBUG
+    .overlay(alignment: .bottomLeading) { TeaReviewRequestCounter() }
+    #endif
   }
 
-  @MainActor private func load() async {
-    guard let path = entry.destination.detailPath else { unavailable = true; return }
+  @MainActor private func load(force: Bool = false) async {
+    guard !loading else { return }
     loading = true
     error = nil
     defer { loading = false }
     do {
-      let response: CaptroTeaDetails = try await api.get(path)
+      let response = try await api.teaDetails.load(entry, force: force)
       try Task.checkCancellation()
       guard response.item.destination == entry.destination else {
         unavailable = true
         return
       }
-      if let post = response.post, let commerce = response.commerce {
-        let model = PostDetailModel(post: post, api: api)
-        model.commerce = commerce
-        model.currentUserId = viewerID
-        model.didAttemptCurrentUserLoad = true
-        commerceModel = model
-      } else if response.business == nil {
-        unavailable = true
-        return
+      if let commerceModel, let commerce = response.commerce {
+        // Preserve the existing action model and selections during refresh.
+        if !commerceModel.isUpdatingCommerce { commerceModel.commerce = commerce }
+      } else {
+        commerceModel = Self.model(for: response, api: api, viewerID: viewerID)
       }
+      unavailable = false
       detail = response
     } catch is CancellationError {
-    } catch MIRAAPIError.server(let status, _, _) where status == 404 {
-      unavailable = true
+    } catch MIRAAPIError.server(let status, _, _) where [401, 403, 404, 410].contains(status) {
+      detail = nil; commerceModel = nil; unavailable = true
+    } catch MIRAAPIError.badStatus(let status) where [401, 403, 404, 410].contains(status) {
+      detail = nil; commerceModel = nil; unavailable = true
     } catch {
-      self.error = "Could not load these details."
+      self.error = detail == nil ? "Could not load these details." : "Could not refresh. Showing the last loaded details."
     }
   }
 }
@@ -347,6 +377,7 @@ private struct TeaActivityContent: View {
   var body: some View {
     if let commerce = model.commerce {
       TeaEntityCard(entry: entry, location: commerce.city)
+      VStack(spacing: 0) {
       if let schedule = commerce.scheduleLabel {
         TeaFact(symbol: "calendar", value: schedule, palette: .lilac)
       }
@@ -376,6 +407,8 @@ private struct TeaActivityContent: View {
       if let end = commerce.expiresAt.flatMap(captroBusinessDate) {
         TeaFact(symbol: "clock", value: "Ends \(end.formatted(date: .abbreviated, time: .shortened))", palette: .sand)
       }
+      }
+      .overlay(alignment: .bottom) { Divider() }
       if viewerID == nil {
         Button("Sign in to continue", action: signIn)
           .buttonStyle(.plain)
@@ -419,10 +452,9 @@ private struct TeaEntityCard: View {
         TeaTimestamp(entry: entry)
       }.frame(maxWidth: .infinity, alignment: .leading)
     }
-    .foregroundStyle(entry.palette.ink)
-    .padding(14)
+    .foregroundStyle(MIRATheme.Color.textPrimary)
+    .padding(.vertical, 10)
     .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
-    .background(entry.palette.color, in: RoundedRectangle(cornerRadius: 15))
   }
 
   private var title: some View {
@@ -430,6 +462,7 @@ private struct TeaEntityCard: View {
       Text(entry.name).font(.title2.bold()).accessibilityAddTraits(.isHeader)
       Text([typeLabel ?? entry.typeLabel, location].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
         .font(.subheadline)
+        .foregroundStyle(MIRATheme.Color.textSecondary)
     }
   }
 }
@@ -446,19 +479,17 @@ private struct TeaFact: View {
       Text(value).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, alignment: .leading)
       if link { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).accessibilityHidden(true) }
     }
-    .foregroundStyle(palette.ink)
-    .padding(.horizontal, 12)
+    .foregroundStyle(MIRATheme.Color.textPrimary)
     .padding(.vertical, 7)
     .frame(minHeight: 44)
-    .background(palette.color, in: RoundedRectangle(cornerRadius: 13))
     .contentShape(Rectangle())
   }
 }
 
 private struct TeaPrimary: ViewModifier {
   func body(content: Content) -> some View {
-    content.font(.body.weight(.semibold)).foregroundStyle(.white)
+    content.font(.body.weight(.semibold)).foregroundStyle(MIRATheme.Color.onPrimary)
       .frame(maxWidth: .infinity, minHeight: 48)
-      .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 15))
+      .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: MIRATheme.Radius.small))
   }
 }

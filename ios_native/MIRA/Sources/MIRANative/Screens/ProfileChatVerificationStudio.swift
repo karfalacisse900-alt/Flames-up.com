@@ -541,7 +541,7 @@ public struct ProfileNativeView: View {
         await MainActor.run {
           model.primeUser(authSession?.user)
         }
-        await model.load()
+        await model.revalidateIfStale()
       }
       .onReceive(NotificationCenter.default.publisher(for: .captroPostSubmissionCompleted)) { _ in
         model.requestRefresh()
@@ -2222,7 +2222,7 @@ final class ChatNativeModel: ObservableObject {
       if forceRefresh { refreshRequested = true }
       return
     }
-    if !forceRefresh && hasLoadedFreshConversations && !conversations.isEmpty,
+    if !forceRefresh && hasLoadedFreshConversations,
        let lastRefreshAttemptAt,
        Date().timeIntervalSince(lastRefreshAttemptAt) < 30 { return }
     isLoadingFreshConversations = true
@@ -2376,10 +2376,7 @@ public struct ChatNativeView: View {
       .miraScrollFeel(.chat)
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.push)
-      .task {
-        model.configure(currentUserId: currentUserId)
-        await model.load()
-      }
+      .refreshable { await model.load(forceRefresh: true) }
       .task(id: scenePhase == .active && activeConversationRoute == nil) {
         guard scenePhase == .active, activeConversationRoute == nil else { return }
         model.configure(currentUserId: currentUserId)
@@ -2413,6 +2410,8 @@ public struct ChatNativeView: View {
       }
       .navigationBarTitleDisplayMode(.inline)
       .navigationTitle("Messages")
+      .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button { showCreateGroup = true } label: {

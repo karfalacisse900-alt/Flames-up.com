@@ -96,6 +96,49 @@ final class TeaTests: XCTestCase {
     screenshot.lifetime = .keepAlways
     add(screenshot)
   }
+
+  func testFreshReopenDoesNotRequestAgainAndFailedRefreshKeepsDetails() {
+    let app = launch(["--tea-request-counts", "--tea-slow", "--tea-refresh-failure"])
+    tapRow(3, in: app)
+    XCTAssertTrue(app.buttons["tea.primary-action"].waitForExistence(timeout: 10))
+    let actionY = app.buttons["tea.primary-action"].frame.midY
+    XCTAssertEqual(app.staticTexts["tea.test.requests"].value as? String, "3=1")
+    back(app); tapRow(3, in: app)
+    XCTAssertTrue(app.buttons["tea.primary-action"].waitForExistence(timeout: 2))
+    XCTAssertFalse(app.staticTexts["Loading details"].exists)
+    XCTAssertEqual(app.staticTexts["tea.test.requests"].value as? String, "3=1")
+    XCTAssertEqual(app.buttons["tea.primary-action"].frame.midY, actionY, accuracy: 2)
+    XCUIDevice.shared.press(.home); app.activate()
+    XCTAssertEqual(app.staticTexts["tea.test.requests"].value as? String, "3=1")
+    app.scrollViews.firstMatch.swipeDown()
+    XCTAssertTrue(app.buttons["tea.detail.retry"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["$20 Entry"].exists)
+    XCTAssertTrue(app.buttons["tea.primary-action"].exists)
+    attach("tea-offline-retains-details", from: app)
+    app.buttons["tea.detail.retry"].tap()
+    let recovered = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["tea.detail.retry"])
+    wait(for: [recovered], timeout: 10)
+    XCTAssertEqual(app.staticTexts["tea.test.requests"].value as? String, "3=3")
+  }
+
+  func testFirstLoadRetryAndSwitchingItemsNeverShowsWrongDetails() {
+    let app = launch(["--tea-request-counts", "--tea-detail-retry", "--tea-slow"])
+    tapRow(3, in: app)
+    XCTAssertTrue(app.buttons["tea.detail.retry"].waitForExistence(timeout: 10))
+    XCTAssertFalse(app.buttons["tea.primary-action"].exists)
+    app.buttons["tea.detail.retry"].tap()
+    XCTAssertTrue(app.buttons["tea.primary-action"].waitForExistence(timeout: 10))
+    back(app); tapRow(2, in: app); back(app); tapRow(3, in: app)
+    XCTAssertTrue(app.staticTexts["$20 Entry"].waitForExistence(timeout: 3))
+    XCTAssertFalse(app.staticTexts["Photo Walk"].exists)
+    XCTAssertEqual(app.buttons["tea.primary-action"].label, "Buy Ticket")
+    back(app); app.buttons["tea.back.home"].tap()
+    app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
+    tapRow(3, in: app)
+    XCTAssertTrue(app.buttons["tea.primary-action"].waitForExistence(timeout: 3))
+    XCTAssertFalse(app.staticTexts["Loading details"].exists)
+    XCTAssertTrue((app.staticTexts["tea.test.requests"].value as? String)?.contains("3=2") == true)
+  }
 }
 
 private extension XCUIElement {

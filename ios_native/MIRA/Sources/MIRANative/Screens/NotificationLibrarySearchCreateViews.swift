@@ -11,28 +11,40 @@ final class NotificationNativeModel: ObservableObject {
   @Published var isLoading = false
   @Published var errorMessage: String?
   let api: MIRAAPIClient
+  private var isFetching = false
+  private var scope = ""
+  private var lastSuccess = Date.distantPast
 
   init(api: MIRAAPIClient) {
     self.api = api
   }
 
-  func load() async {
+  func load(force: Bool = false) async {
+    let owner = api.presentationScope
+    if scope != owner {
+      scope = owner; notifications = []; lastSuccess = .distantPast; isFetching = false; errorMessage = nil
+    }
+    guard !isFetching, force || Date().timeIntervalSince(lastSuccess) >= 30 else { return }
+    isFetching = true
+    defer { if scope == owner { isFetching = false; isLoading = false } }
     if notifications.isEmpty, let cached = await MIRAAppCacheStore.shared.loadNotifications() {
+      guard owner == api.presentationScope else { return }
       notifications = cached
     }
+    guard owner == api.presentationScope else { return }
     isLoading = notifications.isEmpty
-    defer { isLoading = false }
     do {
       let fresh: [MIRANotification] = try await api.get("/notifications?limit=60")
+      guard owner == api.presentationScope else { return }
       if notifications != fresh {
         notifications = fresh
       }
       await MIRAAppCacheStore.shared.saveNotifications(fresh)
       errorMessage = nil
+      lastSuccess = Date()
     } catch {
-      if notifications.isEmpty {
-        errorMessage = "Notifications could not load."
-      }
+      guard owner == api.presentationScope else { return }
+      errorMessage = notifications.isEmpty ? "Notifications could not load." : "Could not refresh. Showing saved notifications."
     }
   }
 
@@ -67,7 +79,7 @@ public struct NotificationNativeView: View {
           MIRAEmptyState(title: "Couldn't load notifications", message: error, systemImage: "wifi.exclamationmark")
           MIRAPrimaryButton("Try again") { Task { await model.load() } }
         } else if model.notifications.isEmpty {
-          MIRAEmptyState(title: "No notifications yet", message: "Likes, replies, follows, gifts, and posts will appear here.", systemImage: "bell")
+          MIRAEmptyState(title: "No notifications yet", message: "Likes, replies, follows, and activity will appear here.", systemImage: "bell")
         } else {
           ForEach(model.notifications) { item in
             Button { Task { await open(item) } } label: { notificationRow(item) }
@@ -83,7 +95,7 @@ public struct NotificationNativeView: View {
     .navigationTitle("Notifications")
     .miraHideTabBarOnAppear()
     .task { await model.load() }
-    .refreshable { await model.load() }
+    .refreshable { await model.load(force: true) }
     .navigationDestination(item: $target) { destination in
       switch destination {
       case .post: if let targetPost { DiscoverPostDetailNativeView(post: targetPost, api: model.api) }
@@ -128,10 +140,12 @@ public struct NotificationNativeView: View {
         Text(item.title ?? "New activity")
           .font(.body.weight(.semibold))
           .foregroundStyle(MIRATheme.Color.textPrimary)
-        Text(item.body ?? "Something new happened on Captro.")
+        if let body = item.body?.trimmingCharacters(in: .whitespacesAndNewlines), !body.isEmpty {
+        Text(body)
           .font(.subheadline)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .fixedSize(horizontal: false, vertical: true)
+        }
         if let created = CaptroStoryExpiry.date(item.createdAt) {
           Text(created, style: .relative).font(.caption).foregroundStyle(.secondary)
         }

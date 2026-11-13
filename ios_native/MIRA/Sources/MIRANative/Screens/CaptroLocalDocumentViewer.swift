@@ -28,7 +28,7 @@ struct CaptroLocalDocumentViewer: View {
           }
         }
       }
-      .background(Color(red: 0.988, green: 0.988, blue: 0.982))
+      .background(MIRATheme.Color.appBackground)
       .navigationTitle("Original document")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }

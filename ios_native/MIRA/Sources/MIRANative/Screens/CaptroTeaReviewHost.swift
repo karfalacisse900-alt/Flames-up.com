@@ -36,6 +36,8 @@ private final class TeaReviewProtocol: URLProtocol {
   private static let lock = NSLock()
   private static var purchases: Set<Int> = []
   private static var deliveredError = false
+  private static var detailRequests: [Int: Int] = [:]
+  private var delivery: DispatchWorkItem?
 
   override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "localhost" }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -112,6 +114,16 @@ private final class TeaReviewProtocol: URLProtocol {
         payload = ["items": (1...20).map(entry), "nextCursor": "tea-fixture-second-page"]
       }
     } else if path.hasPrefix("/tea/"), let number = Int(url.lastPathComponent.suffix(12)) {
+      let count = Self.lock.withLock {
+        Self.detailRequests[number, default: 0] += 1
+        return Self.detailRequests[number]!
+      }
+      DispatchQueue.main.async { TeaReviewMetrics.shared.counts[number] = count }
+      let flags = ProcessInfo.processInfo.arguments
+      if number == 3 && ((flags.contains("--tea-detail-retry") && count == 1)
+                         || (flags.contains("--tea-refresh-failure") && count == 2)) {
+        reply(503, ["detail": "Isolated network failure"]); return
+      }
       if number == 4 {
         payload = ["item": entry(number), "business": [
           "id": id(number), "name": "Sample Bakery", "category": "coffee_bakery", "pickupAddress": "Sample pickup",
@@ -153,7 +165,11 @@ private final class TeaReviewProtocol: URLProtocol {
     } else if path.hasPrefix("/feed") || path.contains("posts") || path.contains("statuses") || path.hasSuffix("/menu") {
       payload = [] as [String]
     }
-    reply(status, payload)
+    if path.hasPrefix("/tea/"), ProcessInfo.processInfo.arguments.contains("--tea-slow") {
+      let work = DispatchWorkItem { [weak self] in self?.reply(status, payload) }
+      delivery = work
+      DispatchQueue.global().asyncAfter(deadline: .now() + 1, execute: work)
+    } else { reply(status, payload) }
   }
 
   private func readBody() -> Data? {
@@ -180,6 +196,24 @@ private final class TeaReviewProtocol: URLProtocol {
     client?.urlProtocol(self, didLoad: body)
     client?.urlProtocolDidFinishLoading(self)
   }
-  override func stopLoading() {}
+  override func stopLoading() { delivery?.cancel() }
+}
+
+@MainActor
+final class TeaReviewMetrics: ObservableObject {
+  static let shared = TeaReviewMetrics()
+  @Published var counts: [Int: Int] = [:]
+}
+
+struct TeaReviewRequestCounter: View {
+  @ObservedObject private var metrics = TeaReviewMetrics.shared
+  var body: some View {
+    if ProcessInfo.processInfo.arguments.contains("--tea-request-counts") {
+      Text("Isolated request counts")
+        .font(.caption2).foregroundStyle(.secondary)
+        .accessibilityIdentifier("tea.test.requests")
+        .accessibilityValue(metrics.counts.keys.sorted().map { "\($0)=\(metrics.counts[$0]!)" }.joined(separator: ";"))
+    }
+  }
 }
 #endif

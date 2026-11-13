@@ -221,7 +221,7 @@ public struct MIRANativeRootView: View {
           .zIndex(100)
       }
     }
-    .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
+    .background((startup.isSplashMounted ? MIRATheme.Color.launchBackground : MIRATheme.Color.appBackground).ignoresSafeArea())
     .background(CaptroRecoveryPresenter(session: authSession, api: api,
       ready: startup.isRoutingReady && !startup.isSplashMounted).frame(width: 0, height: 0))
     .background(CaptroSupportReturnPresenter(store: supportReturns, session: authSession, api: api,

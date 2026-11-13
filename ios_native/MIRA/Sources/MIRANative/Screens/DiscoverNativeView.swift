@@ -10,6 +10,7 @@ final class DiscoverNativeModel: ObservableObject {
   @Published var isLoadingStories = true
   @Published var isLoadingPosts = true
   @Published var errorMessage: String?
+  @Published var postsLoadError: String?
   let api: MIRAAPIClient
   private let storiesCacheKey = "native.discover.stories.v6"
   private let postsCacheKeyPrefix = "native.discover.posts.v7"
@@ -18,6 +19,9 @@ final class DiscoverNativeModel: ObservableObject {
   private var hasLoadedFreshPosts = false
   private var hasScheduledPostsLoad = false
   private var hasScheduledStoriesLoad = false
+  private var postsRequestID = UUID()
+  private var lastPostsSuccess = Date.distantPast
+  private var loadingCategory: String?
 
   init(api: MIRAAPIClient) {
     self.api = api
@@ -87,7 +91,11 @@ final class DiscoverNativeModel: ObservableObject {
 
   private func loadPosts(category requestedCategory: String = "all", force: Bool = false) async {
     let category = normalizedDiscoverCategory(requestedCategory)
+    guard loadingCategory != category else { return }
     guard force || !hasLoadedFreshPosts else { return }
+    let requestID = UUID(); postsRequestID = requestID
+    let scope = api.presentationScope
+    loadingCategory = category
     activePostsCategory = category
     hasLoadedFreshPosts = true
     if posts.isEmpty {
@@ -95,8 +103,11 @@ final class DiscoverNativeModel: ObservableObject {
       updateLoadingState()
     }
     defer {
+      if postsRequestID == requestID {
+      loadingCategory = nil
       isLoadingPosts = false
       updateLoadingState()
+      }
     }
     do {
       let encodedCategory = category.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "all"
@@ -113,20 +124,24 @@ final class DiscoverNativeModel: ObservableObject {
       if loaded.isEmpty && category == "all" {
         loaded = photoDiscoverPosts((try? await api.get("/posts/world-board?limit=24")) ?? [])
       }
+      guard requestID == postsRequestID, category == activePostsCategory, scope == api.presentationScope else { return }
       let merged = await MIRAAppCacheStore.shared.mergeFreshPostsPreservingViewerState(
         existing: posts,
         fresh: loaded,
         maxCount: 90
       )
+      guard requestID == postsRequestID, scope == api.presentationScope else { return }
       if posts != merged {
         posts = merged
       }
       prefetchVisibleMedia(merged)
       await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: category)
+      postsLoadError = nil; lastPostsSuccess = Date()
       if !merged.isEmpty {
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_network")
       }
     } catch {
+      guard requestID == postsRequestID, scope == api.presentationScope else { return }
       if category == "all", let fallback: [MIRAPost] = try? await api.get("/posts/world-board?limit=24"), !fallback.isEmpty {
         let photoFallback = photoDiscoverPosts(fallback)
         guard !photoFallback.isEmpty else { return }
@@ -135,13 +150,16 @@ final class DiscoverNativeModel: ObservableObject {
           fresh: photoFallback,
           maxCount: 90
         )
+        guard requestID == postsRequestID, scope == api.presentationScope else { return }
         if posts != merged {
           posts = merged
         }
         prefetchVisibleMedia(merged)
         await MIRAAppCacheStore.shared.saveDiscoverPosts(merged, category: category)
+        postsLoadError = nil; lastPostsSuccess = Date()
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
-      } else if posts.isEmpty {
+      } else {
+        postsLoadError = posts.isEmpty ? "Could not load Discover." : "Could not refresh. Showing saved posts."
         hasLoadedFreshPosts = false
         hasScheduledPostsLoad = false
       }
@@ -187,7 +205,8 @@ final class DiscoverNativeModel: ObservableObject {
     isLoading = isLoadingStories || isLoadingPosts
   }
 
-  func refreshVisiblePosts() async {
+  func refreshVisiblePosts(force: Bool = true) async {
+    guard force || Date().timeIntervalSince(lastPostsSuccess) >= 30 else { return }
     hasLoadedFreshPosts = false
     hasScheduledPostsLoad = false
     await loadPosts(category: activePostsCategory, force: true)
@@ -504,6 +523,7 @@ public struct DiscoverNativeView: View {
             .padding(.bottom, MIRATheme.Space.xxl + MIRATheme.Space.lg)
           }
           .miraScrollFeel(.feed)
+          .refreshable { await model.refreshVisiblePosts(); await model.refreshStories() }
         }
         .background(MIRATheme.Color.appBackground)
       }
@@ -537,7 +557,7 @@ public struct DiscoverNativeView: View {
       }
       .onChange(of: scenePhase) { _, phase in
         guard phase == .active, !model.posts.isEmpty else { return }
-        Task { await model.refreshVisiblePosts() }
+        Task { await model.refreshVisiblePosts(force: false) }
       }
       .fullScreenCover(item: $selectedStoryGroup, onDismiss: {
         if let target = queuedStoryReport {
@@ -752,6 +772,13 @@ public struct DiscoverNativeView: View {
     VStack(alignment: .leading, spacing: 6) {
       galleryFilterRail
 
+      if let error = model.postsLoadError {
+        VStack(alignment: .leading, spacing: 4) {
+          Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+          Button("Retry") { Task { await model.refreshVisiblePosts() } }.frame(minHeight: 44)
+        }.padding(.horizontal, MIRATheme.Space.md)
+      }
+
       if model.isLoadingPosts && model.posts.isEmpty {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(0..<18, id: \.self) { index in
@@ -759,8 +786,10 @@ public struct DiscoverNativeView: View {
           }
         }
       } else if filteredGalleryPosts.isEmpty {
+        if model.postsLoadError == nil {
         DiscoverGalleryEmptyTile()
           .padding(.horizontal, MIRATheme.Space.md)
+        }
       } else {
         LazyVGrid(columns: galleryGridColumns, spacing: 1) {
           ForEach(filteredGalleryPosts) { post in

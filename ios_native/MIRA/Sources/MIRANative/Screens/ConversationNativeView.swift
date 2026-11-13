@@ -10,17 +10,17 @@ enum ConversationNativeKind: Hashable {
 private enum ChatRoomPalette {
   static let background = MIRATheme.Color.appBackground
   static let backgroundWash = MIRATheme.Color.surfaceSoft
-  static let composer = MIRATheme.Color.surface
-  static let input = MIRATheme.Color.surfaceRaised
-  static let incomingBubble = MIRATheme.Color.surface
-  static let outgoingBubble = MIRATheme.Color.forest.opacity(0.12)
+  static let composer = MIRATheme.Color.appBackground
+  static let input = MIRATheme.Color.appBackground
+  static let incomingBubble = MIRATheme.Color.surfaceSoft
+  static let outgoingBubble = MIRATheme.Color.forest
   static let outgoingSoft = MIRATheme.Color.forest.opacity(0.82)
   static let accent = MIRATheme.Color.forest
   static let hairline = MIRATheme.Color.hairline
   static let incomingStroke = Color.clear
   static let outgoingStroke = Color.clear
   static let incomingTimestamp = MIRATheme.Color.textSecondary
-  static let outgoingTimestamp = MIRATheme.Color.textSecondary
+  static let outgoingTimestamp = MIRATheme.Color.onPrimary.opacity(0.85)
   static let messageShadow = Color.clear
 }
 
@@ -49,6 +49,7 @@ final class ConversationNativeModel: ObservableObject {
   private var consecutiveSyncFailures = 0
   private var isRealtimeConnected = false
   private var lastRecentReconcile = Date.distantPast
+  private var lastSuccessfulSync = Date.distantPast
 
   init(kind: ConversationNativeKind, api: MIRAAPIClient, currentUserId: String = "") {
     self.kind = kind
@@ -69,17 +70,18 @@ final class ConversationNativeModel: ObservableObject {
 
   func load() async {
     if didBeginInitialLoad {
-      await syncNewMessages()
+      if Date().timeIntervalSince(lastSuccessfulSync) >= 5 {
+        if Date().timeIntervalSince(lastRecentReconcile) >= 45 { await refreshRecentMessages() }
+        else { await syncNewMessages() }
+      }
       return
     }
     didBeginInitialLoad = true
     await hydrateLocalMessages()
     if !messages.isEmpty {
       await refreshRecentMessages()
-    }
-    await syncNewMessages()
-    if case let .direct(peerId) = kind {
-      presence = try? await api.get("/messages/presence/\(peerId)")
+    } else {
+      await syncNewMessages()
     }
   }
 
@@ -123,17 +125,18 @@ final class ConversationNativeModel: ObservableObject {
         await persistThread()
       }
       consecutiveSyncFailures = 0
+      lastSuccessfulSync = Date()
       errorMessage = nil
     } catch {
       consecutiveSyncFailures = min(4, consecutiveSyncFailures + 1)
       if await clearIfAccessRevoked(error) { return }
-      if messages.isEmpty {
-        errorMessage = "Could not load this chat."
-      }
+      errorMessage = messages.isEmpty ? "Could not load this chat." : "Could not refresh messages. Reconnecting…"
     }
   }
 
   func pollMessagesWhileActive() async {
+    await load()
+    guard !Task.isCancelled else { return }
     let realtimeTask = Task { [weak self] in
       guard let self else { return }
       await MIRAChatRealtime.observe(
@@ -147,15 +150,13 @@ final class ConversationNativeModel: ObservableObject {
       isRealtimeConnected = false
     }
     while !Task.isCancelled {
-      await syncNewMessages()
-      if Date().timeIntervalSince(lastRecentReconcile) >= 45 {
-        await refreshRecentMessages()
-      }
       // A healthy socket still gets occasional reconciliation for removals,
       // changed permissions, and events missed while the app was suspended.
       let delay = isRealtimeConnected ? 45 : min(60, 5 * (1 << consecutiveSyncFailures))
       do { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
       catch { break }
+      if Date().timeIntervalSince(lastRecentReconcile) >= 45 { await refreshRecentMessages() }
+      else { await syncNewMessages() }
     }
   }
 
@@ -180,9 +181,12 @@ final class ConversationNativeModel: ObservableObject {
       hasOlderMessages = rows.count >= 50 || messages.filter { !$0.id.hasPrefix("local-") }.count > rows.count
       prefetchMessageMedia(rows)
       await persistThread()
+      lastSuccessfulSync = Date()
+      consecutiveSyncFailures = 0
+      errorMessage = nil
     } catch {
       if await clearIfAccessRevoked(error) { return }
-      // Keep the cached chat visible; foreground sync will retry next open/poll.
+      errorMessage = messages.isEmpty ? "Could not load this chat." : "Could not refresh messages. Reconnecting…"
     }
   }
 
@@ -539,6 +543,10 @@ public struct ConversationNativeView: View {
           LazyVStack(spacing: 5) {
             if model.isLoading && model.messages.isEmpty {
               chatSkeleton
+            } else if model.messages.isEmpty, let error = model.errorMessage {
+              MIRAEmptyState(title: "Couldn't load messages", message: error, systemImage: "wifi.exclamationmark")
+              Button("Retry") { Task { await model.load() } }.frame(minHeight: 44)
+                .accessibilityIdentifier("chat.retry")
             } else if model.messages.isEmpty {
               MIRAEmptyState(title: "Start the chat", message: "Send a message when you are ready.", systemImage: "message")
             } else {
@@ -606,7 +614,6 @@ public struct ConversationNativeView: View {
     .miraScreenEnter(.push)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
-    .task { await model.load() }
     .task(id: scenePhase == .active) {
       guard scenePhase == .active else { return }
       await model.pollMessagesWhileActive()
@@ -1046,9 +1053,9 @@ public struct ConversationNativeView: View {
 
   private var composerContainer: some View {
     VStack(spacing: 0) {
-      if let error = model.errorMessage {
+      if let error = model.errorMessage, !model.messages.isEmpty {
         Text(error)
-          .font(.system(size: 12, weight: .semibold))
+          .font(.footnote)
           .foregroundStyle(.red)
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.horizontal, MIRATheme.Space.md)
@@ -1322,11 +1329,11 @@ private struct MessageBubbleContent: View {
   }
 
   private var bubbleFill: Color {
-    editorial ? (outgoing ? Color(red: 0.94, green: 0.95, blue: 0.94) : MIRATheme.Color.surfaceSoft) : (outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble)
+    outgoing ? ChatRoomPalette.outgoingBubble : ChatRoomPalette.incomingBubble
   }
 
   private var bubbleTextColor: Color {
-    MIRATheme.Color.textPrimary
+    outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary
   }
 
   private var bubbleRadius: CGFloat {
@@ -1453,15 +1460,15 @@ private struct MessageBubbleContent: View {
   private var fileCard: some View {
     HStack(spacing: 10) {
       Image(systemName: "doc.fill")
-        .font(.system(size: 18, weight: .semibold))
-        .foregroundStyle(MIRATheme.Color.textPrimary)
+        .font(.body.weight(.semibold))
+        .foregroundStyle(bubbleTextColor)
         .frame(width: 34, height: 34)
         .background((outgoing ? MIRATheme.Color.onPrimary : MIRATheme.Color.textPrimary).opacity(0.12))
         .clipShape(Circle())
       VStack(alignment: .leading, spacing: 3) {
         Text(message.fileName?.isEmpty == false ? message.fileName! : "File")
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(MIRATheme.Color.textPrimary)
+          .font(.footnote.weight(.semibold))
+          .foregroundStyle(bubbleTextColor)
           .lineLimit(1)
         if let fileSize = message.fileSize, fileSize > 0 {
           Text(ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file))

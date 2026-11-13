@@ -330,8 +330,8 @@ struct CaptroCommerceDetailSection: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
     .frame(maxWidth: .infinity, minHeight: 48)
-    .foregroundStyle(disabled ? MIRATheme.Color.textSecondary : (teaStyle ? Color.white : MIRATheme.Color.onPrimary))
-    .background(disabled ? MIRATheme.Color.surfaceSoft : (teaStyle ? Color(white: 0.12) : MIRATheme.Color.forest))
+    .foregroundStyle(disabled ? MIRATheme.Color.textSecondary : MIRATheme.Color.onPrimary)
+    .background(disabled ? MIRATheme.Color.surfaceSoft : MIRATheme.Color.forest)
     .clipShape(RoundedRectangle(cornerRadius: teaStyle ? 15 : MIRATheme.Radius.small))
   }
 

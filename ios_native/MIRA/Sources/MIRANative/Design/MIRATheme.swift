@@ -4,7 +4,7 @@ import UIKit
 public enum MIRATheme {
   public enum Color {
     public static let appBackground = adaptive(
-      light: UIColor(red: 0.978, green: 0.974, blue: 0.959, alpha: 1),
+      light: .white,
       dark: UIColor(red: 0.000, green: 0.000, blue: 0.000, alpha: 1)
     )
     public static let launchBackground = adaptive(
@@ -24,11 +24,11 @@ public enum MIRATheme {
       dark: UIColor(red: 0.105, green: 0.105, blue: 0.115, alpha: 1)
     )
     public static let mediaPlaceholder = adaptive(
-      light: UIColor(red: 0.875, green: 0.872, blue: 0.838, alpha: 1),
+      light: UIColor(white: 0.90, alpha: 1),
       dark: UIColor(red: 0.105, green: 0.105, blue: 0.112, alpha: 1)
     )
     public static let mediaPlaceholderRaised = adaptive(
-      light: UIColor(red: 0.948, green: 0.944, blue: 0.904, alpha: 1),
+      light: UIColor(white: 0.96, alpha: 1),
       dark: UIColor(red: 0.150, green: 0.150, blue: 0.158, alpha: 1)
     )
     public static let textPrimary = adaptive(
@@ -52,7 +52,7 @@ public enum MIRATheme {
       dark: UIColor(red: 0.055, green: 0.095, blue: 0.065, alpha: 1)
     )
     public static let editorialOlive = adaptive(
-      light: UIColor(red: 0.978, green: 0.974, blue: 0.959, alpha: 1),
+      light: .white,
       dark: UIColor(red: 0.078, green: 0.078, blue: 0.086, alpha: 1)
     )
     public static let editorialCream = adaptive(

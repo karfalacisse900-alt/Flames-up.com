@@ -151,6 +151,15 @@ private actor MIRAAPIRequestDeduplicator {
 }
 
 public final class MIRAAPIClient {
+  @MainActor var presentationScope: String {
+    "\(MIRALocalJSONCache.currentScopeIdentifier):\((sessionProvider as? MIRAAuthSession)?.sessionGeneration ?? 0)"
+  }
+  @MainActor lazy var teaDetails = CaptroTeaDetailStore(scope: { [weak self] in
+    self?.presentationScope ?? "released"
+  }, fetch: { [weak self] path in
+    guard let self else { throw CancellationError() }
+    return try await self.getFresh(path)
+  })
   @MainActor lazy var favorites = CaptroFavoritesStore(api: self)
   @MainActor lazy var publications = CaptroPublicationStore()
   public static let productionSession: URLSession = {
@@ -421,6 +430,9 @@ public final class MIRAAPIClient {
   }
 
   private func request<T: Decodable>(_ path: String, method: String, body: Data?, freshRead: Bool = false) async throws -> T {
+    let changesTea = method != "GET" && ["/posts", "/commerce", "/payments", "/business", "/users", "/favorites", "/auth"].contains(where: path.hasPrefix)
+    let discardsTea = method == "DELETE" || path.contains("/block") || path.hasPrefix("/auth") || path.contains("/privacy")
+    if changesTea { await teaDetails.invalidate(discard: discardsTea) }
     let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
     let url = try makeURL(path)
     var request = URLRequest(url: url)
@@ -445,6 +457,7 @@ public final class MIRAAPIClient {
     try await validateSessionGeneration(generation)
 
     let data: Data
+    do {
     if method == "GET", body == nil, !freshRead {
       let key = "\(method) \(url.absoluteString) \(tokenFingerprint(token))"
       data = try await MIRAAPIRequestDeduplicator.shared.data(for: key) {
@@ -453,9 +466,14 @@ public final class MIRAAPIClient {
     } else {
       data = try await responseData(for: request, metricLabel: "\(method) \(url.path)", generation: generation)
     }
+    } catch {
+      if changesTea { await teaDetails.invalidate(discard: discardsTea) }
+      throw error
+    }
     try await validateSessionGeneration(generation)
 
     do {
+      if changesTea { await teaDetails.invalidate(discard: discardsTea) }
       return try decoder.decode(T.self, from: data)
     } catch {
       // Log the failing field/type, never the response body (which may contain secrets).
