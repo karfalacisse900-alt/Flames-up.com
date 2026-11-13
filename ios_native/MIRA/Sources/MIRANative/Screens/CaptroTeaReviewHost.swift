@@ -7,6 +7,11 @@ struct CaptroTeaReviewHost: View {
   private let api: MIRAAPIClient
 
   init() {
+    // Match the requested screenshot appearance in the real root and its covers.
+    UserDefaults.standard.set(
+      ProcessInfo.processInfo.arguments.contains("--captro-quality-dark")
+        ? MIRAAppearance.dark.rawValue : MIRAAppearance.light.rawValue,
+      forKey: MIRAAppearanceResolver.preferenceKey)
     let storage = TeaReviewStorage()
     let defaults = UserDefaults(suiteName: "captro.tea.review")!
     defaults.removePersistentDomain(forName: "captro.tea.review")
