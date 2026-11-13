@@ -97,6 +97,23 @@ final class CaptroScreenLoadingTests: XCTestCase {
     XCTAssertNil(model.user)
     XCTAssertNotNil(model.profileError)
   }
+
+  func testDiscoverFailureIsNotEmptySuccessAndRetryBecomesFresh() async {
+    MIRALocalJSONCache.setAccountScope(userId: "polish-\(UUID())")
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let model = DiscoverNativeModel(api: api())
+    PolishLoadingProtocol.fail = true
+    await model.refreshVisiblePosts()
+    XCTAssertNotNil(model.postsLoadError)
+    XCTAssertFalse(model.isLoadingPosts)
+    PolishLoadingProtocol.fail = false
+    await model.refreshVisiblePosts()
+    XCTAssertNil(model.postsLoadError)
+    XCTAssertFalse(model.isLoadingPosts)
+    let requests = PolishLoadingProtocol.count("/discover")
+    await model.refreshVisiblePosts(force: false)
+    XCTAssertEqual(PolishLoadingProtocol.count("/discover"), requests)
+  }
 }
 
 private final class PolishLoadingProtocol: URLProtocol {
