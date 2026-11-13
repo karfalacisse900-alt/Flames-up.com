@@ -110,7 +110,9 @@ final class TeaTests: XCTestCase {
     XCTAssertEqual(app.buttons["tea.primary-action"].frame.midY, actionY, accuracy: 2)
     XCUIDevice.shared.press(.home); app.activate()
     XCTAssertEqual(app.staticTexts["tea.test.requests"].value as? String, "3=1")
-    app.scrollViews.firstMatch.swipeDown()
+    let details = app.scrollViews["tea.detail"]
+    XCTAssertTrue(details.isHittable)
+    details.swipeDown()
     XCTAssertTrue(app.buttons["tea.detail.retry"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["$20 Entry"].exists)
     XCTAssertTrue(app.buttons["tea.primary-action"].exists)

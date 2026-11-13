@@ -323,6 +323,7 @@ private struct CaptroTeaDetailView: View {
       .padding(.vertical, 12)
     }
     .background(MIRATheme.Color.appBackground)
+    .accessibilityIdentifier("tea.detail")
     .navigationTitle("Tea")
     .navigationBarTitleDisplayMode(.inline)
     .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
