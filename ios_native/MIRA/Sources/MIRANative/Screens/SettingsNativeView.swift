@@ -65,6 +65,7 @@ final class SettingsNativeModel: ObservableObject {
   let api: MIRAAPIClient
   private weak var authSession: MIRAAuthSession?
   private var lastSuccess = Date.distantPast
+  private var loadScope: String?
 
   init(api: MIRAAPIClient, authSession: MIRAAuthSession?) {
     self.api = api
@@ -73,11 +74,15 @@ final class SettingsNativeModel: ObservableObject {
   }
 
   func load(force: Bool = false) async {
+    let scope = api.presentationScope
+    if loadScope != scope {
+      loadScope = scope; lastSuccess = .distantPast; isLoading = false
+      user = nil; email = ""; isPrivate = false; loadError = nil
+    }
     guard !isLoading else { return }
     guard force || Date().timeIntervalSince(lastSuccess) >= 30 else { return }
     isLoading = true
-    let scope = api.presentationScope
-    defer { isLoading = false }
+    defer { if loadScope == scope { isLoading = false } }
     if user == nil, let cached = await MIRAAppCacheStore.shared.loadSettings() {
       guard scope == api.presentationScope else { return }
       user = cached.user

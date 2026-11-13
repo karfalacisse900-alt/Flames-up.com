@@ -58,6 +58,10 @@ final class CaptroScreenLoadingTests: XCTestCase {
     XCTAssertEqual(model.user?.id, "polish-user")
     XCTAssertNotNil(model.loadError)
     XCTAssertFalse(model.isLoading)
+    MIRALocalJSONCache.setAccountScope(userId: "polish-other-\(UUID())")
+    await model.load()
+    XCTAssertNil(model.user, "The previous account's fresh settings must not survive a scope change")
+    XCTAssertEqual(PolishLoadingProtocol.count("/auth/me"), 3)
   }
   func testThemeCanvasAndTextContrastInBothAppearances() {
     for style: UIUserInterfaceStyle in [.light, .dark] {
