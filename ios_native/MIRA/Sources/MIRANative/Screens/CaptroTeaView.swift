@@ -323,6 +323,7 @@ private struct CaptroTeaDetailView: View {
       }
       .padding(.horizontal, 14)
       .padding(.vertical, 12)
+      .buttonStyle(.plain)
       .listRowInsets(EdgeInsets())
       .listRowSeparator(.hidden)
       .listRowBackground(Color.clear)
