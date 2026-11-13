@@ -276,7 +276,9 @@ private struct CaptroTeaDetailView: View {
   }
 
   var body: some View {
-    ScrollView {
+    // List owns a native refresh control even when this detail fits on one page.
+    // Keep the facts in one unstyled row so their geometry stays unchanged.
+    List {
       VStack(alignment: .leading, spacing: 12) {
         if unavailable {
           Text("This activity is no longer available.").foregroundStyle(.secondary).padding(.top, 12)
@@ -321,7 +323,13 @@ private struct CaptroTeaDetailView: View {
       }
       .padding(.horizontal, 14)
       .padding(.vertical, 12)
+      .listRowInsets(EdgeInsets())
+      .listRowSeparator(.hidden)
+      .listRowBackground(Color.clear)
     }
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .contentMargins(.vertical, 0, for: .scrollContent)
     .background(MIRATheme.Color.appBackground)
     .accessibilityIdentifier("tea.detail")
     .navigationTitle("Tea")

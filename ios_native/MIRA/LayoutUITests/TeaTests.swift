@@ -110,9 +110,11 @@ final class TeaTests: XCTestCase {
     XCTAssertEqual(app.buttons["tea.primary-action"].frame.midY, actionY, accuracy: 2)
     XCUIDevice.shared.press(.home); app.activate()
     XCTAssertEqual(app.staticTexts["tea.test.requests"].value as? String, "3=1")
-    let details = app.scrollViews["tea.detail"]
+    let details = app.collectionViews["tea.detail"]
     XCTAssertTrue(details.isHittable)
-    details.swipeDown()
+    let pullStart = details.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+    let pullEnd = details.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+    pullStart.press(forDuration: 0.1, thenDragTo: pullEnd)
     XCTAssertTrue(app.buttons["tea.detail.retry"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["$20 Entry"].exists)
     XCTAssertTrue(app.buttons["tea.primary-action"].exists)
