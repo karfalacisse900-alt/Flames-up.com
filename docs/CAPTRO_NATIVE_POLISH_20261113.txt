@@ -1,0 +1,212 @@
+CAPTRO NATIVE SURFACES AND SCREEN RECOVERY — 13 NOVEMBER 2026
+
+Scope and baseline
+Repository: karfalacisse900-alt/Flames-up.com
+Started from clean feature/captro-tea at 976d9b5addf24d783d4618617df7b4131c1b0ee8.
+Implementation branch: polish/native-surfaces-tea-chat.
+No production deployment, TestFlight upload, live setting, backend, schema,
+payment, signing or bundle-identity change is part of this task.
+
+Confirmed causes and repairs
+1. Surfaces: appBackground was warm cream; chat had separate header, canvas,
+   composer and bubble colors. Use shared adaptive white/black canvas tokens,
+   neutral secondary surfaces, readable text and existing forest/onPrimary.
+   Remove redundant generic chat subtitle; use scalable header/timestamp fonts,
+   44-point attachment targets and an explicitly readable message prompt.
+   Root stops using the launch background once the launch overlay is gone.
+   A shared navigation-surface modifier sets the adaptive background and bar
+   color scheme together, preventing dark status text on dark headers.
+   Welcome artwork, launch colors and camera chrome remain unchanged.
+
+2. Tea: every details view began empty and fetched on entry. Add a bounded,
+   memory-only store owned by the existing API client: 24 snapshots, 60-second
+   freshness, 10-minute presentation retention. Scope includes account and
+   session generation. Coalesce concurrent reads, reject wrong destinations and
+   obsolete completions, retain successful data on transport failure, and evict
+   on 401/403/404/410. Relevant mutation attempts invalidate before/after their
+   request, including ambiguous failures; blocking and DELETE requests discard
+   affected presentation data, profile/privacy edits require revalidation,
+   and logout/account changes clear the old scope.
+   Fresh reopen hydrates synchronously; stale refresh keeps content and action
+   selection. First load uses the tapped real row as its header. Retry remains
+   available after a failed load. Categories now color only compact icons;
+   details lead with the entity name and group facts in one neutral section.
+   App-hosted testing showed the short details ScrollView did not invoke its
+   refresh handler. Details now uses a native refresh-capable List with one
+   unstyled row, zero list insets and plain buttons. It preserves the facts'
+   layout without changing Home's scrolling, delegates or gesture physics.
+   Cached display data does not authorize commerce. Existing server-side
+   checkout/join availability checks and payment flow are unchanged.
+
+3. Messages: two view tasks both requested initial data; load also performed
+   redundant recent sync and presence work. One polling path now owns initial
+   loading before realtime starts. Preserve recent messages on return/refresh,
+   skip immediate duplicate load within five seconds, retain existing live
+   updates and merge order. A failed first load has an explicit Retry rather
+   than looking like an empty chat. Inbox treats a successful empty response as
+   fresh and supports forced pull-to-refresh.
+
+4. Other screens: profile entry uses existing revalidation; visitor profile,
+   notifications and Settings guard freshness and account scope. Discover
+   separates failed reads from empty success and guards old category/cache
+   completions. A terminal profile identity error no longer displays a spinner.
+   Notifications omit missing optional body text and retired gift copy. Story
+   review, Create, media-writing and document surfaces use adaptive theme colors.
+   Unknown attendee counts are omitted rather than displayed as zero. Avatar
+   borders and verification controls retain readable dark-mode contrast. Existing
+   active screens and sheets generally already consume these shared tokens;
+   this patch does not replace their navigation or working features.
+
+Preserved
+Home cell/media sizes, sharp corners, carousel identities, scroll physics and
+restoration, Like/Comment/Favorites, existing image recovery/downloader/caches,
+Support behavior, payments and commerce authorization, Capture and Welcome.
+No new SDK, production fixture, fabricated count, extra Home action or entry
+point was added. No 'coming soon', 'under construction', 'not implemented' or
+'lorem ipsum' text was found in the active Screens source audit. Hidden legacy
+tools and DEBUG-only preview fixtures were not promoted into production UI.
+
+Regression coverage
+CaptroTeaCacheTests: freshness/force/retention, coalesced readers, offline then
+denial/recovery, account switch, mutation invalidation, wrong destination,
+bounded item retention and invalidated in-flight completion.
+CaptroScreenLoadingTests: empty inbox freshness, chat failure/recovery, scoped
+notifications/Settings, theme contrast, profile terminal error, Discover retry,
+and a held visitor-profile response released after an account-scope change.
+TeaTests: actual Home-menu route, checkout fixture, join/business navigation,
+pagination/scroll return, fresh reopen request count, resume, failed refresh
+retention, manual retry and rapid two-item navigation.
+NativePolishTests: actual app-hosted light/dark screenshots plus chat failure,
+large text, attachments, keyboard and touch targets.
+Existing MediaRecoveryTests retain real pixel and media-geometry assertions.
+Existing AppSystemUITests/ProfileRedesignTests retain edit/cancel, private
+profile, Story presentation and navigation assertions.
+
+Test fixture corrections (DEBUG-only, not product behavior)
+Profile fixtures now isolate account caches between runs. Tea review owns one
+stable API/session context across scene updates, matching the production App;
+its previous struct initializer recreated them on resume. Story fixture has a
+valid expiry so the existing expiry guard does not correctly discard it before
+the presentation test. The pull-to-refresh UI test targets tea.detail instead
+of the first scroll view (the covered Home Story rail). Retry, geometry and
+request-count assertions are retained. No failure assertion was skipped or weakened.
+The Tea fixture also sets the real root's appearance preference to the requested
+test mode. An outer-only preferredColorScheme conflicted with the root's saved
+preference and produced unreliable navigation/status-bar screenshots. This is
+DEBUG fixture setup only; production appearance preferences are not changed.
+
+Implementation reference: Apple's refreshable documentation describes the
+native List refresh control; the failing app-hosted gesture test, rather than
+the documentation alone, established the need to repair this particular view.
+https://developer.apple.com/documentation/swiftui/view/refreshable(action:)
+
+Verification evidence and final results
+Tested source: 9df7eae010e6f0a89d487ba85527793975343210.
+Final workflow: SUCCESS, 13 November 2026.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43525920873
+Xcode 26.6 (17F113), Debug simulator build, marketing 1.0.1 / build 2.
+This is an unsigned simulator build, not a distributed TestFlight build.
+- iPhone 17, iOS 26.5 (23F77): 251 model tests, 0 failures; 16 app-hosted
+  UI tests, 0 failures. Model suite 20.454 s; UI suite 666.168 s.
+- iPhone 13 mini, first available runtime iOS 26.2 (23C54): 7 app-hosted
+  UI tests, 0 failures; 263.052 s. Captures are 1125 x 2436 pixels.
+- Final total: 251 model tests + 23 UI executions (7 repeated on the small
+  device), zero failures. No skipped regression assertion or test exclusion
+  was introduced to obtain this result.
+- The small-device screenshots were inspected for Tea facts/actions, retained
+  details after a failed refresh, and large-text chat with the keyboard open.
+  Retry and send controls remained reachable without overlapping the keyboard.
+- git diff 976d9b5 --check: passed.
+The logs, xcresult bundles and attachments are retained in the native-polish
+artifact of that run. Local copies of both final test logs accompany this report.
+
+Screenshot evidence (completed)
+Before: 6aad107c193ba96623ad3144e83f93e0ee31e7f4 on the isolated baseline
+branch, production views from 976d9b5 plus screenshot/transport setup only.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43523444898
+After: db2037a70d1a652b8721e85ff3a9e015212162bb, same production implementation
+as the final regression source; later changes only correct a UI-test assertion.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43523400712
+Both screenshot jobs succeeded. After: 2 UI tests, 0 failures.
+Twelve before/after pairs: Home, Tea list, Tea Details, inbox, chat and Profile,
+each in light/dark mode, iPhone 17 / iOS 26.5 (23F77), 1206 x 2622 pixels.
+Home media begins at y=420 and ends at y=1927 in both original PNGs; no media
+frame change. Large-text dark chat captures include error/retry, attachment
+tray and keyboard/draft states. Some simulator captures omit system status-bar
+glyphs; these images do not certify all OS status-bar transitions on hardware.
+
+Delivered comparison: index.html alongside the original PNGs in
+C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-native-polish-20261113/
+
+Evidence interpretation
+- The fresh-reopen UI test asserts exactly one details request through reopen
+  and foreground resume, retains the primary action's vertical position within
+  two points, then forces a failed refresh and successful Retry. The final
+  request count must be three. It does not merely check for a hidden spinner.
+- Delayed two-item navigation verifies the first item's title/action cannot
+  replace the current item. Model tests independently hold completions across
+  account changes and invalidation.
+- Media recovery tests inspect actual red fixture pixels in Home and Details
+  and compare media geometry. They are not empty placeholder existence tests.
+- Screenshot comparison uses original, unaltered PNGs at matching dimensions.
+  Fixture names, counts and messages belong to isolated DEBUG transports.
+- Retained intermediate run 43519331477 passed 251 model tests and 15 of 16 UI
+  methods. Its two failed assertions were in the short Tea pull-to-refresh
+  method. That failure prompted the native refresh-container repair.
+- Run 43522065689 then passed the actual failed-refresh/Retry/request-count
+  checks. Its only failure was asking whether the collection container itself
+  was tappable. The test now checks that the collection exists and its real
+  primary action is hittable; the physical drag and recovery assertions remain.
+
+Changed-file guide (relative to this repository)
+- Design/MIRATheme.swift and App/MIRANativeRootView.swift: shared canvas,
+  contrast tokens, navigation surface and post-launch background.
+- Screens/CaptroTeaView.swift and Services/CaptroTeaDetailStore.swift: Tea
+  presentation, account-scoped snapshots, coalescing and recovery.
+- Services/MIRAAPIClient.swift and Screens/PostDetailNativeView.swift:
+  invalidate presentation snapshots on relevant mutations and update the
+  verified commerce result; no financial authorization rule changed.
+- Screens/ConversationNativeView.swift: chat surfaces, readable composer,
+  attachment hit region, load ownership and error recovery.
+- Screens/ProfileChatVerificationStudio.swift, DiscoverNativeView.swift,
+  NotificationLibrarySearchCreateViews.swift and SettingsNativeView.swift:
+  scoped freshness, stable refresh, honest errors and adaptive surfaces.
+- Screens/CaptroCommerceDetailViews.swift: Tea primary-action appearance only.
+- Screens/CaptroPostDetailSections.swift, CaptroLocalDocumentViewer.swift and
+  CaptroMediaWritingEditor.swift: optional counts and adaptive supporting UI.
+All paths above are within ios_native/MIRA/Sources/MIRANative/.
+- DEBUG-only fixtures: CaptroDesignQualityTestView.swift,
+  CaptroTeaReviewHost.swift and CaptroComposerTestAPI.swift.
+- Tests: CaptroTeaCacheTests.swift, CaptroScreenLoadingTests.swift,
+  NativePolishTests.swift and TeaTests.swift; project.yml includes model tests.
+- .github/workflows/native-polish-validation.yml: manual, simulator-only,
+  contents-read permission, no deployment credentials or release step.
+
+Reproduction commands (macOS with Xcode and XcodeGen)
+cd ios_native/MIRA
+xcodegen generate --spec project.yml
+xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/PolishBuild" \
+  -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" \
+  -only-testing:CaptroStampTests \
+  -only-testing:CaptroLayoutUITests/NativePolishTests \
+  -only-testing:CaptroLayoutUITests/TeaTests \
+  -only-testing:CaptroLayoutUITests/AppSystemUITests \
+  -only-testing:CaptroLayoutUITests/MediaRecoveryTests \
+  -only-testing:CaptroLayoutUITests/ProfileRedesignTests \
+  CODE_SIGNING_ALLOWED=NO test
+The workflow creates an iPhone 13 mini simulator and uses test-without-building
+with the same DerivedData for NativePolishTests and TeaTests. See the versioned
+workflow for the exact runtime selection and screenshot export commands.
+
+Remaining acceptance limits
+No physical iPhone is connected to this Windows workspace. Simulator snapshots
+and isolated delayed/offline transports do not establish physical scrolling
+performance, hardware keyboard behavior, real network reconnect or production
+chat delivery. Real-device VoiceOver, Reduce Motion, interrupted gestures and
+120-Hz scrolling remain device checks. The simulator suite is targeted, not a
+claim that every sheet and every production state was manually inspected.
+Live creator payments, provider onboarding and backend behavior were untouched
+and were not tested as part of this native polish task.
+
