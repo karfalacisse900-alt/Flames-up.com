@@ -1,5 +1,8 @@
 name: Validate native polish (no deployment)
 on:
+  push:
+    branches: [polish/native-surfaces-tea-chat]
+    paths: ['ios_native/MIRA/**', '.github/workflows/native-polish-validation.yml']
   workflow_dispatch:
     inputs:
       baseline:
@@ -22,7 +25,7 @@ jobs:
       - name: Native screens and regression checks
         working-directory: ios_native/MIRA
         env:
-          BASELINE: ${{ inputs.baseline }}
+          BASELINE: ${{ inputs.baseline || github.event_name == 'push' }}
           SMALL: ${{ inputs.small }}
         run: |
           set -o pipefail
