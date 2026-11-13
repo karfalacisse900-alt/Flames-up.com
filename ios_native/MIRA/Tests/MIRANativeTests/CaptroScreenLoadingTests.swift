@@ -85,6 +85,18 @@ final class CaptroScreenLoadingTests: XCTestCase {
       }
     }
   }
+
+  func testProfileIdentityMismatchEndsLoadingInsteadOfSpinningBesideError() async throws {
+    MIRALocalJSONCache.setAccountScope(userId: "polish-\(UUID())")
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let model = ProfileNativeModel(api: api())
+    let previous = try JSONDecoder().decode(MIRAUser.self, from: Data(#"{"id":"different-account","username":"previous"}"#.utf8))
+    model.primeUser(previous)
+    await model.load()
+    XCTAssertTrue(model.hasLoadedProfile)
+    XCTAssertNil(model.user)
+    XCTAssertNotNil(model.profileError)
+  }
 }
 
 private final class PolishLoadingProtocol: URLProtocol {

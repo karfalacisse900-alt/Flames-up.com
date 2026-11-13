@@ -72,16 +72,23 @@ final class DiscoverNativeModel: ObservableObject {
   func selectCategory(_ category: String) async {
     let normalized = normalizedDiscoverCategory(category)
     guard normalized != activePostsCategory || posts.isEmpty else { return }
+    let selection = UUID(); postsRequestID = selection
+    let scope = api.presentationScope
+    loadingCategory = nil
     activePostsCategory = normalized
+    postsLoadError = nil
     hasLoadedFreshPosts = false
     hasScheduledPostsLoad = false
     if let cachedPosts = await cachedDiscoverPosts(for: normalized) {
+      guard postsRequestID == selection, scope == api.presentationScope else { return }
       posts = scopedDiscoverPosts(cachedPosts, category: normalized)
       isLoadingPosts = false
     } else if normalized != "all", let cachedAllPosts = await cachedDiscoverPosts(for: "all") {
+      guard postsRequestID == selection, scope == api.presentationScope else { return }
       posts = scopedDiscoverPosts(cachedAllPosts, category: normalized)
       isLoadingPosts = posts.isEmpty
     } else {
+      guard postsRequestID == selection, scope == api.presentationScope else { return }
       posts = []
       isLoadingPosts = true
     }
@@ -159,6 +166,7 @@ final class DiscoverNativeModel: ObservableObject {
         postsLoadError = nil; lastPostsSuccess = Date()
         MIRAPerformanceTimeline.markOnce("discover_first_content", detail: "posts_fallback")
       } else {
+        guard requestID == postsRequestID, scope == api.presentationScope else { return }
         postsLoadError = posts.isEmpty ? "Could not load Discover." : "Could not refresh. Showing saved posts."
         hasLoadedFreshPosts = false
         hasScheduledPostsLoad = false

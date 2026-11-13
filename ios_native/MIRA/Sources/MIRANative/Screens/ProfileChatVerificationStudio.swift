@@ -123,6 +123,7 @@ final class ProfileNativeModel: ObservableObject {
     if let knownUserID, knownUserID != freshUser.id {
       resetForAccountChange()
       profileError = "Your session changed. Please sign in again."
+      hasLoadedProfile = true
       return
     }
     if user != freshUser { user = freshUser }
@@ -455,7 +456,7 @@ public struct ProfileNativeView: View {
               .contextMenu { Button("Unpin") { Task { await model.togglePin(pinned) } } }
           }
           CaptroProfileTabs(selection: $selectedSection)
-          if !model.hasLoadedProfile && model.posts.isEmpty {
+          if !model.hasLoadedProfile && model.profileError == nil && model.posts.isEmpty {
             ProgressView("Loading profile…").frame(minHeight: 100)
           } else if model.profileError != nil && model.posts.isEmpty {
             EmptyView() // The retry/error below is not an empty-success state.

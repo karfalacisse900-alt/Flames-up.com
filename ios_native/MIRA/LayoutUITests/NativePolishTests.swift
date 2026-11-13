@@ -36,6 +36,7 @@ final class NativePolishTests: XCTestCase {
 
       app = launch(["--captro-design-quality-test", "--captro-quality-profile"], dark: dark)
       XCTAssertTrue(app.buttons["profile.edit"].waitForExistence(timeout: 15))
+      XCTAssertTrue(app.staticTexts["City walks, photography and finding good coffee."].waitForExistence(timeout: 10))
       capture("profile-\(suffix)", app); app.terminate()
     }
   }

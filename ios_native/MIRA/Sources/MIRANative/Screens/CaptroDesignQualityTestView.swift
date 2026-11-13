@@ -11,9 +11,11 @@ public struct CaptroDesignQualityTestView: View {
   private let api = MIRAAPIClient()
 
   public init() {
-    if ProcessInfo.processInfo.arguments.contains("--captro-polish-chat") {
+    if ProcessInfo.processInfo.arguments.contains("--captro-polish-chat")
+      || ProcessInfo.processInfo.arguments.contains("--captro-quality-profile")
+      || ProcessInfo.processInfo.arguments.contains("--captro-quality-visitor-profile") {
       // Each UI run gets a separate local namespace; production caches are untouched.
-      MIRALocalJSONCache.setAccountScope(userId: "polish-chat-\(UUID())")
+      MIRALocalJSONCache.setAccountScope(userId: "polish-screen-\(UUID())")
     }
   }
 
