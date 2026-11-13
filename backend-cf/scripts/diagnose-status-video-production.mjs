@@ -72,6 +72,12 @@ try {
   });
   console.log(JSON.stringify({ event: 'video_intent', status: intent.response.status, code: intent.body.code || null }));
   if (intent.response.status === 502) {
+    const usage = await request(`https://api.cloudflare.com/client/v4/accounts/${account}/stream/storage-usage`, {
+      headers: { Authorization: `Bearer ${streamToken}` },
+    });
+    console.log(JSON.stringify({ event: 'stream_storage_usage', status: usage.response.status,
+      minutesUsed: usage.body.result?.totalStorageMinutes ?? null,
+      minuteLimit: usage.body.result?.totalStorageMinutesLimit ?? null }));
     const probe = await request(`https://api.cloudflare.com/client/v4/accounts/${account}/stream/direct_upload`, {
       method: 'POST', headers: { Authorization: `Bearer ${streamToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ maxDurationSeconds: 60, creator: userId, requireSignedURLs: false, meta: { userId, moderation: 'pre_publish', filename: 'captro-story-smoke.mp4' } }),
