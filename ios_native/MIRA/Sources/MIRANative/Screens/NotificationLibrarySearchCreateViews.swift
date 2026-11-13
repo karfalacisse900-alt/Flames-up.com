@@ -1165,7 +1165,7 @@ public struct CreatePostNativeView: View {
         .navigationTitle("Create")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { compositionNavigation }
-        .toolbarBackground(MIRATheme.Color.launchBackground, for: .navigationBar)
+        .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
     }
     .interactiveDismissDisabled(isPosting || hasUnsavedPost)
@@ -1494,7 +1494,7 @@ public struct CreatePostNativeView: View {
       .disabled(isPosting)
     }
     .scrollDismissesKeyboard(.immediately)
-    .background(MIRATheme.Color.launchBackground.ignoresSafeArea())
+    .background(MIRATheme.Color.appBackground.ignoresSafeArea())
   }
 
   private var compositionCard: some View {

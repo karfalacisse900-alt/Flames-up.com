@@ -117,7 +117,7 @@ struct CaptroMediaWritingEditor: View {
           }.padding(16)
         }.scrollDismissesKeyboard(.interactively)
       }
-      .background(MIRATheme.Color.launchBackground)
+      .background(MIRATheme.Color.appBackground)
       .navigationTitle(coverMode ? "Cover" : "").navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
