@@ -3034,14 +3034,14 @@ public struct VerificationNativeView: View {
       HStack(spacing: 8) {
         if isBusy {
           ProgressView()
-            .tint(.white)
+            .tint(MIRATheme.Color.onPrimary)
         } else {
           Image(systemName: systemImage)
         }
         Text(title)
       }
       .font(.system(size: 15, weight: .semibold))
-      .foregroundStyle(.white)
+      .foregroundStyle(MIRATheme.Color.onPrimary)
       .frame(maxWidth: .infinity)
       .frame(height: 48)
       .background(isDisabled ? MIRATheme.Color.textMuted.opacity(0.45) : MIRATheme.Color.forest)

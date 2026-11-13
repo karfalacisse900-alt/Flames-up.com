@@ -366,7 +366,7 @@ struct CaptroEventAttendees: View {
       ForEach(people) { person in
         NavigationLink(destination: UserProfileNativeView(userId: person.id, api: api).miraHideTabBarOnAppear()) {
           RemoteAvatar(url: person.profileImage, size: 36)
-            .overlay(Circle().stroke(.white, lineWidth: 2))
+            .overlay(Circle().stroke(MIRATheme.Color.appBackground, lineWidth: 2))
             .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
@@ -377,10 +377,10 @@ struct CaptroEventAttendees: View {
           .font(.system(size: 12, weight: .semibold))
           .padding(.horizontal, 10)
           .frame(height: 36)
-          .background(Color.black.opacity(0.05))
+          .background(MIRATheme.Color.surfaceSoft)
           .clipShape(Capsule())
-      } else if people.isEmpty {
-        Text("\(max(0, event.attendeesCount ?? 0)) going")
+      } else if people.isEmpty, let count = event.attendeesCount {
+        Text("\(max(0, count)) going")
           .font(.system(size: 13))
           .foregroundStyle(CaptroDetailStyle.secondary)
       }

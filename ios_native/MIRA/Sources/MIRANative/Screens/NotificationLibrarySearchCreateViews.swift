@@ -4390,7 +4390,7 @@ public struct CreateStoryNativeView: View {
             Button { showCamera = true } label: {
               Label("Try again", systemImage: "camera")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(MIRATheme.Color.textPrimary)
+                .foregroundStyle(.black)
                 .padding(.horizontal, 20)
                 .frame(height: 46)
                 .background(.white)

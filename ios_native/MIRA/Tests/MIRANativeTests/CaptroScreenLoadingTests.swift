@@ -114,25 +114,69 @@ final class CaptroScreenLoadingTests: XCTestCase {
     await model.refreshVisiblePosts(force: false)
     XCTAssertEqual(PolishLoadingProtocol.count("/discover"), requests)
   }
+
+  func testVisitorProfileRejectsOldAccountCompletionAndFreshReopenDoesNotRefetch() async {
+    MIRALocalJSONCache.setAccountScope(userId: "polish-a-\(UUID())")
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let model = UserProfileNativeModel(userId: "polish-visitor", api: api())
+    let started = expectation(description: "Old account profile read held")
+    PolishLoadingProtocol.holdProfile { started.fulfill() }
+    let old = Task { await model.revalidateIfStale() }
+    await fulfillment(of: [started], timeout: 2)
+    MIRALocalJSONCache.setAccountScope(userId: "polish-b-\(UUID())")
+    PolishLoadingProtocol.releaseProfile()
+    await old.value
+    XCTAssertNil(model.user, "An old viewer's response must never populate the new scope")
+    XCTAssertFalse(model.isLoading)
+    await model.revalidateIfStale()
+    XCTAssertEqual(model.user?.id, "polish-visitor")
+    XCTAssertNil(model.errorMessage)
+    await model.revalidateIfStale()
+    XCTAssertEqual(PolishLoadingProtocol.count("/users/polish-visitor"), 2)
+    XCTAssertEqual(PolishLoadingProtocol.count("/users/polish-visitor/posts"), 1)
+  }
 }
 
 private final class PolishLoadingProtocol: URLProtocol {
   private static let lock = NSLock()
   private static var counts: [String: Int] = [:]
   private static var failed = false
+  private static var heldProfile: PolishLoadingProtocol?
+  private static var onProfileHeld: (() -> Void)?
   static var fail: Bool {
     get { lock.withLock { failed } }
     set { lock.withLock { failed = newValue } }
   }
   static func reset() { lock.withLock { counts = [:]; failed = false } }
   static func count(_ path: String) -> Int { lock.withLock { counts[path, default: 0] } }
+  static func holdProfile(_ started: @escaping () -> Void) { lock.withLock { onProfileHeld = started } }
+  static func releaseProfile() {
+    let held = lock.withLock { let value = heldProfile; heldProfile = nil; return value }
+    held?.respond()
+  }
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
     let url = request.url!
     Self.lock.withLock { Self.counts[url.path, default: 0] += 1 }
+    if url.path == "/users/polish-visitor" {
+      let started: (() -> Void)? = Self.lock.withLock {
+        guard let callback = Self.onProfileHeld else { return nil }
+        Self.onProfileHeld = nil; Self.heldProfile = self; return callback
+      }
+      if let started { started(); return }
+    }
+    respond()
+  }
+  private func respond() {
+    let url = request.url!
     let failed = Self.fail
-    let body = failed ? #"{"detail":"Isolated failure"}"# : url.path == "/auth/me" ? #"{"id":"polish-user","username":"fixture"}"# : "[]"
+    let body: String
+    if failed { body = #"{"detail":"Isolated failure"}"# }
+    else if url.path == "/auth/me" { body = #"{"id":"polish-user","username":"fixture"}"# }
+    else if url.path == "/users/polish-visitor" { body = #"{"id":"polish-visitor","username":"visitor"}"# }
+    else if url.path.hasSuffix("/showcase") { body = #"{"pinned":null,"clubs":[]}"# }
+    else { body = "[]" }
     let response = HTTPURLResponse(url: url, statusCode: failed ? 503 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self)
