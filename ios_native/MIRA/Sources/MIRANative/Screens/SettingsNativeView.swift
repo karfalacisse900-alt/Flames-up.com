@@ -1300,8 +1300,7 @@ struct SettingsDetailScaffold<Content: View>: View {
     .navigationTitle(title)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
-    .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
-    .toolbarBackground(.visible, for: .navigationBar)
+    .miraNavigationSurface()
     .miraHideTabBarOnAppear()
   }
 }

@@ -514,6 +514,7 @@ public struct ProfileNativeView: View {
       .refreshable { await model.load() }
       .miraScreenEnter(.tab)
       .navigationTitle("Profile")
+      .miraNavigationSurface()
       .navigationBarTitleDisplayMode(.inline)
       .toolbar(profileTabBarVisibility, for: .tabBar)
       .toolbar {
@@ -1329,6 +1330,7 @@ public struct UserProfileNativeView: View {
     .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
     .navigationTitle(model.user?.username.map { "@\($0)" } ?? "Profile")
+    .miraNavigationSurface()
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.hidden, for: .tabBar)
     .toolbar { ToolbarItem(placement: .topBarTrailing) { profileSafetyMenu } }
@@ -1972,6 +1974,7 @@ struct EditProfileNativeView: View {
       .background(MIRATheme.Color.appBackground)
       .miraScreenEnter(.modal)
       .navigationTitle("Edit profile")
+      .miraNavigationSurface()
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarLeading) {
@@ -2431,8 +2434,7 @@ public struct ChatNativeView: View {
       }
       .navigationBarTitleDisplayMode(.inline)
       .navigationTitle("Messages")
-      .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
-      .toolbarBackground(.visible, for: .navigationBar)
+      .miraNavigationSurface()
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button { showCreateGroup = true } label: {

@@ -119,6 +119,7 @@ struct CaptroMediaWritingEditor: View {
       }
       .background(MIRATheme.Color.appBackground)
       .navigationTitle(coverMode ? "Cover" : "").navigationBarTitleDisplayMode(.inline)
+      .miraNavigationSurface()
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {

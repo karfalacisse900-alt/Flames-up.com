@@ -93,6 +93,7 @@ public struct NotificationNativeView: View {
     .background(MIRATheme.Color.appBackground)
     .miraScreenEnter(.push)
     .navigationTitle("Notifications")
+    .miraNavigationSurface()
     .miraHideTabBarOnAppear()
     .task { await model.load() }
     .refreshable { await model.load(force: true) }
@@ -1165,8 +1166,7 @@ public struct CreatePostNativeView: View {
         .navigationTitle("Create")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { compositionNavigation }
-        .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .miraNavigationSurface()
     }
     .interactiveDismissDisabled(isPosting || hasUnsavedPost)
     .alert("Some draft attachments are unavailable", isPresented: $showMissingDraftMedia) {

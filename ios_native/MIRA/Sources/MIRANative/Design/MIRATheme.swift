@@ -129,6 +129,10 @@ public struct SurfaceShadow: ViewModifier {
 }
 
 public extension View {
+  func miraNavigationSurface() -> some View {
+    modifier(MIRANavigationSurface())
+  }
+
   func miraCardSurface(cornerRadius: CGFloat = MIRATheme.Radius.large) -> some View {
     self
       .background(MIRATheme.Color.surface)
@@ -138,5 +142,16 @@ public extension View {
           .strokeBorder(MIRATheme.Color.hairline, lineWidth: 0.5)
           .allowsHitTesting(false)
       }
+  }
+}
+
+private struct MIRANavigationSurface: ViewModifier {
+  @Environment(\.colorScheme) private var colorScheme
+
+  func body(content: Content) -> some View {
+    content
+      .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
+      .toolbarColorScheme(colorScheme, for: .navigationBar)
   }
 }
