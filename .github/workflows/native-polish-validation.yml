@@ -1,0 +1,52 @@
+name: Validate native polish (no deployment)
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        type: boolean
+        default: false
+      small:
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Native screens and regression checks
+        working-directory: ios_native/MIRA
+        env:
+          BASELINE: ${{ inputs.baseline }}
+          SMALL: ${{ inputs.small }}
+        run: |
+          set -o pipefail
+          device='iPhone 17'
+          if [ "$SMALL" = true ]; then device='iPhone 17 Pro'; fi
+          tests=(-only-testing:CaptroLayoutUITests/NativePolishTests)
+          if [ "$BASELINE" != true ]; then
+            tests+=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/AppSystemUITests -only-testing:CaptroLayoutUITests/MediaRecoveryTests -only-testing:CaptroLayoutUITests/ProfileRedesignTests)
+          fi
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,name=$device" -parallel-testing-enabled NO \
+            -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" "${tests[@]}" \
+            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log"
+      - name: Export screenshots
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/Polish.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Polish.xcresult" --output-path "$RUNNER_TEMP/screenshots"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-polish
+          path: |
+            ${{ runner.temp }}/Polish.xcresult
+            ${{ runner.temp }}/polish.log
+            ${{ runner.temp }}/screenshots

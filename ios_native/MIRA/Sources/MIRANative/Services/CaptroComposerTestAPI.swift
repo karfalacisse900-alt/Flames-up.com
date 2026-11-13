@@ -40,6 +40,10 @@ private final class CaptroComposerTestProtocol: URLProtocol {
         body = #"{"id":"composer-ui-test","full_name":"Test Creator","username":"test_creator","is_private":false,"bio":"City walks, photography and finding good coffee.","city":"New York","open_to":"Photo walks · Creative projects","followers_count":128,"following_count":86}"#
       }
       status = 200
+    } else if ProcessInfo.processInfo.arguments.contains("--captro-polish-chat"), path.hasSuffix("/conversations") {
+      body = #"[{"id":"polish-conversation","other_user_id":"polish-peer","other_username":"alex","last_message":"See you at the photo walk.","unread_count":1}]"#; status = 200
+    } else if ProcessInfo.processInfo.arguments.contains("--captro-polish-chat"), path.hasSuffix("/messages/polish-peer") {
+      body = #"[{"id":"polish-incoming","sender_id":"polish-peer","receiver_id":"composer-ui-test","content":"Are you joining the photo walk?","created_at":"2026-11-13T12:00:00Z","status":"read"},{"id":"polish-outgoing","sender_id":"composer-ui-test","receiver_id":"polish-peer","content":"See you at the photo walk.","created_at":"2026-11-13T12:01:00Z","status":"sent"}]"#; status = 200
     } else if path.hasSuffix("/showcase") {
       body = #"{"pinned":null,"clubs":[]}"#; status = 200
     } else if path.hasSuffix("/posts/creation-capabilities") {
