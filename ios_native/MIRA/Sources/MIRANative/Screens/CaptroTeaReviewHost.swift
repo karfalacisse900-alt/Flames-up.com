@@ -19,6 +19,12 @@ private final class TeaReviewContext: ObservableObject {
   let api: MIRAAPIClient
 
   init() {
+    // This host mounts the real root, which reads the persisted appearance.
+    // Keep it consistent with the fixture's requested mode, including covers.
+    UserDefaults.standard.set(
+      ProcessInfo.processInfo.arguments.contains("--captro-quality-dark")
+        ? MIRAAppearance.dark.rawValue : MIRAAppearance.light.rawValue,
+      forKey: MIRAAppearanceResolver.preferenceKey)
     let storage = TeaReviewStorage()
     let defaults = UserDefaults(suiteName: "captro.tea.review")!
     defaults.removePersistentDomain(forName: "captro.tea.review")
