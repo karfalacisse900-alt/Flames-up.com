@@ -4457,7 +4457,7 @@ public struct CreateStoryNativeView: View {
           } label: {
             Image(systemName: "arrow.left")
               .font(.system(size: 20, weight: .medium))
-              .foregroundStyle(.black)
+              .foregroundStyle(MIRATheme.Color.textPrimary)
               .frame(width: 48, height: 48)
           }
           .accessibilityLabel("Back to story camera")
@@ -4465,12 +4465,12 @@ public struct CreateStoryNativeView: View {
           Spacer()
           Text("New status")
             .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.black)
+            .foregroundStyle(MIRATheme.Color.textPrimary)
           Spacer()
           if isStoryCaptionFocused {
             Button("Done") { isStoryCaptionFocused = false }
               .font(.system(size: 15, weight: .semibold))
-              .foregroundStyle(.black)
+              .foregroundStyle(MIRATheme.Color.textPrimary)
               .frame(minWidth: 48, minHeight: 48)
               .accessibilityLabel("Finish writing status")
           } else {
@@ -4488,10 +4488,10 @@ public struct CreateStoryNativeView: View {
                   LocalMediaThumb(media: media, width: 104, height: 156, cornerRadius: 8)
                 } else {
                   ZStack {
-                    Color(red: 0.96, green: 0.94, blue: 0.90)
+                    MIRATheme.Color.surfaceSoft
                     Text(storyCaption.isEmpty ? "Your words" : storyCaption)
                       .font(.system(size: 15, weight: .medium))
-                      .foregroundStyle(.black)
+                      .foregroundStyle(MIRATheme.Color.textPrimary)
                       .multilineTextAlignment(.center)
                       .lineLimit(5)
                       .padding(9)
@@ -4503,18 +4503,18 @@ public struct CreateStoryNativeView: View {
               .accessibilityLabel(media == nil ? "Text status preview" : "Selected status media")
               ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 10)
-                  .stroke(Color.black.opacity(0.13), lineWidth: 1)
+                  .stroke(MIRATheme.Color.editorialBorder, lineWidth: 1)
                 if storyCaption.isEmpty {
                   Text(media == nil ? "Write your status..." : "Add a caption...")
                     .font(.system(size: 16))
-                    .foregroundStyle(.gray)
+                    .foregroundStyle(MIRATheme.Color.textSecondary)
                     .padding(.horizontal, 12)
                     .padding(.top, 13)
                     .allowsHitTesting(false)
                 }
                 TextEditor(text: $storyCaption)
                   .font(.system(size: 16))
-                  .foregroundStyle(.black)
+                  .foregroundStyle(MIRATheme.Color.textPrimary)
                   .scrollContentBackground(.hidden)
                   .focused($isStoryCaptionFocused)
                   .padding(7)
@@ -4573,18 +4573,18 @@ public struct CreateStoryNativeView: View {
             Task { await submit(media: media) }
           } label: {
             HStack(spacing: 8) {
-              if isPosting { ProgressView().tint(.white) }
+              if isPosting { ProgressView().tint(MIRATheme.Color.onPrimary) }
               Text(isPosting ? storyUploadStage : "Post Status")
                 .font(.system(size: 16, weight: .semibold))
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(MIRATheme.Color.onPrimary)
             .frame(maxWidth: .infinity)
             .frame(height: 54)
-            .background(.black, in: RoundedRectangle(cornerRadius: 10))
+            .background(MIRATheme.Color.forest, in: RoundedRectangle(cornerRadius: 10))
             .overlay(alignment: .bottom) {
               if let storyUploadFraction, isPosting {
                 ProgressView(value: storyUploadFraction)
-                  .tint(.white)
+                  .tint(MIRATheme.Color.onPrimary)
                   .padding(.horizontal, 8)
                   .accessibilityLabel("Status upload progress")
               }
@@ -4597,7 +4597,7 @@ public struct CreateStoryNativeView: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(.white)
+      .background(MIRATheme.Color.appBackground)
     }
     .alert("Location", isPresented: $showLocationEntry) {
       TextField("City or place", text: $locationDraft)
@@ -4633,9 +4633,9 @@ public struct CreateStoryNativeView: View {
       Spacer()
       Image(systemName: "chevron.right")
         .font(.system(size: 14, weight: .medium))
-        .foregroundStyle(.gray)
+        .foregroundStyle(MIRATheme.Color.textSecondary)
     }
-    .foregroundStyle(.black)
+    .foregroundStyle(MIRATheme.Color.textPrimary)
     .frame(minHeight: 62)
     .contentShape(Rectangle())
   }

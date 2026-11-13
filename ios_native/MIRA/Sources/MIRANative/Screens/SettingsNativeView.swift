@@ -64,6 +64,7 @@ final class SettingsNativeModel: ObservableObject {
 
   let api: MIRAAPIClient
   private weak var authSession: MIRAAuthSession?
+  private var lastSuccess = Date.distantPast
 
   init(api: MIRAAPIClient, authSession: MIRAAuthSession?) {
     self.api = api
@@ -71,26 +72,30 @@ final class SettingsNativeModel: ObservableObject {
     apply(user: authSession?.user)
   }
 
-  func load() async {
+  func load(force: Bool = false) async {
     guard !isLoading else { return }
+    guard force || Date().timeIntervalSince(lastSuccess) >= 30 else { return }
+    isLoading = true
+    let scope = api.presentationScope
+    defer { isLoading = false }
     if user == nil, let cached = await MIRAAppCacheStore.shared.loadSettings() {
+      guard scope == api.presentationScope else { return }
       user = cached.user
       isPrivate = cached.isPrivate
       language = cached.language
       email = cached.user?.email ?? email
     }
-    isLoading = true
-    defer { isLoading = false }
     do {
       let fresh: MIRAUser = try await api.get("/auth/me")
+      guard scope == api.presentationScope else { return }
       loadError = nil
+      lastSuccess = Date()
       apply(user: fresh)
       await MIRAAppCacheStore.shared.saveSettings(user: fresh, language: language, isPrivate: isPrivate)
       authSession?.replaceUser(fresh)
     } catch {
-      if user == nil {
-        loadError = "Couldn't load account settings. Pull down to try again."
-      }
+      guard scope == api.presentationScope else { return }
+      loadError = user == nil ? "Couldn't load account settings. Pull down to try again." : "Could not refresh settings. Pull down to retry."
     }
   }
 
@@ -359,7 +364,7 @@ public struct SettingsNativeView: View {
         }
     }
     .task { await model.load() }
-    .refreshable { await model.load() }
+    .refreshable { await model.load(force: true) }
     .onChange(of: model.user) { _, updated in
       guard let updated, let profileModel, profileModel.user?.id == updated.id else { return }
       Task { await profileModel.applyUpdatedUser(updated) }
@@ -1290,6 +1295,8 @@ struct SettingsDetailScaffold<Content: View>: View {
     .navigationTitle(title)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
+    .toolbarBackground(MIRATheme.Color.appBackground, for: .navigationBar)
+    .toolbarBackground(.visible, for: .navigationBar)
     .miraHideTabBarOnAppear()
   }
 }

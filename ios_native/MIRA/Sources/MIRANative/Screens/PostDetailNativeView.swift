@@ -102,6 +102,7 @@ final class PostDetailModel: ObservableObject {
     do {
       let response = try await api.loadCommerce(postId: post.id)
       commerce = response.commerce
+      api.teaDetails.updateCommerce(postID: post.id, commerce: response.commerce)
       var updated = post
       if updated.detail == nil { updated.detail = CaptroPostDetails() }
       updated.detail?.commerce = response.commerce

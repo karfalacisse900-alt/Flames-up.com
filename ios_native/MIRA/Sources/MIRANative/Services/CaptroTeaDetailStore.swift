@@ -76,6 +76,7 @@ final class CaptroTeaDetailStore {
         }
         if let status, [401, 403, 404, 410].contains(status) { snapshots[key] = nil }
         if flights[key]?.id == flight.id { flights[key] = nil }
+        latest[key] = nil
       }
       throw error
     }
@@ -90,6 +91,18 @@ final class CaptroTeaDetailStore {
     for value in flights.values { value.task.cancel() }
     flights.removeAll()
     latest.removeAll()
+  }
+
+  func updateCommerce(postID: String, commerce: CaptroCommerceDetails) {
+    synchronizeScope()
+    for (key, value) in snapshots where value.detail.post?.id == postID {
+      let old = value.detail
+      let updated = CaptroTeaDetails(item: old.item, post: old.post, commerce: commerce,
+                                     business: old.business, linkedEvents: old.linkedEvents)
+      // Update the viewer's action result immediately, but still refresh the
+      // entity's visibility and other facts on its next visit.
+      snapshots[key] = Snapshot(detail: updated, receivedAt: value.receivedAt, invalidated: true)
+    }
   }
 
   private func synchronizeScope() {

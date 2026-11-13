@@ -1,8 +1,5 @@
 name: Validate native polish (no deployment)
 on:
-  push:
-    branches: [polish/native-surfaces-tea-chat]
-    paths: ['ios_native/MIRA/**', '.github/workflows/native-polish-validation.yml']
   workflow_dispatch:
     inputs:
       baseline:
@@ -25,18 +22,25 @@ jobs:
       - name: Native screens and regression checks
         working-directory: ios_native/MIRA
         env:
-          BASELINE: ${{ inputs.baseline || github.event_name == 'push' }}
+          BASELINE: ${{ inputs.baseline }}
           SMALL: ${{ inputs.small }}
         run: |
           set -o pipefail
-          device='iPhone 17'
-          if [ "$SMALL" = true ]; then device='iPhone 17 Pro'; fi
+          destination='platform=iOS Simulator,name=iPhone 17'
+          if [ "$SMALL" = true ]; then
+            runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]))')
+            device=$(xcrun simctl create 'Captro polish small' com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini "$runtime")
+            destination="platform=iOS Simulator,id=$device"
+          fi
+          xcodebuild -version
+          xcrun simctl list runtimes
+          git rev-parse HEAD
           tests=(-only-testing:CaptroLayoutUITests/NativePolishTests)
           if [ "$BASELINE" != true ]; then
             tests+=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/AppSystemUITests -only-testing:CaptroLayoutUITests/MediaRecoveryTests -only-testing:CaptroLayoutUITests/ProfileRedesignTests)
           fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
-            -destination "platform=iOS Simulator,name=$device" -parallel-testing-enabled NO \
+            -destination "$destination" -parallel-testing-enabled NO \
             -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" "${tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log"
       - name: Export screenshots

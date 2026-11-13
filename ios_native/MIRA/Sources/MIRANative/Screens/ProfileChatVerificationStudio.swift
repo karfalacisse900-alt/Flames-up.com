@@ -1088,15 +1088,28 @@ final class UserProfileNativeModel: ObservableObject {
   let api: MIRAAPIClient
   private var userCacheKey: String { "native.profile.user.\(userId).v5" }
   private var postsCacheKey: String { "native.profile.posts.\(userId).v6" }
+  private var lastSuccessfulLoadAt = Date.distantPast
+  private var lastLoadScope: String?
 
   init(userId: String, api: MIRAAPIClient) {
     self.userId = userId
     self.api = api
   }
 
+  func revalidateIfStale() async {
+    let scope = api.presentationScope
+    if scope != lastLoadScope {
+      user = nil; posts = []; showcase = CaptroProfileShowcase(); lastSuccessfulLoadAt = .distantPast
+    }
+    guard !isLoading, Date().timeIntervalSince(lastSuccessfulLoadAt) >= 30 else { return }
+    await load()
+  }
+
   func load() async {
     generation += 1
     let request = generation
+    let owner = api.presentationScope
+    lastLoadScope = owner
     isLoading = true; isLoadingMore = false; errorMessage = nil; requiresSignIn = false
     // Visitor caches are never authority for current privacy/block state.
     defer { if request == generation { isLoading = false } }
@@ -1123,8 +1136,9 @@ final class UserProfileNativeModel: ObservableObject {
         if page.count < 60 { nextOffset = page.count; canLoadMore = false }
       }
       let selected: CaptroProfileShowcase = try await api.get("/users/\(userId)/showcase")
-      guard request == generation, !Task.isCancelled else { return }
+      guard request == generation, !Task.isCancelled, owner == api.presentationScope else { return }
       showcase = selected
+      lastSuccessfulLoadAt = Date()
     } catch {
       guard request == generation, !Task.isCancelled else { return }
       if let apiError = error as? MIRAAPIError, case .server(let status, _, _) = apiError {
@@ -1312,9 +1326,9 @@ public struct UserProfileNativeView: View {
     .toolbar(.hidden, for: .tabBar)
     .toolbar { ToolbarItem(placement: .topBarTrailing) { profileSafetyMenu } }
     .refreshable { await model.load() }
-    .task { await model.load() }
+    .task { await model.revalidateIfStale() }
     .onChange(of: profileScenePhase) { _, phase in
-      if phase == .active { Task { await model.load() } }
+      if phase == .active { Task { await model.revalidateIfStale() } }
     }
     .onReceive(NotificationCenter.default.publisher(for: .captroPostDetailsUpdated)) { _ in
       Task { await model.load() }
