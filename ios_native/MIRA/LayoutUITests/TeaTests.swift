@@ -111,7 +111,10 @@ final class TeaTests: XCTestCase {
     XCUIDevice.shared.press(.home); app.activate()
     XCTAssertEqual(app.staticTexts["tea.test.requests"].value as? String, "3=1")
     let details = app.collectionViews["tea.detail"]
-    XCTAssertTrue(details.isHittable)
+    // The collection is a container, not a tappable accessibility control.
+    // Its real action must remain usable; the drag below proves scrolling.
+    XCTAssertTrue(details.exists)
+    XCTAssertTrue(app.buttons["tea.primary-action"].isHittable)
     let pullStart = details.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
     let pullEnd = details.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
     pullStart.press(forDuration: 0.1, thenDragTo: pullEnd)
