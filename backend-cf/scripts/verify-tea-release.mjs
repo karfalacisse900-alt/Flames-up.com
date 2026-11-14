@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-const baseline='0afe32adc0ad6e6fde6ae1271fac655b55d22919';
-const changed=execFileSync('git',['diff','--name-only',baseline,'HEAD','--','backend-cf/src','backend-cf/wrangler.toml','backend-cf/package.json','backend-cf/package-lock.json'],{encoding:'utf8'}).trim().split('\n');
+import {fileURLToPath} from 'node:url';
+// Actual deployed Worker source; native release commits contain unreleased
+// business-ordering code and are not a safe API deployment baseline.
+const baseline='a8ac2a0fdad1d7c2afdb5f99bf8f9324fef62a6f';
+const changed=execFileSync('git',['diff','--name-only',baseline,'HEAD','--','backend-cf/src','backend-cf/wrangler.toml','backend-cf/package.json','backend-cf/package-lock.json'],{encoding:'utf8',cwd:fileURLToPath(new URL('../../',import.meta.url))}).trim().split('\n');
 assert.deepEqual(changed,['backend-cf/src/index.ts','backend-cf/src/tea-conversations.ts']);
 const {CLOUDFLARE_API_TOKEN:token,CLOUDFLARE_ACCOUNT_ID:account}=process.env;
 assert.equal(account,'2ca88b3551321681a5f9434814f38ec8');assert.ok(token);
@@ -20,6 +23,7 @@ const bindings=settings.bindings;
 assert.ok(Array.isArray(bindings));
 assert.ok(bindings.some(b=>b.name==='ENVIRONMENT'&&b.text==='production'));
 const configurationHash=createHash('sha256').update(JSON.stringify(bindings.slice().sort((a,b)=>a.name.localeCompare(b.name)))).digest('hex');
+assert.equal(configurationHash,'1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a','Production bindings changed after inspection');
 console.log(JSON.stringify({version,created:metadata.metadata?.created_on,annotations:metadata.annotations,configurationHash,changed}));
 if(process.env.DEPLOY==='true') {
   assert.match(process.env.EXPECTED_VERSION??'',/^[a-f0-9-]{36}$/);

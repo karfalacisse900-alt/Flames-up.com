@@ -24,7 +24,7 @@ async function database() {
     create table app_follows(app_follower_id text,app_following_id text,status text);
     insert into app_users(id,supabase_user_id,full_name,username) values('a','${id(100)}','Artist','artist'),('b','${id(101)}','Reader','reader'),('c','${id(102)}','Other','other');
     grant select,update on app_users to service_role; grant select on app_blocks,app_follows to service_role;`);
-  await db.exec(readFileSync(new URL('../../supabase/migrations/20261114014202_tea_conversations.sql',import.meta.url),'utf8'));
+  await db.exec(readFileSync(new URL('../../supabase/migrations/20261114230954_tea_conversations.sql',import.meta.url),'utf8'));
   const write=async(actor,action,post,data)=>(await db.query('select captro_tea_write($1,$2,$3,$4) value',[actor,action,post,JSON.stringify(data)])).rows[0].value;
   const read=async(actor,kind,post=null,before=null,boundary=null,snapshot=new Date(Date.now()+60000).toISOString())=>(await db.query('select captro_tea_read($1,$2,$3,$4,$5,$6) value',[actor,kind,post,before,boundary,snapshot])).rows[0].value;
   return {db,write,read};
@@ -115,3 +115,4 @@ test('real HTTP routes enforce auth, restrictions, canonical actor, HTTPS valida
     assert.equal((await (await request('/tea/conversations/'+id(1))).json()).author.id,'a');
   } finally {await db.close();}
 });
+

@@ -67,7 +67,17 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler deploy --env production --keep-vars --define 'CAPTRO_RELIABILITY_RELEASE_MODE:"ready"'
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          DEPLOY: 'true'
+        run: |
+          node scripts/verify-tea-release.mjs
+          npx wrangler deploy --env production --keep-vars --message "Tea Conversations $GITHUB_SHA" --define 'CAPTRO_RELIABILITY_RELEASE_MODE:"ready"'
+      - name: Verify preserved production bindings and record deployed version
+        if: ${{ inputs.deploy }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node backend-cf/scripts/verify-tea-release.mjs
       - name: Verify public read and anonymous write denial
         if: ${{ inputs.deploy }}
         run: node backend-cf/scripts/verify-tea-http.mjs
