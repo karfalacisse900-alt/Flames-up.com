@@ -105,6 +105,8 @@ jobs:
           node scripts/app-store/verify-security-schema.mjs
           node backend-cf/scripts/verify-reliability-schema.mjs
           node backend-cf/scripts/verify-creator-earnings-schema.mjs
+          node backend-cf/scripts/verify-tea-schema.mjs
+          node backend-cf/scripts/verify-tea-http.mjs
       - name: Upload the preserved IPA to TestFlight
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
@@ -399,6 +401,8 @@ jobs:
           node scripts/app-store/verify-security-schema.mjs
           node backend-cf/scripts/verify-reliability-schema.mjs
           node backend-cf/scripts/verify-creator-earnings-schema.mjs
+          node backend-cf/scripts/verify-tea-schema.mjs
+          node backend-cf/scripts/verify-tea-http.mjs
       - name: Upload to TestFlight
         if: ${{ !inputs.configure_only }}
         env:
