@@ -169,7 +169,7 @@ private struct TeaConversationTime: View {
                     .accessibilityIdentifier("tea.link." + link.hostname)
                 }
               }
-            }.accessibilityIdentifier("tea.inline-links")
+            }
           }
           if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
         }.listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))

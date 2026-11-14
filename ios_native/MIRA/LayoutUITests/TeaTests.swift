@@ -142,6 +142,7 @@ final class TeaTests: XCTestCase {
     XCTAssertEqual(app.buttons["tea.primary-action"].label, "Buy Ticket")
     back(app); app.buttons["tea.back.home"].tap()
     app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
+    app.buttons["Clubs & Events"].tap()
     tapRow(3, in: app)
     XCTAssertTrue(app.buttons["tea.primary-action"].waitForExistence(timeout: 3))
     XCTAssertFalse(app.staticTexts["Loading details"].exists)
