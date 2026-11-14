@@ -83,7 +83,7 @@ extension Notification.Name {
         post = result; loadedAt = Date()
       } catch {
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
-        if Self.denied(error) { post = nil; replies = []; draft = ""; self.error = "This post is no longer available." }
+        if Self.denied(error) { clear(); self.error = "This post is no longer available." }
         else { self.error = "Couldn’t refresh this post. Try again." }
       }
     }
@@ -109,7 +109,7 @@ extension Notification.Name {
       nextCursor = page.nextCursor; replyLoadedAt = Date()
     } catch {
       guard valid, accessRevision == expectedAccess, !Task.isCancelled else { return }
-      if Self.denied(error) { post = nil; replies = []; self.error = "This post is no longer available." }
+      if Self.denied(error) { clear(); self.error = "This post is no longer available." }
       else if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error {
         nextCursor = nil; replyLoadedAt = nil; replyError = "Refresh replies to continue."
       }
