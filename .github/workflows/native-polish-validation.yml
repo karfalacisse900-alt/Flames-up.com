@@ -2,6 +2,9 @@ name: Validate native polish (no deployment)
 on:
   workflow_dispatch:
     inputs:
+      conversations:
+        type: boolean
+        default: false
       baseline:
         type: boolean
         default: false
@@ -24,6 +27,7 @@ jobs:
         env:
           BASELINE: ${{ inputs.baseline }}
           SMALL: ${{ inputs.small }}
+          CONVERSATIONS: ${{ inputs.conversations }}
         run: |
           set -o pipefail
           destination='platform=iOS Simulator,name=iPhone 17'
@@ -39,22 +43,29 @@ jobs:
           if [ "$BASELINE" != true ]; then
             tests+=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/AppSystemUITests -only-testing:CaptroLayoutUITests/MediaRecoveryTests -only-testing:CaptroLayoutUITests/ProfileRedesignTests)
           fi
+          if [ "$CONVERSATIONS" = true ]; then
+            tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/TeaConversationTests)
+          fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "$destination" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" \
             -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" "${tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log"
       - name: Smaller iPhone screens and interactions
+        env:
+          CONVERSATIONS: ${{ inputs.conversations }}
         if: ${{ !inputs.baseline && !inputs.small }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
           runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]))')
           device=$(xcrun simctl create 'Captro polish small' com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini "$runtime")
+          small_tests=(-only-testing:CaptroLayoutUITests/NativePolishTests -only-testing:CaptroLayoutUITests/TeaTests)
+          if [ "$CONVERSATIONS" = true ]; then small_tests=(-only-testing:CaptroLayoutUITests/TeaConversationTests); fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" -resultBundlePath "$RUNNER_TEMP/SmallPolish.xcresult" \
-            -only-testing:CaptroLayoutUITests/NativePolishTests -only-testing:CaptroLayoutUITests/TeaTests \
+            "${small_tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/small-polish.log"
       - name: Export screenshots
         if: always()
