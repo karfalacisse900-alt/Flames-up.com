@@ -50,6 +50,7 @@ extension Notification.Name {
   private var requestID = UUID().uuidString
   private var pendingReply: String?
   private var flight: Task<Void, Never>?
+  private var flightID: UUID?
   private var invalidated = false
   private var revision = 0
 
@@ -59,7 +60,7 @@ extension Notification.Name {
   var valid: Bool { !invalidated && scope == api.presentationScope }
   func clear() {
     invalidated = true; revision += 1
-    flight?.cancel(); flight = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
+    flight?.cancel(); flight = nil; flightID = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
     pendingReply = nil; replyPending = false; requestID = UUID().uuidString; nextCursor = nil
     error = "Refresh this post to check access."
   }
@@ -84,7 +85,9 @@ extension Notification.Name {
         else { self.error = "Couldn’t refresh this post. Try again." }
       }
     }
-    flight = task; await task.value; flight = nil
+    let token = UUID()
+    flightID = token; flight = task; await task.value
+    if flightID == token { flight = nil; flightID = nil }
     if post != nil { await loadReplies(reset: true, force: force) }
   }
   func loadReplies(reset: Bool, force: Bool = false) async {
