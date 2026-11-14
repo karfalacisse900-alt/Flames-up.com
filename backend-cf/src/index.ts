@@ -1,3 +1,4 @@
+import { mountTeaConversations } from './tea-conversations';
 import { teaPage, teaDetail, TeaInputError, TeaUnavailable } from './tea';
 import { runAccountCleanup } from './account-cleanup';
 import { reliabilityRolloutBlocks, reliabilityReleaseMode } from './reliability-rollout';
@@ -20270,6 +20271,20 @@ async function handleTea(c: any, request: (viewer: string, deps: ReturnType<type
 const teaAuth = async (c: any, next: () => Promise<void>) =>
   c.req.header('Authorization') === undefined ? next() : authMiddleware(c, next);
 
+mountTeaConversations(api, {
+  auth: authMiddleware, optionalAuth: teaAuth,
+  viewer: async c => {
+    const id = getUserId(c);
+    if (!id) return '';
+    const row = await getSupabaseAppUserRowByAnyId(c, id);
+    if (!row || supabaseUserStatus(row) !== 'active') throw new Error('TEA_DISCUSSION_FORBIDDEN');
+    return row.id;
+  },
+  limit: (c, write) => enforceRateLimit(c, write ? 'tea_discussion_write' : 'tea_discussion_read', getUserId(c) || clientIp(c), write ? 20 : 120, 60),
+  restriction: (c, type) => enforceUserRestriction(c, getUserId(c), type),
+  rpc: supabaseAdminRpc,
+});
+
 api.get('/tea', teaAuth, c => handleTea(c, (viewer, deps) =>
   teaPage(deps, c.env.JWT_SECRET, viewer, { cursor: c.req.query('cursor'), city: c.req.query('city'),
     lat: c.req.query('lat'), lon: c.req.query('lon') })));
@@ -26382,6 +26397,9 @@ async function permanentlyDeleteSupabaseAccount(env: Env, row: any) {
     },
     async () => {
   const userScopedDeletes: Array<[string, Array<[string, string]>]> = [
+    ['app_tea_follows', [['user_id', userId]]],
+    ['app_tea_replies', [['author_id', userId]]],
+    ['app_tea_conversations', [['author_id', userId]]],
     ['app_push_tokens', [['user_id', userId]]],
     ['app_notifications', [['user_id', userId], ['from_user_id', userId]]],
     ['app_post_interactions', [['app_user_id', userId], ['user_id', authUserId || userId]]],

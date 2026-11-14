@@ -6,6 +6,14 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      tea_release:
+        description: Release only the tested Tea Conversations code; respects reliability_dry_run
+        type: boolean
+        default: false
+      tea_expected_version:
+        description: Inspected Cloudflare version required before Tea deployment
+        type: string
+        default: ''
       branding_support_code_only:
         description: Deploy default-off Support code only, without migrations, payment settings or secret changes
         type: boolean
@@ -52,6 +60,13 @@ on:
         default: false
 
 jobs:
+  tea:
+    if: ${{ inputs.tea_release == true }}
+    uses: ./.github/workflows/tea-conversations-release.yml
+    with:
+      deploy: ${{ inputs.reliability_dry_run == false }}
+      expected_version: ${{ inputs.tea_expected_version }}
+    secrets: inherit
   branding-support:
     if: ${{ inputs.branding_support_code_only == true }}
     uses: ./.github/workflows/branding-support-worker-release.yml
@@ -103,7 +118,7 @@ jobs:
       worker_only: ${{ inputs.worker_only == true }}
     secrets: inherit
   deploy:
-    if: ${{ inputs.branding_support_code_only != true && inputs.profile_release != true && inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
+    if: ${{ inputs.tea_release != true && inputs.branding_support_code_only != true && inputs.profile_release != true && inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
