@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
 // Actual deployed Worker source; native release commits contain unreleased
 // business-ordering code and are not a safe API deployment baseline.
 const baseline='a8ac2a0fdad1d7c2afdb5f99bf8f9324fef62a6f';
-const changed=execFileSync('git',['diff','--name-only',baseline,'HEAD','--','backend-cf/src','backend-cf/wrangler.toml','backend-cf/package.json','backend-cf/package-lock.json'],{encoding:'utf8'}).trim().split('\n');
+const changed=execFileSync('git',['diff','--name-only',baseline,'HEAD','--','backend-cf/src','backend-cf/wrangler.toml','backend-cf/package.json','backend-cf/package-lock.json'],{encoding:'utf8',cwd:fileURLToPath(new URL('../../',import.meta.url))}).trim().split('\n');
 assert.deepEqual(changed,['backend-cf/src/index.ts','backend-cf/src/tea-conversations.ts']);
 const {CLOUDFLARE_API_TOKEN:token,CLOUDFLARE_ACCOUNT_ID:account}=process.env;
 assert.equal(account,'2ca88b3551321681a5f9434814f38ec8');assert.ok(token);
