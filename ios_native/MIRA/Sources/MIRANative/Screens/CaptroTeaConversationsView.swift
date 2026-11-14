@@ -80,9 +80,7 @@ private struct CaptroTeaConversationRow: View {
   private var navy: Bool { (post.id.utf8.last ?? 0) % 2 == 0 }
   var body: some View {
     HStack(spacing: 10) {
-      Image(systemName: "person.2.fill").font(.subheadline)
-        .foregroundStyle(navy ? Color(red: 0.13, green: 0.22, blue: 0.42) : Color(red: 0.35, green: 0.49, blue: 0.38))
-        .frame(width: 29, height: 29).accessibilityHidden(true)
+      TeaIcon(symbol: "person.3.fill", palette: navy ? .navy : .sage)
       ViewThatFits(in: .horizontal) {
         HStack {
           Text(post.title).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize(horizontal: true, vertical: false)

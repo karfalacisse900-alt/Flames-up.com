@@ -17,6 +17,11 @@ final class TeaConversationTests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
   }
   private func back(_ app: XCUIApplication) { app.navigationBars.firstMatch.buttons.firstMatch.tap() }
+  private func input(_ id: String, _ app: XCUIApplication) -> XCUIElement {
+    // A SwiftUI multiline TextField is exposed as UITextView on some iOS versions.
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: id).firstMatch.waitForExistence(timeout: 8))
+    return app.textFields[id].exists ? app.textFields[id] : app.textViews[id]
+  }
 
   func testQuietLinksFollowReplyAndFreshReturn() {
     let app = launch()
@@ -33,8 +38,8 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Author update"].exists)
     shot("conversation-three-inline-links",app)
     follow.tap(); XCTAssertTrue(app.buttons["Unfollow discussion"].waitForExistence(timeout: 8))
-    let input = app.textFields["tea.reply.input"]
-    XCTAssertTrue(input.exists); input.tap(); input.typeText("The second opening feels stronger.")
+    let replyInput = input("tea.reply.input", app)
+    XCTAssertTrue(replyInput.exists); replyInput.tap(); replyInput.typeText("The second opening feels stronger.")
     app.buttons["tea.reply.send"].tap()
     XCTAssertTrue(app.staticTexts["The second opening feels stronger."].waitForExistence(timeout: 8))
     back(app); row(101,app).tap()
@@ -49,9 +54,9 @@ final class TeaConversationTests: XCTestCase {
   func testComposeEditCancelAndAuthorOnlyLinks() {
     let app=launch()
     app.buttons["tea.compose"].tap()
-    let title=app.textFields["tea.compose.title"]
+    let title=input("tea.compose.title",app)
     XCTAssertTrue(title.waitForExistence(timeout: 8)); title.tap(); title.typeText("A new Tea discussion")
-    let body=app.textFields["tea.compose.body"]
+    let body=input("tea.compose.body",app)
     body.tap(); body.typeText("A question for the community.")
     app.buttons["Add link"].tap()
     let link=app.textFields["tea.compose.link.0"]
@@ -93,7 +98,7 @@ final class TeaConversationTests: XCTestCase {
       XCTAssertTrue(link.isHittable); XCTAssertGreaterThanOrEqual(link.frame.height,44)
       XCTAssertLessThanOrEqual(link.frame.maxX,app.frame.maxX)
     }
-    XCTAssertTrue(app.textFields["tea.reply.input"].isHittable)
+    XCTAssertTrue(input("tea.reply.input",app).isHittable)
     shot("conversation-large-text",app)
   }
 }

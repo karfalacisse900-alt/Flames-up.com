@@ -2,6 +2,24 @@ import XCTest
 @testable import MIRANative
 
 final class CaptroTeaConversationTests: XCTestCase {
+  @MainActor func testPresentationCacheKeepsDraftAndEvictsOnAccountSwitchOrInvalidation() {
+    MIRALocalJSONCache.setAccountScope(userId: "tea-a")
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let api = MIRAAPIClient()
+    let seed = CaptroTeaConversation(id: "post", title: "Draft", body: "Body", links: [],
+      author: CaptroTeaAuthor(id: "tea-a", name: "Author", username: "author"),
+      createdAt: "2026-11-13T12:00:00Z", version: 1, isAuthor: true, following: false)
+    let first = api.teaConversations.model(for: seed)
+    first.draft = "An unfinished reply"
+    XCTAssertTrue(first === api.teaConversations.model(for: seed))
+    XCTAssertEqual(api.teaConversations.model(for: seed).draft, "An unfinished reply")
+    MIRALocalJSONCache.setAccountScope(userId: "tea-b")
+    XCTAssertFalse(first.valid)
+    let next = api.teaConversations.model(for: seed)
+    XCTAssertFalse(first === next); XCTAssertNil(first.post); XCTAssertEqual(next.draft, "")
+    api.teaConversations.invalidate()
+    XCTAssertNil(next.post); XCTAssertFalse(next.valid)
+  }
   func testDomainsUseExactBoundariesAndPreserveDestinations() {
     XCTAssertEqual(CaptroTeaLink("https://www.youtube.com/watch?v=a&signature=keep")?.hostname,"youtube.com")
     XCTAssertEqual(CaptroTeaLink("https://www.youtube.com/watch?v=a&signature=keep")?.url.query,"v=a&signature=keep")

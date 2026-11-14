@@ -261,7 +261,7 @@ private struct CaptroTeaRow: View {
   }
 }
 
-private struct TeaIcon: View {
+struct TeaIcon: View {
   let symbol: String
   let palette: CaptroTeaPalette
   var body: some View {
