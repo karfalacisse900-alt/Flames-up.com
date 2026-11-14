@@ -51,6 +51,8 @@ private final class TeaReviewProtocol: URLProtocol {
   private static var purchases: Set<Int> = []
   private static var deliveredError = false
   private static var detailRequests: [Int: Int] = [:]
+  private static var conversations: [String: [String: Any]] = [:]
+  private static var discussionReplies: [String: [[String: Any]]] = [:]
   private var delivery: DispatchWorkItem?
 
   override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "localhost" }
@@ -111,6 +113,7 @@ private final class TeaReviewProtocol: URLProtocol {
     let path = String(url.path.dropFirst(4))
     var status = 200
     var payload: Any = [String: Any]()
+    if path.hasPrefix("/tea/conversations") { discussion(path); return }
     if path == "/auth/me" {
       payload = ["id": "tea-viewer", "username": "tea_fixture", "city": "New York", "status": "active"]
     } else if path == "/tea" {
@@ -184,6 +187,58 @@ private final class TeaReviewProtocol: URLProtocol {
       delivery = work
       DispatchQueue.global().asyncAfter(deadline: .now() + 1, execute: work)
     } else { reply(status, payload) }
+  }
+
+  private func discussion(_ path: String) {
+    let method = request.httpMethod ?? "GET"
+    let body = readBody().flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+    let result: (Int, Any) = Self.lock.withLock {
+      if Self.conversations.isEmpty {
+        for n in 101...104 {
+          let links: [String] = n == 101 ? ["https://www.youtube.com/watch?v=fixture", "https://www.tiktok.com/@fixture", "https://example.com/intro?tracking=hidden"] : n == 103 ? ["https://example.com/one"] : []
+          Self.conversations[id(n)] = ["id": id(n), "title": n == 101 ? "Which music video intro works better?" : n == 102 ? "Where do you find creative inspiration?" : n == 103 ? "A useful website" : "My next project",
+            "body": "I’m trying two openings for a new music video. What holds your attention, and why?", "links": links,
+            "createdAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-1800)), "version": 1,
+            "author": ["id": n == 104 ? "tea-viewer" : "artist", "name": n == 104 ? "Tea Fixture" : "Alex", "username": n == 104 ? "tea_fixture" : "alex"],
+            "isAuthor": n == 104, "following": false]
+        }
+      }
+      if path == "/tea/conversations" {
+        if method == "POST", let key = body["requestID"] as? String {
+          var post = Self.conversations[id(104)]!
+          post["id"] = key; post["title"] = body["title"]; post["body"] = body["body"]; post["links"] = body["links"]
+          Self.conversations[key] = post; return (200, post)
+        }
+        return (200, ["items": Self.conversations.values.sorted { ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "") }])
+      }
+      let parts = path.split(separator: "/")
+      guard parts.count >= 3, var post = Self.conversations[String(parts[2])] else { return (404, ["detail":"Unavailable"]) }
+      let key = String(parts[2])
+      if parts.last == "replies" {
+        if method == "POST", let replyID = body["requestID"] as? String {
+          let reply: [String: Any] = ["id":replyID,"body":body["body"] ?? "", "createdAt":ISO8601DateFormatter().string(from: Date()),
+            "author":["id":"tea-viewer","name":"Tea Fixture","username":"tea_fixture"]]
+          if !(Self.discussionReplies[key] ?? []).contains(where: { $0["id"] as? String == replyID }) { Self.discussionReplies[key, default: []].append(reply) }
+          return (200, reply)
+        }
+        return (200,["items":Self.discussionReplies[key] ?? []])
+      }
+      if parts.last == "follow" { post["following"] = body["following"] }
+      else if method == "PUT" {
+        guard post["isAuthor"] as? Bool == true else { return (403,["detail":"Not your post"]) }
+        post["title"] = body["title"]; post["body"] = body["body"]; post["links"] = body["links"]
+        post["version"] = (post["version"] as? Int ?? 1) + 1
+      } else {
+        let n = Int(key.suffix(12)) ?? 0
+        Self.detailRequests[n, default: 0] += 1
+        let counts = Self.detailRequests
+        DispatchQueue.main.async { TeaReviewMetrics.shared.counts = counts }
+        if ProcessInfo.processInfo.arguments.contains("--discussion-refresh-error"), Self.detailRequests[n] == 2 { return (503,["detail":"Fixture offline"]) }
+      }
+      Self.conversations[key] = post
+      return (200,post)
+    }
+    reply(result.0, result.1)
   }
 
   private func readBody() -> Data? {

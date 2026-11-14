@@ -1,5 +1,6 @@
 import { makeBusinessOrdering } from './business-ordering';
 import { teaPage, teaDetail, TeaInputError, TeaUnavailable } from './tea';
+import { mountTeaConversations } from './tea-conversations';
 import { runAccountCleanup } from './account-cleanup';
 import { reliabilityRolloutBlocks, reliabilityReleaseMode } from './reliability-rollout';
 import { chatOperationID, sameChatOperation, persistChatOperation } from './chat-idempotency';
@@ -20271,6 +20272,20 @@ async function handleTea(c: any, request: (viewer: string, deps: ReturnType<type
 
 const teaAuth = async (c: any, next: () => Promise<void>) =>
   c.req.header('Authorization') === undefined ? next() : authMiddleware(c, next);
+
+mountTeaConversations(api, {
+  auth: authMiddleware, optionalAuth: teaAuth,
+  viewer: async c => {
+    const id = getUserId(c);
+    if (!id) return '';
+    const row = await getSupabaseAppUserRowByAnyId(c, id);
+    if (!row || supabaseUserStatus(row) !== 'active') throw new Error('TEA_DISCUSSION_FORBIDDEN');
+    return row.id;
+  },
+  limit: (c, write) => enforceRateLimit(c, write ? 'tea_discussion_write' : 'tea_discussion_read', getUserId(c) || clientIp(c), write ? 20 : 120, 60),
+  restriction: (c, type) => enforceUserRestriction(c, getUserId(c), type),
+  rpc: supabaseAdminRpc,
+});
 
 api.get('/tea', teaAuth, c => handleTea(c, (viewer, deps) =>
   teaPage(deps, c.env.JWT_SECRET, viewer, { cursor: c.req.query('cursor'), city: c.req.query('city'),

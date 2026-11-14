@@ -161,6 +161,7 @@ public final class MIRAAPIClient {
     return try await self.getFresh(path)
   })
   @MainActor lazy var favorites = CaptroFavoritesStore(api: self)
+  @MainActor lazy var teaConversations = CaptroTeaConversationStore(api: self)
   @MainActor lazy var publications = CaptroPublicationStore()
   public static let productionSession: URLSession = {
     let configuration = URLSessionConfiguration.default
@@ -432,6 +433,7 @@ public final class MIRAAPIClient {
   private func request<T: Decodable>(_ path: String, method: String, body: Data?, freshRead: Bool = false) async throws -> T {
     let changesTea = method != "GET" && ["/posts", "/commerce", "/payments", "/business", "/users", "/favorites"].contains(where: path.hasPrefix)
     let discardsTea = method == "DELETE" || path.contains("/block") || path.hasPrefix("/auth") || path.contains("/privacy")
+    if discardsTea && method != "GET" { await teaConversations.invalidate() }
     if changesTea { await teaDetails.invalidate(discard: discardsTea) }
     let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
     let url = try makeURL(path)

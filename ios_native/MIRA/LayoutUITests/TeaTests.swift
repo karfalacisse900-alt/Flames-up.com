@@ -13,6 +13,7 @@ final class TeaTests: XCTestCase {
     let tea = app.buttons["home.menu.tea"]
     XCTAssertTrue(tea.waitForExistence(timeout: 8), app.debugDescription)
     tea.tap()
+    app.buttons["Clubs & Events"].tap()
     return app
   }
 

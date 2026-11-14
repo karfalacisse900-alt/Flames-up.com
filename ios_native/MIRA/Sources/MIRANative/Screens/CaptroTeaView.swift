@@ -85,7 +85,10 @@ struct CaptroTeaView: View {
   let close: () -> Void
 
   @State private var entries: [CaptroTeaEntry] = []
-  @State private var path: [CaptroTeaEntry] = []
+  @State private var path = NavigationPath()
+  @State private var section = "Conversations"
+  @State private var composing = false
+  @State private var created: CaptroTeaConversation?
   @State private var cursor: String?
   @State private var loading = false
   @State private var didLoad = false
@@ -93,6 +96,13 @@ struct CaptroTeaView: View {
 
   var body: some View {
     NavigationStack(path: $path) {
+      VStack(spacing: 0) {
+        Picker("Tea section", selection: $section) {
+          Text("Conversations").tag("Conversations")
+          Text("Clubs & Events").tag("Clubs & Events")
+        }.pickerStyle(.segmented).padding(.horizontal, 14).padding(.bottom, 8)
+          .accessibilityIdentifier("tea.sections")
+        ZStack {
       List {
         if entries.isEmpty {
           if loading || (!didLoad && error == nil) {
@@ -125,11 +135,28 @@ struct CaptroTeaView: View {
       .scrollContentBackground(.hidden)
       .background(MIRATheme.Color.appBackground)
       .accessibilityIdentifier("tea.list")
+      .refreshable { await load(reset: true) }
+      .opacity(section == "Clubs & Events" ? 1 : 0)
+      .allowsHitTesting(section == "Clubs & Events")
+      .accessibilityHidden(section != "Clubs & Events")
+      CaptroTeaConversationsList(api: api, active: section == "Conversations", created: created)
+        .opacity(section == "Conversations" ? 1 : 0)
+        .allowsHitTesting(section == "Conversations")
+        .accessibilityHidden(section != "Conversations")
+        }
+      }.background(MIRATheme.Color.appBackground)
       .navigationTitle("Tea")
       .miraNavigationSurface()
       .navigationBarTitleDisplayMode(.inline)
       .toolbar(.visible, for: .navigationBar)
       .toolbar {
+        if section == "Conversations" {
+          ToolbarItem(placement: .topBarTrailing) {
+            Button { if viewerID == nil { signIn() } else { composing = true } } label: {
+              Image(systemName: "pencil").frame(minWidth: 44, minHeight: 44)
+            }.accessibilityLabel("New Tea post").accessibilityIdentifier("tea.compose")
+          }
+        }
         ToolbarItem(placement: .topBarLeading) {
           Button(action: close) {
             Image(systemName: "chevron.backward").frame(minWidth: 44, minHeight: 44)
@@ -141,8 +168,13 @@ struct CaptroTeaView: View {
       .navigationDestination(for: CaptroTeaEntry.self) { entry in
         CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn)
       }
-      .refreshable { await load(reset: true) }
-      .task { if !didLoad { await load(reset: true) } }
+      .navigationDestination(for: CaptroTeaConversation.self) { post in
+        CaptroTeaConversationDetail(post: post, api: api, viewerID: viewerID, signIn: signIn)
+      }
+      .sheet(isPresented: $composing) {
+        CaptroTeaComposer(api: api) { post in created = post; path.append(post) }
+      }
+      .task(id: section) { if section == "Clubs & Events", !didLoad { await load(reset: true) } }
     }
   }
 
