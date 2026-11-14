@@ -31,6 +31,33 @@ final class CaptroTeaConversationTests: XCTestCase {
     let _: CaptroTeaConversation = try await api.post("/auth/refresh", body: RefreshFixture())
     XCTAssertNotNil(model.post, "Refreshing credentials must not blank a discussion")
     XCTAssertTrue(model.valid)
+    model.draft = "Do not send this while retrying a read"
+    model.nextCursor = "expired"
+    await model.loadReplies(reset: false)
+    XCTAssertNil(model.nextCursor); XCTAssertNotNil(model.replyError)
+    XCTAssertFalse(model.replySubmissionFailed)
+    await model.loadReplies(reset: true, force: true)
+    XCTAssertNil(model.replyError)
+    XCTAssertEqual(model.draft, "Do not send this while retrying a read")
+  }
+  @MainActor func testEditingOrFollowingDoesNotDiscardAnInFlightReplyRead() async throws {
+    TeaConversationProtocol.reset()
+    let started = expectation(description: "Reply read held")
+    TeaConversationProtocol.holdReplies(started)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [TeaConversationProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let api = MIRAAPIClient(session: session)
+    var seed = try JSONDecoder().decode(CaptroTeaConversation.self, from: TeaConversationProtocol.postData)
+    let model = api.teaConversations.model(for: seed)
+    let pending = Task { await model.loadReplies(reset: true) }
+    await fulfillment(of: [started], timeout: 3)
+    seed.following = true; model.updated(seed)
+    TeaConversationProtocol.releaseReplies()
+    await pending.value
+    XCTAssertEqual(model.replies.first?.body, "An existing reply")
+    XCTAssertEqual(model.post?.following, true)
   }
   @MainActor func testPresentationCacheKeepsDraftAndEvictsOnAccountSwitchOrInvalidation() {
     MIRALocalJSONCache.setAccountScope(userId: "tea-a")
@@ -77,17 +104,35 @@ final class CaptroTeaConversationTests: XCTestCase {
 }
 
 private final class TeaConversationProtocol: URLProtocol {
-  struct State { var detailReads = 0; var replyIDs: [String] = [] }
+  struct State {
+    var detailReads = 0; var replyIDs: [String] = []
+    var onRead: XCTestExpectation?; var held: TeaConversationProtocol?
+  }
   private static let lock = NSLock()
   private static var state = State()
   static let postData = Data(#"{"id":"post","title":"Server title","body":"Text","links":[],"author":{"id":"a","name":"Artist","username":"artist"},"createdAt":"2026-11-13T12:00:00Z","version":1,"isAuthor":false,"following":false}"#.utf8)
   static func reset() { lock.withLock { state = State() } }
   static func snapshot() -> State { lock.withLock { state } }
+  static func holdReplies(_ started: XCTestExpectation) { lock.withLock { state.onRead = started } }
+  static func releaseReplies() {
+    let held = lock.withLock { let value = state.held; state.held = nil; state.onRead = nil; return value }
+    held?.respond(200, Data(#"{"items":[{"id":"reply","body":"An existing reply","createdAt":"2026-11-13T12:00:00Z","author":{"id":"b","name":"Reader","username":"reader"}}]}"#.utf8))
+  }
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
     let isReply = request.url!.path.hasSuffix("/replies")
     let isWrite = request.httpMethod == "POST"
+    if isReply && !isWrite {
+      let started = Self.lock.withLock {
+        if Self.state.onRead != nil { Self.state.held = self }
+        return Self.state.onRead
+      }
+      if let started { started.fulfill(); return }
+      if request.url?.query == "cursor=expired" {
+        respond(400, Data(#"{"code":"TEA_DISCUSSION_INVALID","detail":"Refresh"}"#.utf8)); return
+      }
+    }
     var bodyData = request.httpBody ?? Data()
     if bodyData.isEmpty, let stream = request.httpBodyStream {
       stream.open(); defer { stream.close() }
@@ -110,7 +155,10 @@ private final class TeaConversationProtocol: URLProtocol {
     if isReply && isWrite {
       data = try! JSONSerialization.data(withJSONObject: ["id": body["request_id"] ?? "", "body": body["body"] ?? "", "createdAt": "2026-11-13T12:00:00Z", "author": ["id":"a", "name":"Artist", "username":"artist"]])
     } else { data = isReply ? Data(#"{"items":[]}"#.utf8) : Self.postData }
-    client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!, cacheStoragePolicy: .notAllowed)
+    respond(200, data)
+  }
+  private func respond(_ status: Int, _ data: Data) {
+    client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self)
   }
   override func stopLoading() {}

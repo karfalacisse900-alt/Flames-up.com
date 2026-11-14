@@ -79,6 +79,7 @@ struct CaptroTeaConversationsList: View {
       nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
     } catch is CancellationError {} catch {
       guard owner == api.presentationScope, revision == expectedRevision else { return }
+      if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }
       self.error = "Couldn’t load conversations. Try again."
     }
   }
@@ -198,7 +199,7 @@ private struct TeaConversationTime: View {
           VStack(alignment: .leading) {
             Text(error).font(.footnote).foregroundStyle(.secondary)
             Button("Retry") { Task {
-              if !model.draft.isEmpty { await model.sendReply() } else { await model.loadReplies(reset: model.nextCursor == nil, force: true) }
+              if model.replySubmissionFailed { await model.sendReply() } else { await model.loadReplies(reset: model.nextCursor == nil, force: true) }
             } }.frame(minHeight: 44).disabled(model.busy)
           }.listRowSeparator(.hidden)
         }

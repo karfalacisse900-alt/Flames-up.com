@@ -41,6 +41,7 @@ extension Notification.Name {
   @Published var busy = false
   @Published var draft = ""
   @Published private(set) var replyPending = false
+  @Published private(set) var replySubmissionFailed = false
   @Published var nextCursor: String?
   private unowned let api: MIRAAPIClient
   private let scope: String
@@ -53,13 +54,14 @@ extension Notification.Name {
   private var flightID: UUID?
   private var invalidated = false
   private var revision = 0
+  private var accessRevision = 0
 
   init(post: CaptroTeaConversation, api: MIRAAPIClient) {
     self.post = post; self.id = post.id; self.api = api; scope = api.presentationScope
   }
   var valid: Bool { !invalidated && scope == api.presentationScope }
   func clear() {
-    invalidated = true; revision += 1
+    invalidated = true; revision += 1; accessRevision += 1
     flight?.cancel(); flight = nil; flightID = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
     pendingReply = nil; replyPending = false; requestID = UUID().uuidString; nextCursor = nil
     error = "Refresh this post to check access."
@@ -93,21 +95,24 @@ extension Notification.Name {
   func loadReplies(reset: Bool, force: Bool = false) async {
     guard valid, post != nil, !loadingReplies, reset || nextCursor != nil else { return }
     if reset, !force, let replyLoadedAt, Date().timeIntervalSince(replyLoadedAt) < 30 { return }
-    loadingReplies = true; replyError = nil
-    let expectedRevision = revision
+    loadingReplies = true; replyError = nil; replySubmissionFailed = false
+    let expectedAccess = accessRevision
     defer { loadingReplies = false }
     do {
       var path = "/tea/conversations/\(id)/replies"
       if !reset, let nextCursor { path += "?cursor=" + nextCursor }
       let page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
-      guard valid, revision == expectedRevision, !Task.isCancelled else { return }
+      guard valid, accessRevision == expectedAccess, !Task.isCancelled else { return }
       var seen = Set(reset ? [] : replies.map(\.id))
       let unique = page.items.filter { seen.insert($0.id).inserted }
       replies = reset ? unique : replies + unique
       nextCursor = page.nextCursor; replyLoadedAt = Date()
     } catch {
-      guard valid, revision == expectedRevision, !Task.isCancelled else { return }
+      guard valid, accessRevision == expectedAccess, !Task.isCancelled else { return }
       if Self.denied(error) { post = nil; replies = []; self.error = "This post is no longer available." }
+      else if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error {
+        nextCursor = nil; replyLoadedAt = nil; replyError = "Refresh replies to continue."
+      }
       else { replyError = "Couldn’t load replies. Try again." }
     }
   }
@@ -127,17 +132,18 @@ extension Notification.Name {
     guard valid, !busy, post != nil, !body.isEmpty, body.count <= 4000 else { return }
     if pendingReply != body { requestID = UUID().uuidString; pendingReply = body }
     replyPending = true
-    let expectedRevision = revision
-    busy = true; replyError = nil; defer { busy = false }
+    let expectedAccess = accessRevision
+    busy = true; replyError = nil; replySubmissionFailed = false; defer { busy = false }
     struct Body: Encodable { let requestID, body: String }
     do {
       let reply: CaptroTeaReply = try await api.post("/tea/conversations/\(id)/replies", body: Body(requestID: requestID, body: body))
-      guard valid, revision == expectedRevision else { return }
+      guard valid, accessRevision == expectedAccess else { return }
       // When older replies are paged, do not insert out of chronological order.
       if nextCursor == nil, !replies.contains(where: { $0.id == reply.id }) { replies.append(reply) }
       draft = ""; pendingReply = nil; replyPending = false; replyLoadedAt = nil
     } catch {
-      guard valid else { return }
+      guard valid, accessRevision == expectedAccess else { return }
+      replySubmissionFailed = true
       if case MIRAAPIError.server(let status, _, let detail) = error, [400,403,404,409].contains(status) {
         pendingReply = nil; replyPending = false
         replyError = detail ?? "Couldn’t send this reply. Check the post and try again."
