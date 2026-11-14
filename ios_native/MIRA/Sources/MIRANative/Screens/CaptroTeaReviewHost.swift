@@ -8,6 +8,7 @@ struct CaptroTeaReviewHost: View {
   var body: some View {
     MIRANativeRootView(reviewSession: context.session, api: context.api)
       .environment(\.captroStartupReducedMotion, true)
+      .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
   }
 }
 

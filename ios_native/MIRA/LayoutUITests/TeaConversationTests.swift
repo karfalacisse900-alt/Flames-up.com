@@ -8,6 +8,7 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertTrue(app.buttons["home.feed.selector"].waitForExistence(timeout: 20))
     app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
     XCTAssertTrue(row(101, app).waitForExistence(timeout: 10))
+    XCTAssertTrue(app.navigationBars["Tea"].staticTexts["Tea"].waitForExistence(timeout: 5))
     return app
   }
   private func row(_ n: Int, _ app: XCUIApplication) -> XCUIElement {
@@ -92,6 +93,8 @@ final class TeaConversationTests: XCTestCase {
     let app=launch(["--captro-quality-large-text"])
     row(101,app).tap()
     XCTAssertTrue(app.buttons["tea.conversation.follow"].waitForExistence(timeout: 8))
+    XCTAssertGreaterThan(app.staticTexts["Which music video intro works better?"].frame.height, 44,
+      "The fixture must apply accessibility text size, not merely set a launch flag")
     for host in ["youtube.com","tiktok.com","example.com"] {
       let link=app.buttons["tea.link."+host]
       for _ in 0..<4 where !link.isHittable { app.swipeUp() }
