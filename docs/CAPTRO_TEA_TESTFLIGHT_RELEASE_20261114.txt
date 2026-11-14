@@ -1,0 +1,74 @@
+CAPTRO TEA CONVERSATIONS RELEASE — 14 November 2026
+
+This release follows the user's subsequent TestFlight-update authorization.
+It supersedes the no-deployment status of the implementation-only report.
+
+Production API
+Deployed source: 89ca332f6e47954f376aec366845468b8efa48f4
+Branch: release/tea-conversations-api-20261114
+Deployment run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43652503796
+Worker version: 0728d43a-5775-49e9-b1db-be4fa903d5b6
+Deployment time: 2026-11-14 23:18 UTC
+Actual previous deployed source: a8ac2a0fdad1d7c2afdb5f99bf8f9324fef62a6f
+Previous Worker version: 706f6576-d371-4832-b70b-a4e412a40e17
+
+The API release uses a separate worktree based on the actual deployed Worker.
+Only index.ts Tea registration/account-cleanup hooks and tea-conversations.ts
+change in runtime code. The native working branch includes unreleased business
+ordering routes: those routes were deliberately NOT deployed in this release.
+Worker configuration and package manifests are unchanged. The pre/post binding
+hash matches: 1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a.
+No payment variables, secrets, webhooks or financial code were changed.
+
+Database
+Applied additive migration: 20261114230954_tea_conversations.sql
+Project: cclgvxukwccvtgrbcwie
+New conversation/reply/follow tables enforce RLS with direct anon/authenticated
+access denied. All four Tea RPCs are invoker functions, service-role-only.
+No demo posts or customer-content changes were made for verification.
+
+Verification
+Scoped API: tsc --noEmit; npm test: 400 passed, 0 failed, 0 skipped.
+Full native feature branch before deployment: 407 backend tests passed.
+Production: 14 security checks, 5 reliability checks, 3 earnings checks passed.
+Tea-specific gate verifies three tables and four functions.
+GET /api/tea/conversations and existing GET /api/tea return typed pages.
+Anonymous POST /api/tea/conversations returns 401. Rechecked from the local
+client after CI. No production author/reply mutations were used as smoke tests.
+First scoped release attempt 43652278387 stopped before deployment because
+the gate expected HTTP 200 instead of accepting Supabase's successful 201.
+Corrected only the transport-success check; privilege assertions remain intact.
+
+Native delivery
+Release validation: 43651582908 SUCCESS: 257 unit, 9 main-device UI and
+4 small-device UI tests passed. Zero failures. Source attestation matches the
+native tree in the signed-build source.
+Native tree: 1fe62c7c7f5ca268e4c9336e999c0cb392a57295
+Prior exact native implementation verification: 43587599121 passed 257 unit,
+9 main-device UI and 4 small-device UI tests. See implementation report for
+screenshots and fixture limitations. Physical iPhone testing is not claimed.
+
+Recovery
+Prefer a forward fix for Tea API failures. Preserve the additive tables and
+authored conversations; never drop them as a rollback. Previous app builds
+retain the unchanged /tea listings. Reverting the Worker to its previous version
+would remove Conversations endpoints and break the new section, so it is not
+a transparent rollback after distributing the new app. Do not reset financial
+settings or restore earlier unsafe authorization policies for a Tea rollback.
+
+Release completion
+Build source: 0d24201ce4f94f883925ce0a7e5d0c7bb3cf9f46
+Build workflow: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43653899652
+Requested version: 1.0.1 (686.1)
+Upload completed successfully with no errors at 2026-11-14 23:50:49 UTC.
+Apple status verification: 43655481967, checked 2026-11-14 23:54 UTC.
+Processing: VALID. Expired: false. Internal state: IN_BETA_TESTING.
+Assigned existing internal groups: Captro private and Captro private2.
+Both groups have automatic distribution; automatic notifications are enabled.
+External state: READY_FOR_BETA_SUBMISSION. This release is available to existing
+internal testers; no external beta review submission or public App Store release
+was performed or claimed.
+No physical iPhone installation or capture/performance verification was performed.
+
+Compact release evidence:
+C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-tea-release-20261114/
