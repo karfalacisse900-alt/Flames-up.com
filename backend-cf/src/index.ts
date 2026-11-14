@@ -26419,6 +26419,9 @@ async function permanentlyDeleteSupabaseAccount(env: Env, row: any) {
     },
     async () => {
   const userScopedDeletes: Array<[string, Array<[string, string]>]> = [
+    ['app_tea_follows', [['user_id', userId]]],
+    ['app_tea_replies', [['author_id', userId]]],
+    ['app_tea_conversations', [['author_id', userId]]],
     ['app_push_tokens', [['user_id', userId]]],
     ['app_notifications', [['user_id', userId], ['from_user_id', userId]]],
     ['app_post_interactions', [['app_user_id', userId], ['user_id', authUserId || userId]]],

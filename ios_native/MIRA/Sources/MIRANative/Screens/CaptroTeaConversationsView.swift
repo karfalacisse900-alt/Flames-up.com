@@ -46,6 +46,12 @@ struct CaptroTeaConversationsList: View {
       guard let post, scope == api.presentationScope else { return }
       items.removeAll { $0.id == post.id }; items.insert(post, at: 0)
     }
+    .onReceive(NotificationCenter.default.publisher(for: .captroTeaConversationChanged)) { notification in
+      guard notification.userInfo?["scope"] as? String == scope, scope == api.presentationScope,
+            let post = notification.object as? CaptroTeaConversation,
+            let index = items.firstIndex(where: { $0.id == post.id }) else { return }
+      items[index] = post
+    }
   }
 
   @MainActor private func load(reset: Bool, force: Bool = false) async {
@@ -211,6 +217,7 @@ private struct TeaConversationTime: View {
             if viewerID == nil { Button("Sign in to reply", action: signIn).frame(maxWidth: .infinity, minHeight: 44) }
             else {
               TextField("Write a reply…", text: $model.draft, axis: .vertical).lineLimit(1...5)
+                .disabled(model.busy || model.replyPending)
                 .font(.body).padding(10).background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(MIRATheme.Color.divider))
                 .accessibilityIdentifier("tea.reply.input")
@@ -296,6 +303,7 @@ struct CaptroTeaComposer: View {
   var body: some View {
     NavigationStack {
       Form {
+        Group {
         TextField("Title", text: $title, axis: .vertical).accessibilityIdentifier("tea.compose.title")
         TextField("Start a discussion…", text: $bodyText, axis: .vertical).lineLimit(5...14).accessibilityIdentifier("tea.compose.body")
         Section {
@@ -309,13 +317,14 @@ struct CaptroTeaComposer: View {
           }
           if links.count < 3 { Button("Add link") { links.append("") }.frame(minHeight: 44) }
         } footer: { Text("Optional. Up to three HTTPS links. Only you can edit the links on your post.") }
+        }.disabled(saving || submitted != nil)
         if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
       }.disabled(saving).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
         .navigationTitle(editing == nil ? "New Tea post" : "Edit post").navigationBarTitleDisplayMode(.inline).miraNavigationSurface()
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
           ToolbarItem(placement: .confirmationAction) {
-            Button(saving ? "Saving…" : editing == nil ? "Post" : "Save") { Task { await save() } }
+            Button(saving ? "Saving…" : submitted != nil ? "Retry" : editing == nil ? "Post" : "Save") { Task { await save() } }
               .disabled(!valid || saving).accessibilityIdentifier("tea.compose.save")
           }
         }.interactiveDismissDisabled(saving)
@@ -338,7 +347,13 @@ struct CaptroTeaComposer: View {
       saved(result); dismiss()
     } catch {
       guard owner == api.presentationScope else { return }
-      self.error = "Post wasn’t confirmed. Try again to check or save it. Your draft is still here."
+      switch error {
+      case MIRAAPIError.server(let status, _, let message) where [400,403,404,409].contains(status):
+        submitted = nil
+        self.error = message ?? "Couldn’t save this post. Check the details and try again."
+      default:
+        self.error = "Post wasn’t confirmed. Retry checks the same post before making changes. Your draft is still here."
+      }
     }
   }
 }

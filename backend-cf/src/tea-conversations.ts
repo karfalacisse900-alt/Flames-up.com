@@ -20,8 +20,8 @@ export function discussionLinks(value: unknown): string[] {
 
 export function discussionInput(action: string, value: any) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new DiscussionInputError('Invalid post.');
-  const allowed = action === 'create' ? ['requestID','title','body','links'] : action === 'edit'
-    ? ['title','body','links','version'] : action === 'reply' ? ['requestID','body'] : ['following'];
+  const allowed = action === 'create' ? ['request_id','title','body','links'] : action === 'edit'
+    ? ['title','body','links','version'] : action === 'reply' ? ['request_id','body'] : ['following'];
   if (Object.keys(value).some(k => !allowed.includes(k))) throw new DiscussionInputError('Unsupported field.');
   const text = (key: string, max: number) => {
     if (typeof value[key] !== 'string' || !value[key].trim() || [...value[key]].length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value[key])) throw new DiscussionInputError('Check the ' + key + '.');
@@ -32,12 +32,12 @@ export function discussionInput(action: string, value: any) {
     return { following: value.following };
   }
   if (action === 'create' || action === 'reply') {
-    if (typeof value.requestID !== 'string' || !uuid.test(value.requestID)) throw new DiscussionInputError('Invalid request identity.');
+    if (typeof value.request_id !== 'string' || !uuid.test(value.request_id)) throw new DiscussionInputError('Invalid request identity.');
   }
-  if (action === 'reply') return { requestID: value.requestID, body: text('body', 4000) };
+  if (action === 'reply') return { requestID: value.request_id, body: text('body', 4000) };
   if (action === 'edit' && (!Number.isSafeInteger(value.version) || value.version < 1)) throw new DiscussionInputError('Refresh this post before editing.');
   return { title: text('title', 160), body: text('body', 8000), links: discussionLinks(value.links),
-    ...(action === 'create' ? { requestID: value.requestID } : { version: value.version }) };
+    ...(action === 'create' ? { requestID: value.request_id } : { version: value.version }) };
 }
 
 type Dependencies = {

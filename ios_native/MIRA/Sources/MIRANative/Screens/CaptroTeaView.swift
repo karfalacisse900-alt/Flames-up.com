@@ -140,6 +140,7 @@ struct CaptroTeaView: View {
       .allowsHitTesting(section == "Clubs & Events")
       .accessibilityHidden(section != "Clubs & Events")
       CaptroTeaConversationsList(api: api, active: section == "Conversations", created: created)
+        .id(api.presentationScope)
         .opacity(section == "Conversations" ? 1 : 0)
         .allowsHitTesting(section == "Conversations")
         .accessibilityHidden(section != "Conversations")
@@ -175,6 +176,10 @@ struct CaptroTeaView: View {
         CaptroTeaComposer(api: api) { post in created = post; path.append(post) }
       }
       .task(id: section) { if section == "Clubs & Events", !didLoad { await load(reset: true) } }
+      .onChange(of: viewerID) { _, _ in
+        path = NavigationPath(); entries = []; cursor = nil; didLoad = false; created = nil; composing = false
+        api.teaConversations.invalidate()
+      }
     }
   }
 

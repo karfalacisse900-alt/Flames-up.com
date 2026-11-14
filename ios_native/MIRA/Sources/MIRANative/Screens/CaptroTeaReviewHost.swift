@@ -197,14 +197,14 @@ private final class TeaReviewProtocol: URLProtocol {
         for n in 101...104 {
           let links: [String] = n == 101 ? ["https://www.youtube.com/watch?v=fixture", "https://www.tiktok.com/@fixture", "https://example.com/intro?tracking=hidden"] : n == 103 ? ["https://example.com/one"] : []
           Self.conversations[id(n)] = ["id": id(n), "title": n == 101 ? "Which music video intro works better?" : n == 102 ? "Where do you find creative inspiration?" : n == 103 ? "A useful website" : "My next project",
-            "body": "I’m trying two openings for a new music video. What holds your attention, and why?", "links": links,
+            "body": "Iâ€™m trying two openings for a new music video. What holds your attention, and why?", "links": links,
             "createdAt": ISO8601DateFormatter().string(from: Date().addingTimeInterval(-1800)), "version": 1,
             "author": ["id": n == 104 ? "tea-viewer" : "artist", "name": n == 104 ? "Tea Fixture" : "Alex", "username": n == 104 ? "tea_fixture" : "alex"],
             "isAuthor": n == 104, "following": false]
         }
       }
       if path == "/tea/conversations" {
-        if method == "POST", let key = body["requestID"] as? String {
+        if method == "POST", let key = body["request_id"] as? String {
           var post = Self.conversations[id(104)]!
           post["id"] = key; post["title"] = body["title"]; post["body"] = body["body"]; post["links"] = body["links"]
           Self.conversations[key] = post; return (200, post)
@@ -215,7 +215,7 @@ private final class TeaReviewProtocol: URLProtocol {
       guard parts.count >= 3, var post = Self.conversations[String(parts[2])] else { return (404, ["detail":"Unavailable"]) }
       let key = String(parts[2])
       if parts.last == "replies" {
-        if method == "POST", let replyID = body["requestID"] as? String {
+        if method == "POST", let replyID = body["request_id"] as? String {
           let reply: [String: Any] = ["id":replyID,"body":body["body"] ?? "", "createdAt":ISO8601DateFormatter().string(from: Date()),
             "author":["id":"tea-viewer","name":"Tea Fixture","username":"tea_fixture"]]
           if !(Self.discussionReplies[key] ?? []).contains(where: { $0["id"] as? String == replyID }) { Self.discussionReplies[key, default: []].append(reply) }

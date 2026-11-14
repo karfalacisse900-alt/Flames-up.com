@@ -1,9 +1,13 @@
 import Foundation
 
+extension Notification.Name {
+  static let captroTeaConversationChanged = Notification.Name("captro.tea.conversation.changed")
+}
+
 /// Presentation state owned by the existing API client. Nothing is stored in a
 /// global or disk cache, and the auth/session generation is checked after awaits.
 @MainActor final class CaptroTeaConversationStore {
-  private let api: MIRAAPIClient
+  private unowned let api: MIRAAPIClient
   private var scope = ""
   private var models: [String: CaptroTeaConversationModel] = [:]
   private var order: [String] = []
@@ -31,8 +35,9 @@ import Foundation
   @Published var loadingReplies = false
   @Published var busy = false
   @Published var draft = ""
+  @Published private(set) var replyPending = false
   @Published var nextCursor: String?
-  private let api: MIRAAPIClient
+  private unowned let api: MIRAAPIClient
   private let scope: String
   let id: String
   private var loadedAt: Date?
@@ -40,29 +45,33 @@ import Foundation
   private var requestID = UUID().uuidString
   private var pendingReply: String?
   private var flight: Task<Void, Never>?
+  private var invalidated = false
+  private var revision = 0
 
   init(post: CaptroTeaConversation, api: MIRAAPIClient) {
     self.post = post; self.id = post.id; self.api = api; scope = api.presentationScope
   }
-  var valid: Bool { scope == api.presentationScope }
+  var valid: Bool { !invalidated && scope == api.presentationScope }
   func clear() {
+    invalidated = true; revision += 1
     flight?.cancel(); flight = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
   }
   func load(force: Bool = false) async {
     guard valid else { clear(); return }
     if let flight { await flight.value; return }
     if !force, let loadedAt, Date().timeIntervalSince(loadedAt) < 30 { return }
+    let expectedRevision = revision
     let task = Task { [weak self] in
       guard let self else { return }
       loading = true; error = nil
       defer { loading = false }
       do {
         let result: CaptroTeaConversation = try await api.getFresh("/tea/conversations/" + id)
-        guard valid, !Task.isCancelled else { return }
+        guard valid, revision == expectedRevision, !Task.isCancelled else { return }
         guard result.id == id else { throw MIRAAPIError.decodingFailed }
         post = result; loadedAt = Date()
       } catch {
-        guard valid, !Task.isCancelled else { return }
+        guard valid, revision == expectedRevision, !Task.isCancelled else { return }
         if Self.denied(error) { post = nil; replies = []; draft = ""; self.error = "This post is no longer available." }
         else { self.error = "Couldn’t refresh this post. Try again." }
       }
@@ -97,13 +106,14 @@ import Foundation
     do {
       let updated: CaptroTeaConversation = try await api.put("/tea/conversations/\(id)/follow", body: Body(following: !post.following))
       guard valid, updated.id == id else { return }
-      self.post = updated; loadedAt = Date()
+      self.updated(updated)
     } catch { if valid { self.error = "Couldn’t update Follow. Try again."; loadedAt = nil } }
   }
   func sendReply() async {
-    let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let body = pendingReply ?? draft.trimmingCharacters(in: .whitespacesAndNewlines)
     guard valid, !busy, post != nil, !body.isEmpty, body.count <= 4000 else { return }
     if pendingReply != body { requestID = UUID().uuidString; pendingReply = body }
+    replyPending = true
     busy = true; replyError = nil; defer { busy = false }
     struct Body: Encodable { let requestID, body: String }
     do {
@@ -111,12 +121,19 @@ import Foundation
       guard valid else { return }
       // When older replies are paged, do not insert out of chronological order.
       if nextCursor == nil, !replies.contains(where: { $0.id == reply.id }) { replies.append(reply) }
-      draft = ""; pendingReply = nil; replyLoadedAt = nil
-    } catch { if valid { replyError = "Reply wasn’t confirmed. Retry to check or send it." } }
+      draft = ""; pendingReply = nil; replyPending = false; replyLoadedAt = nil
+    } catch {
+      guard valid else { return }
+      if case MIRAAPIError.server(let status, _, let detail) = error, [400,403,404,409].contains(status) {
+        pendingReply = nil; replyPending = false
+        replyError = detail ?? "Couldn’t send this reply. Check the post and try again."
+      } else { replyError = "Reply wasn’t confirmed. Retry to check or send the same reply." }
+    }
   }
   func updated(_ result: CaptroTeaConversation) {
     guard valid, result.id == id else { return }
-    post = result; loadedAt = Date()
+    revision += 1; post = result; loadedAt = Date()
+    NotificationCenter.default.post(name: .captroTeaConversationChanged, object: result, userInfo: ["scope": scope])
   }
   private static func denied(_ error: Error) -> Bool {
     switch error {

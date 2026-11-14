@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import { discussionLinks, discussionInput, mountTeaConversations } from '../src/tea-conversations.ts';
 
 const id = n => '00000000-0000-4000-8000-' + String(n).padStart(12,'0');
-const draft = (extra={}) => ({requestID:id(1),title:'Which intro works?',body:'Tell me what you think.',links:[],...extra});
+const draft = (extra={}) => ({request_id:id(1),title:'Which intro works?',body:'Tell me what you think.',links:[],...extra});
 test('links are bounded HTTPS destinations, preserve queries and reject ambiguous or forged payloads',()=>{
   assert.deepEqual(discussionLinks(['https://youtube.com/watch?v=a&token=private','https://example.com/a']),['https://youtube.com/watch?v=a&token=private','https://example.com/a']);
   assert.deepEqual(discussionLinks(['https://youtube.com/a','https://youtube.com/a']),['https://youtube.com/a']);
@@ -54,6 +54,16 @@ test('persisted post/reply/follow lifecycle, ownership, stale edits and duplicat
     for(const table of ['app_tea_conversations','app_tea_replies','app_tea_follows']) await assert.rejects(db.query('select * from '+table),/permission denied/);
     await assert.rejects(read('a','detail',id(1)),/permission denied/);
     await assert.rejects(write('a','edit',id(1),draft({version:2})),/permission denied/);
+    await db.exec('reset role; set role service_role');
+    assert.equal((await read('a','detail',id(1))).id,id(1));
+    await write('b','follow',id(1),{following:true});
+    await db.exec("update app_users set full_name=null,username=null where id='a'");
+    assert.equal((await read('b','detail',id(1))).author.name,'Captro member');
+    // The existing durable account cleanup can remove this new content without
+    // leaving child foreign keys or retaining another user's private reply text.
+    await db.query('delete from app_tea_conversations where author_id=$1',['a']);
+    assert.equal((await db.query('select count(*)::int n from app_tea_replies')).rows[0].n,0);
+    assert.equal((await db.query('select count(*)::int n from app_tea_follows')).rows[0].n,0);
   } finally {await db.close();}
 });
 
@@ -92,7 +102,12 @@ test('real HTTP routes enforce auth, restrictions, canonical actor, HTTPS valida
     assert.equal((await request('/tea/conversations','POST',draft(),false)).status,401);
     assert.equal((await request('/tea/conversations','POST',draft({links:['http://example.com']}))).status,400);
     restricted=true;assert.equal((await request('/tea/conversations','POST',draft())).status,403);restricted=false;
-    for(let n=1;n<=23;n++) assert.equal((await request('/tea/conversations','POST',draft({requestID:id(n)}))).status,200);
+    for(let n=1;n<=23;n++) assert.equal((await request('/tea/conversations','POST',draft({request_id:id(n)}))).status,200);
+    const nativeReply={request_id:id(1000),body:'A reply encoded by the native snake-case contract.'};
+    const replyPath='/tea/conversations/'+id(1)+'/replies';
+    assert.equal((await request(replyPath,'POST',nativeReply)).status,200);
+    assert.equal((await request(replyPath,'POST',nativeReply)).status,200);
+    assert.equal((await (await request(replyPath)).json()).items.length,1);
     const page=await (await request('/tea/conversations')).json();assert.equal(page.items.length,20);assert.ok(page.nextCursor);
     assert.equal((await request('/tea/conversations?cursor='+page.nextCursor,'GET',null,false)).status,400);
     assert.equal((await request('/tea/conversations/'+id(1)+'/replies?cursor='+page.nextCursor)).status,400);

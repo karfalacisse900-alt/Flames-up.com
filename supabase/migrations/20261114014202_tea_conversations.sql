@@ -14,7 +14,7 @@ create table public.app_tea_conversations (
 create index app_tea_conversations_page on public.app_tea_conversations(created_at desc,id desc) where status='active';
 create table public.app_tea_replies (
   id uuid primary key,
-  conversation_id uuid not null references public.app_tea_conversations(id),
+  conversation_id uuid not null references public.app_tea_conversations(id) on delete cascade,
   author_id text not null references public.app_users(id),
   body text not null check(length(btrim(body)) between 1 and 4000),
   status text not null default 'active' check(status in ('active','removed')),
@@ -22,7 +22,7 @@ create table public.app_tea_replies (
 );
 create index app_tea_replies_page on public.app_tea_replies(conversation_id,created_at,id) where status='active';
 create table public.app_tea_follows (
-  conversation_id uuid not null references public.app_tea_conversations(id),
+  conversation_id uuid not null references public.app_tea_conversations(id) on delete cascade,
   user_id text not null references public.app_users(id),
   created_at timestamptz not null default now(),
   primary key(conversation_id,user_id)
@@ -47,7 +47,7 @@ $$;
 create function public.captro_tea_post_json(p public.app_tea_conversations,p_viewer text) returns jsonb
 language sql stable security invoker set search_path='' as $$
  select jsonb_build_object('id',p.id,'title',p.title,'body',p.body,'links',p.links,'version',p.version,
-   'createdAt',p.created_at,'author',jsonb_build_object('id',u.id,'name',coalesce(nullif(u.full_name,''),u.username),'username',u.username),
+   'createdAt',p.created_at,'author',jsonb_build_object('id',u.id,'name',coalesce(nullif(u.full_name,''),nullif(u.username,''),'Captro member'),'username',coalesce(u.username,'')),
    'isAuthor',u.id=p_viewer,'following',exists(select 1 from public.app_tea_follows f where f.conversation_id=p.id and f.user_id=p_viewer))
  from public.app_users u where u.id=p.author_id
 $$;
@@ -71,7 +71,7 @@ begin
  if p_kind<>'replies' then raise exception 'TEA_DISCUSSION_INVALID'; end if;
  select coalesce(jsonb_agg(q.value order by q.created_at,q.id),'[]') into result from (
    select r.created_at,r.id,jsonb_build_object('id',r.id,'body',r.body,'createdAt',r.created_at,
-     'author',jsonb_build_object('id',u.id,'name',coalesce(nullif(u.full_name,''),u.username),'username',u.username)) value
+     'author',jsonb_build_object('id',u.id,'name',coalesce(nullif(u.full_name,''),nullif(u.username,''),'Captro member'),'username',coalesce(u.username,''))) value
    from public.app_tea_replies r join public.app_users u on u.id=r.author_id
    where r.conversation_id=p_id and r.status='active' and r.created_at<=p_snapshot
      and (p_before is null or (r.created_at,r.id)>(p_before,p_boundary))
@@ -110,7 +110,7 @@ begin
    select * into existing_reply from public.app_tea_replies where id=(p_data->>'requestID')::uuid;
    if existing_reply.author_id<>p_actor or existing_reply.conversation_id<>p_id or existing_reply.body<>p_data->>'body' then raise exception 'TEA_DISCUSSION_CONFLICT'; end if;
    return jsonb_build_object('id',existing_reply.id,'body',existing_reply.body,'createdAt',existing_reply.created_at,
-     'author',jsonb_build_object('id',actor.id,'name',coalesce(nullif(actor.full_name,''),actor.username),'username',actor.username));
+     'author',jsonb_build_object('id',actor.id,'name',coalesce(nullif(actor.full_name,''),nullif(actor.username,''),'Captro member'),'username',coalesce(actor.username,'')));
  elsif p_action='follow' then
    if (p_data->>'following')::boolean then
      insert into public.app_tea_follows(conversation_id,user_id) values(p_id,p_actor) on conflict do nothing;
