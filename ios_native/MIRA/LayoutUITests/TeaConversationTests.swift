@@ -33,7 +33,7 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertFalse(app.navigationBars["Conversation"].exists)
     XCTAssertFalse(app.buttons["tea.conversation.edit"].exists)
     for host in ["youtube.com","tiktok.com","example.com"] {
-      let link = app.buttons["tea.link." + host]; XCTAssertTrue(link.isHittable); XCTAssertGreaterThanOrEqual(link.frame.height,44)
+      let link = app.buttons["tea.link." + host]; XCTAssertTrue(link.isHittable); XCTAssertGreaterThanOrEqual(link.frame.height + 0.000001,44)
     }
     XCTAssertFalse(app.staticTexts["Links"].exists)
     XCTAssertFalse(app.staticTexts["Author update"].exists)
@@ -76,12 +76,18 @@ final class TeaConversationTests: XCTestCase {
   }
 
   func testBrowserReturnPreservesDiscussionAndGeometry() {
+    // Initialize the simulator's browser separately from the measured link tap.
+    // A cold Safari process can otherwise spend the test interval starting up.
+    let safari=XCUIApplication(bundleIdentifier:"com.apple.mobilesafari")
+    safari.launch()
+    XCTAssertTrue(safari.wait(for:.runningForeground,timeout:10))
     let app=launch()
     row(103,app).tap()
     let link=app.buttons["tea.link.example.com"]
     XCTAssertTrue(link.waitForExistence(timeout: 8)); let original=link.frame.minY
+    XCTAssertNotEqual(safari.state, .runningForeground)
+    XCTAssertTrue(link.isHittable)
     link.tap()
-    let safari=XCUIApplication(bundleIdentifier:"com.apple.mobilesafari")
     XCTAssertTrue(safari.wait(for:.runningForeground,timeout:10))
     app.activate()
     XCTAssertTrue(link.waitForExistence(timeout: 8)); XCTAssertEqual(link.frame.minY,original,accuracy:2)
@@ -98,7 +104,8 @@ final class TeaConversationTests: XCTestCase {
     for host in ["youtube.com","tiktok.com","example.com"] {
       let link=app.buttons["tea.link."+host]
       for _ in 0..<4 where !link.isHittable { app.swipeUp() }
-      XCTAssertTrue(link.isHittable); XCTAssertGreaterThanOrEqual(link.frame.height,44)
+      // CGRect subtraction can represent 44 as 43.99999999999994.
+      XCTAssertTrue(link.isHittable); XCTAssertGreaterThanOrEqual(link.frame.height + 0.000001,44)
       XCTAssertLessThanOrEqual(link.frame.maxX,app.frame.maxX)
     }
     XCTAssertTrue(input("tea.reply.input",app).isHittable)
