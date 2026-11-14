@@ -13,8 +13,20 @@ final class TeaTests: XCTestCase {
     let tea = app.buttons["home.menu.tea"]
     XCTAssertTrue(tea.waitForExistence(timeout: 8), app.debugDescription)
     tea.tap()
-    app.buttons["Clubs & Events"].tap()
+    selectListings(app)
     return app
+  }
+
+  private func selectListings(_ app: XCUIApplication) {
+    // Do not tap coordinates captured while the full-screen cover is entering.
+    let title = app.navigationBars["Tea"].staticTexts["Tea"]
+    XCTAssertTrue(title.waitForExistence(timeout: 8), app.debugDescription)
+    let section = app.buttons["Clubs & Events"]
+    let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: section)
+    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 8), .completed)
+    section.tap()
+    let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: section)
+    XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 8), .completed, app.debugDescription)
   }
 
   private func row(_ number: Int, source: String = "activity", in app: XCUIApplication) -> XCUIElement {
@@ -142,7 +154,7 @@ final class TeaTests: XCTestCase {
     XCTAssertEqual(app.buttons["tea.primary-action"].label, "Buy Ticket")
     back(app); app.buttons["tea.back.home"].tap()
     app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
-    app.buttons["Clubs & Events"].tap()
+    selectListings(app)
     tapRow(3, in: app)
     XCTAssertTrue(app.buttons["tea.primary-action"].waitForExistence(timeout: 3))
     XCTAssertFalse(app.staticTexts["Loading details"].exists)

@@ -183,6 +183,14 @@ struct CaptroTeaView: View {
         api.teaConversations.invalidate()
       }
     }
+    #if DEBUG
+    // Tea is a full-screen presentation: inject the isolated fixture size here,
+    // since the presenting Home host's override is not inherited on every OS.
+    .transformEnvironment(\.dynamicTypeSize) { size in
+      if ProcessInfo.processInfo.arguments.contains("--captro-tea-review"),
+         ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") { size = .accessibility2 }
+    }
+    #endif
   }
 
   private func listRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
