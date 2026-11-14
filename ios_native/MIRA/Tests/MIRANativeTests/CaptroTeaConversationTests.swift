@@ -27,6 +27,10 @@ final class CaptroTeaConversationTests: XCTestCase {
     XCTAssertEqual(sent.first, sent.last)
     XCTAssertEqual(model.replies.count, 1); XCTAssertFalse(model.replyPending)
     XCTAssertEqual(model.draft, "")
+    struct RefreshFixture: Encodable { let refreshToken = "isolated-fixture" }
+    let _: CaptroTeaConversation = try await api.post("/auth/refresh", body: RefreshFixture())
+    XCTAssertNotNil(model.post, "Refreshing credentials must not blank a discussion")
+    XCTAssertTrue(model.valid)
   }
   @MainActor func testPresentationCacheKeepsDraftAndEvictsOnAccountSwitchOrInvalidation() {
     MIRALocalJSONCache.setAccountScope(userId: "tea-a")

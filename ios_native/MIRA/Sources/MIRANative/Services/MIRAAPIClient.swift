@@ -433,7 +433,10 @@ public final class MIRAAPIClient {
   private func request<T: Decodable>(_ path: String, method: String, body: Data?, freshRead: Bool = false) async throws -> T {
     let changesTea = method != "GET" && ["/posts", "/commerce", "/payments", "/business", "/users", "/favorites"].contains(where: path.hasPrefix)
     let discardsTea = method == "DELETE" || path.contains("/block") || path.hasPrefix("/auth") || path.contains("/privacy")
-    if discardsTea && method != "GET" { await teaConversations.invalidate() }
+    // Ordinary token refresh must not clear an open discussion. Identity changes
+    // are already isolated by presentationScope/sessionGeneration.
+    let discardsConversations = discardsTea && method != "GET" && !path.hasPrefix("/auth")
+    if discardsConversations { await teaConversations.invalidate() }
     if changesTea { await teaDetails.invalidate(discard: discardsTea) }
     let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
     let url = try makeURL(path)
@@ -470,14 +473,14 @@ public final class MIRAAPIClient {
     }
     } catch {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
-      if discardsTea && method != "GET" { await teaConversations.invalidate() }
+      if discardsConversations { await teaConversations.invalidate() }
       throw error
     }
     try await validateSessionGeneration(generation)
 
     do {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
-      if discardsTea && method != "GET" { await teaConversations.invalidate() }
+      if discardsConversations { await teaConversations.invalidate() }
       return try decoder.decode(T.self, from: data)
     } catch {
       // Log the failing field/type, never the response body (which may contain secrets).
