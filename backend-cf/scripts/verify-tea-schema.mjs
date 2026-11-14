@@ -13,6 +13,6 @@ select p.proname,not p.prosecdef and has_function_privilege('service_role',p.oid
 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
 and p.proname in ('captro_tea_read','captro_tea_write','captro_tea_author_visible','captro_tea_post_json');`;
 const r=await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({query,read_only:true}),signal:AbortSignal.timeout(20000)});
-assert.equal(r.status,200,'Tea schema inspection failed');const rows=await r.json();
+assert.ok(r.ok,'Tea schema inspection failed');const rows=await r.json();
 assert.equal(rows.length,7);assert.ok(rows.every(r=>r.passed===true));
 console.log('PASS: Tea tables enforce RLS and all Tea tables/functions are service-role-only.');
