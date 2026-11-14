@@ -470,12 +470,14 @@ public final class MIRAAPIClient {
     }
     } catch {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
+      if discardsTea && method != "GET" { await teaConversations.invalidate() }
       throw error
     }
     try await validateSessionGeneration(generation)
 
     do {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
+      if discardsTea && method != "GET" { await teaConversations.invalidate() }
       return try decoder.decode(T.self, from: data)
     } catch {
       // Log the failing field/type, never the response body (which may contain secrets).

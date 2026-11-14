@@ -12,6 +12,7 @@ struct CaptroTeaConversationsList: View {
   @State private var error: String?
   @State private var scope = ""
   @State private var receivedAt: Date?
+  @State private var revision = 0
   @Environment(\.scenePhase) private var scenePhase
 
   var body: some View {
@@ -41,6 +42,7 @@ struct CaptroTeaConversationsList: View {
     .accessibilityIdentifier("tea.conversations.list")
     .refreshable { await load(reset: true, force: true) }
     .task(id: active) { if active { await load(reset: true) } }
+    .onAppear { if active { Task { await load(reset: true) } } }
     .onChange(of: scenePhase) { _, phase in if phase == .active, active { Task { await load(reset: true) } } }
     .onChange(of: created) { _, post in
       guard let post, scope == api.presentationScope else { return }
@@ -52,6 +54,11 @@ struct CaptroTeaConversationsList: View {
             let index = items.firstIndex(where: { $0.id == post.id }) else { return }
       items[index] = post
     }
+    .onReceive(NotificationCenter.default.publisher(for: .captroTeaAccessChanged)) { _ in
+      revision += 1
+      items = []; nextCursor = nil; receivedAt = nil
+      error = "Refresh to see available conversations."
+    }
   }
 
   @MainActor private func load(reset: Bool, force: Bool = false) async {
@@ -59,17 +66,18 @@ struct CaptroTeaConversationsList: View {
     if scope != api.presentationScope { items = []; nextCursor = nil; receivedAt = nil; loaded = false; scope = api.presentationScope }
     if reset, !force, let receivedAt, Date().timeIntervalSince(receivedAt) < 30 { return }
     let owner = scope
+    let expectedRevision = revision
     loading = true; error = nil; defer { loading = false }
     do {
       let path = "/tea/conversations" + (!reset && nextCursor != nil ? "?cursor=" + nextCursor! : "")
       let page: CaptroTeaConversationPage<CaptroTeaConversation> = try await api.getFresh(path)
-      guard owner == api.presentationScope, !Task.isCancelled else { return }
+      guard owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled else { return }
       var seen = Set(reset ? [] : items.map(\.id))
       let unique = page.items.filter { seen.insert($0.id).inserted }
       items = reset ? unique : items + unique
       nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
     } catch is CancellationError {} catch {
-      guard owner == api.presentationScope else { return }
+      guard owner == api.presentationScope, revision == expectedRevision else { return }
       self.error = "Couldn’t load conversations. Try again."
     }
   }
@@ -194,6 +202,9 @@ private struct TeaConversationTime: View {
           Text(error).font(.subheadline).foregroundStyle(.secondary)
           Button("Retry") { Task { await model.load(force: true) } }.frame(minHeight: 44)
         }.listRowSeparator(.hidden).listRowBackground(Color.clear)
+      }
+      if model.loading, model.post == nil {
+        ProgressView("Loading post").listRowSeparator(.hidden).listRowBackground(Color.clear)
       }
     }.listStyle(.plain).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
       .navigationTitle("").navigationBarTitleDisplayMode(.inline).miraNavigationSurface()

@@ -2,6 +2,7 @@ import Foundation
 
 extension Notification.Name {
   static let captroTeaConversationChanged = Notification.Name("captro.tea.conversation.changed")
+  static let captroTeaAccessChanged = Notification.Name("captro.tea.access.changed")
 }
 
 /// Presentation state owned by the existing API client. Nothing is stored in a
@@ -13,7 +14,10 @@ extension Notification.Name {
   private var order: [String] = []
   init(api: MIRAAPIClient) { self.api = api }
   func model(for post: CaptroTeaConversation) -> CaptroTeaConversationModel {
-    if scope != api.presentationScope { invalidate(); scope = api.presentationScope }
+    if scope != api.presentationScope {
+      if !scope.isEmpty { invalidate() }
+      scope = api.presentationScope
+    }
     if let model = models[post.id] { return model }
     let model = CaptroTeaConversationModel(post: post, api: api)
     models[post.id] = model; order.append(post.id)
@@ -23,6 +27,7 @@ extension Notification.Name {
   func invalidate() {
     for model in models.values { model.clear() }
     models.removeAll(); order.removeAll()
+    NotificationCenter.default.post(name: .captroTeaAccessChanged, object: nil)
   }
 }
 
@@ -55,9 +60,12 @@ extension Notification.Name {
   func clear() {
     invalidated = true; revision += 1
     flight?.cancel(); flight = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
+    pendingReply = nil; replyPending = false; requestID = UUID().uuidString; nextCursor = nil
+    error = "Refresh this post to check access."
   }
   func load(force: Bool = false) async {
-    guard valid else { clear(); return }
+    guard scope == api.presentationScope else { clear(); return }
+    invalidated = false
     if let flight { await flight.value; return }
     if !force, let loadedAt, Date().timeIntervalSince(loadedAt) < 30 { return }
     let expectedRevision = revision
@@ -83,18 +91,19 @@ extension Notification.Name {
     guard valid, post != nil, !loadingReplies, reset || nextCursor != nil else { return }
     if reset, !force, let replyLoadedAt, Date().timeIntervalSince(replyLoadedAt) < 30 { return }
     loadingReplies = true; replyError = nil
+    let expectedRevision = revision
     defer { loadingReplies = false }
     do {
       var path = "/tea/conversations/\(id)/replies"
       if !reset, let nextCursor { path += "?cursor=" + nextCursor }
       let page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
-      guard valid, !Task.isCancelled else { return }
+      guard valid, revision == expectedRevision, !Task.isCancelled else { return }
       var seen = Set(reset ? [] : replies.map(\.id))
       let unique = page.items.filter { seen.insert($0.id).inserted }
       replies = reset ? unique : replies + unique
       nextCursor = page.nextCursor; replyLoadedAt = Date()
     } catch {
-      guard valid, !Task.isCancelled else { return }
+      guard valid, revision == expectedRevision, !Task.isCancelled else { return }
       if Self.denied(error) { post = nil; replies = []; self.error = "This post is no longer available." }
       else { replyError = "Couldn’t load replies. Try again." }
     }
@@ -102,10 +111,11 @@ extension Notification.Name {
   func follow() async {
     guard valid, !busy, let post else { return }
     busy = true; error = nil; defer { busy = false }
+    let expectedRevision = revision
     struct Body: Encodable { let following: Bool }
     do {
       let updated: CaptroTeaConversation = try await api.put("/tea/conversations/\(id)/follow", body: Body(following: !post.following))
-      guard valid, updated.id == id else { return }
+      guard valid, revision == expectedRevision, updated.id == id else { return }
       self.updated(updated)
     } catch { if valid { self.error = "Couldn’t update Follow. Try again."; loadedAt = nil } }
   }
@@ -114,11 +124,12 @@ extension Notification.Name {
     guard valid, !busy, post != nil, !body.isEmpty, body.count <= 4000 else { return }
     if pendingReply != body { requestID = UUID().uuidString; pendingReply = body }
     replyPending = true
+    let expectedRevision = revision
     busy = true; replyError = nil; defer { busy = false }
     struct Body: Encodable { let requestID, body: String }
     do {
       let reply: CaptroTeaReply = try await api.post("/tea/conversations/\(id)/replies", body: Body(requestID: requestID, body: body))
-      guard valid else { return }
+      guard valid, revision == expectedRevision else { return }
       // When older replies are paged, do not insert out of chronological order.
       if nextCursor == nil, !replies.contains(where: { $0.id == reply.id }) { replies.append(reply) }
       draft = ""; pendingReply = nil; replyPending = false; replyLoadedAt = nil

@@ -47,7 +47,7 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertTrue((app.staticTexts["tea.test.requests"].value as? String ?? "").contains("101=1"))
     back(app); row(102,app).tap()
     XCTAssertTrue(app.buttons["tea.conversation.follow"].waitForExistence(timeout: 8))
-    XCTAssertFalse(app.buttons["tea.link.youtube.com"].exists)
+    XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tea.link.")).count, 0)
     shot("conversation-zero-links",app)
   }
 
