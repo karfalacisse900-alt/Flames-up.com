@@ -1,5 +1,13 @@
 name: Release Tea Conversations API
 on:
+  workflow_call:
+    inputs:
+      deploy:
+        type: boolean
+        default: false
+      expected_version:
+        type: string
+        default: ''
   workflow_dispatch:
     inputs:
       deploy:
