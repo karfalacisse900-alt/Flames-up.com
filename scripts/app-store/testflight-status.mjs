@@ -24,6 +24,10 @@ for (const build of builds.data ?? []) {
   const version = included.find(item=>item.type==='preReleaseVersions'&&item.id===versionID);
   const groups = build.relationships?.betaGroups?.data ?? [];
   console.log(JSON.stringify({build:build.attributes.version,version:version?.attributes?.version,uploaded:build.attributes.uploadedDate,processing:build.attributes.processingState,expired:build.attributes.expired,beta:detail?.attributes,groups:groups.map(g=>included.find(item=>item.type==='betaGroups'&&item.id===g.id)?.attributes?.name ?? 'assigned group')}));
+  console.log(JSON.stringify({build:build.attributes.version,distributionGroups:groups.map(g=>{
+    const a=included.find(item=>item.type==='betaGroups'&&item.id===g.id)?.attributes ?? {};
+    return {name:a.name,internal:a.isInternalGroup,automaticDistribution:a.hasAccessToAllBuilds,publicLinkEnabled:a.publicLinkEnabled};
+  })}));
 }
 // Read-only signing audit. Decode profiles in memory; never log profile contents,
 // certificates, private keys or the bearer. This does not enable a capability.
