@@ -54,7 +54,7 @@ jobs:
       - name: Smaller iPhone screens and interactions
         env:
           CONVERSATIONS: ${{ inputs.conversations }}
-        if: ${{ !inputs.baseline && !inputs.small }}
+        if: ${{ !cancelled() && !inputs.baseline && !inputs.small }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail

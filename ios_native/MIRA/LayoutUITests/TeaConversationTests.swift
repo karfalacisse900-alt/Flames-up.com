@@ -39,13 +39,17 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Author update"].exists)
     shot("conversation-three-inline-links",app)
     follow.tap(); XCTAssertTrue(app.buttons["Unfollow discussion"].waitForExistence(timeout: 8))
+    // Check the fresh cache immediately. Keyboard automation may legitimately
+    // take longer than the production 30-second freshness window on CI.
+    back(app); row(101,app).tap()
+    XCTAssertTrue(app.buttons["Unfollow discussion"].waitForExistence(timeout: 8))
+    XCTAssertTrue((app.staticTexts["tea.test.requests"].value as? String ?? "").contains("101=1"))
     let replyInput = input("tea.reply.input", app)
     XCTAssertTrue(replyInput.exists); replyInput.tap(); replyInput.typeText("The second opening feels stronger.")
     app.buttons["tea.reply.send"].tap()
     XCTAssertTrue(app.staticTexts["The second opening feels stronger."].waitForExistence(timeout: 8))
     back(app); row(101,app).tap()
     XCTAssertTrue(app.staticTexts["The second opening feels stronger."].waitForExistence(timeout: 8))
-    XCTAssertTrue((app.staticTexts["tea.test.requests"].value as? String ?? "").contains("101=1"))
     back(app); row(102,app).tap()
     XCTAssertTrue(app.buttons["tea.conversation.follow"].waitForExistence(timeout: 8))
     XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tea.link.")).count, 0)
