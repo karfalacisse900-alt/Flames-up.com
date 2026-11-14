@@ -1,0 +1,151 @@
+CAPTRO TEA CONVERSATIONS — IMPLEMENTATION AND VERIFICATION
+13–14 November 2026 (America/New_York)
+
+Scope
+New Conversations section is the default in the existing Tea destination.
+Clubs & Events retains the original list, detail destinations and actions.
+No Home post schema, bottom navigation, checkout or payment changes. No deployment.
+No new mockup was attached to the latest request; layout follows the written
+requirements and the existing white outlined Tea rows.
+
+Baseline
+Clean initial checkout: 0afe32adc0ad6e6fde6ae1271fac655b55d22919.
+Working branch: feature/tea-conversations.
+Verified source: f09d467e31bbf980d62001353ab48bd3e05b0484.
+Before screenshots are existing simulator captures of this baseline's Tea list
+and listing detail. Conversations did not exist at that baseline, so there is no
+genuine previous conversation-detail screenshot to compare against.
+
+Implementation
+- CaptroTeaView: Conversations / Clubs & Events selector, existing Tea entry,
+  pencil compose and typed navigation. Existing listings remain separate.
+- CaptroTeaConversationsView: outlined compact rows, navy/sage people icons,
+  title/author/time/Follow/body, inline hostname links, replies, bottom composer,
+  author editing with Cancel and failure recovery. No Author update feature,
+  comment-bubble icons, link cards, Links heading or large platform logos.
+- CaptroTeaConversation and CaptroTeaConversationStore: typed records, bounded
+  account/session-scoped presentation cache, shared in-flight detail loading,
+  30-second freshness, retained drafts, stale-response rejection, author edits
+  propagated to the list without reordering it. Browser return keeps the view.
+- MIRAAPIClient: reuse authenticated native transport and session-generation
+  protection; invalidate the new presentation cache for access-changing actions.
+- tea-conversations.ts and index.ts: real API routes using existing identity,
+  rate limits and posting/commenting restrictions. Client actor fields rejected.
+- 20261114014202_tea_conversations.sql: new conversation/reply/follow tables and
+  service-role-only RPCs. No Home rows or duplicate clubs/events are created.
+  Author-only edits use versions; creation/replies use durable request IDs;
+  following stores desired state. Existing durable account cleanup includes new
+  content. No stored legacy Author update data is deleted or rewritten.
+
+API / privacy contract
+GET /tea/conversations: eligible posts, 20 per page, signed viewer-bound cursor.
+GET /tea/conversations/:id: revalidated detail.
+GET /tea/conversations/:id/replies: eligible replies with parent-bound cursor.
+POST /tea/conversations: request_id, title, body, links.
+PUT /tea/conversations/:id: title, body, links, expected version.
+POST /tea/conversations/:id/replies: request_id, body.
+PUT /tea/conversations/:id/follow: desired following boolean.
+The existing Swift encoder uses snake_case; HTTP tests exercise request_id.
+Only canonical server-resolved actors can mutate data. Private-author visibility,
+active follow permissions, both-direction blocks, removed content and account
+status are checked on list/detail/reply routes. Responses project only the public
+author ID, display name and username. Tables/RPCs deny anon/authenticated direct
+access; the trusted Worker supplies identity. Follow is persisted per discussion;
+this patch does not add a separate push-notification delivery system.
+
+Links
+Up to three HTTPS destinations, validated on client and server. No credentials,
+local/IP hosts or nonstandard ports. URLs retain their actual query parameters;
+the UI displays only the parsed hostname. Exact domain boundaries identify
+YouTube/TikTok. Other sites get a tiny neutral link symbol. Supported owned-domain
+profile links use existing in-app profile navigation; other HTTPS destinations
+open the system browser. No arbitrary URL fetching or remote favicon service.
+Platform symbols are bundled Simple Icons SVGs, template-rendered at 11 points;
+the accompanying upstream license is in TeaLinkIcons-LICENSE.txt. Link controls
+retain 44-point touch height and explicit VoiceOver labels.
+
+Tests executed
+Backend: npm test — 407 passed, 0 failed, 0 skipped.
+Focused: node --experimental-strip-types --test tests/tea-conversations.test.mjs
+  tests/tea.test.mjs — 9 passed, 0 failed.
+Tests execute the new migration in disposable PGlite, including RPC lifecycle,
+ownership, stale edits, request replay, author privacy, blocks, removal,
+suspension, pagination, public projection, direct-role denial and real Hono HTTP
+route contracts. Existing Tea listing tests also pass.
+Worker: npx wrangler deploy --dry-run --env production --outdir <temporary-dir>
+  — passed; bundle only, no deployment.
+Final native verification: run 43587599121 PASSED.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43587599121
+Xcode 26.6, Debug simulator app, code signing disabled:
+- iPhone 17 / iOS 26.5: 257 native unit tests passed, 0 failed; 9 UI tests passed,
+  0 failed (4 Conversations + 5 existing Tea listing tests).
+- iPhone 13 mini / iOS 26.2: 4 Conversations UI tests passed, 0 failed.
+- Both sizes cover zero/one/three links, unknown hostnames, author edit/cancel,
+  follow/reply, real Safari foreground/return and genuine accessibility2 text.
+- Screenshots reviewed: white compact list with internal chevrons; quiet inline
+  hostname links at normal size; natural wrapping at accessibility size on both
+  devices; no link box or empty link section. Reply input stays reachable.
+- Browser-return assertions verify the same link Y coordinate within 2 points
+  and no duplicate detail request while the cache is fresh.
+- The complete final run has no remaining test failures.
+Commands (macOS CI, Xcode-generated Captro project):
+  xcodegen generate --spec project.yml
+  xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug
+    -destination 'platform=iOS Simulator,name=iPhone 17'
+    -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/PolishBuild"
+    -resultBundlePath "$RUNNER_TEMP/Polish.xcresult"
+    -only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests
+    -only-testing:CaptroLayoutUITests/TeaConversationTests
+    CODE_SIGNING_ALLOWED=NO test
+  xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug
+    -destination 'platform=iOS Simulator,id=<created iPhone 13 mini>'
+    -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/PolishBuild"
+    -resultBundlePath "$RUNNER_TEMP/SmallPolish.xcresult"
+    -only-testing:CaptroLayoutUITests/TeaConversationTests
+    CODE_SIGNING_ALLOWED=NO test-without-building
+Native tests use the actual root, Tea views and MIRAAPIClient with isolated
+URLProtocol fixtures. Browser-return test launches Safari and returns to the
+same discussion, asserts unchanged link Y position and exactly one fresh detail
+request. Fixtures are not a production data or deployed Worker verification.
+Regression history:
+- 43544968264: 256 unit tests passed; UI found inherited accessibility IDs on
+  link buttons and a legacy test reopening the wrong default section. Fixed.
+- 43545836929: 256 unit + 9 main UI + 4 smaller-iPhone UI tests passed. Its
+  accessibility launch flag did not actually resize the presented text; that
+  screenshot is NOT accepted as large-text evidence.
+- 43546859233 and 43548083471: 257 unit tests passed each. UI failures exposed
+  presentation-transition timing and the large-text fixture propagation issue.
+  Kept assertions, added explicit section readiness/selection checks, and applied
+  the DEBUG text-size override directly to the full-screen Tea presentation.
+  No production animations were disabled or made slower to satisfy the tests.
+- 43549965396: 257 native unit tests and all five legacy listing UI tests passed.
+  The new tests caught exact floating-point comparison noise (44 pt represented
+  as 43.99999999999994) and a Safari foreground timeout. The geometry comparison
+  now permits only 0.000001 pt arithmetic noise. Safari is initialized before
+  Captro launches; the test still requires the actual link tap to bring it to the
+  foreground, then asserts preserved geometry and no extra fresh-cache request.
+  Genuine accessibility-sized screenshots were visually inspected in this run.
+- 43586097522: browser return and large text passed; one request-count assertion
+  ran after slow keyboard automation exceeded the real 30-second cache window.
+  Moved the unchanged fresh-cache assertion before typing. Retained the separate
+  submitted-reply persistence assertion after reopening. The final run passes.
+The first simulator attempt (43543125975) failed before tests: Xcode build service
+crashed. This is recorded as an unsuccessful verification attempt, not a pass.
+
+Release requirements / limits
+Migration is prepared, not applied. Worker and native changes are on the feature
+branch only. Deploy migration before the matching Worker, then release the app
+only after staging/privacy verification. Old clients continue using unchanged
+/tea listing routes. Do not publish the new default section before its API exists.
+No production records were changed, no payment settings were touched and no
+TestFlight upload was performed for this task. Physical iPhone/VoiceOver/browser
+app-choice checks remain separate from simulator fixture verification.
+
+Evidence
+Before/after gallery and raw simulator screenshots:
+C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-tea-conversations-20261113/index.html
+The same folder includes backend-tests.log, worker-dry-run.log, polish.log,
+small-polish.log and verification.txt. After screenshots come from the final
+verified source. Sample authors/posts and request-count overlay are isolated
+DEBUG fixtures, not seeded production content. The gallery labels the previous
+listing details separately; it does not present them as an old conversation UI.
