@@ -5,6 +5,7 @@ struct CaptroTeaConversationsList: View {
   let api: MIRAAPIClient
   let active: Bool
   let created: CaptroTeaConversation?
+  let open: (CaptroTeaConversation) -> Void
   @State private var items: [CaptroTeaConversation] = []
   @State private var nextCursor: String?
   @State private var loading = false
@@ -22,7 +23,7 @@ struct CaptroTeaConversationsList: View {
         else if error == nil, loaded { Text("No conversations yet. Start one with the pencil.").font(.subheadline).foregroundStyle(.secondary).listRowSeparator(.hidden) }
       }
       ForEach(items) { post in
-        NavigationLink(value: post) { CaptroTeaConversationRow(post: post) }
+        Button { open(post) } label: { CaptroTeaConversationRow(post: post) }
           .buttonStyle(.plain)
           .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
           .listRowSeparator(.hidden).listRowBackground(Color.clear)
@@ -99,7 +100,7 @@ private struct CaptroTeaConversationRow: View {
           TeaConversationTime(value: post.createdAt)
         }.frame(maxWidth: .infinity, alignment: .leading)
       }
-      // NavigationLink supplies the small native chevron.
+      Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).accessibilityHidden(true)
     }.foregroundStyle(MIRATheme.Color.textPrimary)
       .padding(.horizontal, 12).padding(.vertical, 7).frame(minHeight: 48)
       .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 10))
@@ -110,7 +111,10 @@ private struct CaptroTeaConversationRow: View {
 private struct TeaConversationTime: View {
   let value: String
   var body: some View {
-    if let date = captroTeaDate(value) { Text(date, style: .relative).font(.caption).foregroundStyle(.secondary) }
+    if let date = captroTeaDate(value) {
+      Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+        .font(.caption).foregroundStyle(.secondary)
+    }
   }
 }
 
@@ -138,7 +142,9 @@ private struct TeaConversationTime: View {
             VStack(alignment: .leading, spacing: 3) {
               Text(post.author.name).font(.subheadline.weight(.semibold))
               HStack(spacing: 6) {
-                Text("@" + post.author.username).font(.caption).foregroundStyle(.secondary)
+                if !post.author.username.isEmpty {
+                  Text("@" + post.author.username).font(.caption).foregroundStyle(.secondary)
+                }
                 TeaConversationTime(value: post.createdAt)
               }
             }

@@ -139,7 +139,9 @@ struct CaptroTeaView: View {
       .opacity(section == "Clubs & Events" ? 1 : 0)
       .allowsHitTesting(section == "Clubs & Events")
       .accessibilityHidden(section != "Clubs & Events")
-      CaptroTeaConversationsList(api: api, active: section == "Conversations", created: created)
+      CaptroTeaConversationsList(api: api, active: section == "Conversations", created: created) { post in
+        if path.isEmpty { path.append(post) }
+      }
         .id(api.presentationScope)
         .opacity(section == "Conversations" ? 1 : 0)
         .allowsHitTesting(section == "Conversations")
