@@ -126,7 +126,12 @@ test('real HTTP routes enforce auth, restrictions, canonical actor, HTTPS valida
       auth:async(c,next)=>c.req.header('Authorization')==='Bearer fixture'?next():c.json({detail:'Sign in'},401),
       optionalAuth:async(c,next)=>next(), viewer:async c=>c.req.header('Authorization')?'a':'',
       limit:async()=>null,restriction:async c=>restricted?c.json({detail:'Restricted'},403):null,
-      rpc:async(c,name,b)=>name==='captro_tea_write'?write(b.p_actor,b.p_action,b.p_id,b.p_data):read(b.p_viewer,b.p_kind,b.p_id,b.p_before,b.p_boundary,b.p_snapshot??undefined),
+      rpc:async(c,name,b)=>{
+        if(name==='captro_tea_write')return write(b.p_actor,b.p_action,b.p_id,b.p_data);
+        if(name==='captro_tea_reply_revision')return (await db.query('select captro_tea_reply_revision($1,$2,$3) v',[b.p_viewer,b.p_id,b.p_version])).rows[0].v;
+        if(name==='captro_tea_target_replies')return (await db.query('select captro_tea_target_replies($1,$2,$3,$4,$5,$6) v',[b.p_viewer,b.p_id,b.p_target,b.p_before,b.p_boundary,b.p_snapshot])).rows[0].v;
+        return read(b.p_viewer,b.p_kind,b.p_id,b.p_before,b.p_boundary,b.p_snapshot??undefined);
+      },
     });
     const request=(path,method='GET',body,auth=true)=>app.request('https://fixture.test'+path,{method,headers:{...(auth?{Authorization:'Bearer fixture'}:{}),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})},{JWT_SECRET:'isolated-fixture-secret-not-production'});
     assert.equal((await request('/tea/conversations','POST',draft(),false)).status,401);
@@ -143,6 +148,11 @@ test('real HTTP routes enforce auth, restrictions, canonical actor, HTTPS valida
     assert.equal((await request('/tea/conversations/'+id(1)+'/replies?cursor='+page.nextCursor)).status,400);
     assert.equal((await request('/tea/conversations/'+id(1),'PUT',draft({version:1,author_id:'b'}))).status,400);
     assert.equal((await (await request('/tea/conversations/'+id(1))).json()).author.id,'a');
+    const target=discussionSentences(draft().body,1)[0];
+    assert.equal((await request(replyPath,'POST',{request_id:id(1001),body:'Target reply',target})).status,200);
+    assert.equal((await (await request(replyPath+'?target=general')).json()).items.length,1);
+    const thread=await (await request(replyPath+'?target='+target.id)).json();assert.equal(thread.items.length,1);assert.deepEqual(thread.items[0].target,target);
+    assert.equal((await request(replyPath,'POST',{request_id:id(1002),body:'Forged',target:{...target,id:'1:0:4',end:4,quote:'Tell'}})).status,400);
   } finally {await db.close();}
 });
 

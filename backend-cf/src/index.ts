@@ -18856,7 +18856,7 @@ api.get('/conversations', authMiddleware, async (c) => {
       }).catch(() => []),
       supabaseAdminQueryRows(c, 'app_group_messages', {
         select: '*',
-        filters: { group_id: postgrestInFilter(groupIds) },
+        filters: { group_id: postgrestInFilter(groupIds), tea_room_id: 'is.null' },
         order: 'created_at.desc',
         limit: Math.max(100, groupIds.length * 20),
       }).catch(() => []),
@@ -19264,6 +19264,7 @@ api.post('/group-chats/:groupId/messages', authMiddleware, async (c) => {
       filters: {
         group_id: postgrestEqFilter(groupId),
         sender_id: postgrestEqFilter(userId),
+        tea_room_id: 'is.null',
         created_at: `gt.${new Date(Date.now() - 30_000).toISOString()}`,
       },
       order: 'created_at.desc',
@@ -20295,7 +20296,17 @@ mountTeaClubs(api, {
     return row && supabaseUserStatus(row) === 'active' ? row.id : '';
   },
   rpc: supabaseAdminRpc,
-  limit: (c, write) => enforceRateLimit(c, write ? 'tea_club_write' : 'tea_club_read', getUserId(c), write ? 60 : 180, 60),
+  limit: async (c, write) => {
+    if (write) { const oversized = rejectLargeRequest(c, 120_000); if (oversized) return oversized; }
+    const user = getUserId(c);
+    if (write && c.req.path.endsWith('/send')) {
+      const minute = await enforceRateLimit(c, 'group_message_send', user, 60, 60);
+      if (minute) return minute;
+      const daily = await enforceRateLimit(c, 'group_message_send_daily', user, 800, 86400);
+      if (daily) return daily;
+    }
+    return enforceRateLimit(c, write ? 'tea_club_write' : 'tea_club_read', user, write ? 60 : 180, 60);
+  },
   restriction: c => enforceUserRestriction(c, getUserId(c), 'messaging'),
   site: path => 'https://captro-site.pages.dev/' + path,
 });

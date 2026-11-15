@@ -95,7 +95,7 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
       }
       if (action === 'detail') return c.json(enrich(await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action, p_id: id })));
       const target = action === 'replies' ? c.req.query('target') : undefined;
-      if (target && target !== 'general' && !/^[1-9][0-9]*:[0-9]+:[0-9]+$/.test(target)) throw new DiscussionInputError('Invalid reply target.');
+      if (target && (target.length>60 || (target !== 'general' && !/^[1-9][0-9]*:[0-9]+:[0-9]+$/.test(target)))) throw new DiscussionInputError('Invalid reply target.');
       const secret = c.env.JWT_SECRET;
       const cursor = await readFeedCursor(secret, c.req.query('cursor'), { viewer, scope: 'tea-discussions-' + action, city: (id ?? '') + (target ? ':' + target : '') });
       const rows = await deps.rpc(c, target ? 'captro_tea_target_replies' : 'captro_tea_read', { p_viewer: viewer, ...(target ? {p_target: target} : {p_kind: action}),

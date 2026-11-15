@@ -38,7 +38,7 @@ import UIKit
   @Environment(\.scenePhase) private var scenePhase
   @State private var sheet: ClubSheet?
   @State private var linkDestination: ClubLinkDestination?
-  @State private var quoteDestination: CaptroClubMessage?
+  @State private var visible = false
   @State private var scrollID: String?
   @State private var linkError: String?
   @State private var linkToSave: CaptroClubLinkDraft?
@@ -83,15 +83,8 @@ import UIKit
       case .invite(let token): CaptroTeaInviteView(token: token, api: api, signedIn: true).toolbar(.visible, for: .navigationBar)
       }
     }
-    .sheet(item: $quoteDestination) { message in
-      NavigationStack {
-        ScrollView { VStack(alignment: .leading, spacing: 12) { Text(message.author.name).font(.headline); Text(message.body).textSelection(.enabled); TeaConversationTime(value: message.createdAt) }.padding().frame(maxWidth: .infinity, alignment: .leading) }
-          .background(MIRATheme.Color.appBackground).navigationTitle("Original message").navigationBarTitleDisplayMode(.inline)
-          .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { quoteDestination = nil } } }
-      }
-    }
-    .task(id: "\(model.room ?? "general"):\(scenePhase == .active):\(model.tab)") {
-      guard scenePhase == .active else { return }
+    .task(id: "\(model.room ?? "general"):\(scenePhase == .active):\(model.tab):\(visible)") {
+      guard scenePhase == .active, visible else { return }
       if model.tab == "Links" { await model.loadLinks() }
       await model.loadMessages()
       while !Task.isCancelled, model.valid {
@@ -105,8 +98,8 @@ import UIKit
       if let scrollID { model.scrollIDs[old ?? "general"] = scrollID }
       scrollID = model.scrollIDs[new ?? "general"]
     }
-    .onDisappear { if let scrollID { model.scrollIDs[model.key] = scrollID } }
-    .onAppear { scrollID = model.scrollIDs[model.key] }
+    .onDisappear { visible = false; if let scrollID { model.scrollIDs[model.key] = scrollID } }
+    .onAppear { visible = true; scrollID = model.scrollIDs[model.key] }
   }
 
   private var header: some View {
@@ -128,6 +121,10 @@ import UIKit
   }
   private var chat: some View {
     VStack(spacing: 0) {
+      if model.focusedHistory.contains(model.key) {
+        Button("Latest messages") { Task { await model.loadMessages(latest: true); scrollID = model.messages.last?.id } }
+          .frame(minHeight: 44).accessibilityIdentifier("tea.club.latest")
+      }
       if let pin = model.club?.pin {
         Button { jump(pin) } label: {
           HStack(spacing: 8) { Image(systemName: "pin").font(.caption); Text(pin.body).font(.subheadline).lineLimit(1); Spacer(minLength: 0); Image(systemName: "chevron.right").font(.caption) }.frame(minHeight: 44).padding(.horizontal, 16)
@@ -225,7 +222,7 @@ import UIKit
           Text(saved.title).font(.headline)
           if let link = CaptroTeaLink(saved.url) { quietLink(link) }
           if let user = saved.sharedBy {
-            Button("View sharer") { linkDestination = .profile(user) }.font(.caption).frame(minHeight: 44)
+            Button(saved.sharedName.map { "Shared by " + $0 } ?? "View sharer") { linkDestination = .profile(user) }.font(.caption).frame(minHeight: 44)
           }
           if let id = saved.messageId { Button("Original message") { jump(.init(id: id, body: saved.title, room: nil)) }.font(.caption).frame(minHeight: 44) }
         }.contextMenu {
@@ -270,7 +267,15 @@ import UIKit
       do {
         let original = try await model.message(quote)
         if original.room == model.room, model.messages.contains(where: { $0.id == original.id }) { model.tab = "Chat"; scrollID = original.id }
-        else { quoteDestination = original }
+        else {
+          // Fetch one bounded page ending at the authorized original message.
+          // Do not download an entire club history to jump to an older quote.
+          model.tab = "Chat"; model.focusedHistory.insert(original.room ?? "general")
+          model.room = original.room
+          await model.loadMessages(through: original.id)
+          if model.messages.contains(where: { $0.id == original.id }) { scrollID = original.id }
+          else { linkError = "Couldn’t open the original message. Try again." }
+        }
       } catch { linkError = "The original message is unavailable or access has changed." }
     }
   }

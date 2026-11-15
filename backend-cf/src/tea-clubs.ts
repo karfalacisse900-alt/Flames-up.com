@@ -14,19 +14,20 @@ export function clubInput(action:string, raw:any) {
  for(const key of fields[action]) {
    if (['room','quote','message'].includes(key) && data[key]==null) continue;
    if (['id','room'].includes(key) && !uuid.test(data[key]??'')) throw new DiscussionInputError('Invalid identity.');
+   if (['id','room'].includes(key)) data[key]=data[key].toLowerCase();
    if (['quote','message','user'].includes(key) && (typeof data[key]!=='string'||! /^[a-zA-Z0-9_-]{1,120}$/.test(data[key]))) throw new DiscussionInputError('Invalid target.');
    if (['announcements','approval','approve'].includes(key) && typeof data[key]!=='boolean') throw new DiscussionInputError('Choose an option.');
    if (key==='version' && (!Number.isSafeInteger(data[key])||data[key]<1)) throw new DiscussionInputError('Refresh before changing this item.');
    if (['body','title','name','rules'].includes(key)) {
      const max=key==='body'?2000:key==='rules'?8000:key==='name'?60:100;
-     if(typeof data[key]!=='string'||[...data[key]].length>max||(key!=='rules'&&!data[key].trim())) throw new DiscussionInputError('Check the '+key+'.');
+     if(typeof data[key]!=='string'||[...data[key]].length>max||/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(data[key])||(key!=='rules'&&!data[key].trim())) throw new DiscussionInputError('Check the '+key+'.');
      data[key]=data[key].trim();
    }
  }
- if('url' in data) data.url=discussionLinks([data.url])[0];
- if('links' in data) data.links=discussionLinks(data.links);
- if('role' in data&&!['admin','member'].includes(data.role)) throw new DiscussionInputError('Invalid role.');
- if('expires' in data&&!Number.isFinite(Date.parse(data.expires))) throw new DiscussionInputError('Choose a valid expiry.');
+ if(fields[action].includes('url')) data.url=discussionLinks([data.url])[0];
+ if(fields[action].includes('links')) data.links=discussionLinks(data.links);
+ if(fields[action].includes('role')&&!['admin','member'].includes(data.role)) throw new DiscussionInputError('Invalid role.');
+ if(fields[action].includes('expires')&&(typeof data.expires!=='string'||!Number.isFinite(Date.parse(data.expires)))) throw new DiscussionInputError('Choose a valid expiry.');
  return data;
 }
 async function digest(raw:string) {return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(raw)))].map(x=>x.toString(16).padStart(2,'0')).join('');}
@@ -42,19 +43,28 @@ export function mountTeaClubs(api:any,deps:Deps) {
    const write=!reads.has(action);const limited=await deps.limit(c,write);if(limited)return limited;
    const viewer=await deps.viewer(c);if(!viewer)return c.json({detail:'Sign in to open this club.'},401);
    if(write){const denied=await deps.restriction(c);if(denied)return denied;}
-   const id=c.req.param('id');if(!uuid.test(id??''))throw new DiscussionInputError('Invalid club.');
+   const id=(c.req.param('id')??'').toLowerCase();if(!uuid.test(id))throw new DiscussionInputError('Invalid club.');
    let data:any=write?clubInput(action,await c.req.json()):{};
-   const room=c.req.query('room');if(room&&!uuid.test(room))throw new DiscussionInputError('Invalid room.');
+   const room=c.req.query('room')?.toLowerCase();if(room&&!uuid.test(room))throw new DiscussionInputError('Invalid room.');
    if(reads.has(action)&&room)data.room=room;
    if(action==='message')data.message=c.req.param('message');
    if(action==='members')data.after=c.req.query('after')??'';
-   if ([data.message,data.after].some(v=>v && !/^[a-zA-Z0-9_-]{1,120}$/.test(v))) throw new DiscussionInputError('Invalid target.');
+   if(action==='messages')data.through=c.req.query('through');
+   if ([data.message,data.after,data.through].some(v=>v && !/^[a-zA-Z0-9_-]{1,120}$/.test(v))) throw new DiscussionInputError('Invalid target.');
+   if(data.through&&c.req.query('cursor'))throw new DiscussionInputError('Choose a message or a page.');
    let cursor:any;
    if(['messages','links','invites','inviteRequests'].includes(action)) {
     cursor=await readFeedCursor(c.env.JWT_SECRET,c.req.query('cursor'),{viewer,scope:'tea-club-'+action,city:id+':'+(room??'general')});
     if(cursor.boundary){data.before=cursor.boundary.createdAt;data.boundary=cursor.boundary.id;}
    }
    let token:string|undefined;
+   if(action==='saveLink' && data.message) {
+    const source=await deps.rpc(c,'captro_tea_club',{p_actor:viewer,p_club:id,p_action:'message',p_data:{message:data.message}});
+    const candidates=typeof source?.[0]?.body==='string'?source[0].body.match(/https:\/\/[^\s<>"']+/g)??[]:[];
+    if(!candidates.some((raw:string)=>{
+      try { return discussionLinks([raw])[0]===data.url || discussionLinks([raw.replace(/[.,;!?)\]}]+$/,'')])[0]===data.url; } catch { return false; }
+    })) throw new DiscussionInputError('This link does not belong to that message.');
+   }
    if(action==='createInvite'){token=await inviteToken(c.env.JWT_SECRET,viewer,id,data.id);data.hash=await digest(token);}
    let value=await deps.rpc(c,'captro_tea_club',{p_actor:viewer,p_club:id,p_action:action,p_data:data});
    if(action==='invites') value=await Promise.all(value.map(async(i:any)=>{

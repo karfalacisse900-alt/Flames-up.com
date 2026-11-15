@@ -35,7 +35,7 @@ language sql stable security invoker set search_path='' as $$
  select jsonb_build_object('id',p.id,'title',p.title,'body',p.body,'links',p.links,'version',p.version,
    'createdAt',p.created_at,'author',jsonb_build_object('id',u.id,'name',coalesce(nullif(u.full_name,''),nullif(u.username,''),'Captro member'),'username',coalesce(u.username,'')),
    'replyCount',(select count(*) from public.app_tea_replies r where r.conversation_id=p.id and r.status='active' and public.captro_tea_author_visible(p_viewer,r.author_id)),
-   'replyTargets',coalesce((select jsonb_agg(t.value) from (select jsonb_build_object('target',r.target,'count',count(*)) value
+   'replyTargets',coalesce((select jsonb_agg(t.value order by (t.value->'target'->>'version')::integer,(t.value->'target'->>'start')::integer) from (select jsonb_build_object('target',r.target,'count',count(*)) value
      from public.app_tea_replies r where r.conversation_id=p.id and r.target is not null and r.status='active'
      and public.captro_tea_author_visible(p_viewer,r.author_id) group by r.target) t),'[]'),
    'isAuthor',u.id=p_viewer,'following',exists(select 1 from public.app_tea_follows f where f.conversation_id=p.id and f.user_id=p_viewer))

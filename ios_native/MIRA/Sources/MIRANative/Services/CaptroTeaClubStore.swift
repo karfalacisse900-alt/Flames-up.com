@@ -43,10 +43,11 @@ import Foundation
   @Published var linksError: String?
   @Published var loadingLinks = false
   @Published var pending: [String: CaptroClubAction] = [:]
+  @Published var focusedHistory: Set<String> = []
   var scrollIDs: [String: String] = [:]
   private var loadedAt: Date?
   private var flight: Task<Void, Never>?
-  private var messageFlights = Set<String>()
+  private var messageFlights: [String: UUID] = [:]
   private var readCandidate: [String: CaptroClubMessage] = [:]
   private var readTasks: [String: Task<Void, Never>] = [:]
   private var readThrough: [String: String] = [:]
@@ -60,7 +61,7 @@ import Foundation
   var base: String { "/tea/clubs/" + id }
   func clear() {
     invalidated = true; revision += 1; flight?.cancel(); flight = nil
-    club = nil; pages = [:]; drafts = [:]; quotes = [:]; links = []; pending = [:]; scrollIDs = [:]
+    club = nil; pages = [:]; drafts = [:]; quotes = [:]; links = []; pending = [:]; scrollIDs = [:]; focusedHistory = []; messageFlights = [:]
     loadedAt = nil; linksLoaded = false; denied = true
     readTasks.values.forEach { $0.cancel() }; readTasks = [:]; readCandidate = [:]; readThrough = [:]
   }
@@ -80,31 +81,38 @@ import Foundation
     }
     flight = task; await task.value; flight = nil
   }
-  func loadMessages(older: Bool = false, force: Bool = false) async {
+  func loadMessages(older: Bool = false, force: Bool = false, through: String? = nil, latest: Bool = false) async {
     let selected = room, roomKey = key, expected = revision
-    guard valid, club != nil, !messageFlights.contains(roomKey) else { return }
+    guard valid, club != nil else { return }
+    if through == nil, !latest, messageFlights[roomKey] != nil { return }
+    if through == nil, !older, !latest, focusedHistory.contains(roomKey) { return }
     let previous = pages[roomKey]
     if older && previous?.cursor == nil { return }
-    if !older, !force, let date = previous?.date, Date().timeIntervalSince(date) < 5 { return }
-    messageFlights.insert(roomKey); defer { messageFlights.remove(roomKey) }
+    if through == nil, !latest, !older, !force, let date = previous?.date, Date().timeIntervalSince(date) < 5 { return }
+    let token = UUID(); messageFlights[roomKey] = token
+    defer { if messageFlights[roomKey] == token { messageFlights[roomKey] = nil } }
     do {
       var parts = URLComponents(); parts.path = base + "/messages"
       var query: [URLQueryItem] = []
       if let selected { query.append(.init(name: "room", value: selected)) }
+      if let through { query.append(.init(name: "through", value: through)) }
       if older, let cursor = previous?.cursor { query.append(.init(name: "cursor", value: cursor)) }
       parts.queryItems = query.isEmpty ? nil : query
       let page: CaptroTeaConversationPage<CaptroClubMessage> = try await api.getFresh(parts.string!)
-      guard valid, expected == revision, !Task.isCancelled else { return }
+      guard valid, expected == revision, messageFlights[roomKey] == token, !Task.isCancelled else { return }
       let prior = pages[roomKey]?.items ?? []
       var combined: [CaptroClubMessage]
-      if older { combined = page.items + prior }
+      if through != nil || latest { combined = page.items }
+      else if older { combined = page.items + prior }
       else if page.nextCursor != nil, let first = page.items.first {
         combined = prior.filter { ($0.createdAt, $0.id) < (first.createdAt, first.id) } + page.items
       } else { combined = page.items }
       var seen = Set<String>(); combined = combined.filter { seen.insert($0.id).inserted }
-      pages[roomKey] = Messages(items: combined, cursor: older ? page.nextCursor : (prior.count > 50 ? previous?.cursor : page.nextCursor), date: Date())
+      pages[roomKey] = Messages(items: combined, cursor: older || through != nil || latest ? page.nextCursor : (prior.count > 50 ? previous?.cursor : page.nextCursor), date: Date())
+      if through != nil { focusedHistory.insert(roomKey) }
+      if latest { focusedHistory.remove(roomKey) }
       error = nil
-    } catch { handle(error, expected: expected) }
+    } catch { if messageFlights[roomKey] == token { handle(error, expected: expected) } }
   }
   func markRead(_ message: CaptroClubMessage) async {
     guard valid, tab == "Chat", message.room == room else { return }
@@ -148,6 +156,7 @@ import Foundation
       if pages[roomKey] == nil { pages[roomKey] = Messages() }
       if pages[roomKey]?.items.contains(where: { $0.id == message.id }) != true { pages[roomKey]?.items.append(message) }
       drafts[roomKey] = ""; quotes[roomKey] = nil; pending[roomKey] = nil
+      if focusedHistory.contains(roomKey), key == roomKey { await loadMessages(latest: true) }
     } catch {
       if Self.accessDenied(error) { clear() }
       else {

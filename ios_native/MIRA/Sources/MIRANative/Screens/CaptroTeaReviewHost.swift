@@ -226,6 +226,11 @@ private final class TeaReviewProtocol: URLProtocol {
         Self.conversations[id(101)]?["title"] = "My first music video"
         Self.conversations[id(101)]?["body"] = caption
         Self.conversations[id(101)]?["links"] = []
+        Self.conversations[id(101)]?["author"] = ["id":"artist","name":"Maya Chen","username":"mayafilms"]
+        if ProcessInfo.processInfo.arguments.contains("--tea-sentence-owner") {
+          Self.conversations[id(101)]?["isAuthor"] = true
+          Self.conversations[id(101)]?["author"] = ["id":"tea-viewer","name":"Maya Chen","username":"mayafilms"]
+        }
         let quote = "The hardest part was finding a location."
         let target: [String:Any] = ["id":"1:22:61","version":1,"start":22,"end":61,"quote":quote]
         let now = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-30))
@@ -290,7 +295,7 @@ private final class TeaReviewProtocol: URLProtocol {
       let replies = Self.discussionReplies[key] ?? []
       post["replyCount"] = replies.count
       let groups = Dictionary(grouping: replies.filter { $0["target"] is [String: Any] }) { ($0["target"] as? [String:Any])?["id"] as? String ?? "" }
-      post["replyTargets"] = groups.values.map { ["target": $0[0]["target"]!, "count":$0.count] }
+      post["replyTargets"] = groups.keys.sorted().compactMap { groups[$0] }.map { ["target": $0[0]["target"]!, "count":$0.count] }
       return (200,post)
     }
     reply(result.0, result.1)

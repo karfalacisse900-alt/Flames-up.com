@@ -54,6 +54,23 @@ final class CaptroTeaClubTests: XCTestCase {
     XCTAssertNil(ClubLinkDestination.parse(try XCTUnwrap(CaptroTeaLink("https://captro-site.pages.dev.evil.example/post/safe_id"))))
   }
 
+  @MainActor func testOlderQuoteLoadsBoundedHistoryAndDoesNotJumpOnPolling() async {
+    ClubTestProtocol.reset()
+    let config=URLSessionConfiguration.ephemeral; config.protocolClasses=[ClubTestProtocol.self]
+    let session=URLSession(configuration:config); defer { session.invalidateAndCancel() }
+    let model=MIRAAPIClient(session:session)
+    let club=model.teaClubs.model("club")
+    await club.load(); await club.loadMessages()
+    XCTAssertEqual(club.messages.last?.id,"message")
+    await club.loadMessages(through:"old-message")
+    XCTAssertEqual(club.messages.last?.id,"old-message")
+    XCTAssertTrue(club.focusedHistory.contains("general"))
+    await club.loadMessages(force:true)
+    XCTAssertEqual(club.messages.last?.id,"old-message","A poll must not move the user out of quoted history")
+    await club.loadMessages(latest:true)
+    XCTAssertEqual(club.messages.last?.id,"message"); XCTAssertFalse(club.focusedHistory.contains("general"))
+  }
+
   func testExistingMessagesDecodeWithoutRoomOrQuoteAndExtractOnlySafeLinks() throws {
     let data=Data(#"{"id":"old","body":"See https://www.youtube.com/watch?v=example and http://example.com","createdAt":"2026-11-14T00:00:00Z","author":{"id":"a","name":"Author","username":"author"}}"#.utf8)
     let message=try JSONDecoder().decode(CaptroClubMessage.self,from:data)
@@ -75,7 +92,8 @@ private final class ClubTestProtocol: URLProtocol {
     let body:String
     if denied { body=#"{"detail":"Membership revoked"}"# }
     else if request.url!.path.hasSuffix("/messages") {
-      body=#"{"items":[{"id":"message","body":"Member-only text","createdAt":"2026-11-14T00:00:00Z","author":{"id":"a","name":"Author","username":"author"}}]}"#
+      let old=URLComponents(url:request.url!,resolvingAgainstBaseURL:false)?.queryItems?.contains(where:{$0.name=="through"}) == true
+      body=#"{"items":[{"id":"message","body":"Member-only text","createdAt":"2026-11-14T00:00:00Z","author":{"id":"a","name":"Author","username":"author"}}]}"#.replacingOccurrences(of:"\"message\"",with:old ? "\"old-message\"" : "\"message\"")
     } else if request.url!.path.hasSuffix("/read") { body="{}" }
     else {
       Self.lock.withLock { Self.count += 1 }

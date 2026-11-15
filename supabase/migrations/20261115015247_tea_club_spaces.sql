@@ -15,13 +15,18 @@ create table public.app_tea_club_rooms (
 alter table public.app_group_messages add column tea_room_id uuid references public.app_tea_club_rooms(id);
 alter table public.app_group_messages add column tea_quote_id text;
 create index tea_room_messages on public.app_group_messages(group_id,tea_room_id,created_at desc,id desc);
+create index tea_message_room_reference on public.app_group_messages(tea_room_id) where tea_room_id is not null;
 create table public.app_tea_club_links (
  id uuid primary key, club_id uuid not null references public.app_purchasables(id) on delete cascade,
  title text not null check(length(btrim(title)) between 1 and 100), url text not null check(length(url)<=2048 and url like 'https://%'),
- shared_by text references public.app_users(id) on delete set null, message_id text,
+ shared_by text references public.app_users(id) on delete set null,
+ saved_by text references public.app_users(id) on delete set null, message_id text,
  version integer not null default 1, created_at timestamptz not null default now(), removed_at timestamptz
 );
 create index tea_club_links_page on public.app_tea_club_links(club_id,created_at desc,id desc) where removed_at is null;
+create index tea_club_links_creator on public.app_tea_club_links(shared_by);
+create index tea_club_links_curator on public.app_tea_club_links(saved_by);
+create index tea_club_links_reference on public.app_tea_club_links(club_id);
 create table public.app_tea_club_reads (
  club_id uuid not null references public.app_purchasables(id) on delete cascade, user_id text not null references public.app_users(id) on delete cascade,
  room text not null default 'general', seen_at timestamptz not null,
@@ -38,6 +43,10 @@ create table public.app_tea_club_invite_requests (
  status text not null default 'pending' check(status in ('pending','approved','denied')),
  decided_by text, decided_at timestamptz, created_at timestamptz not null default now(), primary key(invite_id,user_id)
 );
+create index tea_club_reads_user on public.app_tea_club_reads(user_id);
+create index tea_club_invites_page on public.app_tea_club_invites(club_id,created_at desc,id desc);
+create index tea_club_invites_creator on public.app_tea_club_invites(created_by);
+create index tea_club_invite_requests_user on public.app_tea_club_invite_requests(user_id);
 do $$ declare t text; begin
  foreach t in array array['app_tea_club_settings','app_tea_club_rooms','app_tea_club_links','app_tea_club_reads','app_tea_club_invites','app_tea_club_invite_requests'] loop
    execute format('alter table public.%I enable row level security',t);
@@ -66,7 +75,7 @@ begin
  end if;
  select * into member from public.app_group_chat_members where group_id=gid and user_id=p_actor for share;
  if member.id is null then raise exception 'TEA_CLUB_FORBIDDEN'; end if;
- admin:=member.role in ('owner','admin');
+ admin:=coalesce(member.role in ('owner','admin'),false);
  select * into settings from public.app_tea_club_settings where club_id=p_club;
  room_id:=nullif(p_data->>'room','')::uuid;
  if room_id is not null then
@@ -89,6 +98,11 @@ begin
        order by r.created_at,r.id) from public.app_tea_club_rooms r where r.club_id=p_club and coalesce(settings.rooms_enabled,false)),'[]'));
  end if;
  if p_action in ('messages','message') then
+   if p_action='messages' and p_data->>'through' is not null then
+     select * into msg from public.app_group_messages where id=p_data->>'through' and group_id=gid
+       and tea_room_id is not distinct from room_id and media->>'removed_at' is null;
+     if msg.id is null then raise exception 'TEA_CLUB_UNAVAILABLE'; end if;
+   end if;
    select coalesce(jsonb_agg(q.value order by q.created_at desc,q.id desc),'[]') into result from (
      select m.id,m.created_at,jsonb_build_object('id',m.id,'body',m.body,'createdAt',m.created_at,'room',m.tea_room_id,
        'mediaURL',m.media_url,'mediaType',m.media_type,
@@ -99,13 +113,15 @@ begin
      where m.group_id=gid and m.media->>'removed_at' is null and
        ((p_action='message' and m.id=p_data->>'message') or
         (p_action='messages' and m.tea_room_id is not distinct from room_id and
+         (p_data->>'through' is null or (m.created_at,m.id)<=(msg.created_at,msg.id)) and
          (p_data->>'before' is null or (m.created_at,m.id)<((p_data->>'before')::timestamptz,p_data->>'boundary'))))
      order by m.created_at desc,m.id desc limit 51) q;
    return result;
  end if;
  if p_action='links' then
    select coalesce(jsonb_agg(to_jsonb(q) order by q.created_at desc,q.id desc),'[]') into result from (
-     select l.* from public.app_tea_club_links l where l.club_id=p_club and l.removed_at is null
+     select l.*,coalesce(nullif(u.full_name,''),u.username) shared_name from public.app_tea_club_links l
+       left join public.app_users u on u.id=l.shared_by where l.club_id=p_club and l.removed_at is null
        and (p_data->>'before' is null or (l.created_at,l.id)<((p_data->>'before')::timestamptz,(p_data->>'boundary')::uuid))
      order by l.created_at desc,l.id desc limit 51) q; return result;
  end if;
@@ -130,6 +146,7 @@ begin
    else
      insert into public.app_group_messages(id,group_id,sender_id,body,tea_room_id,tea_quote_id)
        values(p_data->>'id',gid,p_actor,p_data->>'body',room_id,target);
+     update public.app_group_chats set updated_at=now() where id=gid;
    end if;
    return public.captro_tea_club(p_actor,p_club,'message',jsonb_build_object('message',p_data->>'id'));
  elsif p_action='read' then
@@ -139,12 +156,15 @@ begin
      on conflict(club_id,user_id,room) do update set seen_at=greatest(public.app_tea_club_reads.seen_at,excluded.seen_at);
  elsif p_action='saveLink' then
    target:=nullif(p_data->>'message','');
-   if target is not null and not exists(select 1 from public.app_group_messages where id=target and group_id=gid and media->>'removed_at' is null
-     and position(p_data->>'url' in body)>0) then raise exception 'TEA_CLUB_UNAVAILABLE'; end if;
-   insert into public.app_tea_club_links(id,club_id,title,url,shared_by,message_id)
-     values((p_data->>'id')::uuid,p_club,p_data->>'title',p_data->>'url',p_actor,target) on conflict(id) do nothing;
+   -- The Worker validates the canonical URL against the message text. Recheck
+   -- membership and source visibility atomically here, including removal races.
+   if target is not null and not exists(select 1 from public.app_group_messages where id=target and group_id=gid and media->>'removed_at' is null)
+     then raise exception 'TEA_CLUB_UNAVAILABLE'; end if;
+   insert into public.app_tea_club_links(id,club_id,title,url,shared_by,saved_by,message_id)
+     values((p_data->>'id')::uuid,p_club,p_data->>'title',p_data->>'url',
+       case when target is null then p_actor else (select sender_id from public.app_group_messages where id=target and group_id=gid) end,p_actor,target) on conflict(id) do nothing;
    select * into saved from public.app_tea_club_links where id=(p_data->>'id')::uuid;
-   if saved.club_id<>p_club or saved.shared_by<>p_actor or saved.title<>p_data->>'title' or saved.url<>p_data->>'url' or saved.message_id is distinct from target
+   if saved.club_id<>p_club or saved.saved_by<>p_actor or saved.title<>p_data->>'title' or saved.url<>p_data->>'url' or saved.message_id is distinct from target
      then raise exception 'TEA_CLUB_CONFLICT'; end if;
    return to_jsonb(saved);
  else

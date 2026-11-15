@@ -55,6 +55,7 @@ extension Notification.Name {
   private unowned let api: MIRAAPIClient
   private let scope: String
   let id: String
+  let viewport = CaptroFeedViewport()
   private var loadedAt: Date?
   private var replyLoadedAt: Date?
   private var requestID = UUID().uuidString
@@ -68,10 +69,12 @@ extension Notification.Name {
 
   init(post: CaptroTeaConversation, api: MIRAAPIClient) {
     self.post = post; self.id = post.id; self.api = api; scope = api.presentationScope
+    viewport.select("tea:" + post.id); viewport.updateOrder(["caption", "general"])
   }
   var valid: Bool { !invalidated && scope == api.presentationScope }
   func clear() {
     invalidated = true; revision += 1; accessRevision += 1
+    viewport.setActive(false)
     flight?.cancel(); flight = nil; flightID = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
     pendingReply = nil; replyPending = false; requestID = UUID().uuidString; nextCursor = nil
     replyTarget = nil; pendingTarget = nil; expandedTargets = []; authorProfile = nil

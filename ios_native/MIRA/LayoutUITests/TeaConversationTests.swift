@@ -163,4 +163,25 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["tea.reply.target"].exists)
     shot("multiple-sentence-threads",app)
   }
+
+  func testEditedCaptionKeepsOriginalQuoteAndLargeTextComposer() {
+    let app=launch(["--tea-sentence-fixture","--tea-sentence-owner","--captro-quality-large-text"])
+    row(101,app).tap()
+    XCTAssertTrue(app.buttons["tea.conversation.edit"].waitForExistence(timeout:8))
+    XCTAssertFalse(app.buttons["tea.author.follow"].exists)
+    app.buttons["tea.conversation.edit"].tap()
+    let body=input("tea.compose.body",app)
+    body.tap(); body.typeText(" A different ending.")
+    app.buttons["tea.compose.save"].tap()
+    let earlier=app.staticTexts["Earlier text"]
+    for _ in 0..<5 where !earlier.isHittable { app.swipeUp() }
+    XCTAssertTrue(earlier.exists)
+    XCTAssertFalse(app.buttons["tea.thread.2:22:61"].exists,"Old replies must never move to the new caption revision")
+    let original=app.buttons["tea.thread.1:22:61"]
+    for _ in 0..<4 where !original.isHittable { app.swipeUp() }
+    XCTAssertTrue(original.isHittable); original.tap()
+    XCTAssertTrue(app.staticTexts["Where did you end up shooting?"].waitForExistence(timeout:8))
+    XCTAssertTrue(input("tea.reply.input",app).isHittable)
+    shot("sentence-edited-caption-large-text",app)
+  }
 }

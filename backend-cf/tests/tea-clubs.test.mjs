@@ -10,7 +10,7 @@ async function fixture(){
  create table app_users(id text primary key,supabase_user_id uuid,metadata jsonb default '{}',full_name text,username text);
  create table app_blocks(blocker_id text,blocked_id text);
  create table app_purchasables(id uuid primary key,post_id uuid,content_type text,private_config jsonb,status text,title text,description text,creator_app_user_id text,creator_id uuid,approval_required boolean);
- create table app_group_chats(id text primary key,metadata jsonb default '{}');
+ create table app_group_chats(id text primary key,metadata jsonb default '{}',updated_at timestamptz default now());
  create table app_group_chat_members(id text primary key,group_id text,user_id text,role text);
  create table app_group_messages(id text primary key,group_id text,sender_id text,body text,media jsonb default '{}',media_url text,media_type text,created_at timestamptz default now());
  insert into app_users(id,full_name,username) values('owner','Owner','owner'),('member','Member','member'),('visitor','Visitor','visitor'),('moderator','Moderator','mod');
@@ -48,6 +48,10 @@ test('General preserves existing messages; membership, rooms, quotes, pins, link
   const link={id:id(6),title:'Info',url:'https://example.com/info',message:id(4)};
   await call('member','saveLink',link);await call('member','saveLink',link);
   assert.equal((await call('member','links')).length,1);
+  await call('owner','saveLink',{...link,id:id(8)});
+  const curated=(await call('owner','links')).find(l=>l.id===id(8));
+  assert.equal(curated.shared_by,'member');assert.equal(curated.saved_by,'owner');assert.equal(curated.shared_name,'Member');
+  await call('owner','removeLink',{id:id(8),version:1});
   await assert.rejects(call('member','removeLink',{id:id(6),version:1}),/FORBIDDEN/);
   await call('moderator','editLink',{id:id(6),title:'Updated',url:'https://example.com/new',version:1});
   await assert.rejects(call('owner','removeLink',{id:id(6),version:1}),/CONFLICT/);
@@ -56,6 +60,8 @@ test('General preserves existing messages; membership, rooms, quotes, pins, link
   await assert.rejects(call('owner','removeMember',{user:'owner'}),/FORBIDDEN/);
   await call('owner','removeMember',{user:'member'});
   await assert.rejects(call('member','message',{message:'legacy'}),/FORBIDDEN/);
+  await db.exec("update app_group_chat_members set role=null where user_id='moderator'");
+  await assert.rejects(call('moderator','createRoom',{id:id(20),name:'Invalid role',announcements:false}),/FORBIDDEN/);
   await db.exec('set role authenticated');
   await assert.rejects(db.query('select * from app_tea_club_links'),/permission denied/);
   await assert.rejects(call('owner','overview'),/permission denied/);
@@ -85,6 +91,7 @@ test('HTTP actions reject anonymous actors and unsafe or forged data',async()=>{
  }
  assert.equal(calls,0);
  assert.throws(()=>clubInput('memberRole',{user:'member',role:'owner'}));
+ assert.throws(()=>clubInput('memberRole',{user:'member'}));
  assert.equal((await api.request('/tea/clubs/'+id(1),{headers:{Authorization:'fixture'}})).status,403);
 });
 
@@ -103,7 +110,16 @@ test('real HTTP/database pagination preserves legacy messages, binds cursors, an
   assert.equal(new Set([...first.items,...second.items].map(m=>m.id)).size,62);assert.equal(second.nextCursor,null);
   assert.equal((await req(base+'/messages?cursor='+first.nextCursor,'owner')).status,400);
   assert.equal((await req(base+'/links?cursor='+first.nextCursor)).status,400);
-  const invite=await (await req(base+'/createInvite','owner',{id:id(9),approval:true,expires:new Date(Date.now()+86400000).toISOString()})).json();
+  const anchor=await (await req(base+'/messages?through=legacy-message-010')).json();
+  assert.equal(anchor.items.length,10);assert.equal(anchor.items.at(-1).id,'legacy-message-010');
+  assert.equal((await req(base+'/messages?through=unknown')).status,404);
+  assert.equal((await req(base+'/messages?through=legacy-message-010&cursor='+first.nextCursor)).status,400);
+  await db.exec("update app_group_messages set body='See https://example.com and https://example.com.evil.test' where id='legacy'");
+  assert.equal((await req(base+'/saveLink','owner',{id:id(13),title:'Source',url:'https://example.com',message:'legacy'})).status,200);
+  const saved=await (await req(base+'/links','member')).json();assert.equal(saved.items[0].shared_by,'member');assert.equal(saved.items[0].saved_by,'owner');
+  assert.equal((await req(base+'/saveLink','owner',{id:id(14),title:'Forged attribution',url:'https://example.com.evil',message:'legacy'})).status,400);
+  // Swift UUID.uuidString uses uppercase: persisted UUIDs normalize to lowercase.
+  const invite=await (await req(base+'/createInvite','owner',{id:'ABCDEF00-0000-4000-8000-000000000009',approval:true,expires:new Date(Date.now()+86400000).toISOString()})).json();
   assert.ok(invite.url);assert.equal(invite.token_hash,undefined);
   const listing=await (await req(base+'/invites','owner')).json();assert.equal(listing.items[0].url,invite.url);assert.equal(listing.items[0].token_hash,undefined);
   const rotated=await (await req(base+'/invites','owner',undefined,{JWT_SECRET:'a-different-signing-key-for-rotation'})).json();assert.equal(rotated.items[0].url,null);

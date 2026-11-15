@@ -183,14 +183,15 @@ struct TeaConversationTime: View {
             }
           }
           if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
-        }.listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
+        }.background(CaptroFeedViewportMarker(owner: model.viewport, postID: "caption", feed: "tea:" + model.id).allowsHitTesting(false))
+          .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
           .listRowSeparator(.hidden).listRowBackground(Color.clear)
         if let error = model.authorError {
           HStack { Text(error).font(.footnote).foregroundStyle(.secondary); Button("Retry profile") { Task { await model.loadAuthor() } }.frame(minHeight: 44) }
             .listRowSeparator(.hidden).listRowBackground(Color.clear)
         }
         HStack {
-          Text((post.replyTargets ?? []).isEmpty ? "\(post.replyCount ?? model.replies.count) replies" : "General replies")
+          Text((post.replyTargets ?? []).isEmpty ? post.replyCount.map { "\($0) replies" } ?? "Replies" : "General replies")
             .font(.subheadline).foregroundStyle(.secondary)
           Spacer()
           Button {
@@ -201,6 +202,7 @@ struct TeaConversationTime: View {
             .accessibilityIdentifier("tea.conversation.follow")
         }.listRowSeparator(.hidden).listRowBackground(Color.clear)
         TeaReplyGroups(replies: model.replies.filter { $0.target == nil })
+          .background(CaptroFeedViewportMarker(owner: model.viewport, postID: "general", feed: "tea:" + model.id).allowsHitTesting(false))
           .listRowSeparator(.hidden).listRowBackground(Color.clear)
         if model.loadingReplies { ProgressView("Loading replies").listRowSeparator(.hidden) }
         if model.nextCursor != nil {
@@ -284,8 +286,13 @@ struct TeaConversationTime: View {
         if let profile { UserProfileNativeView(userId: profile.id, api: api).toolbar(.visible, for: .navigationBar) }
       }
       .task { await model.load() }
+      .onAppear { model.viewport.setActive(true) }
+      .onDisappear { model.viewport.setActive(false) }
       .refreshable { await model.load(force: true) }
-      .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await model.load() } } }
+      .onChange(of: scenePhase) { _, phase in
+        model.viewport.setActive(phase == .active)
+        if phase == .active { Task { await model.load() } }
+      }
   }
 
   private func authorHeader(_ post: CaptroTeaConversation) -> some View {

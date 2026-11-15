@@ -43,7 +43,7 @@ struct CaptroClubMessage: Decodable, Identifiable {
 }
 struct CaptroClubLink: Decodable, Identifiable {
   let id, title, url, createdAt: String
-  let sharedBy, messageId: String?
+  let sharedBy, sharedName, messageId: String?
   let version: Int
 }
 struct CaptroClubMember: Decodable, Identifiable {
@@ -91,7 +91,7 @@ struct CaptroTeaInviteRoute: Identifiable {
     if url.scheme == "captro", url.host == "tea-invite", parts.count == 1 { token = parts[0] }
     else if url.scheme == "https", ["captro.app", "www.captro.app", "captro-site.pages.dev"].contains(url.host?.lowercased() ?? ""), parts.count == 2, parts[0] == "tea-invite" { token = parts[1] }
     else { token = nil }
-    guard url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+    guard url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil,
           let token, token.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return nil }
     return .init(id: token)
   }
