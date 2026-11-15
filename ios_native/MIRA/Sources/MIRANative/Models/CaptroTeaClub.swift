@@ -41,6 +41,16 @@ struct CaptroClubMessage: Decodable, Identifiable {
       return link
     }
   }
+  /// Keep the original persisted body for quoting/verification. In the chat,
+  /// safe URLs are rendered once as compact hostname controls below the text.
+  var textWithoutLinks: String {
+    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return body }
+    let text = NSMutableString(string: body)
+    for match in detector.matches(in: body, range: NSRange(body.startIndex..., in: body)).reversed() {
+      if let raw = match.url?.absoluteString, CaptroTeaLink(raw) != nil { text.deleteCharacters(in: match.range) }
+    }
+    return (text as String).trimmingCharacters(in: .whitespacesAndNewlines)
+  }
 }
 struct CaptroClubLink: Decodable, Identifiable {
   let id, title, url, createdAt: String

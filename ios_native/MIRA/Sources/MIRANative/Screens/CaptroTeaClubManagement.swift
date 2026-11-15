@@ -60,6 +60,7 @@ struct CaptroClubLinkEditor: View {
   @State private var busy = false
   @State private var error: String?
   @State private var roomName = ""
+  @FocusState private var roomFieldFocused: Bool
   @State private var announcements = false
   @State private var newRoomID = UUID().uuidString
   @State private var newInviteID = UUID().uuidString
@@ -110,7 +111,8 @@ struct CaptroClubLinkEditor: View {
       }
       if model.club?.canManage == true {
         Section("Add a room") {
-          TextField("Room name", text: $roomName).accessibilityIdentifier("tea.room.name").disabled(submittedRoom != nil)
+          TextField("Room name", text: $roomName).focused($roomFieldFocused).submitLabel(.done).onSubmit { roomFieldFocused = false }
+            .accessibilityIdentifier("tea.room.name").disabled(submittedRoom != nil)
           Toggle("Only organizers can post", isOn: $announcements).disabled(submittedRoom != nil)
           Button(submittedRoom == nil ? "Create room" : "Retry room creation") {
             Task {

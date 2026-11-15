@@ -104,7 +104,7 @@ import UIKit
 
   private var header: some View {
     HStack(spacing: 12) {
-      Button { dismiss() } label: { Image(systemName: "chevron.left").font(.headline).frame(width: 44, height: 44).background(MIRATheme.Color.surface, in: Circle()) }
+      Button { dismiss() } label: { MIRAHeaderCircleButton(systemImage: "chevron.left", size: 44) }
         .accessibilityLabel("Back").accessibilityIdentifier("tea.club.back")
       VStack(alignment: .leading, spacing: 3) {
         Text(model.club?.name ?? "Club").font(.headline).fixedSize(horizontal: false, vertical: true)
@@ -178,8 +178,10 @@ import UIKit
         Button { jump(quote) } label: { Text(quote.body).font(.footnote).foregroundStyle(.secondary).lineLimit(2).padding(.leading, 9).frame(minHeight: 44, alignment: .leading).overlay(alignment: .leading) { Rectangle().fill(MIRATheme.Color.divider).frame(width: 2) } }
           .buttonStyle(.plain).accessibilityLabel("Open quoted message: " + quote.body).accessibilityIdentifier("tea.club.quote." + message.id)
       }
-      Text(message.body).font(.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-        .accessibilityIdentifier("tea.club.message." + message.id)
+      if !message.textWithoutLinks.isEmpty {
+        Text(message.textWithoutLinks).font(.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+          .accessibilityIdentifier("tea.club.message." + message.id)
+      }
       if let media = message.mediaURL, !media.isEmpty {
         // The existing message view owns authorized attachment/video rendering.
         NavigationLink { ConversationNativeView(groupId: model.club?.groupId ?? "", title: model.club?.name ?? "Club", api: api) } label: { Label("Open attachment in Messages", systemImage: "photo").font(.subheadline).frame(minHeight: 44) }

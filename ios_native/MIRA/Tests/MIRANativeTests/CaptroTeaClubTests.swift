@@ -76,6 +76,8 @@ final class CaptroTeaClubTests: XCTestCase {
     let message=try JSONDecoder().decode(CaptroClubMessage.self,from:data)
     XCTAssertNil(message.room); XCTAssertNil(message.quote); XCTAssertEqual(message.links.count,1)
     XCTAssertEqual(message.links.first?.hostname,"youtube.com")
+    XCTAssertEqual(message.textWithoutLinks,"See  and http://example.com")
+    XCTAssertTrue(message.body.contains("https://www.youtube.com/watch?v=example"),"Rendering must not rewrite persisted message or quote text")
   }
 }
 

@@ -237,8 +237,7 @@ struct TeaConversationTime: View {
       .safeAreaInset(edge: .top, spacing: 0) {
         HStack(alignment: .top, spacing: 12) {
           Button { dismiss() } label: {
-            Image(systemName: "chevron.left").font(.headline).frame(width: 44, height: 44)
-              .background(MIRATheme.Color.surface, in: Circle())
+            MIRAHeaderCircleButton(systemImage: "chevron.left", size: 44)
           }.accessibilityLabel("Back").accessibilityIdentifier("tea.detail.back")
           if let post = model.post, model.valid { authorHeader(post) }
           else { Spacer() }
