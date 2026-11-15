@@ -3,6 +3,25 @@ import Foundation
 @testable import MIRANative
 
 final class CaptroTeaConversationTests: XCTestCase {
+  func testConsecutiveReplyGroupingDoesNotReorderAuthors() {
+    let a = CaptroTeaAuthor(id: "a", name: "A", username: "a")
+    let b = CaptroTeaAuthor(id: "b", name: "B", username: "b")
+    let replies = [a,a,b,a].enumerated().map { CaptroTeaReply(id: String($0.offset), body: "Reply", author: $0.element, createdAt: "now") }
+    let groups = CaptroTeaReplyGroup.consecutive(replies)
+    XCTAssertEqual(groups.map { $0.replies.count }, [2,1,1])
+    XCTAssertEqual(groups.flatMap { $0.replies.map(\.id) }, ["0","1","2","3"])
+  }
+  @MainActor func testClearingSentenceTargetPreservesDraftAndScopeInvalidationErasesIt() throws {
+    let api = MIRAAPIClient()
+    let seed = try JSONDecoder().decode(CaptroTeaConversation.self, from: TeaConversationProtocol.postData)
+    let model = api.teaConversations.model(for: seed)
+    model.draft = "Keep this draft"
+    model.selectTarget(CaptroTeaReplyTarget(id: "1:0:5", version: 1, start: 0, end: 5, quote: "Hello"))
+    model.selectTarget(nil)
+    XCTAssertEqual(model.draft, "Keep this draft")
+    XCTAssertNil(model.replyTarget)
+    model.clear(); XCTAssertEqual(model.draft, "")
+  }
   @MainActor func testActualTransportCoalescesDetailAndReplaysUncertainReplyIdentity() async throws {
     TeaConversationProtocol.reset()
     let configuration = URLSessionConfiguration.ephemeral

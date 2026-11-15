@@ -54,6 +54,7 @@ private final class TeaReviewProtocol: URLProtocol {
   private static var detailRequests: [Int: Int] = [:]
   private static var conversations: [String: [String: Any]] = [:]
   private static var discussionReplies: [String: [[String: Any]]] = [:]
+  private static var followsAuthor = false
   private var delivery: DispatchWorkItem?
 
   override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "localhost" }
@@ -115,6 +116,14 @@ private final class TeaReviewProtocol: URLProtocol {
     var status = 200
     var payload: Any = [String: Any]()
     if path.hasPrefix("/tea/conversations") { discussion(path); return }
+    if path == "/users/artist/follow" {
+      let body = readBody().flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+      Self.lock.withLock { Self.followsAuthor = body["following"] as? Bool ?? false }
+      reply(200, ["following": Self.lock.withLock { Self.followsAuthor }, "followersCount": 1]); return
+    }
+    if path == "/users/artist" {
+      reply(200,["id":"artist","username":"alex","fullName":"Alex","isFollowing":Self.lock.withLock { Self.followsAuthor }]); return
+    }
     if path == "/auth/me" {
       payload = ["id": "tea-viewer", "username": "tea_fixture", "city": "New York", "status": "active"]
     } else if path == "/tea" {
@@ -217,8 +226,9 @@ private final class TeaReviewProtocol: URLProtocol {
       let key = String(parts[2])
       if parts.last == "replies" {
         if method == "POST", let replyID = body["request_id"] as? String {
-          let reply: [String: Any] = ["id":replyID,"body":body["body"] ?? "", "createdAt":ISO8601DateFormatter().string(from: Date()),
+          var reply: [String: Any] = ["id":replyID,"body":body["body"] ?? "", "createdAt":ISO8601DateFormatter().string(from: Date()),
             "author":["id":"tea-viewer","name":"Tea Fixture","username":"tea_fixture"]]
+          reply["target"] = body["target"]
           if !(Self.discussionReplies[key] ?? []).contains(where: { $0["id"] as? String == replyID }) { Self.discussionReplies[key, default: []].append(reply) }
           return (200, reply)
         }
@@ -237,6 +247,20 @@ private final class TeaReviewProtocol: URLProtocol {
         if ProcessInfo.processInfo.arguments.contains("--discussion-refresh-error"), Self.detailRequests[n] == 2 { return (503,["detail":"Fixture offline"]) }
       }
       Self.conversations[key] = post
+      let caption = post["body"] as? String ?? ""
+      let version = post["version"] as? Int ?? 1
+      var sentences: [[String: Any]] = []
+      caption.enumerateSubstrings(in: caption.startIndex..<caption.endIndex, options: .bySentences) { _, range, _, _ in
+        let quote = String(caption[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let start = caption[..<range.lowerBound].unicodeScalars.count
+        let end = start + quote.unicodeScalars.count
+        sentences.append(["id":"\(version):\(start):\(end)","version":version,"start":start,"end":end,"quote":quote])
+      }
+      post["sentences"] = sentences
+      let replies = Self.discussionReplies[key] ?? []
+      post["replyCount"] = replies.count
+      let groups = Dictionary(grouping: replies.filter { $0["target"] is [String: Any] }) { ($0["target"] as? [String:Any])?["id"] as? String ?? "" }
+      post["replyTargets"] = groups.values.map { ["target": $0[0]["target"]!, "count":$0.count] }
       return (200,post)
     }
     reply(result.0, result.1)

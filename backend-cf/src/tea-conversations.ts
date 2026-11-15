@@ -3,6 +3,15 @@ import { FeedCursorError, readFeedCursor, writeFeedCursor } from './feed-paginat
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export class DiscussionInputError extends Error {}
 
+// Offsets are Unicode code points in an immutable post revision, never UI lines.
+export function discussionSentences(body: string, version: number) {
+  return [...new Intl.Segmenter('en', { granularity: 'sentence' }).segment(body)].map(s => {
+    const start = [...body.slice(0, s.index)].length;
+    const end = start + [...s.segment.trimEnd()].length;
+    return { id: `${version}:${start}:${end}`, version, start, end, quote: s.segment.trimEnd() };
+  }).filter(s => s.quote.trim().length > 0);
+}
+
 export function discussionLinks(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 3) throw new DiscussionInputError('Add up to three HTTPS links.');
   return [...new Set(value.map(raw => {
@@ -21,7 +30,7 @@ export function discussionLinks(value: unknown): string[] {
 export function discussionInput(action: string, value: any) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new DiscussionInputError('Invalid post.');
   const allowed = action === 'create' ? ['request_id','title','body','links'] : action === 'edit'
-    ? ['title','body','links','version'] : action === 'reply' ? ['request_id','body'] : ['following'];
+    ? ['title','body','links','version'] : action === 'reply' ? ['request_id','body','target'] : ['following'];
   if (Object.keys(value).some(k => !allowed.includes(k))) throw new DiscussionInputError('Unsupported field.');
   const text = (key: string, max: number) => {
     if (typeof value[key] !== 'string' || !value[key].trim() || [...value[key]].length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value[key])) throw new DiscussionInputError('Check the ' + key + '.');
@@ -34,7 +43,16 @@ export function discussionInput(action: string, value: any) {
   if (action === 'create' || action === 'reply') {
     if (typeof value.request_id !== 'string' || !uuid.test(value.request_id)) throw new DiscussionInputError('Invalid request identity.');
   }
-  if (action === 'reply') return { requestID: value.request_id, body: text('body', 4000) };
+  if (action === 'reply') {
+    const t = value.target;
+    if (t != null && (typeof t !== 'object' || Array.isArray(t) ||
+      Object.keys(t).some(k => !['id','version','start','end','quote'].includes(k)) ||
+      !Number.isSafeInteger(t.version) || t.version < 1 || !Number.isSafeInteger(t.start) || t.start < 0 ||
+      !Number.isSafeInteger(t.end) || t.end <= t.start || t.end > 8000 ||
+      typeof t.quote !== 'string' || t.quote.length > 16000 || t.id !== `${t.version}:${t.start}:${t.end}`))
+      throw new DiscussionInputError('Select a sentence from this post.');
+    return { requestID: value.request_id, body: text('body', 4000), ...(t ? {target:t} : {}) };
+  }
   if (action === 'edit' && (!Number.isSafeInteger(value.version) || value.version < 1)) throw new DiscussionInputError('Refresh this post before editing.');
   return { title: text('title', 160), body: text('body', 8000), links: discussionLinks(value.links),
     ...(action === 'create' ? { requestID: value.request_id } : { version: value.version }) };
@@ -62,11 +80,20 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
         const denied = await deps.restriction(c, action === 'reply' ? 'commenting' : 'posting');
         if (denied) return denied;
         const data: any = discussionInput(action, await c.req.json().catch(() => null));
-        return c.json(await deps.rpc(c, 'captro_tea_write', {
+        if (action === 'reply' && data.target) {
+          // Check against the persisted revision, including retries after edits.
+          const revision = await deps.rpc(c, 'captro_tea_reply_revision', {
+            p_viewer: viewer, p_id: id, p_version: data.target.version,
+          });
+          if (!discussionSentences(revision, data.target.version).some(s =>
+            s.id === data.target.id && s.quote === data.target.quote)) throw new DiscussionInputError('Select a sentence from this post.');
+        }
+        const result = await deps.rpc(c, 'captro_tea_write', {
           p_actor: viewer, p_action: action, p_id: action === 'create' ? data.requestID : id, p_data: data,
-        }));
+        });
+        return c.json(action === 'reply' ? result : enrich(result));
       }
-      if (action === 'detail') return c.json(await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action, p_id: id }));
+      if (action === 'detail') return c.json(enrich(await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action, p_id: id })));
       const secret = c.env.JWT_SECRET;
       const cursor = await readFeedCursor(secret, c.req.query('cursor'), { viewer, scope: 'tea-discussions-' + action, city: id ?? '' });
       const rows = await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action,
@@ -76,7 +103,7 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
       const nextCursor = rows.length > 20 && last ? await writeFeedCursor(secret, {
         ...cursor, boundary: { id: last.id, createdAt: last.createdAt, legacyCreatedAt: null },
       }) : null;
-      return c.json({ items, nextCursor });
+      return c.json({ items: action === 'list' ? items.map(enrich) : items, nextCursor });
     } catch (error) {
       if (error instanceof DiscussionInputError || error instanceof FeedCursorError) return c.json({ detail: error instanceof DiscussionInputError ? error.message : 'Refresh to start again.', code: 'TEA_DISCUSSION_INVALID' },400);
       const message = error instanceof Error ? error.message : '';
@@ -97,4 +124,8 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
   api.put('/tea/conversations/:id', deps.auth, (c: any) => handle(c,'edit'));
   api.post('/tea/conversations/:id/replies', deps.auth, (c: any) => handle(c,'reply'));
   api.put('/tea/conversations/:id/follow', deps.auth, (c: any) => handle(c,'follow'));
+}
+
+function enrich(post: any) {
+  return {...post, sentences: discussionSentences(post.body, post.version)};
 }

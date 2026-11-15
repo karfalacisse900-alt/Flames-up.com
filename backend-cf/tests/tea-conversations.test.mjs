@@ -3,10 +3,39 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { Hono } from 'hono';
-import { discussionLinks, discussionInput, mountTeaConversations } from '../src/tea-conversations.ts';
+import { discussionLinks, discussionInput, discussionSentences, mountTeaConversations } from '../src/tea-conversations.ts';
 
 const id = n => '00000000-0000-4000-8000-' + String(n).padStart(12,'0');
 const draft = (extra={}) => ({request_id:id(1),title:'Which intro works?',body:'Tell me what you think.',links:[],...extra});
+
+test('sentence references survive reflow and preserve edited quotes without attaching to replacement text',async()=>{
+  const {db,write,read}=await database(); try {
+    const body='I filmed 🎬 on my phone. The hardest part was finding a location.';
+    const sentences=discussionSentences(body,1);
+    assert.equal(sentences.length,2);assert.equal(sentences[1].quote,'The hardest part was finding a location.');
+    assert.equal(discussionSentences('Dr. Chen arrived. Then we filmed.',1).at(-1).quote,'Then we filmed.');
+    await write('a','create',id(1),draft({body}));
+    const target=sentences[1];
+    const payload=discussionInput('reply',{request_id:id(40),body:'Where?',target});
+    await write('b','reply',id(1),payload);await write('b','reply',id(1),payload);
+    await write('b','reply',id(1),{requestID:id(41),body:'General reply'});
+    const replies=await read('b','replies',id(1));assert.equal(replies.length,2);
+    assert.deepEqual(replies[0].target,target);assert.equal(replies[1].target,null);
+    assert.equal((await read('b','detail',id(1))).replyTargets[0].count,1);
+    await write('a','edit',id(1),draft({body:'Replacement caption.',version:1}));
+    assert.deepEqual((await read('b','replies',id(1)))[0].target,target);
+    await write('b','reply',id(1),payload); // A lost success response still reconciles after an edit.
+    await assert.rejects(write('b','reply',id(1),{...payload,requestID:id(42)}),/CONFLICT/);
+    await assert.rejects(write('b','reply',id(1),{...payload,target:null}),/CONFLICT/);
+    await write('a','create',id(2),draft({body:'Other post.'}));
+    await assert.rejects(write('b','reply',id(2),{...payload,requestID:id(43)}),/CONFLICT/);
+    await db.exec("update app_users set is_private=true where id='a'");
+    await assert.rejects(db.query('select captro_tea_reply_revision($1,$2,$3)',['b',id(1),1]),/UNAVAILABLE/);
+    await db.exec('set role authenticated');
+    await assert.rejects(db.query('select * from app_tea_revisions'),/permission denied/);
+    await assert.rejects(db.query('select captro_tea_reply_revision($1,$2,$3)',['a',id(1),1]),/permission denied/);
+  } finally {await db.close();}
+});
 test('links are bounded HTTPS destinations, preserve queries and reject ambiguous or forged payloads',()=>{
   assert.deepEqual(discussionLinks(['https://youtube.com/watch?v=a&token=private','https://example.com/a']),['https://youtube.com/watch?v=a&token=private','https://example.com/a']);
   assert.deepEqual(discussionLinks(['https://youtube.com/a','https://youtube.com/a']),['https://youtube.com/a']);
@@ -25,6 +54,7 @@ async function database() {
     insert into app_users(id,supabase_user_id,full_name,username) values('a','${id(100)}','Artist','artist'),('b','${id(101)}','Reader','reader'),('c','${id(102)}','Other','other');
     grant select,update on app_users to service_role; grant select on app_blocks,app_follows to service_role;`);
   await db.exec(readFileSync(new URL('../../supabase/migrations/20261114230954_tea_conversations.sql',import.meta.url),'utf8'));
+  await db.exec(readFileSync(new URL('../../supabase/migrations/20261115014511_tea_sentence_replies.sql',import.meta.url),'utf8'));
   const write=async(actor,action,post,data)=>(await db.query('select captro_tea_write($1,$2,$3,$4) value',[actor,action,post,JSON.stringify(data)])).rows[0].value;
   const read=async(actor,kind,post=null,before=null,boundary=null,snapshot=new Date(Date.now()+60000).toISOString())=>(await db.query('select captro_tea_read($1,$2,$3,$4,$5,$6) value',[actor,kind,post,before,boundary,snapshot])).rows[0].value;
   return {db,write,read};

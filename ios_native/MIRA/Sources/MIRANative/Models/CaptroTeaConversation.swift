@@ -16,6 +16,21 @@ struct CaptroTeaConversation: Codable, Identifiable, Hashable {
   var version: Int
   var isAuthor: Bool
   var following: Bool
+  var sentences: [CaptroTeaReplyTarget]? = nil
+  var replyTargets: [CaptroTeaReplyCount]? = nil
+  var replyCount: Int? = nil
+}
+
+struct CaptroTeaReplyTarget: Codable, Identifiable, Hashable {
+  let id: String
+  let version: Int
+  let start: Int
+  let end: Int
+  let quote: String
+}
+struct CaptroTeaReplyCount: Codable, Hashable {
+  let target: CaptroTeaReplyTarget
+  let count: Int
 }
 
 struct CaptroTeaReply: Codable, Identifiable {
@@ -23,6 +38,19 @@ struct CaptroTeaReply: Codable, Identifiable {
   let body: String
   let author: CaptroTeaAuthor
   let createdAt: String
+  var target: CaptroTeaReplyTarget? = nil
+}
+
+struct CaptroTeaReplyGroup: Identifiable {
+  var id: String { replies[0].id }
+  var replies: [CaptroTeaReply]
+  static func consecutive(_ replies: [CaptroTeaReply]) -> [Self] {
+    replies.reduce(into: []) { groups, reply in
+      if groups.last?.replies.last?.author.id == reply.author.id {
+        groups[groups.count - 1].replies.append(reply)
+      } else { groups.append(Self(replies: [reply])) }
+    }
+  }
 }
 
 struct CaptroTeaConversationPage<Item: Decodable>: Decodable {

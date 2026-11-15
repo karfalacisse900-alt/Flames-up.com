@@ -127,6 +127,7 @@ private struct TeaConversationTime: View {
   @State private var editing = false
   @State private var profile: CaptroProfileLink?
   @State private var linkError: String?
+  @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
 
   init(post: CaptroTeaConversation, api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void) {
@@ -137,26 +138,30 @@ private struct TeaConversationTime: View {
   var body: some View {
     List {
       if let post = model.post, model.valid {
+        authorHeader(post).listRowSeparator(.hidden).listRowBackground(Color.clear)
         VStack(alignment: .leading, spacing: 12) {
           Text(post.title).font(.title3.weight(.bold)).accessibilityAddTraits(.isHeader)
-          HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-              Text(post.author.name).font(.subheadline.weight(.semibold))
-              HStack(spacing: 6) {
-                if !post.author.username.isEmpty {
-                  Text("@" + post.author.username).font(.caption).foregroundStyle(.secondary)
-                }
-                TeaConversationTime(value: post.createdAt)
+          if let sentences = post.sentences, !sentences.isEmpty {
+            ForEach(sentences) { sentence in
+              VStack(alignment: .leading, spacing: 6) {
+                Text(sentence.quote).font(.body).fixedSize(horizontal: false, vertical: true)
+                  .textSelection(.enabled)
+                  .contextMenu { Button("Reply to this part") { target(sentence) } }
+                  .accessibilityAction(named: "Reply to this part") { target(sentence) }
+                  .accessibilityIdentifier("tea.sentence." + sentence.id)
+                sentenceThread(sentence, post: post)
               }
             }
-            Spacer(minLength: 8)
-            Button(post.following ? "Following" : "Follow") {
-              if viewerID == nil { signIn() } else { Task { await model.follow() } }
-            }.font(.subheadline.weight(.semibold)).frame(minWidth: 44, minHeight: 44)
-              .disabled(model.busy).accessibilityLabel(post.following ? "Unfollow discussion" : "Follow discussion")
-              .accessibilityIdentifier("tea.conversation.follow")
+            ForEach((post.replyTargets ?? []).filter { count in !sentences.contains { $0.id == count.target.id } }, id: \.target.id) { count in
+              VStack(alignment: .leading, spacing: 4) {
+                Text("Earlier text").font(.caption).foregroundStyle(.secondary)
+                Text(count.target.quote).font(.subheadline).foregroundStyle(.secondary)
+                sentenceThread(count.target, post: post)
+              }
+            }
+          } else {
+            Text(post.body).font(.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
           }
-          Text(post.body).font(.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
           let links = post.links.compactMap(CaptroTeaLink.init)
           if !links.isEmpty {
             TeaLinkFlow(spacing: 8) {
@@ -181,16 +186,19 @@ private struct TeaConversationTime: View {
           if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
         }.listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
           .listRowSeparator(.hidden).listRowBackground(Color.clear)
-        ForEach(model.replies) { reply in
-          VStack(alignment: .leading, spacing: 6) {
-            HStack {
-              Text(reply.author.name).font(.subheadline.weight(.semibold))
-              Spacer(); TeaConversationTime(value: reply.createdAt)
-            }
-            Text(reply.body).font(.body).fixedSize(horizontal: false, vertical: true)
-          }.padding(.vertical, 6).listRowBackground(Color.clear)
-            .accessibilityIdentifier("tea.reply." + reply.id)
-        }
+        HStack {
+          Text((post.replyTargets ?? []).isEmpty ? "\(post.replyCount ?? model.replies.count) replies" : "General replies")
+            .font(.subheadline).foregroundStyle(.secondary)
+          Spacer()
+          Button {
+            if viewerID == nil { signIn() } else { Task { await model.follow() } }
+          } label: { Image(systemName: post.following ? "bookmark.fill" : "bookmark").frame(width: 44, height: 44) }
+            .buttonStyle(.plain).disabled(model.busy)
+            .accessibilityLabel(post.following ? "Unfollow discussion" : "Follow discussion")
+            .accessibilityIdentifier("tea.conversation.follow")
+        }.listRowSeparator(.hidden).listRowBackground(Color.clear)
+        TeaReplyGroups(replies: model.replies.filter { $0.target == nil })
+          .listRowSeparator(.hidden).listRowBackground(Color.clear)
         if model.loadingReplies { ProgressView("Loading replies").listRowSeparator(.hidden) }
         if model.nextCursor != nil {
           Button("More replies") { Task { await model.loadReplies(reset: false) } }.frame(minHeight: 44).disabled(model.loadingReplies)
@@ -219,16 +227,31 @@ private struct TeaConversationTime: View {
       #if DEBUG
       .overlay(alignment: .bottomTrailing) { TeaReviewRequestCounter().allowsHitTesting(false) }
       #endif
+      .navigationBarBackButtonHidden(true)
       .toolbar {
-        if model.post?.isAuthor == true {
-          ToolbarItem(placement: .topBarTrailing) {
-            Button { editing = true } label: { Image(systemName: "pencil").frame(minWidth: 44, minHeight: 44) }
-              .accessibilityLabel("Edit Tea post").accessibilityIdentifier("tea.conversation.edit")
-          }
+        ToolbarItem(placement: .topBarLeading) {
+          Button { dismiss() } label: {
+            Image(systemName: "chevron.left").font(.headline).frame(width: 44, height: 44)
+              .background(MIRATheme.Color.surface, in: Circle())
+          }.accessibilityLabel("Back")
         }
       }
       .safeAreaInset(edge: .bottom, spacing: 0) {
         if model.post != nil, model.valid {
+          VStack(alignment: .leading, spacing: 8) {
+          if let target = model.replyTarget {
+            HStack(alignment: .top) {
+              Rectangle().fill(MIRATheme.Color.divider).frame(width: 2)
+              VStack(alignment: .leading, spacing: 3) {
+                Text("Replying to this line").font(.caption).foregroundStyle(.secondary)
+                Text(target.quote).font(.subheadline).lineLimit(2)
+              }
+              Spacer(minLength: 0)
+              Button { model.selectTarget(nil) } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                .disabled(model.busy || model.replyPending).accessibilityLabel("Clear reply target")
+                .accessibilityIdentifier("tea.reply.clear-target")
+            }.fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("tea.reply.target")
+          }
           HStack(alignment: .bottom, spacing: 10) {
             if viewerID == nil { Button("Sign in to reply", action: signIn).frame(maxWidth: .infinity, minHeight: 44) }
             else {
@@ -243,6 +266,7 @@ private struct TeaConversationTime: View {
               }.disabled(model.busy || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.draft.count > 4000)
                 .accessibilityLabel("Send reply").accessibilityIdentifier("tea.reply.send")
             }
+          }
           }.padding(.horizontal, 14).padding(.vertical, 8).background(MIRATheme.Color.appBackground)
             .overlay(alignment: .top) { Divider() }
         }
@@ -258,11 +282,94 @@ private struct TeaConversationTime: View {
       .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await model.load() } } }
   }
 
+  private func authorHeader(_ post: CaptroTeaConversation) -> some View {
+    HStack(alignment: .top, spacing: 8) {
+      if post.isAuthor {
+        Button { editing = true } label: { Image(systemName: "pencil").frame(width: 44, height: 44) }
+          .accessibilityLabel("Edit Tea post").accessibilityIdentifier("tea.conversation.edit")
+      }
+      Spacer(minLength: 0)
+      Button { profile = CaptroProfileLink(id: post.author.id) } label: {
+        HStack(spacing: 10) {
+          VStack(alignment: .trailing, spacing: 3) {
+            Text(post.author.name).font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing)
+            Text("@" + post.author.username).font(.caption).foregroundStyle(.secondary)
+            TeaConversationTime(value: post.createdAt)
+          }
+          Group {
+            if let photo = model.authorProfile?.profileImage, !photo.isEmpty {
+              RemoteAvatar(url: photo, size: 44)
+            } else {
+              Text(post.author.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined())
+                .font(.headline).frame(width: 44, height: 44).background(MIRATheme.Color.surfaceSoft, in: Circle())
+            }
+          }.accessibilityHidden(true)
+        }.padding(.bottom, post.isAuthor ? 0 : 10)
+      }.buttonStyle(.plain).accessibilityLabel("Open profile for " + post.author.name)
+        .accessibilityIdentifier("tea.author.profile")
+        .overlay(alignment: .bottomTrailing) {
+          if !post.isAuthor {
+            Button {
+              if viewerID == nil { signIn() } else { Task { await model.followAuthor() } }
+            } label: {
+              Image(systemName: model.authorProfile?.viewerFollowing == true ? "checkmark" : model.authorProfile?.followPending == true ? "clock" : "plus")
+                .font(.system(size: 10, weight: .bold)).foregroundStyle(MIRATheme.Color.appBackground)
+                .frame(width: 18, height: 18).background(MIRATheme.Color.textPrimary, in: Circle())
+                .frame(width: 44, height: 44, alignment: .bottomTrailing).contentShape(Rectangle())
+            }.buttonStyle(.plain).disabled(model.followingAuthor)
+              .accessibilityLabel(model.authorProfile?.viewerFollowing == true ? "Unfollow author" : model.authorProfile?.followPending == true ? "Cancel follow request" : "Follow author")
+              .accessibilityIdentifier("tea.author.follow")
+          }
+        }
+    }.foregroundStyle(MIRATheme.Color.textPrimary)
+  }
+  private func target(_ sentence: CaptroTeaReplyTarget) {
+    if viewerID == nil { signIn() } else { model.selectTarget(sentence) }
+  }
+  @ViewBuilder private func sentenceThread(_ target: CaptroTeaReplyTarget, post: CaptroTeaConversation) -> some View {
+    let count = post.replyTargets?.first { $0.target.id == target.id }?.count ?? 0
+    if count > 0 {
+      let expanded = model.expandedTargets.contains(target.id)
+      Button {
+        if expanded { model.expandedTargets.remove(target.id) } else { model.expandedTargets.insert(target.id) }
+      } label: { Text(expanded ? "Hide replies" : "\(count) replies to this line").font(.subheadline).underline().frame(minHeight: 44) }
+        .buttonStyle(.plain).accessibilityIdentifier("tea.thread." + target.id)
+      if expanded {
+        VStack(alignment: .leading, spacing: 8) {
+          TeaReplyGroups(replies: model.replies.filter { $0.target?.id == target.id })
+          if count > model.replies.filter({ $0.target?.id == target.id }).count, model.nextCursor != nil {
+            Button("Load more replies") { Task { await model.loadReplies(reset: false) } }.frame(minHeight: 44).disabled(model.loadingReplies)
+          }
+        }.padding(.leading, 14).overlay(alignment: .leading) { Rectangle().fill(MIRATheme.Color.divider).frame(width: 2) }
+      }
+    }
+  }
+
   private func open(_ link: CaptroTeaLink) {
     linkError = nil
     if let destination = link.profile { profile = destination; return }
     UIApplication.shared.open(link.url, options: [:]) { success in
       if !success { Task { @MainActor in linkError = "Couldn’t open this website. Try again." } }
+    }
+  }
+}
+
+
+private struct TeaReplyGroups: View {
+  let replies: [CaptroTeaReply]
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      ForEach(CaptroTeaReplyGroup.consecutive(replies)) { group in
+        VStack(alignment: .leading, spacing: 6) {
+          Text(group.replies[0].author.name).font(.subheadline.weight(.semibold))
+          ForEach(group.replies) { reply in
+            VStack(alignment: .leading, spacing: 3) {
+              Text(reply.body).font(.body).fixedSize(horizontal: false, vertical: true)
+              TeaConversationTime(value: reply.createdAt)
+            }.frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("tea.reply." + reply.id)
+          }
+        }
+      }
     }
   }
 }
