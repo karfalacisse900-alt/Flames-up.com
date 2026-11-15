@@ -440,14 +440,20 @@ th {
 }
 .skip {
   position: fixed;
-  top: -80px;
+  top: 10px;
   left: 20px;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
   background: white;
   padding: 14px;
   z-index: 10;
 }
 .skip:focus {
-  top: 10px;
+  clip-path: none;
+  width: auto;
+  height: auto;
 }
 @media (max-width: 1050px) {
   .sidebar {

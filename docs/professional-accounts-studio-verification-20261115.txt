@@ -1,0 +1,158 @@
+CAPTRO PROFESSIONAL ACCOUNTS + STUDIO — IMPLEMENTATION AND VERIFICATION
+Prepared 15 November 2026. Branch: feature/professional-accounts-studio
+Baseline: c839f7ad42c574101803d98dd5ac61d8bbab7013
+Native validation source: f7b5043 (final results appended below).
+
+DELIVERY BOUNDARY
+Implemented in the existing native app, existing Worker, existing admin console,
+and new studio-web directory. No production migration, Worker deployment, website
+publication, TestFlight upload, role assignment to a real account, charge or payout
+was performed. Test fixtures contain synthetic accounts only.
+The three new profile mockups were not available in the supplied message or the
+linked conversation. That conversation exposed one existing post-details screenshot.
+The implementation preserves the actual Captro profile and follows the written role
+requirements; exact matching to three unavailable images cannot be claimed.
+
+IMPLEMENTED
+1. iPhone Settings / application
+   Apply independently for Creator / Gig and Business. Optional HTTPS links;
+   business operating area and pickup preference; explicit public versus reviewer-only
+   fields. Save draft, cancel unsaved edits, submit, see review status and applicant
+   message, revise and resubmit. Submission never grants a role. Existing accounts
+   keep regular features. No banking or identity-document fields were added.
+2. Review / role lifecycle
+   Existing private admin console has a paginated Professional accounts queue,
+   applicant details, reasoned approve/request-changes/decline decisions, private
+   internal notes and audit history. Owner/admin only, fresh server authorization.
+   Independent suspend/restore/remove actions for each role. Version checks and
+   idempotent operation IDs protect against repeated and concurrent decisions.
+   Role removal does not delete posts, accounts, purchases or financial journals.
+3. Public profile / eligibility
+   Explicit public projection includes active approved roles, public descriptions,
+   links, authorized portfolio posts and eligible published/unpaused business menus.
+   Regular and pending accounts have no creator Support or business Menu from an
+   application. Dual-role profiles can switch their professional presentation.
+   Existing Follow, Message, Moments, Plans, Clubs and grid behavior are retained.
+   A real future hosted plan can supply the compact gig row; no synthetic gig is added.
+   Support requires active Creator approval AND existing Stripe/readiness/storefront
+   checks. Approval never enables checkout or changes rollout/payment flags.
+4. Captro Studio (unpublished)
+   Separate responsive website; existing account/password authentication, or a
+   single-use 60-second handoff from Settings for existing Apple/Google sessions.
+   Handoff becomes a narrow, revocable one-hour Studio credential. Exact-origin and
+   method/path restrictions; no admin, publishing, account-security or payment-creation
+   endpoints are granted to the delegated token. Account and role checks remain on
+   the server for every protected action. No second account or onboarding system.
+   Creator: public info, authorized portfolio selection, existing post visibility/pin,
+   editable existing gig details, actual Support readiness, ledger and payout history.
+   Business: public info, storefront photos through existing approval pipeline, hours,
+   dated movable-vendor pickup location/instructions, menu/category/prices/finite stock,
+   QUICK_ADD/CUSTOMIZE options, ordering pause, existing orders and one-use pickup
+   verification, sales/history. Native camera QR scanning remains available; Studio
+   accepts a connected QR reader or pasted pickup code, not a new camera scanner.
+   Both roles can switch workspaces. Suspended/removed roles retain history and existing
+   order resolution while new ordering and editing are denied. Legacy business owners
+   retain native Settings access to existing orders without automatic approval.
+
+SOURCE MAP
+- backend-cf/src/professional-accounts.ts: validation, own application API, private
+  review API, Studio handoff/exchange/revocation and endpoint scope.
+- backend-cf/src/index.ts: canonical auth integration, public DTO, portfolio visibility,
+  trusted Creator/Business checks, Support readiness, Studio origins and media guards.
+- backend-cf/src/business-ordering.ts: server-side Business role gates, historical
+  owner access, existing ordering/pickup/refund adapters, stock and pickup fields.
+- backend-cf/src/creator-support.ts: role and provider readiness in eligibility;
+  existing payment accounting, webhooks, fees, settlement and payouts are reused.
+- backend-cf/src/tea.ts: business discovery excludes inactive Business roles;
+  club/event/conversation behavior is unchanged.
+- supabase/migrations/20261115224938_professional_accounts_studio.sql: application,
+  role, immutable audit, hashed Studio session records; atomic review operations;
+  financial insert guards; finite stock reservation/release and discovery guard.
+- ios_native/MIRA/Sources/MIRANative/Models/CaptroProfessionalAccount.swift
+- ios_native/MIRA/Sources/MIRANative/Screens/CaptroProfessionalAccountsView.swift
+- SettingsNativeView.swift, ProfileChatVerificationStudio.swift,
+  Components/CaptroProfilePresentation.swift, Models/MIRAModels.swift: integration.
+- Components/CaptroCreatorSupport.swift: server-confirmed visibility; known approved
+  creators get a safe retry after transient failure, never unchecked checkout.
+- admin-web/src/ProfessionalPage.tsx and professional.css: existing private console.
+- studio-web/src: main.tsx, api.ts, Creator.tsx, Business.tsx, components.tsx, style.css.
+- DEBUG-only CaptroProfessionalReviewHost.swift and updated Support review transport
+  wrap the real shipping views with isolated HTTP fixtures; not production demo data.
+
+PREPARED MIGRATION / CONFIGURATION
+The migration depends on the existing app_users/admin_roles/purchases infrastructure
+and 20261112030025_captro_business_ordering.sql. Read-only production catalog inspection
+found Business and Professional tables absent. Do not apply the new migration alone
+against that schema. It was exercised in isolated PGlite Postgres with the existing
+Business ordering migration, RPCs and fixture financial lifecycle.
+The migration grants no anonymous/authenticated table access. Service-only RPCs use
+trusted account IDs, active account status and server-managed admin roles. No role is
+backfilled from email, profile metadata, historical payments or application submission.
+Finite stock defaults to NULL (unlimited), preserving old records; no old commitment
+is reinterpreted. Only cancelled, unpaid awaiting_payment orders release reserved stock.
+Fulfillment/refund updates remain possible after role suspension/removal.
+
+Future approved rollout sequence:
+- Review Business migration dependencies and current production schema first. Take the
+  established backup and rehearse restoration/forward repair in a disposable database.
+- Apply the prepared schema before deploying a Worker that reads it. No live Support
+  or Business checkout flags are enabled as part of these changes.
+- Configure CAPTRO_STUDIO_ORIGIN to the final owned HTTPS root origin (currently unset).
+  VITE_CAPTRO_API_BASE defaults to https://api.flames-up.com/api; use the matching test
+  API for isolated verification. Align Studio public/_headers connect-src with that API.
+- Verify actual email/password login and iPhone Apple/Google handoff, expiry, logout,
+  revocation and origin checks against that environment. Browser fixtures alone do not
+  verify provider OAuth, live credentials, email delivery or cross-device handoff.
+- Deploy matching Worker/admin/native only after separately authorized validation.
+  Studio remains unpublished until explicitly authorized. Review existing creators and
+  businesses explicitly; no automatic grants are supplied.
+- Keep reconciliation and historical order/refund endpoints active during rollout or
+  incident gating. Prefer disabling new professional mutations/checkouts and forward
+  repair over dropping role/audit/session/financial data. Do not roll back to a Worker
+  that omits professional checks while leaving new commerce available.
+
+VALIDATION COMPLETED
+Windows commands, run from the named directories:
+- backend-cf: npm test — 420 passed, 0 failed, 0 skipped (full suite).
+- backend-cf: npx tsc --noEmit — passed.
+- studio-web: npm run build — TypeScript and production Vite build passed.
+- studio-web: node tests/studio.browser.mjs — 25 checks passed, 1440x1050 and
+  390x844; role switching, gig edit, disabled Support, actual order action request,
+  rejected action retaining state, customization, failed sales not zero, cancel,
+  suspension, signout, regular/pending/declined/business-only and revoked account.
+- admin-web: npm run build — TypeScript and production Vite build passed.
+- admin-web: node tests/professional.browser.mjs — desktop and tablet queue,
+  selected application, reasoned approval, version/idempotency and audit passed.
+- git diff --check — passed.
+Backend regression coverage includes isolated real SQL review lifecycle, role
+independence, stale/replayed decisions, forbidden writes, immutable audit, single-use
+handoff, revocation/bans, optional-site validation, protected-field rejection; actual
+Business HTTP routes + Postgres for pricing, repeated test checkout, provider replay,
+fulfillment, one-use pickup, refunds, finite stock and suspension continuity.
+The Stripe adapter uses isolated test-object fixtures. No live Stripe payment was
+created; this is not proof of processor onboarding, live funds or production payouts.
+An obsolete profile source-text assertion was replaced with an assertion that both
+profiles use the shared filtering function, plus a native behavior test ensuring
+legacy text and duplicate posts do not enter Moments. No tests were skipped.
+
+NATIVE / PHYSICAL STATUS
+GitHub simulator run 43774092489 built both targets. Initial Settings tests used an
+incorrect text selector (combined accessibility label); corrected to stable IDs.
+The actual three-profile UI check passed on iPhone 13 mini in that run. Its failed
+Settings checks were not presented as successful verification.
+Expanded run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43776303815
+Exact native results and screenshot inventory will be appended after completion.
+No physical iPhone, production build, provider login, real upload approval or real
+Stripe test-account interaction was exercised in this task.
+
+REMAINING RELEASE LIMITS
+- Existing Business ordering infrastructure is test-only and has no live payout
+  release adapter. This task reuses it and does not pretend Business sales are
+  withdrawable or introduce a competing ledger. Live Business release remains blocked.
+- Support uses existing readiness/accounting/payout flows; no payment gate, fee or
+  financial setting was enabled or changed. Creator approval is a separate prerequisite.
+- Actual production schema rollout, Studio domain publication/configuration, real
+  identity-provider handoff, physical-device checks and processor end-to-end evidence
+  remain separate work requiring the appropriate environment and release authorization.
+- Existing dependency advisories are outside this focused implementation. No unrelated
+  dependency/security migration or broad app redesign was applied.

@@ -174,7 +174,7 @@ function App() {
           <button onClick={() => void signOut()}>Sign out</button>
         </div>
       </aside>
-      <main id="workspace" className="workspace">
+      <main id="workspace" className="workspace" tabIndex={-1}>
         <div className="topbar">
           <span>
             {workspace === "creator" ? "Creator / Gig" : "Business"} / {page}

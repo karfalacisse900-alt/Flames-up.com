@@ -332,6 +332,40 @@ try {
     tests++;
     await context.close();
   }
+  for (const accountState of ["regular", "under_review", "declined", "business_only", "banned"]) {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await context.addInitScript(() => sessionStorage.setItem("captro.studio.access", "fixture-only"));
+    let revoked = accountState === "banned";
+    const paths = [];
+    await context.route("**/api/**", async route => {
+      const path = new URL(route.request().url()).pathname.replace("/api", ""); paths.push(path);
+      const data = revoked ? { detail: "This account no longer has access." }
+        : path === "/auth/me" ? { id: "sample", username: "sample" }
+        : path === "/professional/me" ? {
+          applications: accountState === "regular" || accountState === "business_only" ? [] : [{ role: "creator", status: accountState }],
+          roles: accountState === "business_only" ? [{ role: "business", status: "active", version: 1, public_data: publicBusiness }] : []
+        } : path === "/business-owner/shops" ? [] : {};
+      await route.fulfill({ status: revoked ? 403 : 200, contentType: "application/json", body: JSON.stringify(data) });
+    });
+    const page = await context.newPage(); await page.goto("http://127.0.0.1:4180/");
+    if (accountState === "banned") {
+      await page.getByRole("heading", { name: "Your professional workspace" }).waitFor();
+      await page.getByText("This account no longer has access.").waitFor();
+      assert.equal(await page.evaluate(() => sessionStorage.getItem("captro.studio.access")), null);
+    } else if (accountState === "business_only") {
+      await page.getByLabel("Workspace", { exact: true }).selectOption("business");
+      assert.equal(await page.locator('select[aria-label="Workspace"] option').count(), 1);
+      assert.equal(await page.getByRole("button", { name: "Support", exact: true }).count(), 0);
+      assert.ok(!paths.some(p => p.includes("/earnings")));
+      revoked = true; await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.getByText("This account no longer has access.").waitFor();
+      assert.equal(await page.getByRole("button", { name: "Save storefront" }).count(), 0);
+    } else {
+      await page.getByRole("heading", { name: "Approval required" }).waitFor();
+      assert.ok(!paths.some(p => p.includes("/business-owner/") || p.includes("/earnings")));
+    }
+    tests++; await context.close();
+  }
   console.log(
     `PASS ${tests} Studio browser checks across desktop and mobile; screenshots: ${output}`,
   );
