@@ -402,6 +402,7 @@ private struct ProfileGridSkeleton: View {
 }
 
 public struct ProfileNativeView: View {
+  @State private var professionalSelection = "creator"
   @StateObject private var model: ProfileNativeModel
   @State private var selectedSection: CaptroProfileSection = .moments
   @State private var showEditProfile = false
@@ -731,7 +732,7 @@ public struct ProfileNativeView: View {
 
   private var profileHeader: some View {
     VStack(alignment: .leading, spacing: 18) {
-      CaptroProfileIntroduction(user: model.user)
+      CaptroProfessionalProfileHeader(user: model.user, api: model.api, selection: $professionalSelection)
       HStack(spacing: 10) {
       Button { showEditProfile = true } label: {
         Text("Edit profile")
@@ -1248,6 +1249,7 @@ final class UserProfileNativeModel: ObservableObject {
 }
 
 public struct UserProfileNativeView: View {
+  @State private var professionalSelection = "creator"
   @State private var selectedSection: CaptroProfileSection = .moments
   @Environment(\.scenePhase) private var profileScenePhase
   @State private var queuedCommentReport: MIRAComment?
@@ -1509,7 +1511,7 @@ public struct UserProfileNativeView: View {
 
   private var profileHeader: some View {
     VStack(alignment: .leading, spacing: 18) {
-      CaptroProfileIntroduction(user: model.user)
+      CaptroProfessionalProfileHeader(user: model.user, api: model.api, selection: $professionalSelection)
       if model.isBlocked {
         profileStatusNotice("You blocked this user. Unblock them to message or follow again.")
       } else if model.isBlockedBy {
@@ -1532,7 +1534,7 @@ public struct UserProfileNativeView: View {
           }
           .buttonStyle(CaptroProfileActionStyle())
           .disabled(isOpeningMessage || model.user == nil)
-          if let user = model.user {
+          if let user = model.user, professionalSelection == "creator" {
             CaptroSupportAction(creatorID: model.userId, name: CaptroSupportPolicy.recipientName(user.fullName, fallback: user.displayName),
               username: user.username ?? "", avatar: user.profileImage, api: model.api)
           }

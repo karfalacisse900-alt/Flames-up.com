@@ -79,6 +79,7 @@ targets:
     type: bundle.unit-test
     platform: iOS
     sources:
+      - path: Tests/MIRANativeTests/CaptroProfessionalTests.swift
       - path: Tests/MIRANativeTests/CaptroStampTests.swift
       - path: Tests/MIRANativeTests/CaptroPostDetailsTests.swift
       - path: Tests/MIRANativeTests/CaptroPostMediaTests.swift

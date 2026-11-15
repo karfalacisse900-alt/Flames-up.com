@@ -87,7 +87,7 @@ struct CaptroSupportAction: View {
   @State private var presented = false
   @State private var unavailableMessage = "No payment was started."
   private var identity: String { "\(viewerID ?? "guest"):\(creatorID)" }
-  private struct Eligibility: Decodable { let enabled: Bool; let mode: String?; let reason: String? }
+  private struct Eligibility: Decodable { let visible: Bool?; let enabled: Bool; let mode: String?; let reason: String? }
   @State private var paymentMode = "unknown"
   private var actionContent: some View {
     // The task decides visibility from the real storefront and viewer identity.
@@ -130,16 +130,6 @@ struct CaptroSupportAction: View {
       guard let viewerID, viewerID != creatorID else { return }
       let storefront = await runtime.currentStorefront()
       guard !Task.isCancelled, expected == identity, CaptroSupportPolicy.permits(storefront: storefront) else { return }
-      // This local guard controls presentation only; the server remains the
-      // authority for live rollout, creator approval, and payout readiness.
-      guard runtime.enabled else {
-        visibleInStorefront = true
-        unavailableMessage = "Captro has not enabled Support checkout yet. No payment can be made right now."
-        return
-      }
-      // Keep the layout stable while the server verifies the creator. The
-      // button is visible but temporarily disabled until that answer arrives.
-      visibleInStorefront = true
       await refreshEligibility(expected: expected)
       for await _ in Storefront.updates {
         guard !Task.isCancelled else { return }
@@ -167,7 +157,8 @@ struct CaptroSupportAction: View {
       let result: Eligibility = try await api.get("/creator-support/eligibility/\(creatorID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")")
       guard !Task.isCancelled, expected == identity else { return }
       paymentMode = result.mode ?? "unknown"
-      failed = false; canCheckout = result.enabled
+      visibleInStorefront = result.visible == true
+      failed = false; canCheckout = result.enabled && runtime.enabled
       if !canCheckout {
         presented = false
         unavailableMessage = result.reason == "rollout_disabled"

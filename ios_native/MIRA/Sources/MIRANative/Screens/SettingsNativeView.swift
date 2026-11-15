@@ -275,8 +275,8 @@ public struct SettingsNativeView: View {
 
         SettingsCard(title: localization.string("settings.account")) {
           SettingsNavigationRow(
-            title: "Business management", subtitle: "", systemImage: "storefront",
-            destination: CaptroBusinessOwner(api: model.api)
+            title: "Apply for a professional account", subtitle: "Creator / Gig or Business", systemImage: "person.crop.rectangle",
+            destination: CaptroProfessionalAccountsView(api: model.api)
           )
           SettingsNavigationRow(
             title: "Account", subtitle: "", systemImage: "person",

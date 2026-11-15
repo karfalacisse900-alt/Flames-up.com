@@ -58,6 +58,7 @@ public enum MIRAUsernameRules {
 }
 
 public struct MIRAUser: Codable, Identifiable, Hashable {
+  public var professional: [CaptroProfessionalPublicRole]? = nil
   public var openTo: String? = nil
   public var followPending: Bool? = nil
   public let id: String

@@ -148,12 +148,13 @@ struct CaptroProfilePlans: View {
 
 struct CaptroProfileIntroduction: View {
   let user: MIRAUser?
+  var professionalRole: CaptroProfessionalPublicRole? = nil
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
       HStack(spacing: 18) {
         RemoteAvatar(url: user?.profileImage, size: 84)
         VStack(alignment: .leading, spacing: 5) {
-          Text(user?.fullName?.nonemptyProfileText ?? user?.displayName ?? "Profile")
+            Text(professionalRole?.displayName ?? user?.fullName?.nonemptyProfileText ?? user?.displayName ?? "Profile")
             .font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
           if let username = user?.username {
             Text("@\(MIRAUsernameRules.normalized(username))").foregroundStyle(.secondary)
