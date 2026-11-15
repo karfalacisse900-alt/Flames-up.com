@@ -46,6 +46,7 @@ struct CaptroProfessionalState: Decodable {
   var applications: [CaptroProfessionalRecord]
   var roles: [CaptroProfessionalRecord]
   var studioUrl: String?
+  var hasBusinessHistory: Bool?
 }
 public struct CaptroProfessionalPublicRole: Codable, Hashable, Identifiable {
   public let role: String

@@ -132,8 +132,8 @@ export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
     c.header('Cache-Control', 'no-store');
     try {
       if (!await s.professional(c, c.req.param('creator'))) return c.json({ visible: false, enabled: false, mode: s.mode(c), reason: 'professional_required' });
-      if (!s.enabled(c)) return c.json({ visible: true, enabled: false, mode: s.mode(c), reason: 'rollout_disabled' });
       await s.authorize(c, s.viewer(c), c.req.param('creator'));
+      if (!s.enabled(c)) return c.json({ visible: true, enabled: false, mode: s.mode(c), reason: 'rollout_disabled' });
       return c.json({ visible: true, enabled: true, mode: s.mode(c), ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE });
     }
     catch (error) {

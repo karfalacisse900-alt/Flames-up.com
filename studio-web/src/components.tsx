@@ -1,9 +1,36 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, APIError, uploadPhoto } from "./api";
-export function Modal({children,close,label}:{children:ReactNode;close:()=>void;label:string}) {
-  const dialog=useRef<HTMLDialogElement>(null);
-  useEffect(()=>{const previous=document.activeElement as HTMLElement;dialog.current?.showModal();return()=>{dialog.current?.close();previous?.focus();};},[]);
-  return <dialog ref={dialog} className="modal" aria-label={label} onCancel={event=>{event.preventDefault();close();}}>{children}</dialog>;
+export function Modal({
+  children,
+  close,
+  label,
+}: {
+  children: ReactNode;
+  close: () => void;
+  label: string;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement;
+    dialog.current?.showModal();
+    return () => {
+      dialog.current?.close();
+      previous?.focus();
+    };
+  }, []);
+  return (
+    <dialog
+      ref={dialog}
+      className="modal"
+      aria-label={label}
+      onCancel={(event) => {
+        event.preventDefault();
+        close();
+      }}
+    >
+      {children}
+    </dialog>
+  );
 }
 export function useData<T>(path: string | null) {
   const [value, setValue] = useState<T>(),

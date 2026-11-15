@@ -202,7 +202,25 @@ try {
           ],
           nextOffset: null,
         };
-      else if (path === "/users/sample/posts") data = [];
+      else if (path === "/users/sample/posts")
+        data = [
+          {
+            id: "gig",
+            title: "Sample performance",
+            post_type: "event",
+            visibility: "public",
+            detail: {
+              event: {
+                creatorEditable: true,
+                startsAt: "2026-12-15T19:00:00Z",
+                timeZone: "America/New_York",
+                venueName: "Sample venue",
+                attendanceEnabled: true,
+              },
+            },
+          },
+        ];
+      else if (path === "/posts/gig/event") data = { ok: true };
       else if (path === "/professional/creator/edit_public")
         data = { ok: true };
       else {
@@ -218,6 +236,15 @@ try {
     const page = await context.newPage();
     await page.goto("http://127.0.0.1:4180/");
     await page.getByRole("heading", { name: "Sample Artist" }).waitFor();
+    tests++;
+    await page.getByRole("button", { name: "Edit gig details" }).click();
+    await page.getByLabel("Public venue").fill("Updated sample venue");
+    await page.getByRole("button", { name: "Save gig details" }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    assert.equal(
+      calls.find((c) => c.path === "/posts/gig/event").body.venueName,
+      "Updated sample venue",
+    );
     tests++;
     await page.getByRole("button", { name: "Support", exact: true }).click();
     await page.getByText("Gross Support", { exact: true }).waitFor();

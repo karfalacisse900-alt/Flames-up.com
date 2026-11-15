@@ -573,4 +573,22 @@ th {
   font-size: 15px;
 }
 
-dialog.modal{border:1px solid var(--line)}dialog.modal::backdrop{background:#0005}.product{border:1px solid var(--line);border-radius:7px;background:white}.product-open{border:0;text-align:left;padding:0}.product-open strong{font-weight:600}
+dialog.modal {
+  border: 1px solid var(--line);
+}
+dialog.modal::backdrop {
+  background: #0005;
+}
+.product {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+}
+.product-open {
+  border: 0;
+  text-align: left;
+  padding: 0;
+}
+.product-open strong {
+  font-weight: 600;
+}

@@ -27,7 +27,18 @@ final class ProfessionalAccountTests: XCTestCase {
       capture(app,"professional-profile-"+kind);app.terminate()
     }
   }
-  func testLargeTextAndRejectedSubmissionStayHonest() {
+  func testLargeTextApplicationStatesRemainReadable() {
     let app=launch(["--professional-large-text"]);app.buttons["professional.settings"].tap();XCTAssertTrue(app.buttons["professional.apply.creator"].waitForExistence(timeout: 10));capture(app,"professional-large-text")
+  }
+  func testRejectedApplicationRetainsDraftAndDoesNotClaimApproval() {
+    let app=launch(["--professional-rejected"])
+    XCTAssertTrue(app.buttons["professional.settings"].waitForExistence(timeout:10));app.buttons["professional.settings"].tap()
+    XCTAssertTrue(app.buttons["professional.apply.creator"].waitForExistence(timeout:10));app.buttons["professional.apply.creator"].tap()
+    let name=app.textFields["professional.name"];XCTAssertTrue(name.waitForExistence(timeout:5));name.tap();name.typeText("Retained draft")
+    let description=app.textViews["professional.description"].exists ? app.textViews["professional.description"] : app.textFields["professional.description"]
+    description.tap();description.typeText("Independent artist")
+    app.swipeUp();let submit=app.buttons["professional.submit"];if !submit.isHittable { app.swipeUp() };submit.tap()
+    XCTAssertTrue(app.staticTexts["professional.error"].waitForExistence(timeout:10));XCTAssertFalse(app.staticTexts["Under review"].exists)
+    capture(app,"professional-rejected-submit")
   }
 }

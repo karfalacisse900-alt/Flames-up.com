@@ -7,7 +7,7 @@ import {
   type Role,
   type PublicData,
 } from "./api";
-import { ConfirmButton, DataState, Photo, useData } from "./components";
+import { ConfirmButton, DataState, Modal, Photo, useData } from "./components";
 export function PublicProfileForm({
   role,
   saved,
@@ -149,6 +149,18 @@ export function PublicProfileForm({
     </form>
   );
 }
+type EventData = {
+  creatorEditable?: boolean;
+  startsAt?: string;
+  endsAt?: string;
+  timeZone?: string;
+  venueName?: string;
+  address?: string;
+  city?: string;
+  price?: string;
+  currency?: string;
+  attendanceEnabled?: boolean;
+};
 type Post = {
   id: string;
   title?: string;
@@ -159,7 +171,7 @@ type Post = {
   media_thumbnail_urls?: string[];
   pinned_at?: string;
   detail?: {
-    event?: { title?: string; starts_at?: string; venue_name?: string };
+    event?: EventData;
   };
 };
 export function Creator({
@@ -214,6 +226,7 @@ function Work({
     `/users/${encodeURIComponent(userID)}/posts?skip=${offset}&limit=24`,
   );
   const [error, setError] = useState("");
+  const [editingGig, setEditingGig] = useState<Post>();
   async function portfolio(id: string) {
     const ids = role.public_data.portfolioPostIds;
     const chosen = ids.includes(id)
@@ -261,8 +274,8 @@ function Work({
             <h3>{post.title || post.caption || "Untitled moment"}</h3>
             <small>
               {words(post.post_type || "moment")}
-              {post.detail?.event?.starts_at
-                ? " · " + new Date(post.detail.event.starts_at).toLocaleString()
+              {post.detail?.event?.startsAt
+                ? " · " + new Date(post.detail.event.startsAt).toLocaleString()
                 : ""}
             </small>
             <label>
@@ -289,6 +302,14 @@ function Work({
               </select>
             </label>
             <div className="actions">
+              {post.detail?.event?.creatorEditable && (
+                <button
+                  disabled={role.status !== "active"}
+                  onClick={() => setEditingGig(post)}
+                >
+                  Edit gig details
+                </button>
+              )}
               <ConfirmButton
                 disabled={role.status !== "active"}
                 title={
@@ -328,6 +349,18 @@ function Work({
           Next
         </button>
       </div>
+      {editingGig && (
+        <Modal label="Edit gig details" close={() => setEditingGig(undefined)}>
+          <GigForm
+            post={editingGig}
+            active={role.status === "active"}
+            done={() => {
+              setEditingGig(undefined);
+              posts.reload();
+            }}
+          />
+        </Modal>
+      )}
     </>
   );
 }
@@ -559,5 +592,118 @@ function Support() {
         </>
       )}
     </>
+  );
+}
+
+function GigForm({
+  post,
+  active,
+  done,
+}: {
+  post: Post;
+  active: boolean;
+  done: () => void;
+}) {
+  const [draft, setDraft] = useState<EventData>(post.detail!.event!),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const local = (value?: string) => {
+    if (!value) return "";
+    const date = new Date(value);
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 16);
+  };
+  return (
+    <form
+      className="form"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        setError("");
+        try {
+          const { creatorEditable, ...fields } = draft;
+          await api(`/posts/${post.id}/event`, fields, "PUT");
+          done();
+        } catch (e) {
+          setError((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <h2>Edit gig details</h2>
+      <p>
+        Changes use Captro’s existing event permissions. Provider-managed and
+        paid availability rules are unchanged.
+      </p>
+      <fieldset disabled={!active || busy}>
+        <p className="quiet">
+          Date inputs use this browser’s time zone:{" "}
+          {Intl.DateTimeFormat().resolvedOptions().timeZone}. The event’s
+          display time zone is stored separately.
+        </p>
+        {(
+          [
+            ["startsAt", "Start"],
+            ["endsAt", "End"],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key}>
+            {label}
+            <input
+              type="datetime-local"
+              value={local(draft[key])}
+              onChange={(e) =>
+                setDraft((d) => ({
+                  ...d,
+                  [key]: e.target.value
+                    ? new Date(e.target.value).toISOString()
+                    : undefined,
+                }))
+              }
+            />
+          </label>
+        ))}
+        {(
+          [
+            ["timeZone", "Event time zone (for example America/New_York)", 100],
+            ["venueName", "Public venue", 180],
+            ["address", "Venue address", 260],
+            ["city", "City", 80],
+          ] as const
+        ).map(([key, label, max]) => (
+          <label key={key}>
+            {label}
+            <input
+              maxLength={max}
+              value={draft[key] ?? ""}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, [key]: e.target.value }))
+              }
+            />
+          </label>
+        ))}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.attendanceEnabled !== false}
+            onChange={(e) =>
+              setDraft((d) => ({ ...d, attendanceEnabled: e.target.checked }))
+            }
+          />{" "}
+          Allow RSVP
+        </label>
+        <div className="actions">
+          <button type="button" onClick={done}>
+            Cancel
+          </button>
+          <button className="primary">
+            {busy ? "Saving…" : "Save gig details"}
+          </button>
+        </div>
+      </fieldset>
+      {error && <p role="alert">{error}</p>}
+    </form>
   );
 }

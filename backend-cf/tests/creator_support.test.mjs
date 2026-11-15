@@ -40,12 +40,12 @@ test('handoff is deterministic per request but isolated by recipient, account an
   await assert.rejects(supportToken('','a','b',id));
 });
 function fixture() {
- const app=new Hono(); let row=null,h=null,blocked=false,revoked=false,providerFailure=false,paid=false,creates=0;
+ const app=new Hono(); let row=null,h=null,blocked=false,revoked=false,providerFailure=false,paid=false,creates=0,professional=true;
  const hash=async value=>createHash('sha256').update(value).digest('hex');
  const services={enabled:c=>supportTestEnabled(c.env),mode:c=>c.env.STRIPE_MODE,hash,viewer:c=>c.get('viewer'),limit:async()=>null,
-  professional:async()=>true,
+  professional:async()=>professional,
   authorize:async(c,buyer,creator)=>{if(providerFailure)throw new Error('private provider diagnostic');
-   if(blocked||buyer!=='buyer'||creator!=='creator')throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',403);
+   if(!professional||blocked||buyer!=='buyer'||creator!=='creator')throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',403);
    return {buyerId:'buyer-auth',buyerAppId:'buyer',creatorId:'creator-auth',creatorAppId:'creator',accountId:'trusted-account',profile:{id:'creator',username:'fixture',display_name:'Fixture creator',avatar_url:null}};},
   validateBuyer:async()=>{if(revoked)throw new SupportError('CAPTRO_SUPPORT_SESSION_EXPIRED',401);},
   handoff:async(c,tokenHash)=>h?.token_hash===tokenHash?h:null,handoffById:async(c,value)=>h?.id===value?h:null,
@@ -61,7 +61,7 @@ function fixture() {
  const env={CAPTRO_CREATOR_SUPPORT:'test',STRIPE_MODE:'test',ENVIRONMENT:'test',JWT_SECRET:'s'.repeat(48)};
  const send=(path,body,headers={})=>app.request(path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Origin:'https://captro-site.pages.dev',...headers},...(body?{body:JSON.stringify(body)}:{})},env);
  return {send,get row(){return row;},get h(){return h;},set enabled(v){env.CAPTRO_CREATOR_SUPPORT=v?'test':'blocked';},
-  set blocked(v){blocked=v;},set revoked(v){revoked=v;},set paid(v){paid=v;},set providerFailure(v){providerFailure=v;}};
+  set professional(v){professional=v;},set blocked(v){blocked=v;},set revoked(v){revoked=v;},set paid(v){paid=v;},set providerFailure(v){providerFailure=v;}};
 }
 async function handoff(f) {
  const response=await f.send('/creator-support/handoffs',{creator_id:'creator',request_key:id,storefront:'USA'},{Authorization:'buyer'});
@@ -121,4 +121,13 @@ test('eligibility distinguishes disabled/restricted creators from retryable prov
  assert.deepEqual(await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json(),{visible:false,enabled:false,mode:'test',reason:'creator_unavailable'});
  f.blocked=false;
  assert.equal((await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json()).enabled,true);
+});
+test('regular, applicant and business-only recipients stay hidden; creator approval never overrides rollout',async()=>{
+ const f=fixture();f.professional=false;
+ const state=await(await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json();
+ assert.equal(state.visible,false);assert.equal(state.enabled,false);
+ assert.equal((await f.send('/creator-support/handoffs',{creator_id:'creator',request_key:id,storefront:'USA'},{Authorization:'buyer'})).status,403);
+ f.professional=true;f.enabled=false;
+ const approved=await(await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json();
+ assert.equal(approved.visible,true);assert.equal(approved.enabled,false);assert.equal(approved.reason,'rollout_disabled');
 });

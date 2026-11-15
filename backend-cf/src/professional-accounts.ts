@@ -219,6 +219,7 @@ type Dependencies = {
   query(c: any, table: string, options: any): Promise<any[]>;
   eq(value: string): string;
   portfolio(c: any, ids: string[]): Promise<void>;
+  businessHistory(c: any): Promise<boolean>;
 };
 export function mountProfessionalAccounts(api: any, d: Dependencies) {
   const wrap = (fn: (c: any) => Promise<Response>) => async (c: any) => {
@@ -278,13 +279,15 @@ export function mountProfessionalAccounts(api: any, d: Dependencies) {
     d.auth,
     wrap(async (c) => {
       const actor = d.actor(c);
-      const [applications, roles] = await Promise.all([
+      const [applications, roles, hasBusinessHistory] = await Promise.all([
         rows(c, "app_professional_applications", actor),
         rows(c, "app_professional_roles", actor),
+        d.businessHistory(c),
       ]);
       return c.json({
         applications: applications.map(({ decided_by, ...safe }: any) => safe),
         roles,
+        has_business_history: hasBusinessHistory,
         studio_url: roles.length ? studioOrigin(c.env) : null,
       });
     }),

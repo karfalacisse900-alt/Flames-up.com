@@ -283,6 +283,7 @@ test("actual HTTP routes deny forged owner/admin operations and keep reviewer no
     limit: async () => null,
     eq: (v) => "eq." + v,
     portfolio: async () => {},
+    businessHistory: async () => true,
     rpc: async () => {
       rpcCalls++;
       return { ok: true };
@@ -317,6 +318,8 @@ test("actual HTTP routes deny forged owner/admin operations and keep reviewer no
   assert.equal((await send("/professional/me")).status, 401);
   const mine = await (await send("/professional/me", "alice")).json();
   assert.equal(mine.applications[0].decided_by, undefined);
+  assert.equal(mine.has_business_history, true);
+  assert.equal(mine.roles.length, 0, "legacy order history must not grant a role");
   assert.equal((await send("/admin/professional", "alice")).status, 403);
   assert.equal(
     (await send("/professional/creator/approve", "alice", {})).status,

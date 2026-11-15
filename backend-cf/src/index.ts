@@ -20182,11 +20182,9 @@ async function professionalPublicRoles(c: any, appId: string) {
     select: 'id,name,category,pickup_address,hours', order: 'name.asc,id.asc', limit: 10,
   }) : [];
   return Promise.all(roles.map(async row => {
-    const portfolio = [];
-    if (row.role === 'creator') for (const id of (row.public_data.portfolioPostIds || []).slice(0,9)) {
-      const [post] = await supabaseReadVisiblePosts(c,getUserId(c),{ownerId:appId,postId:id,limit:1});
-      if (post) portfolio.push(feedPostPayload(post,[],c.env));
-    }
+    const ids: string[] = row.role === 'creator' ? (row.public_data.portfolioPostIds || []).slice(0,9) : [];
+    const visible = ids.length ? await supabaseReadVisiblePosts(c,getUserId(c),{ownerId:appId,postIds:ids,limit:9}) : [];
+    const portfolio = visible.sort((a,b)=>ids.indexOf(a.id)-ids.indexOf(b.id)).map(post=>feedPostPayload(post,[],c.env));
     return { role: row.role, displayName: row.public_data.displayName,
       category: row.public_data.category, description: row.public_data.description,
       links: row.public_data.links, area: row.public_data.area, pickup: row.public_data.pickup,
@@ -20201,6 +20199,12 @@ mountProfessionalAccounts(api, {
   auth: authMiddleware, actor: getUserId, rpc: supabaseAdminRpc, query: supabaseAdminQueryRows, eq: postgrestEqFilter,
   limit: async c => rejectLargeRequest(c, 16_000) || await enforceRateLimit(c, 'professional_accounts', getUserId(c) || c.req.header('CF-Connecting-IP') || 'anonymous', 60, 60),
   admin: async (c, write) => { await requireAdminRole(c, write ? 'professional:write' : 'professional:read'); },
+  businessHistory: async c => {
+    const account = await supabaseUserByAnyId(c, getUserId(c));
+    if (!account?.supabase_user_id) return false;
+    const shops = await supabaseAdminQueryRows(c, 'app_businesses', { select: 'id', filters: { owner_id: postgrestEqFilter(account.supabase_user_id) }, limit: 1 });
+    return shops.length > 0;
+  },
   portfolio: async (c, ids) => {
     for (const id of ids) {
       const [post] = await supabaseReadVisiblePosts(c, getUserId(c), { ownerId: getUserId(c), postId: id, limit: 1 });

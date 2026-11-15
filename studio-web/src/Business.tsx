@@ -408,12 +408,11 @@ function Menu({ shop, active }: { shop: Shop; active: boolean }) {
         <>
           <div className="products">
             {products.value.map((p) => (
-              <article
-                className="product"
-                key={p.id}
-              >
+              <article className="product" key={p.id}>
                 <Photo url={p.image_url} label={p.name} />
-                <button className="product-open" onClick={() => setEditing(p)}><strong>{p.name}</strong></button>
+                <button className="product-open" onClick={() => setEditing(p)}>
+                  <strong>{p.name}</strong>
+                </button>
                 <span>
                   {money(p.unit_amount)} ·{" "}
                   {p.mode === "CUSTOMIZE" ? "Customize" : "Quick add"}
@@ -443,19 +442,19 @@ function Menu({ shop, active }: { shop: Shop; active: boolean }) {
         </>
       )}
       {editing && (
-          <Modal label="Edit menu item" close={()=>setEditing(undefined)}>
-            <ProductForm
-              key={editing.id}
-              product={editing}
-              business={shop.id}
-              active={active}
-              close={() => setEditing(undefined)}
-              saved={() => {
-                setEditing(undefined);
-                products.reload();
-              }}
-            />
-          </Modal>
+        <Modal label="Edit menu item" close={() => setEditing(undefined)}>
+          <ProductForm
+            key={editing.id}
+            product={editing}
+            business={shop.id}
+            active={active}
+            close={() => setEditing(undefined)}
+            saved={() => {
+              setEditing(undefined);
+              products.reload();
+            }}
+          />
+        </Modal>
       )}
     </>
   );

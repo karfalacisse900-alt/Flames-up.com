@@ -283,6 +283,7 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     }
   });
   await t.test('suspended Business disappears publicly and blocks new orders while preserving resolution and history',async()=>{
+    const pending=await(await call('/businesses/'+hotdogs+'/checkout',buyer,{lines:[{product_id:dog,quantity:1,option_ids:[]}],total:432,request_id:'60000000-0000-4000-8000-000000000004'})).json();
     await db.exec("update app_professional_roles set status='suspended' where user_id='sample-owner'");
     assert.deepEqual(await(await call('/businesses')).json(),[]);
     assert.equal((await call('/businesses/'+coffee+'/menu')).status,403);
@@ -292,6 +293,8 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     assert.equal((await call('/business-owner/'+coffee+'/orders',stranger)).status,404);
     assert.equal((await call('/business-owner/'+coffee+'/earnings',owner)).status,200);
     assert.equal((await call('/business-owner/'+coffee+'/products',owner,{id:latte})).status,403);
+    assert.equal((await call('/business-orders/'+pending.order.id+'/action',buyer,{action:'cancel_payment'})).status,200);
+    assert.equal((await one('select stock from app_business_products where id=$1',[dog])).stock,2,'verified unpaid cancellation releases inventory even after suspension');
     await db.exec("update app_professional_roles set status='active' where user_id='sample-owner'");
     assert.equal((await call('/businesses/'+coffee+'/menu')).status,200);
   });

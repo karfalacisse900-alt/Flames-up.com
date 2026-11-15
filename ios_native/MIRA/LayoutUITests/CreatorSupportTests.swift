@@ -47,16 +47,11 @@ final class CreatorSupportTests: XCTestCase {
       XCTAssertFalse(app.buttons["support.checkout"].exists, flag); app.terminate()
     }
   }
-  func testIneligibleCreatorKeepsVisibleSupportEntryButNeverOpensCheckout() {
+  func testApprovedButPaymentIneligibleCreatorCannotOfferSupport() {
     let app = launchSurface(["--support-profile", "--support-ineligible"])
-    let button = app.buttons["creator.support"]
-    XCTAssertTrue(button.waitForExistence(timeout: 10))
-    waitUntilEnabled(button)
-    XCTAssertEqual(button.value as? String, "Not available")
-    button.tap()
-    XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Earnings")).firstMatch.exists)
-    XCTAssertFalse(app.buttons["support.checkout"].isEnabled)
+    XCTAssertFalse(app.buttons["creator.support"].waitForExistence(timeout: 3))
+    XCTAssertFalse(app.buttons["support.checkout"].exists)
+    XCTAssertTrue(app.buttons["profile.follow"].exists)
   }
   private func waitUntilEnabled(_ element: XCUIElement, timeout: TimeInterval = 10) {
     let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: element)
@@ -69,7 +64,7 @@ final class CreatorSupportTests: XCTestCase {
     XCTAssertEqual(button.value as? String, "Not available")
     button.tap()
     XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Captro has not enabled Support checkout yet. No payment can be made right now."].exists)
+    XCTAssertTrue(app.staticTexts["Live Support is disabled by Captro. No payment was started."].exists)
     XCTAssertFalse(app.buttons["support.checkout"].isEnabled)
   }
   private func launch(_ flags: [String] = []) -> XCUIApplication {

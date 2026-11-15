@@ -75,6 +75,7 @@ struct CaptroSupportAction: View {
   let username: String
   let avatar: String?
   let api: MIRAAPIClient
+  var approvedCreator = false
   var originPostID: String? = nil
   var onPresentSheet: ((CaptroSupportPresentation) -> Void)? = nil
   @Environment(\.captroSupportViewerID) private var viewerID
@@ -168,6 +169,8 @@ struct CaptroSupportAction: View {
     } catch {
       guard !Task.isCancelled, expected == identity else { return }
       canCheckout = false; failed = true; presented = false
+      // A fresh public profile can offer a retry, never checkout, during an outage.
+      visibleInStorefront = approvedCreator || visibleInStorefront
       unavailableMessage = "Support availability couldn’t be checked. Please retry; no payment was started."
     }
   }

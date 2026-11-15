@@ -34,6 +34,12 @@ struct CaptroProfessionalAccountsView: View {
             }
           }
         }
+        if state.hasBusinessHistory == true && !state.roles.contains(where: { $0.role == .business }) {
+          Section("Existing business") {
+            NavigationLink("Existing orders & history") { CaptroBusinessOwner(api: api) }
+            Text("Apply for Business to manage new ordering. Existing orders and financial history remain accessible.").font(.footnote).foregroundStyle(.secondary)
+          }
+        }
         if !state.roles.isEmpty {
           Section("Captro Studio") {
             if state.studioUrl != nil {

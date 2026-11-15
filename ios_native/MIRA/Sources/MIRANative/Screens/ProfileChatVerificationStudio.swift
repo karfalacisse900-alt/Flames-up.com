@@ -1304,7 +1304,7 @@ public struct UserProfileNativeView: View {
           if model.showcase.clubs.isEmpty { Text("No clubs displayed").foregroundStyle(.secondary) }
         } else if selectedSection == .plans {
           CaptroProfilePlans(posts: model.posts, api: model.api)
-        } else if model.posts.isEmpty {
+        } else if model.posts.isEmpty && captroProfessionalMoments(model.posts, user: model.user).isEmpty {
           MIRAEmptyState(title: "No posts yet", message: "This profile has not posted yet.", systemImage: "square.grid.3x3")
             .padding(.horizontal, MIRATheme.Space.md)
         } else {
@@ -1534,9 +1534,9 @@ public struct UserProfileNativeView: View {
           }
           .buttonStyle(CaptroProfileActionStyle())
           .disabled(isOpeningMessage || model.user == nil)
-          if let user = model.user, professionalSelection == "creator" {
+          if let user = model.user, professionalSelection == "creator", user.professional?.contains(where: { $0.role == "creator" }) == true {
             CaptroSupportAction(creatorID: model.userId, name: CaptroSupportPolicy.recipientName(user.fullName, fallback: user.displayName),
-              username: user.username ?? "", avatar: user.profileImage, api: model.api)
+              username: user.username ?? "", avatar: user.profileImage, api: model.api, approvedCreator: true)
           }
         }
       }

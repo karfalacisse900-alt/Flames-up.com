@@ -65,6 +65,8 @@ function App() {
         if (alive) {
           setError(e.message);
           if (e.status === 401 || e.status === 403) {
+            clearSession();
+            setSignedIn(false);
             setMe(undefined);
             setState(undefined);
           }
@@ -90,11 +92,11 @@ function App() {
     };
   }, [signedIn]);
   async function signOut() {
-    await logout();
-    setSignedIn(false);
-    setMe(undefined);
-    setState(undefined);
-    setError("");
+    try { await logout(); }
+    catch { /* Local credentials are cleared even if the server is offline. */ }
+    finally {
+      setSignedIn(false); setMe(undefined); setState(undefined); setError("");
+    }
   }
   const role = state?.roles.find((r) => r.role === workspace);
   if (!signedIn)
