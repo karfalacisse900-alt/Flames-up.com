@@ -1,1 +1,2 @@
 /support-creator/return /support-creator/index.html 200
+/tea-invite/:token /tea-invite/index.html 200

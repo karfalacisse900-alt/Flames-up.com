@@ -109,7 +109,7 @@ private struct CaptroTeaConversationRow: View {
   }
 }
 
-private struct TeaConversationTime: View {
+struct TeaConversationTime: View {
   let value: String
   var body: some View {
     if let date = captroTeaDate(value) {
@@ -138,7 +138,6 @@ private struct TeaConversationTime: View {
   var body: some View {
     List {
       if let post = model.post, model.valid {
-        authorHeader(post).listRowSeparator(.hidden).listRowBackground(Color.clear)
         VStack(alignment: .leading, spacing: 12) {
           Text(post.title).font(.title3.weight(.bold)).accessibilityAddTraits(.isHeader)
           if let sentences = post.sentences, !sentences.isEmpty {
@@ -186,6 +185,10 @@ private struct TeaConversationTime: View {
           if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
         }.listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
           .listRowSeparator(.hidden).listRowBackground(Color.clear)
+        if let error = model.authorError {
+          HStack { Text(error).font(.footnote).foregroundStyle(.secondary); Button("Retry profile") { Task { await model.loadAuthor() } }.frame(minHeight: 44) }
+            .listRowSeparator(.hidden).listRowBackground(Color.clear)
+        }
         HStack {
           Text((post.replyTargets ?? []).isEmpty ? "\(post.replyCount ?? model.replies.count) replies" : "General replies")
             .font(.subheadline).foregroundStyle(.secondary)
@@ -228,13 +231,16 @@ private struct TeaConversationTime: View {
       .overlay(alignment: .bottomTrailing) { TeaReviewRequestCounter().allowsHitTesting(false) }
       #endif
       .navigationBarBackButtonHidden(true)
-      .toolbar {
-        ToolbarItem(placement: .topBarLeading) {
+      .toolbar(.hidden, for: .navigationBar)
+      .safeAreaInset(edge: .top, spacing: 0) {
+        HStack(alignment: .top, spacing: 12) {
           Button { dismiss() } label: {
             Image(systemName: "chevron.left").font(.headline).frame(width: 44, height: 44)
               .background(MIRATheme.Color.surface, in: Circle())
-          }.accessibilityLabel("Back")
-        }
+          }.accessibilityLabel("Back").accessibilityIdentifier("tea.detail.back")
+          if let post = model.post, model.valid { authorHeader(post) }
+          else { Spacer() }
+        }.padding(.horizontal, 16).padding(.vertical, 8).background(MIRATheme.Color.appBackground)
       }
       .safeAreaInset(edge: .bottom, spacing: 0) {
         if model.post != nil, model.valid {
@@ -243,14 +249,14 @@ private struct TeaConversationTime: View {
             HStack(alignment: .top) {
               Rectangle().fill(MIRATheme.Color.divider).frame(width: 2)
               VStack(alignment: .leading, spacing: 3) {
-                Text("Replying to this line").font(.caption).foregroundStyle(.secondary)
+                Text("Replying to this line").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("tea.reply.target")
                 Text(target.quote).font(.subheadline).lineLimit(2)
               }
               Spacer(minLength: 0)
               Button { model.selectTarget(nil) } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
                 .disabled(model.busy || model.replyPending).accessibilityLabel("Clear reply target")
                 .accessibilityIdentifier("tea.reply.clear-target")
-            }.fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("tea.reply.target")
+            }.fixedSize(horizontal: false, vertical: true)
           }
           HStack(alignment: .bottom, spacing: 10) {
             if viewerID == nil { Button("Sign in to reply", action: signIn).frame(maxWidth: .infinity, minHeight: 44) }
@@ -275,7 +281,7 @@ private struct TeaConversationTime: View {
         if let post = model.post { CaptroTeaComposer(api: api, editing: post) { model.updated($0) } }
       }
       .navigationDestination(isPresented: Binding(get: { profile != nil }, set: { if !$0 { profile = nil } })) {
-        if let profile { UserProfileNativeView(userId: profile.id, api: api) }
+        if let profile { UserProfileNativeView(userId: profile.id, api: api).toolbar(.visible, for: .navigationBar) }
       }
       .task { await model.load() }
       .refreshable { await model.load(force: true) }
@@ -331,14 +337,22 @@ private struct TeaConversationTime: View {
     if count > 0 {
       let expanded = model.expandedTargets.contains(target.id)
       Button {
-        if expanded { model.expandedTargets.remove(target.id) } else { model.expandedTargets.insert(target.id) }
+        if expanded { model.expandedTargets.remove(target.id) } else {
+          model.expandedTargets.insert(target.id)
+          Task { await model.loadThread(target) }
+        }
       } label: { Text(expanded ? "Hide replies" : "\(count) replies to this line").font(.subheadline).underline().frame(minHeight: 44) }
         .buttonStyle(.plain).accessibilityIdentifier("tea.thread." + target.id)
       if expanded {
         VStack(alignment: .leading, spacing: 8) {
-          TeaReplyGroups(replies: model.replies.filter { $0.target?.id == target.id })
-          if count > model.replies.filter({ $0.target?.id == target.id }).count, model.nextCursor != nil {
-            Button("Load more replies") { Task { await model.loadReplies(reset: false) } }.frame(minHeight: 44).disabled(model.loadingReplies)
+          TeaReplyGroups(replies: model.threads[target.id] ?? [])
+          if model.loadingThreads.contains(target.id) { ProgressView("Loading replies") }
+          if let error = model.threadErrors[target.id] {
+            Text(error).font(.footnote)
+            Button("Retry replies") { Task { await model.loadThread(target, reset: true) } }.frame(minHeight: 44)
+          }
+          if model.threadCursors[target.id] != nil {
+            Button("Load more replies") { Task { await model.loadThread(target) } }.frame(minHeight: 44).disabled(model.loadingThreads.contains(target.id))
           }
         }.padding(.leading, 14).overlay(alignment: .leading) { Rectangle().fill(MIRATheme.Color.divider).frame(width: 2) }
       }
@@ -375,7 +389,7 @@ private struct TeaReplyGroups: View {
 }
 
 /// Wrap whole link controls instead of squeezing them into one horizontal line.
-private struct TeaLinkFlow: Layout {
+struct TeaLinkFlow: Layout {
   let spacing: CGFloat
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     arrange(width: proposal.width ?? 320, subviews: subviews).size

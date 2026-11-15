@@ -4,6 +4,7 @@
       {
         "appIDs": ["56C9MBK53P.com.captro.app"],
         "components": [
+          { "/": "/tea-invite/*", "comment": "Invitation capability only; the API validates membership and admission separately." },
           {
             "/": "/support-creator/return",
             "?": {"purchase_id": "????????-????-????-????-????????????"},

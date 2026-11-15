@@ -1,6 +1,7 @@
 import { makeBusinessOrdering } from './business-ordering';
 import { teaPage, teaDetail, TeaInputError, TeaUnavailable } from './tea';
 import { mountTeaConversations } from './tea-conversations';
+import { mountTeaClubs } from './tea-clubs';
 import { runAccountCleanup } from './account-cleanup';
 import { reliabilityRolloutBlocks, reliabilityReleaseMode } from './reliability-rollout';
 import { chatOperationID, sameChatOperation, persistChatOperation } from './chat-idempotency';
@@ -18753,7 +18754,7 @@ async function supabaseDirectMessageRows(c: any, firstUserId: string, secondUser
 
 async function supabaseGroupMessageRows(c: any, groupId: string, input: { limit: number; before?: string; after?: string }) {
   const limit = clampNumber(input.limit, 1, 100, 80);
-  const filters: Record<string, string> = { group_id: postgrestEqFilter(groupId) };
+  const filters: Record<string, string> = { group_id: postgrestEqFilter(groupId), tea_room_id: 'is.null' };
   const after = cleanText(input.after || '', 80);
   const before = cleanText(input.before || '', 80);
   if (after) filters.created_at = `gt.${after}`;
@@ -20285,6 +20286,18 @@ mountTeaConversations(api, {
   limit: (c, write) => enforceRateLimit(c, write ? 'tea_discussion_write' : 'tea_discussion_read', getUserId(c) || clientIp(c), write ? 20 : 120, 60),
   restriction: (c, type) => enforceUserRestriction(c, getUserId(c), type),
   rpc: supabaseAdminRpc,
+});
+
+mountTeaClubs(api, {
+  auth: authMiddleware,
+  viewer: async c => {
+    const row = await getSupabaseAppUserRowByAnyId(c, getUserId(c));
+    return row && supabaseUserStatus(row) === 'active' ? row.id : '';
+  },
+  rpc: supabaseAdminRpc,
+  limit: (c, write) => enforceRateLimit(c, write ? 'tea_club_write' : 'tea_club_read', getUserId(c), write ? 60 : 180, 60),
+  restriction: c => enforceUserRestriction(c, getUserId(c), 'messaging'),
+  site: path => 'https://captro-site.pages.dev/' + path,
 });
 
 api.get('/tea', teaAuth, c => handleTea(c, (viewer, deps) =>

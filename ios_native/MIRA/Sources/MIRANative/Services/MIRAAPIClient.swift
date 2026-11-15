@@ -161,6 +161,7 @@ public final class MIRAAPIClient {
     return try await self.getFresh(path)
   })
   @MainActor lazy var favorites = CaptroFavoritesStore(api: self)
+  @MainActor lazy var teaClubs = CaptroTeaClubStore(api: self)
   @MainActor lazy var teaConversations = CaptroTeaConversationStore(api: self)
   @MainActor lazy var publications = CaptroPublicationStore()
   public static let productionSession: URLSession = {
@@ -436,7 +437,7 @@ public final class MIRAAPIClient {
     // Ordinary token refresh must not clear an open discussion. Identity changes
     // are already isolated by presentationScope/sessionGeneration.
     let discardsConversations = discardsTea && method != "GET" && !path.hasPrefix("/auth")
-    if discardsConversations { await teaConversations.invalidate() }
+    if discardsConversations { await teaConversations.invalidate(); await teaClubs.invalidate() }
     if changesTea { await teaDetails.invalidate(discard: discardsTea) }
     let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
     let url = try makeURL(path)
@@ -473,14 +474,14 @@ public final class MIRAAPIClient {
     }
     } catch {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
-      if discardsConversations { await teaConversations.invalidate() }
+      if discardsConversations { await teaConversations.invalidate(); await teaClubs.invalidate() }
       throw error
     }
     try await validateSessionGeneration(generation)
 
     do {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
-      if discardsConversations { await teaConversations.invalidate() }
+      if discardsConversations { await teaConversations.invalidate(); await teaClubs.invalidate() }
       return try decoder.decode(T.self, from: data)
     } catch {
       // Log the failing field/type, never the response body (which may contain secrets).

@@ -165,6 +165,7 @@ public struct MIRANativeRootView: View {
   @State private var featureStatusBarHidden = false
   @State private var cameraDarkChrome = false
   @State private var profileLink: CaptroProfileLink?
+  @State private var teaInvite: CaptroTeaInviteRoute?
   @State private var hasMountedDestination = false
   @StateObject private var supportReturns = CaptroSupportReturnStore()
   @AppStorage(MIRAAppearanceResolver.preferenceKey) private var appearancePreference = MIRAAppearance.system.rawValue
@@ -237,6 +238,13 @@ public struct MIRANativeRootView: View {
       guard authSession.isGuest else { return }
       profileLink = nil
       leaveGuestModeForSignIn()
+    }
+    .sheet(item: Binding(get: { startup.isRoutingReady && !startup.isSplashMounted && profileLink == nil && authSession.passwordResetContext == nil ? teaInvite : nil }, set: { teaInvite = $0 })) { route in
+      NavigationStack {
+        CaptroTeaInviteView(token: route.id, api: api, signedIn: authSession.user != nil)
+          .id(api.presentationScope)
+          .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { teaInvite = nil } } }
+      }
     }
     .environmentObject(localization)
     .environmentObject(supportReturns)
@@ -340,6 +348,7 @@ public struct MIRANativeRootView: View {
       registerPushToken(token)
     }
     .onOpenURL { url in
+      if let invite = CaptroTeaInviteRoute.parse(url) { teaInvite = invite; return }
       if CaptroSupportPolicy.enabled, let purchaseID = CaptroSupportPolicy.returnPurchase(url) {
         supportReturns.pendingPurchaseID = purchaseID
         NotificationCenter.default.post(name: .captroSupportReturned, object: purchaseID)

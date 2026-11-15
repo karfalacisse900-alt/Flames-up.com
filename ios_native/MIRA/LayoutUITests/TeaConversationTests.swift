@@ -17,7 +17,7 @@ final class TeaConversationTests: XCTestCase {
   private func shot(_ name: String, _ app: XCUIApplication) {
     let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
   }
-  private func back(_ app: XCUIApplication) { app.navigationBars.firstMatch.buttons.firstMatch.tap() }
+  private func back(_ app: XCUIApplication) { app.buttons["tea.detail.back"].tap() }
   private func input(_ id: String, _ app: XCUIApplication) -> XCUIElement {
     // A SwiftUI multiline TextField is exposed as UITextView on some iOS versions.
     XCTAssertTrue(app.descendants(matching: .any).matching(identifier: id).firstMatch.waitForExistence(timeout: 8))
@@ -114,5 +114,53 @@ final class TeaConversationTests: XCTestCase {
     }
     XCTAssertTrue(input("tea.reply.input",app).isHittable)
     shot("conversation-large-text",app)
+  }
+
+  func testSentenceRepliesCollapsedExpandedAndClearKeepsDraft() {
+    let app=launch(["--tea-sentence-fixture"])
+    row(101,app).tap()
+    let thread=app.buttons["tea.thread.1:22:61"]
+    XCTAssertTrue(thread.waitForExistence(timeout:8))
+    XCTAssertFalse(app.staticTexts["Where did you end up shooting?"].exists)
+    shot("sentence-replies-collapsed",app)
+    thread.tap()
+    XCTAssertTrue(app.staticTexts["Where did you end up shooting?"].waitForExistence(timeout:8))
+    shot("sentence-replies-expanded",app)
+    thread.tap()
+    let sentence=app.staticTexts["tea.sentence.1:22:61"]
+    sentence.press(forDuration:1)
+    XCTAssertTrue(app.buttons["Reply to this part"].waitForExistence(timeout:5))
+    app.buttons["Reply to this part"].tap()
+    XCTAssertTrue(app.staticTexts["tea.reply.target"].exists)
+    let field=input("tea.reply.input",app); field.tap(); field.typeText("A great location.")
+    shot("sentence-reply-composer",app)
+    XCTAssertTrue(app.buttons["tea.reply.clear-target"].isHittable)
+    app.buttons["tea.reply.clear-target"].tap()
+    XCTAssertEqual(field.value as? String,"A great location.")
+    XCTAssertFalse(app.staticTexts["tea.reply.target"].exists)
+    app.buttons["tea.reply.send"].tap()
+    for _ in 0..<4 where !app.staticTexts["A great location."].isHittable { app.swipeUp() }
+    XCTAssertTrue(app.staticTexts["A great location."].exists)
+  }
+
+  func testTargetedSendAndAuthorFollowAreSeparateFromDiscussionFollow() {
+    let app=launch(["--tea-sentence-fixture"])
+    row(101,app).tap()
+    let author=app.buttons["tea.author.follow"]
+    XCTAssertTrue(author.waitForExistence(timeout:8)); author.tap()
+    XCTAssertTrue(app.buttons["Unfollow author"].waitForExistence(timeout:8))
+    XCTAssertTrue(app.buttons["Follow discussion"].exists)
+    app.buttons["tea.author.profile"].tap()
+    XCTAssertTrue(app.buttons["profile.follow"].waitForExistence(timeout:8))
+    app.navigationBars.firstMatch.buttons.firstMatch.tap()
+    XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout:5))
+    let first=app.staticTexts["tea.sentence.1:0:21"]
+    first.press(forDuration:1); app.buttons["Reply to this part"].tap()
+    let field=input("tea.reply.input",app); field.tap(); field.typeText("Which phone did you use?")
+    app.buttons["tea.reply.send"].tap()
+    XCTAssertTrue(app.buttons["tea.thread.1:0:21"].waitForExistence(timeout:8))
+    XCTAssertTrue(app.staticTexts["Which phone did you use?"].waitForExistence(timeout:8))
+    XCTAssertFalse(app.staticTexts["tea.reply.target"].exists)
+    shot("multiple-sentence-threads",app)
   }
 }

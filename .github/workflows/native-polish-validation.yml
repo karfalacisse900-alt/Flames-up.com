@@ -57,7 +57,7 @@ jobs:
             tests+=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/AppSystemUITests -only-testing:CaptroLayoutUITests/MediaRecoveryTests -only-testing:CaptroLayoutUITests/ProfileRedesignTests)
           fi
           if [ "$CONVERSATIONS" = true ]; then
-            tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/TeaConversationTests)
+            tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/TeaConversationTests -only-testing:CaptroLayoutUITests/TeaClubTests)
           fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "$destination" -parallel-testing-enabled NO \
@@ -74,7 +74,7 @@ jobs:
           runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]))')
           device=$(xcrun simctl create 'Captro polish small' com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini "$runtime")
           small_tests=(-only-testing:CaptroLayoutUITests/NativePolishTests -only-testing:CaptroLayoutUITests/TeaTests)
-          if [ "$CONVERSATIONS" = true ]; then small_tests=(-only-testing:CaptroLayoutUITests/TeaConversationTests); fi
+          if [ "$CONVERSATIONS" = true ]; then small_tests=(-only-testing:CaptroLayoutUITests/TeaConversationTests -only-testing:CaptroLayoutUITests/TeaClubTests); fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" -resultBundlePath "$RUNNER_TEMP/SmallPolish.xcresult" \

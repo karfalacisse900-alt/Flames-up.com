@@ -115,7 +115,15 @@ private final class TeaReviewProtocol: URLProtocol {
     let path = String(url.path.dropFirst(4))
     var status = 200
     var payload: Any = [String: Any]()
+    if path.hasPrefix("/tea/clubs/") {
+      let body = readBody().flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String:Any] ?? [:]
+      let result = CaptroTeaClubReviewFixture.shared.response(path, request: request, body: body)
+      reply(result.0, result.1); return
+    }
     if path.hasPrefix("/tea/conversations") { discussion(path); return }
+    if path == "/users/artist/posts" { reply(200, []); return }
+    if path == "/users/artist/showcase" { reply(200, ["clubs":[],"plans":[]]); return }
+
     if path == "/users/artist/follow" {
       let body = readBody().flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
       Self.lock.withLock { Self.followsAuthor = body["following"] as? Bool ?? false }
@@ -213,6 +221,22 @@ private final class TeaReviewProtocol: URLProtocol {
             "isAuthor": n == 104, "following": false]
         }
       }
+      if ProcessInfo.processInfo.arguments.contains("--tea-sentence-fixture"), Self.discussionReplies[id(101)] == nil {
+        let caption = "I shot it on my phone. The hardest part was finding a location."
+        Self.conversations[id(101)]?["title"] = "My first music video"
+        Self.conversations[id(101)]?["body"] = caption
+        Self.conversations[id(101)]?["links"] = []
+        let quote = "The hardest part was finding a location."
+        let target: [String:Any] = ["id":"1:22:61","version":1,"start":22,"end":61,"quote":quote]
+        let now = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-30))
+        Self.discussionReplies[id(101)] = [
+          ["id":"r1","body":"Where did you end up shooting?","author":["id":"jordan","name":"Jordan","username":"jordan"],"createdAt":now,"target":target],
+          ["id":"r2","body":"On my friend’s rooftop.","author":["id":"artist","name":"Maya","username":"mayafilms"],"createdAt":now,"target":target],
+          ["id":"r3","body":"Did you need a permit?","author":["id":"nia","name":"Nia","username":"nia"],"createdAt":now,"target":target],
+          ["id":"r4","body":"This turned out great.","author":["id":"jules","name":"Jules","username":"jules"],"createdAt":now],
+          ["id":"r5","body":"Love the light.","author":["id":"jules","name":"Jules","username":"jules"],"createdAt":now]
+        ]
+      }
       if path == "/tea/conversations" {
         if method == "POST", let key = body["request_id"] as? String {
           var post = Self.conversations[id(104)]!
@@ -232,7 +256,13 @@ private final class TeaReviewProtocol: URLProtocol {
           if !(Self.discussionReplies[key] ?? []).contains(where: { $0["id"] as? String == replyID }) { Self.discussionReplies[key, default: []].append(reply) }
           return (200, reply)
         }
-        return (200,["items":Self.discussionReplies[key] ?? []])
+        let target = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "target" }?.value
+        let replies = (Self.discussionReplies[key] ?? []).filter {
+          if target == "general" { return $0["target"] == nil }
+          if let target { return ($0["target"] as? [String:Any])?["id"] as? String == target }
+          return true
+        }
+        return (200,["items":replies])
       }
       if parts.last == "follow" { post["following"] = body["following"] }
       else if method == "PUT" {

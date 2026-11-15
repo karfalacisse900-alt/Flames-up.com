@@ -169,7 +169,9 @@ struct CaptroTeaView: View {
         }
       }
       .navigationDestination(for: CaptroTeaEntry.self) { entry in
-        CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn)
+        if entry.kind == "club", entry.destination.source == "activity" {
+          CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn)
+        } else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
       }
       .navigationDestination(for: CaptroTeaConversation.self) { post in
         CaptroTeaConversationDetail(post: post, api: api, viewerID: viewerID, signIn: signIn)
@@ -296,7 +298,7 @@ private struct TeaTimestamp: View {
 }
 
 @MainActor
-private struct CaptroTeaDetailView: View {
+struct CaptroTeaDetailView: View {
   let entry: CaptroTeaEntry
   let api: MIRAAPIClient
   let viewerID: String?
