@@ -2,6 +2,7 @@ export type ConsoleSection =
   | "dashboard"
   | "reports"
   | "finance"
+  | "professional"
   | "users"
   | "posts"
   | "media"
@@ -14,6 +15,7 @@ export const sections: { key: ConsoleSection; label: string; icon: string }[] =
   [
     { key: "dashboard", label: "Overview", icon: "home" },
     { key: "reports", label: "Reports", icon: "report" },
+    { key: "professional", label: "Professional accounts", icon: "users" },
     { key: "finance", label: "Captro Funds", icon: "appeal" },
     { key: "users", label: "Users", icon: "users" },
     { key: "posts", label: "Content", icon: "image" },
