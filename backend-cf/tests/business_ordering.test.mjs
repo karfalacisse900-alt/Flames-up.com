@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { Hono } from 'hono';
 import { makeBusinessOrdering } from '../src/business-ordering.ts';
+import { ProfessionalError } from '../src/professional-accounts.ts';
 
 const owner = '10000000-0000-4000-8000-000000000001';
 const buyer = '10000000-0000-4000-8000-000000000002';
@@ -54,12 +55,16 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     '20260925120000_seller_identity_verification.sql',
     '20260926214527_deferred_marketplace_settlement.sql',
     '20261112030025_captro_business_ordering.sql',
+    '20261115224938_professional_accounts_studio.sql',
   ];
   await db.exec('create role anon; create role authenticated; create role service_role; create schema auth; create table auth.users(id uuid primary key); create table app_posts(id uuid primary key);');
+  await db.exec('create table app_users(id text primary key,supabase_user_id uuid,metadata jsonb default \'{}\'); create table app_admin_roles(user_id text,role text);');
   for (const migration of migrations) {
     await db.exec(readFileSync(new URL('../../supabase/migrations/' + migration, import.meta.url), 'utf8'));
   }
   await db.query('insert into auth.users values($1),($2),($3)', [owner, buyer, stranger]);
+  await db.query("insert into app_users(id,supabase_user_id) values('sample-owner',$1)", [owner]);
+  await db.exec("insert into app_professional_roles(user_id,role,status,public_data) values('sample-owner','business','active','{}')");
   await db.query("insert into app_businesses(id,owner_id,name,category,pickup_address,latitude,longitude,tax_bps,published,paused) values($1,$3,'Captro Coffee','coffee_bakery','Sample pickup',40.73,-74,800,true,false),($2,$3,'NYC Hot Dogs','street_food','Sample vendor pickup',40.76,-74,800,true,false)", [coffee, hotdogs, owner]);
   await db.query("insert into app_business_products(id,business_id,name,category,unit_amount,mode,groups) values($1,$3,'Iced Latte','Coffee',490,'CUSTOMIZE',$5),($2,$4,'Hotdog','Food',400,'QUICK_ADD','[]')", [
     latte, dog, coffee, hotdogs,
@@ -99,7 +104,9 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     stripe: () => ({ mode: 'test', configured: true, webhookConfigured: true,
       publishableKey: realStripe ? process.env.STRIPE_PUBLISHABLE_KEY : 'pk_test_fixture' }),
     actor: c => c.req.header('fixture-actor'),
-    professional: async () => {},
+    professional: async (_, userId, active) => {
+      if(active && !(await one("select captro_professional_active($1,'business') v",[userId])).v)throw new ProfessionalError('PROFESSIONAL_FORBIDDEN',403);
+    },
     seller: async () => ({ provider_account_id: 'acct_fixture' }),
     media: async () => [],
     limit: async () => null,
@@ -250,13 +257,18 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     assert.equal((await one("select count(*)::int n from app_marketplace_ledger where event_type='BUSINESS_REFUND'")).n, 1);
   });
   await t.test('buyer can cancel an unpaid intent; vendor summary includes only confirmed charges', async () => {
+    await db.query('update app_business_products set stock=2 where id=$1',[dog]);
     const next = await (await call('/businesses/' + hotdogs + '/checkout', buyer, {
       lines: [{ product_id: dog, quantity: 1, option_ids: [] }], total: 432,
       request_id: '60000000-0000-4000-8000-000000000003',
     })).json();
+    assert.equal((await one('select stock from app_business_products where id=$1',[dog])).stock,1);
     const cancellation = { action: 'cancel_payment' };
     assert.equal((await call('/business-orders/' + next.order.id + '/action', stranger, cancellation)).status, 404);
     assert.equal((await (await call('/business-orders/' + next.order.id + '/action', buyer, cancellation)).json()).status, 'cancelled');
+    assert.equal((await one('select stock from app_business_products where id=$1',[dog])).stock,2);
+    await call('/business-orders/'+next.order.id+'/action',buyer,cancellation);
+    assert.equal((await one('select stock from app_business_products where id=$1',[dog])).stock,2,'unpaid stock releases exactly once');
     const totals = await (await call('/business-owner/' + hotdogs + '/earnings', owner)).json();
     assert.equal(totals.gross, 432);
     assert.equal(totals.refunded, 432);
@@ -269,5 +281,18 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
       await assert.rejects(db.query('select captro_business_transition($1,$2,$3,null)', [paidOrder, owner, 'ready']), /permission denied/);
       await db.exec('reset role');
     }
+  });
+  await t.test('suspended Business disappears publicly and blocks new orders while preserving resolution and history',async()=>{
+    await db.exec("update app_professional_roles set status='suspended' where user_id='sample-owner'");
+    assert.deepEqual(await(await call('/businesses')).json(),[]);
+    assert.equal((await call('/businesses/'+coffee+'/menu')).status,403);
+    assert.equal((await call('/businesses/'+coffee+'/quote',buyer,{lines})).status,403);
+    assert.equal((await call('/businesses/'+coffee+'/checkout',buyer,checkout)).status,403);
+    assert.equal((await call('/business-owner/'+coffee+'/orders',owner)).status,200);
+    assert.equal((await call('/business-owner/'+coffee+'/orders',stranger)).status,404);
+    assert.equal((await call('/business-owner/'+coffee+'/earnings',owner)).status,200);
+    assert.equal((await call('/business-owner/'+coffee+'/products',owner,{id:latte})).status,403);
+    await db.exec("update app_professional_roles set status='active' where user_id='sample-owner'");
+    assert.equal((await call('/businesses/'+coffee+'/menu')).status,200);
   });
 });

@@ -490,7 +490,7 @@ public struct ProfileNativeView: View {
             ProfileGridSkeleton()
           } else {
             LazyVGrid(columns: postGridColumns, spacing: 1) {
-              ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost && !$0.isProfilePlan && $0.captroEditorialCardContent.type != .club }) { post in
+              ForEach(captroProfessionalMoments(model.posts, user: model.user)) { post in
                 profilePostTile(post)
               }
             }
@@ -732,7 +732,7 @@ public struct ProfileNativeView: View {
 
   private var profileHeader: some View {
     VStack(alignment: .leading, spacing: 18) {
-      CaptroProfessionalProfileHeader(user: model.user, api: model.api, selection: $professionalSelection)
+      CaptroProfessionalProfileHeader(user: model.user, api: model.api, selection: $professionalSelection, posts: model.posts)
       HStack(spacing: 10) {
       Button { showEditProfile = true } label: {
         Text("Edit profile")
@@ -1309,7 +1309,7 @@ public struct UserProfileNativeView: View {
             .padding(.horizontal, MIRATheme.Space.md)
         } else {
           LazyVGrid(columns: postGridColumns, spacing: 1) {
-            ForEach(model.posts.filter { !$0.isLegacyOrdinaryTextPost && !$0.isProfilePlan && $0.captroEditorialCardContent.type != .club }) { post in
+            ForEach(captroProfessionalMoments(model.posts, user: model.user)) { post in
               userProfilePostTile(post)
             }
           }
@@ -1511,7 +1511,7 @@ public struct UserProfileNativeView: View {
 
   private var profileHeader: some View {
     VStack(alignment: .leading, spacing: 18) {
-      CaptroProfessionalProfileHeader(user: model.user, api: model.api, selection: $professionalSelection)
+      CaptroProfessionalProfileHeader(user: model.user, api: model.api, selection: $professionalSelection, posts: model.posts)
       if model.isBlocked {
         profileStatusNotice("You blocked this user. Unblock them to message or follow again.")
       } else if model.isBlockedBy {

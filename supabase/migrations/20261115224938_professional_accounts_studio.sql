@@ -15,7 +15,7 @@ create table public.app_professional_roles (
   user_id text not null references public.app_users(id),
   role text not null check(role in ('creator','business')),
   status text not null check(status in ('active','suspended','removed')),
-  public_data jsonb not null, version integer not null default 1,
+  public_data jsonb not null, status_message text not null default '', version integer not null default 1,
   approved_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   primary key(user_id,role)
 );
@@ -101,7 +101,7 @@ begin
      if (p_action='suspend' and assigned.status<>'active') or (p_action='remove' and assigned.status='removed') or (p_action='restore' and assigned.status='active') then raise exception 'PROFESSIONAL_CONFLICT'; end if;
      if p_action='restore' and not exists(select 1 from public.app_users where id=p_target and coalesce(metadata->>'status','active')='active') then raise exception 'PROFESSIONAL_FORBIDDEN'; end if;
      update public.app_professional_roles set status=case p_action when 'suspend' then 'suspended' when 'remove' then 'removed' else 'active' end,
-       version=version+1,updated_at=now() where user_id=p_target and role=p_role;
+       status_message=p_data->>'message',version=version+1,updated_at=now() where user_id=p_target and role=p_role;
    else raise exception 'PROFESSIONAL_INVALID'; end if;
    result:=jsonb_build_object('ok',true);
  exception when others then
@@ -155,6 +155,8 @@ create function public.captro_professional_business_guard() returns trigger
 language plpgsql security invoker set search_path='' as $$
 declare owner_id uuid;
 begin
+ if tg_table_name='app_business_products' and tg_op='UPDATE' and pg_catalog.pg_trigger_depth()>1
+   and (to_jsonb(new)-'stock'-'updated_at')=(to_jsonb(old)-'stock'-'updated_at') then return new; end if;
  if tg_table_name='app_business_orders' then select b.owner_id into owner_id from public.app_businesses b where b.id=new.business_id;
  elsif tg_table_name='app_business_products' then select b.owner_id into owner_id from public.app_businesses b where b.id=new.business_id;
  else owner_id:=new.owner_id; end if;
@@ -188,7 +190,21 @@ begin
  return new;
 end $$;
 create trigger business_reserve_stock before insert on public.app_business_orders for each row execute function public.captro_business_reserve_stock();
--- Stock is a reservation at checkout. Cancellation/refund does not silently add prepared food back to stock.
+-- Only a verified unpaid cancellation releases stock. Refunded/prepared food is never automatically restocked.
+create function public.captro_business_release_unpaid_stock() returns trigger language plpgsql security invoker set search_path='' as $$
+declare line jsonb;
+begin
+ if old.status='awaiting_payment' and new.status='cancelled' and new.charge_id is null then
+   for line in select value from jsonb_array_elements(new.lines) order by value->>'product_id' loop
+     update public.app_business_products set stock=stock+(line->>'quantity')::integer
+       where id=(line->>'product_id')::uuid and stock is not null;
+   end loop;
+ end if;
+ return new;
+end $$;
+create trigger business_release_unpaid_stock after update on public.app_business_orders for each row execute function public.captro_business_release_unpaid_stock();
+revoke all on function public.captro_business_release_unpaid_stock() from public,anon,authenticated;
+grant execute on function public.captro_business_release_unpaid_stock() to service_role;
 revoke all on function public.captro_professional_active(text,text),public.captro_professional_mutate(text,text,text,text,jsonb,uuid),public.captro_studio_session(text,text,text,text),public.captro_professional_purchase_guard(),public.captro_professional_business_guard(),public.captro_business_reserve_stock() from public,anon,authenticated;
 grant execute on function public.captro_professional_active(text,text),public.captro_professional_mutate(text,text,text,text,jsonb,uuid),public.captro_studio_session(text,text,text,text),public.captro_professional_purchase_guard(),public.captro_professional_business_guard(),public.captro_business_reserve_stock() to service_role;
 commit;

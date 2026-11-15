@@ -5,7 +5,7 @@ final class ProfessionalAccountTests: XCTestCase {
   }
   private func capture(_ app: XCUIApplication, _ name: String) { let image = XCTAttachment(screenshot: app.screenshot()); image.name=name; image.lifetime = .keepAlways; add(image) }
   func testSettingsApplicationSaveCancelSubmitAndReviewStatus() {
-    let app = launch(); let entry = app.buttons["Apply for a professional account"]
+    let app = launch(); let entry = app.buttons["professional.settings"]
     if !entry.waitForExistence(timeout: 10) { app.swipeUp() }
     entry.tap(); XCTAssertTrue(app.buttons["professional.apply.creator"].waitForExistence(timeout: 10)); capture(app,"professional-settings")
     app.buttons["professional.apply.creator"].tap()
@@ -28,6 +28,6 @@ final class ProfessionalAccountTests: XCTestCase {
     }
   }
   func testLargeTextAndRejectedSubmissionStayHonest() {
-    let app=launch(["--professional-large-text"]);app.buttons["Apply for a professional account"].tap();XCTAssertTrue(app.buttons["professional.apply.creator"].waitForExistence(timeout: 10));capture(app,"professional-large-text")
+    let app=launch(["--professional-large-text"]);app.buttons["professional.settings"].tap();XCTAssertTrue(app.buttons["professional.apply.creator"].waitForExistence(timeout: 10));capture(app,"professional-large-text")
   }
 }

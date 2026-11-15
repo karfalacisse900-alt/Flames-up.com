@@ -38,6 +38,7 @@ struct CaptroProfessionalRecord: Decodable, Identifiable {
   let version: Int
   var reviewerMessage: String?
   var applicantMessage: String?
+  var statusMessage: String?
   var id: String { role.rawValue }
   var statusLabel: String { ["draft":"Draft", "under_review":"Under review", "needs_changes":"Needs changes", "approved":"Approved", "declined":"Declined", "active":"Approved", "suspended":"Suspended", "removed":"Removed"][status] ?? "Unavailable" }
 }
@@ -55,6 +56,15 @@ public struct CaptroProfessionalPublicRole: Codable, Hashable, Identifiable {
   public let area: String
   public let pickup: Bool
   public var shops: [Shop]?
+  public var portfolio: [MIRAPost]?
   public var id: String { role }
   public struct Shop: Codable, Hashable, Identifiable { public let id: String; public let name: String }
+}
+
+func captroProfessionalMoments(_ posts: [MIRAPost], user: MIRAUser?) -> [MIRAPost] {
+  let portfolio = user?.professional?.first { $0.role == "creator" }?.portfolio ?? []
+  var seen = Set<String>()
+  return (portfolio + posts).filter { post in
+    seen.insert(post.id).inserted && !post.isLegacyOrdinaryTextPost && !post.isProfilePlan && post.captroEditorialCardContent.type != .club
+  }
 }

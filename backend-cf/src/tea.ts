@@ -115,7 +115,7 @@ function eligibility(candidate: Candidate, access: Access, deps: Dependencies, s
   if (!owner || owner.is_private !== false || !deps.isActiveUser(owner)
     || access.blocked.has(owner.id) || access.blocked.has(owner.supabase_user_id)) return null;
   if (source === 'business') {
-    if (row.published !== true || !['coffee_bakery', 'street_food'].includes(row.category)) return null;
+    if (owner.professional_business_active !== true || row.published !== true || !['coffee_bakery', 'street_food'].includes(row.category)) return null;
     if (search.point && (typeof row.latitude !== 'number' || typeof row.longitude !== 'number'
       || distance(search.point, row) > nearbyMiles)) return null;
     return { kind: 'business' as const, status: row.paused ? 'paused' : 'listed', name: row.name };

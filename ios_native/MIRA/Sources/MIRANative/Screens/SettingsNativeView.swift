@@ -277,7 +277,7 @@ public struct SettingsNativeView: View {
           SettingsNavigationRow(
             title: "Apply for a professional account", subtitle: "Creator / Gig or Business", systemImage: "person.crop.rectangle",
             destination: CaptroProfessionalAccountsView(api: model.api)
-          )
+          ).accessibilityIdentifier("professional.settings")
           SettingsNavigationRow(
             title: "Account", subtitle: "", systemImage: "person",
             destination: AccountSettingsNativeView(model: model)

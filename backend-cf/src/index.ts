@@ -20181,10 +20181,17 @@ async function professionalPublicRoles(c: any, appId: string) {
     filters: { owner_id: postgrestEqFilter(user.supabase_user_id), published: 'eq.true', paused: 'eq.false', tax_bps: 'not.is.null' },
     select: 'id,name,category,pickup_address,hours', order: 'name.asc,id.asc', limit: 10,
   }) : [];
-  return roles.map(row => ({ role: row.role, displayName: row.public_data.displayName,
-    category: row.public_data.category, description: row.public_data.description,
-    links: row.public_data.links, area: row.public_data.area, pickup: row.public_data.pickup,
-    shops: row.role === 'business' ? shops : [] }));
+  return Promise.all(roles.map(async row => {
+    const portfolio = [];
+    if (row.role === 'creator') for (const id of (row.public_data.portfolioPostIds || []).slice(0,9)) {
+      const [post] = await supabaseReadVisiblePosts(c,getUserId(c),{ownerId:appId,postId:id,limit:1});
+      if (post) portfolio.push(feedPostPayload(post,[],c.env));
+    }
+    return { role: row.role, displayName: row.public_data.displayName,
+      category: row.public_data.category, description: row.public_data.description,
+      links: row.public_data.links, area: row.public_data.area, pickup: row.public_data.pickup,
+      portfolio, shops: row.role === 'business' ? shops : [] };
+  }));
 }
 async function requireProfessionalRole(c: any, identity: string, role: 'creator' | 'business') {
   const active = await supabaseAdminRpc(c, 'captro_professional_active', { p_user: identity, p_role: role });
@@ -20268,13 +20275,7 @@ registerCreatorSupportRoutes(api, authMiddleware, {
 
 function teaDependencies(c: any, viewerId: string) {
   return {
-    query: async (table: string, input: Parameters<typeof supabaseAdminQueryRows>[2]) => {
-      const rows = await supabaseAdminQueryRows(c, table, input);
-      if (table !== 'app_businesses' || !rows.length) return rows;
-      const checks = new Map(await Promise.all([...new Set(rows.map(row => row.owner_id))].map(async id =>
-        [id, await supabaseAdminRpc(c,'captro_professional_active',{p_user:id,p_role:'business'})] as const)));
-      return rows.filter(row => checks.get(row.owner_id));
-    },
+    query: (table: string, input: Parameters<typeof supabaseAdminQueryRows>[2]) => supabaseAdminQueryRows(c, table, input),
     async access(postIds: string[], ownerIds: string[]) {
       const [posts, owners, aliases] = await Promise.all([
         postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
@@ -20287,6 +20288,11 @@ function teaDependencies(c: any, viewerId: string) {
         }) : Promise.resolve([]),
         viewerId ? supabaseRelatedInteractionUserIds(c, viewerId) : Promise.resolve([]),
       ]);
+      const professional = owners.length ? await supabaseAdminQueryRows(c,'app_professional_roles', {
+        select:'user_id', filters:{user_id:postgrestInFilter(owners.map(owner=>owner.id)),role:'eq.business',status:'eq.active'},limit:owners.length,
+      }) : [];
+      const approved = new Set(professional.map(role=>role.user_id));
+      for (const owner of owners) owner.professional_business_active = approved.has(owner.id);
       if (viewerId && !aliases.length) throw new Error('TEA_VIEWER_IDENTITY_UNAVAILABLE');
       const targets = Array.from(new Set(owners.flatMap((owner: any) => [owner.id, owner.supabase_user_id]).filter(Boolean)));
       const blocked = new Set<string>();

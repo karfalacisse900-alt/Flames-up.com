@@ -19,6 +19,7 @@ struct CaptroProfessionalAccountsView: View {
           let assigned = state.roles.first { $0.role == kind }
           Section(kind.title) {
             LabeledContent("Status", value: assigned?.statusLabel ?? application?.statusLabel ?? "Not applied")
+            if let message = assigned?.statusMessage, !message.isEmpty { Text(message).font(.subheadline) }
             if let message = application?.reviewerMessage, !message.isEmpty { Text(message).font(.subheadline) }
             if assigned == nil {
               if application?.status == "under_review" { Text("We’ll show the review decision here. Submitting does not activate professional features.").font(.footnote).foregroundStyle(.secondary) }
@@ -167,6 +168,7 @@ struct CaptroProfessionalProfileHeader: View {
   let user: MIRAUser?
   let api: MIRAAPIClient
   @Binding var selection: String
+  var posts: [MIRAPost] = []
   private var roles: [CaptroProfessionalPublicRole] {
     guard user?.privacyLocked != true, user?.viewerHasBlocked != true, user?.viewerBlockedBy != true else { return [] }
     return user?.professional ?? []
@@ -181,6 +183,13 @@ struct CaptroProfessionalProfileHeader: View {
       }
       CaptroProfileIntroduction(user: user, professionalRole: chosen)
       if let chosen { CaptroProfessionalProfileInfo(roles: [chosen], api: api) }
+      if chosen?.role == "creator", let gig = posts.first(where: { post in
+        post.isProfilePlan && (CaptroStoryExpiry.date(post.detail?.commerce?.startsAt ?? post.detail?.event?.startsAt) ?? .distantPast) > Date()
+      }) {
+        NavigationLink { DiscoverPostDetailNativeView(post: gig, api: api) } label: {
+          CaptroProfileItemRow(post: gig)
+        }.buttonStyle(.plain).accessibilityLabel("View upcoming plan")
+      }
     }.onChange(of: roles.map(\.role), initial: true) { _, values in
       if !values.contains(selection), let first = values.first { selection = first }
     }

@@ -28,7 +28,7 @@ function fixture() {
     return row;
   }
   function business(n, overrides = {}) {
-    const owner = user(100 + n, overrides.owner);
+    const owner = user(100 + n, { professional_business_active: true, ...overrides.owner });
     owners.set(owner.supabase_user_id, owner);
     const row = { id: id(n), owner_id: owner.supabase_user_id, name: 'Business ' + n, category: 'coffee_bakery',
       latitude: 40.73, longitude: -73.99, published: true, paused: false, location_updated_at: at, ...overrides.row };
@@ -160,3 +160,9 @@ test('Tea continues beyond an empty scan window without disclosing a hidden reco
   const next = await teaPage(f.deps, key, viewer, { cursor: first.nextCursor }, now);
   assert.deepEqual(next.items.map(row => row.id), ['activity:' + id(1)]);
 });
+
+ test('Tea hides suspended or absent Business roles without hiding ordinary events',async()=>{
+  const f=fixture();const shop=f.business(1,{owner:{professional_business_active:false}});f.activity(2,'event');
+  assert.deepEqual((await teaPage(f.deps,key,viewer,{},now)).items.map(v=>v.kind),['event']);
+  await assert.rejects(teaDetail(f.deps,viewer,'business',shop.id,now),TeaUnavailable);
+ });
