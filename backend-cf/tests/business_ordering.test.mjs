@@ -99,6 +99,7 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
     stripe: () => ({ mode: 'test', configured: true, webhookConfigured: true,
       publishableKey: realStripe ? process.env.STRIPE_PUBLISHABLE_KEY : 'pk_test_fixture' }),
     actor: c => c.req.header('fixture-actor'),
+    professional: async () => {},
     seller: async () => ({ provider_account_id: 'acct_fixture' }),
     media: async () => [],
     limit: async () => null,

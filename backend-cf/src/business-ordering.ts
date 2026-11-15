@@ -1,4 +1,5 @@
 import type { Context, Hono, MiddlewareHandler } from 'hono';
+import { ProfessionalError } from './professional-accounts.ts';
 
 const shops = 'app_businesses';
 const products = 'app_business_products';
@@ -50,6 +51,7 @@ type Dependencies = {
   stripe(c: Context): { mode: 'test' | 'live' | null; configured: boolean; webhookConfigured: boolean; publishableKey: string };
   actor(c: Context): string;
   seller(c: Context, id: string): Promise<{ provider_account_id: string }>;
+  professional(c: Context, ownerId: string, active: boolean): Promise<void>;
   media(c: Context, ids: string[]): Promise<string[]>;
   limit(c: Context, key: string): Promise<Response | null | undefined>;
 };
@@ -104,6 +106,7 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
   const owner = async (c: Context, business: string) => {
     const shop = await get(c, shops, business, { owner_id: eq(deps.actor(c)) });
     if (!shop) throw new Error('ORDER_NOT_FOUND');
+    await deps.professional(c, shop.owner_id, false);
     return shop;
   };
   const payable = (c: Context) => {
@@ -121,6 +124,7 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
       }
       return await handler(c);
     } catch (error) {
+      if (error instanceof ProfessionalError) return c.json({ detail: 'An approved, active Business role is required for new business activity. Existing orders remain available.', code: error.code }, 403);
       const message = error instanceof Error ? error.message : '';
       const code = Object.keys(errors).find(key => message === key || message.endsWith(':' + key));
       if (code) return c.json({ detail: errors[code][1], code }, errors[code][0]);
@@ -186,9 +190,18 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
       p_lon: lon === undefined ? null : coordinate(Number(lon), 180), p_offset: offset(c),
     }));
   }));
+  api.get('/businesses/:id', wrap(async c => {
+    const shop = await get(c, shops, token(c.req.param('id')), { published: 'eq.true' });
+    if (!shop) throw new Error('ORDER_NOT_FOUND');
+    await deps.professional(c, shop.owner_id, true);
+    const {owner_id, tax_bps, ...publicShop} = shop;
+    return c.json(publicShop);
+  }));
   api.get('/businesses/:id/menu', wrap(async c => {
     const id = token(c.req.param('id'));
-    if (!await get(c, shops, id, { published: 'eq.true' })) throw new Error('ORDER_NOT_FOUND');
+    const shop = await get(c, shops, id, { published: 'eq.true' });
+    if (!shop) throw new Error('ORDER_NOT_FOUND');
+    await deps.professional(c, shop.owner_id, true);
     return c.json(await deps.query(c, products, {
       filters: { business_id: eq(id), available: 'eq.true' }, select: '*',
       order: 'category.asc,name.asc,id.asc', limit: 50, offset: offset(c),
@@ -196,6 +209,9 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
   }));
   api.post('/businesses/:id/quote', auth, wrap(async c => {
     const input = await body(c);
+    const shop = await get(c, shops, token(c.req.param('id')), {published:'eq.true'});
+    if (!shop) throw new Error('ORDER_NOT_FOUND');
+    await deps.professional(c, shop.owner_id, true);
     return c.json(await deps.rpc(c, 'captro_business_price', {
       p_business: token(c.req.param('id')), p_lines: businessLines(input?.lines),
     }));
@@ -206,6 +222,7 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     const input = await body(c);
     const shop = await get(c, shops, id, { published: 'eq.true' });
     if (!shop) throw new Error('BUSINESS_UNAVAILABLE');
+    await deps.professional(c, shop.owner_id, true);
     const account = await deps.seller(c, shop.owner_id);
     const order = await deps.rpc(c, 'captro_business_begin', {
       p_business: id, p_buyer: deps.actor(c), p_request: token(input?.request_id),
@@ -297,9 +314,12 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     return c.json(orderView(row, row.buyer_id === deps.actor(c)));
   }, true));
 
-  api.get('/business-owner/shops', auth, wrap(async c =>
-    c.json(await deps.select(c, shops, { owner_id: eq(deps.actor(c)) }, '*', 50))));
+  api.get('/business-owner/shops', auth, wrap(async c => {
+    await deps.professional(c, deps.actor(c), false);
+    return c.json(await deps.select(c, shops, { owner_id: eq(deps.actor(c)) }, '*', 50));
+  }));
   api.post('/business-owner/shops', auth, wrap(async c => {
+    await deps.professional(c, deps.actor(c), true);
     const input = await body(c);
     const id = token(input?.id);
     const category = string(input?.category, 24);
@@ -315,6 +335,8 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     const fields = {
       name: string(input?.name, 80), category, pickup_address: address, latitude, longitude,
       hours: string(input?.hours ?? '', 300, true), paused: input.paused,
+      ...(input?.pickup_instructions === undefined ? {} : { pickup_instructions: string(input.pickup_instructions, 500, true) }),
+      ...(input?.published === undefined ? {} : typeof input.published === 'boolean' ? { published: input.published } : invalid()),
       ...(photoUrls ? { photos: photoUrls } : {}), ...(avatarUrl !== undefined ? { avatar_url: avatarUrl } : {}),
       ...(!current || current.latitude !== latitude || current.longitude !== longitude || current.pickup_address !== address
         ? { location_updated_at: new Date().toISOString() } : {}),
@@ -330,6 +352,7 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
   }));
   api.post('/business-owner/:id/products', auth, wrap(async c => {
     const shop = await owner(c, token(c.req.param('id')));
+    await deps.professional(c, shop.owner_id, true);
     const input = await body(c);
     const id = token(input?.id);
     const current = await get(c, products, id);
@@ -355,6 +378,7 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
     })) }));
     const fields = { name: string(input?.name, 80), category: string(input?.category, 48),
       unit_amount: integer(input?.unit_amount, 50, 100000), available: input.available,
+      ...(input?.stock === undefined ? {} : { stock: input.stock === null ? null : integer(input.stock, 0, 100000) }),
       mode, groups: groupsWithImages, ...(image ? { image_url: image } : {}) };
     if (current) await deps.patch(c, products, { id: eq(id), business_id: eq(shop.id) }, fields);
     else await deps.insert(c, products, [{ ...fields, id, business_id: shop.id }]);

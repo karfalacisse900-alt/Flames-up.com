@@ -43,6 +43,7 @@ function fixture() {
  const app=new Hono(); let row=null,h=null,blocked=false,revoked=false,providerFailure=false,paid=false,creates=0;
  const hash=async value=>createHash('sha256').update(value).digest('hex');
  const services={enabled:c=>supportTestEnabled(c.env),mode:c=>c.env.STRIPE_MODE,hash,viewer:c=>c.get('viewer'),limit:async()=>null,
+  professional:async()=>true,
   authorize:async(c,buyer,creator)=>{if(providerFailure)throw new Error('private provider diagnostic');
    if(blocked||buyer!=='buyer'||creator!=='creator')throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE',403);
    return {buyerId:'buyer-auth',buyerAppId:'buyer',creatorId:'creator-auth',creatorAppId:'creator',accountId:'trusted-account',profile:{id:'creator',username:'fixture',display_name:'Fixture creator',avatar_url:null}};},
@@ -117,7 +118,7 @@ test('eligibility distinguishes disabled/restricted creators from retryable prov
  assert.equal(failed.status,503);
  assert.doesNotMatch(await failed.text(),/private provider diagnostic/);
  f.providerFailure=false;f.blocked=true;
- assert.deepEqual(await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json(),{enabled:false,mode:'test',reason:'creator_unavailable'});
+ assert.deepEqual(await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json(),{visible:false,enabled:false,mode:'test',reason:'creator_unavailable'});
  f.blocked=false;
  assert.equal((await (await f.send('/creator-support/eligibility/creator',null,{Authorization:'buyer'})).json()).enabled,true);
 });

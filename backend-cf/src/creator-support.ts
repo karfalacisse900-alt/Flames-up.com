@@ -72,6 +72,7 @@ type Services = {
   viewer(c: any): string;
   limit(c: any, key: string): Promise<Response | null>;
   authorize(c: any, buyer: string, creator: string, issuedAt?: string): Promise<any>;
+  professional(c: any, creator: string): Promise<boolean>;
   validateBuyer(c: any, buyer: string, authId: string, issuedAt: string): Promise<void>;
   rpc(c: any, name: string, args: any): Promise<any>;
   handoff(c: any, hash: string): Promise<any>;
@@ -129,10 +130,14 @@ export function registerCreatorSupportRoutes(api: any, auth: any, s: Services) {
   };
   api.get('/creator-support/eligibility/:creator', auth, async (c: any) => {
     c.header('Cache-Control', 'no-store');
-    if (!s.enabled(c)) return c.json({ enabled: false, mode: s.mode(c), reason: 'rollout_disabled' });
-    try { await s.authorize(c, s.viewer(c), c.req.param('creator')); return c.json({ enabled: true, mode: s.mode(c), ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE }); }
+    try {
+      if (!await s.professional(c, c.req.param('creator'))) return c.json({ visible: false, enabled: false, mode: s.mode(c), reason: 'professional_required' });
+      if (!s.enabled(c)) return c.json({ visible: true, enabled: false, mode: s.mode(c), reason: 'rollout_disabled' });
+      await s.authorize(c, s.viewer(c), c.req.param('creator'));
+      return c.json({ visible: true, enabled: true, mode: s.mode(c), ...SUPPORT_LIMITS, disclosure: SUPPORT_DISCLOSURE });
+    }
     catch (error) {
-      if (error instanceof SupportError && [401, 403, 404, 409].includes(error.status)) return c.json({ enabled: false, mode: s.mode(c), reason: 'creator_unavailable' });
+      if (error instanceof SupportError && [401, 403, 404, 409].includes(error.status)) return c.json({ visible: false, enabled: false, mode: s.mode(c), reason: 'creator_unavailable' });
       return c.json({ code: 'CAPTRO_SUPPORT_RETRY', detail: 'Could not check support availability. Please retry.' }, 503);
     }
   });

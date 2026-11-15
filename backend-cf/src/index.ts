@@ -1,4 +1,5 @@
 import { makeBusinessOrdering } from './business-ordering';
+import { mountProfessionalAccounts, professionalHash, ProfessionalError, studioOrigin, studioPathAllowed } from './professional-accounts';
 import { teaPage, teaDetail, TeaInputError, TeaUnavailable } from './tea';
 import { mountTeaConversations } from './tea-conversations';
 import { mountTeaClubs } from './tea-clubs';
@@ -227,7 +228,8 @@ function allowedOrigins(c?: any): string[] {
     .split(',')
     .map((origin) => origin.trim())
     .filter((origin) => /^https:\/\//.test(origin));
-  return Array.from(new Set([...DEFAULT_ALLOWED_ORIGINS, ...configured]));
+  const studio = c ? studioOrigin(c.env) : null;
+  return Array.from(new Set([...DEFAULT_ALLOWED_ORIGINS, ...configured, ...(studio ? [studio] : [])]));
 }
 
 function allowedCorsOrigin(origin: string, c?: any) {
@@ -435,7 +437,16 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   try {
     const supabaseRequired = requireSupabasePrimaryDatabase(c, 'auth_context');
     if (supabaseRequired) return supabaseRequired;
-    const resolved = await resolveSupabaseSessionUser(c, token);
+    let resolved;
+    if (token.startsWith('studio_')) {
+      if (!/^studio_[a-f0-9]{64}$/.test(token) || !studioPathAllowed(c.req.method, new URL(c.req.url).pathname)
+          || c.req.header('Origin') !== studioOrigin(c.env)) return c.json({ detail: 'Studio access is restricted to its approved workspace.', code: 'STUDIO_SCOPE_DENIED' }, 403);
+      const hash = await professionalHash(token);
+      const session = await supabaseAdminRpc(c, 'captro_studio_session', { p_action: 'resolve', p_hash: hash });
+      const sessionUser = await getSupabaseSessionUserByAnyId(c, session.user_id);
+      resolved = { userId: session.user_id, user: sessionUser, payload: { sub: session.user_id, iat: Math.floor(Date.parse(session.issued_at) / 1000) } };
+      c.set('studioSession', hash);
+    } else resolved = await resolveSupabaseSessionUser(c, token);
     payload = resolved.payload;
     userId = resolved.userId;
     user = resolved.user;
@@ -478,6 +489,11 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
     }
     payload = canonicalSupabaseRequestPayload(payload, user);
     userId = String(payload?.sub || userId);
+    if (c.get('studioSession') && !['GET','HEAD','OPTIONS'].includes(c.req.method)) {
+      const role = /^\/api\/media\//.test(requestPath) ? 'business' : /^\/api\/(posts\/|users\/me\/showcase)/.test(requestPath) ? 'creator' : null;
+      if (role && !await supabaseAdminRpc(c, 'captro_professional_active', { p_user:userId, p_role:role }))
+        return c.json({detail:'This professional role is no longer active.',code:'PROFESSIONAL_FORBIDDEN'},403);
+    }
     if(!['GET','HEAD','OPTIONS'].includes(c.req.method) && /^\/api\/(commerce\/purchases(?:\/[^/]+\/(?:checkout|decision))?|checkout\/create-payment-intent|stripe\/checkout\/sessions)$/.test(requestPath)
       && await userHasActiveRestriction(c,userId,'commerce')) return c.json({detail:'This account is temporarily restricted from new commercial actions.',code:'CAPABILITY_RESTRICTED'},403);
     c.set('jwtPayload', payload);
@@ -15502,7 +15518,7 @@ api.get('/auth/me', authMiddleware, async (c) => {
   if (supabaseRequired) return supabaseRequired;
   const user = await getSupabaseSessionUserByAnyId(c, userId);
   if (!user) return c.json({ detail: 'User not found' }, 404);
-  return c.json(authUserPayload(user));
+  return c.json({ ...authUserPayload(user), professional: await professionalPublicRoles(c, userId) });
 });
 
 async function accountIdentityMatches(c: any, user: any, provider: string, providerUserId: string): Promise<boolean> {
@@ -16430,6 +16446,9 @@ api.get('/users/:userId', authMiddleware, async (c) => {
   const targetUserId = c.req.param('userId');
   const result = await supabasePublicUserPayload(c, viewerId, targetUserId);
   c.header('Cache-Control', 'no-store');
+  if (result.status === 200 && !(result.body as any).privacy_locked) {
+    return c.json({ ...result.body, professional: await professionalPublicRoles(c, (result.body as any).id) });
+  }
   return c.json(result.body, result.status);
 });
 
@@ -20153,6 +20172,35 @@ api.post('/upload/video-direct', authMiddleware, async (c) => {
 
 // Captro commerce. Home receives only publicCommercePayload; purchases and
 // entitlements are private, authenticated resources.
+async function professionalPublicRoles(c: any, appId: string) {
+  const roles = await supabaseAdminQueryRows(c, 'app_professional_roles', {
+    filters: { user_id: postgrestEqFilter(appId), status: 'eq.active' }, select: 'role,public_data', limit: 2,
+  });
+  const user = roles.some(r => r.role === 'business') ? await supabaseUserByAnyId(c, appId) : null;
+  const shops = user?.supabase_user_id ? await supabaseAdminQueryRows(c, 'app_businesses', {
+    filters: { owner_id: postgrestEqFilter(user.supabase_user_id), published: 'eq.true', paused: 'eq.false', tax_bps: 'not.is.null' },
+    select: 'id,name,category,pickup_address,hours', order: 'name.asc,id.asc', limit: 10,
+  }) : [];
+  return roles.map(row => ({ role: row.role, displayName: row.public_data.displayName,
+    category: row.public_data.category, description: row.public_data.description,
+    links: row.public_data.links, area: row.public_data.area, pickup: row.public_data.pickup,
+    shops: row.role === 'business' ? shops : [] }));
+}
+async function requireProfessionalRole(c: any, identity: string, role: 'creator' | 'business') {
+  const active = await supabaseAdminRpc(c, 'captro_professional_active', { p_user: identity, p_role: role });
+  if (active !== true) throw new ProfessionalError('PROFESSIONAL_FORBIDDEN', 403);
+}
+mountProfessionalAccounts(api, {
+  auth: authMiddleware, actor: getUserId, rpc: supabaseAdminRpc, query: supabaseAdminQueryRows, eq: postgrestEqFilter,
+  limit: async c => rejectLargeRequest(c, 16_000) || await enforceRateLimit(c, 'professional_accounts', getUserId(c) || c.req.header('CF-Connecting-IP') || 'anonymous', 60, 60),
+  admin: async (c, write) => { await requireAdminRole(c, write ? 'professional:write' : 'professional:read'); },
+  portfolio: async (c, ids) => {
+    for (const id of ids) {
+      const [post] = await supabaseReadVisiblePosts(c, getUserId(c), { ownerId: getUserId(c), postId: id, limit: 1 });
+      if (!post) throw new ProfessionalError('PROFESSIONAL_INVALID', 400, 'Choose posts that belong to your account.');
+    }
+  },
+});
 async function supportBuyer(c: any, appId: string, expectedAuthId?: string, issuedAt?: string) {
   const row = await supabaseUserByAnyId(c, appId);
   const metadata = parseJsonObject(row?.metadata);
@@ -20176,6 +20224,7 @@ async function supportParties(c: any, buyerAppId: string, creatorAppId: string, 
   const access = await supabasePublicUserPayload(c, buyer.id, creator.id);
   const profile: any = access.body;
   if (access.status !== 200 || profile.privacy_locked || profile.viewer_has_blocked || profile.viewer_blocked_by) throw new SupportError('CAPTRO_SUPPORT_UNAVAILABLE', 403);
+  if (await supabaseAdminRpc(c, 'captro_professional_active', { p_user: creator.id, p_role: 'creator' }) !== true) throw new SupportError('CAPTRO_SUPPORT_PROFESSIONAL_REQUIRED', 403);
   const mode = configuredStripeMode(c);
   const enrollmentField = mode === 'test' ? 'enabled_for_test' : 'enabled_for_live';
   const enrollment = await supabaseAdminSelectRows(c, 'app_creator_support_enrollments', {
@@ -20192,6 +20241,11 @@ registerCreatorSupportRoutes(api, authMiddleware, {
   enabled: c => supportModeEnabled(c.env), mode: c => configuredStripeMode(c), hash: sha256Hex, viewer: getUserId,
   limit: (c, key) => enforceRateLimit(c, 'creator_support', key, 30, 60),
   authorize: supportParties,
+  professional: async (c, creatorId) => {
+    const profile = await supabasePublicUserPayload(c, getUserId(c), creatorId);
+    return profile.status === 200 && !(profile.body as any).privacy_locked &&
+      await supabaseAdminRpc(c, 'captro_professional_active', { p_user: (profile.body as any).id, p_role: 'creator' }) === true;
+  },
   validateBuyer: async (c, appId, authId, issuedAt) => { await supportBuyer(c, appId, authId, issuedAt); },
   rpc: supabaseAdminRpc,
   handoff: async (c, hash) => (await supabaseAdminSelectRows(c, 'app_creator_support_handoffs', { token_hash: postgrestEqFilter(hash) }, '*', 1))[0],
@@ -20214,8 +20268,13 @@ registerCreatorSupportRoutes(api, authMiddleware, {
 
 function teaDependencies(c: any, viewerId: string) {
   return {
-    query: (table: string, input: Parameters<typeof supabaseAdminQueryRows>[2]) =>
-      supabaseAdminQueryRows(c, table, input),
+    query: async (table: string, input: Parameters<typeof supabaseAdminQueryRows>[2]) => {
+      const rows = await supabaseAdminQueryRows(c, table, input);
+      if (table !== 'app_businesses' || !rows.length) return rows;
+      const checks = new Map(await Promise.all([...new Set(rows.map(row => row.owner_id))].map(async id =>
+        [id, await supabaseAdminRpc(c,'captro_professional_active',{p_user:id,p_role:'business'})] as const)));
+      return rows.filter(row => checks.get(row.owner_id));
+    },
     async access(postIds: string[], ownerIds: string[]) {
       const [posts, owners, aliases] = await Promise.all([
         postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
@@ -21446,9 +21505,13 @@ async function loadCreatorSupportReadiness(c:any,sellerId:string,enrollmentOverr
         || session?.metadata?.captro_mode !== identity.stripe_mode) throw new Error('STRIPE_IDENTITY_OWNER_MISMATCH');
     identityStatus = ['requires_input','processing','verified','canceled'].includes(session.status) ? session.status : 'processing';
   }
-  return supportReadiness({mode:configuredStripeMode(c),enabled,account,providerVerified,enrolled,
+  const readiness = supportReadiness({mode:configuredStripeMode(c),enabled,account,providerVerified,enrolled,
     manualRequired:true,identityRequired,
     identityVerified:identityStatus === 'verified' && identity?.connected_account_id === account?.id});
+  if (await supabaseAdminRpc(c, 'captro_professional_active', { p_user: sellerId, p_role: 'creator' }) !== true) {
+    return { ...readiness, status: 'not_ready', blockers: [{ source: 'captro', code: 'professional_creator_required', message: 'An approved, active Creator / Gig role is required. Apply in Settings; existing earnings and payout records remain available.' }, ...readiness.blockers] };
+  }
+  return readiness;
 }
 
 registerCreatorEarningsRoutes(api, authMiddleware, {
@@ -21855,6 +21918,16 @@ const businessWebhook = makeBusinessOrdering(api, authMiddleware, {
   getStripe: stripeApiGet, postStripe: stripeApiRequest, stripe: getStripeConfig,
   actor: c => c.get('jwtPayload')?.supabase_sub,
   seller: requireReadyConnectedAccount,
+  professional: async (c, ownerId, active) => {
+    if (active) await requireProfessionalRole(c, ownerId, 'business');
+    else {
+      const owner = await supabaseUserByAnyId(c, ownerId);
+      const roles = owner ? await supabaseAdminQueryRows(c, 'app_professional_roles', { filters: { user_id: postgrestEqFilter(owner.id), role: 'eq.business' }, limit: 1 }) : [];
+      // Historical owners retain fulfillment access even if they predate applications.
+      const existing = roles.length ? [] : await supabaseAdminQueryRows(c, 'app_businesses', { filters: { owner_id: postgrestEqFilter(ownerId) }, select: 'id', limit: 1 });
+      if (!roles.length && !existing.length) throw new ProfessionalError('PROFESSIONAL_FORBIDDEN', 403);
+    }
+  },
   media: async (c, ids) => {
     const result = await approvedMediaAssetsForPost(c, getUserId(c), ids, []);
     if (!result.ok || result.assets.length !== ids.length ||
@@ -22072,6 +22145,8 @@ const ADMIN_PERMISSIONS: Record<AdminRole, Set<string>> = {
   owner: new Set(['*']),
   admin: new Set([
     'admin:read',
+    'professional:read',
+    'professional:write',
     'reports:read',
     'reports:write',
     'content:read',
