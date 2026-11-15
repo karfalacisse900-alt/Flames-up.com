@@ -4,7 +4,7 @@ create table public.app_tea_club_settings (
  club_id uuid primary key references public.app_purchasables(id) on delete cascade,
  rules text not null default '' check(length(rules)<=8000),
  official_links jsonb not null default '[]', rooms_enabled boolean not null default false,
- pinned_message_id text, version integer not null default 1
+ pinned_message_id text, pin_migrated boolean not null default false, version integer not null default 1
 );
 create table public.app_tea_club_rooms (
  id uuid primary key, club_id uuid not null references public.app_purchasables(id) on delete cascade,
@@ -91,6 +91,7 @@ begin
        and m.created_at>coalesce((select seen_at from public.app_tea_club_reads where club_id=p_club and user_id=p_actor and room='general'),'epoch')),
      'approvalRequired',club.approval_required,'postId',club.post_id,
      'image',(select metadata->>'image_url' from public.app_group_chats where id=gid),
+     'legacyPin',case when not coalesce(settings.pin_migrated,false) then (select nullif(metadata->>'pinned_message','') from public.app_group_chats where id=gid) end,
      'pin',(select jsonb_build_object('id',m.id,'body',m.body,'room',m.tea_room_id) from public.app_group_messages m where m.id=settings.pinned_message_id and m.group_id=gid and m.media->>'removed_at' is null),
      'rooms',coalesce((select jsonb_agg(jsonb_build_object('id',r.id,'name',r.name,'announcements',r.announcements,
        'unread',exists(select 1 from public.app_group_messages m where m.group_id=gid and m.tea_room_id=r.id and m.sender_id<>p_actor
@@ -180,6 +181,7 @@ begin
        removed_at=case when p_action='removeLink' then now() else null end,version=version+1 where id=saved.id returning * into saved;
      return to_jsonb(saved);
    elsif p_action='createRoom' then
+     if exists(select 1 from public.app_tea_club_rooms where club_id=p_club and name=p_data->>'name' and id<>(p_data->>'id')::uuid) then raise exception 'TEA_CLUB_CONFLICT'; end if;
      if (select count(*) from public.app_tea_club_rooms where club_id=p_club)>=30 and not exists(select 1 from public.app_tea_club_rooms where id=(p_data->>'id')::uuid and club_id=p_club) then raise exception 'TEA_CLUB_INVALID'; end if;
      insert into public.app_tea_club_rooms(id,club_id,name,announcements) values((p_data->>'id')::uuid,p_club,p_data->>'name',(p_data->>'announcements')::boolean) on conflict(id) do nothing;
      select * into selected_room from public.app_tea_club_rooms where id=(p_data->>'id')::uuid;
@@ -192,11 +194,11 @@ begin
      if p_action='pin' then
        target:=nullif(p_data->>'message','');
        if target is not null and not exists(select 1 from public.app_group_messages where id=target and group_id=gid and media->>'removed_at' is null) then raise exception 'TEA_CLUB_UNAVAILABLE'; end if;
-       if settings.pinned_message_id is not distinct from target then return jsonb_build_object('ok',true); end if;
+       if settings.pin_migrated and settings.pinned_message_id is not distinct from target then return jsonb_build_object('ok',true); end if;
      end if;
      if p_action='settings' and settings.rules is not distinct from p_data->>'rules' and settings.official_links is not distinct from p_data->'links' then return jsonb_build_object('ok',true); end if;
      if settings.version is distinct from (p_data->>'version')::integer then raise exception 'TEA_CLUB_CONFLICT'; end if;
-     if p_action='pin' then update public.app_tea_club_settings set pinned_message_id=target,version=version+1 where club_id=p_club;
+     if p_action='pin' then update public.app_tea_club_settings set pinned_message_id=target,pin_migrated=true,version=version+1 where club_id=p_club;
      else update public.app_tea_club_settings set rules=p_data->>'rules',official_links=p_data->'links',version=version+1 where club_id=p_club; end if;
    elsif p_action='invites' then
      select coalesce(jsonb_agg(to_jsonb(q) order by q.created_at desc,q.id desc),'[]') into result from (select i.* from public.app_tea_club_invites i where i.club_id=p_club
@@ -256,6 +258,11 @@ declare i public.app_tea_club_invites; c public.app_purchasables; a public.app_u
  if exists(select 1 from public.app_blocks b where (b.blocker_id in (p_actor,a.supabase_user_id::text) and b.blocked_id in (c.creator_app_user_id,c.creator_id::text)) or (b.blocked_id in (p_actor,a.supabase_user_id::text) and b.blocker_id in (c.creator_app_user_id,c.creator_id::text))) then raise exception 'TEA_CLUB_UNAVAILABLE'; end if;
  if exists(select 1 from public.app_group_chat_members where group_id=c.private_config->>'group_chat_id' and user_id=p_actor) then
    return jsonb_build_object('state','member','clubId',c.id,'name',c.title,'postId',c.post_id); end if;
+ -- Clubs that already require approval use their existing join/request flow.
+ -- Do not make the recipient obtain two independent organizer approvals.
+ if c.approval_required then
+   return jsonb_build_object('state','continue_to_join','clubId',c.id,'name',c.title,'postId',c.post_id,'requiresApproval',true);
+ end if;
  if i.requires_approval and p_accept then
    insert into public.app_tea_club_invite_requests(invite_id,user_id) values(i.id,p_actor) on conflict do nothing;
  end if;

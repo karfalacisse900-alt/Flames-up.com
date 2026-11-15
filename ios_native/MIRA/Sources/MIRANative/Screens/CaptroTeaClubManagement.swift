@@ -222,7 +222,15 @@ struct CaptroClubLinkEditor: View {
   @discardableResult private func mutate(_ action: String, _ payload: CaptroClubAction) async -> Bool {
     guard !busy else { return false }; busy = true; error = nil; defer { busy = false }
     do { try await model.perform(action, payload); return true }
-    catch { self.error = "Couldn’t confirm the change. Refresh and try again."; return false }
+    catch {
+      if case MIRAAPIError.server(let status, _, let detail) = error, [400,403,404,409].contains(status) {
+        if action == "createRoom" { submittedRoom = nil }
+        if action == "createInvite" { submittedInvite = nil }
+        self.error = detail ?? "This change was rejected. Check the details and try again."
+        if status == 409 { await model.load(force: true) }
+      } else { self.error = "Couldn’t confirm the change. Retry checks the same request." }
+      return false
+    }
   }
   private func load(more: Bool = false) async {
     guard !loading, model.valid else { return }; loading = true; error = nil; defer { loading = false }
@@ -267,7 +275,8 @@ struct CaptroTeaInviteView: View {
         case "approval_required": Text("An organizer must approve this invitation."); Button("Request admission") { Task { await load(accept: true) } }.disabled(loading)
         case "pending": Text("Waiting for organizer approval."); Button("Check status") { Task { await load() } }
         case "denied": Text("This admission request was declined.")
-        default: Text("Review the club’s current membership requirements before joining."); if invitation.postId != nil { Button("View club and join") { destination = true } }
+        case "continue_to_join": Text("Review the club’s current membership requirements before joining."); if invitation.postId != nil { Button("View club and join") { destination = true } }
+        default: Text("This invitation is unavailable.")
         }
       } else if loading { ProgressView("Checking invitation") }
       if let error { Text(error).font(.subheadline); Button("Retry") { Task { await load() } }.disabled(loading) }

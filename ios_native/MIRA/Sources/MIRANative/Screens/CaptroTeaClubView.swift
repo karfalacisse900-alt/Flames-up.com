@@ -130,6 +130,15 @@ import UIKit
           HStack(spacing: 8) { Image(systemName: "pin").font(.caption); Text(pin.body).font(.subheadline).lineLimit(1); Spacer(minLength: 0); Image(systemName: "chevron.right").font(.caption) }.frame(minHeight: 44).padding(.horizontal, 16)
         }.buttonStyle(.plain).accessibilityLabel("Pinned message: " + pin.body).accessibilityIdentifier("tea.club.pin")
         Divider()
+      } else if let club = model.club, let legacy = club.legacyPin, !legacy.isEmpty {
+        HStack(spacing: 8) { Image(systemName: "pin").font(.caption); Text(legacy).font(.subheadline).lineLimit(2); Spacer(minLength: 0) }
+          .frame(minHeight: 44).padding(.horizontal, 16)
+          .contextMenu {
+            if club.canManage {
+              Button("Unpin") { Task { do { try await model.perform("pin", .init(version: club.version)) } catch { model.actionError = "Couldn’t change the pin. Try again." } } }
+            }
+          }
+        Divider()
       }
       ScrollViewReader { proxy in
         ScrollView {
@@ -170,6 +179,7 @@ import UIKit
           .buttonStyle(.plain).accessibilityLabel("Open quoted message: " + quote.body).accessibilityIdentifier("tea.club.quote." + message.id)
       }
       Text(message.body).font(.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        .accessibilityIdentifier("tea.club.message." + message.id)
       if let media = message.mediaURL, !media.isEmpty {
         // The existing message view owns authorized attachment/video rendering.
         NavigationLink { ConversationNativeView(groupId: model.club?.groupId ?? "", title: model.club?.name ?? "Club", api: api) } label: { Label("Open attachment in Messages", systemImage: "photo").font(.subheadline).frame(minHeight: 44) }
@@ -180,7 +190,7 @@ import UIKit
       TeaConversationTime(value: message.createdAt)
     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
       .contextMenu {
-        if !model.readOnly { Button("Reply") { model.quotes[model.key] = message.reference; composing = true } }
+        if !model.readOnly { Button("Reply") { model.quotes[model.key] = message.reference } }
         ForEach(message.links) { link in Button("Save " + link.hostname + " to Links") { linkToSave = .init(url: link.url.absoluteString, message: message.id) } }
         if let club = model.club, club.canManage {
           Button(club.pin?.id == message.id ? "Unpin" : "Pin message") {
@@ -188,8 +198,7 @@ import UIKit
           }
         }
       }
-      .accessibilityAction(named: "Reply") { if !model.readOnly { model.quotes[model.key] = message.reference; composing = true } }
-      .accessibilityIdentifier("tea.club.message." + message.id)
+      .accessibilityAction(named: "Reply") { if !model.readOnly { model.quotes[model.key] = message.reference } }
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 6) {

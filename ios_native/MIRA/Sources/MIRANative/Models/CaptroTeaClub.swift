@@ -13,6 +13,7 @@ struct CaptroTeaClub: Decodable, Identifiable {
   let postId: String?
   let image: String?
   let pin: CaptroClubQuote?
+  let legacyPin: String?
   let rooms: [CaptroClubRoom]
   var canManage: Bool { ["owner", "admin"].contains(role) }
 }

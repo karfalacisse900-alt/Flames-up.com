@@ -45,6 +45,28 @@ test('links are bounded HTTPS destinations, preserve queries and reject ambiguou
   assert.throws(()=>discussionInput('edit',{title:'a',body:'b',links:[],version:0}));
 });
 
+test('long sentence threads paginate independently from general replies and other sentences',async()=>{
+  const {db,write}=await database();try {
+    const body='First sentence. Second sentence.';
+    const targets=discussionSentences(body,1);
+    await write('a','create',id(1),draft({body}));
+    for(let n=1;n<=25;n++) {
+      await write('b','reply',id(1),{requestID:id(300+n),body:'General '+n});
+      await write('b','reply',id(1),{requestID:id(400+n),body:'Target '+n,target:targets[0]});
+    }
+    await write('c','reply',id(1),{requestID:id(500),body:'Other sentence',target:targets[1]});
+    const readTarget=async(target,before=null,boundary=null)=>(await db.query('select captro_tea_target_replies($1,$2,$3,$4,$5) r',['b',id(1),target,before,boundary])).rows[0].r;
+    const first=await readTarget(targets[0].id);assert.equal(first.length,21);
+    const last=first[19];const second=await readTarget(targets[0].id,last.createdAt,last.id);
+    const complete=[...first.slice(0,20),...second];assert.equal(new Set(complete.map(r=>r.id)).size,25);
+    assert.ok(complete.every(r=>r.target.id===targets[0].id));
+    assert.equal((await readTarget(targets[1].id)).length,1);
+    assert.ok((await readTarget('general')).every(r=>r.target===null));
+    await db.exec("insert into app_blocks values('b','a')");
+    await assert.rejects(readTarget(targets[0].id),/UNAVAILABLE/);
+  }finally{await db.close();}
+});
+
 async function database() {
   const db=new PGlite();
   await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;

@@ -119,7 +119,7 @@ final class TeaConversationTests: XCTestCase {
   func testSentenceRepliesCollapsedExpandedAndClearKeepsDraft() {
     let app=launch(["--tea-sentence-fixture"])
     row(101,app).tap()
-    let thread=app.buttons["tea.thread.1:22:61"]
+    let thread=app.buttons["tea.thread.1:23:63"]
     XCTAssertTrue(thread.waitForExistence(timeout:8))
     XCTAssertFalse(app.staticTexts["Where did you end up shooting?"].exists)
     shot("sentence-replies-collapsed",app)
@@ -127,7 +127,7 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Where did you end up shooting?"].waitForExistence(timeout:8))
     shot("sentence-replies-expanded",app)
     thread.tap()
-    let sentence=app.staticTexts["tea.sentence.1:22:61"]
+    let sentence=app.staticTexts["tea.sentence.1:23:63"]
     sentence.press(forDuration:1)
     XCTAssertTrue(app.buttons["Reply to this part"].waitForExistence(timeout:5))
     app.buttons["Reply to this part"].tap()
@@ -154,11 +154,15 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertTrue(app.buttons["profile.follow"].waitForExistence(timeout:8))
     app.navigationBars.firstMatch.buttons.firstMatch.tap()
     XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout:5))
-    let first=app.staticTexts["tea.sentence.1:0:21"]
+    app.buttons["tea.author.avatar"].tap()
+    XCTAssertTrue(app.buttons["profile.follow"].waitForExistence(timeout:8))
+    app.navigationBars.firstMatch.buttons.firstMatch.tap()
+    XCTAssertTrue(app.buttons["Unfollow author"].waitForExistence(timeout:8),"Opening the avatar must not toggle the separate follow control")
+    let first=app.staticTexts["tea.sentence.1:0:22"]
     first.press(forDuration:1); app.buttons["Reply to this part"].tap()
     let field=input("tea.reply.input",app); field.tap(); field.typeText("Which phone did you use?")
     app.buttons["tea.reply.send"].tap()
-    XCTAssertTrue(app.buttons["tea.thread.1:0:21"].waitForExistence(timeout:8))
+    XCTAssertTrue(app.buttons["tea.thread.1:0:22"].waitForExistence(timeout:8))
     XCTAssertTrue(app.staticTexts["Which phone did you use?"].waitForExistence(timeout:8))
     XCTAssertFalse(app.staticTexts["tea.reply.target"].exists)
     shot("multiple-sentence-threads",app)
@@ -176,8 +180,8 @@ final class TeaConversationTests: XCTestCase {
     let earlier=app.staticTexts["Earlier text"]
     for _ in 0..<5 where !earlier.isHittable { app.swipeUp() }
     XCTAssertTrue(earlier.exists)
-    XCTAssertFalse(app.buttons["tea.thread.2:22:61"].exists,"Old replies must never move to the new caption revision")
-    let original=app.buttons["tea.thread.1:22:61"]
+    XCTAssertFalse(app.buttons["tea.thread.2:23:63"].exists,"Old replies must never move to the new caption revision")
+    let original=app.buttons["tea.thread.1:23:63"]
     for _ in 0..<4 where !original.isHittable { app.swipeUp() }
     XCTAssertTrue(original.isHittable); original.tap()
     XCTAssertTrue(app.staticTexts["Where did you end up shooting?"].waitForExistence(timeout:8))

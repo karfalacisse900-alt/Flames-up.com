@@ -28,8 +28,12 @@ test('General preserves existing messages; membership, rooms, quotes, pins, link
   for(const action of ['overview','messages','members','links','invites'])await assert.rejects(call('visitor',action),/FORBIDDEN/);
   assert.equal((await call('member','messages'))[0].id,'legacy');
   assert.equal((await call('member','overview')).rooms.length,0);
+  await db.exec(`update app_group_chats set metadata='{"pinned_message":"An existing announcement"}'`);
+  assert.equal((await call('member','overview')).legacyPin,'An existing announcement');
   await assert.rejects(call('member','createRoom',{id:id(2),name:'News',announcements:true}),/FORBIDDEN/);
   await call('owner','createRoom',{id:id(2),name:'News',announcements:true});
+  await assert.rejects(call('owner','createRoom',{id:id(30),name:'News',announcements:true}),/CONFLICT/);
+  assert.equal((await call('member','overview')).legacyPin,'An existing announcement');
   await assert.rejects(call('member','send',{id:id(3),room:id(2),body:'Forged'}),/FORBIDDEN/);
   await call('owner','send',{id:id(3),room:id(2),body:'Announcement',quote:'legacy'});
   assert.equal((await call('member','overview')).rooms[0].unread,true);
@@ -44,6 +48,7 @@ test('General preserves existing messages; membership, rooms, quotes, pins, link
   await assert.rejects(call('member','pin',{message:id(4),version:1}),/FORBIDDEN/);
   await call('owner','pin',{message:id(4),version:1});
   assert.equal((await call('member','overview')).pin.id,id(4));
+  assert.equal((await call('member','overview')).legacyPin,null);
   await assert.rejects(call('owner','pin',{message:'legacy',version:1}),/CONFLICT/);
   const link={id:id(6),title:'Info',url:'https://example.com/info',message:id(4)};
   await call('member','saveLink',link);await call('member','saveLink',link);
@@ -143,6 +148,10 @@ test('canonical approval, removed messages, foreign rooms and concurrent writes 
   const payload={id:id(7),hash:'fixture',approval:false,expires:new Date(Date.now()+86400000).toISOString()};
   assert.equal((await call('owner','createInvite',payload)).requires_approval,true);
   await assert.rejects(call('owner','createInvite',{...payload,expires:new Date(Date.now()+172800000).toISOString()}),/CONFLICT/);
+  const canonical=(await db.query("select captro_tea_invite('visitor','fixture',true) r")).rows[0].r;
+  assert.equal(canonical.state,'continue_to_join');assert.equal(canonical.requiresApproval,true);
+  assert.equal((await db.query('select count(*) n from app_tea_club_invite_requests')).rows[0].n,0);
+  await db.exec('update app_purchasables set approval_required=false');
   await db.query("select captro_tea_invite('visitor','fixture',true)");
   await call('owner','decideInvite',{id:id(7),user:'visitor',approve:true});
   await assert.rejects(call('owner','decideInvite',{id:id(7),user:'visitor',approve:false}),/CONFLICT/);
