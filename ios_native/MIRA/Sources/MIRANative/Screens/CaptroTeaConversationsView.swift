@@ -315,7 +315,8 @@ struct TeaConversationTime: View {
           if let photo = model.authorProfile?.profileImage, !photo.isEmpty { RemoteAvatar(url: photo, size: 44) }
           else {
             Text(post.author.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined())
-              .font(.headline).frame(width: 44, height: 44).background(MIRATheme.Color.surfaceSoft, in: Circle())
+              .font(.headline).lineLimit(1).minimumScaleFactor(0.35)
+              .frame(width: 44, height: 44).background(MIRATheme.Color.surfaceSoft, in: Circle())
           }
         }.frame(width: 44, height: 44)
       }.buttonStyle(.plain).accessibilityLabel("Open profile photo for " + post.author.name)
