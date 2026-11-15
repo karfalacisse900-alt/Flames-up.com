@@ -100,6 +100,7 @@ targets:
       - path: Tests/MIRANativeTests/CaptroAdditionalReviewTests.swift
       - path: Tests/MIRANativeTests/CaptroTeaCacheTests.swift
       - path: Tests/MIRANativeTests/CaptroTeaConversationTests.swift
+      - path: Tests/MIRANativeTests/CaptroTeaClubTests.swift
       - path: Tests/MIRANativeTests/CaptroScreenLoadingTests.swift
       - path: Tests/MIRANativeTests/CaptroReliabilityTests.swift
       - path: Tests/MIRANativeTests/CaptroImageUploadPreparationTests.swift

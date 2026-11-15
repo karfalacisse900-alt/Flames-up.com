@@ -7,6 +7,7 @@ struct CaptroTeaClub: Decodable, Identifiable {
   let rules: String
   let officialLinks: [String]
   let roomsEnabled: Bool
+  let generalUnread: Bool?
   let version: Int
   let approvalRequired: Bool
   let postId: String?

@@ -78,6 +78,8 @@ begin
      'role',member.role,'viewerId',p_actor,'memberCount',(select count(*) from public.app_group_chat_members where group_id=gid),
      'rules',coalesce(settings.rules,''),'officialLinks',coalesce(settings.official_links,'[]'),
      'roomsEnabled',coalesce(settings.rooms_enabled,false),'version',coalesce(settings.version,1),
+     'generalUnread',exists(select 1 from public.app_group_messages m where m.group_id=gid and m.tea_room_id is null and m.sender_id<>p_actor and m.media->>'removed_at' is null
+       and m.created_at>coalesce((select seen_at from public.app_tea_club_reads where club_id=p_club and user_id=p_actor and room='general'),'epoch')),
      'approvalRequired',club.approval_required,'postId',club.post_id,
      'image',(select metadata->>'image_url' from public.app_group_chats where id=gid),
      'pin',(select jsonb_build_object('id',m.id,'body',m.body,'room',m.tea_room_id) from public.app_group_messages m where m.id=settings.pinned_message_id and m.group_id=gid and m.media->>'removed_at' is null),
@@ -158,7 +160,7 @@ begin
        removed_at=case when p_action='removeLink' then now() else null end,version=version+1 where id=saved.id returning * into saved;
      return to_jsonb(saved);
    elsif p_action='createRoom' then
-     if (select count(*) from public.app_tea_club_rooms where club_id=p_club)>=30 then raise exception 'TEA_CLUB_INVALID'; end if;
+     if (select count(*) from public.app_tea_club_rooms where club_id=p_club)>=30 and not exists(select 1 from public.app_tea_club_rooms where id=(p_data->>'id')::uuid and club_id=p_club) then raise exception 'TEA_CLUB_INVALID'; end if;
      insert into public.app_tea_club_rooms(id,club_id,name,announcements) values((p_data->>'id')::uuid,p_club,p_data->>'name',(p_data->>'announcements')::boolean) on conflict(id) do nothing;
      select * into selected_room from public.app_tea_club_rooms where id=(p_data->>'id')::uuid;
      if selected_room.club_id<>p_club or selected_room.name<>p_data->>'name' or selected_room.announcements is distinct from (p_data->>'announcements')::boolean then raise exception 'TEA_CLUB_CONFLICT'; end if;
@@ -172,6 +174,7 @@ begin
        if target is not null and not exists(select 1 from public.app_group_messages where id=target and group_id=gid and media->>'removed_at' is null) then raise exception 'TEA_CLUB_UNAVAILABLE'; end if;
        if settings.pinned_message_id is not distinct from target then return jsonb_build_object('ok',true); end if;
      end if;
+     if p_action='settings' and settings.rules is not distinct from p_data->>'rules' and settings.official_links is not distinct from p_data->'links' then return jsonb_build_object('ok',true); end if;
      if settings.version is distinct from (p_data->>'version')::integer then raise exception 'TEA_CLUB_CONFLICT'; end if;
      if p_action='pin' then update public.app_tea_club_settings set pinned_message_id=target,version=version+1 where club_id=p_club;
      else update public.app_tea_club_settings set rules=p_data->>'rules',official_links=p_data->'links',version=version+1 where club_id=p_club; end if;

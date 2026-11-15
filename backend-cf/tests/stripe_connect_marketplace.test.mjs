@@ -9,7 +9,8 @@ import {
   stripeV2RecipientTransfersEnabled,
 } from '../src/stripe-connect-v2.ts';
 
-const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+// Source contracts must be identical on Windows checkouts and macOS CI.
+const source = path => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const worker = source('../src/index.ts');
 const connectV2 = source('../src/stripe-connect-v2.ts');
 const money = source('../src/stripe-money.ts');

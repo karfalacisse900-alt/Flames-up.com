@@ -47,6 +47,9 @@ import Foundation
   private var loadedAt: Date?
   private var flight: Task<Void, Never>?
   private var messageFlights = Set<String>()
+  private var readCandidate: [String: CaptroClubMessage] = [:]
+  private var readTasks: [String: Task<Void, Never>] = [:]
+  private var readThrough: [String: String] = [:]
   private var revision = 0
   private var invalidated = false
   init(id: String, api: MIRAAPIClient) { self.id = id; self.api = api; scope = api.presentationScope }
@@ -59,6 +62,7 @@ import Foundation
     invalidated = true; revision += 1; flight?.cancel(); flight = nil
     club = nil; pages = [:]; drafts = [:]; quotes = [:]; links = []; pending = [:]; scrollIDs = [:]
     loadedAt = nil; linksLoaded = false; denied = true
+    readTasks.values.forEach { $0.cancel() }; readTasks = [:]; readCandidate = [:]; readThrough = [:]
   }
   func load(force: Bool = false) async {
     guard valid else { return }
@@ -100,10 +104,23 @@ import Foundation
       var seen = Set<String>(); combined = combined.filter { seen.insert($0.id).inserted }
       pages[roomKey] = Messages(items: combined, cursor: older ? page.nextCursor : (prior.count > 50 ? previous?.cursor : page.nextCursor), date: Date())
       error = nil
-      if selected == room, let last = page.items.last {
-        let _: EmptyResponse = try await api.post(base + "/read", body: CaptroClubAction(room: selected, message: last.id))
-      }
     } catch { handle(error, expected: expected) }
+  }
+  func markRead(_ message: CaptroClubMessage) async {
+    guard valid, tab == "Chat", message.room == room else { return }
+    let roomKey = key
+    guard message.createdAt > (readThrough[roomKey] ?? "") else { return }
+    if message.createdAt >= (readCandidate[roomKey]?.createdAt ?? "") { readCandidate[roomKey] = message }
+    guard readTasks[roomKey] == nil else { return }
+    readTasks[roomKey] = Task { [weak self] in
+      do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+      guard let self, valid, let candidate = readCandidate.removeValue(forKey: roomKey) else { return }
+      defer { readTasks[roomKey] = nil }
+      do {
+        let _: EmptyResponse = try await api.post(base + "/read", body: CaptroClubAction(room: candidate.room, message: candidate.id))
+        if valid { readThrough[roomKey] = candidate.createdAt }
+      } catch { if Self.accessDenied(error) { clear() } }
+    }
   }
   func loadLinks(more: Bool = false, force: Bool = false) async {
     guard valid, !loadingLinks, !more || linkCursor != nil else { return }

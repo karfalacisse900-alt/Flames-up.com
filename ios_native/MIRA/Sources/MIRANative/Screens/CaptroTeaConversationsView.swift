@@ -296,24 +296,24 @@ struct TeaConversationTime: View {
       }
       Spacer(minLength: 0)
       Button { profile = CaptroProfileLink(id: post.author.id) } label: {
-        HStack(spacing: 10) {
-          VStack(alignment: .trailing, spacing: 3) {
-            Text(post.author.name).font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing)
-            Text("@" + post.author.username).font(.caption).foregroundStyle(.secondary)
-            TeaConversationTime(value: post.createdAt)
-          }
-          Group {
-            if let photo = model.authorProfile?.profileImage, !photo.isEmpty {
-              RemoteAvatar(url: photo, size: 44)
-            } else {
-              Text(post.author.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined())
-                .font(.headline).frame(width: 44, height: 44).background(MIRATheme.Color.surfaceSoft, in: Circle())
-            }
-          }.accessibilityHidden(true)
-        }.padding(.bottom, post.isAuthor ? 0 : 10)
+        VStack(alignment: .trailing, spacing: 3) {
+          Text(post.author.name).font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing)
+          Text("@" + post.author.username).font(.caption).foregroundStyle(.secondary)
+          TeaConversationTime(value: post.createdAt)
+        }.frame(minHeight: 44).contentShape(Rectangle())
       }.buttonStyle(.plain).accessibilityLabel("Open profile for " + post.author.name)
         .accessibilityIdentifier("tea.author.profile")
-        .overlay(alignment: .bottomTrailing) {
+      Button { profile = CaptroProfileLink(id: post.author.id) } label: {
+        Group {
+          if let photo = model.authorProfile?.profileImage, !photo.isEmpty { RemoteAvatar(url: photo, size: 44) }
+          else {
+            Text(post.author.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined())
+              .font(.headline).frame(width: 44, height: 44).background(MIRATheme.Color.surfaceSoft, in: Circle())
+          }
+        }.frame(width: 44, height: 44)
+      }.buttonStyle(.plain).accessibilityLabel("Open profile photo for " + post.author.name)
+        .accessibilityIdentifier("tea.author.avatar")
+        .overlay(alignment: .topLeading) {
           if !post.isAuthor {
             Button {
               if viewerID == nil { signIn() } else { Task { await model.followAuthor() } }
@@ -321,12 +321,16 @@ struct TeaConversationTime: View {
               Image(systemName: model.authorProfile?.viewerFollowing == true ? "checkmark" : model.authorProfile?.followPending == true ? "clock" : "plus")
                 .font(.system(size: 10, weight: .bold)).foregroundStyle(MIRATheme.Color.appBackground)
                 .frame(width: 18, height: 18).background(MIRATheme.Color.textPrimary, in: Circle())
-                .frame(width: 44, height: 44, alignment: .bottomTrailing).contentShape(Rectangle())
+                .frame(width: 44, height: 44, alignment: .topLeading).contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(model.followingAuthor)
               .accessibilityLabel(model.authorProfile?.viewerFollowing == true ? "Unfollow author" : model.authorProfile?.followPending == true ? "Cancel follow request" : "Follow author")
               .accessibilityIdentifier("tea.author.follow")
+              .offset(x: 24, y: 24)
           }
         }
+        // The follow target extends outside the avatar, leaving its center and
+        // the name as independent profile controls rather than intercepting them.
+        .padding(.trailing, post.isAuthor ? 0 : 24).padding(.bottom, post.isAuthor ? 0 : 24)
     }.foregroundStyle(MIRATheme.Color.textPrimary)
   }
   private func target(_ sentence: CaptroTeaReplyTarget) {
@@ -341,7 +345,7 @@ struct TeaConversationTime: View {
           model.expandedTargets.insert(target.id)
           Task { await model.loadThread(target) }
         }
-      } label: { Text(expanded ? "Hide replies" : "\(count) replies to this line").font(.subheadline).underline().frame(minHeight: 44) }
+      } label: { Text(expanded ? "Hide replies" : "\(count) \(count == 1 ? "reply" : "replies") to this line").font(.subheadline).underline().frame(minHeight: 44) }
         .buttonStyle(.plain).accessibilityIdentifier("tea.thread." + target.id)
       if expanded {
         VStack(alignment: .leading, spacing: 8) {

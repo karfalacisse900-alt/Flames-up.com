@@ -87,3 +87,52 @@ test('HTTP actions reject anonymous actors and unsafe or forged data',async()=>{
  assert.throws(()=>clubInput('memberRole',{user:'member',role:'owner'}));
  assert.equal((await api.request('/tea/clubs/'+id(1),{headers:{Authorization:'fixture'}})).status,403);
 });
+
+test('real HTTP/database pagination preserves legacy messages, binds cursors, and never exposes invite hashes',async()=>{
+ const {db,call}=await fixture();try {
+  await db.exec(`insert into app_group_messages(id,group_id,sender_id,body,created_at)
+    select 'legacy-message-'||lpad(n::text,3,'0'),'group','member','Message '||n,'2026-11-01'::timestamptz + n*interval '1 second' from generate_series(1,61) n;`);
+  const api=new Hono();
+  mountTeaClubs(api,{auth:async(c,next)=>c.req.header('Authorization')?next():c.json({},401),viewer:async c=>c.req.header('Authorization'),limit:async()=>null,restriction:async()=>null,site:p=>'https://captro-site.pages.dev/'+p,
+   rpc:async(c,name,p)=>name==='captro_tea_club'?call(p.p_actor,p.p_action,p.p_data,p.p_club):(await db.query('select captro_tea_invite($1,$2,$3) r',[p.p_actor,p.p_hash,p.p_accept])).rows[0].r});
+  const secret={JWT_SECRET:'isolated-cursor-secret-at-least-32-characters'};
+  const req=(path,user='member',data,env=secret)=>api.request(path,{headers:{Authorization:user,'Content-Type':'application/json'},...(data?{method:'POST',body:JSON.stringify(data)}:{})},env);
+  const base='/tea/clubs/'+id(1);
+  const first=await (await req(base+'/messages')).json();assert.equal(first.items.length,50);assert.ok(first.nextCursor);
+  const second=await (await req(base+'/messages?cursor='+first.nextCursor)).json();
+  assert.equal(new Set([...first.items,...second.items].map(m=>m.id)).size,62);assert.equal(second.nextCursor,null);
+  assert.equal((await req(base+'/messages?cursor='+first.nextCursor,'owner')).status,400);
+  assert.equal((await req(base+'/links?cursor='+first.nextCursor)).status,400);
+  const invite=await (await req(base+'/createInvite','owner',{id:id(9),approval:true,expires:new Date(Date.now()+86400000).toISOString()})).json();
+  assert.ok(invite.url);assert.equal(invite.token_hash,undefined);
+  const listing=await (await req(base+'/invites','owner')).json();assert.equal(listing.items[0].url,invite.url);assert.equal(listing.items[0].token_hash,undefined);
+  const rotated=await (await req(base+'/invites','owner',undefined,{JWT_SECRET:'a-different-signing-key-for-rotation'})).json();assert.equal(rotated.items[0].url,null);
+  const token=invite.url.split('/').at(-1);
+  assert.equal((await (await req('/tea/club-invites/'+token,'visitor')).json()).state,'approval_required');
+  await db.exec("insert into app_blocks values('visitor','owner')");
+  assert.equal((await req('/tea/club-invites/'+token,'visitor')).status,404);
+ }finally{await db.close();}
+});
+
+test('canonical approval, removed messages, foreign rooms and concurrent writes retain authorization',async()=>{
+ const {db,call}=await fixture();try {
+  await db.exec(`update app_purchasables set approval_required=true;
+    insert into app_group_messages(id,group_id,sender_id,body) values('foreign','other','owner','Private other group');`);
+  await assert.rejects(call('member','message',{message:'foreign'}).then(rows=>{if(!rows.length)throw Error('UNAVAILABLE')}),/UNAVAILABLE/);
+  await assert.rejects(call('member','send',{id:id(3),body:'Hi',room:id(99)}),/UNAVAILABLE/);
+  await assert.rejects(call('member','saveLink',{id:id(4),message:'foreign',title:'Leaked',url:'https://example.com'}),/UNAVAILABLE/);
+  await db.exec(`update app_group_messages set media='{"removed_at":"2026-11-01"}' where id='legacy'`);
+  assert.equal((await call('member','messages')).length,0);
+  await assert.rejects(call('member','send',{id:id(3),body:'Hi',quote:'legacy'}),/UNAVAILABLE/);
+  const payload={id:id(7),hash:'fixture',approval:false,expires:new Date(Date.now()+86400000).toISOString()};
+  assert.equal((await call('owner','createInvite',payload)).requires_approval,true);
+  await assert.rejects(call('owner','createInvite',{...payload,expires:new Date(Date.now()+172800000).toISOString()}),/CONFLICT/);
+  await db.query("select captro_tea_invite('visitor','fixture',true)");
+  await call('owner','decideInvite',{id:id(7),user:'visitor',approve:true});
+  await assert.rejects(call('owner','decideInvite',{id:id(7),user:'visitor',approve:false}),/CONFLICT/);
+  const pair=await Promise.allSettled([call('owner','settings',{version:1,rules:'A',links:[]}),call('moderator','settings',{version:1,rules:'B',links:[]})]);
+  assert.equal(pair.filter(x=>x.status==='fulfilled').length,1);assert.equal(pair.filter(x=>x.status==='rejected').length,1);
+  await db.exec("update app_users set metadata='{\"status\":\"suspended\"}' where id='member'");
+  await assert.rejects(call('member','overview'),/FORBIDDEN/);
+ }finally{await db.close();}
+});

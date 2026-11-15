@@ -99,7 +99,7 @@ struct CaptroClubLinkEditor: View {
   }
   private var rooms: some View {
     Group {
-      Button { model.room = nil; model.tab = "Chat"; dismiss() } label: { roomLabel("General", selected: model.room == nil, unread: false) }.accessibilityIdentifier("tea.room.general")
+      Button { model.room = nil; model.tab = "Chat"; dismiss() } label: { roomLabel("General", selected: model.room == nil, unread: model.club?.generalUnread == true) }.accessibilityIdentifier("tea.room.general")
       ForEach(model.club?.rooms ?? []) { room in
         Button { model.room = room.id; model.tab = "Chat"; dismiss() } label: {
           VStack(alignment: .leading, spacing: 4) {

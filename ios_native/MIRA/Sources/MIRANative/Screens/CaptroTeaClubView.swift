@@ -42,6 +42,7 @@ import UIKit
   @State private var scrollID: String?
   @State private var linkError: String?
   @State private var linkToSave: CaptroClubLinkDraft?
+  @State private var externalLink: CaptroTeaLink?
   @FocusState private var composing: Bool
 
   var body: some View {
@@ -68,6 +69,12 @@ import UIKit
       }
     }
     .sheet(item: $linkToSave) { draft in CaptroClubLinkEditor(model: model, draft: draft) }
+    .confirmationDialog("Open external link?", isPresented: Binding(get: { externalLink != nil }, set: { if !$0 { externalLink = nil } }), presenting: externalLink) { link in
+      Button("Open " + link.hostname) {
+        UIApplication.shared.open(link.url) { success in if !success { Task { @MainActor in linkError = "Couldn’t open this link. Try again." } } }
+      }
+      Button("Cancel", role: .cancel) {}
+    }
     .navigationDestination(item: $linkDestination) { destination in
       switch destination {
       case .profile(let id): UserProfileNativeView(userId: id, api: api).toolbar(.visible, for: .navigationBar)
@@ -115,6 +122,8 @@ import UIKit
           .accessibilityLabel("Rooms").accessibilityIdentifier("tea.club.rooms")
       }
       if let image = model.club?.image, !image.isEmpty { RemoteAvatar(url: image, size: 36).accessibilityHidden(true) }
+      else { Text(model.club?.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined() ?? "")
+        .font(.caption.weight(.semibold)).frame(width: 36, height: 36).background(MIRATheme.Color.surfaceSoft, in: Circle()).accessibilityHidden(true) }
     }.padding(.horizontal, 12).padding(.vertical, 8)
   }
   private var chat: some View {
@@ -136,6 +145,7 @@ import UIKit
             ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
               messageRow(message, showAuthor: index == 0 || model.messages[index - 1].author.id != message.author.id)
                 .id(message.id)
+                .onAppear { if scenePhase == .active, model.tab == "Chat" { Task { await model.markRead(message) } } }
             }
             if let error = model.error {
               Text(error).font(.footnote).foregroundStyle(.secondary)
@@ -253,7 +263,7 @@ import UIKit
   }
   private func open(_ link: CaptroTeaLink) {
     if let destination = ClubLinkDestination.parse(link) { linkDestination = destination; return }
-    UIApplication.shared.open(link.url) { success in if !success { Task { @MainActor in linkError = "Couldn’t open this link. Try again." } } }
+    externalLink = link
   }
   private func jump(_ quote: CaptroClubQuote) {
     Task {
@@ -294,7 +304,7 @@ struct CaptroClubPostDestination: View {
       else { ProgressView("Loading post") }
     }.task(id: retry) {
       do { let value: MIRAPost = try await api.getFresh("/posts/" + id); try Task.checkCancellation(); post = value }
-      catch { if !Task.isCancelled { error = true } }
+      catch { if !Task.isCancelled { self.error = true } }
     }
   }
 }
@@ -312,7 +322,7 @@ struct CaptroClubActivityLink: View {
       else { ProgressView("Loading activity") }
     }.task(id: retry) {
       do { let result: CaptroTeaDetails = try await api.getFresh("/tea/activity/" + id); try Task.checkCancellation(); detail = result }
-      catch { if !Task.isCancelled { error = true } }
+      catch { if !Task.isCancelled { self.error = true } }
     }
   }
 }

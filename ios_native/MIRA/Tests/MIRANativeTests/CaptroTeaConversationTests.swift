@@ -148,7 +148,7 @@ private final class TeaConversationProtocol: URLProtocol {
         return Self.state.onRead
       }
       if let started { started.fulfill(); return }
-      if request.url?.query == "cursor=expired" {
+      if URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "cursor" && $0.value == "expired" }) == true {
         respond(400, Data(#"{"code":"TEA_DISCUSSION_INVALID","detail":"Refresh"}"#.utf8)); return
       }
     }
@@ -164,7 +164,7 @@ private final class TeaConversationProtocol: URLProtocol {
     let body = (try? JSONSerialization.jsonObject(with: bodyData)) as? [String: Any] ?? [:]
     let attempt: Int = Self.lock.withLock {
       if isReply && isWrite { Self.state.replyIDs.append(body["request_id"] as? String ?? "") }
-      if !isReply { Self.state.detailReads += 1 }
+      if request.url?.path.hasSuffix("/tea/conversations/post") == true { Self.state.detailReads += 1 }
       return Self.state.replyIDs.count
     }
     if isReply && isWrite && attempt == 1 {

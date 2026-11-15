@@ -17,11 +17,13 @@ const datePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]
 function validDate(value: unknown): value is string {
   return typeof value === 'string' && datePattern.test(value) && Number.isFinite(Date.parse(value));
 }
-function validBoundary(value: any): value is FeedBoundary {
+function validBoundary(value: any, scope = ''): value is FeedBoundary {
   return value != null && (value.legacyCreatedAt === null || validDate(value.legacyCreatedAt))
     && validDate(value.createdAt) && typeof value.id === 'string'
     && (value.source === undefined || value.source === 'activity' || value.source === 'business')
-    && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value.id);
+    && (['tea-club-messages','tea-club-inviteRequests'].includes(scope)
+      ? /^[a-zA-Z0-9_:-]{1,180}$/.test(value.id)
+      : /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value.id));
 }
 async function key(secret: string) {
   if (typeof secret !== 'string' || secret.length < 16) throw Error('FEED_CURSOR_KEY_UNAVAILABLE');
@@ -51,13 +53,13 @@ export async function readFeedCursor(secret: string, token: string | undefined, 
     if (cursor.version !== 1 || cursor.viewer !== expected.viewer || cursor.scope !== expected.scope
       || cursor.city !== expected.city || !validDate(cursor.snapshot) || !Number.isFinite(cursor.expires)
       || cursor.expires <= time || cursor.expires > time + maxAge + 60_000
-      || Date.parse(cursor.snapshot) > time + 60_000 || !validBoundary(cursor.boundary)) throw new FeedCursorError();
+      || Date.parse(cursor.snapshot) > time + 60_000 || !validBoundary(cursor.boundary, expected.scope)) throw new FeedCursorError();
     return cursor;
   } catch { throw new FeedCursorError(); }
 }
 
 export async function writeFeedCursor(secret: string, cursor: FeedCursor): Promise<string> {
-  if (!validBoundary(cursor.boundary)) throw Error('FEED_CURSOR_BOUNDARY_INVALID');
+  if (!validBoundary(cursor.boundary, cursor.scope)) throw Error('FEED_CURSOR_BOUNDARY_INVALID');
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const payload = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await key(secret), encoder.encode(JSON.stringify(cursor)));
   const bytes = new Uint8Array(iv.length + payload.byteLength);
