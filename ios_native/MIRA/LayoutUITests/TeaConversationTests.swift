@@ -94,9 +94,12 @@ final class TeaConversationTests: XCTestCase {
     link.tap()
     // Verify the browser actually received the URL. On iOS 26 the launch
     // instance can report a stale process state after an external activation.
-    let address = safari.descendants(matching: .any).matching(NSPredicate(
-      format: "value CONTAINS[c] %@ OR label CONTAINS[c] %@", "example.com", "example.com")).firstMatch
+    // Query Safari's native address field directly. Traversing every descendant
+    // crosses into its transient WebContent process and can fail even while the
+    // native URL bar is visible and correct (kAXErrorServerNotFound on iOS 26).
+    let address = safari.textFields["TabBarItemTitle"]
     XCTAssertTrue(address.waitForExistence(timeout:10))
+    XCTAssertTrue((address.value as? String ?? "").contains("example.com"))
     app.activate()
     XCTAssertTrue(link.waitForExistence(timeout: 8)); XCTAssertEqual(link.frame.minY,original,accuracy:2)
     XCTAssertTrue((app.staticTexts["tea.test.requests"].value as? String ?? "").contains("103=1"))
