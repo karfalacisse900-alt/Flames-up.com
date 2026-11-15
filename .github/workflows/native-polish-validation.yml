@@ -26,8 +26,13 @@ permissions:
   contents: read
 jobs:
   simulator:
+    name: simulator (${{ matrix.phone }})
     runs-on: macos-26
     timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        phone: ${{ fromJSON(inputs.conversations && !inputs.small && '["large","small"]' || '["large"]') }}
     steps:
       - uses: actions/checkout@v6
       - name: Record actual source for release validation
@@ -39,16 +44,17 @@ jobs:
         working-directory: ios_native/MIRA
         env:
           BASELINE: ${{ inputs.baseline }}
-          SMALL: ${{ inputs.small }}
+          SMALL: ${{ inputs.small || matrix.phone == 'small' }}
           CONVERSATIONS: ${{ inputs.conversations }}
         run: |
           set -o pipefail
-          destination='platform=iOS Simulator,name=iPhone 17'
-          if [ "$SMALL" = true ]; then
-            runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]))')
-            device=$(xcrun simctl create 'Captro polish small' com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini "$runtime")
-            destination="platform=iOS Simulator,id=$device"
-          fi
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]]; print(max(rs,key=lambda r:tuple(map(int,r["version"].split("."))))["identifier"])')
+          device_type=com.apple.CoreSimulator.SimDeviceType.iPhone-17
+          if [ "$SMALL" = true ]; then device_type=com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini; fi
+          device=$(xcrun simctl create 'Captro polish ${{ matrix.phone }}' "$device_type" "$runtime")
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          destination="platform=iOS Simulator,id=$device"
           xcodebuild -version
           xcrun simctl list runtimes
           git rev-parse HEAD
@@ -58,16 +64,18 @@ jobs:
           fi
           if [ "$CONVERSATIONS" = true ]; then
             tests=(-only-testing:CaptroStampTests -only-testing:CaptroLayoutUITests/TeaTests -only-testing:CaptroLayoutUITests/TeaConversationTests -only-testing:CaptroLayoutUITests/TeaClubTests)
+            if [ "$SMALL" = true ]; then tests=(-only-testing:CaptroLayoutUITests/TeaConversationTests -only-testing:CaptroLayoutUITests/TeaClubTests); fi
           fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "$destination" -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 \
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" \
             -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" "${tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log"
       - name: Smaller iPhone screens and interactions
         env:
           CONVERSATIONS: ${{ inputs.conversations }}
-        if: ${{ !cancelled() && !inputs.baseline && !inputs.small }}
+        if: ${{ !cancelled() && !inputs.baseline && !inputs.small && !inputs.conversations }}
         working-directory: ios_native/MIRA
         run: |
           set -o pipefail
@@ -92,12 +100,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-validation-source
+          name: ${{ inputs.conversations && format('native-validation-source-{0}', matrix.phone) || 'native-validation-source' }}
           path: ${{ runner.temp }}/native-validation-source/source.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-polish
+          name: ${{ inputs.conversations && format('native-polish-{0}', matrix.phone) || 'native-polish' }}
           path: |
             ${{ runner.temp }}/Polish.xcresult
             ${{ runner.temp }}/polish.log

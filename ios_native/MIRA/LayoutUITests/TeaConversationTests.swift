@@ -92,7 +92,11 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertNotEqual(safari.state, .runningForeground)
     XCTAssertTrue(link.isHittable)
     link.tap()
-    XCTAssertTrue(safari.wait(for:.runningForeground,timeout:10))
+    // Verify the browser actually received the URL. On iOS 26 the launch
+    // instance can report a stale process state after an external activation.
+    let address = safari.descendants(matching: .any).matching(NSPredicate(
+      format: "value CONTAINS[c] %@ OR label CONTAINS[c] %@", "example.com", "example.com")).firstMatch
+    XCTAssertTrue(address.waitForExistence(timeout:10))
     app.activate()
     XCTAssertTrue(link.waitForExistence(timeout: 8)); XCTAssertEqual(link.frame.minY,original,accuracy:2)
     XCTAssertTrue((app.staticTexts["tea.test.requests"].value as? String ?? "").contains("103=1"))

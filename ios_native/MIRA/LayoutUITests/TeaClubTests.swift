@@ -55,8 +55,13 @@ final class TeaClubTests: XCTestCase {
     app.buttons["tea.club.rooms"].tap()
     XCTAssertTrue(app.textFields["tea.room.name"].waitForExistence(timeout:5))
     app.textFields["tea.room.name"].tap(); app.textFields["tea.room.name"].typeText("Announcements\n")
-    app.switches["Only organizers can post"].tap()
-    XCTAssertEqual(app.switches["Only organizers can post"].value as? String,"1")
+    let announcements = app.switches["Only organizers can post"]
+    // SwiftUI exposes the whole label row as the switch's AX frame. Its
+    // midpoint is the label, outside the actual native UISwitch hit area.
+    XCTAssertTrue(announcements.isHittable)
+    announcements.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+      .withOffset(CGVector(dx: -25, dy: 0)).tap()
+    XCTAssertEqual(announcements.value as? String,"1")
     app.buttons["tea.room.create"].tap()
     XCTAssertTrue(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","Announcements")).firstMatch.waitForExistence(timeout:8))
     XCTAssertTrue(app.staticTexts["Announcements · organizers can post"].exists)
