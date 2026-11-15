@@ -116,7 +116,8 @@ import UIKit
       }
       if let image = model.club?.image, !image.isEmpty { RemoteAvatar(url: image, size: 36).accessibilityHidden(true) }
       else { Text(model.club?.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined() ?? "")
-        .font(.caption.weight(.semibold)).frame(width: 36, height: 36).background(MIRATheme.Color.surfaceSoft, in: Circle()).accessibilityHidden(true) }
+        .font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.35)
+        .frame(width: 36, height: 36).background(MIRATheme.Color.surfaceSoft, in: Circle()).accessibilityHidden(true) }
     }.padding(.horizontal, 12).padding(.vertical, 8)
   }
   private var chat: some View {
