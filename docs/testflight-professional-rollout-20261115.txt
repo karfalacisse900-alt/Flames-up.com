@@ -1,0 +1,76 @@
+CAPTRO TESTFLIGHT RELEASE DEPENDENCIES - 15 November 2026
+
+Candidate: feature/professional-accounts-studio; native source f78952db9fd8ef4b5a9292dde4b10d817162a174.
+Latest Apple status check: run 43784955283, 2026-11-16 01:13 UTC.
+1.0.1 (686.1) VALID / IN_BETA_TESTING for Captro private and Captro private2 (internal groups).
+External state is READY_FOR_BETA_SUBMISSION; this is not external tester availability.
+Active distribution signing profile. Associated Domains absent, as in current source.
+No signing or entitlement change is proposed by this release.
+
+AUTHORIZATION
+TestFlight upload is authorized by the latest request. The preceding feature requests
+explicitly withheld production deployment and website publication. Those are separate
+actions needed for the new backend-dependent app screens; they have not been performed.
+
+CONFIRMED BLOCKER
+Read-only live catalog inspection found all four migrations below absent, including
+Business, Tea sentence replies, Tea club spaces and professional account tables/RPCs.
+Original Tea conversations migration 20261114230954 is present.
+The catalog release gate returned 32 failed prerequisites because these objects are
+absent, not because this inspection demonstrated 32 independent production defects.
+Uploading the new native screen code alone would leave its API-dependent actions broken.
+
+EXACT PROPOSED DATABASE SCOPE (ORDERED, PREPARED ONLY)
+20261112030025_captro_business_ordering.sql
+  Git-blob SHA256 b078bf70d25e30fc37d65934881ba111d2a640fe02186cc19a8618311d24c7b4
+20261115014511_tea_sentence_replies.sql
+  Git-blob SHA256 b1324dbee7df8f064d1290b539f14745f00162a526585c4c138f0d1e706c821a
+20261115015247_tea_club_spaces.sql
+  Git-blob SHA256 095a922a9f2da400cc56a3d0d60c56b7dd92ccbd037d7614ba98e646d414f51a
+20261115224938_professional_accounts_studio.sql
+  Git-blob SHA256 2a7502829e4f701d0ac89c0f8e62271c0beb09ecce4d5abf6ef156b2f1a6a87f
+
+ROLLOUT FOR SEPARATE APPROVAL
+1. Recheck the deployed Worker revision/bindings and database metadata immediately
+   before rollout; preserve the prior Worker artifact and all current financial flags.
+2. Apply only the four named migrations after the existing schema compatibility checks.
+   Never run an unrestricted db push over other pending migrations.
+3. Deploy the matching scoped Worker for Tea replies/clubs, Business and professional
+   APIs. Preserve authentication, payment keys, webhook handling and rollout variables.
+   Review any difference from the actual deployed Worker before deployment. The older
+   profile/Tea release scripts have obsolete baseline allowlists and must not be reused
+   with their checks removed. No live Business checkout or new payment activation.
+4. Update the existing private admin console with its professional review queue, so
+   applications have a working review path. Do not publish Captro Studio or configure
+   CAPTRO_STUDIO_ORIGIN as part of a TestFlight-only release.
+5. Verify application ownership, admin denial/review, role separation and old/new client
+   compatibility with isolated identities. Recheck live schema/API contracts; never
+   modify real users, grant them roles, charge, refund, transfer or pay out to test.
+6. Upload the signed app only when source attestation and all release gates pass.
+   Then confirm Apple processing and assignment to the existing internal groups.
+
+FINANCIAL / COMPATIBILITY EFFECTS
+Creator approval becomes an additional prerequisite for new Support checkout. Existing
+creators are not automatically approved. Existing payments, ledgers, fulfillment and
+refund resolution remain recorded and accessible under their existing permissions.
+Business ordering remains test-only until its separate live payout contract is ready.
+Studio remains visibly unavailable until the separate site/domain rollout is approved.
+Tea changes retain existing conversations, general replies, messages and memberships.
+
+ROLLBACK / FORWARD REPAIR
+Pause new affected actions at the server if verification fails; keep payment webhooks,
+reconciliation, existing orders/refunds and financial history operating. Preserve all
+new tables, application/audit records, sentence snapshots and club history. Do not drop
+migrations to undo a release or restore a Worker that bypasses new role checks or exposes
+room messages through legacy group endpoints. Use a compatible maintenance/forward
+repair Worker. Re-evaluate safe rollback against the actual deployed baseline first.
+
+VALIDATION
+Prior full backend suite: 421 passed. Final combined native run 43781933864:
+30 executions passed on iPhone 13 mini and iPhone 17 (app-hosted fixtures).
+New release prerequisite + native source gate tests: 9 passed, 0 failed, 0 skipped.
+New native source-attested release validation: run 43784958743 (pending at preparation).
+Physical-device, real Stripe/provider and production acceptance are separate.
+
+No production write, website publication, Apple agreement acceptance or TestFlight
+upload has been performed during this release preparation.
