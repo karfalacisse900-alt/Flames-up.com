@@ -81,10 +81,11 @@ final class CaptroPaymentsModel: ObservableObject {
         async let professional: CaptroProfessionalState = api.get("/professional/me")
         async let earnings = api.loadCreatorEarnings()
         async let payouts = api.loadCreatorPayouts()
-        let (roles, history, transfers) = try await (professional, earnings, payouts)
+        async let pools = api.loadCreatorEarningsPools()
+        let (roles, history, transfers, categories) = try await (professional, earnings, payouts, pools)
         guard accountID == currentUserId else { return }
         showSellerTools = roles.roles.contains { $0.status == "active" } || roles.hasBusinessHistory == true ||
-          !history.recent.isEmpty || !transfers.payouts.isEmpty ||
+          !history.recent.isEmpty || !transfers.payouts.isEmpty || categories.pools.contains { $0.transactions > 0 || $0.pending != 0 || $0.available != 0 || $0.held != 0 || $0.paidOut != 0 } ||
           [history.balance.available, history.balance.pending, history.balance.clearing, history.balance.paidOut].contains { ($0 ?? 0) != 0 }
       } else { showSellerTools = true }
       MIRAPerformanceTimeline.mark("payout_method_confirmed")

@@ -11,7 +11,7 @@ final class CaptroScreenLoadingTests: XCTestCase {
     return MIRAAPIClient(baseURL: URL(string: "https://localhost")!, session: URLSession(configuration: config))
   }
   func testVisitorSectionsOnlyCollapseAfterConfirmedEmptyLoad() async {
-    let model = UserProfileNativeModel(userId: "polish-user", api: api())
+    let model = UserProfileNativeModel(userId: "polish-visitor", api: api())
     XCTAssertEqual(model.visibleSections, CaptroProfileSection.allCases)
     await model.load()
     XCTAssertNil(model.errorMessage)
