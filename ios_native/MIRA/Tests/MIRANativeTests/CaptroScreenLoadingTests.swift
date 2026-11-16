@@ -16,9 +16,11 @@ final class CaptroScreenLoadingTests: XCTestCase {
     await model.load()
     XCTAssertNil(model.errorMessage)
     XCTAssertEqual(model.visibleSections, [.moments])
-    model.canLoadMore = true
+    PolishLoadingProtocol.fullProfilePage = true
+    await model.load()
     XCTAssertTrue(model.visibleSections.contains(.plans), "Later pages may contain plans")
-    model.errorMessage = "Offline"
+    PolishLoadingProtocol.fail = true
+    await model.load()
     XCTAssertEqual(model.visibleSections, CaptroProfileSection.allCases)
   }
 
