@@ -80,7 +80,7 @@ final class TeaTests: XCTestCase {
     XCTAssertTrue(app.buttons["home.create.post"].waitForExistence(timeout: 8))
   }
 
-  func testJoinUsesCommerceAndBusinessOpensExistingMenu() {
+  func testJoinUsesCommerceAndDiscoveryOmitsBusinessDirectory() {
     let app = launch()
     tapRow(1, in: app)
     let join = app.buttons["tea.primary-action"]
@@ -90,12 +90,8 @@ final class TeaTests: XCTestCase {
     join.tap()
     XCTAssertTrue(app.buttons["tea.primary-action"].matchingLabel("MEMBERSHIP ACTIVE", in: 10))
     back(app)
-    tapRow(4, source: "business", in: app)
-    XCTAssertTrue(app.staticTexts["Sample pickup"].waitForExistence(timeout: 8))
-    let business = app.buttons["View Business"].firstMatch
-    XCTAssertTrue(business.exists)
-    business.tap()
-    XCTAssertTrue(app.staticTexts["Menu"].waitForExistence(timeout: 8))
+    XCTAssertFalse(row(4, source: "business", in: app).exists,
+      "Shopping directories are omitted; storefront ordering remains covered by BusinessOrderingTests")
   }
 
   func testRetryPaginationAndReturnToSameScrollPosition() {

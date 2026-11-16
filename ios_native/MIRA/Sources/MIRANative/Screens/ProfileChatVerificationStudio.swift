@@ -1175,6 +1175,20 @@ final class UserProfileNativeModel: ObservableObject {
     }
   }
 
+  var visibleSections: [CaptroProfileSection] {
+    // Only a successful, complete load can establish absence.
+    guard !isLoading, errorMessage == nil, lastSuccessfulLoadAt != .distantPast else {
+      return CaptroProfileSection.allCases
+    }
+    return CaptroProfileSection.allCases.filter { section in
+      switch section {
+      case .moments: return true
+      case .plans: return canLoadMore || posts.contains(where: \.isProfilePlan)
+      case .clubs: return !showcase.clubs.isEmpty
+      }
+    }
+  }
+
   func loadMore() async {
     guard valid, canLoadMore, !isLoadingMore, !isLoading, user?.privacyLocked != true, !isBlocked, !isBlockedBy else { return }
     let request = generation; isLoadingMore = true
@@ -1319,7 +1333,7 @@ public struct UserProfileNativeView: View {
             CaptroProfileItemRow(post: pinned, pinned: true)
           }.buttonStyle(.plain).padding(.horizontal, 20)
         }
-        CaptroProfileTabs(selection: $model.selectedSection)
+        CaptroProfileTabs(selection: $model.selectedSection, sections: model.visibleSections)
         if model.user == nil && model.errorMessage == nil {
           ProgressView("Loading profileâ€¦").frame(minHeight: 100)
         } else if model.posts.isEmpty && model.isLoading {
@@ -1377,6 +1391,9 @@ public struct UserProfileNativeView: View {
     .toolbar { ToolbarItem(placement: .topBarTrailing) { profileSafetyMenu } }
     .refreshable { await model.load() }
     .task { await model.revalidateIfStale() }
+    .onChange(of: model.visibleSections) { _, sections in
+      if !sections.contains(model.selectedSection) { model.selectedSection = .moments }
+    }
     .onAppear {
       model.viewport.select("profile-" + selectedSection.rawValue)
       model.viewport.updateOrder(["profile"]); model.viewport.setActive(true)
@@ -1581,7 +1598,7 @@ public struct UserProfileNativeView: View {
           }
           .buttonStyle(CaptroProfileActionStyle())
           .disabled(isOpeningMessage || model.user == nil)
-          if let user = model.user, professionalSelection == "creator", user.professional?.contains(where: { $0.role == "creator" }) == true {
+          if let user = model.user, user.professional?.contains(where: { $0.role == "creator" }) == true {
             CaptroSupportAction(creatorID: model.userId, name: CaptroSupportPolicy.recipientName(user.fullName, fallback: user.displayName),
               username: user.username ?? "", avatar: user.profileImage, api: model.api, approvedCreator: true)
           }

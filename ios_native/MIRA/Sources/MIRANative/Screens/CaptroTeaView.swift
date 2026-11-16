@@ -103,6 +103,8 @@ enum CaptroTeaPalette: String {
     _receivedAt = State(initialValue: cached?.receivedAt)
   }
 
+  private var discoveryEntries: [CaptroTeaEntry] { entries.filter { $0.destination.source != "business" } }
+
   var body: some View {
     NavigationStack(path: $path) {
       VStack(spacing: 0) {
@@ -113,7 +115,7 @@ enum CaptroTeaPalette: String {
           .accessibilityIdentifier("tea.sections")
         ZStack {
       List {
-        if entries.isEmpty {
+        if discoveryEntries.isEmpty {
           if loading || (!didLoad && error == nil) {
             listRow { ProgressView("Loading Tea").frame(maxWidth: .infinity).padding(.vertical, 16) }
           } else if let error {
@@ -122,7 +124,7 @@ enum CaptroTeaPalette: String {
             listRow { Text("No activities to show yet.").foregroundStyle(.secondary).padding(.vertical, 16) }
           }
         }
-        ForEach(entries) { entry in
+        ForEach(discoveryEntries) { entry in
           listRow {
             Button { if path.isEmpty { path.append(entry) } } label: { CaptroTeaRow(entry: entry) }
               .background(CaptroFeedViewportMarker(owner: api.teaDetails.listViewport,
@@ -138,7 +140,7 @@ enum CaptroTeaPalette: String {
               .accessibilityLabel("Loading more activities")
               .task(id: cursor) { await load(reset: false) }
           }
-        } else if !entries.isEmpty, let error {
+        } else if !discoveryEntries.isEmpty, let error {
           listRow { status(message: error, button: "Retry") { Task { await load(reset: cursor == nil) } } }
         }
       }

@@ -1137,7 +1137,8 @@ public struct MainFeedView: View {
   @State private var selectedPostFallbackIndex = 0
   @State private var selectedFeedSection: MainFeedSection = .forYou
   @State private var isFeedSelectorPresented = false
-  @State private var showsBusinessOrdering = false
+  private var inboxModel: ChatNativeModel? = nil
+  @State private var showsInbox = false
   @State private var showsTea = false
   @State private var isShowingCreatePost = false
   @State private var detailPost: MIRAPost?
@@ -1164,13 +1165,15 @@ public struct MainFeedView: View {
     isTabActive: Bool = true,
     isGuest: Bool = false,
     teaViewerID: String? = nil,
-    signInForTea: (() -> Void)? = nil
+    signInForTea: (() -> Void)? = nil,
+    inboxModel: ChatNativeModel? = nil
   ) {
     _model = StateObject(wrappedValue: model)
     self.isTabActive = isTabActive
     self.isGuest = isGuest
     self.teaViewerID = teaViewerID
     self.signInForTea = signInForTea
+    self.inboxModel = inboxModel
   }
 
   private var presentedFeed: some View {
@@ -1367,8 +1370,10 @@ public struct MainFeedView: View {
         .id(teaViewerID)
       }
       .onChange(of: teaViewerID) { _, _ in showsTea = false }
-      .sheet(isPresented: $showsBusinessOrdering) {
-        NavigationStack { CaptroBusinessDirectory(api: model.api, isGuest: isGuest) }
+      .sheet(isPresented: $showsInbox) {
+        if let inboxModel {
+          NavigationStack { ChatNativeView(api: model.api, currentUserId: teaViewerID ?? "", model: inboxModel) }
+        }
       }
       .overlay(alignment: .top) {
         VStack(spacing: 4) {
@@ -1462,10 +1467,6 @@ public struct MainFeedView: View {
               }
               .disabled(isGuest && section != .forYou)
             }
-            CaptroEditorialMenuRow(title: "Captro Business", selected: false) {
-              isFeedSelectorPresented = false
-              showsBusinessOrdering = true
-            }
           }
         }
 
@@ -1519,6 +1520,14 @@ public struct MainFeedView: View {
         catch { return }
         guard !Task.isCancelled else { return }
         updateHomeStories(homeStories)
+      }
+      if inboxModel != nil {
+        Button {
+          if isGuest { signInForTea?() } else { showsInbox = true }
+        } label: {
+          Image(systemName: "tray").font(.system(size: 20, weight: .medium))
+            .frame(width: 44, height: 44)
+        }.buttonStyle(.plain).accessibilityLabel("Messages").accessibilityIdentifier("home.inbox")
       }
     }
     .frame(height: 78)
@@ -1878,7 +1887,7 @@ public struct MainFeedView: View {
   }
 
   private var isViewportSuspended: Bool {
-    !isTabActive || scenePhase != .active || detailPost != nil || isShowingCreatePost || showsBusinessOrdering || showsTea || selectedStoryGroup != nil
+    !isTabActive || scenePhase != .active || detailPost != nil || isShowingCreatePost || showsInbox || showsTea || selectedStoryGroup != nil
   }
 
   private var isFeedOverlayPresented: Bool {
@@ -1887,7 +1896,7 @@ public struct MainFeedView: View {
       isReportSheetPresented ||
       reportTarget != nil ||
       isShowingCreatePost ||
-      showsBusinessOrdering ||
+      showsInbox ||
       showsTea ||
       selectedStoryGroup != nil
   }

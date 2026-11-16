@@ -39,6 +39,7 @@ import UIKit
   @State private var sheet: ClubSheet?
   @State private var linkDestination: ClubLinkDestination?
   @State private var visible = false
+  @State private var playingAttachmentID: String?
   @State private var scrollID: String?
   @State private var linkError: String?
   @State private var linkToSave: CaptroClubLinkDraft?
@@ -184,8 +185,13 @@ import UIKit
           .accessibilityIdentifier("tea.club.message." + message.id)
       }
       if let media = message.mediaURL, !media.isEmpty {
+        if message.mediaType == "file" || message.mediaType == "audio" || message.mediaType == "voice" {
         // The existing message view owns authorized attachment/video rendering.
         NavigationLink { ConversationNativeView(groupId: model.club?.groupId ?? "", title: model.club?.name ?? "Club", api: api) } label: { Label("Open attachment in Messages", systemImage: "photo").font(.subheadline).frame(minHeight: 44) }
+        } else {
+          CaptroClubAttachment(id: message.id, url: media, type: message.mediaType, playingID: $playingAttachmentID,
+            active: visible && model.tab == "Chat" && model.valid && scenePhase == .active)
+        }
       }
       if !message.links.isEmpty {
         TeaLinkFlow(spacing: 8) { ForEach(message.links) { link in quietLink(link).contextMenu { Button("Save to Links") { linkToSave = .init(url: link.url.absoluteString, message: message.id) } } } }
@@ -341,5 +347,27 @@ struct CaptroClubActivityLink: View {
       do { let result: CaptroTeaDetails = try await api.getFresh("/tea/activity/" + id); try Task.checkCancellation(); detail = result }
       catch { if !Task.isCancelled { self.error = true } }
     }
+  }
+}
+
+private struct CaptroClubAttachment: View {
+  let id: String
+  let url: String
+  let type: String?
+  @Binding var playingID: String?
+  let active: Bool
+  private var playing: Bool { playingID == id }
+  private var video: Bool { type == "video" || url.isVideoURL }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      RemoteMediaView(url: url, isVideo: video, shouldPlay: video && playing && active,
+        maxPixelSize: 900, showsVideoPlaceholderIcon: true)
+        .frame(maxWidth: 300).frame(height: 240).clipped()
+      if video {
+        Button(playing ? "Pause video" : "Play video") { playingID = playing ? nil : id }.frame(minHeight: 44)
+      }
+    }.onChange(of: active) { _, value in if !value && playing { playingID = nil } }
+      .onChange(of: url) { _, _ in if playing { playingID = nil } }
+      .onDisappear { if playing { playingID = nil } }
   }
 }

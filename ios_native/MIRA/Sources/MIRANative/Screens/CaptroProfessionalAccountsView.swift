@@ -40,12 +40,12 @@ struct CaptroProfessionalAccountsView: View {
             Text("Apply for Business to manage new ordering. Existing orders and financial history remain accessible.").font(.footnote).foregroundStyle(.secondary)
           }
         }
-        if !state.roles.isEmpty {
+        if state.roles.contains(where: { $0.status == "active" }), state.studioUrl != nil {
           Section("Captro Studio") {
             if state.studioUrl != nil {
               Button(opening ? "Opening…" : "Open Captro Studio") { Task { await openStudio() } }.disabled(opening)
               Text("Manage your professional work on the web using this Captro account.").font(.footnote).foregroundStyle(.secondary)
-            } else { Text("Studio is not published yet. Your approval and account are unchanged.").font(.footnote).foregroundStyle(.secondary) }
+            }
           }
         }
       }
@@ -180,15 +180,10 @@ struct CaptroProfessionalProfileHeader: View {
     return user?.professional ?? []
   }
   var body: some View {
-    let chosen = roles.first { $0.role == selection } ?? roles.first
+    let chosen = roles.first { $0.role == "creator" } ?? roles.first
     VStack(alignment: .leading, spacing: 12) {
-      if roles.count > 1 {
-        Picker("Profile", selection: $selection) {
-          ForEach(roles) { Text($0.role == "creator" ? "Creator / Gig" : "Business").tag($0.role) }
-        }.pickerStyle(.segmented).accessibilityIdentifier("professional.profile.switch")
-      }
       CaptroProfileIntroduction(user: user, professionalRole: chosen)
-      if let chosen { CaptroProfessionalProfileInfo(roles: [chosen], api: api) }
+      CaptroProfessionalProfileInfo(roles: roles, api: api)
       if chosen?.role == "creator", let gig = posts.first(where: { post in
         post.isProfilePlan && (CaptroStoryExpiry.date(post.detail?.commerce?.startsAt ?? post.detail?.event?.startsAt) ?? .distantPast) > Date()
       }) {

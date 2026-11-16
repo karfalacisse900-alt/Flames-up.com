@@ -10,6 +10,18 @@ final class CaptroScreenLoadingTests: XCTestCase {
     config.protocolClasses = [PolishLoadingProtocol.self]
     return MIRAAPIClient(baseURL: URL(string: "https://localhost")!, session: URLSession(configuration: config))
   }
+  func testVisitorSectionsOnlyCollapseAfterConfirmedEmptyLoad() async {
+    let model = UserProfileNativeModel(userId: "polish-user", api: api())
+    XCTAssertEqual(model.visibleSections, CaptroProfileSection.allCases)
+    await model.load()
+    XCTAssertNil(model.errorMessage)
+    XCTAssertEqual(model.visibleSections, [.moments])
+    model.canLoadMore = true
+    XCTAssertTrue(model.visibleSections.contains(.plans), "Later pages may contain plans")
+    model.errorMessage = "Offline"
+    XCTAssertEqual(model.visibleSections, CaptroProfileSection.allCases)
+  }
+
   func testPresentationReusePreservesChatDraftAndViewportAndClearsOnAccountSwitch() {
     MIRALocalJSONCache.setAccountScope(userId: "presentation-a")
     defer { MIRALocalJSONCache.setAccountScope(userId: nil) }

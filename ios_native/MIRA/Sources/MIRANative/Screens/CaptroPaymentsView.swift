@@ -14,6 +14,7 @@ final class CaptroPaymentsModel: ObservableObject {
   @Published var isPreparingCardSetup = false
   @Published var cardError: String?
   @Published var payoutError: String?
+  @Published var showSellerTools = true // Unknown/error must not hide history.
   private var currentUserId = ""
   private var lastRefreshAttemptAt: Date?
 
@@ -28,6 +29,7 @@ final class CaptroPaymentsModel: ObservableObject {
     earningsModel.configure(currentUserId: currentUserId)
     methods = []
     payoutAccount = nil
+    showSellerTools = true
     customerSheet = nil
     cardError = nil
     payoutError = nil
@@ -75,9 +77,20 @@ final class CaptroPaymentsModel: ObservableObject {
       guard accountID == currentUserId else { return }
       payoutAccount = freshAccount
       payoutError = nil
+      if freshAccount.status == "not_started" {
+        async let professional: CaptroProfessionalState = api.get("/professional/me")
+        async let earnings = api.loadCreatorEarnings()
+        async let payouts = api.loadCreatorPayouts()
+        let (roles, history, transfers) = try await (professional, earnings, payouts)
+        guard accountID == currentUserId else { return }
+        showSellerTools = roles.roles.contains { $0.status == "active" } || roles.hasBusinessHistory == true ||
+          !history.recent.isEmpty || !transfers.payouts.isEmpty ||
+          [history.balance.available, history.balance.pending, history.balance.clearing, history.balance.paidOut].contains { ($0 ?? 0) != 0 }
+      } else { showSellerTools = true }
       MIRAPerformanceTimeline.mark("payout_method_confirmed")
     } catch {
       guard accountID == currentUserId else { return }
+      showSellerTools = true
       payoutError = apiMessage(error, fallback: "Could not load your payout method.")
     }
   }
@@ -189,8 +202,9 @@ struct CaptroPaymentsView: View {
           SettingsNavigationRow(title: "Payment methods", subtitle: "Cards saved for purchases", systemImage: "creditcard",
             destination: CaptroPaymentsView(api: model.api, model: model, page: .cards))
         }
+        if model.showSellerTools {
         SettingsCard(title: "Selling") {
-          if let account = model.payoutAccount, account.status != "not_started" {
+          if model.payoutAccount != nil && !model.isLoadingPayout && model.payoutError == nil {
             SettingsNavigationRow(title: "Your earnings", subtitle: "", systemImage: "dollarsign",
               destination: CaptroEarningsView(api: model.api, model: model.earningsModel))
             SettingsNavigationRow(title: "Payout account", subtitle: "", systemImage: "building.columns",
@@ -204,6 +218,7 @@ struct CaptroPaymentsView: View {
             SettingsNavigationRow(title: "Set up earnings", subtitle: "For creators who want to sell", systemImage: "building.columns",
               destination: CaptroPaymentsView(api: model.api, model: model, page: .payout))
           }
+        }
         }
       case .cards: paymentCardsSection
       case .payout: payoutSection

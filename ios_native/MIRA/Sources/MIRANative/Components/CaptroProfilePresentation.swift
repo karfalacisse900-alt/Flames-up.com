@@ -183,9 +183,10 @@ struct CaptroProfileIntroduction: View {
 
 struct CaptroProfileTabs: View {
   @Binding var selection: CaptroProfileSection
+  var sections: [CaptroProfileSection] = CaptroProfileSection.allCases
   var body: some View {
     HStack(spacing: 0) {
-      ForEach(CaptroProfileSection.allCases) { section in
+      ForEach(sections) { section in
         Button { selection = section } label: {
           Text(section.rawValue).font(.subheadline.weight(selection == section ? .semibold : .regular))
             .foregroundStyle(selection == section ? Color.primary : Color.secondary)
