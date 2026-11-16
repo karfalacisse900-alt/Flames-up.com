@@ -218,27 +218,18 @@ enum CaptroTeaPalette: String {
       .toolbar(.visible, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .principal) { CaptroTeaHeading() }
-        ToolbarItem(placement: .topBarTrailing) {
-          Menu {
-            Button { if viewerID == nil { signIn() } else { composing = true } } label: { Label("New Tea post", systemImage: "square.and.pencil") }
-              .accessibilityIdentifier("tea.compose")
-            Button("Conversations") { selectFilter("All") }
-            Button("All clubs, events & activities") { switchCity(""); filter = "Activities"; section = "Clubs & Events" }
-              .accessibilityIdentifier("tea.activities")
-          } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-            .accessibilityLabel("Tea menu").accessibilityIdentifier("tea.menu")
-        }
-        ToolbarItem(placement: .topBarLeading) {
-          Button(action: close) {
-            Image(systemName: "chevron.backward").frame(minWidth: 44, minHeight: 44)
-          }
-          .accessibilityLabel("Back to Home")
-          .accessibilityIdentifier("tea.back.home")
+        if #available(iOS 26.0, *) {
+          ToolbarItem(placement: .topBarTrailing) { teaMenu }.sharedBackgroundVisibility(.hidden)
+          ToolbarItem(placement: .topBarLeading) { backButton }.sharedBackgroundVisibility(.hidden)
+        } else {
+          ToolbarItem(placement: .topBarTrailing) { teaMenu }
+          ToolbarItem(placement: .topBarLeading) { backButton }
         }
       }
+
       .navigationDestination(for: CaptroTeaEntry.self) { entry in
         if entry.kind == "club", entry.destination.source == "activity" {
-          CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn)
+          CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent)
         } else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent) }
       }
       .navigationDestination(for: CaptroTeaConversation.self) { post in
@@ -278,6 +269,25 @@ enum CaptroTeaPalette: String {
          ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") { size = .accessibility2 }
     }
     #endif
+  }
+
+  private var teaMenu: some View {
+    Menu {
+      Button { if viewerID == nil { signIn() } else { composing = true } } label: {
+        Label("New Tea post", systemImage: "square.and.pencil")
+      }.accessibilityIdentifier("tea.compose")
+      Button("Conversations") { selectFilter("All") }
+      Button("All clubs, events & activities") { switchCity(""); filter = "Activities"; section = "Clubs & Events" }
+        .accessibilityIdentifier("tea.activities")
+    } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+      .accessibilityLabel("Tea menu").accessibilityIdentifier("tea.menu")
+      .foregroundStyle(MIRATheme.Color.textPrimary)
+  }
+  private var backButton: some View {
+    Button(action: close) {
+      Image(systemName: "chevron.backward").frame(minWidth: 44, minHeight: 44)
+    }.accessibilityLabel("Back to Home").accessibilityIdentifier("tea.back.home")
+      .foregroundStyle(MIRATheme.Color.textPrimary)
   }
 
   private func selectFilter(_ item: String) {
@@ -373,7 +383,7 @@ private struct CaptroTeaRow: View {
     .foregroundStyle(MIRATheme.Color.textPrimary)
     .padding(.vertical, 16)
     .frame(minHeight: 64)
-    .overlay(alignment: .bottom) { Divider() }
+    .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
     .contentShape(Rectangle())
   }
 }
@@ -579,7 +589,7 @@ private struct TeaActivityContent: View {
         TeaFact(symbol: "clock", value: "Ends \(end.formatted(date: .abbreviated, time: .shortened))", palette: .sand)
       }
       }
-      .overlay(alignment: .bottom) { Divider() }
+      .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
       if viewerID == nil {
         Button("Sign in to continue", action: signIn)
           .buttonStyle(.plain)

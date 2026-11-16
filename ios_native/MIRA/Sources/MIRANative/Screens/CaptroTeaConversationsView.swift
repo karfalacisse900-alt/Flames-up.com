@@ -13,7 +13,7 @@ struct CaptroTeaHeading: View {
   var body: some View {
     VStack(spacing: 0) {
       Text("Captro").font(.headline)
-      Label("Tea", systemImage: "cup.and.saucer.fill").font(.caption.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
+      Label("Tea", systemImage: "cup.and.saucer.fill").labelStyle(.titleAndIcon).font(.caption.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
     }.accessibilityElement(children: .combine).accessibilityIdentifier("tea.heading")
   }
 }
@@ -179,7 +179,7 @@ private struct CaptroTeaConversationRow: View {
       }
       Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).padding(.top, 4).accessibilityHidden(true)
     }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 16)
-      .overlay(alignment: .bottom) { Divider() }.contentShape(Rectangle())
+      .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }.contentShape(Rectangle())
   }
   @ViewBuilder private var replyCount: some View {
     if let count = post.replyCount {
@@ -330,7 +330,7 @@ struct TeaConversationTime: View {
           Spacer(minLength: 0)
           Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
         }.padding(.horizontal, 8).padding(.vertical, 4).background(MIRATheme.Color.appBackground)
-          .overlay(alignment: .bottom) { Divider() }
+          .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
       }
 
       .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -360,6 +360,7 @@ struct TeaConversationTime: View {
                 if model.busy { ProgressView().frame(width: 44, height: 44) }
                 else { Image(systemName: "paperplane").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(CaptroTeaStyle.accent, in: Circle()) }
               }.disabled(model.busy || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.draft.count > 4000)
+                .opacity(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
                 .accessibilityLabel(model.replySubmissionFailed ? "Retry reply" : "Send reply").accessibilityIdentifier("tea.reply.send")
             }
           }
@@ -471,7 +472,7 @@ private struct TeaReplyGroups: View {
             }
           }
         }.padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-          .overlay(alignment: .bottom) { Divider() }
+          .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
       }
     }
   }

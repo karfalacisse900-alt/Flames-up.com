@@ -23,6 +23,9 @@ final class TeaClubTests: XCTestCase {
   func testMemberChatQuoteLinksInfoAndDraftSurviveTabs() {
     let app = launch(owner: false)
     XCTAssertTrue(app.staticTexts["Welcome to our next photo walk."].waitForExistence(timeout: 8))
+    XCTAssertFalse(app.buttons["tea.club.send"].isEnabled)
+    XCTAssertLessThan(app.staticTexts["Welcome to our next photo walk."].frame.minY - app.segmentedControls["tea.club.tabs"].frame.maxY, 130,
+      "Short histories must align near the header instead of leaving a large empty gap")
     shot("club-chat-member",app)
     // Consecutive Maya messages have one author control, not one per message.
     XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Open profile for Maya")).count, 1)

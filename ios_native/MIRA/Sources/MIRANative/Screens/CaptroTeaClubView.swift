@@ -165,7 +165,7 @@ import UIKit
             }
             if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
           }.padding(16).frame(maxWidth: .infinity, alignment: .leading).scrollTargetLayout()
-        }.scrollPosition(id: $scrollID).defaultScrollAnchor(.bottom).scrollDismissesKeyboard(.interactively)
+        }.scrollPosition(id: $scrollID).defaultScrollAnchor(.top).scrollDismissesKeyboard(.interactively)
           .refreshable { await model.load(force: true); await model.loadMessages(force: true) }
           .onChange(of: model.messages.last?.id) { old, new in
             if old == nil, model.scrollIDs[model.key] == nil, let new { proxy.scrollTo(new, anchor: .bottom) }
@@ -207,6 +207,7 @@ import UIKit
       }
       HStack(spacing: 12) {
         TeaConversationTime(value: message.createdAt)
+        Spacer(minLength: 12)
         if !model.readOnly {
           Button("Reply") { model.quotes[model.key] = message.reference; composing = true }
             .font(.caption).frame(minHeight: 44).accessibilityLabel("Reply to " + message.author.name)
@@ -214,7 +215,7 @@ import UIKit
       }
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.padding(.top, showAuthor ? 12 : 4).padding(.bottom, 8)
-      .overlay(alignment: .bottom) { Divider() }
+      .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
       .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
       .contextMenu {
         if !model.readOnly { Button("Reply") { model.quotes[model.key] = message.reference } }
@@ -243,6 +244,7 @@ import UIKit
           Button { Task { await model.send() } } label: {
             if model.busy { ProgressView().frame(width: 44, height: 44) } else { Image(systemName: "paperplane").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(CaptroTeaStyle.accent, in: Circle()) }
           }.disabled(model.busy || model.drafts[model.key, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .opacity(model.drafts[model.key, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
             .accessibilityLabel(model.pending[model.key] == nil ? "Send message" : "Retry message").accessibilityIdentifier("tea.club.send")
         }
       }
