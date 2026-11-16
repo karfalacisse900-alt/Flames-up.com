@@ -7,8 +7,8 @@ final class TeaClubTests: XCTestCase {
     app.launch()
     XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 20))
     app.buttons["home.tea"].tap()
-    XCTAssertTrue(app.segmentedControls["tea.sections"].waitForExistence(timeout: 8))
-    app.segmentedControls["tea.sections"].buttons["Clubs & Events"].tap()
+    XCTAssertTrue(app.buttons["tea.filter.clubs"].waitForExistence(timeout: 8))
+    app.buttons["tea.filter.clubs"].tap()
     let row = app.buttons["tea.row.activity:00000000-0000-4000-8000-000000000001"]
     XCTAssertTrue(row.waitForExistence(timeout: 8)); row.tap()
     XCTAssertTrue(app.segmentedControls["tea.club.tabs"].waitForExistence(timeout: 8))
@@ -52,6 +52,7 @@ final class TeaClubTests: XCTestCase {
     app.staticTexts["Welcome to our next photo walk."].press(forDuration:1)
     XCTAssertTrue(app.buttons["Pin message"].waitForExistence(timeout:5)); app.buttons["Pin message"].tap()
     XCTAssertTrue(app.buttons["tea.club.pin"].waitForExistence(timeout:8)); shot("club-chat-pinned",app)
+    app.buttons["tea.club.menu"].tap()
     app.buttons["tea.club.rooms"].tap()
     XCTAssertTrue(app.textFields["tea.room.name"].waitForExistence(timeout:5))
     app.textFields["tea.room.name"].tap(); app.textFields["tea.room.name"].typeText("Announcements\n")

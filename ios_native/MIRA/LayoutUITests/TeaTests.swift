@@ -15,15 +15,11 @@ final class TeaTests: XCTestCase {
   }
 
   private func selectListings(_ app: XCUIApplication) {
-    // Do not tap coordinates captured while the full-screen cover is entering.
-    let title = app.navigationBars["Tea"].staticTexts["Tea"]
-    XCTAssertTrue(title.waitForExistence(timeout: 8), app.debugDescription)
-    let section = app.buttons["Clubs & Events"]
-    let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: section)
-    XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 8), .completed)
-    section.tap()
-    let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: section)
-    XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 8), .completed, app.debugDescription)
+    XCTAssertTrue(app.buttons["tea.menu"].waitForExistence(timeout: 8), app.debugDescription)
+    app.buttons["tea.menu"].tap()
+    let activities = app.buttons["tea.activities"]
+    XCTAssertTrue(activities.waitForExistence(timeout: 5)); activities.tap()
+
   }
 
   private func row(_ number: Int, source: String = "activity", in app: XCUIApplication) -> XCUIElement {
@@ -35,8 +31,8 @@ final class TeaTests: XCTestCase {
     let app = launch()
     XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 10),
       "The signed-in fixture has a city; eligible clubs without a matching city must still appear")
-    XCTAssertTrue(app.buttons["Conversations"].exists)
-    XCTAssertTrue(app.buttons["Clubs & Events"].isSelected)
+    XCTAssertTrue(app.buttons["tea.filter.all"].exists)
+    XCTAssertTrue(app.staticTexts["Clubs & Events"].exists)
     XCTAssertFalse(app.buttons["home.menu.tea"].exists)
     attach("tea-clubs-with-profile-city", from: app)
     app.buttons["tea.back.home"].tap()
@@ -45,6 +41,32 @@ final class TeaTests: XCTestCase {
     XCTAssertEqual(tea.frame.width, 44, accuracy: 1)
     XCTAssertEqual(tea.frame.midY, app.buttons["home.create.post"].frame.midY, accuracy: 1)
     attach("home-direct-tea-button", from: app)
+  }
+
+  func testFiltersKeepDistinctResultsAndUnavailableFollowingIsHonest() {
+    let app = launch()
+    app.buttons["tea.filter.clubs"].tap()
+    XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 8))
+    XCTAssertFalse(row(3, in: app).exists)
+    app.buttons["tea.filter.events"].tap()
+    XCTAssertTrue(row(3, in: app).waitForExistence(timeout: 8))
+    XCTAssertFalse(row(1, in: app).exists)
+    app.buttons["tea.filter.following"].tap()
+    XCTAssertTrue(app.alerts["Following"].waitForExistence(timeout: 5))
+    app.alerts["Following"].buttons["OK"].tap()
+    XCTAssertTrue(app.buttons["tea.filter.events"].isSelected)
+    app.buttons["tea.filter.nearby"].tap()
+    let city = app.alerts["Nearby activities"].textFields.firstMatch
+    XCTAssertTrue(city.waitForExistence(timeout: 5)); city.tap(); city.typeText("Boston")
+    app.alerts["Nearby activities"].buttons["Show activities"].tap()
+    XCTAssertTrue(app.staticTexts["No activities to show yet."].waitForExistence(timeout: 8))
+    XCTAssertFalse(row(1, in: app).exists)
+    app.buttons["tea.filter.clubs"].tap()
+    XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 8))
+    app.buttons["tea.filter.all"].tap()
+    XCTAssertTrue(app.buttons["tea.conversation.00000000-0000-4000-8000-000000000101"].waitForExistence(timeout: 8))
+    XCTAssertFalse(row(1, in: app).isHittable)
+    attach("tea-reference-list", from: app)
   }
 
   private func tapRow(_ number: Int, source: String = "activity", in app: XCUIApplication) {

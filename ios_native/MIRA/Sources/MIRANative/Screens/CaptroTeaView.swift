@@ -93,6 +93,21 @@ enum CaptroTeaPalette: String {
   @State private var didLoad = false
   @State private var error: String?
   @State private var receivedAt: Date?
+  @State private var filter = "All"
+  @State private var city = ""
+  @State private var cityDraft = ""
+  @State private var choosingCity = false
+  @State private var followingUnavailable = false
+  @State private var requestID: UUID?
+  @State private var citySnapshots: [String: ActivitySnapshot] = [:]
+  private struct ActivitySnapshot {
+    let entries: [CaptroTeaEntry]
+    let cursor: String?
+    let receivedAt: Date?
+    let loaded: Bool
+  }
+  private var queryKey: String { api.presentationScope + ":" + city }
+
 
   init(api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void, close: @escaping () -> Void) {
     self.api = api; self.viewerID = viewerID; self.signIn = signIn; self.close = close
@@ -103,16 +118,39 @@ enum CaptroTeaPalette: String {
     _receivedAt = State(initialValue: cached?.receivedAt)
   }
 
-  private var discoveryEntries: [CaptroTeaEntry] { entries.filter { $0.destination.source != "business" } }
+  private var discoveryEntries: [CaptroTeaEntry] {
+    entries.filter { entry in
+      guard entry.destination.source != "business" else { return false }
+      if filter == "Clubs" { return entry.kind == "club" }
+      if filter == "Events" { return ["event", "meetup"].contains(entry.kind) }
+      return true
+    }
+  }
 
   var body: some View {
     NavigationStack(path: $path) {
       VStack(spacing: 0) {
-        Picker("Tea section", selection: $section) {
-          Text("Conversations").tag("Conversations")
-          Text("Clubs & Events").tag("Clubs & Events")
-        }.pickerStyle(.segmented).padding(.horizontal, 14).padding(.bottom, 8)
-          .accessibilityIdentifier("tea.sections")
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 8) {
+            ForEach(["All", "Following", "Clubs", "Events", "Nearby"], id: \.self) { item in
+              Button { selectFilter(item) } label: {
+                Text(item).font(.subheadline.weight(filter == item ? .semibold : .regular))
+                  .foregroundStyle(filter == item ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary)
+                  .padding(.horizontal, 14).padding(.vertical, 8)
+                  .background(filter == item ? CaptroTeaStyle.accent.opacity(0.13) : MIRATheme.Color.surfaceSoft, in: Capsule())
+                  .frame(minHeight: 44)
+              }.buttonStyle(.plain).accessibilityAddTraits(filter == item ? .isSelected : [])
+                .accessibilityIdentifier("tea.filter." + item.lowercased())
+            }
+          }.padding(.horizontal, 16)
+        }.padding(.vertical, 8)
+        HStack {
+          Text(section == "Conversations" ? "Conversations" : city.isEmpty ? "Clubs & Events" : "Activities in " + city)
+            .font(.caption).foregroundStyle(.secondary)
+          Spacer()
+          if !city.isEmpty { Button("Change city") { cityDraft = city; choosingCity = true }.font(.caption).frame(minHeight: 44) }
+        }.padding(.horizontal, 16).padding(.bottom, 4)
+        Divider()
         ZStack {
       List {
         if discoveryEntries.isEmpty {
@@ -138,7 +176,7 @@ enum CaptroTeaPalette: String {
           listRow {
             ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12)
               .accessibilityLabel("Loading more activities")
-              .task(id: cursor) { await load(reset: false) }
+              .task(id: cursor + section + queryKey) { if section == "Clubs & Events" { await load(reset: false) } }
           }
         } else if !discoveryEntries.isEmpty, let error {
           listRow { status(message: error, button: "Retry") { Task { await load(reset: cursor == nil) } } }
@@ -173,12 +211,16 @@ enum CaptroTeaPalette: String {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar(.visible, for: .navigationBar)
       .toolbar {
-        if section == "Conversations" {
-          ToolbarItem(placement: .topBarTrailing) {
-            Button { if viewerID == nil { signIn() } else { composing = true } } label: {
-              Image(systemName: "pencil").frame(minWidth: 44, minHeight: 44)
-            }.accessibilityLabel("New Tea post").accessibilityIdentifier("tea.compose")
-          }
+        ToolbarItem(placement: .principal) { CaptroTeaHeading() }
+        ToolbarItem(placement: .topBarTrailing) {
+          Menu {
+            Button { if viewerID == nil { signIn() } else { composing = true } } label: { Label("New Tea post", systemImage: "square.and.pencil") }
+              .accessibilityIdentifier("tea.compose")
+            Button("Conversations") { selectFilter("All") }
+            Button("All clubs, events & activities") { switchCity(""); filter = "Activities"; section = "Clubs & Events" }
+              .accessibilityIdentifier("tea.activities")
+          } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+            .accessibilityLabel("Tea menu").accessibilityIdentifier("tea.menu")
         }
         ToolbarItem(placement: .topBarLeading) {
           Button(action: close) {
@@ -199,12 +241,25 @@ enum CaptroTeaPalette: String {
       .sheet(isPresented: $composing) {
         CaptroTeaComposer(api: api) { post in created = post; path.append(post) }
       }
-      .task(id: section) {
+      .task(id: section + queryKey) {
         if section == "Clubs & Events", receivedAt.map({ Date().timeIntervalSince($0) >= 30 }) != false {
           await load(reset: true)
         }
       }
+      .alert("Following", isPresented: $followingUnavailable) { Button("OK", role: .cancel) {} } message: {
+        Text("Tea does not yet support filtering conversations by followed accounts. Your current list has not changed.")
+      }
+      .alert("Nearby activities", isPresented: $choosingCity) {
+        TextField("City", text: $cityDraft)
+        Button("Cancel", role: .cancel) {}
+        Button("Show activities") {
+          let value = cityDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !value.isEmpty { switchCity(value); filter = "Nearby"; section = "Clubs & Events" }
+        }
+      } message: { Text("Choose a city for clubs, events and activities. This does not request your precise location or filter conversation posts.") }
+      .tint(CaptroTeaStyle.accent)
       .onChange(of: viewerID) { _, _ in
+        requestID = nil; loading = false; citySnapshots = [:]; city = ""; filter = "All"; section = "Conversations"
         path = NavigationPath(); entries = []; cursor = nil; didLoad = false; receivedAt = nil; created = nil; composing = false
         api.teaConversations.invalidate()
       }
@@ -217,6 +272,26 @@ enum CaptroTeaPalette: String {
          ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") { size = .accessibility2 }
     }
     #endif
+  }
+
+  private func selectFilter(_ item: String) {
+    if item == "Following" { followingUnavailable = true; return }
+    if item == "Nearby" { cityDraft = city; choosingCity = true; return }
+    switchCity("")
+    filter = item
+    section = item == "All" ? "Conversations" : "Clubs & Events"
+  }
+
+  private func switchCity(_ next: String) {
+    let normalized = next.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard city != normalized else { return }
+    citySnapshots[city] = ActivitySnapshot(entries: entries, cursor: cursor, receivedAt: receivedAt, loaded: didLoad)
+    requestID = nil; loading = false; error = nil
+    city = normalized
+    let snapshot = citySnapshots[city]
+    entries = snapshot?.entries ?? []; cursor = snapshot?.cursor
+    receivedAt = snapshot?.receivedAt; didLoad = snapshot?.loaded ?? false
+    api.teaDetails.listViewport.select("tea-activities:" + queryKey)
   }
 
   private func listRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -236,33 +311,35 @@ enum CaptroTeaPalette: String {
   @MainActor private func load(reset: Bool) async {
     guard !loading, reset || cursor != nil else { return }
     loading = true
+    let token = UUID(); requestID = token
+    let expectedQuery = queryKey
     let owner = api.presentationScope
     error = nil
-    defer { loading = false }
+    defer { if requestID == token { loading = false; requestID = nil } }
     var params: [URLQueryItem] = []
     if !reset, let cursor { params.append(URLQueryItem(name: "cursor", value: cursor)) }
-    // This list has no location selector: do not silently restrict discovery
-    // to a profile-city string (legacy clubs may have no city at all).
+    if !city.isEmpty { params.append(URLQueryItem(name: "city", value: city)) }
     var path = URLComponents()
     path.path = "/tea"
     if !params.isEmpty { path.queryItems = params }
     do {
       let result: CaptroTeaPage = try await api.get(path.string ?? "/tea")
       try Task.checkCancellation()
-      guard owner == api.presentationScope else { return }
+      guard owner == api.presentationScope, requestID == token, queryKey == expectedQuery else { return }
       var seen = Set(reset ? [] : entries.map(\.id))
       let unique = result.items.filter { seen.insert($0.id).inserted }
       entries = reset ? unique : entries + unique
       cursor = result.nextCursor
       didLoad = true
       receivedAt = Date()
-      api.teaDetails.saveListing(entries, cursor: cursor)
+      if city.isEmpty { api.teaDetails.saveListing(entries, cursor: cursor) }
     } catch is CancellationError {
     } catch MIRAAPIError.server(_, let code, _) where code == "TEA_INVALID_PAGE" && !reset {
+      guard requestID == token, queryKey == expectedQuery else { return }
       cursor = nil
       error = "Refresh Tea to start again."
     } catch {
-      guard owner == api.presentationScope, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
+      guard owner == api.presentationScope, requestID == token, queryKey == expectedQuery, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       self.error = CaptroRefreshFailure.message(error, content: "activities", cached: !entries.isEmpty)
     }
   }
@@ -288,11 +365,9 @@ private struct CaptroTeaRow: View {
       Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).accessibilityHidden(true)
     }
     .foregroundStyle(MIRATheme.Color.textPrimary)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 7)
-    .frame(minHeight: 48)
-    .background(MIRATheme.Color.surface, in: RoundedRectangle(cornerRadius: 10))
-    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(MIRATheme.Color.divider))
+    .padding(.vertical, 16)
+    .frame(minHeight: 64)
+    .overlay(alignment: .bottom) { Divider() }
     .contentShape(Rectangle())
   }
 }

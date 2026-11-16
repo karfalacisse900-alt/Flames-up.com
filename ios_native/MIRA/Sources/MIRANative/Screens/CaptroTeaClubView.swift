@@ -60,7 +60,7 @@ import UIKit
         }
       } else { Text("You no longer have access to this club.").padding(); Spacer() }
     }
-    .background(MIRATheme.Color.appBackground).foregroundStyle(MIRATheme.Color.textPrimary)
+    .background(MIRATheme.Color.appBackground).foregroundStyle(MIRATheme.Color.textPrimary).tint(CaptroTeaStyle.accent)
     .toolbar(.hidden, for: .navigationBar).miraHideTabBarOnAppear()
     .safeAreaInset(edge: .bottom, spacing: 0) { if model.tab == "Chat", model.club != nil, model.valid { composer } }
     .sheet(item: $sheet) { destination in
@@ -104,22 +104,26 @@ import UIKit
   }
 
   private var header: some View {
-    HStack(spacing: 12) {
-      Button { dismiss() } label: { MIRAHeaderCircleButton(systemImage: "chevron.left", size: 44) }
+    HStack(spacing: 10) {
+      Button { dismiss() } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
         .accessibilityLabel("Back").accessibilityIdentifier("tea.club.back")
+      CaptroTeaIdentity(name: model.club?.name ?? "", photo: model.club?.image, size: 36)
       VStack(alignment: .leading, spacing: 3) {
         Text(model.club?.name ?? "Club").font(.headline).fixedSize(horizontal: false, vertical: true)
-        if let club = model.club { Text("\(club.memberCount) members" + (model.room.flatMap { selected in club.rooms.first { $0.id == selected }?.name }.map { " · " + $0 } ?? "")).font(.caption).foregroundStyle(.secondary) }
+        if let club = model.club {
+          Text("\(club.memberCount) members" + (model.room.flatMap { selected in club.rooms.first { $0.id == selected }?.name }.map { " · " + $0 } ?? ""))
+            .font(.caption).foregroundStyle(.secondary)
+        }
       }.frame(maxWidth: .infinity, alignment: .leading)
-      if let club = model.club, club.roomsEnabled || club.canManage {
-        Button { sheet = .rooms } label: { Image(systemName: "list.bullet").frame(width: 44, height: 44) }
-          .accessibilityLabel("Rooms").accessibilityIdentifier("tea.club.rooms")
-      }
-      if let image = model.club?.image, !image.isEmpty { RemoteAvatar(url: image, size: 36).accessibilityHidden(true) }
-      else { Text(model.club?.name.split(separator: " ").prefix(2).compactMap { $0.first.map(String.init) }.joined() ?? "")
-        .font(.caption.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.35)
-        .frame(width: 36, height: 36).background(MIRATheme.Color.surfaceSoft, in: Circle()).accessibilityHidden(true) }
-    }.padding(.horizontal, 12).padding(.vertical, 8)
+      Menu {
+        Button("Club information") { model.tab = "Info" }
+        Button("Saved links") { model.tab = "Links" }
+        if let club = model.club, club.roomsEnabled || club.canManage {
+          Button("Rooms") { sheet = .rooms }.accessibilityIdentifier("tea.club.rooms")
+        }
+      } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+        .accessibilityLabel("Club menu").accessibilityIdentifier("tea.club.menu")
+    }.padding(.horizontal, 8).padding(.vertical, 8)
   }
   private var chat: some View {
     VStack(spacing: 0) {
@@ -144,7 +148,7 @@ import UIKit
       }
       ScrollViewReader { proxy in
         ScrollView {
-          LazyVStack(alignment: .leading, spacing: 14) {
+          LazyVStack(alignment: .leading, spacing: 0) {
             if model.pages[model.key]?.cursor != nil { Button("Earlier messages") { Task { await model.loadMessages(older: true) } }.frame(minHeight: 44) }
             if model.messages.isEmpty {
               if model.pages[model.key] == nil, model.error == nil { ProgressView("Loading messages") }
@@ -171,13 +175,18 @@ import UIKit
     }
   }
   private func messageRow(_ message: CaptroClubMessage, showAuthor: Bool) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
+    HStack(alignment: .top, spacing: 10) {
+      if showAuthor {
+        Button { linkDestination = .profile(message.author.id) } label: { CaptroTeaIdentity(name: message.author.name, size: 36) }
+          .buttonStyle(.plain).accessibilityLabel("Open profile photo for " + message.author.name)
+      } else { Color.clear.frame(width: 36, height: 1).accessibilityHidden(true) }
+      VStack(alignment: .leading, spacing: 5) {
       if showAuthor {
         Button { linkDestination = .profile(message.author.id) } label: { Text(message.author.name).font(.subheadline.weight(.semibold)) }
           .buttonStyle(.plain).accessibilityLabel("Open profile for " + message.author.name)
       }
       if let quote = message.quote {
-        Button { jump(quote) } label: { Text(quote.body).font(.footnote).foregroundStyle(.secondary).lineLimit(2).padding(.leading, 9).frame(minHeight: 44, alignment: .leading).overlay(alignment: .leading) { Rectangle().fill(MIRATheme.Color.divider).frame(width: 2) } }
+        Button { jump(quote) } label: { CaptroTeaQuote(text: quote.body).frame(minHeight: 44, alignment: .leading) }
           .buttonStyle(.plain).accessibilityLabel("Open quoted message: " + quote.body).accessibilityIdentifier("tea.club.quote." + message.id)
       }
       if !message.textWithoutLinks.isEmpty {
@@ -196,8 +205,17 @@ import UIKit
       if !message.links.isEmpty {
         TeaLinkFlow(spacing: 8) { ForEach(message.links) { link in quietLink(link).contextMenu { Button("Save to Links") { linkToSave = .init(url: link.url.absoluteString, message: message.id) } } } }
       }
-      TeaConversationTime(value: message.createdAt)
-    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+      HStack(spacing: 12) {
+        TeaConversationTime(value: message.createdAt)
+        if !model.readOnly {
+          Button("Reply") { model.quotes[model.key] = message.reference; composing = true }
+            .font(.caption).frame(minHeight: 44).accessibilityLabel("Reply to " + message.author.name)
+        }
+      }
+      }.frame(maxWidth: .infinity, alignment: .leading)
+    }.padding(.top, showAuthor ? 12 : 4).padding(.bottom, 8)
+      .overlay(alignment: .bottom) { Divider() }
+      .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
       .contextMenu {
         if !model.readOnly { Button("Reply") { model.quotes[model.key] = message.reference } }
         ForEach(message.links) { link in Button("Save " + link.hostname + " to Links") { linkToSave = .init(url: link.url.absoluteString, message: message.id) } }
@@ -220,10 +238,10 @@ import UIKit
         HStack(alignment: .bottom, spacing: 6) {
           Button { sheet = .mention } label: { Image(systemName: "at").frame(width: 44, height: 44) }.accessibilityLabel("Mention a member")
           TextField("Message the club…", text: Binding(get: { model.drafts[model.key, default: ""] }, set: { model.drafts[model.key] = $0 }), axis: .vertical)
-            .lineLimit(1...5).padding(10).overlay(RoundedRectangle(cornerRadius: 18).stroke(MIRATheme.Color.divider))
+            .lineLimit(1...5).padding(12).background(CaptroTeaStyle.tint, in: RoundedRectangle(cornerRadius: 22))
             .focused($composing).disabled(model.busy || model.pending[model.key] != nil).accessibilityIdentifier("tea.club.input")
           Button { Task { await model.send() } } label: {
-            if model.busy { ProgressView().frame(width: 44, height: 44) } else { Image(systemName: "arrow.up").font(.headline).frame(width: 44, height: 44) }
+            if model.busy { ProgressView().frame(width: 44, height: 44) } else { Image(systemName: "paperplane").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(CaptroTeaStyle.accent, in: Circle()) }
           }.disabled(model.busy || model.drafts[model.key, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel(model.pending[model.key] == nil ? "Send message" : "Retry message").accessibilityIdentifier("tea.club.send")
         }
@@ -272,9 +290,9 @@ import UIKit
       HStack(spacing: 4) {
         if let platform = link.platform { Image("Tea" + platform, bundle: .module).renderingMode(.template).resizable().scaledToFit().frame(width: 11, height: 11) }
         else { Image(systemName: "link").font(.system(size: 11)) }
-        Text(link.hostname).font(.subheadline).underline()
-      }.frame(minHeight: 44).contentShape(Rectangle())
-    }.buttonStyle(.plain).accessibilityLabel("Open " + link.hostname)
+        Text(link.hostname).font(.subheadline).underline().fixedSize(horizontal: false, vertical: true)
+      }.padding(.horizontal, 10).frame(minHeight: 44).background(CaptroTeaStyle.tint, in: RoundedRectangle(cornerRadius: 8)).contentShape(Rectangle())
+    }.buttonStyle(.plain).foregroundStyle(CaptroTeaStyle.accent).accessibilityLabel("Open " + link.hostname)
   }
   private func open(_ link: CaptroTeaLink) {
     if let destination = ClubLinkDestination.parse(link) { linkDestination = destination; return }

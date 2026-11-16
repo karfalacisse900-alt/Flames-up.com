@@ -8,7 +8,7 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 20))
     app.buttons["home.tea"].tap()
     XCTAssertTrue(row(101, app).waitForExistence(timeout: 10))
-    XCTAssertTrue(app.navigationBars["Tea"].staticTexts["Tea"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["tea.menu"].waitForExistence(timeout: 5))
     return app
   }
   private func row(_ n: Int, _ app: XCUIApplication) -> XCUIElement {
@@ -58,6 +58,7 @@ final class TeaConversationTests: XCTestCase {
 
   func testComposeEditCancelAndAuthorOnlyLinks() {
     let app=launch()
+    app.buttons["tea.menu"].tap()
     app.buttons["tea.compose"].tap()
     let title=input("tea.compose.title",app)
     XCTAssertTrue(title.waitForExistence(timeout: 8)); title.tap(); title.typeText("A new Tea discussion")
