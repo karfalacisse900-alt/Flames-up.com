@@ -82,9 +82,28 @@ repair Worker. Re-evaluate safe rollback against the actual deployed baseline fi
 VALIDATION
 Prior full backend suite: 421 passed. Final combined native run 43781933864:
 30 executions passed on iPhone 13 mini and iPhone 17 (app-hosted fixtures).
-New release prerequisite + native source gate tests: 9 passed, 0 failed, 0 skipped.
+Release prerequisite, Worker preflight and native source gate tests: 11 passed,
+0 failed, 0 skipped. The Worker preflight is prepared in
+backend-cf/scripts/verify-professional-worker.mjs; its fresh live execution is pending.
 Worker production-configuration dry-run compile and TypeScript checks passed.
-New native source-attested release validation: run 43784958743 (pending at preparation).
+New native source-attested release validation: run 43784958743 PASSED.
+8 app-hosted Support UI tests and 9 Support model tests, 0 failures.
+Source b97f1fbe585689b8b4e3c96c5d6499602a783589; native tree
+8db88e818d8f2f9ae0416d42802dec51b82c4a79 matches the release candidate.
+Native release gate verified this attestation locally before archive dispatch.
+Signed Release archive 690.1 completed in run 43786700730 from
+bb206d25d07b954e50762d57a8aed1fc9e9b4302. Archive, Release authentication
+configuration and IPA export all PASSED. The IPA artifact was preserved.
+Upload to TestFlight was SKIPPED after the backend compatibility gate failed
+on the four absent migrations and their absent objects. Earlier security (14),
+reliability (5), creator earnings, existing Tea schema and public API checks passed.
+No Apple upload request was attempted. This is not an available TestFlight update.
+Artifact ID 14191476254, Captro-native-ios-ipa; 32,335,109 bytes.
+Artifact ZIP SHA256 26bb64d43838527f51fc619242816e7f8ffca5da8bb8c1e77f0d8c1f7c03d147.
+GitHub artifact expiry: 14 February 2027.
+After approved backend rollout and verification, retry the existing IPA with
+retry_upload_run=43786700730 and validation_run=43784958743 on the same branch.
+The retry must retain all release gates; do not rebuild merely to renumber it.
 Physical-device, real Stripe/provider and production acceptance are separate.
 
 No production write, website publication, Apple agreement acceptance or TestFlight
