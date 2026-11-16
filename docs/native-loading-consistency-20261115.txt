@@ -1,0 +1,35 @@
+CAPTRO NATIVE LOADING / CONSISTENCY - BASELINE
+15 November 2026 (America/New_York). Branch fix/native-loading-consistency-20261115.
+Baseline source: 264a8b6; installed build not inspected. No production changes authorized.
+
+Before editing: backend full suite 432 passed, 0 failed, 0 skipped (31.7 seconds).
+Command: npm test, backend-cf. Log: %TEMP%/captro-polish-baseline-tests.txt.
+Windows host has no Swift/Xcode or connected iPhone. Simulator work remains stopped
+at the user's request. No current device/simulator timings or screenshots collected.
+Do not confuse the following source baselines with measured device performance.
+
+Confirmed source baselines:
+- Tea nonmember club GET denial calls clear(), making its cached model invalid.
+  The store recreates it on every open, showing Opening club before visitor details.
+- Conversation load() returns on a fresh post before retrying missing/failed replies
+  or author metadata. Stale loads serialize detail before replies/author.
+- Tea list state belongs to a full-screen View and is discarded when Tea closes.
+- Visitor profiles and direct profile-to-chat destinations allocate new models.
+  Inbox room models are cached separately, so draft/scroll retention depends on entry.
+- Chat sync catches CancellationError/URL cancellation as network failure; one failed
+  refresh displays a red composer banner even with cached messages. Recent-page
+  failures do not increment backoff. Socket initial-join errors end observation;
+  only polling continues. The exact user's live failing request is unobserved.
+- Chat refresh reassigns equal arrays and repeats disk writes/prefetch each poll.
+- Home recomputes attachment filtering and identifier arrays on view evaluations;
+  existing viewport sampling is already bounded to mounted markers. No current
+  Instruments trace proves this is the cause of observed device hitches.
+- Welcome still renders the old collage and an eight-second zoom, conflicting
+  with this request's white, no-collage welcome. Authentication actions stay intact.
+
+Preserve: native scrolling/ratios/carousel identities, media recovery, server-side
+access, auth, Support/payment, ticket/pickup validation, live-only camera pipeline.
+No deployment, TestFlight upload, financial activation or real-user mutations.
+
+Passes: Tea/cache behavior; Home/media/startup; Chat/shared presentation.
+Results and remaining physical-device measurements will be appended after changes.
