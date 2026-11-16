@@ -1,0 +1,88 @@
+CAPTRO CURRENT APP CLEANUP — 16 November 2026
+Branch: fix/current-app-cleanup-20261116
+Baseline: 64d3e9a (TestFlight 697.1 source plus release documentation).
+Implementation: cd8cc2c, 859a8a0, c9122f9.
+No production deployment, TestFlight upload, live transactions or payment settings changes.
+
+CURRENT IMPLEMENTATION INSPECTED
+Home retains Tea/create controls, Stories and Around/Following/For You. Root still
+owns the shared inbox and Home/Capture/Me navigation. Tea has Conversations and
+Clubs & Events, existing sentence replies and member-only club spaces. Profiles
+retain Moments/Plans/Clubs, Saved, pinning, relationship actions and safety controls.
+Professional applications/roles use the existing approved backend; Studio remains
+URL/role gated and unpublished. Business checkout is explicitly test-only in
+business-ordering.ts (CAPTRO_BUSINESS_TEST_CHECKOUT + Stripe test mode).
+Support retains active Creator approval, server readiness, storefront and payment
+activation checks. Business-only approval does NOT gain Support through this patch;
+dual-role users keep creator Support alongside their business information. Current
+production flag values were not changed or inferred from local configuration.
+
+EXACT INTERFACE CHANGES
+- Remove Home's Captro Business menu item and its now-unused sheet. The directory
+  implementation, API, storefronts and supported routes remain.
+- Tea list omits standalone business-directory rows only. Raw pages, caches and
+  cursors remain intact; pagination continues through pages containing only those
+  rows. Activity offers/reservations, events, meetups and clubs remain eligible.
+- Visitor Plans/Clubs tabs collapse only after successful data establishes absence.
+  Pending pages keep Plans visible; loading/errors are not treated as zero content.
+  Owner tabs and management remain unchanged. Hidden selected tabs return to Moments.
+- Remove the professional profile switch. Render authorized Creator and Business
+  information together, with one introduction, real upcoming plan and shop links.
+  Support no longer depends on a local profile-switch selection; approval/readiness
+  checks remain unchanged.
+- Hide unavailable Studio entry/placeholder. Active authorized users with a supplied
+  Studio URL retain the existing server-authorized browser handoff.
+- Hide seller tools only when payout setup, approved roles, business history,
+  earnings, payouts and Support/category history establish no seller activity.
+  Errors preserve access with Retry. Historical activity does not require an active
+  professional role. Buying/payment methods and purchase/ticket history remain.
+- Club photos/videos render inside the conversation through RemoteMediaView using
+  the original server URL, no public fallback. Retry stays interactive. Video is
+  opt-in, one selected attachment at a time, stopped when inactive/backgrounded.
+  Unsupported legacy file/audio types retain the existing Messages route.
+- Add a 44-point Home inbox shortcut using startup.chatModel, also used by Me.
+  Guest taps use the existing sign-in path. No new tab, independent inbox model or
+  messaging service. Existing media playback suspension also covers the inbox sheet.
+
+FILES CHANGED (relative to ios_native/MIRA)
+Sources/MIRANative/App/MIRANativeRootView.swift
+Sources/MIRANative/Components/CaptroProfilePresentation.swift
+Sources/MIRANative/Screens/MainFeedView.swift
+Sources/MIRANative/Screens/CaptroTeaView.swift
+Sources/MIRANative/Screens/CaptroTeaClubView.swift
+Sources/MIRANative/Screens/ProfileChatVerificationStudio.swift
+Sources/MIRANative/Screens/CaptroProfessionalAccountsView.swift
+Sources/MIRANative/Screens/CaptroPaymentsView.swift
+Tests/MIRANativeTests/CaptroScreenLoadingTests.swift
+LayoutUITests/TeaTests.swift
+
+PRESERVED
+Backend/schema/Stripe configuration, approval/authorization, paid/free memberships,
+event tickets and check-in, pickup verification, financial records, refunds,
+reconciliation, ordering/customization/cart, supported deep links, creator Support,
+business management, application decisions, posts, memberships, moderation, reports,
+blocking, account deletion, media recovery, Home ratios/sharp corners, camera, theme,
+navigation and branding. No data was deleted or migrated.
+
+VERIFICATION
+backend-cf: npm test — 433 passed, 0 failed, 0 skipped (37.64 seconds).
+Log: %TEMP%/captro-cleanup-final-tests.txt.
+Includes existing isolated professional role/approval/suspension/privacy, Support
+gating/accounting, paid/free commerce, business checkout/order/pickup, Tea permissions,
+messages and security tests. These are not real Stripe/device acceptance results.
+Added native model regression for unknown/confirmed-empty/paginated/error profile
+sections. Updated Tea UI assertion for removed directory rows while retaining club
+join assertions; storefront ordering remains covered in BusinessOrderingTests.
+Native compile workflow (no simulator, no signing, no upload):
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43969725400
+Native result pending at report creation. Earlier two runs were superseded/cancelled.
+
+LIMITS / REMAINING ACCEPTANCE
+No simulator or connected physical iPhone execution in this pass. Windows has no
+local Xcode. No current screenshots collected. Native tests added/updated are not
+claimed passed without execution. Inspect small-screen Home spacing, dual-role
+profile layout, VoiceOver, inline attachment gestures/playback and sheet return on
+device. Confirm revoked club access removes media using existing server denial flow.
+Financial visibility performs additional existing reads only for not-started payout
+accounts; failed reads deliberately leave recovery/navigation accessible.
+Runtime flags and disabled checkout remain authoritative on the server.
