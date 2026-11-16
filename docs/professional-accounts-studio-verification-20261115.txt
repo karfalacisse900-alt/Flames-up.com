@@ -1,7 +1,9 @@
 CAPTRO PROFESSIONAL ACCOUNTS + STUDIO — IMPLEMENTATION AND VERIFICATION
 Prepared 15 November 2026. Branch: feature/professional-accounts-studio
 Baseline: c839f7ad42c574101803d98dd5ac61d8bbab7013
-Native validation source: f7b5043 (final results appended below).
+Initial green profile/application validation: 112cd97b3525098ca6c52961f95e090b2fb7e38c.
+Final combined native validation: f78952db9fd8ef4b5a9292dde4b10d817162a174.
+Studio session-race repair: 0c0508a (web-only changes after the native builds).
 
 DELIVERY BOUNDARY
 Implemented in the existing native app, existing Worker, existing admin console,
@@ -119,10 +121,16 @@ Windows commands, run from the named directories:
 - backend-cf: npm test — 421 passed, 0 failed, 0 skipped (full suite).
 - backend-cf: npx tsc --noEmit — passed.
 - studio-web: npm run build — TypeScript and production Vite build passed.
-- studio-web: node tests/studio.browser.mjs — 25 checks passed, 1440x1050 and
+- studio-web: node tests/studio.browser.mjs — 27 checks passed, 1440x1050 and
   390x844; role switching, gig edit, disabled Support, actual order action request,
   rejected action retaining state, customization, failed sales not zero, cancel,
-  suspension, signout, regular/pending/declined/business-only and revoked account.
+  suspension, signout, regular/pending/declined/business-only and revoked account;
+  explicit required pickup coordinates and stale-stock request contract.
+- studio-web: node tests/session.browser.mjs — 4 passed: delayed 401 after account
+  switch, old mutation during another account’s shared refresh, request coalescing,
+  and transient refresh outage. The delayed-401 check failed against the preceding
+  code and passed after the account-generation guards; no credentials or real users
+  are used by the transport fixtures.
 - admin-web: npm run build — TypeScript and production Vite build passed.
 - admin-web: node tests/professional.browser.mjs — desktop and tablet queue,
   selected application, reasoned approval, version/idempotency and audit passed.
@@ -139,14 +147,82 @@ profiles use the shared filtering function, plus a native behavior test ensuring
 legacy text and duplicate posts do not enter Moments. No tests were skipped.
 
 NATIVE / PHYSICAL STATUS
-GitHub simulator run 43774092489 built both targets. Initial Settings tests used an
-incorrect text selector (combined accessibility label); corrected to stable IDs.
-The actual three-profile UI check passed on iPhone 13 mini in that run. Its failed
-Settings checks were not presented as successful verification.
-Expanded run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43776303815
-Exact native results and screenshot inventory will be appended after completion.
+Actual app-hosted simulator runs use isolated URLProtocol fixtures, not live accounts.
+Xcode 26.6 (17F113), iOS 26.5 (23F77); iPhone 13 mini and iPhone 17.
+Generated Xcode project, Debug build, CODE_SIGNING_ALLOWED=NO, no archive or upload.
+
+Profile/application run 43777791715:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43777791715
+4 ProfessionalAccountTests passed on each phone, 0 failures (8 total executions).
+Tests cover actual Settings entry, cancel/discard, submit/status, rejection/draft
+retention, large text, and regular/Creator/Business profile control differences.
+The earlier failed status assertion was corrected to the real combined accessibility
+label "Status, Under review"; actual submission was working. Assertions retained.
+
+Model run 43776303815:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43776303815
+3 CaptroProfessionalTests passed on each phone (6 total executions): independent
+roles/optional website, old payload decode without approval, and portfolio identity /
+legacy-content filtering. This expanded run also exposed the Support retry issue;
+its failed UI cases were not counted as passes.
+
+Support diagnostics from run 43779126270:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43779126270
+The run still failed the Retry case. Its actual app console proved a fixture bug:
+CaptroSupportReviewHost generated a new account-cache UUID whenever SwiftUI rebuilt
+it on scene activation. The production profile correctly discarded previous-account
+state, then refetched eligibility, consuming the fixture's first 503 response.
+The DEBUG Support and Professional hosts now use one isolated namespace per process.
+Production account isolation is unchanged. The original Retry assertions remain;
+before/recovered screenshots were added. Duplicate unchanged storefront updates
+are also ignored, but this was not the confirmed cause of the failed fixture.
+
+Final combined run 43781933864:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43781933864
+Source f78952db9fd8ef4b5a9292dde4b10d817162a174.
+PASSED on both devices: 3 model tests + 4 Professional UI tests + 8 Support UI tests
+per device. Total 30 executions, 0 failures, 0 skipped. Both xcodebuild results are
+TEST SUCCEEDED; the xcresult database independently records all cases as Success.
+The real profile displays Retry after the 503, manual Retry recovers eligibility,
+and the correct recipient sheet opens afterward. Guest/self/storefront restrictions,
+provider-ineligible creators and disabled live checkout remain protected.
+No remaining failures in the selected native suites.
+
+Exact commands used by native-polish-validation.yml from ios_native/MIRA:
+  xcodegen generate --spec project.yml
+  xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug
+    -destination "platform=iOS Simulator,id=<created device>"
+    -parallel-testing-enabled NO -test-timeouts-enabled YES
+    -maximum-test-execution-time-allowance 180
+    -derivedDataPath "$RUNNER_TEMP/PolishBuild"
+    -resultBundlePath "$RUNNER_TEMP/Polish.xcresult"
+    -only-testing:CaptroLayoutUITests/ProfessionalAccountTests
+    CODE_SIGNING_ALLOWED=NO test
+The final combined run additionally selected
+  -only-testing:CaptroStampTests/CaptroProfessionalTests
+  -only-testing:CaptroLayoutUITests/CreatorSupportTests
+using the same xcodebuild invocation and both simulator destinations.
+These are focused suites, not a claim that every existing iOS test was rerun.
+
 No physical iPhone, production build, provider login, real upload approval or real
 Stripe test-account interaction was exercised in this task.
+
+SCREENSHOTS / EVIDENCE
+Permanent local evidence directory:
+C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-professional-20261115/
+Open review-gallery.html for the unedited full-size captures. Native PNGs include:
+- professional-settings, professional-application, professional-under-review,
+  professional-rejected-submit and professional-large-text.
+- professional-profile-regular, professional-profile-creator,
+  professional-profile-business.
+Each native name ends -iphone13mini.png or -iphone17.png. Final captures also include
+support-retry-before and support-retry-recovered on both phones. All native images
+were refreshed from the final green combined run; earlier logs remain labeled.
+Browser captures: studio-creator-1440.png / -390.png,
+studio-business-1440.png / -390.png, admin-review-1440.png / -768.png.
+All sample names, counts and amounts are isolated fixtures. No sample business or
+professional account was published. Native source and test logs are retained alongside
+screenshots; the original xcresult artifacts are attached to the cited workflow run.
 
 REMAINING RELEASE LIMITS
 - Existing Business ordering infrastructure is test-only and has no live payout
