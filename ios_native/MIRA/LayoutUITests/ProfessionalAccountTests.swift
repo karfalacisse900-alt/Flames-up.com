@@ -16,7 +16,7 @@ final class ProfessionalAccountTests: XCTestCase {
     description.tap(); description.typeText("Independent musician making original music.")
     app.swipeUp(); capture(app,"professional-application")
     let submit=app.buttons["professional.submit"]; if !submit.isHittable { app.swipeUp() }; XCTAssertTrue(submit.isEnabled); submit.tap()
-    XCTAssertTrue(app.staticTexts["Under review"].waitForExistence(timeout: 10)); XCTAssertTrue(app.buttons["professional.apply.business"].exists); capture(app,"professional-under-review")
+    XCTAssertTrue(app.staticTexts["Status, Under review"].waitForExistence(timeout: 10)); XCTAssertTrue(app.buttons["professional.apply.business"].exists); capture(app,"professional-under-review")
   }
   func testPublicProfilesKeepRegularControlsAndSeparateSupport() {
     for kind in ["regular","creator","business"] {
@@ -38,7 +38,7 @@ final class ProfessionalAccountTests: XCTestCase {
     let description=app.textViews["professional.description"].exists ? app.textViews["professional.description"] : app.textFields["professional.description"]
     description.tap();description.typeText("Independent artist")
     app.swipeUp();let submit=app.buttons["professional.submit"];if !submit.isHittable { app.swipeUp() };submit.tap()
-    XCTAssertTrue(app.staticTexts["professional.error"].waitForExistence(timeout:10));XCTAssertFalse(app.staticTexts["Under review"].exists)
+    XCTAssertTrue(app.staticTexts["professional.error"].waitForExistence(timeout:10));XCTAssertFalse(app.staticTexts["Status, Under review"].exists)
     capture(app,"professional-rejected-submit")
   }
 }
