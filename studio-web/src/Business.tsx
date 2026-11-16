@@ -14,8 +14,8 @@ type Shop = {
   category: string;
   pickup_address: string;
   pickup_instructions?: string;
-  latitude: number;
-  longitude: number;
+  latitude: number | null;
+  longitude: number | null;
   hours: string;
   paused: boolean;
   published: boolean;
@@ -63,8 +63,8 @@ const newShop = (): Shop => ({
   name: "",
   category: "coffee_bakery",
   pickup_address: "",
-  latitude: 0,
-  longitude: 0,
+  latitude: null,
+  longitude: null,
   hours: "",
   paused: true,
   published: false,
@@ -263,8 +263,8 @@ function ShopForm({
               min={-90}
               max={90}
               step="any"
-              value={draft.latitude}
-              onChange={(e) => field("latitude", Number(e.target.value))}
+              value={draft.latitude ?? ""}
+              onChange={(e) => field("latitude", e.target.value === "" ? null : Number(e.target.value))}
             />
           </label>
           <label>
@@ -275,8 +275,8 @@ function ShopForm({
               min={-180}
               max={180}
               step="any"
-              value={draft.longitude}
-              onChange={(e) => field("longitude", Number(e.target.value))}
+              value={draft.longitude ?? ""}
+              onChange={(e) => field("longitude", e.target.value === "" ? null : Number(e.target.value))}
             />
           </label>
         </div>

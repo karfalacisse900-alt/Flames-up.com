@@ -266,6 +266,12 @@ try {
     await page
       .getByRole("heading", { name: "Sample Coffee", exact: true })
       .waitFor();
+    await page.getByRole("button", { name: "Add business", exact: true }).click();
+    assert.equal(await page.getByLabel("Latitude", { exact: true }).inputValue(), "");
+    assert.equal(await page.getByLabel("Longitude", { exact: true }).inputValue(), "");
+    assert.equal(await page.getByLabel("Latitude", { exact: true }).evaluate(el => el.validity.valueMissing), true);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    tests++;
     await page.getByRole("button", { name: "accept", exact: true }).click();
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
     await page.getByText("accepted", { exact: true }).waitFor();

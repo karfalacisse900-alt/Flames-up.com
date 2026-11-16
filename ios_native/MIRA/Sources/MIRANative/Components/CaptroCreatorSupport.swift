@@ -129,11 +129,20 @@ struct CaptroSupportAction: View {
       canCheckout = false; failed = false; presented = false; checking = false
       visibleInStorefront = false
       guard let viewerID, viewerID != creatorID else { return }
-      let storefront = await runtime.currentStorefront()
-      guard !Task.isCancelled, expected == identity, CaptroSupportPolicy.permits(storefront: storefront) else { return }
-      await refreshEligibility(expected: expected)
+      var storefront = await runtime.currentStorefront()
+      guard !Task.isCancelled, expected == identity else { return }
+      if CaptroSupportPolicy.permits(storefront: storefront) { await refreshEligibility(expected: expected) }
       for await _ in Storefront.updates {
-        guard !Task.isCancelled else { return }
+        let next = await runtime.currentStorefront()
+        guard !Task.isCancelled, expected == identity else { return }
+        // StoreKit can announce the same storefront on startup. It must not
+        // erase a visible retry state or issue duplicate eligibility requests.
+        guard next != storefront else { continue }
+        storefront = next
+        guard CaptroSupportPolicy.permits(storefront: next) else {
+          visibleInStorefront = false; canCheckout = false; presented = false
+          continue
+        }
         await refreshEligibility(expected: expected)
       }
     }
