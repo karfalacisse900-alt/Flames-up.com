@@ -7,6 +7,20 @@ External state is READY_FOR_BETA_SUBMISSION; this is not external tester availab
 Active distribution signing profile. Associated Domains absent, as in current source.
 No signing or entitlement change is proposed by this release.
 
+LAST RECORDED WORKER DEPLOYMENT (NOT A FRESH LIVE VERSION READ)
+Successful production run 43652503796 deployed source
+89ca332f6e47954f376aec366845468b8efa48f4 on 14 November at 23:18 UTC.
+Worker version: 0728d43a-5775-49e9-b1db-be4fa903d5b6.
+Bindings fingerprint: 1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a.
+Candidate Worker diff is eight files: business-ordering.ts, creator-support.ts,
+feed-pagination.ts, index.ts, professional-accounts.ts, tea-clubs.ts,
+tea-conversations.ts and tea.ts. The feed cursor change only admits existing
+non-UUID message/request IDs in the two explicit Tea club scopes. Package files
+and wrangler.toml are unchanged from that deployed source.
+Fresh deployed-version/configuration comparison is still required before applying
+the proposal. Local Wrangler has no Cloudflare token; existing CI deployment
+credentials can perform that read without exposing or creating credentials.
+
 AUTHORIZATION
 TestFlight upload is authorized by the latest request. The preceding feature requests
 explicitly withheld production deployment and website publication. Those are separate
@@ -69,6 +83,7 @@ VALIDATION
 Prior full backend suite: 421 passed. Final combined native run 43781933864:
 30 executions passed on iPhone 13 mini and iPhone 17 (app-hosted fixtures).
 New release prerequisite + native source gate tests: 9 passed, 0 failed, 0 skipped.
+Worker production-configuration dry-run compile and TypeScript checks passed.
 New native source-attested release validation: run 43784958743 (pending at preparation).
 Physical-device, real Stripe/provider and production acceptance are separate.
 
