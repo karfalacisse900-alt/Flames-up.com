@@ -4,6 +4,7 @@ import SwiftUI
 
 /// Isolated transport around shipping Settings and visitor profile screens.
 public struct CaptroProfessionalReviewHost: View {
+  private static let accountScope = "professional-review-\(UUID().uuidString)"
   private let api: MIRAAPIClient
   @StateObject private var session: MIRAAuthSession
   public init() {
@@ -12,7 +13,7 @@ public struct CaptroProfessionalReviewHost: View {
     let auth = MIRAAuthSession(keychain: ProfessionalReviewStorage(), defaults: defaults)
     _session = StateObject(wrappedValue: auth)
     let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ProfessionalReviewProtocol.self]
-    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    MIRALocalJSONCache.setAccountScope(userId: Self.accountScope)
     api = MIRAAPIClient(baseURL: URL(string: "https://localhost/api")!, sessionProvider: auth, session: URLSession(configuration: config))
   }
   public var body: some View {
