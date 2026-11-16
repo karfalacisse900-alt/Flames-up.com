@@ -1,7 +1,7 @@
 CAPTRO CURRENT APP CLEANUP — 16 November 2026
 Branch: fix/current-app-cleanup-20261116
 Baseline: 64d3e9a (TestFlight 697.1 source plus release documentation).
-Implementation: cd8cc2c, 859a8a0, c9122f9.
+Implementation: cd8cc2c, 859a8a0, c9122f9, f1e96a0.
 No production deployment, TestFlight upload, live transactions or payment settings changes.
 
 CURRENT IMPLEMENTATION INSPECTED
@@ -74,8 +74,11 @@ Added native model regression for unknown/confirmed-empty/paginated/error profil
 sections. Updated Tea UI assertion for removed directory rows while retaining club
 join assertions; storefront ordering remains covered in BusinessOrderingTests.
 Native compile workflow (no simulator, no signing, no upload):
-https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43969725400
-Native result pending at report creation. Earlier two runs were superseded/cancelled.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43970620206
+Native result pending: the macOS queue had no assigned runner during handoff.
+Earlier runs were superseded/cancelled, not reported as test failures.
+The final small change also retains direct Earnings & history navigation after a
+failed seller-history lookup; it does not grant access or imply a successful read.
 
 LIMITS / REMAINING ACCEPTANCE
 No simulator or connected physical iPhone execution in this pass. Windows has no
