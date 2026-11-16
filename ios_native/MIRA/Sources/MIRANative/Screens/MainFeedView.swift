@@ -42,7 +42,15 @@ private struct MainFeedMediaPreloadPlan: Sendable, Equatable {
 
 @MainActor
 final class MainFeedModel: ObservableObject {
-  @Published var posts: [MIRAPost] = []
+  @Published var posts: [MIRAPost] = [] {
+    didSet {
+      // Derive once per data mutation, not on every scroll/overlay body update.
+      homePosts = posts.filter { $0.hasHomeMedia }
+      homePostIDs = homePosts.map(\.id)
+    }
+  }
+  private(set) var homePosts: [MIRAPost] = []
+  private(set) var homePostIDs: [String] = []
   @Published var isLoading = true
   @Published var isLoadingMore = false
   @Published var errorMessage: String?
@@ -1321,14 +1329,14 @@ public struct MainFeedView: View {
         viewport.setActive(!suspended)
         if !suspended { model.applyPublicationIfAtTop(viewport.isAtTopAndIdle) }
       }
-      .onChange(of: displayedPosts.map(\.id)) { _, _ in
-        viewport.updateOrder(displayedPosts.map(\.id))
+      .onChange(of: model.homePostIDs) { _, _ in
+        viewport.updateOrder(model.homePostIDs)
         reconcileCurrentPostSelection()
       }
       .onChange(of: selectedFeedSection) { _, _ in
         viewport.select(selectedFeedSection.rawValue)
         model.selectFeedSection(selectedFeedSection)
-        viewport.updateOrder(displayedPosts.map(\.id))
+        viewport.updateOrder(model.homePostIDs)
         selectedPostID = nil
         selectedPostFallbackIndex = 0
         reconcileCurrentPostSelection()
@@ -1411,7 +1419,7 @@ public struct MainFeedView: View {
       if id == nil { active.wrappedValue = nil }
       CaptroFeedDiagnostics.event("visible", feed: "home", reason: "visibility_threshold", post: id)
     }
-    viewport.updateOrder(displayedPosts.map(\.id))
+    viewport.updateOrder(model.homePostIDs)
     reconcileCurrentPostSelection()
     MIRAApplePerformanceLogger.event("feed_render", detail: model.posts.isEmpty ? "empty" : "posts")
     if !isMediaPlaybackSuppressed {
@@ -1698,7 +1706,7 @@ public struct MainFeedView: View {
   }
 
   private var displayedPosts: [MIRAPost] {
-    model.posts.filter { $0.hasHomeMedia }
+    model.homePosts
   }
 
   private var currentPostIndex: Int {

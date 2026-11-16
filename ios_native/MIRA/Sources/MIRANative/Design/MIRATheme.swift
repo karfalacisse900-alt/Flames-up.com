@@ -3,12 +3,16 @@ import UIKit
 
 public enum MIRATheme {
   public enum Color {
+    public static let textError = adaptive(
+      light: UIColor(red: 0.72, green: 0.10, blue: 0.12, alpha: 1),
+      dark: UIColor(red: 1, green: 0.55, blue: 0.55, alpha: 1)
+    )
     public static let appBackground = adaptive(
       light: .white,
       dark: UIColor(red: 0.000, green: 0.000, blue: 0.000, alpha: 1)
     )
     public static let launchBackground = adaptive(
-      light: UIColor(red: 0.961, green: 0.957, blue: 0.941, alpha: 1),
+      light: .white,
       dark: UIColor(red: 0.000, green: 0.000, blue: 0.000, alpha: 1)
     )
     public static let surface = adaptive(

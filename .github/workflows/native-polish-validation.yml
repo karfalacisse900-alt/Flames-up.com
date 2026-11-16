@@ -2,6 +2,9 @@ name: Validate native polish (no deployment)
 on:
   workflow_call:
     inputs:
+      compile_only:
+        type: boolean
+        default: false
       conversations:
         type: boolean
         default: false
@@ -19,6 +22,9 @@ on:
         default: ''
   workflow_dispatch:
     inputs:
+      compile_only:
+        type: boolean
+        default: false
       conversations:
         type: boolean
         default: false
@@ -38,6 +44,7 @@ permissions:
   contents: read
 jobs:
   simulator:
+    if: ${{ !inputs.compile_only }}
     name: simulator (${{ matrix.phone }})
     runs-on: macos-26
     timeout-minutes: 65
@@ -139,3 +146,50 @@ jobs:
             ${{ runner.temp }}/SmallPolish.xcresult
             ${{ runner.temp }}/small-polish.log
             ${{ runner.temp }}/small-screenshots
+
+  device-compile:
+    if: ${{ inputs.compile_only }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - name: Host Swift policy checks (no simulator)
+        run: |
+          set -o pipefail
+          swiftc ios_native/MIRA/Sources/MIRANative/Services/CaptroRefreshState.swift scripts/native/check-refresh-policy.swift -o "$RUNNER_TEMP/refresh-checks"
+          "$RUNNER_TEMP/refresh-checks" | tee "$RUNNER_TEMP/refresh-checks.log"
+          # Mutation proof: real cancellation regression must fail this harness.
+          sed 's/guard !CaptroRefreshFailure.isCancellation(error) else { return }//' ios_native/MIRA/Sources/MIRANative/Services/CaptroRefreshState.swift > "$RUNNER_TEMP/BrokenRefreshState.swift"
+          swiftc "$RUNNER_TEMP/BrokenRefreshState.swift" scripts/native/check-refresh-policy.swift -o "$RUNNER_TEMP/broken-refresh-checks"
+          if "$RUNNER_TEMP/broken-refresh-checks" > "$RUNNER_TEMP/mutation-check.log"; then
+            echo 'ERROR: cancellation regression was not caught'; exit 1
+          fi
+          cat "$RUNNER_TEMP/mutation-check.log"
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Compile iOS app and regression tests without running a simulator
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -version
+          git rev-parse HEAD
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/NativeCompile" \
+            CODE_SIGNING_ALLOWED=NO build-for-testing 2>&1 | tee "$RUNNER_TEMP/native-compile.log"
+      - name: Compile optimized Release for iPhone (unsigned, no upload)
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/NativeCompile" \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/native-release-compile.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-compile-no-simulator
+          path: |
+            ${{ runner.temp }}/native-compile.log
+            ${{ runner.temp }}/native-release-compile.log
+            ${{ runner.temp }}/refresh-checks.log
+            ${{ runner.temp }}/mutation-check.log

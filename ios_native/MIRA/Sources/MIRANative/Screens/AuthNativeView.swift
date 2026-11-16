@@ -28,6 +28,7 @@ public struct AuthNativeView: View {
   @State private var openEmailAfterConsent = false
   @AppStorage("captro.terms.accepted.version") private var acceptedTermsVersion = ""
   @AppStorage("captro.terms.accepted.at") private var acceptedTermsAt = ""
+  @Environment(\.colorScheme) private var colorScheme
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   public init(session: MIRAAuthSession, api: MIRAAPIClient) {
@@ -39,7 +40,7 @@ public struct AuthNativeView: View {
     NavigationStack {
       CaptroWelcomeView(
         appleControl: {
-          appleSignInButton(style: .white, cornerRadius: 25) {
+          appleSignInButton(style: colorScheme == .dark ? .white : .black, cornerRadius: 25) {
             session.errorMessage = nil
             welcomeConsentProvider = .apple
           }
