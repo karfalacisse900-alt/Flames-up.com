@@ -107,6 +107,7 @@ enum CaptroTeaPalette: String {
     let loaded: Bool
   }
   private var queryKey: String { api.presentationScope + ":" + city }
+  private var activityViewportKey: String { "tea-list:" + queryKey + ":" + filter }
 
 
   init(api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void, close: @escaping () -> Void) {
@@ -166,7 +167,7 @@ enum CaptroTeaPalette: String {
           listRow {
             Button { if path.isEmpty { path.append(entry) } } label: { CaptroTeaRow(entry: entry) }
               .background(CaptroFeedViewportMarker(owner: api.teaDetails.listViewport,
-                postID: entry.id, feed: "tea-list:" + api.presentationScope).allowsHitTesting(false))
+                postID: entry.id, feed: activityViewportKey).allowsHitTesting(false))
               .buttonStyle(.plain)
               .accessibilityHint("Opens \(entry.typeLabel.lowercased()) details")
               .accessibilityIdentifier("tea.row." + entry.id)
@@ -188,12 +189,17 @@ enum CaptroTeaPalette: String {
       .accessibilityIdentifier("tea.list")
       .refreshable { await load(reset: true) }
       .onAppear {
-        api.teaDetails.listViewport.updateOrder(entries.map(\.id))
+        api.teaDetails.listViewport.select(activityViewportKey)
+        api.teaDetails.listViewport.updateOrder(discoveryEntries.map(\.id))
         api.teaDetails.listViewport.setActive(section == "Clubs & Events")
       }
       .onDisappear { api.teaDetails.listViewport.setActive(false) }
       .onChange(of: section) { _, section in api.teaDetails.listViewport.setActive(section == "Clubs & Events") }
-      .onChange(of: entries) { _, entries in api.teaDetails.listViewport.updateOrder(entries.map(\.id)) }
+      .onChange(of: entries) { _, _ in api.teaDetails.listViewport.updateOrder(discoveryEntries.map(\.id)) }
+      .onChange(of: activityViewportKey) { _, key in
+        api.teaDetails.listViewport.select(key)
+        api.teaDetails.listViewport.updateOrder(discoveryEntries.map(\.id))
+      }
       .opacity(section == "Clubs & Events" ? 1 : 0)
       .allowsHitTesting(section == "Clubs & Events")
       .accessibilityHidden(section != "Clubs & Events")
@@ -233,7 +239,7 @@ enum CaptroTeaPalette: String {
       .navigationDestination(for: CaptroTeaEntry.self) { entry in
         if entry.kind == "club", entry.destination.source == "activity" {
           CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn)
-        } else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
+        } else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent) }
       }
       .navigationDestination(for: CaptroTeaConversation.self) { post in
         CaptroTeaConversationDetail(post: post, api: api, viewerID: viewerID, signIn: signIn)
@@ -285,13 +291,13 @@ enum CaptroTeaPalette: String {
   private func switchCity(_ next: String) {
     let normalized = next.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard city != normalized else { return }
+    if citySnapshots.count >= 8, let oldest = citySnapshots.keys.sorted().first { citySnapshots.removeValue(forKey: oldest) }
     citySnapshots[city] = ActivitySnapshot(entries: entries, cursor: cursor, receivedAt: receivedAt, loaded: didLoad)
     requestID = nil; loading = false; error = nil
     city = normalized
     let snapshot = citySnapshots[city]
     entries = snapshot?.entries ?? []; cursor = snapshot?.cursor
     receivedAt = snapshot?.receivedAt; didLoad = snapshot?.loaded ?? false
-    api.teaDetails.listViewport.select("tea-activities:" + queryKey)
   }
 
   private func listRow<Content: View>(@ViewBuilder content: () -> Content) -> some View {

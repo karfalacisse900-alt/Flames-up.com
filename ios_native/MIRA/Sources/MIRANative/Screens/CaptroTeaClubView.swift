@@ -78,9 +78,9 @@ import UIKit
     }
     .navigationDestination(item: $linkDestination) { destination in
       switch destination {
-      case .profile(let id): UserProfileNativeView(userId: id, api: api).toolbar(.visible, for: .navigationBar)
-      case .post(let id): CaptroClubPostDestination(id: id, api: api).toolbar(.visible, for: .navigationBar)
-      case .activity(let id): CaptroClubActivityLink(id: id, api: api, viewerID: model.club?.viewerId).toolbar(.visible, for: .navigationBar)
+      case .profile(let id): UserProfileNativeView(userId: id, api: api).tint(MIRATheme.Color.accent).toolbar(.visible, for: .navigationBar)
+      case .post(let id): CaptroClubPostDestination(id: id, api: api).tint(MIRATheme.Color.accent).toolbar(.visible, for: .navigationBar)
+      case .activity(let id): CaptroClubActivityLink(id: id, api: api, viewerID: model.club?.viewerId).tint(MIRATheme.Color.accent).toolbar(.visible, for: .navigationBar)
       case .invite(let token): CaptroTeaInviteView(token: token, api: api, signedIn: true).toolbar(.visible, for: .navigationBar)
       }
     }
@@ -196,7 +196,7 @@ import UIKit
       if let media = message.mediaURL, !media.isEmpty {
         if message.mediaType == "file" || message.mediaType == "audio" || message.mediaType == "voice" {
         // The existing message view owns authorized attachment/video rendering.
-        NavigationLink { ConversationNativeView(groupId: model.club?.groupId ?? "", title: model.club?.name ?? "Club", api: api) } label: { Label("Open attachment in Messages", systemImage: "photo").font(.subheadline).frame(minHeight: 44) }
+        NavigationLink { ConversationNativeView(groupId: model.club?.groupId ?? "", title: model.club?.name ?? "Club", api: api).tint(MIRATheme.Color.accent) } label: { Label("Open attachment in Messages", systemImage: "photo").font(.subheadline).frame(minHeight: 44) }
         } else {
           CaptroClubAttachment(id: message.id, url: media, type: message.mediaType, playingID: $playingAttachmentID,
             active: visible && model.tab == "Chat" && model.valid && scenePhase == .active)

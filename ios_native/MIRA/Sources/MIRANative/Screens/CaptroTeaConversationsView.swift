@@ -274,6 +274,9 @@ struct TeaConversationTime: View {
           VStack(alignment: .leading, spacing: 3) {
             Text(post.replyCount.map { "Replies (\($0))" } ?? "Replies").font(.headline)
             if !(post.replyTargets ?? []).isEmpty { Text("General replies").font(.caption).foregroundStyle(.secondary) }
+            if model.nextCursor != nil {
+              Text("\(model.replies.filter { $0.target == nil }.count) general replies loaded").font(.caption).foregroundStyle(.secondary)
+            }
           }
           Spacer()
           Button {
@@ -368,7 +371,7 @@ struct TeaConversationTime: View {
         if let post = model.post { CaptroTeaComposer(api: api, editing: post) { model.updated($0) } }
       }
       .navigationDestination(isPresented: Binding(get: { profile != nil }, set: { if !$0 { profile = nil } })) {
-        if let profile { UserProfileNativeView(userId: profile.id, api: api).toolbar(.visible, for: .navigationBar) }
+        if let profile { UserProfileNativeView(userId: profile.id, api: api).tint(MIRATheme.Color.accent).toolbar(.visible, for: .navigationBar) }
       }
       .task { await model.load() }
       .onAppear { model.viewport.setActive(true) }
