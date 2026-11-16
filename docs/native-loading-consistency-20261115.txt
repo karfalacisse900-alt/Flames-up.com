@@ -33,3 +33,181 @@ No deployment, TestFlight upload, financial activation or real-user mutations.
 
 Passes: Tea/cache behavior; Home/media/startup; Chat/shared presentation.
 Results and remaining physical-device measurements will be appended after changes.
+
+IMPLEMENTATION / REVIEW HANDOFF (updated 15 November, local time)
+Branch: fix/native-loading-consistency-20261115
+Implementation commits: 1d145d0, 35df28d, dacce75, 7fddf36, da022b2, 1119522.
+Source baseline recorded separately in 1e8ada9 before any app edits.
+This is an implementation and verification report, not a release-readiness claim.
+
+PASS 1 - TEA AND PRESENTATION REUSE
+- Tea conversations retain the real list title/caption while missing data loads.
+  Post/reply/author reads start concurrently. Fresh post data no longer prevents
+  retrying failed replies. Fresh reopen avoids repeat reads. Explicit refresh works.
+- Revalidate displayed general and sentence reply pages before replacing them,
+  preserving drafts and expanded targets. Pagination refresh is bounded at 16
+  cursors; incomplete/error results leave the previous successful display intact.
+- Tea list snapshots retain cursor/data and viewport within the existing API's
+  account scope. Details reuse the existing 60-second cache / 10-minute retention.
+- A confirmed nonmember club result clears private member data immediately, but
+  reuses that denial for 15 seconds. It can open the existing public visitor details
+  without rebuilding a failed member request on every visit. Force refresh still
+  rechecks access. It grants no club access and changes no join/payment behavior.
+- API-owned chat/profile presentation reuse is bounded to 12 heavy models each.
+  Up to 64 lightweight unsent chat drafts are retained on eviction. Profile tab and
+  viewport selection are retained. Auth/account changes clear retained models and
+  drafts; scope checks reject late completions. Blocking/privacy changes invalidate
+  presentation. Writes mark profile freshness stale, including ambiguous responses.
+  Restricted profile introductions also receive a freshness timestamp without
+  querying private posts; pagination denial clears previously authorized content.
+- Existing account-scoped disk cache and authorization policy remain in place;
+  no global cache purge, second downloader or credentials change was introduced.
+- Existing compact Tea author/avatar/follow+, sentence replies, small domain links,
+  general replies and pinned composer remain. No author-update UI was reintroduced.
+
+PASS 2 - HOME / MEDIA / WELCOME
+- Filter media-eligible Home posts and derive stable IDs once per posts mutation.
+  Body updates from scrolling, overlays and playback reuse that result. Stored
+  text/structured records and raw pagination remain intact; no deletion or reorder.
+- Failed Home refresh keeps content and offers Retry in the existing stable-height
+  footer. It distinguishes offline from first-load failure. Retry preserves order.
+- Post ratios, sharp edges, carousel identity/selection, media recovery, player
+  admission, preview decoding, prefetch budgets and feed physics are unchanged.
+  Existing single-video ownership and background/navigation pause remain in place.
+- Replace the obsolete welcome collage/8-second zoom with the supplied fitted
+  Captro lockup and shared white/dark canvas. Static launch background matches.
+  Native sign-in, consent, guest, email, legal and error actions remain available.
+  No new launch wait or animation was added. The existing root startup coordinator
+  and essential concurrent initialization remain unchanged.
+- No Instruments trace is available to attribute the user's Home hitch to this
+  derived-data work. The patch removes observable source-level repeated work;
+  it does not establish a device frame-rate improvement.
+
+PASS 3 - CHAT / SHARED PRESENTATION
+- Lifecycle/URL cancellation is no longer classified as reconnect failure.
+- Persistent errors need >=2 failures spanning >=8 seconds before header status.
+  The existing subtitle line holds the status/Retry, preserving the message frame.
+  No extra reconnect row or red transport banner is inserted above the composer.
+- API polling backs off (bounded at 60 seconds), even if the socket looks connected.
+  Initial socket join failures retry a bounded five times; existing authorized
+  cursor polling remains the fallback. Reconnect never authorizes access itself.
+- Equal message snapshots no longer rewrite the list/disk cache or restart the same
+  media prefetch. Prefetch is capped by the existing helper and obsolete work cancels.
+- Direct/profile/inbox routes reuse the same scoped chat presentation. Drafts and
+  viewport survive ordinary navigation/reconnect. Initial chat keeps native bottom
+  anchoring; saved visits restore their previous viewport. No keyboard autofocus.
+- Sending/Sent/Failed remain server-acknowledgment driven. Failed retry retains the
+  existing client request ID. A stale Retry control cannot resend an acknowledged
+  row. Existing server idempotency remains unchanged.
+- Shared adaptive surfaces already cover Tea/Home/inbox/chat/profile/Scan/settings;
+  this pass reuses them for welcome and errors. No active Coming soon sections were
+  found in the reviewed screens. DEBUG/sample screens remain isolated, not deleted.
+
+CHANGED FILE MAP (relative to repository)
+ios_native/MIRA/Sources/MIRANative/Services:
+  CaptroTeaConversationStore.swift, CaptroTeaDetailStore.swift, CaptroTeaClubStore.swift
+  CaptroPresentationModels.swift (new), CaptroRefreshState.swift (new)
+  MIRAChatRealtime.swift, MIRAChatLocalStore.swift, MIRAAPIClient.swift
+Screens: CaptroTeaConversationsView.swift, CaptroTeaView.swift,
+  ConversationNativeView.swift, ProfileChatVerificationStudio.swift, MainFeedView.swift,
+  CaptroWelcomeView.swift, AuthNativeView.swift (Apple button appearance only)
+App/MIRANativeRootView.swift: clear presentation stores on account transition.
+Components/CaptroFeedViewport.swift: read saved-anchor state; optional initial anchor
+  for chat. Existing Home calls retain their prior behavior.
+Design/MIRATheme.swift; AppTarget/LaunchScreen.storyboard and launch color asset.
+Tests: CaptroScreenLoadingTests, CaptroTeaConversationTests, CaptroTeaClubTests,
+  CaptroFeedStabilityTests, CaptroWelcomeTests, LayoutUITests/WelcomeTests;
+  backend Home wiring tests/helper. Welcome UI checks retain real action-frame,
+  legal/guest/consent tests and now check white/dark canvas pixels instead of paper.
+Host checks: scripts/native/check-refresh-policy.swift and check-tea-model.swift.
+CI: native-polish-validation.yml adds compile_only mode; no signing or deployment.
+
+VERIFICATION
+- Before: npm test (backend-cf): 432 passed / 0 failed / 0 skipped.
+- After: npm test (backend-cf): 433 passed / 0 failed / 0 skipped.
+  Latest saved log: %TEMP%/captro-polish-final-tests.txt, 29.75 seconds.
+- Two obsolete source-text assertions failed immediately after moving Home filtering
+  out of View.body. Replaced with full source-wiring checks, plus a mutation test:
+  removing filtering or bypassing the filtered renderer fails. No test was skipped.
+- Targeted command: node --test tests/captro_home_presentation_wiring.test.mjs
+  tests/captro_media_post_retirement.test.mjs tests/captro_stamp_feed_guard.test.mjs
+  Result: 28 passed / 0 failed / 0 skipped.
+- Ten executable Swift reconnect-policy checks passed. Injecting the actual
+  cancellation-classification regression makes the harness fail as expected.
+- Ten executable checks against the production Tea conversation model passed with
+  isolated host network/viewport adapters. They cover immediate seed content,
+  coalescing, offline reply recovery, fresh reopen, draft reuse, uncertain send
+  identity, account switching and denial. These are model checks, NOT UI tests.
+- The same Tea model harness compiled against baseline 264a8b6 fails at:
+  "Fresh post retries missing replies on reopen". The repaired source passes.
+- Native XCTest regressions added for canceled chat reads, stale Retry buttons,
+  shared drafts/viewports, visitor account isolation, fresh replies, nonmember club
+  reuse, Home derived state/offline refresh, and white-welcome logo proportions.
+  Native test execution remains pending; iPhone-targeted compilation is recorded
+  below. It does not prove layout, gesture or viewport behavior on a device.
+- Existing backend auth, permissions, commerce/Support, ticketing, business/pickup,
+  refund and payment gate tests are included in npm test. This is not a live Stripe,
+  Apple/Google provider, physical ticket scanner or real customer transaction test.
+
+EXACT NON-DEPLOY BUILD COMMANDS
+xcodegen generate --spec project.yml (ios_native/MIRA)
+xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug
+  -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/NativeCompile"
+  CODE_SIGNING_ALLOWED=NO build-for-testing
+xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Release
+  -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/NativeCompile"
+  CODE_SIGNING_ALLOWED=NO build
+Swift host commands and the baseline/mutation checks are recorded verbatim in
+.github/workflows/native-polish-validation.yml.
+Initial compile verification at 35df28d succeeded (Xcode 26.6, build 17F113):
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43802064346
+Both TEST BUILD SUCCEEDED and Release BUILD SUCCEEDED appear in artifact logs.
+Intermediate runs were superseded/canceled as the patch advanced.
+
+FINAL EXACT-SOURCE BUILD VERIFICATION
+Source: 1119522af270ea57c82e5422d252d5e311bd0550
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43804536544
+Result: SUCCESS. The device-compile job completed every step successfully.
+- Ten host Swift policy checks passed; the cancellation mutation failed as expected.
+- Ten real Tea model checks passed; the baseline failed the missing-replies check.
+- Unsigned generic iPhone Debug app and test targets: TEST BUILD SUCCEEDED.
+- Unsigned generic iPhone optimized Release app: BUILD SUCCEEDED.
+- Simulator job skipped deliberately. Native XCTest/UI tests compiled, NOT run.
+Downloaded artifact: %TEMP%/captro-native-compile-43804536544/
+  native-compile.log; native-release-compile.log; refresh-checks.log;
+  mutation-check.log; tea-model-checks.log; tea-baseline-regression.log.
+The expected FAIL lines in mutation/baseline logs demonstrate regression detection;
+they are not failures of the repaired source. No app archive, signing, installation,
+deployment or TestFlight upload was performed. A later report-only commit does not
+change the verified app source.
+
+DEVICE ACCEPTANCE STILL OPEN
+No connected physical iPhone, no Instruments capture, no app-hosted UI execution,
+no before/after screenshots or recordings collected during this pass. Simulator
+execution remains off at the user's earlier instruction. Supplied old screenshots
+are not presented as a current-checkout baseline. Installed iPhone build unknown.
+
+Metric                               Before / After
+Cold launch -> usable content        NOT MEASURED / NOT MEASURED
+Tea first / repeat-open milliseconds  NOT MEASURED / NOT MEASURED
+Home scroll hitches / peak memory     NOT MEASURED / NOT MEASURED
+Chat send / reconnect latency         NOT MEASURED / NOT MEASURED
+
+On the same physical iPhone, iOS, signed Release build and network, capture baseline
+264a8b6 and the repair revision: cold/warm launch; Tea first/repeat/rapid item switch,
+back/link return, profile/tab return; Home flicks/diagonal carousels/Details return;
+Chat sends, keyboard, long draft and scrolled history through slow Wi-Fi and an
+actual disconnect/reconnect. Check large text, small screen, VoiceOver, light/dark,
+image retry, one-player audio and background return. Record Instruments launch,
+time profiler/hitches and memory plus actual device/build/network. Use existing
+isolated sign-in/payment/ticket/pickup flows; no real charges or access changes.
+
+Untouched: backend runtime/database/schema/production flags, authentication logic,
+account authorization, financial routing/Support rules, ticketing, pickup, live-only
+camera, native bottom navigation, Home post geometry/crop/carousel and media pipeline.
+No deployment, TestFlight upload, signing changes or live payment activation.
+
+Build warnings observed in the initial verification (not introduced by this pass):
+existing camera/navigation deprecations, Swift 6 actor-isolation migration warnings,
+and unassigned legacy AppIcon/CaptroLaunchLogo asset children. These are not build
+failures under the current Swift language setting; they remain separate cleanup.
