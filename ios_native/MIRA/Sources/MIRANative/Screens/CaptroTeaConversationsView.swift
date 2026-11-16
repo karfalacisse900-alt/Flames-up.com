@@ -328,7 +328,10 @@ struct TeaConversationTime: View {
           Spacer(minLength: 0)
           CaptroTeaHeading()
           Spacer(minLength: 0)
-          Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+          if model.post?.isAuthor == true, model.valid {
+            Button { editing = true } label: { Image(systemName: "pencil").frame(width: 44, height: 44) }
+              .buttonStyle(.plain).accessibilityLabel("Edit Tea post").accessibilityIdentifier("tea.conversation.edit")
+          } else { Color.clear.frame(width: 44, height: 44).accessibilityHidden(true) }
         }.padding(.horizontal, 8).padding(.vertical, 4).background(MIRATheme.Color.appBackground)
           .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
       }
@@ -398,10 +401,7 @@ struct TeaConversationTime: View {
         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
       }.buttonStyle(.plain).accessibilityLabel("Open profile for " + post.author.name)
         .accessibilityIdentifier("tea.author.profile")
-      if post.isAuthor {
-        Button { editing = true } label: { Image(systemName: "pencil").frame(width: 44, height: 44) }
-          .accessibilityLabel("Edit Tea post").accessibilityIdentifier("tea.conversation.edit")
-      } else {
+      if !post.isAuthor {
         Button {
           if viewerID == nil { signIn() } else { Task { await model.followAuthor() } }
         } label: {

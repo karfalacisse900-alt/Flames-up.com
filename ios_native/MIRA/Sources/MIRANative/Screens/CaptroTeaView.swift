@@ -339,11 +339,25 @@ enum CaptroTeaPalette: String {
     path.path = "/tea"
     if !params.isEmpty { path.queryItems = params }
     do {
-      let result: CaptroTeaPage = try await api.get(path.string ?? "/tea")
+      var result: CaptroTeaPage = try await api.getFresh(path.string ?? "/tea")
+      var refreshed = result.items
+      var visited = Set<String>()
+      // Refresh the loaded range atomically. Replacing a paged list with only
+      // page one clamps UIKit's offset before the remaining pages arrive.
+      while reset, refreshed.count < entries.count, let next = result.nextCursor {
+        guard owner == api.presentationScope, requestID == token, queryKey == expectedQuery else { return }
+        try Task.checkCancellation()
+        guard visited.insert(next).inserted, visited.count <= 16 else { throw MIRAAPIError.decodingFailed }
+        var nextPath = URLComponents(); nextPath.path = "/tea"
+        nextPath.queryItems = [URLQueryItem(name: "cursor", value: next)]
+        if !city.isEmpty { nextPath.queryItems?.append(URLQueryItem(name: "city", value: city)) }
+        result = try await api.getFresh(nextPath.string ?? "/tea")
+        refreshed += result.items
+      }
       try Task.checkCancellation()
       guard owner == api.presentationScope, requestID == token, queryKey == expectedQuery else { return }
       var seen = Set(reset ? [] : entries.map(\.id))
-      let unique = result.items.filter { seen.insert($0.id).inserted }
+      let unique = refreshed.filter { seen.insert($0.id).inserted }
       entries = reset ? unique : entries + unique
       cursor = result.nextCursor
       didLoad = true
