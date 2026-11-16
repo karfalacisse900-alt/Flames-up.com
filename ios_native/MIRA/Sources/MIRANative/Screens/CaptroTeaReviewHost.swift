@@ -143,6 +143,10 @@ private final class TeaReviewProtocol: URLProtocol {
         }
       if shouldFail {
         status = 503
+      } else if URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "city" }) == true {
+        // Reproduce live eligible clubs with no matching canonical city. A
+        // profile location must not secretly become a discovery filter.
+        payload = ["items": [] as [String]]
       } else if URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "cursor" }) == true {
         payload = ["items": (21...26).map(entry)]
       } else {

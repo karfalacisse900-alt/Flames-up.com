@@ -2,6 +2,22 @@ import XCTest
 import UIKit
 
 final class HomeFullBleedTests: XCTestCase {
+  func testHomeOmitsTextOnlyListingsAndKeepsMediaFrame() {
+    let app = launch(["--captro-home-media-only"])
+    let photo = app.otherElements["home.post.page.full-bleed-portrait-0"]
+    XCTAssertTrue(photo.waitForExistence(timeout: 15))
+    for type in ["general", "club", "event", "meetup", "deal"] {
+      XCTAssertFalse(app.otherElements["home.post.page.text-\(type)"].exists)
+      XCTAssertFalse(app.staticTexts["Text-only \(type)"].exists)
+    }
+    let media = photo.otherElements["home.post.media"].firstMatch
+    XCTAssertTrue(media.exists)
+    XCTAssertEqual(media.frame.minX, 0, accuracy: 1)
+    XCTAssertEqual(media.frame.width, app.frame.width, accuracy: 1)
+    XCTAssertEqual(media.frame.minY, app.scrollViews["home.post.stream"].frame.minY, accuracy: 1)
+    capture(app, "home-media-without-text-listings")
+  }
+
   /// Captures native offset/bounds changes *during* each gesture, not only the
   /// resting before/after frames that previously missed transient movement.
   func testSameCarouselHomeAndDetailsGestureTrace() {
@@ -273,13 +289,14 @@ final class HomeFullBleedTests: XCTestCase {
     XCTAssertEqual(media.frame.height, before.height, accuracy: 1)
     XCTAssertTrue(page.staticTexts["Photo 2 of 4"].exists)
     XCTAssertFalse(app.staticTexts["For You"].exists)
-    let menu = app.buttons["home.feed.selector"]
+    let menu = app.buttons["home.tea"]
     let create = app.buttons["Create post"]
     XCTAssertEqual(menu.frame.width, 44, accuracy: 1)
     XCTAssertEqual(create.frame.width, 44, accuracy: 1)
     XCTAssertEqual(menu.frame.midY, create.frame.midY, accuracy: 1)
     capture(app, "stable-after-two-minute-background-updates")
-    menu.tap()
+    menu.press(forDuration: 1)
+    app.buttons["Feed options"].tap()
     XCTAssertTrue(app.staticTexts["For You"].waitForExistence(timeout: 3) || app.buttons["For You"].exists)
     capture(app, "header-feed-choice-menu")
   }

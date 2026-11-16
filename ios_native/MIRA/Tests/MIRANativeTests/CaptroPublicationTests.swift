@@ -267,7 +267,7 @@ import Combine
     XCTAssertNotNil(model.paginationError)
     XCTAssertFalse(model.isLoadingMore)
     await model.loadMoreIfNeeded(after: old.last!)
-    await model.loadPastLegacyTextPage()
+    await model.loadPastNonMediaPage()
     XCTAssertEqual(offsets, [0, 12], "Visibility callbacks cannot repeatedly retry or silently reset an expired session")
     await model.retryPagination()
     XCTAssertEqual(offsets, [0, 12, 0])

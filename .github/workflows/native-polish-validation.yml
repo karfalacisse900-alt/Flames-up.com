@@ -95,6 +95,7 @@ jobs:
       - name: Smaller iPhone screens and interactions
         env:
           CONVERSATIONS: ${{ inputs.conversations }}
+          TEST_FILTER: ${{ inputs.test_filter }}
         if: ${{ !cancelled() && !inputs.baseline && !inputs.small && !inputs.conversations }}
         working-directory: ios_native/MIRA
         run: |
@@ -103,6 +104,11 @@ jobs:
           device=$(xcrun simctl create 'Captro polish small' com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini "$runtime")
           small_tests=(-only-testing:CaptroLayoutUITests/NativePolishTests -only-testing:CaptroLayoutUITests/TeaTests)
           if [ "$CONVERSATIONS" = true ]; then small_tests=(-only-testing:CaptroLayoutUITests/TeaConversationTests -only-testing:CaptroLayoutUITests/TeaClubTests); fi
+          if [ -n "$TEST_FILTER" ]; then
+            small_tests=()
+            IFS=',' read -ra filters <<< "$TEST_FILTER"
+            for filter in "${filters[@]}"; do small_tests+=("-only-testing:$filter"); done
+          fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" -resultBundlePath "$RUNNER_TEMP/SmallPolish.xcresult" \

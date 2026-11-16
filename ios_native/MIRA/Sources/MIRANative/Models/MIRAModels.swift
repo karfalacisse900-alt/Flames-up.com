@@ -214,6 +214,10 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     uniqueMediaURLs(from: images?.values ?? [], fallback: image)
   }
 
+  /// Home is media-only, including structured posts. This checks attachments,
+  /// never download success: failed images keep their existing frame and Retry.
+  public var hasHomeMedia: Bool { !feedMediaURLs.isEmpty }
+
   public var feedMediaURLs: [String] {
     let optimized = feedMediaUrls?.values ?? []
     let originals = mediaURLs

@@ -7,6 +7,45 @@ import SwiftUI
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  func testHomeRequiresMediaForEveryPostTypeWithoutHidingFailedAttachments() throws {
+    for type in ["general", "text", "note", "club", "event", "meetup", "deal", "place", "document"] {
+      func decode(_ media: [String]) throws -> MIRAPost {
+        try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
+          ["id": type, "postType": type, "caption": "Keep this writing in Details", "images": media]))
+      }
+      let text = try decode([])
+      XCTAssertFalse(text.hasHomeMedia, type)
+      XCTAssertFalse(try decode(["  "]).hasHomeMedia, type)
+      let photo = try decode(["https://example.invalid/unavailable.jpg"])
+      XCTAssertTrue(photo.hasHomeMedia, "A failed image remains eligible for the existing Retry UI")
+      XCTAssertEqual(photo.caption, text.caption)
+      XCTAssertTrue(try decode(["https://example.invalid/movie.mp4"]).hasHomeMedia)
+    }
+    let optimizedOnly = try JSONDecoder().decode(MIRAPost.self, from: Data(
+      #"{"id":"optimized","postType":"club","feedMediaUrls":["https://example.invalid/feed.jpg"]}"#.utf8))
+    XCTAssertTrue(optimizedOnly.hasHomeMedia)
+  }
+
+  func testStructuredTextPageAdvancesToMediaWithoutChangingStoredRecords() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.testAutomaticPagination = false
+    model.configureGuestMode(true)
+    let types = ["club", "event", "meetup", "deal"]
+    let text = try (0..<12).map { index in
+      try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
+        ["id": "listing-\(index)", "postType": types[index % types.count], "title": "Text listing"]))
+    }
+    let media = try [post("media-after-listings")]
+    var offsets: [Int] = []
+    model.testPageLoader = { _, offset in offsets.append(offset); return offset == 0 ? text : media }
+    await model.load()
+    XCTAssertTrue(model.posts.filter(\.hasHomeMedia).isEmpty)
+    await model.loadPastNonMediaPage()
+    XCTAssertEqual(offsets, [0, 12])
+    XCTAssertEqual(model.posts.filter(\.hasHomeMedia).map(\.id), ["media-after-listings"])
+    XCTAssertEqual(model.posts.count, 13, "Presentation filtering must not delete listings")
+  }
+
   func testHomeVideoPrewarmPlanPrioritizesSelectedStableMediaAndStaysBounded() throws {
     func mediaPost(_ id: String, _ urls: [String]) throws -> MIRAPost {
       let record: [String: Any] = ["id": id, "images": urls]
@@ -464,7 +503,7 @@ final class CaptroFeedStabilityTests: XCTestCase {
     }
     await model.load()
     XCTAssertTrue(model.posts.allSatisfy(\.isLegacyOrdinaryTextPost))
-    await model.loadPastLegacyTextPage()
+    await model.loadPastNonMediaPage()
     XCTAssertEqual(offsets, [0, 12], "Offset must include hidden raw records")
     XCTAssertEqual(model.posts.filter { !$0.isLegacyOrdinaryTextPost }.map(\.id), ["photo-a", "photo-b"])
     XCTAssertEqual(model.posts.count, 14, "Home presentation must not delete legacy content")

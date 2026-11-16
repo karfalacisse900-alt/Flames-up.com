@@ -5,8 +5,8 @@ final class TeaConversationTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-design-quality-test", "--captro-tea-review", "--tea-request-counts"] + extra
     app.launch()
-    XCTAssertTrue(app.buttons["home.feed.selector"].waitForExistence(timeout: 20))
-    app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
+    XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 20))
+    app.buttons["home.tea"].tap()
     XCTAssertTrue(row(101, app).waitForExistence(timeout: 10))
     XCTAssertTrue(app.navigationBars["Tea"].staticTexts["Tea"].waitForExistence(timeout: 5))
     return app

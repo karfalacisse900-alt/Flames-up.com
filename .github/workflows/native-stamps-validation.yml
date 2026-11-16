@@ -2,6 +2,10 @@ name: Validate Captro Stamps
 on:
   workflow_dispatch:
     inputs:
+      home_tea_review:
+        description: Verify direct Tea entry, unfiltered clubs, Home media-only presentation and preserved scrolling
+        type: boolean
+        default: false
       tea_conversations_review:
         description: Verify Tea Conversations and preserved listings on both simulator sizes, with exact-source attestation
         type: boolean
@@ -102,6 +106,11 @@ on:
 permissions:
   contents: read
 jobs:
+  home-tea:
+    if: ${{ inputs.home_tea_review }}
+    uses: ./.github/workflows/native-polish-validation.yml
+    with:
+      test_filter: CaptroStampTests/CaptroFeedStabilityTests,CaptroStampTests/CaptroPublicationTests,CaptroLayoutUITests/TeaTests,CaptroLayoutUITests/EditorialMenuTests/testHomeFeedSelectorStaysInHeaderAndChangesSelection,CaptroLayoutUITests/HomeFullBleedTests/testHomeOmitsTextOnlyListingsAndKeepsMediaFrame,CaptroLayoutUITests/HomeFullBleedTests/testMixedCarouselKeepsOneFeedFrame,CaptroLayoutUITests/HomeFullBleedTests/testLazyFeedTabReturnDoesNotIssueScrollCommands,CaptroLayoutUITests/MediaRecoveryTests
   tea-conversations:
     if: ${{ inputs.tea_conversations_review }}
     uses: ./.github/workflows/native-polish-validation.yml
@@ -175,7 +184,7 @@ jobs:
             ${{ runner.temp }}/support-review.log
             ${{ runner.temp }}/Support.xcresult
   stamps:
-    if: ${{ inputs.cleanup_user_id == '' && !inputs.tea_conversations_review && !inputs.creator_support_review && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review && !inputs.release_scroll_profile }}
+    if: ${{ inputs.cleanup_user_id == '' && !inputs.home_tea_review && !inputs.tea_conversations_review && !inputs.creator_support_review && !inputs.camera_carousel && !inputs.vertical_feed && inputs.profile_archive_run == '' && !inputs.welcome_review && !inputs.release_scroll_profile }}
     runs-on: macos-26
     environment: captro-payments-live
     timeout-minutes: 65

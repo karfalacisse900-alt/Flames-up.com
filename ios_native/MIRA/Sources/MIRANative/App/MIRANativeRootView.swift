@@ -418,7 +418,6 @@ public struct MIRANativeRootView: View {
           isTabActive: selectedTab == .main,
           isGuest: authSession.isGuest,
           teaViewerID: authSession.user?.id,
-          teaCity: authSession.user?.city,
           signInForTea: leaveGuestModeForSignIn
         )
       }

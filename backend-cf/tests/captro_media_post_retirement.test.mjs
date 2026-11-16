@@ -25,7 +25,7 @@ test('poll presentation is removed without touching server-authorized membership
 });
 test('legacy text has no Home card or empty Profile tile; stored records remain accessible in an archive', () => {
   const feed = read('Screens/MainFeedView.swift');
-  assert.match(feed, /model\.posts\.filter \{ !\$0\.isLegacyOrdinaryTextPost \}/);
+  assert.match(feed, /model\.posts\.filter \{ \$0\.hasHomeMedia \}/);
   assert.match(feed, /pageOffsets\[section\] = skip \+ loaded\.count/);
   assert.match(feed, /isLastVisible/);
   const profile = read('Screens/ProfileChatVerificationStudio.swift');

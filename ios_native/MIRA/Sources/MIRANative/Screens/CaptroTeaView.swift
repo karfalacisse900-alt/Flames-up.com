@@ -80,7 +80,6 @@ enum CaptroTeaPalette: String {
 struct CaptroTeaView: View {
   let api: MIRAAPIClient
   let viewerID: String?
-  let city: String?
   let signIn: () -> Void
   let close: () -> Void
 
@@ -216,13 +215,8 @@ struct CaptroTeaView: View {
     defer { loading = false }
     var params: [URLQueryItem] = []
     if !reset, let cursor { params.append(URLQueryItem(name: "cursor", value: cursor)) }
-    if let city = city?.split(separator: ",").first?.trimmingCharacters(in: .whitespacesAndNewlines),
-       !city.isEmpty, city.count <= 80,
-       city.unicodeScalars.allSatisfy({
-         CharacterSet.alphanumerics.union(.nonBaseCharacters).union(CharacterSet(charactersIn: " .'-’")).contains($0)
-       }) {
-      params.append(URLQueryItem(name: "city", value: city))
-    }
+    // This list has no location selector: do not silently restrict discovery
+    // to a profile-city string (legacy clubs may have no city at all).
     var path = URLComponents()
     path.path = "/tea"
     if !params.isEmpty { path.queryItems = params }

@@ -302,14 +302,14 @@ final class MainFeedModel: ObservableObject {
     guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
     let ratioTriggerIndex = max(0, Int((Double(max(posts.count - 1, 0)) * paginationTriggerRatio).rounded(.down)))
     let isNearEnd = posts.suffix(paginationTriggerWindow).contains(where: { $0.id == post.id })
-    let isLastVisible = posts.last(where: { !$0.isLegacyOrdinaryTextPost })?.id == post.id
+    let isLastVisible = posts.last(where: { $0.hasHomeMedia })?.id == post.id
     guard index >= ratioTriggerIndex || isNearEnd || isLastVisible else { return }
     await loadNextPage(reason: "pager")
   }
 
-  func loadPastLegacyTextPage() async {
+  func loadPastNonMediaPage() async {
     // Offset advances using raw server records, never the filtered UI count.
-    await loadNextPage(reason: "legacy_text_page")
+    await loadNextPage(reason: "non_media_page")
   }
 
   func retryPagination() async {
@@ -395,7 +395,7 @@ final class MainFeedModel: ObservableObject {
             receipt.accountScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       // The scoped API is the authority for privacy, moderation and rank/scope
       // eligibility. A successful POST alone never bypasses those rules.
-      let eligible = fresh.first { $0.id == receipt.post.id && !$0.isLegacyOrdinaryTextPost }
+      let eligible = fresh.first { $0.id == receipt.post.id && $0.hasHomeMedia }
       eligiblePublishedPost = eligible?.bindingWritingIdentities()
       publicationNotice = CaptroPublicationNotice(receipt: receipt,
         state: eligible == nil ? .outsideFeed : .available)
@@ -1112,7 +1112,6 @@ public struct MainFeedView: View {
   private let isTabActive: Bool
   private let isGuest: Bool
   private let teaViewerID: String?
-  private let teaCity: String?
   private let signInForTea: (() -> Void)?
   @EnvironmentObject private var localization: MIRALocalization
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1143,7 +1142,6 @@ public struct MainFeedView: View {
     self.isTabActive = true
     self.isGuest = isGuest
     self.teaViewerID = nil
-    self.teaCity = nil
     self.signInForTea = nil
   }
 
@@ -1153,14 +1151,12 @@ public struct MainFeedView: View {
     isTabActive: Bool = true,
     isGuest: Bool = false,
     teaViewerID: String? = nil,
-    teaCity: String? = nil,
     signInForTea: (() -> Void)? = nil
   ) {
     _model = StateObject(wrappedValue: model)
     self.isTabActive = isTabActive
     self.isGuest = isGuest
     self.teaViewerID = teaViewerID
-    self.teaCity = teaCity
     self.signInForTea = signInForTea
   }
 
@@ -1349,7 +1345,6 @@ public struct MainFeedView: View {
         CaptroTeaView(
           api: model.api,
           viewerID: teaViewerID,
-          city: teaCity,
           signIn: {
             showsTea = false
             signInForTea?()
@@ -1428,25 +1423,25 @@ public struct MainFeedView: View {
   private var homeTopBar: some View {
     HStack(spacing: 0) {
       HStack(spacing: 8) {
-        Button { isFeedSelectorPresented = true } label: {
-          Image(systemName: "line.3.horizontal")
+        Button { showsTea = true } label: {
+          Image(systemName: "cup.and.saucer")
           .font(.system(size: 20, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .frame(width: 44, height: 44)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Feed selection, \(selectedFeedSection.title)")
-        .accessibilityIdentifier("home.feed.selector")
+        .accessibilityLabel("Tea")
+        .accessibilityValue(selectedFeedSection.title)
+        .accessibilityHint("Opens Tea. Feed options are available in the actions menu.")
+        .accessibilityIdentifier("home.tea")
+        .accessibilityAction(named: Text("Feed options")) { isFeedSelectorPresented = true }
+        .contextMenu {
+          Button("Feed options") { isFeedSelectorPresented = true }
+            .accessibilityIdentifier("home.feed.options")
+        }
         .popover(isPresented: $isFeedSelectorPresented, attachmentAnchor: .point(.bottomLeading), arrowEdge: .top) {
           CaptroEditorialMenu(title: "Menu") {
-            if signInForTea != nil {
-              CaptroEditorialMenuRow(title: "Tea", disclosure: true) {
-                isFeedSelectorPresented = false
-                showsTea = true
-              }
-              .accessibilityIdentifier("home.menu.tea")
-            }
             ForEach(MainFeedSection.allCases, id: \.self) { section in
               CaptroEditorialMenuRow(title: section.title, selected: selectedFeedSection == section) {
                 isFeedSelectorPresented = false
@@ -1618,7 +1613,7 @@ public struct MainFeedView: View {
       .frame(width: size.width, height: size.height)
       .task(id: model.posts.last?.id) {
         guard model.canLoadMore else { return }
-        await model.loadPastLegacyTextPage()
+        await model.loadPastNonMediaPage()
       }
     } else {
       verticalPostStream(width: size.width, bottomInset: bottomInset)
@@ -1703,7 +1698,7 @@ public struct MainFeedView: View {
   }
 
   private var displayedPosts: [MIRAPost] {
-    model.posts.filter { !$0.isLegacyOrdinaryTextPost }
+    model.posts.filter { $0.hasHomeMedia }
   }
 
   private var currentPostIndex: Int {

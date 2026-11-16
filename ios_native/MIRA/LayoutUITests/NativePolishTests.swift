@@ -20,8 +20,8 @@ final class NativePolishTests: XCTestCase {
       capture("home-\(suffix)", app); app.terminate()
 
       app = launch(["--captro-design-quality-test", "--captro-tea-review"], dark: dark)
-      XCTAssertTrue(app.buttons["home.feed.selector"].waitForExistence(timeout: 20))
-      app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
+      XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 20))
+      app.buttons["home.tea"].tap()
       app.buttons["Clubs & Events"].tap()
       let row = app.buttons["tea.row.activity:00000000-0000-4000-8000-000000000003"]
       XCTAssertTrue(row.waitForExistence(timeout: 10)); capture("tea-list-\(suffix)", app); row.tap()

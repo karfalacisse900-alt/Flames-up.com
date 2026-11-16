@@ -5,8 +5,8 @@ final class TeaClubTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-design-quality-test", "--captro-tea-review", owner ? "--tea-club-owner" : "--tea-club-member"] + (large ? ["--captro-quality-large-text"] : [])
     app.launch()
-    XCTAssertTrue(app.buttons["home.feed.selector"].waitForExistence(timeout: 20))
-    app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
+    XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 20))
+    app.buttons["home.tea"].tap()
     XCTAssertTrue(app.segmentedControls["tea.sections"].waitForExistence(timeout: 8))
     app.segmentedControls["tea.sections"].buttons["Clubs & Events"].tap()
     let row = app.buttons["tea.row.activity:00000000-0000-4000-8000-000000000001"]

@@ -43,8 +43,9 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
   assert.doesNotMatch(mediaPager, /CaptroGuideOverlay|CaptroCapturedStamp/);
 });
 
-test('Home hides ordinary legacy text but retains media and structured posts without deleting data', () => {
+test('Home filters media presentation while retaining stored structured posts and raw pagination', () => {
   assert.doesNotMatch(mainFeed, /photoFeedPosts/);
+  assert.match(mainFeed, /model\.posts\.filter \{ \$0\.hasHomeMedia \}/);
   assert.match(mainFeed, /startsNewOrder \? await sortedByNativeScore\(loaded\) : loaded/);
   assert.match(mainFeed, /CaptroFeedReconciliation\.background\(existing: posts, fresh: loaded\)/);
   assert.match(mainFeed, /CaptroFeedFormatMixer\.mix\(rankedPosts\)/);

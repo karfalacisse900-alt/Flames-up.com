@@ -526,7 +526,7 @@ private enum CaptroHomeFeedVisualFixtures {
       if ProcessInfo.processInfo.arguments.contains("--captro-stamp-budget-test") {
         return budgetPosts(mediaURL: mediaURL, size: size)
       }
-      return try (0..<(pagerFixture ? 3 : 1)).map { index in
+      let photos = try (0..<(pagerFixture ? 3 : 1)).map { index in
         let json: [String: Any] = [
           "id": "full-bleed-\(name)-\(index)", "userFullName": "Captro", "userUsername": "captro",
           "title": pagerFixture ? "Pager post \(index + 1)" : "Full-width media",
@@ -538,6 +538,14 @@ private enum CaptroHomeFeedVisualFixtures {
         ]
         return try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject: json))
       }
+      if ProcessInfo.processInfo.arguments.contains("--captro-home-media-only") {
+        let text = try ["general", "club", "event", "meetup", "deal"].map { type in
+          try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
+            ["id": "text-\(type)", "postType": type, "title": "Text-only \(type)", "caption": "Existing listing without media"]))
+        }
+        return text + photos
+      }
+      return photos
     } catch {
       assertionFailure("Full-bleed visual fixture failed: \(error)")
       return []

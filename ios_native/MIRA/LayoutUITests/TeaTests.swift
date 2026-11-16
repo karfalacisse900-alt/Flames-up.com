@@ -5,13 +5,10 @@ final class TeaTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-design-quality-test", "--captro-tea-review"] + extra
     app.launch()
-    let menu = app.buttons["home.feed.selector"]
-    XCTAssertTrue(menu.waitForExistence(timeout: 20), app.debugDescription)
+    let tea = app.buttons["home.tea"]
+    XCTAssertTrue(tea.waitForExistence(timeout: 20), app.debugDescription)
     XCTAssertTrue(app.buttons["home.create.post"].exists)
     XCTAssertFalse(app.tabBars.buttons["Tea"].exists)
-    menu.tap()
-    let tea = app.buttons["home.menu.tea"]
-    XCTAssertTrue(tea.waitForExistence(timeout: 8), app.debugDescription)
     tea.tap()
     selectListings(app)
     return app
@@ -34,6 +31,22 @@ final class TeaTests: XCTestCase {
     return app.buttons["tea.row.\(source):\(id)"]
   }
 
+  func testProfileCityDoesNotHideClubsAndHomeEntryNeedsOneTap() {
+    let app = launch()
+    XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 10),
+      "The signed-in fixture has a city; eligible clubs without a matching city must still appear")
+    XCTAssertTrue(app.buttons["Conversations"].exists)
+    XCTAssertTrue(app.buttons["Clubs & Events"].isSelected)
+    XCTAssertFalse(app.buttons["home.menu.tea"].exists)
+    attach("tea-clubs-with-profile-city", from: app)
+    app.buttons["tea.back.home"].tap()
+    let tea = app.buttons["home.tea"]
+    XCTAssertTrue(tea.waitForExistence(timeout: 8))
+    XCTAssertEqual(tea.frame.width, 44, accuracy: 1)
+    XCTAssertEqual(tea.frame.midY, app.buttons["home.create.post"].frame.midY, accuracy: 1)
+    attach("home-direct-tea-button", from: app)
+  }
+
   private func tapRow(_ number: Int, source: String = "activity", in app: XCUIApplication) {
     let target = row(number, source: source, in: app)
     XCTAssertTrue(target.waitForExistence(timeout: 10), app.debugDescription)
@@ -45,7 +58,7 @@ final class TeaTests: XCTestCase {
     nav.buttons.firstMatch.tap()
   }
 
-  func testHomeMenuOpensIndividualEventAndExistingCheckout() {
+  func testHomeTeaButtonOpensIndividualEventAndExistingCheckout() {
     let app = launch()
     XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 10))
     attach("tea-list", from: app)
@@ -153,7 +166,7 @@ final class TeaTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Photo Walk"].exists)
     XCTAssertEqual(app.buttons["tea.primary-action"].label, "Buy Ticket")
     back(app); app.buttons["tea.back.home"].tap()
-    app.buttons["home.feed.selector"].tap(); app.buttons["home.menu.tea"].tap()
+    app.buttons["home.tea"].tap()
     selectListings(app)
     tapRow(3, in: app)
     XCTAssertTrue(app.buttons["tea.primary-action"].waitForExistence(timeout: 3))

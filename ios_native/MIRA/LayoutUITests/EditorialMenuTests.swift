@@ -5,19 +5,20 @@ final class EditorialMenuTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-home-feed-visual-test"]
     app.launch()
-    let selector = app.buttons["home.feed.selector"]
+    let selector = app.buttons["home.tea"]
     XCTAssertTrue(selector.waitForExistence(timeout: 15))
     let header = app.otherElements["home.fixed.controls"]
     let storyRail = app.scrollViews["home.story.rail"]
     let beforeRailX = storyRail.frame.minX
-    selector.tap()
+    selector.press(forDuration: 1)
+    app.buttons["Feed options"].tap()
     for name in ["Around", "Following", "For You"] {
       XCTAssertTrue(app.buttons[name].waitForExistence(timeout: 5))
     }
     XCTAssertFalse(app.buttons["NYC"].exists)
     capture(app, "editorial-home-feed-selector")
     app.buttons["Around"].tap()
-    XCTAssertTrue(selector.label.contains("Around"))
+    XCTAssertTrue((selector.value as? String) == "Around")
     XCTAssertEqual(storyRail.frame.minX, beforeRailX, accuracy: 1)
     XCTAssertTrue(header.exists)
   }
