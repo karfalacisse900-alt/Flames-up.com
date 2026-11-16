@@ -39,7 +39,9 @@ union all
 select 'table:'||v.id, coalesce(c.relrowsecurity
   and has_table_privilege('service_role',c.oid,'SELECT')
   and not has_table_privilege('anon',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
-  and not has_table_privilege('authenticated',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'),false)
+  and not has_table_privilege('authenticated',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+  and not has_any_column_privilege('anon',c.oid,'SELECT,INSERT,UPDATE,REFERENCES')
+  and not has_any_column_privilege('authenticated',c.oid,'SELECT,INSERT,UPDATE,REFERENCES'),false)
 from (values ${values(tables)}) v(id) left join pg_class c on c.oid=to_regclass('public.'||v.id)
 union all
 select 'function:'||v.id, coalesce(not p.prosecdef
@@ -51,7 +53,8 @@ union all
 select 'column:'||v.tab||'.'||v.col, exists(select 1 from information_schema.columns c where c.table_schema='public' and c.table_name=v.tab and c.column_name=v.col)
 from (values ${columns.map(([table, column]) => `('${table}','${column}')`).join(',')}) v(tab,col)
 union all
-select 'audit:immutable', coalesce(not has_table_privilege('service_role',to_regclass('public.app_professional_audit'),'UPDATE,DELETE,TRUNCATE'),false);`;
+select 'audit:immutable', coalesce(not has_table_privilege('service_role',to_regclass('public.app_professional_audit'),'UPDATE,DELETE,TRUNCATE')
+  and not has_any_column_privilege('service_role',to_regclass('public.app_professional_audit'),'UPDATE'),false);`;
 
 export function validateReleaseSchema(rows) {
   if (!Array.isArray(rows) || rows.length !== releaseCheckIDs.length)

@@ -44,8 +44,10 @@ test('catalog gate detects privilege, RLS, RPC and immutable-audit regressions',
   assert.equal(validateReleaseSchema(await read()), releaseCheckIDs.length);
   for (const [change, undo, failed] of [
     ['grant select on app_studio_sessions to authenticated', 'revoke select on app_studio_sessions from authenticated', 'table:app_studio_sessions'],
+    ['grant select(id) on app_studio_sessions to authenticated', 'revoke select(id) on app_studio_sessions from authenticated', 'table:app_studio_sessions'],
     ['alter table app_professional_roles disable row level security', 'alter table app_professional_roles enable row level security', 'table:app_professional_roles'],
     ['grant update on app_professional_audit to service_role', 'revoke update on app_professional_audit from service_role', 'audit:immutable'],
+    ['grant update(id) on app_professional_audit to service_role', 'revoke update(id) on app_professional_audit from service_role', 'audit:immutable'],
     ['grant execute on function captro_professional_active(text,text) to public', 'revoke execute on function captro_professional_active(text,text) from public', 'function:captro_professional_active(text,text)'],
   ]) {
     await db.exec(change);
