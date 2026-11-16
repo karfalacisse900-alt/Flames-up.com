@@ -606,7 +606,10 @@ public struct ConversationNativeView: View {
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(spacing: 5) {
-            if model.isLoading && model.messages.isEmpty {
+            if !model.valid {
+              MIRAEmptyState(title: "Conversation access changed", message: "Reopen this chat to check its current access.", systemImage: "lock")
+              Button("Back to chats") { dismiss() }.frame(minHeight: 44)
+            } else if model.isLoading && model.messages.isEmpty {
               chatSkeleton
             } else if model.messages.isEmpty, let error = model.errorMessage {
               MIRAEmptyState(title: "Couldn't load messages", message: error, systemImage: "wifi.exclamationmark")

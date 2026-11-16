@@ -1117,7 +1117,8 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func revalidateIfStale() async {
-    guard valid else { return }
+    guard presentationScope == api.presentationScope else { return }
+    if invalidated { await load(); return }
     let scope = api.presentationScope
     if scope != lastLoadScope {
       generation += 1; isLoading = false; isLoadingMore = false
@@ -1131,7 +1132,8 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func load() async {
-    guard valid, !isLoading else { return }
+    guard presentationScope == api.presentationScope, !isLoading else { return }
+    invalidated = false
     generation += 1
     let request = generation
     let owner = api.presentationScope

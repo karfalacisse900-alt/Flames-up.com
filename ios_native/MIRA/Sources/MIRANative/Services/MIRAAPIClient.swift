@@ -442,7 +442,7 @@ public final class MIRAAPIClient {
     if discardsPresentations { await presentations.invalidate() }
     if discardsConversations { await teaConversations.invalidate(); await teaClubs.invalidate() }
     if changesTea { await teaDetails.invalidate(discard: discardsTea) }
-      if changesTea || (method != "GET" && path == "/auth/me") { await presentations.invalidateProfileFreshness() }
+    if changesTea || (method != "GET" && path == "/auth/me") { await presentations.invalidateProfileFreshness() }
     let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
     let url = try makeURL(path)
     var request = URLRequest(url: url)

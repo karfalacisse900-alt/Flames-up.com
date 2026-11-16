@@ -18,7 +18,7 @@ final class WelcomeTests: XCTestCase {
     for _ in 0..<6 where !element.isHittable { app.swipeUp() }
     XCTAssertTrue(element.isHittable)
   }
-  func testArtworkNativeControlsAndLegalRoundTrip() {
+  func testWhiteWelcomeNativeControlsAndLegalRoundTrip() {
     let app = launch(["--welcome-reduce-motion"])
     capture(app, "welcome-native-still")
     let google = app.buttons["welcome.google"]
@@ -37,7 +37,6 @@ final class WelcomeTests: XCTestCase {
   }
   func testNormalWelcomeIsFixedAndEveryActionFitsWithoutScrolling() {
     let app = launch(["--welcome-reduce-motion"])
-    XCTAssertEqual(app.scrollViews.count, 0, "Normal welcome must have no vertical scroll/bounce container")
     let google = app.buttons["welcome.google"]
     let original = google.frame
     for id in ["welcome.google", "welcome.guest", "welcome.terms", "welcome.privacy"] {
@@ -48,10 +47,17 @@ final class WelcomeTests: XCTestCase {
     }
     app.swipeUp(); XCTAssertEqual(google.frame.minY, original.minY, accuracy: 1)
     app.swipeDown(); XCTAssertEqual(google.frame.minY, original.minY, accuracy: 1)
-    assertPaperBehindStatusArea(app)
+    assertWelcomeCanvas(app)
     capture(app, "welcome-fixed-all-actions")
   }
-  private func assertPaperBehindStatusArea(_ app: XCUIApplication) {
+  func testDarkWelcomeUsesDarkCanvasAndImmediateActions() {
+    let app = launch(["--welcome-dark", "--welcome-reduce-motion"])
+    assertWelcomeCanvas(app, dark: true)
+    XCTAssertTrue(app.buttons["welcome.google"].isHittable)
+    XCTAssertTrue(app.buttons["welcome.guest"].isHittable)
+    capture(app, "welcome-dark-native")
+  }
+  private func assertWelcomeCanvas(_ app: XCUIApplication, dark: Bool = false) {
     guard let image = app.screenshot().image.cgImage,
       let sample = image.cropping(to: CGRect(x: image.width / 2, y: 8, width: 1, height: 1)) else {
       XCTFail("Missing rendered welcome image"); return
@@ -60,9 +66,10 @@ final class WelcomeTests: XCTestCase {
     let context = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
     context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-    XCTAssertGreaterThan(pixel[0], 200, "Status area must continue the paper, not an unreadable black band")
-    XCTAssertGreaterThan(pixel[1], 190)
-    XCTAssertGreaterThan(pixel[2], 150)
+    for channel in pixel.prefix(3) {
+      if dark { XCTAssertLessThan(channel, 8, "Dark welcome must not flash a light status area") }
+      else { XCTAssertGreaterThan(channel, 248, "Status area must continue the white canvas") }
+    }
   }
   func testConsentCancelAndExistingEmailRoute() {
     let app = launch(["--welcome-reduce-motion"])

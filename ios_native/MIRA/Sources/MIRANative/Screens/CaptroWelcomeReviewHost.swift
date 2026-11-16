@@ -22,11 +22,12 @@ public struct CaptroWelcomeReviewHost: View {
     Group {
       if session.isGuest {
         VStack(spacing: 20) {
-          Text("Guest session — no authenticated account").accessibilityIdentifier("welcome.guest.confirmed")
+          Text("Guest session â€” no authenticated account").accessibilityIdentifier("welcome.guest.confirmed")
           Button("Back to welcome") { session.exitGuestMode() }
         }
       } else { AuthNativeView(session: session, api: api) }
     }
+    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--welcome-dark") ? .dark : .light)
     .defaultAppStorage(defaults)
     .environmentObject(MIRALocalization.shared)
     .environment(\.captroWelcomeReducedMotion, ProcessInfo.processInfo.arguments.contains("--welcome-reduce-motion") ? true : nil)

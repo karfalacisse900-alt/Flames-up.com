@@ -70,6 +70,7 @@ struct CaptroWelcomeView<AppleControl: View>: View {
         .frame(maxWidth: .infinity)
       }
       .scrollIndicators(.hidden)
+      .scrollBounceBehavior(.basedOnSize)
       .accessibilityIdentifier("welcome.accessibilityScroll")
     }
     .background(MIRATheme.Color.appBackground.ignoresSafeArea())
