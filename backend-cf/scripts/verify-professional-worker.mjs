@@ -16,18 +16,18 @@ export const professionalWorkerFiles = Object.freeze([
   'backend-cf/src/professional-accounts.ts', 'backend-cf/src/tea-clubs.ts',
   'backend-cf/src/tea-conversations.ts', 'backend-cf/src/tea.ts',
 ]);
-export function checkProfessionalWorker({ changed, deployment, bindings }) {
+export function checkProfessionalWorker({ changed, deployment, bindings, verifiedVersion = professionalWorkerBaseline.version }) {
   assert.deepEqual(changed, professionalWorkerFiles, 'Worker code/configuration scope changed; review required.');
   assert.equal(deployment?.versions?.length, 1, 'Expected one deployed Worker version.');
   assert.equal(deployment.versions[0].percentage, 100, 'Expected the recorded full deployment.');
-  assert.equal(deployment.versions[0].version_id, professionalWorkerBaseline.version, 'Production Worker changed; review required.');
+  assert.equal(deployment.versions[0].version_id, verifiedVersion, 'Production Worker changed; review required.');
   assert.ok(Array.isArray(bindings), 'Production bindings are unavailable.');
   const fingerprint = createHash('sha256').update(JSON.stringify(bindings.slice().sort((a,b) => a.name.localeCompare(b.name)))).digest('hex');
   assert.equal(fingerprint, professionalWorkerBaseline.bindings, 'Production configuration changed; review required.');
-  return { version: professionalWorkerBaseline.version, configurationHash: fingerprint, changed };
+  return { version: verifiedVersion, configurationHash: fingerprint, changed };
 }
 
-export async function inspectProfessionalWorker(env = process.env, request = fetch, execute = execFileSync) {
+export async function inspectProfessionalWorker(env = process.env, request = fetch, execute = execFileSync, afterDeployment = false) {
   if (env.CLOUDFLARE_ACCOUNT_ID !== '2ca88b3551321681a5f9434814f38ec8' || !env.CLOUDFLARE_API_TOKEN)
     throw Error('Existing Captro Cloudflare read credentials are required.');
   const changed = execute('git', ['diff', '--name-only', professionalWorkerBaseline.source, 'HEAD', '--',
@@ -48,12 +48,22 @@ export async function inspectProfessionalWorker(env = process.env, request = fet
     return body.result;
   }
   const deployment = (await read('/deployments')).deployments?.[0];
+  let verifiedVersion = professionalWorkerBaseline.version;
+  if (afterDeployment) {
+    assert.match(env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/, 'Candidate source identity is missing.');
+    const version = deployment?.versions?.[0]?.version_id;
+    assert.match(version ?? '', /^[a-f0-9-]{36}$/, 'Deployed version identity is missing.');
+    const metadata = await read('/versions/' + version);
+    assert.equal(metadata.annotations?.['workers/message'], 'Professional accounts and Tea ' + env.GITHUB_SHA,
+      'Deployed Worker does not identify the reviewed candidate source.');
+    verifiedVersion = version;
+  }
   const settings = await read('/settings');
-  return checkProfessionalWorker({ changed, deployment, bindings: settings.bindings });
+  return checkProfessionalWorker({ changed, deployment, bindings: settings.bindings, verifiedVersion });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try { console.log(JSON.stringify(await inspectProfessionalWorker())); }
+  try { console.log(JSON.stringify(await inspectProfessionalWorker(process.env, fetch, execFileSync, process.argv.includes('--after')))); }
   catch (error) {
     // Assertion values could contain configuration. Never dump actual/expected,
     // response bodies, child-process output, tokens or provider exceptions.

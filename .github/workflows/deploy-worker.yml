@@ -6,6 +6,11 @@ on:
     paths: ["backend-cf/**", "supabase/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
     inputs:
+      professional_release_stage:
+        description: Approved professional/Tea rollout; inspect is read-only, deploy requires the reviewed schema
+        type: choice
+        options: [none, inspect, deploy]
+        default: none
       tea_release:
         description: Release only the tested Tea Conversations code; respects reliability_dry_run
         type: boolean
@@ -60,27 +65,33 @@ on:
         default: false
 
 jobs:
+  professional:
+    if: ${{ inputs.professional_release_stage != '' && inputs.professional_release_stage != 'none' }}
+    uses: ./.github/workflows/professional-worker-release.yml
+    with:
+      stage: ${{ inputs.professional_release_stage }}
+    secrets: inherit
   tea:
-    if: ${{ inputs.tea_release == true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.tea_release == true) }}
     uses: ./.github/workflows/tea-conversations-release.yml
     with:
       deploy: ${{ inputs.reliability_dry_run == false }}
       expected_version: ${{ inputs.tea_expected_version }}
     secrets: inherit
   branding-support:
-    if: ${{ inputs.branding_support_code_only == true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.branding_support_code_only == true) }}
     uses: ./.github/workflows/branding-support-worker-release.yml
     with:
       deploy: ${{ inputs.reliability_dry_run == false }}
     secrets: inherit
   scoped-profile:
-    if: ${{ inputs.profile_release == true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.profile_release == true) }}
     uses: ./.github/workflows/profile-worker-release.yml
     with:
       deploy: ${{ inputs.reliability_dry_run == false }}
     secrets: inherit
   payment-diagnostics:
-    if: ${{ inputs.payment_diagnostics_only == true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.payment_diagnostics_only == true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true) }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
@@ -111,14 +122,14 @@ jobs:
           print(json.dumps({'webhooks': [{'enabled': hook.get('status') == 'enabled', 'captro_worker': 'flames-up-api.karfalacisse900.workers.dev' in hook.get('url','') or 'api.flames-up.com' in hook.get('url',''), 'events': hook.get('enabled_events')} for hook in hooks.get('data', [])]}))
           PY
   deploy-reliability:
-    if: ${{ inputs.profile_release != true && inputs.reliability_only == true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.profile_release != true && inputs.reliability_only == true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true) }}
     uses: ./.github/workflows/coordinated-reliability-release.yml
     with:
       deploy: ${{ inputs.reliability_dry_run == false }}
       worker_only: ${{ inputs.worker_only == true }}
     secrets: inherit
   deploy:
-    if: ${{ inputs.tea_release != true && inputs.branding_support_code_only != true && inputs.profile_release != true && inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.tea_release != true && inputs.branding_support_code_only != true && inputs.profile_release != true && inputs.reliability_only != true && inputs.payment_diagnostics_only != true && inputs.configure_retained_platform != true && inputs.checkout_readiness_only != true) }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
@@ -718,7 +729,7 @@ jobs:
         run: node scripts/verify-event-editor.mjs
 
   configure-platform-retention:
-    if: ${{ inputs.configure_retained_platform == true && inputs.checkout_readiness_only != true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.configure_retained_platform == true && inputs.checkout_readiness_only != true) }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.retention_mode == 'live' && 'captro-payments-live' || 'captro-payments-test' }}
     steps:
@@ -751,7 +762,7 @@ jobs:
           PY
 
   checkout-readiness:
-    if: ${{ inputs.checkout_readiness_only == true }}
+    if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.checkout_readiness_only == true) }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     steps:
