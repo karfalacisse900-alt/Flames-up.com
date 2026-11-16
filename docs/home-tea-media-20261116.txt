@@ -58,3 +58,28 @@ ROLLOUT
 No backend code, production configuration, permissions, payments or schema change needed.
 Native update requires a new signed build. Build and Apple availability remain
 separate from source completion. No physical-iPhone verification collected this turn.
+Release source: 77e628f (native implementation ce7ee53).
+Fresh signed iPhone Release archive: 1.0.1 (695.1).
+Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43794957576
+Dispatch: gh workflow run native-ios-testflight.yml --ref feature/professional-accounts-studio -f defer_runtime_for_native_tree=766b17d7760384b9cf6f8a458f959ba369ec87de
+Archive succeeded 03:08:02 UTC; export succeeded 03:08:13 UTC.
+Release authentication validation passed. Live pre-upload checks passed:
+14 security checks, five reliability assertions, three protected creator-earnings views,
+Tea RLS/privileges and live typed pages/anonymous-write denial, 32 backend prerequisites.
+Apple upload succeeded without errors at 03:10:01 UTC.
+Read-only Apple status run 43796596055 at 03:11:03 UTC reported 695.1 PROCESSING,
+with no upload errors or warnings.
+The same read-only status run, attempt 3, confirmed at 03:14:33 UTC:
+buildUpload COMPLETE; 1.0.1 (695.1) processing VALID; not expired;
+internalBuildState IN_BETA_TESTING; assigned to Captro private and Captro private2,
+both internal groups with automatic distribution. The update is available to those
+existing testers. External status remains READY_FOR_BETA_SUBMISSION; no external
+review submission or public App Store release was performed.
+
+FINAL STATUS
+Actual native fixes are included in uploaded/processed TestFlight build 695.1.
+Simulator work was stopped as requested. No simulator or physical-iPhone verification
+is claimed for these changes. 40 non-simulator source/release checks passed; the signed
+Release archive and retained live API/schema checks passed. No backend deployment,
+schema mutation, customer-content deletion or payment-setting change was needed.
+Unrelated pre-existing supabase/.temp/ preserved.
