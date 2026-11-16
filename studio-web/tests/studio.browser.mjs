@@ -289,7 +289,12 @@ try {
       await page.getByLabel("Option", { exact: true }).inputValue(),
       "Oat",
     );
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByLabel("Stock · leave blank for unlimited").fill("8");
+    await page.getByRole("button", { name: "Save menu item", exact: true }).click();
+    await page.getByRole("dialog").waitFor({ state: "hidden" });
+    const productUpdate = calls.find(c => c.path.endsWith("/products") && c.method === "POST");
+    assert.equal(productUpdate.body.stock, 8);
+    assert.equal(productUpdate.body.expected_stock, 12);
     tests++;
     failedSales = true;
     await page.getByRole("button", { name: "Sales", exact: true }).click();

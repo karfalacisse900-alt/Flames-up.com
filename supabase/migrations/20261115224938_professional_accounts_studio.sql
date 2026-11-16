@@ -207,4 +207,22 @@ revoke all on function public.captro_business_release_unpaid_stock() from public
 grant execute on function public.captro_business_release_unpaid_stock() to service_role;
 revoke all on function public.captro_professional_active(text,text),public.captro_professional_mutate(text,text,text,text,jsonb,uuid),public.captro_studio_session(text,text,text,text),public.captro_professional_purchase_guard(),public.captro_professional_business_guard(),public.captro_business_reserve_stock() from public,anon,authenticated;
 grant execute on function public.captro_professional_active(text,text),public.captro_professional_mutate(text,text,text,text,jsonb,uuid),public.captro_studio_session(text,text,text,text),public.captro_professional_purchase_guard(),public.captro_professional_business_guard(),public.captro_business_reserve_stock() to service_role;
+-- A stale menu form must not restore stock consumed by another order.
+create function public.captro_business_update_stock_product(p_owner uuid,p_business uuid,p_product uuid,p_fields jsonb,p_expected_stock integer)
+returns jsonb language plpgsql security invoker set search_path='' as $$
+declare current_product public.app_business_products; changed public.app_business_products;
+begin
+ if not public.captro_professional_active(p_owner::text,'business') then raise exception 'PROFESSIONAL_FORBIDDEN'; end if;
+ if not exists(select 1 from public.app_businesses where id=p_business and owner_id=p_owner) then raise exception 'ORDER_NOT_FOUND'; end if;
+ if p_fields-array['name','category','unit_amount','available','stock','mode','groups','image_url'] <> '{}'::jsonb or not (p_fields ? 'stock') then raise exception 'INVALID_BUSINESS_INPUT'; end if;
+ select * into current_product from public.app_business_products where id=p_product and business_id=p_business for update;
+ if current_product.id is null then raise exception 'ORDER_NOT_FOUND'; end if;
+ if current_product.stock is distinct from p_expected_stock then raise exception 'BUSINESS_STOCK_CHANGED'; end if;
+ changed:=jsonb_populate_record(current_product,p_fields);
+ update public.app_business_products set name=changed.name,category=changed.category,unit_amount=changed.unit_amount,
+   available=changed.available,stock=changed.stock,mode=changed.mode,groups=changed.groups,image_url=changed.image_url where id=p_product;
+ return to_jsonb(changed);
+end $$;
+revoke all on function public.captro_business_update_stock_product(uuid,uuid,uuid,jsonb,integer) from public,anon,authenticated;
+grant execute on function public.captro_business_update_stock_product(uuid,uuid,uuid,jsonb,integer) to service_role;
 commit;

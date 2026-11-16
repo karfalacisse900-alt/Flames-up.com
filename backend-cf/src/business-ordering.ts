@@ -25,6 +25,7 @@ const invalid = (): never => { throw new Error('INVALID_BUSINESS_INPUT'); };
 const errors: Record<string, [400 | 404 | 409 | 503, string]> = {
   INVALID_BUSINESS_INPUT: [400, 'Check the business, product, or order details and try again.'],
   BUSINESS_UNAVAILABLE: [409, 'This business is not taking orders.'],
+  BUSINESS_STOCK_CHANGED: [409, 'Stock changed while you were editing. Reopen the product before saving a new quantity.'],
   PRODUCT_UNAVAILABLE: [409, 'A product in your bag is no longer available.'],
   INVALID_OPTIONS: [409, 'The menu changed. Review the options in your bag.'],
   INVALID_BAG: [400, 'Check the quantities in your bag.'],
@@ -380,6 +381,13 @@ export function makeBusinessOrdering<E extends { Bindings?: object; Variables?: 
       unit_amount: integer(input?.unit_amount, 50, 100000), available: input.available,
       ...(input?.stock === undefined ? {} : { stock: input.stock === null ? null : integer(input.stock, 0, 100000) }),
       mode, groups: groupsWithImages, ...(image ? { image_url: image } : {}) };
+    if (current && input?.stock !== undefined) {
+      if (!Object.prototype.hasOwnProperty.call(input, 'expected_stock')) invalid();
+      const expected = input.expected_stock === null ? null : integer(input.expected_stock, 0, 100000);
+      return c.json(await deps.rpc(c, 'captro_business_update_stock_product', {
+        p_owner: deps.actor(c), p_business: shop.id, p_product: id, p_fields: fields, p_expected_stock: expected,
+      }));
+    }
     if (current) await deps.patch(c, products, { id: eq(id), business_id: eq(shop.id) }, fields);
     else await deps.insert(c, products, [{ ...fields, id, business_id: shop.id }]);
     return c.json(await get(c, products, id));

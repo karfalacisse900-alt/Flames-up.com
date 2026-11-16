@@ -282,6 +282,17 @@ test('Captro Business API and Postgres complete a pickup order using isolated St
       await db.exec('reset role');
     }
   });
+  await t.test('stale stock edits cannot overwrite stock consumed by concurrent orders',async()=>{
+    const original=await one('select * from app_business_products where id=$1',[dog]);
+    const form={id:dog,name:'Hotdog updated',category:'Food',unit_amount:400,mode:'QUICK_ADD',available:true,groups:[],stock:10,expected_stock:original.stock};
+    await db.query('update app_business_products set stock=stock-1 where id=$1',[dog]);
+    assert.equal((await call('/business-owner/'+hotdogs+'/products',owner,form)).status,409);
+    assert.equal((await one('select stock from app_business_products where id=$1',[dog])).stock,original.stock-1);
+    assert.equal((await call('/business-owner/'+hotdogs+'/products',owner,{...form,expected_stock:original.stock-1})).status,200);
+    assert.equal((await one('select stock from app_business_products where id=$1',[dog])).stock,10);
+    assert.equal((await call('/business-owner/'+hotdogs+'/products',stranger,form)).status,404);
+    await db.query('update app_business_products set stock=$2 where id=$1',[dog,original.stock]);
+  });
   await t.test('suspended Business disappears publicly and blocks new orders while preserving resolution and history',async()=>{
     const pending=await(await call('/businesses/'+hotdogs+'/checkout',buyer,{lines:[{product_id:dog,quantity:1,option_ids:[]}],total:432,request_id:'60000000-0000-4000-8000-000000000004'})).json();
     await db.exec("update app_professional_roles set status='suspended' where user_id='sample-owner'");

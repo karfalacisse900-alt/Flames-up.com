@@ -495,7 +495,7 @@ function ProductForm({
         unit_amount: Math.round(Number(price) * 100),
         mode: draft.mode,
         available: draft.available,
-        stock: draft.stock,
+        ...(draft.stock !== product.stock ? { stock: draft.stock, expected_stock: product.stock } : {}),
         groups:
           draft.mode === "QUICK_ADD"
             ? []

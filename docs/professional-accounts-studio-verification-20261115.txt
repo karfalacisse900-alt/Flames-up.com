@@ -91,6 +91,9 @@ backfilled from email, profile metadata, historical payments or application subm
 Finite stock defaults to NULL (unlimited), preserving old records; no old commitment
 is reinterpreted. Only cancelled, unpaid awaiting_payment orders release reserved stock.
 Fulfillment/refund updates remain possible after role suspension/removal.
+Stock edits lock the product and compare the previously observed quantity; an old
+form cannot restore inventory consumed by orders. Unchanged quantities are omitted
+from ordinary catalog edits, preserving old clients and current reservations.
 
 Future approved rollout sequence:
 - Review Business migration dependencies and current production schema first. Take the
@@ -113,7 +116,7 @@ Future approved rollout sequence:
 
 VALIDATION COMPLETED
 Windows commands, run from the named directories:
-- backend-cf: npm test — 420 passed, 0 failed, 0 skipped (full suite).
+- backend-cf: npm test — 421 passed, 0 failed, 0 skipped (full suite).
 - backend-cf: npx tsc --noEmit — passed.
 - studio-web: npm run build — TypeScript and production Vite build passed.
 - studio-web: node tests/studio.browser.mjs — 25 checks passed, 1440x1050 and
@@ -128,7 +131,7 @@ Backend regression coverage includes isolated real SQL review lifecycle, role
 independence, stale/replayed decisions, forbidden writes, immutable audit, single-use
 handoff, revocation/bans, optional-site validation, protected-field rejection; actual
 Business HTTP routes + Postgres for pricing, repeated test checkout, provider replay,
-fulfillment, one-use pickup, refunds, finite stock and suspension continuity.
+fulfillment, one-use pickup, refunds, finite stock, atomic stale-stock rejection, and suspension continuity.
 The Stripe adapter uses isolated test-object fixtures. No live Stripe payment was
 created; this is not proof of processor onboarding, live funds or production payouts.
 An obsolete profile source-text assertion was replaced with an assertion that both
