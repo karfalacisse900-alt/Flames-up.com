@@ -215,6 +215,8 @@ struct CaptroPaymentsView: View {
           } else if let error = model.payoutError {
             Text(error).foregroundStyle(.red).font(.subheadline)
             Button("Try again") { Task { await model.refreshPayoutAccount() } }
+            SettingsNavigationRow(title: "Earnings & history", subtitle: "", systemImage: "clock",
+              destination: CaptroEarningsView(api: model.api, model: model.earningsModel))
           } else {
             SettingsNavigationRow(title: "Set up earnings", subtitle: "For creators who want to sell", systemImage: "building.columns",
               destination: CaptroPaymentsView(api: model.api, model: model, page: .payout))
