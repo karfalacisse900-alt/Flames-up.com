@@ -15,6 +15,18 @@ async function get(path) {
 }
 const apps = await get('apps?' + new URLSearchParams({'filter[bundleId]':'com.captro.app',limit:'1'}));
 const app = apps.data?.[0]; if (!app) throw Error('Captro app not found');
+// A transported IPA can still be processing before it appears in /builds.
+// Read the upload resource too; do not mistake transport success for availability.
+// https://developer.apple.com/documentation/appstoreconnectapi/get-v1-apps-_id_-builduploads
+const uploads = await get(`apps/${app.id}/buildUploads?` + new URLSearchParams({
+  sort:'-uploadedDate', limit:'4',
+  'fields[buildUploads]':'cfBundleShortVersionString,cfBundleVersion,createdDate,uploadedDate,state,platform',
+}));
+for (const upload of uploads.data ?? []) {
+  const a = upload.attributes;
+  console.log(JSON.stringify({buildUpload:{build:a.cfBundleVersion,version:a.cfBundleShortVersionString,
+    platform:a.platform,created:a.createdDate,uploaded:a.uploadedDate,state:a.state}}));
+}
 const builds = await get('builds?' + new URLSearchParams({'filter[app]':app.id,sort:'-uploadedDate',limit:'4',include:'buildBetaDetail,betaGroups,preReleaseVersion'}));
 const included = builds.included ?? [];
 for (const build of builds.data ?? []) {

@@ -1,110 +1,129 @@
-CAPTRO TESTFLIGHT RELEASE DEPENDENCIES - 15 November 2026
+CAPTRO APPROVED BACKEND AND TESTFLIGHT ROLLOUT - 15/16 NOVEMBER 2026
 
-Candidate: feature/professional-accounts-studio; native source f78952db9fd8ef4b5a9292dde4b10d817162a174.
-Latest Apple status check: run 43784955283, 2026-11-16 01:13 UTC.
-1.0.1 (686.1) VALID / IN_BETA_TESTING for Captro private and Captro private2 (internal groups).
-External state is READY_FOR_BETA_SUBMISSION; this is not external tester availability.
-Active distribution signing profile. Associated Domains absent, as in current source.
-No signing or entitlement change is proposed by this release.
+AUTHORIZATION AND SCOPE
+User approved the four prepared Business, Tea replies, Tea club and professional-account
+migrations, matching API, existing private admin review queue and TestFlight upload.
+Payment activation settings remain unchanged. Captro Studio stays unpublished.
+No real payments, refunds, transfers, payouts or changes to real users were used for testing.
 
-LAST RECORDED WORKER DEPLOYMENT (NOT A FRESH LIVE VERSION READ)
-Successful production run 43652503796 deployed source
-89ca332f6e47954f376aec366845468b8efa48f4 on 14 November at 23:18 UTC.
-Worker version: 0728d43a-5775-49e9-b1db-be4fa903d5b6.
-Bindings fingerprint: 1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a.
-Candidate Worker diff is eight files: business-ordering.ts, creator-support.ts,
-feed-pagination.ts, index.ts, professional-accounts.ts, tea-clubs.ts,
-tea-conversations.ts and tea.ts. The feed cursor change only admits existing
-non-UUID message/request IDs in the two explicit Tea club scopes. Package files
-and wrangler.toml are unchanged from that deployed source.
-Fresh deployed-version/configuration comparison is still required before applying
-the proposal. Local Wrangler has no Cloudflare token; existing CI deployment
-credentials can perform that read without exposing or creating credentials.
-
-AUTHORIZATION
-TestFlight upload is authorized by the latest request. The preceding feature requests
-explicitly withheld production deployment and website publication. Those are separate
-actions needed for the new backend-dependent app screens; they have not been performed.
-
-CONFIRMED BLOCKER
-Read-only live catalog inspection found all four migrations below absent, including
-Business, Tea sentence replies, Tea club spaces and professional account tables/RPCs.
-Original Tea conversations migration 20261114230954 is present.
-The catalog release gate returned 32 failed prerequisites because these objects are
-absent, not because this inspection demonstrated 32 independent production defects.
-Uploading the new native screen code alone would leave its API-dependent actions broken.
-
-EXACT PROPOSED DATABASE SCOPE (ORDERED, PREPARED ONLY)
+PRODUCTION DATABASE - APPLIED
+Project cclgvxukwccvtgrbcwie. Applied in dependency order on 16 November at 02:00-02:01 UTC:
 20261112030025_captro_business_ordering.sql
-  Git-blob SHA256 b078bf70d25e30fc37d65934881ba111d2a640fe02186cc19a8618311d24c7b4
+  Git blob SHA256 b078bf70d25e30fc37d65934881ba111d2a640fe02186cc19a8618311d24c7b4
 20261115014511_tea_sentence_replies.sql
-  Git-blob SHA256 b1324dbee7df8f064d1290b539f14745f00162a526585c4c138f0d1e706c821a
+  Git blob SHA256 b1324dbee7df8f064d1290b539f14745f00162a526585c4c138f0d1e706c821a
 20261115015247_tea_club_spaces.sql
-  Git-blob SHA256 095a922a9f2da400cc56a3d0d60c56b7dd92ccbd037d7614ba98e646d414f51a
+  Git blob SHA256 095a922a9f2da400cc56a3d0d60c56b7dd92ccbd037d7614ba98e646d414f51a
 20261115224938_professional_accounts_studio.sql
-  Git-blob SHA256 2a7502829e4f701d0ac89c0f8e62271c0beb09ecce4d5abf6ef156b2f1a6a87f
+  Git blob SHA256 2a7502829e4f701d0ac89c0f8e62271c0beb09ecce4d5abf6ef156b2f1a6a87f
+MCP assigned current timestamps; each successfully applied history entry was then aligned
+with its canonical repository version. Failed/absent SQL was never marked applied.
+No unrestricted db push or unrelated pending migrations were used.
 
-ROLLOUT FOR SEPARATE APPROVAL
-1. Recheck the deployed Worker revision/bindings and database metadata immediately
-   before rollout; preserve the prior Worker artifact and all current financial flags.
-2. Apply only the four named migrations after the existing schema compatibility checks.
-   Never run an unrestricted db push over other pending migrations.
-3. Deploy the matching scoped Worker for Tea replies/clubs, Business and professional
-   APIs. Preserve authentication, payment keys, webhook handling and rollout variables.
-   Review any difference from the actual deployed Worker before deployment. The older
-   profile/Tea release scripts have obsolete baseline allowlists and must not be reused
-   with their checks removed. No live Business checkout or new payment activation.
-4. Update the existing private admin console with its professional review queue, so
-   applications have a working review path. Do not publish Captro Studio or configure
-   CAPTRO_STUDIO_ORIGIN as part of a TestFlight-only release.
-5. Verify application ownership, admin denial/review, role separation and old/new client
-   compatibility with isolated identities. Recheck live schema/API contracts; never
-   modify real users, grant them roles, charge, refund, transfer or pay out to test.
-6. Upload the signed app only when source attestation and all release gates pass.
-   Then confirm Apple processing and assignment to the existing internal groups.
+The production release gate exposed inherited Supabase default DELETE/TRUNCATE privileges
+on the new professional audit table. The reviewed migration revoked only UPDATE.
+Before Worker deployment, a narrow forward repair was prepared, regression-tested and
+applied: 20261116020500_professional_audit_grants.sql. It resets that audit ACL to
+SELECT/INSERT for service_role only; client access remains denied. No audit was deleted.
+Regression reproduces the default grant, proves SELECT/INSERT work after repair, and
+proves UPDATE/DELETE/TRUNCATE fail. All 32 production schema gate checks now pass.
+Advisors: 78 informational RLS/no-policy notices for server-only tables; the only warning
+remains pre-existing leaked-password protection disabled. No auth settings were changed.
+Reference: https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection
 
-FINANCIAL / COMPATIBILITY EFFECTS
-Creator approval becomes an additional prerequisite for new Support checkout. Existing
-creators are not automatically approved. Existing payments, ledgers, fulfillment and
-refund resolution remain recorded and accessible under their existing permissions.
-Business ordering remains test-only until its separate live payout contract is ready.
-Studio remains visibly unavailable until the separate site/domain rollout is approved.
-Tea changes retain existing conversations, general replies, messages and memberships.
+MATCHING WORKER - DEPLOYED AND VERIFIED
+Source: 164494c7c79300daea7459b49de460d3ce2a80a7
+Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43790044371
+Deployment at 2026-11-16 02:06:50 UTC; version c5294a13-8b86-4419-97a6-db5d453fe77f.
+Exact source annotation verified after deployment. Financial/runtime binding fingerprint
+unchanged: 1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a.
+Previous version 0728d43a-5775-49e9-b1db-be4fa903d5b6, source
+89ca332f6e47954f376aec366845468b8efa48f4; source artifact preserved in rollout CI.
+Changed Worker files: business-ordering.ts, creator-support.ts, feed-pagination.ts,
+index.ts, professional-accounts.ts, tea-clubs.ts, tea-conversations.ts, tea.ts.
+No wrangler.toml/package/lockfile change. Feed cursor relaxation only affects the two
+explicit Tea-club scopes using existing non-UUID IDs; Home pagination is unchanged.
 
-ROLLBACK / FORWARD REPAIR
-Pause new affected actions at the server if verification fails; keep payment webhooks,
-reconciliation, existing orders/refunds and financial history operating. Preserve all
-new tables, application/audit records, sentence snapshots and club history. Do not drop
-migrations to undo a release or restore a Worker that bypasses new role checks or exposes
-room messages through legacy group endpoints. Use a compatible maintenance/forward
-repair Worker. Re-evaluate safe rollback against the actual deployed baseline first.
+Production acceptance: TypeScript and 430 backend tests passed; 0 failed, 0 skipped.
+14 security checks, 5 reliability checks, 3 creator-earnings view checks and 32 new
+schema checks passed. Existing Tea public/anonymous-denial and feed pagination checks passed.
+30 live professional checks passed using two new private synthetic identities:
+- canonical identity; anonymous/ordinary admin denial; protected-field rejection;
+- draft/submit/resubmit, requested changes, independent applications;
+- duplicate submit and approval idempotency; stale version rejection;
+- server-admin approval, separate Creator/Business roles, dual roles;
+- suspension/restore/removal isolation and edit denial during suspension;
+- private internal notes, server-written decision audit, direct table-access denial;
+- creator approval does not enable payment; unpublished Studio remains unavailable;
+- removed admin rejected with existing token.
+Cleanup passed: synthetic accounts banned/revoked, admin and professional grants removed,
+application queue entries closed. Immutable synthetic audit evidence is retained.
+No real customer records were read or modified for these acceptance cases.
 
-VALIDATION
-Prior full backend suite: 421 passed. Final combined native run 43781933864:
-30 executions passed on iPhone 13 mini and iPhone 17 (app-hosted fixtures).
-Release prerequisite, Worker preflight and native source gate tests: 11 passed,
-0 failed, 0 skipped. The Worker preflight is prepared in
-backend-cf/scripts/verify-professional-worker.mjs; its fresh live execution is pending.
-Worker production-configuration dry-run compile and TypeScript checks passed.
-New native source-attested release validation: run 43784958743 PASSED.
-8 app-hosted Support UI tests and 9 Support model tests, 0 failures.
-Source b97f1fbe585689b8b4e3c96c5d6499602a783589; native tree
-8db88e818d8f2f9ae0416d42802dec51b82c4a79 matches the release candidate.
-Native release gate verified this attestation locally before archive dispatch.
-Signed Release archive 690.1 completed in run 43786700730 from
-bb206d25d07b954e50762d57a8aed1fc9e9b4302. Archive, Release authentication
-configuration and IPA export all PASSED. The IPA artifact was preserved.
-Upload to TestFlight was SKIPPED after the backend compatibility gate failed
-on the four absent migrations and their absent objects. Earlier security (14),
-reliability (5), creator earnings, existing Tea schema and public API checks passed.
-No Apple upload request was attempted. This is not an available TestFlight update.
-Artifact ID 14191476254, Captro-native-ios-ipa; 32,335,109 bytes.
-Artifact ZIP SHA256 26bb64d43838527f51fc619242816e7f8ffca5da8bb8c1e77f0d8c1f7c03d147.
-GitHub artifact expiry: 14 February 2027.
-After approved backend rollout and verification, retry the existing IPA with
-retry_upload_run=43786700730 and validation_run=43784958743 on the same branch.
-The retry must retain all release gates; do not rebuild merely to renumber it.
-Physical-device, real Stripe/provider and production acceptance are separate.
+PRIVATE ADMIN - DEPLOYED
+https://captro-admin.pages.dev/
+Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43790282744
+Existing production Pages project/branch used. Build and deployment succeeded.
+Deployed HTML and asset /assets/index-DnhCrfYW.js returned HTTP 200 and reference
+/admin/professional using https://api.flames-up.com/api. Admin authentication remains
+required. Live review/permissions were exercised against the API with isolated identities;
+prior desktop/tablet app-hosted browser screenshots remain separate UI evidence.
+Captro Studio was not published and CAPTRO_STUDIO_ORIGIN was not configured.
 
-No production write, website publication, Apple agreement acceptance or TestFlight
-upload has been performed during this release preparation.
+NATIVE CANDIDATE AND TESTFLIGHT
+Preserved signed Release IPA: 1.0.1 (690.1), com.captro.app.
+Archive source bb206d25d07b954e50762d57a8aed1fc9e9b4302, run 43786700730.
+Native tree 8db88e818d8f2f9ae0416d42802dec51b82c4a79 unchanged through deployment source.
+IPA SHA256 7b04f0ed78e19138c5ebcc9e59f57701227fa7c16b41de5655f94180c6646a57.
+Artifact 14191476254, Captro-native-ios-ipa; ZIP SHA256
+26bb64d43838527f51fc619242816e7f8ffca5da8bb8c1e77f0d8c1f7c03d147.
+Archive, signing, Release authentication and export passed previously. Upload originally
+stopped at the missing backend schema gate. The same IPA is being retried after rollout:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43790375925
+No rebuild or signing/bundle/entitlement change. All provenance and production gates retained.
+Apple upload SUCCEEDED with no errors at 2026-11-16 02:10:49 UTC.
+Delivery UUID f73a9d9a-5f07-4d2b-b30b-7f8538921983.
+Read-only Apple run 43790604018 at 02:11:29 UTC still listed 686.1 as newest;
+690.1 ingestion/processing/tester availability remains pending at this report update.
+
+NATIVE VERIFICATION ALREADY COLLECTED
+Run 43781933864: 30 combined professional/Support executions passed on iPhone 13 mini
+and iPhone 17 simulators, Xcode 26.6 / iOS 26.5 (app-hosted isolated fixtures).
+Release-attested run 43784958743: 8 app-hosted Support UI and 9 Support model tests passed,
+0 failed. Source b97f1fbe585689b8b4e3c96c5d6499602a783589 has the same native tree as IPA.
+These do not prove physical-device behavior or a real Stripe/provider end-to-end payment.
+Associated Domains remain absent in the app/signing configuration; this release did not
+claim to repair or verify Universal Links. No live financial activation is included.
+Business ordering remains test-only pending its separate live payout contract.
+Support still requires approved active Creator AND existing payment/readiness checks.
+Existing financial records and resolution/fulfillment permissions are preserved.
+
+COMMANDS / TOOLS
+Supabase apply_migration: exact four reviewed SQL blobs plus narrow audit ACL repair.
+Supabase execute_sql: catalog/schema/privilege verification and exact migration history alignment.
+node --experimental-strip-types --test tests/professional_audit_grants.test.mjs (1 passed)
+CI: npm ci; npx tsc --noEmit; npm test (430 passed)
+node scripts/app-store/verify-security-schema.mjs
+node backend-cf/scripts/verify-reliability-schema.mjs
+node backend-cf/scripts/verify-creator-earnings-schema.mjs
+node scripts/app-store/verify-professional-release-schema.mjs
+node backend-cf/scripts/verify-professional-worker.mjs [--after]
+node backend-cf/scripts/verify-tea-http.mjs
+node backend-cf/scripts/verify-feed-pagination.mjs
+node backend-cf/scripts/verify-professional-live.mjs (30 checks + cleanup passed)
+gh workflow run deploy-worker.yml --ref feature/professional-accounts-studio -f professional_release_stage=deploy
+gh workflow run admin-web-deploy.yml --ref feature/professional-accounts-studio
+gh workflow run native-ios-testflight.yml --ref feature/professional-accounts-studio -f retry_upload_run=43786700730 -f validation_run=43784958743
+
+FORWARD REPAIR / ROLLBACK
+Preserve migrations, roles, applications, immutable audit, sentence snapshots, clubs,
+orders, reconciliation and financial history. If new actions need pausing, use compatible
+server-side restrictions while keeping webhooks/reconciliation/order resolution active.
+Do not restore an older Worker that bypasses professional-role checks or exposes room
+messages through legacy endpoints. Do not restore clock-only payment-hold expiration.
+Use a narrowly tested compatible forward repair; no destructive down-migration.
+
+EVIDENCE
+Local evidence folder: C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-professional-20261115
+review-gallery.html includes prior app/browser screenshots; production-schema-verified.json,
+production-worker-verification.txt and release-690-metadata.json retain redacted release evidence.
