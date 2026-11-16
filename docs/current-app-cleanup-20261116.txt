@@ -75,8 +75,15 @@ sections. Updated Tea UI assertion for removed directory rows while retaining cl
 join assertions; storefront ordering remains covered in BusinessOrderingTests.
 Native compile workflow (no simulator, no signing, no upload):
 https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43970620206
-Native result pending: the macOS queue had no assigned runner during handoff.
-Earlier runs were superseded/cancelled, not reported as test failures.
+FINAL RESULT: SUCCESS at source f1e96a04c2306f3d735e13b1e436338567d2a2a4.
+Unsigned generic iPhone Debug app and XCTest/UI-test targets: TEST BUILD SUCCEEDED.
+Unsigned optimized iPhone Release app: BUILD SUCCEEDED.
+Existing host Swift checks: 10 reconnect-policy + 10 actual Tea-model checks passed.
+Native XCTest/UI tests were compiled, not executed. The newly added visitor-tab
+regression is not represented as a runtime pass. Simulator job was skipped.
+Artifact logs: %TEMP%/captro-cleanup-43970620206/.
+Earlier runs were superseded/cancelled, not reported as test failures. The final
+run initially waited for a macOS runner, then completed successfully.
 The final small change also retains direct Earnings & history navigation after a
 failed seller-history lookup; it does not grant access or imply a successful read.
 
