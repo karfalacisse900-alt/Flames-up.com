@@ -17,6 +17,28 @@ enum MIRAChatRealtime {
     onChange: @escaping @MainActor @Sendable () async -> Void,
     onConnectionChange: @escaping @MainActor @Sendable (Bool) -> Void
   ) async {
+    let owner = api.presentationScope
+    // Recover an initial failed join as well as SDK-managed socket reconnects.
+    // The authorized cursor API continues polling throughout. Stop retries on
+    // disappearance/account change; never start a parallel observer per retry.
+    for attempt in 0..<5 {
+      guard !Task.isCancelled, owner == api.presentationScope else { return }
+      await observeOnce(kind: kind, userId: userId, api: api,
+        onChange: { if owner == api.presentationScope, !Task.isCancelled { await onChange() } },
+        onConnectionChange: { connected in if owner == api.presentationScope { onConnectionChange(connected) } })
+      guard !Task.isCancelled, owner == api.presentationScope else { return }
+      MIRAApplePerformanceLogger.event("chat_socket_retry", detail: "attempt=\(attempt + 1)")
+      do { try await Task.sleep(for: .seconds(min(60, 2 * (1 << attempt)))) } catch { return }
+    }
+  }
+  private static func observeOnce(
+    kind: ConversationNativeKind,
+    userId: String,
+    api: MIRAAPIClient,
+    onChange: @escaping @MainActor @Sendable () async -> Void,
+    onConnectionChange: @escaping @MainActor @Sendable (Bool) -> Void
+  ) async {
+    onConnectionChange(false)
     guard !userId.isEmpty else { return }
     guard let config: MIRAChatRealtimeConfig = try? await api.get("/chat/realtime-config"),
           config.url.scheme == "https",

@@ -183,7 +183,14 @@ import Foundation
   }
   private func handle(_ error: Error, expected: Int) {
     guard valid, revision == expected, !Task.isCancelled else { return }
-    if Self.accessDenied(error) { clear() }
+    if Self.accessDenied(error) {
+      clear()
+      // Retain only the negative membership result briefly. No private content
+      // survives clear(). Reopening a visitor club can show its public details
+      // immediately, without probing membership on every navigation.
+      invalidated = false
+      loadedAt = Date()
+    }
     else { self.error = "Couldn’t refresh this club. Try again." }
   }
   private static func accessDenied(_ error: Error) -> Bool {

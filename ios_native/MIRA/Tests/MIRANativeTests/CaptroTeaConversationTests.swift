@@ -3,6 +3,28 @@ import Foundation
 @testable import MIRANative
 
 final class CaptroTeaConversationTests: XCTestCase {
+  @MainActor func testFreshPostReopenRetriesFailedRepliesAndKeepsDraft() async throws {
+    TeaConversationProtocol.reset()
+    TeaConversationProtocol.failNextReplyRead()
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [TeaConversationProtocol.self]
+    let session = URLSession(configuration: config)
+    defer { session.invalidateAndCancel() }
+    let api = MIRAAPIClient(session: session)
+    let seed = try JSONDecoder().decode(CaptroTeaConversation.self, from: TeaConversationProtocol.postData)
+    let model = api.teaConversations.model(for: seed)
+    model.draft = "Unsent sentence reply"
+    await model.load()
+    XCTAssertEqual(model.post?.title, "Server title")
+    XCTAssertNotNil(model.replyError)
+    await model.load()
+    XCTAssertNil(model.replyError)
+    XCTAssertEqual(model.draft, "Unsent sentence reply")
+    XCTAssertEqual(TeaConversationProtocol.snapshot().detailReads, 1)
+    XCTAssertEqual(TeaConversationProtocol.snapshot().replyReads, 2)
+    await model.load()
+    XCTAssertEqual(TeaConversationProtocol.snapshot().replyReads, 2, "Fresh replies must not be requested on every open")
+  }
   func testConsecutiveReplyGroupingDoesNotReorderAuthors() {
     let a = CaptroTeaAuthor(id: "a", name: "A", username: "a")
     let b = CaptroTeaAuthor(id: "b", name: "B", username: "b")
@@ -124,13 +146,14 @@ final class CaptroTeaConversationTests: XCTestCase {
 
 private final class TeaConversationProtocol: URLProtocol {
   struct State {
-    var detailReads = 0; var replyIDs: [String] = []
+    var detailReads = 0; var replyReads = 0; var failReplyRead = false; var replyIDs: [String] = []
     var onRead: XCTestExpectation?; var held: TeaConversationProtocol?
   }
   private static let lock = NSLock()
   private static var state = State()
   static let postData = Data(#"{"id":"post","title":"Server title","body":"Text","links":[],"author":{"id":"a","name":"Artist","username":"artist"},"createdAt":"2026-11-13T12:00:00Z","version":1,"isAuthor":false,"following":false}"#.utf8)
   static func reset() { lock.withLock { state = State() } }
+  static func failNextReplyRead() { lock.withLock { state.failReplyRead = true } }
   static func snapshot() -> State { lock.withLock { state } }
   static func holdReplies(_ started: XCTestExpectation) { lock.withLock { state.onRead = started } }
   static func releaseReplies() {
@@ -143,6 +166,11 @@ private final class TeaConversationProtocol: URLProtocol {
     let isReply = request.url!.path.hasSuffix("/replies")
     let isWrite = request.httpMethod == "POST"
     if isReply && !isWrite {
+      let fail = Self.lock.withLock {
+        Self.state.replyReads += 1
+        let value = Self.state.failReplyRead; Self.state.failReplyRead = false; return value
+      }
+      if fail { respond(503, Data(#"{"detail":"Retry fixture"}"#.utf8)); return }
       let started = Self.lock.withLock {
         if Self.state.onRead != nil { Self.state.held = self }
         return Self.state.onRead

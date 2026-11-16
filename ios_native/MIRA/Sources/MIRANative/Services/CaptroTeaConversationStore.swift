@@ -12,12 +12,31 @@ extension Notification.Name {
   private var scope = ""
   private var models: [String: CaptroTeaConversationModel] = [:]
   private var order: [String] = []
+  struct Listing {
+    let items: [CaptroTeaConversation]
+    let cursor: String?
+    let receivedAt: Date
+  }
+  private var listing: Listing?
+  let listViewport = CaptroFeedViewport()
   init(api: MIRAAPIClient) { self.api = api }
-  func model(for post: CaptroTeaConversation) -> CaptroTeaConversationModel {
+  func cachedListing() -> Listing? {
+    synchronizeScope()
+    guard let listing, Date().timeIntervalSince(listing.receivedAt) < 600 else { return nil }
+    return listing
+  }
+  func saveListing(_ items: [CaptroTeaConversation], cursor: String?, receivedAt: Date) {
+    synchronizeScope()
+    listing = Listing(items: items, cursor: cursor, receivedAt: receivedAt)
+  }
+  private func synchronizeScope() {
     if scope != api.presentationScope {
       if !scope.isEmpty { invalidate() }
       scope = api.presentationScope
     }
+  }
+  func model(for post: CaptroTeaConversation) -> CaptroTeaConversationModel {
+    synchronizeScope()
     if let model = models[post.id] { return model }
     let model = CaptroTeaConversationModel(post: post, api: api)
     models[post.id] = model; order.append(post.id)
@@ -27,6 +46,7 @@ extension Notification.Name {
   func invalidate() {
     for model in models.values { model.clear() }
     models.removeAll(); order.removeAll()
+    listing = nil; listViewport.setActive(false)
     NotificationCenter.default.post(name: .captroTeaAccessChanged, object: nil)
   }
 }
@@ -58,6 +78,9 @@ extension Notification.Name {
   let viewport = CaptroFeedViewport()
   private var loadedAt: Date?
   private var replyLoadedAt: Date?
+  private var authorLoadedAt: Date?
+  private var loadingAuthor = false
+  private var threadLoadedAt: [String: Date] = [:]
   private var requestID = UUID().uuidString
   private var pendingReply: String?
   private var pendingTarget: CaptroTeaReplyTarget?
@@ -79,18 +102,26 @@ extension Notification.Name {
     pendingReply = nil; replyPending = false; requestID = UUID().uuidString; nextCursor = nil
     replyTarget = nil; pendingTarget = nil; expandedTargets = []; authorProfile = nil
     threads = [:]; threadCursors = [:]; threadErrors = [:]; loadingThreads = []
+    authorLoadedAt = nil; threadLoadedAt = [:]
     error = "Refresh this post to check access."
   }
   func load(force: Bool = false) async {
     guard scope == api.presentationScope else { clear(); return }
     invalidated = false
     if let flight { await flight.value; return }
-    if !force, let loadedAt, Date().timeIntervalSince(loadedAt) < 30 { return }
+    if !force, let loadedAt, Date().timeIntervalSince(loadedAt) < 30 {
+      // Post freshness is not evidence that replies or author metadata loaded.
+      await loadSupplementary(force: false)
+      return
+    }
     let expectedRevision = revision
     let task = Task { [weak self] in
       guard let self else { return }
       loading = true; error = nil
       defer { loading = false }
+      let interval = MIRAApplePerformanceLogger.beginInterval("tea_detail_read")
+      defer { interval.end(status: valid ? "finished" : "discarded") }
+      async let supplementary: Void = loadSupplementary(force: force)
       do {
         let result: CaptroTeaConversation = try await api.getFresh("/tea/conversations/" + id)
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
@@ -101,32 +132,48 @@ extension Notification.Name {
         if Self.denied(error) { clear(); self.error = "This post is no longer available." }
         else { self.error = "Couldn’t refresh this post. Try again." }
       }
+      await supplementary
     }
     let token = UUID()
     flightID = token; flight = task; await task.value
     if flightID == token { flight = nil; flightID = nil }
-    if post != nil {
+  }
+  private func loadSupplementary(force: Bool) async {
+    if valid, post != nil {
       async let replies: Void = loadReplies(reset: true, force: force)
-      async let author: Void = loadAuthor()
+      async let author: Void = loadAuthor(force: force)
       _ = await (replies, author)
       for count in post?.replyTargets ?? [] where expandedTargets.contains(count.target.id) {
-        await loadThread(count.target, reset: true)
+        if force || threadLoadedAt[count.target.id].map({ Date().timeIntervalSince($0) >= 30 }) != false {
+          await loadThread(count.target, reset: true)
+        }
       }
     }
   }
   func loadReplies(reset: Bool, force: Bool = false) async {
     guard valid, post != nil, !loadingReplies, reset || nextCursor != nil else { return }
     if reset, !force, let replyLoadedAt, Date().timeIntervalSince(replyLoadedAt) < 30 { return }
-    loadingReplies = true; replyError = nil; replySubmissionFailed = false
+    loadingReplies = true
+    if !replySubmissionFailed { replyError = nil }
     let expectedAccess = accessRevision
     defer { loadingReplies = false }
     do {
       var path = "/tea/conversations/\(id)/replies?target=general"
       if !reset, let nextCursor { path += "&cursor=" + nextCursor }
-      let page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
+      var page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
+      var refreshed = page.items
+      // Revalidate already displayed pages as one replacement. A first-page
+      // refresh must not discard the history the reader has scrolled into.
+      var cursors = Set<String>()
+      while reset, refreshed.count < replies.count, let cursor = page.nextCursor,
+            cursors.insert(cursor).inserted {
+        guard valid, accessRevision == expectedAccess, !Task.isCancelled else { return }
+        page = try await api.getFresh("/tea/conversations/\(id)/replies?target=general&cursor=" + cursor)
+        refreshed += page.items
+      }
       guard valid, accessRevision == expectedAccess, !Task.isCancelled else { return }
       var seen = Set(reset ? [] : replies.map(\.id))
-      let unique = page.items.filter { seen.insert($0.id).inserted }
+      let unique = refreshed.filter { seen.insert($0.id).inserted }
       replies = reset ? unique : replies + unique
       nextCursor = page.nextCursor; replyLoadedAt = Date()
     } catch {
@@ -204,18 +251,22 @@ extension Notification.Name {
       var seen = Set(reset ? [] : (threads[target.id] ?? []).map(\.id))
       threads[target.id] = (reset ? [] : threads[target.id] ?? []) + page.items.filter { $0.target?.id == target.id && seen.insert($0.id).inserted }
       threadCursors[target.id] = page.nextCursor
+      threadLoadedAt[target.id] = Date()
     } catch {
       guard valid, expected == accessRevision else { return }
       if Self.denied(error) { clear() }
       else { threadErrors[target.id] = "Couldn’t load these replies. Try again." }
     }
   }
-  func loadAuthor() async {
-    guard valid, let author = post?.author.id else { return }
+  func loadAuthor(force: Bool = false) async {
+    guard valid, !loadingAuthor, let author = post?.author.id else { return }
+    if !force, let authorLoadedAt, Date().timeIntervalSince(authorLoadedAt) < 60 { return }
+    loadingAuthor = true
+    defer { loadingAuthor = false }
     do {
       let user: MIRAUser = try await api.getFresh("/users/" + author)
       guard valid, post?.author.id == user.id else { return }
-      authorProfile = user; authorError = nil
+      authorProfile = user; authorError = nil; authorLoadedAt = Date()
     } catch { if valid { authorError = "Couldn’t refresh this profile." } }
   }
   func followAuthor() async {
@@ -227,9 +278,9 @@ extension Notification.Name {
       let result: FollowResponse = try await api.post("/users/" + author + "/follow", body: FollowBody(following: !(user.viewerFollowing || user.followPending == true)))
       guard valid else { return }
       MIRAUserFollowSync.publish(MIRAUserFollowUpdate(userId: author, following: result.following == true, followersCount: result.followersCount))
-      await loadAuthor()
+      await loadAuthor(force: true)
       await load(force: true)
-    } catch { if valid { await loadAuthor(); authorError = "Couldn’t confirm the follow change. Refresh and try again." } }
+    } catch { if valid { await loadAuthor(force: true); authorError = "Couldn’t confirm the follow change. Refresh and try again." } }
   }
   func updated(_ result: CaptroTeaConversation) {
     guard valid, result.id == id else { return }

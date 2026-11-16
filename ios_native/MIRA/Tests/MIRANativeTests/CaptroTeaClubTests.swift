@@ -40,6 +40,13 @@ final class CaptroTeaClubTests: XCTestCase {
     ClubTestProtocol.revoke()
     await model.load(force:true)
     XCTAssertTrue(model.denied); XCTAssertNil(model.club); XCTAssertTrue(model.messages.isEmpty); XCTAssertTrue(model.drafts.isEmpty)
+    let reads = ClubTestProtocol.reads
+    let reopened = api.teaClubs.model("club")
+    XCTAssertTrue(reopened === model, "A visitor reuses the denial, not private member data")
+    await reopened.load()
+    XCTAssertEqual(ClubTestProtocol.reads, reads)
+    await reopened.load(force: true)
+    XCTAssertTrue(reopened.denied)
   }
 
   func testInviteAndNativeLinkParsingRejectsSpoofedHostsAndCredentials() throws {

@@ -10,6 +10,51 @@ final class CaptroScreenLoadingTests: XCTestCase {
     config.protocolClasses = [PolishLoadingProtocol.self]
     return MIRAAPIClient(baseURL: URL(string: "https://localhost")!, session: URLSession(configuration: config))
   }
+  func testPresentationReusePreservesChatDraftAndViewportAndClearsOnAccountSwitch() {
+    MIRALocalJSONCache.setAccountScope(userId: "presentation-a")
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let client = api()
+    let room = client.presentations.room(.direct(peerId: "friend"), userID: "presentation-a")
+    room.draft = "Keep my unfinished message"
+    let reopened = client.presentations.room(.direct(peerId: "friend"), userID: "presentation-a")
+    XCTAssertTrue(room === reopened); XCTAssertTrue(room.viewport === reopened.viewport)
+    XCTAssertEqual(reopened.draft, "Keep my unfinished message")
+    let other = client.presentations.room(.direct(peerId: "other"), userID: "presentation-a")
+    XCTAssertEqual(other.draft, "")
+    MIRALocalJSONCache.setAccountScope(userId: "presentation-b")
+    let switched = client.presentations.room(.direct(peerId: "friend"), userID: "presentation-b")
+    XCTAssertFalse(room === switched); XCTAssertFalse(room.valid)
+    XCTAssertEqual(room.draft, ""); XCTAssertEqual(switched.draft, "")
+  }
+  func testCancelledChatReadDoesNotBecomeReconnectErrorAndRetryRecovers() async {
+    let client = api()
+    let model = ConversationNativeModel(kind: .direct(peerId: "polish-peer"), api: client, currentUserId: "polish-\(UUID())")
+    PolishLoadingProtocol.cancelNextRead()
+    await model.load()
+    XCTAssertNil(model.errorMessage); XCTAssertNil(model.syncNotice)
+    XCTAssertFalse(model.isLoading)
+    await model.load()
+    XCTAssertEqual(PolishLoadingProtocol.count("/messages/polish-peer"), 2)
+    XCTAssertNil(model.errorMessage)
+  }
+  func testRetryCannotResendAnAcknowledgedMessageFromAnOldButton() async throws {
+    MIRALocalJSONCache.setAccountScope(userId: "send-\(UUID())")
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    let client = api()
+    let model = ConversationNativeModel(kind: .direct(peerId: "polish-peer"), api: client, currentUserId: "polish-user")
+    model.draft = "One message"
+    await model.sendText()
+    let failed = try XCTUnwrap(model.messages.first)
+    XCTAssertEqual(failed.status, "failed")
+    await model.retry(failed)
+    XCTAssertEqual(model.messages.count, 1)
+    XCTAssertEqual(model.messages.first?.status, "sent")
+    await model.retry(failed)
+    let ids = PolishLoadingProtocol.sendIDs
+    XCTAssertEqual(ids.count, 2)
+    XCTAssertFalse(ids.first?.isEmpty ?? true)
+    XCTAssertEqual(ids.first, ids.last, "Ambiguous delivery retries must keep their durable identity")
+  }
   func testEmptyInboxIsAValidFreshResponse() async {
     let model = ChatNativeModel(api: api())
     model.configure(currentUserId: "polish-\(UUID())")
@@ -118,7 +163,8 @@ final class CaptroScreenLoadingTests: XCTestCase {
   func testVisitorProfileRejectsOldAccountCompletionAndFreshReopenDoesNotRefetch() async {
     MIRALocalJSONCache.setAccountScope(userId: "polish-a-\(UUID())")
     defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
-    let model = UserProfileNativeModel(userId: "polish-visitor", api: api())
+    let client = api()
+    let model = client.presentations.profile("polish-visitor")
     let started = expectation(description: "Old account profile read held")
     PolishLoadingProtocol.holdProfile { started.fulfill() }
     let old = Task { await model.revalidateIfStale() }
@@ -128,10 +174,13 @@ final class CaptroScreenLoadingTests: XCTestCase {
     await old.value
     XCTAssertNil(model.user, "An old viewer's response must never populate the new scope")
     XCTAssertFalse(model.isLoading)
-    await model.revalidateIfStale()
-    XCTAssertEqual(model.user?.id, "polish-visitor")
-    XCTAssertNil(model.errorMessage)
-    await model.revalidateIfStale()
+    XCTAssertFalse(model.valid)
+    let next = client.presentations.profile("polish-visitor")
+    XCTAssertFalse(next === model)
+    await next.revalidateIfStale()
+    XCTAssertEqual(next.user?.id, "polish-visitor")
+    XCTAssertNil(next.errorMessage)
+    await next.revalidateIfStale()
     XCTAssertEqual(PolishLoadingProtocol.count("/users/polish-visitor"), 2)
     XCTAssertEqual(PolishLoadingProtocol.count("/users/polish-visitor/posts"), 1)
   }
@@ -141,13 +190,17 @@ private final class PolishLoadingProtocol: URLProtocol {
   private static let lock = NSLock()
   private static var counts: [String: Int] = [:]
   private static var failed = false
+  private static var cancelRead = false
+  private static var sentIDs: [String] = []
+  static var sendIDs: [String] { lock.withLock { sentIDs } }
+  static func cancelNextRead() { lock.withLock { cancelRead = true } }
   private static var heldProfile: PolishLoadingProtocol?
   private static var onProfileHeld: (() -> Void)?
   static var fail: Bool {
     get { lock.withLock { failed } }
     set { lock.withLock { failed = newValue } }
   }
-  static func reset() { lock.withLock { counts = [:]; failed = false } }
+  static func reset() { lock.withLock { counts = [:]; failed = false; cancelRead = false; sentIDs = [] } }
   static func count(_ path: String) -> Int { lock.withLock { counts[path, default: 0] } }
   static func holdProfile(_ started: @escaping () -> Void) { lock.withLock { onProfileHeld = started } }
   static func releaseProfile() {
@@ -158,7 +211,28 @@ private final class PolishLoadingProtocol: URLProtocol {
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
     let url = request.url!
+    if request.httpMethod == "POST", url.path == "/messages" {
+      var data = request.httpBody ?? Data()
+      if data.isEmpty, let stream = request.httpBodyStream {
+        stream.open(); defer { stream.close() }
+        var bytes = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+          let count = stream.read(&bytes, maxLength: bytes.count)
+          if count <= 0 { break }; data.append(contentsOf: bytes.prefix(count))
+        }
+      }
+      let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+      let id = body["client_request_id"] as? String ?? ""
+      let attempt = Self.lock.withLock { Self.sentIDs.append(id); return Self.sentIDs.count }
+      if attempt == 1 { client?.urlProtocol(self, didFailWithError: URLError(.timedOut)); return }
+      let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type":"application/json"])!
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: Data(#"{"id":"acknowledged","sender_id":"polish-user","receiver_id":"polish-peer","content":"One message","created_at":"2026-11-15T12:00:00Z","status":"sent"}"#.utf8))
+      client?.urlProtocolDidFinishLoading(self); return
+    }
+    let canceled = Self.lock.withLock { let value = Self.cancelRead; Self.cancelRead = false; return value }
     Self.lock.withLock { Self.counts[url.path, default: 0] += 1 }
+    if canceled { client?.urlProtocol(self, didFailWithError: URLError(.cancelled)); return }
     if url.path == "/users/polish-visitor" {
       let started: (() -> Void)? = Self.lock.withLock {
         guard let callback = Self.onProfileHeld else { return nil }

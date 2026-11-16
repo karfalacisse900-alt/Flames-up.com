@@ -163,6 +163,7 @@ public final class MIRAAPIClient {
   @MainActor lazy var favorites = CaptroFavoritesStore(api: self)
   @MainActor lazy var teaClubs = CaptroTeaClubStore(api: self)
   @MainActor lazy var teaConversations = CaptroTeaConversationStore(api: self)
+  @MainActor lazy var presentations = CaptroPresentationModels(api: self)
   @MainActor lazy var publications = CaptroPublicationStore()
   public static let productionSession: URLSession = {
     let configuration = URLSessionConfiguration.default
@@ -437,6 +438,8 @@ public final class MIRAAPIClient {
     // Ordinary token refresh must not clear an open discussion. Identity changes
     // are already isolated by presentationScope/sessionGeneration.
     let discardsConversations = discardsTea && method != "GET" && !path.hasPrefix("/auth")
+    let discardsPresentations = method != "GET" && (path.contains("/block") || path.contains("/privacy"))
+    if discardsPresentations { await presentations.invalidate() }
     if discardsConversations { await teaConversations.invalidate(); await teaClubs.invalidate() }
     if changesTea { await teaDetails.invalidate(discard: discardsTea) }
     let generation = await (sessionProvider as? MIRAAuthSession)?.sessionGeneration
@@ -474,6 +477,7 @@ public final class MIRAAPIClient {
     }
     } catch {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
+      if discardsPresentations { await presentations.invalidate() }
       if discardsConversations { await teaConversations.invalidate(); await teaClubs.invalidate() }
       throw error
     }
@@ -481,6 +485,7 @@ public final class MIRAAPIClient {
 
     do {
       if changesTea { await teaDetails.invalidate(discard: discardsTea) }
+      if discardsPresentations { await presentations.invalidate() }
       if discardsConversations { await teaConversations.invalidate(); await teaClubs.invalidate() }
       return try decoder.decode(T.self, from: data)
     } catch {

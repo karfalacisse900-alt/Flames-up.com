@@ -1071,6 +1071,15 @@ private struct ProfileToolbarDestinationButton<Destination: View>: View {
 
 @MainActor
 final class UserProfileNativeModel: ObservableObject {
+  private var invalidated = false
+  private let presentationScope: String
+  let viewport = CaptroFeedViewport()
+  var valid: Bool { !invalidated && presentationScope == api.presentationScope }
+  func clearPresentation() {
+    invalidated = true; generation += 1; user = nil; posts = []; showcase = CaptroProfileShowcase()
+    viewport.setActive(false); isLoading = false; isLoadingMore = false
+    isFollowing = false; followPending = false; followersCount = 0; canLoadMore = false
+  }
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
   @Published var isFollowing = false
@@ -1097,9 +1106,12 @@ final class UserProfileNativeModel: ObservableObject {
   init(userId: String, api: MIRAAPIClient) {
     self.userId = userId
     self.api = api
+    presentationScope = api.presentationScope
+    viewport.select("profile"); viewport.updateOrder(["profile"])
   }
 
   func revalidateIfStale() async {
+    guard valid else { return }
     let scope = api.presentationScope
     if scope != lastLoadScope {
       generation += 1; isLoading = false; isLoadingMore = false
@@ -1113,6 +1125,7 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func load() async {
+    guard valid, !isLoading else { return }
     generation += 1
     let request = generation
     let owner = api.presentationScope
@@ -1157,16 +1170,16 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func loadMore() async {
-    guard canLoadMore, !isLoadingMore, !isLoading, user?.privacyLocked != true, !isBlocked, !isBlockedBy else { return }
+    guard valid, canLoadMore, !isLoadingMore, !isLoading, user?.privacyLocked != true, !isBlocked, !isBlockedBy else { return }
     let request = generation; isLoadingMore = true
     defer { if request == generation { isLoadingMore = false } }
     do {
       let page: [MIRAPost] = try await api.get("/users/\(userId)/posts?limit=60&skip=\(nextOffset)")
-      guard request == generation, !Task.isCancelled else { return }
+      guard valid, request == generation, !Task.isCancelled else { return }
       let existing = Set(posts.map(\.id))
       posts += profileVisiblePosts(page).filter { !existing.contains($0.id) }
       nextOffset += page.count; canLoadMore = page.count == 60; errorMessage = nil
-    } catch { if request == generation { errorMessage = "Could not load more posts. Try again." } }
+    } catch { if valid, request == generation, !CaptroRefreshFailure.isCancellation(error) { errorMessage = "Could not load more posts. Try again." } }
   }
 
   func removePostLocally(id postId: String) async {
@@ -1192,12 +1205,13 @@ final class UserProfileNativeModel: ObservableObject {
   }
 
   func toggleFollow() async {
-    guard !isUpdatingRelationship, !isBlocked, !isBlockedBy else { return }
+    guard valid, !isUpdatingRelationship, !isBlocked, !isBlockedBy else { return }
     isUpdatingRelationship = true
     defer { isUpdatingRelationship = false }
     let nextFollowing = !(isFollowing || followPending)
     do {
       let response: FollowResponse = try await api.post("/users/\(userId)/follow", body: FollowBody(following: nextFollowing))
+      guard valid else { return }
       isFollowing = response.following == true
       followPending = response.followPending == true
       followersCount = response.followersCount ?? followersCount
@@ -1228,6 +1242,8 @@ final class UserProfileNativeModel: ObservableObject {
   func unblockUser() async -> Bool {
     do {
       let _: EmptyResponse? = try await api.delete("/users/\(userId)/block")
+      guard presentationScope == api.presentationScope else { return false }
+      invalidated = false
       isBlocked = false
       errorMessage = nil
       await load()
@@ -1268,13 +1284,14 @@ public struct UserProfileNativeView: View {
   }
 
   public init(userId: String, api: MIRAAPIClient) {
-    _model = StateObject(wrappedValue: UserProfileNativeModel(userId: userId, api: api))
+    _model = StateObject(wrappedValue: api.presentations.profile(userId))
   }
 
   public var body: some View {
     ScrollView {
       VStack(spacing: MIRATheme.Space.lg) {
         profileHeader
+          .background(CaptroFeedViewportMarker(owner: model.viewport, postID: "profile", feed: "profile").allowsHitTesting(false))
         if let pinned = model.showcase.pinned, model.user?.privacyLocked != true, !model.isBlocked, !model.isBlockedBy {
           NavigationLink(destination: DiscoverPostDetailNativeView(post: pinned, api: model.api)) {
             CaptroProfileItemRow(post: pinned, pinned: true)
@@ -1328,7 +1345,7 @@ public struct UserProfileNativeView: View {
       .padding(.top, MIRATheme.Space.md)
       .padding(.bottom, MIRATheme.Space.xxl)
     }
-    .background(Color(uiColor: .systemBackground))
+    .background(MIRATheme.Color.appBackground)
     .miraScrollFeel(.feed)
     .miraScreenEnter(.push)
     .navigationTitle(model.user?.username.map { "@\($0)" } ?? "Profile")
@@ -1338,6 +1355,8 @@ public struct UserProfileNativeView: View {
     .toolbar { ToolbarItem(placement: .topBarTrailing) { profileSafetyMenu } }
     .refreshable { await model.load() }
     .task { await model.revalidateIfStale() }
+    .onAppear { model.viewport.setActive(true) }
+    .onDisappear { model.viewport.setActive(false) }
     .onChange(of: profileScenePhase) { _, phase in
       if phase == .active { Task { await model.revalidateIfStale() } }
     }
@@ -1589,7 +1608,7 @@ public struct UserProfileNativeView: View {
     let current: MIRAUser
     do { current = try await model.api.get("/auth/me") }
     catch { model.errorMessage = "Sign in or reconnect to open this conversation."; return }
-    let roomModel = ConversationNativeModel(kind: .direct(peerId: model.userId), api: model.api, currentUserId: current.id)
+    let roomModel = model.api.presentations.room(.direct(peerId: model.userId), userID: current.id)
     messageRoute = ChatOpenRoute(
       id: "profile-\(model.userId)",
       title: model.user?.displayName ?? "Chat",
@@ -2279,10 +2298,11 @@ final class ChatNativeModel: ObservableObject {
       await localStore.saveConversations(fresh, userId: accountId)
     } catch {
       guard accountId == currentUserId else { return }
+      guard !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       consecutiveFailures = min(3, consecutiveFailures + 1)
-      if conversations.isEmpty {
-        hasLoadedFreshConversations = false
-        loadError = "Check your connection and try again."
+      if conversations.isEmpty { hasLoadedFreshConversations = false }
+      if conversations.isEmpty || consecutiveFailures >= 2 {
+        loadError = CaptroRefreshFailure.message(error, content: "chats", cached: !conversations.isEmpty)
       }
     }
   }
@@ -2319,12 +2339,12 @@ final class ChatNativeModel: ObservableObject {
     } else {
       return nil
     }
-    if let cached = roomModels[conversation.id] {
+    if let cached = roomModels[conversation.id], cached.valid {
       recentRoomIDs.removeAll { $0 == conversation.id }
       recentRoomIDs.append(conversation.id)
       return cached
     }
-    let room = ConversationNativeModel(kind: kind, api: api, currentUserId: currentUserId)
+    let room = api.presentations.room(kind, userID: currentUserId)
     roomModels[conversation.id] = room
     recentRoomIDs.append(conversation.id)
     while recentRoomIDs.count > 4 {
@@ -2394,6 +2414,13 @@ public struct ChatNativeView: View {
               }
             }
             .padding(.horizontal, MIRATheme.Space.md)
+          }
+          if !model.conversations.isEmpty, let error = model.loadError {
+            HStack {
+              Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+              Spacer()
+              Button("Retry") { Task { await model.load(forceRefresh: true) } }.frame(minHeight: 44)
+            }.padding(.horizontal, MIRATheme.Space.md)
           }
         }
         .padding(.top, MIRATheme.Space.md)

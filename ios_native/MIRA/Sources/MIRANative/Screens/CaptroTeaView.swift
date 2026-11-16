@@ -77,7 +77,7 @@ enum CaptroTeaPalette: String {
   var iconBackground: Color { .white.opacity(self == .navy ? 0.22 : 0.80) }
 }
 
-struct CaptroTeaView: View {
+@MainActor struct CaptroTeaView: View {
   let api: MIRAAPIClient
   let viewerID: String?
   let signIn: () -> Void
@@ -92,6 +92,16 @@ struct CaptroTeaView: View {
   @State private var loading = false
   @State private var didLoad = false
   @State private var error: String?
+  @State private var receivedAt: Date?
+
+  init(api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void, close: @escaping () -> Void) {
+    self.api = api; self.viewerID = viewerID; self.signIn = signIn; self.close = close
+    let cached = api.teaDetails.cachedListing()
+    _entries = State(initialValue: cached?.entries ?? [])
+    _cursor = State(initialValue: cached?.cursor)
+    _didLoad = State(initialValue: cached != nil)
+    _receivedAt = State(initialValue: cached?.receivedAt)
+  }
 
   var body: some View {
     NavigationStack(path: $path) {
@@ -178,9 +188,13 @@ struct CaptroTeaView: View {
       .sheet(isPresented: $composing) {
         CaptroTeaComposer(api: api) { post in created = post; path.append(post) }
       }
-      .task(id: section) { if section == "Clubs & Events", !didLoad { await load(reset: true) } }
+      .task(id: section) {
+        if section == "Clubs & Events", receivedAt.map({ Date().timeIntervalSince($0) >= 30 }) != false {
+          await load(reset: true)
+        }
+      }
       .onChange(of: viewerID) { _, _ in
-        path = NavigationPath(); entries = []; cursor = nil; didLoad = false; created = nil; composing = false
+        path = NavigationPath(); entries = []; cursor = nil; didLoad = false; receivedAt = nil; created = nil; composing = false
         api.teaConversations.invalidate()
       }
     }
@@ -211,6 +225,7 @@ struct CaptroTeaView: View {
   @MainActor private func load(reset: Bool) async {
     guard !loading, reset || cursor != nil else { return }
     loading = true
+    let owner = api.presentationScope
     error = nil
     defer { loading = false }
     var params: [URLQueryItem] = []
@@ -223,11 +238,14 @@ struct CaptroTeaView: View {
     do {
       let result: CaptroTeaPage = try await api.get(path.string ?? "/tea")
       try Task.checkCancellation()
+      guard owner == api.presentationScope else { return }
       var seen = Set(reset ? [] : entries.map(\.id))
       let unique = result.items.filter { seen.insert($0.id).inserted }
       entries = reset ? unique : entries + unique
       cursor = result.nextCursor
       didLoad = true
+      receivedAt = Date()
+      api.teaDetails.saveListing(entries, cursor: cursor)
     } catch is CancellationError {
     } catch MIRAAPIError.server(_, let code, _) where code == "TEA_INVALID_PAGE" && !reset {
       cursor = nil
@@ -302,10 +320,12 @@ struct CaptroTeaDetailView: View {
   @State private var error: String?
   @State private var unavailable = false
   @State private var loading = false
+  private let viewport: CaptroFeedViewport
   @Environment(\.scenePhase) private var scenePhase
 
   init(entry: CaptroTeaEntry, api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void) {
     self.entry = entry; self.api = api; self.viewerID = viewerID; self.signIn = signIn
+    viewport = api.teaDetails.viewport(for: entry)
     let cached = api.teaDetails.snapshot(for: entry)
     _detail = State(initialValue: cached)
     _commerceModel = State(initialValue: cached.flatMap { Self.model(for: $0, api: api, viewerID: viewerID) })
@@ -370,6 +390,8 @@ struct CaptroTeaDetailView: View {
       .listRowInsets(EdgeInsets())
       .listRowSeparator(.hidden)
       .listRowBackground(Color.clear)
+      .background(CaptroFeedViewportMarker(owner: viewport, postID: entry.id,
+        feed: entry.destination.detailPath ?? entry.id).allowsHitTesting(false))
     }
     .listStyle(.plain)
     .scrollContentBackground(.hidden)
@@ -381,6 +403,8 @@ struct CaptroTeaDetailView: View {
     .miraNavigationSurface()
     .miraHideTabBarOnAppear()
     .task(id: entry.destination) { await load() }
+    .onAppear { viewport.setActive(true) }
+    .onDisappear { viewport.setActive(false) }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { Task { await load() } }
     }

@@ -109,8 +109,11 @@ actor MIRAChatLocalStore {
     messages: [MIRAMessage],
     lastSyncedAt: String?,
     lastServerSequence: Int?,
-    hasOlderRemote: Bool
+    hasOlderRemote: Bool,
+    expectedScopeIdentifier: String? = nil
   ) async {
+    let owner = expectedScopeIdentifier ?? MIRALocalJSONCache.currentScopeIdentifier
+    guard owner == MIRALocalJSONCache.currentScopeIdentifier else { return }
     let sorted = sortedMessages(dedupedMessages(messages))
     let trimmed = Array(sorted.suffix(maxThreadMessages))
     let latestCursor = lastSyncedAt ?? latestRemoteCursor(in: trimmed)
@@ -121,7 +124,7 @@ actor MIRAChatLocalStore {
       hasOlderRemote: hasOlderRemote || sorted.count > trimmed.count,
       savedAt: nowISO()
     )
-    await MIRALocalJSONCache.save(snapshot, key: threadKey(kind: kind, currentUserId: currentUserId))
+    await MIRALocalJSONCache.save(snapshot, key: threadKey(kind: kind, currentUserId: currentUserId), expectedScopeIdentifier: owner)
   }
 
   func merge(_ existing: [MIRAMessage], with incoming: [MIRAMessage]) -> [MIRAMessage] {

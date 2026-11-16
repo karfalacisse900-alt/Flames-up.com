@@ -16,6 +16,16 @@ struct CaptroTeaConversationsList: View {
   @State private var revision = 0
   @Environment(\.scenePhase) private var scenePhase
 
+  init(api: MIRAAPIClient, active: Bool, created: CaptroTeaConversation?, open: @escaping (CaptroTeaConversation) -> Void) {
+    self.api = api; self.active = active; self.created = created; self.open = open
+    let cached = api.teaConversations.cachedListing()
+    _items = State(initialValue: cached?.items ?? [])
+    _nextCursor = State(initialValue: cached?.cursor)
+    _receivedAt = State(initialValue: cached?.receivedAt)
+    _loaded = State(initialValue: cached != nil)
+    _scope = State(initialValue: api.presentationScope)
+  }
+
   var body: some View {
     List {
       if items.isEmpty {
@@ -24,6 +34,8 @@ struct CaptroTeaConversationsList: View {
       }
       ForEach(items) { post in
         Button { open(post) } label: { CaptroTeaConversationRow(post: post) }
+          .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
+            postID: post.id, feed: "tea-list").allowsHitTesting(false))
           .buttonStyle(.plain)
           .listRowInsets(EdgeInsets(top: 4, leading: 14, bottom: 4, trailing: 14))
           .listRowSeparator(.hidden).listRowBackground(Color.clear)
@@ -43,7 +55,19 @@ struct CaptroTeaConversationsList: View {
     .accessibilityIdentifier("tea.conversations.list")
     .refreshable { await load(reset: true, force: true) }
     .task(id: active) { if active { await load(reset: true) } }
-    .onAppear { if active { Task { await load(reset: true) } } }
+    .onAppear {
+      api.teaConversations.listViewport.select("tea-list")
+      api.teaConversations.listViewport.updateOrder(items.map(\.id))
+      api.teaConversations.listViewport.setActive(active)
+    }
+    .onDisappear { api.teaConversations.listViewport.setActive(false) }
+    .onChange(of: active) { _, active in api.teaConversations.listViewport.setActive(active) }
+    .onChange(of: items) { _, items in
+      api.teaConversations.listViewport.updateOrder(items.map(\.id))
+      if scope == api.presentationScope, let receivedAt {
+        api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt)
+      }
+    }
     .onChange(of: scenePhase) { _, phase in if phase == .active, active { Task { await load(reset: true) } } }
     .onChange(of: created) { _, post in
       guard let post, scope == api.presentationScope else { return }
@@ -77,6 +101,7 @@ struct CaptroTeaConversationsList: View {
       let unique = page.items.filter { seen.insert($0.id).inserted }
       items = reset ? unique : items + unique
       nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
+      api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt!)
     } catch is CancellationError {} catch {
       guard owner == api.presentationScope, revision == expectedRevision else { return }
       if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }

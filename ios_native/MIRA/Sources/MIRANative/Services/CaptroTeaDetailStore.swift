@@ -20,6 +20,9 @@ final class CaptroTeaDetailStore {
   private var snapshots: [String: Snapshot] = [:]
   private var flights: [String: Flight] = [:]
   private var latest: [String: UUID] = [:]
+  private var viewports: [String: CaptroFeedViewport] = [:]
+  struct Listing { let entries: [CaptroTeaEntry]; let cursor: String?; let receivedAt: Date }
+  private var listing: Listing?
   private let freshness: TimeInterval = 60
   private let retention: TimeInterval = 600
 
@@ -33,6 +36,24 @@ final class CaptroTeaDetailStore {
     guard let key = entry.destination.detailPath, let value = snapshots[key],
           now().timeIntervalSince(value.receivedAt) < retention else { return nil }
     return value.detail
+  }
+
+  func cachedListing() -> Listing? {
+    synchronizeScope()
+    guard let listing, now().timeIntervalSince(listing.receivedAt) < retention else { return nil }
+    return listing
+  }
+  func saveListing(_ entries: [CaptroTeaEntry], cursor: String?) {
+    synchronizeScope(); listing = Listing(entries: entries, cursor: cursor, receivedAt: now())
+  }
+  func viewport(for entry: CaptroTeaEntry) -> CaptroFeedViewport {
+    synchronizeScope()
+    let key = entry.destination.detailPath ?? entry.id
+    if let viewport = viewports[key] { return viewport }
+    let viewport = CaptroFeedViewport(); viewport.select(key); viewport.updateOrder([entry.id])
+    viewports[key] = viewport
+    if viewports.count > 24, let old = viewports.keys.first(where: { $0 != key }) { viewports[old] = nil }
+    return viewport
   }
 
   func load(_ entry: CaptroTeaEntry, force: Bool = false) async throws -> CaptroTeaDetails {
@@ -86,7 +107,8 @@ final class CaptroTeaDetailStore {
   /// Keep display data, but require a fresh read on the next visit.
   func invalidate(discard: Bool = false) {
     synchronizeScope()
-    if discard { snapshots.removeAll() }
+    listing = nil
+    if discard { snapshots.removeAll(); viewports.removeAll() }
     for key in snapshots.keys { snapshots[key]?.invalidated = true }
     for value in flights.values { value.task.cancel() }
     flights.removeAll()
@@ -109,6 +131,6 @@ final class CaptroTeaDetailStore {
     let current = scope()
     guard current != activeScope else { return }
     for value in flights.values { value.task.cancel() }
-    flights.removeAll(); latest.removeAll(); snapshots.removeAll(); activeScope = current
+    flights.removeAll(); latest.removeAll(); snapshots.removeAll(); viewports.removeAll(); listing = nil; activeScope = current
   }
 }

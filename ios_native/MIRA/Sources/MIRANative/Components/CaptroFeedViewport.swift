@@ -23,6 +23,7 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
   private var activeID: String?
   private var isActive = true
   var onVisible: ((String?) -> Void)?
+  var hasSavedPosition: Bool { snapshots[scope] != nil }
 
   /// A read-only publication hint. An absent/hidden scroll view, pending
   /// navigation, rubber-banding or user motion is not an invitation to insert

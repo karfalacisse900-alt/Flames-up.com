@@ -37,6 +37,15 @@ final class ConversationNativeModel: ObservableObject {
   @Published var isSending = false
   @Published var isUploading = false
   @Published var errorMessage: String?
+  @Published private(set) var syncNotice: String?
+  let viewport = CaptroFeedViewport()
+  private let scope: String
+  private let cacheScope: String
+  private var invalidated = false
+  private var accessRevoked = false
+  private var syncState = CaptroChatSyncState()
+  private var mediaPrefetchTask: Task<Void, Never>?
+  private var lastPrefetchURLs: [String] = []
 
   let kind: ConversationNativeKind
   let api: MIRAAPIClient
@@ -55,7 +64,32 @@ final class ConversationNativeModel: ObservableObject {
     self.kind = kind
     self.api = api
     self.currentUserId = currentUserId
+    scope = api.presentationScope
+    cacheScope = MIRALocalJSONCache.currentScopeIdentifier
     self.uploadService = MIRAMediaUploadService(api: api)
+    viewport.select("chat"); viewport.updateOrder([])
+  }
+
+  var valid: Bool { !invalidated && scope == api.presentationScope }
+  func clearPresentation() {
+    invalidated = true; messages = []; draft = ""; groupInfo = nil; presence = nil
+    viewport.setActive(false); mediaPrefetchTask?.cancel(); lastPrefetchURLs = []
+    syncNotice = nil; isLoading = false; isSyncing = false
+  }
+  func retryRefresh() async { guard valid else { return }; await refreshRecentMessages() }
+
+  private func recordSyncFailure(_ error: Error) {
+    guard valid, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
+    syncState.failed(error)
+    consecutiveSyncFailures = syncState.failures
+    syncNotice = messages.isEmpty ? nil : syncState.notice()
+    if messages.isEmpty { errorMessage = CaptroRefreshFailure.message(error, content: "messages", cached: false) }
+    MIRAApplePerformanceLogger.event("chat_sync_failed", detail: CaptroRefreshFailure.isOffline(error) ? "offline" : "transport")
+  }
+  private func recordSyncSuccess() {
+    syncState.succeeded(); consecutiveSyncFailures = 0; syncNotice = nil
+    lastSuccessfulSync = Date(); accessRevoked = false
+    if !messages.contains(where: { $0.status == "failed" }) { errorMessage = nil }
   }
 
   var isGroup: Bool {
@@ -69,6 +103,7 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   func load() async {
+    guard valid else { return }
     if didBeginInitialLoad {
       if Date().timeIntervalSince(lastSuccessfulSync) >= 5 {
         if Date().timeIntervalSince(lastRecentReconcile) >= 45 { await refreshRecentMessages() }
@@ -86,8 +121,9 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   private func hydrateLocalMessages() async {
-    guard messages.isEmpty else { return }
+    guard valid, messages.isEmpty else { return }
     if let snapshot = await localStore.loadThread(kind: kind, currentUserId: currentUserId, limit: 50) {
+      guard valid else { return }
       messages = CaptroHiddenMessages.visible(snapshot.messages, account: currentUserId, kind: kind)
       lastSyncedAt = snapshot.lastSyncedAt ?? latestMessageCursor()
       lastServerSequence = snapshot.lastServerSequence
@@ -98,7 +134,7 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   private func syncNewMessages() async {
-    guard !isSyncing else { return }
+    guard valid, !isSyncing else { return }
     isSyncing = true
     isLoading = messages.isEmpty
     defer {
@@ -113,30 +149,32 @@ final class ConversationNativeModel: ObservableObject {
         rows = try await api.get(messagesPath("/messages/\(peerId)", after: cursor, limit: 50))
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", after: cursor, limit: 50))
+        guard valid, !Task.isCancelled else { return }
         groupInfo = response.group
         rows = response.messages
       }
+      guard valid, !Task.isCancelled else { return }
       if !rows.isEmpty || messages.isEmpty {
-        messages = CaptroHiddenMessages.visible(await localStore.merge(messages, with: rows), account: currentUserId, kind: kind)
+        let merged = CaptroHiddenMessages.visible(await localStore.merge(messages, with: rows), account: currentUserId, kind: kind)
+        guard valid, !Task.isCancelled else { return }
+        if messages != merged { messages = merged }
         lastSyncedAt = latestMessageCursor() ?? lastSyncedAt
         lastServerSequence = messages.compactMap(\.serverSequence).max() ?? lastServerSequence
         if messages.count >= 50 { hasOlderMessages = true }
         prefetchMessageMedia(messages)
         await persistThread()
       }
-      consecutiveSyncFailures = 0
-      lastSuccessfulSync = Date()
-      errorMessage = nil
+      recordSyncSuccess()
     } catch {
-      consecutiveSyncFailures = min(4, consecutiveSyncFailures + 1)
+      guard valid, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       if await clearIfAccessRevoked(error) { return }
-      errorMessage = messages.isEmpty ? "Could not load this chat." : "Could not refresh messages. Reconnecting…"
+      recordSyncFailure(error)
     }
   }
 
   func pollMessagesWhileActive() async {
     await load()
-    guard !Task.isCancelled else { return }
+    guard valid, !accessRevoked, !Task.isCancelled else { return }
     let realtimeTask = Task { [weak self] in
       guard let self else { return }
       await MIRAChatRealtime.observe(
@@ -149,10 +187,10 @@ final class ConversationNativeModel: ObservableObject {
       realtimeTask.cancel()
       isRealtimeConnected = false
     }
-    while !Task.isCancelled {
+    while !Task.isCancelled, valid, !accessRevoked {
       // A healthy socket still gets occasional reconciliation for removals,
       // changed permissions, and events missed while the app was suspended.
-      let delay = isRealtimeConnected ? 45 : min(60, 5 * (1 << consecutiveSyncFailures))
+      let delay = syncState.pollDelay(socketConnected: isRealtimeConnected)
       do { try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000) }
       catch { break }
       if Date().timeIntervalSince(lastRecentReconcile) >= 45 { await refreshRecentMessages() }
@@ -161,7 +199,7 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   private func refreshRecentMessages() async {
-    guard !isSyncing else { return }
+    guard valid, !isSyncing else { return }
     isSyncing = true
     lastRecentReconcile = Date()
     defer { isSyncing = false }
@@ -172,21 +210,25 @@ final class ConversationNativeModel: ObservableObject {
         rows = try await api.get(messagesPath("/messages/\(peerId)", limit: 50))
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", limit: 50))
+        guard valid, !Task.isCancelled else { return }
         groupInfo = response.group
         rows = response.messages
       }
-      messages = CaptroHiddenMessages.visible(await localStore.reconcileRecent(messages, with: rows), account: currentUserId, kind: kind)
+      guard valid, !Task.isCancelled else { return }
+      let reconciled = CaptroHiddenMessages.visible(await localStore.reconcileRecent(messages, with: rows), account: currentUserId, kind: kind)
+      guard valid, !Task.isCancelled else { return }
+      let changed = messages != reconciled
+      if changed { messages = reconciled }
       lastSyncedAt = latestMessageCursor()
       lastServerSequence = messages.compactMap(\.serverSequence).max()
       hasOlderMessages = rows.count >= 50 || messages.filter { !$0.id.hasPrefix("local-") }.count > rows.count
       prefetchMessageMedia(rows)
-      await persistThread()
-      lastSuccessfulSync = Date()
-      consecutiveSyncFailures = 0
-      errorMessage = nil
+      if changed { await persistThread() }
+      recordSyncSuccess()
     } catch {
+      guard valid, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       if await clearIfAccessRevoked(error) { return }
-      errorMessage = messages.isEmpty ? "Could not load this chat." : "Could not refresh messages. Reconnecting…"
+      recordSyncFailure(error)
     }
   }
 
@@ -198,6 +240,7 @@ final class ConversationNativeModel: ObservableObject {
     default: return false
     }
     guard status == 401 || status == 403 || status == 404 else { return false }
+    accessRevoked = true; syncNotice = nil; mediaPrefetchTask?.cancel()
     messages = []
     groupInfo = nil
     lastSyncedAt = nil
@@ -215,7 +258,7 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   func loadOlderMessagesIfNeeded() async {
-    guard hasOlderMessages, !isLoadingOlder, let before = messages.first?.createdAt else { return }
+    guard valid, !accessRevoked, hasOlderMessages, !isLoadingOlder, let before = messages.first?.createdAt else { return }
     isLoadingOlder = true
     defer { isLoadingOlder = false }
     do {
@@ -225,27 +268,35 @@ final class ConversationNativeModel: ObservableObject {
         rows = try await api.get(messagesPath("/messages/\(peerId)", before: before, limit: 50))
       case let .group(groupId):
         let response: MIRAGroupMessagesResponse = try await api.get(messagesPath("/group-chats/\(groupId)/messages", before: before, limit: 50))
+        guard valid, !Task.isCancelled else { return }
         groupInfo = response.group
         rows = response.messages
       }
+      guard valid, !Task.isCancelled else { return }
       guard !rows.isEmpty else {
         hasOlderMessages = false
         await persistThread()
         return
       }
-      messages = CaptroHiddenMessages.visible(await localStore.merge(rows, with: messages), account: currentUserId, kind: kind)
+      let merged = CaptroHiddenMessages.visible(await localStore.merge(rows, with: messages), account: currentUserId, kind: kind)
+      guard valid, !Task.isCancelled else { return }
+      messages = merged
       hasOlderMessages = rows.count >= 50
       prefetchMessageMedia(rows)
       await persistThread()
     } catch {
+      guard valid, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
+      if await clearIfAccessRevoked(error) { return }
       errorMessage = messages.isEmpty ? "Could not load earlier messages." : nil
     }
   }
 
   func pollPresence() async {
     guard case let .direct(peerId) = kind else { return }
-    while !Task.isCancelled {
-      presence = try? await api.get("/messages/presence/\(peerId)")
+    while !Task.isCancelled, valid, !accessRevoked {
+      let value: MIRAPresence? = try? await api.get("/messages/presence/\(peerId)")
+      guard valid, !Task.isCancelled else { return }
+      presence = value
       try? await Task.sleep(nanoseconds: 8_000_000_000)
     }
   }
@@ -256,20 +307,21 @@ final class ConversationNativeModel: ObservableObject {
 
   func sendText() async {
     let clean = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !clean.isEmpty, !isSending else { return }
+    guard valid, !accessRevoked, !clean.isEmpty, !isSending else { return }
     draft = ""
     updateTyping(false)
-    if !(await send(content: clean, mediaUrl: nil, mediaType: nil)) {
+    if !(await send(content: clean, mediaUrl: nil, mediaType: nil)), valid {
       errorMessage = "Could not confirm delivery. Retry the saved message below."
     }
   }
 
   func sendPickedMedia(data: Data, contentTypes: [UTType], replacingLocalId: String? = nil) async {
-    guard !isUploading else { return }
+    guard valid, !accessRevoked, !isUploading, !isSending else { return }
     isUploading = true
     defer { isUploading = false }
     let (kind, fileName, mimeType) = pickedMediaKind(from: contentTypes, fallbackData: data)
     let localURL = await localStore.storeOutgoingMedia(data: data, fileName: fileName)
+    guard valid else { return }
     let localId = replacingLocalId ?? appendLocalOutgoingMessage(
       content: "",
       mediaUrl: localURL?.absoluteString,
@@ -278,20 +330,23 @@ final class ConversationNativeModel: ObservableObject {
     )
     do {
       let url = try await uploadService.upload(MIRAPickedMedia(data: data, kind: kind, fileName: fileName, mimeType: mimeType))
+      guard valid else { return }
       if let index = messages.firstIndex(where: { $0.id == localId }) {
         messages[index] = messages[index].updating(mediaUrl: url, uploadStatus: "uploaded")
         await persistThread()
       }
       await send(content: "", mediaUrl: url, mediaType: kind == .video ? "video" : "image", replacingLocalId: localId)
     } catch {
+      guard valid else { return }
       updateLocalMessage(localId, status: "failed", uploadStatus: "failed")
       errorMessage = "Could not send this media."
     }
   }
 
   func updateTyping(_ typing: Bool) {
-    guard case let .direct(peerId) = kind else { return }
+    guard valid, !accessRevoked, case let .direct(peerId) = kind else { return }
     Task {
+      guard valid else { return }
       let _: EmptyResponse? = try? await api.post("/messages/typing", body: TypingBody(peerId: peerId, isTyping: typing))
     }
   }
@@ -335,11 +390,13 @@ final class ConversationNativeModel: ObservableObject {
 
   @discardableResult
   private func send(content: String, mediaUrl: String?, mediaType: String?, replacingLocalId: String? = nil) async -> Bool {
-    guard !isSending else { return false }
+    guard valid, !accessRevoked, !isSending else { return false }
     isSending = true
     let localId = replacingLocalId ?? appendLocalOutgoingMessage(content: content, mediaUrl: mediaUrl, mediaType: mediaType, uploadStatus: mediaUrl == nil ? nil : "uploaded")
+    if replacingLocalId != nil { updateLocalMessage(localId, status: "sending", uploadStatus: mediaUrl == nil ? nil : "uploaded") }
     await persistThread()
     defer { isSending = false }
+    guard valid else { return false }
     do {
       let sent: MIRAMessage
       switch kind {
@@ -354,10 +411,12 @@ final class ConversationNativeModel: ObservableObject {
           body: GroupMessageBody(content: content, mediaUrl: mediaUrl, mediaType: mediaType, clientRequestId: localId)
         )
       }
+      guard valid else { return false }
       replaceLocalMessage(localId, with: sent.updating(status: "sent", uploadStatus: "uploaded"))
       errorMessage = nil
       return true
     } catch {
+      guard valid else { return false }
       updateLocalMessage(localId, status: "failed", uploadStatus: mediaUrl == nil ? nil : "failed")
       errorMessage = "Could not send this message."
       return false
@@ -365,7 +424,8 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   func retry(_ message: MIRAMessage) async {
-    guard !isSending, !isUploading, message.status?.lowercased() == "failed" else { return }
+    guard valid, !accessRevoked, !isSending, !isUploading,
+          messages.contains(where: { $0.id == message.id && $0.status?.lowercased() == "failed" }) else { return }
     guard !["voice", "audio"].contains(message.mediaType?.lowercased() ?? "") else {
       errorMessage = "Voice messages are no longer supported. Your saved recording has not been deleted."
       return
@@ -403,8 +463,9 @@ final class ConversationNativeModel: ObservableObject {
         .filter { !$0.isEmpty && !$0.isVideoURL }
     }
     let urls = avatarURLs + imageURLs
-    guard !urls.isEmpty else { return }
-    Task.detached(priority: .utility) {
+    guard !urls.isEmpty, urls != lastPrefetchURLs else { return }
+    mediaPrefetchTask?.cancel(); lastPrefetchURLs = urls
+    mediaPrefetchTask = Task.detached(priority: .utility) {
       await MIRAImagePrefetcher.prefetch(urls: urls, maxPixelSize: 760, limit: 18)
     }
   }
@@ -448,13 +509,15 @@ final class ConversationNativeModel: ObservableObject {
   }
 
   private func persistThread() async {
+    guard valid else { return }
     await localStore.saveThread(
       kind: kind,
       currentUserId: currentUserId,
       messages: messages,
       lastSyncedAt: lastSyncedAt ?? latestMessageCursor(),
       lastServerSequence: lastServerSequence,
-      hasOlderRemote: hasOlderMessages
+      hasOlderRemote: hasOlderMessages,
+      expectedScopeIdentifier: cacheScope
     )
   }
 
@@ -507,6 +570,7 @@ public struct ConversationNativeView: View {
   @State private var isReportSheetPresented = false
   @State private var isViewingLatestMessage = true
   @State private var hasNewMessages = false
+  @State private var isVisible = false
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -516,13 +580,13 @@ public struct ConversationNativeView: View {
   public init(peerId: String, title: String, api: MIRAAPIClient, currentUserId: String = "", initialAvatarURL: String? = nil) {
     self.title = title
     self.initialAvatarURL = initialAvatarURL
-    _model = StateObject(wrappedValue: ConversationNativeModel(kind: .direct(peerId: peerId), api: api, currentUserId: currentUserId))
+    _model = StateObject(wrappedValue: api.presentations.room(.direct(peerId: peerId), userID: currentUserId))
   }
 
   public init(groupId: String, title: String, api: MIRAAPIClient, currentUserId: String = "", initialAvatarURL: String? = nil) {
     self.title = title
     self.initialAvatarURL = initialAvatarURL
-    _model = StateObject(wrappedValue: ConversationNativeModel(kind: .group(groupId: groupId), api: api, currentUserId: currentUserId))
+    _model = StateObject(wrappedValue: api.presentations.room(.group(groupId: groupId), userID: currentUserId))
   }
 
   init(title: String, model: ConversationNativeModel, initialAvatarURL: String? = nil) {
@@ -537,6 +601,14 @@ public struct ConversationNativeView: View {
         clubContextHeader
       } else {
         chatHeader
+      }
+      if let notice = model.syncNotice, !model.messages.isEmpty {
+        HStack(spacing: 8) {
+          Text(notice).font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+          Spacer(minLength: 0)
+          Button("Retry") { Task { await model.retryRefresh() } }.font(.caption).frame(minHeight: 44)
+        }.padding(.horizontal, 16).background(MIRATheme.Color.appBackground)
+          .accessibilityIdentifier("chat.sync.status")
       }
       ScrollViewReader { proxy in
         ScrollView {
@@ -555,6 +627,7 @@ public struct ConversationNativeView: View {
               }
               ForEach(model.messages) { message in
                 messageBubble(message)
+                  .background(CaptroFeedViewportMarker(owner: model.viewport, postID: message.id, feed: "chat").allowsHitTesting(false))
                   .padding(.top, startsMessageRun(message) ? 8 : 0)
                   .id(message.id)
               }
@@ -572,9 +645,12 @@ public struct ConversationNativeView: View {
         .defaultScrollAnchor(.bottom)
         .scrollDismissesKeyboard(.interactively)
         .miraScrollFeel(.chat)
+        .refreshable { await model.retryRefresh() }
         .onChange(of: model.messages.map(\.id)) { oldIDs, newIDs in
+          model.viewport.updateOrder(newIDs)
           guard let last = newIDs.last else { return }
           if oldIDs.isEmpty {
+            guard !model.viewport.hasSavedPosition else { return }
             DispatchQueue.main.async {
               var transaction = Transaction()
               transaction.disablesAnimations = true
@@ -614,12 +690,17 @@ public struct ConversationNativeView: View {
     .miraScreenEnter(.push)
     .toolbar(.hidden, for: .navigationBar)
     .toolbar(.hidden, for: .tabBar)
-    .task(id: scenePhase == .active) {
-      guard scenePhase == .active else { return }
+    .onAppear {
+      isVisible = true
+      model.viewport.updateOrder(model.messages.map(\.id)); model.viewport.setActive(true)
+    }
+    .onDisappear { isVisible = false; model.viewport.setActive(false) }
+    .task(id: scenePhase == .active && isVisible) {
+      guard scenePhase == .active, isVisible else { return }
       await model.pollMessagesWhileActive()
     }
-    .task(id: scenePhase == .active) {
-      guard scenePhase == .active else { return }
+    .task(id: scenePhase == .active && isVisible) {
+      guard scenePhase == .active, isVisible else { return }
       await model.pollPresence()
     }
     .miraActionModal(isPresented: $showProfileOptions, onDismissed: {

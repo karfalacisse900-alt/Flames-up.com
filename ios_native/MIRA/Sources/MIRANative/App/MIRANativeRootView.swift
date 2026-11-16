@@ -279,6 +279,10 @@ public struct MIRANativeRootView: View {
       registerCachedPushTokenIfPossible()
     }
     .onChange(of: authSession.user?.id) { oldUserID, userID in
+      api.presentations.invalidate()
+      api.teaConversations.invalidate()
+      api.teaClubs.invalidate()
+      api.teaDetails.invalidate(discard: true)
       if let oldUserID, oldUserID != userID { supportReturns.forget(accountID: oldUserID) }
       // A profile opened under the previous account must not retain its presentation.
       if let oldUserID, oldUserID != userID { profileLink = nil }
