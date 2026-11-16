@@ -23,6 +23,10 @@ on:
         description: Required successful native validation run for identical IPA source (also required for retry)
         type: string
         default: ''
+      defer_runtime_for_native_tree:
+        description: Explicitly defer simulator verification for this exact native git tree only; release/security checks still run
+        type: string
+        default: ''
   push:
     branches: [main]
     paths:
@@ -96,6 +100,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VALIDATION_RUN: ${{ inputs.validation_run }}
+          DEFER_RUNTIME_FOR_NATIVE_TREE: ${{ inputs.defer_runtime_for_native_tree }}
         run: node scripts/app-store/verify-native-validation.mjs
       - name: Require live security schema compatibility before retry upload
         env:
@@ -142,6 +147,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VALIDATION_RUN: ${{ inputs.validation_run }}
+          DEFER_RUNTIME_FOR_NATIVE_TREE: ${{ inputs.defer_runtime_for_native_tree }}
         run: node scripts/app-store/verify-native-validation.mjs
 
       - name: Show Xcode version

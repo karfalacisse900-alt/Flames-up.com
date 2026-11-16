@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -63,6 +63,22 @@ function downloadSource(runID, repository, execute, context) {
 }
 
 export function verifyFromEnvironment(env = process.env, execute = execFileSync, loadSource = downloadSource) {
+  // An operator can explicitly defer runtime checks for one exact native tree.
+  // This does not manufacture a successful validation result, apply to push
+  // releases, or bypass archive/signing/authentication/live-schema checks.
+  const deferredTree = env.DEFER_RUNTIME_FOR_NATIVE_TREE ?? '';
+  if (deferredTree) {
+    if (env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.VALIDATION_RUN ||
+        !/^[a-f0-9]{40}$/.test(deferredTree)) {
+      throw new Error('Runtime deferral requires manual dispatch, an exact native tree, and no claimed validation run.');
+    }
+    const sourceSHA = env.IPA_SOURCE_SHA || env.GITHUB_SHA;
+    if (!/^[a-f0-9]{40}$/.test(sourceSHA ?? '')) throw new Error('IPA source identity is missing.');
+    const nativeTree = execute('git', ['rev-parse', `${sourceSHA}:ios_native/MIRA`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    if (nativeTree !== deferredTree) throw new Error('Runtime deferral does not match the IPA native source tree.');
+    return { runtimeDeferred: true, sourceSHA, nativeTree };
+  }
   const runID = env.VALIDATION_RUN ?? '';
   if (!/^\d+$/.test(runID)) throw new Error('A successful matching validation_run is required for every TestFlight upload.');
   const repository = env.GITHUB_REPOSITORY ?? '';
@@ -85,7 +101,13 @@ export function verifyFromEnvironment(env = process.env, execute = execFileSync,
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const result = verifyFromEnvironment();
-    console.log(`Native validation ${result.runID} passed for IPA source ${result.sourceSHA} (tree ${result.nativeTree}).`);
+    if (result.runtimeDeferred) {
+      const message = `Simulator verification explicitly deferred for IPA source ${result.sourceSHA} (tree ${result.nativeTree}). No runtime pass is claimed. Signing, Release authentication and live schema/API checks remain required.`;
+      console.log(`::warning::${message}`);
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${message}\n`);
+    } else {
+      console.log(`Native validation ${result.runID} passed for IPA source ${result.sourceSHA} (tree ${result.nativeTree}).`);
+    }
   } catch (error) {
     // Never dump child-process stdout/stderr, which may contain auth context.
     console.error(`::error::${error instanceof Error && !('stdout' in error) ? error.message : 'Native validation verification failed.'}`);

@@ -1,0 +1,60 @@
+CAPTRO HOME / TEA REPAIR - 16 NOVEMBER 2026
+
+Source: feature/professional-accounts-studio, ce7ee53.
+Started from released native 690.1 / branch 4ab26c2; preserved unrelated work.
+
+CONFIRMED CAUSES
+Home's hamburger opened a menu and required a second Tea selection. Replaced it
+with cup.and.saucer at the same 44pt location beside Create post; one tap opens Tea.
+The existing Feed options / Captro Business destinations remain under a long press
+and the VoiceOver Feed options action. Main navigation and Home media geometry unchanged.
+
+Tea silently passed the signed-in account's city to /tea, despite showing no location
+selector. Live read-only API reproduction: unfiltered /tea returned five eligible objects
+(three clubs, one event, one meetup). city=Bronx, NYC and New York each returned zero.
+The three public clubs' current commerce.city values are null. No user data was changed.
+Removed the implicit native profile-city filter. Server visibility, block, moderation,
+expiry and access checks remain intact. Conversations remains the default section;
+clubs remain in Clubs & Events and open their existing membership/details flows.
+
+Home's old isLegacyOrdinaryTextPost predicate exempted structured posts. It therefore
+kept text-only club/event/meetup/deal cards. Home now uses hasHomeMedia consistently
+for visible rows, last-visible pagination and publication insertion eligibility.
+The predicate checks attached media, never image download success; broken attachments
+retain their existing frame/retry path. Raw page counts/cursors, stored posts, Profile,
+Tea and direct Details are preserved. No content records were deleted or migrated.
+
+CHANGED IMPLEMENTATION
+MainFeedView.swift: direct Tea button, retained secondary actions, media-only presentation.
+MIRAModels.swift: explicit Home media eligibility independent of post type/download state.
+MIRANativeRootView.swift / CaptroTeaView.swift: remove hidden profile-city discovery scope.
+Existing fixtures/tests updated for one-tap Tea and retained feed menu access.
+Native fixtures reproduce unmatched city and mixed ordinary/structured text plus media.
+
+VERIFICATION
+node --test backend-cf/tests/captro_media_post_retirement.test.mjs backend-cf/tests/captro_stamp_feed_guard.test.mjs backend-cf/tests/tea.test.mjs
+33 passed, 0 failed, 0 skipped.
+Added native model regressions (not completed): every post type without media excluded; invalid media URL stays
+eligible; optimized-only media retained; pagination crosses 12 text-only listings without
+changing stored records or raw offsets.
+Added native app-hosted regressions (not completed): direct Tea entry, city-independent club visibility,
+preserved feed options, media-only Home geometry, mixed carousel, navigation restoration,
+Home server fallback and tappable image retry.
+Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43794193133
+Simulator run canceled at the user's explicit request to stop simulator work.
+No simulator result or screenshots claimed for this source. Physical checks remain open.
+Non-simulator release/source checks rerun with native_release_gate.test.mjs included:
+40 passed, 0 failed, 0 skipped.
+
+The manual TestFlight workflow now permits explicit runtime deferral tied to the exact
+native git tree 766b17d7760384b9cf6f8a458f959ba369ec87de. Default matching-runtime
+verification remains required; push releases cannot use the manual deferral. The
+deferral cannot claim a successful validation run and records a warning in the job
+summary. Archive/signing, Release authentication, live security/reliability/professional
+schema and Tea API checks remain required before upload. Preserved-IPA retries check
+the actual preserved source, not the current checkout.
+
+ROLLOUT
+No backend code, production configuration, permissions, payments or schema change needed.
+Native update requires a new signed build. Build and Apple availability remain
+separate from source completion. No physical-iPhone verification collected this turn.

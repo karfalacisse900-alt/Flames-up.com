@@ -37,6 +37,33 @@ test('missing validation fails before network or build work', () => {
   assert.throws(() => verifyFromEnvironment({}, () => assert.fail('Must fail before command execution')), /required/);
 });
 
+test('runtime deferral is manual, exact-source, and never reported as a passed run', () => {
+  const env = { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: sha, DEFER_RUNTIME_FOR_NATIVE_TREE: tree };
+  const execute = (command, args) => {
+    assert.equal(command, 'git');
+    assert.deepEqual(args, ['rev-parse', `${sha}:ios_native/MIRA`]);
+    return tree;
+  };
+  assert.deepEqual(verifyFromEnvironment(env, execute), { runtimeDeferred: true, sourceSHA: sha, nativeTree: tree });
+  for (const patch of [{ GITHUB_EVENT_NAME: 'push' }, { DEFER_RUNTIME_FOR_NATIVE_TREE: 'true' },
+    { VALIDATION_RUN: '123' }, { GITHUB_SHA: '' }]) {
+    assert.throws(() => verifyFromEnvironment({ ...env, ...patch }, () => assert.fail('Must reject before command execution')));
+  }
+  assert.throws(() => verifyFromEnvironment(env, () => '3'.repeat(40)), /does not match/);
+});
+
+test('runtime deferral on IPA retry uses the preserved source and rejects a different tree', () => {
+  const preserved = '4'.repeat(40);
+  const env = { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_SHA: sha, IPA_SOURCE_SHA: preserved, DEFER_RUNTIME_FOR_NATIVE_TREE: tree };
+  const result = verifyFromEnvironment(env, (command, args) => {
+    assert.deepEqual(args, ['rev-parse', `${preserved}:ios_native/MIRA`]);
+    return tree;
+  });
+  assert.equal(result.sourceSHA, preserved);
+  assert.equal(result.runtimeDeferred, true);
+  assert.throws(() => verifyFromEnvironment(env, () => '5'.repeat(40)), /does not match/);
+});
+
 test('retry validation compares the preserved IPA source, not current checkout', () => {
   const preserved = '4'.repeat(40), head = '5'.repeat(40);
   const commands = [];
