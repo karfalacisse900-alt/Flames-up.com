@@ -5,6 +5,10 @@ import Foundation
 /// Real shipping sheet with isolated API and a deliberately failing browser
 /// opener. Never contacts Stripe, uses a credential, or fakes payment success.
 public struct CaptroSupportReviewHost: View {
+  // A SwiftUI View initializer can run again on scene activation. A fresh UUID
+  // there impersonated an account switch, cleared the real profile, and consumed
+  // the first failed eligibility response before the tester could tap Retry.
+  private static let accountScope = "support-review-\(UUID().uuidString)"
   @StateObject private var returns = CaptroSupportReturnStore()
   private let api: MIRAAPIClient
   private let flags = ProcessInfo.processInfo.arguments
@@ -12,7 +16,7 @@ public struct CaptroSupportReviewHost: View {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [SupportReviewTransport.self]
     api = MIRAAPIClient(baseURL: URL(string: "https://localhost:9453")!, session: URLSession(configuration: configuration))
-    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    MIRALocalJSONCache.setAccountScope(userId: Self.accountScope)
   }
   public var body: some View {
     Group {

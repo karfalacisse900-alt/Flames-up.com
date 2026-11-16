@@ -36,9 +36,11 @@ final class CreatorSupportTests: XCTestCase {
     let app = launchSurface(["--support-profile", "--support-eligibility-error"])
     let retry = app.buttons["Retry Support"]; XCTAssertTrue(retry.waitForExistence(timeout: 10))
     XCTAssertFalse(app.buttons["support.checkout"].exists)
+    let before = XCTAttachment(screenshot: app.screenshot()); before.name = "support-retry-before"; before.lifetime = .keepAlways; add(before)
     retry.tap()
     let button = app.buttons["Support"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); waitUntilEnabled(button); button.tap()
     XCTAssertTrue(app.staticTexts["Support Fixture Creator"].waitForExistence(timeout: 5))
+    let recovered = XCTAttachment(screenshot: app.screenshot()); recovered.name = "support-retry-recovered"; recovered.lifetime = .keepAlways; add(recovered)
   }
   func testUnsupportedStorefrontGuestAndSelfNeverOfferSupportAction() {
     for flag in ["--support-non-us", "--support-guest", "--support-self"] {
