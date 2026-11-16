@@ -51,4 +51,8 @@ import Foundation
     rooms = [:]; roomOrder = []; profiles = [:]; profileOrder = []
     retainedDrafts = [:]; draftOrder = []
   }
+  func invalidateProfileFreshness() {
+    synchronize()
+    profiles.values.forEach { $0.invalidateFreshness() }
+  }
 }

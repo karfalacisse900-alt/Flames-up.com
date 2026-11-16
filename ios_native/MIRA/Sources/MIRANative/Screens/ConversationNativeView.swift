@@ -603,14 +603,6 @@ public struct ConversationNativeView: View {
       } else {
         chatHeader
       }
-      if let notice = model.syncNotice, !model.messages.isEmpty {
-        HStack(spacing: 8) {
-          Text(notice).font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
-          Spacer(minLength: 0)
-          Button("Retry") { Task { await model.retryRefresh() } }.font(.caption).frame(minHeight: 44)
-        }.padding(.horizontal, 16).background(MIRATheme.Color.appBackground)
-          .accessibilityIdentifier("chat.sync.status")
-      }
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(spacing: 5) {
@@ -812,21 +804,15 @@ public struct ConversationNativeView: View {
 
       RemoteAvatar(url: peerAvatarURL, size: 40)
 
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-          .font(.headline)
-          .foregroundStyle(MIRATheme.Color.textPrimary)
-          .lineLimit(2)
-          .truncationMode(.tail)
-        if let statusText {
-        Text(statusText)
-          .font(.caption)
-          .foregroundStyle(MIRATheme.Color.textSecondary)
-          .lineLimit(1)
-          .truncationMode(.tail)
-        }
+      Group {
+        if model.syncNotice != nil {
+          Button { Task { await model.retryRefresh() } } label: { chatHeading }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(title). \(model.syncNotice ?? ""). Retry message updates")
+            .accessibilityIdentifier("chat.sync.status")
+        } else { chatHeading }
       }
-      .frame(maxWidth: .infinity, alignment: .leading)
+      .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
 
       Menu {
         if model.isGroup {
@@ -855,7 +841,20 @@ public struct ConversationNativeView: View {
     }
   }
 
+  private var chatHeading: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(title).font(.headline).foregroundStyle(MIRATheme.Color.textPrimary)
+        .lineLimit(2).truncationMode(.tail)
+      // Keep one subtitle line reserved: connection updates never insert a row
+      // above the messages or move the keyboard/composer.
+      Text(statusText ?? " ").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+        .lineLimit(1).truncationMode(.tail).accessibilityHidden(statusText == nil)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+  }
+
   private var statusText: String? {
+    if let notice = model.syncNotice { return notice + " · Retry" }
     if model.isGroup { return "group chat" }
     if model.presence?.isTyping == true { return "typing..." }
     if model.presence?.isOnline == true { return "online" }
@@ -981,9 +980,9 @@ public struct ConversationNativeView: View {
           )
         }
         if message.status == "failed" {
-          Text("Failed to send · long press to retry")
+          Text("Failed to send Â· long press to retry")
             .font(.system(size: 11))
-            .foregroundStyle(.red)
+            .foregroundStyle(MIRATheme.Color.textError)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -1140,7 +1139,7 @@ public struct ConversationNativeView: View {
       if let error = model.errorMessage, !model.messages.isEmpty {
         Text(error)
           .font(.footnote)
-          .foregroundStyle(.red)
+          .foregroundStyle(MIRATheme.Color.textError)
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding(.horizontal, MIRATheme.Space.md)
           .padding(.top, MIRATheme.Space.xs)
@@ -1184,8 +1183,8 @@ public struct ConversationNativeView: View {
         .accessibilityLabel(showAttachmentTray ? "Close attachments" : "Add attachment")
 
         HStack(spacing: 4) {
-          TextField(model.isGroup ? "Message the club…" : "Message", text: $model.draft,
-                    prompt: Text(model.isGroup ? "Message the club…" : "Message")
+          TextField(model.isGroup ? "Message the clubâ€¦" : "Message", text: $model.draft,
+                    prompt: Text(model.isGroup ? "Message the clubâ€¦" : "Message")
                       .foregroundColor(MIRATheme.Color.textSecondary), axis: .vertical)
             .lineLimit(1...4)
             .font(.body)

@@ -1104,6 +1104,11 @@ final class UserProfileNativeModel: ObservableObject {
   private var lastSuccessfulLoadAt = Date.distantPast
   private var lastLoadScope: String?
 
+  func invalidateFreshness() {
+    generation += 1; lastSuccessfulLoadAt = .distantPast
+    isLoading = false; isLoadingMore = false
+  }
+
   init(userId: String, api: MIRAAPIClient) {
     self.userId = userId
     self.api = api

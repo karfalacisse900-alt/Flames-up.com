@@ -7,6 +7,23 @@ import SwiftUI
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  func testOfflineRefreshKeepsLoadedPostsAndRetryDoesNotReorderThem() async throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    model.testAutomaticPagination = false
+    model.configureGuestMode(true)
+    let rows = try [post("first"), post("second")]
+    model.testPageLoader = { _, _ in rows }
+    await model.load()
+    let shown = model.homePostIDs
+    model.testPageLoader = { _, _ in throw URLError(.notConnectedToInternet) }
+    await model.load(forceRefresh: true)
+    XCTAssertEqual(model.homePostIDs, shown)
+    XCTAssertEqual(model.refreshError, "Offline. Showing saved posts.")
+    model.testPageLoader = { _, _ in Array(rows.reversed()) }
+    await model.load(forceRefresh: true)
+    XCTAssertEqual(model.homePostIDs, shown)
+    XCTAssertNil(model.refreshError)
+  }
   func testDerivedHomePresentationTracksMutationsWithoutDeletingStoredRecords() throws {
     let model = MainFeedModel(api: MIRAAPIClient())
     let text = try JSONDecoder().decode(MIRAPost.self, from: Data(#"{"id":"text","caption":"A legacy record"}"#.utf8))

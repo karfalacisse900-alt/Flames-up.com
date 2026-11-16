@@ -54,6 +54,7 @@ final class MainFeedModel: ObservableObject {
   @Published var isLoading = true
   @Published var isLoadingMore = false
   @Published var errorMessage: String?
+  @Published private(set) var refreshError: String?
   @Published private(set) var paginationError: String?
   private(set) var paginationNeedsRefresh = false
   @Published private(set) var publicationNotice: CaptroPublicationNotice?
@@ -125,6 +126,7 @@ final class MainFeedModel: ObservableObject {
     currentUserId = nil
     currentUsername = nil
     errorMessage = nil
+    refreshError = nil
     paginationError = nil
     hasLoadedFreshFeed = false
     isLoadingFreshFeed = false
@@ -216,8 +218,10 @@ final class MainFeedModel: ObservableObject {
       page = try await fetchFeedPage(skip: 0)
     } catch {
       guard accountGeneration == generation, requestGeneration == request else { return }
+      guard !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       hasLoadedFreshFeed = false
-      if posts.isEmpty { errorMessage = "Check your connection and try again." }
+      if posts.isEmpty { errorMessage = CaptroRefreshFailure.message(error, content: "posts", cached: false) }
+      else { refreshError = CaptroRefreshFailure.message(error, content: "posts", cached: true) }
       MIRAPerformanceTimeline.mark("home_feed_page_failed", detail: "first_page")
       return
     }
@@ -226,6 +230,7 @@ final class MainFeedModel: ObservableObject {
       return
     }
     hasLoadedFreshFeed = true
+    refreshError = nil
     let loaded = page.posts
     if posts.isEmpty || userInitiated {
       pageOffsets[section] = loaded.count
@@ -1645,10 +1650,13 @@ public struct MainFeedView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.post.page.\(post.id)")
         }
-        CaptroFeedPaginationFooter(canLoadMore: model.canLoadMore,
-          isLoading: model.isLoadingMore, error: model.paginationError,
-          needsRefresh: model.paginationNeedsRefresh,
-          retry: { Task { await model.retryPagination() } })
+        CaptroFeedPaginationFooter(canLoadMore: model.canLoadMore || model.refreshError != nil,
+          isLoading: model.isLoadingMore, error: model.refreshError ?? model.paginationError,
+          needsRefresh: model.refreshError != nil || model.paginationNeedsRefresh,
+          retry: { Task {
+            if model.refreshError != nil { await model.load(forceRefresh: true) }
+            else { await model.retryPagination() }
+          } })
       }
       .scrollTargetLayout()
     }
