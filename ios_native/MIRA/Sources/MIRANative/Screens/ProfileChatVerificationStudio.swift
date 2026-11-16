@@ -1147,6 +1147,7 @@ final class UserProfileNativeModel: ObservableObject {
       apply(user: fresh)
       guard fresh.privacyLocked != true, !isBlocked, !isBlockedBy else {
         posts = []; showcase = CaptroProfileShowcase(); canLoadMore = false; nextOffset = 0
+        lastSuccessfulLoadAt = Date()
         return
       }
       let page: [MIRAPost] = try await api.get("/users/\(userId)/posts?limit=60&skip=0")
@@ -1169,10 +1170,7 @@ final class UserProfileNativeModel: ObservableObject {
       lastSuccessfulLoadAt = Date()
     } catch {
       guard request == generation, !Task.isCancelled, owner == api.presentationScope else { return }
-      if let apiError = error as? MIRAAPIError, case .server(let status, _, _) = apiError {
-        requiresSignIn = status == 401
-        if [401,403,404,410].contains(status) { posts = []; user = nil; showcase = CaptroProfileShowcase(); canLoadMore = false }
-      }
+      rejectRevokedPresentation(error)
       errorMessage = "This profile could not be loaded. Check your connection or sign in, then try again."
     }
   }
@@ -1187,7 +1185,23 @@ final class UserProfileNativeModel: ObservableObject {
       let existing = Set(posts.map(\.id))
       posts += profileVisiblePosts(page).filter { !existing.contains($0.id) }
       nextOffset += page.count; canLoadMore = page.count == 60; errorMessage = nil
-    } catch { if valid, request == generation, !CaptroRefreshFailure.isCancellation(error) { errorMessage = "Could not load more posts. Try again." } }
+    } catch {
+      guard valid, request == generation, !CaptroRefreshFailure.isCancellation(error) else { return }
+      rejectRevokedPresentation(error)
+      errorMessage = "Could not load more posts. Try again."
+    }
+  }
+
+  private func rejectRevokedPresentation(_ error: Error) {
+    let status: Int
+    switch error {
+    case MIRAAPIError.server(let code, _, _), MIRAAPIError.badStatus(let code): status = code
+    default: return
+    }
+    guard [401, 403, 404, 410].contains(status) else { return }
+    requiresSignIn = status == 401
+    posts = []; user = nil; showcase = CaptroProfileShowcase(); canLoadMore = false
+    lastSuccessfulLoadAt = .distantPast
   }
 
   func removePostLocally(id postId: String) async {

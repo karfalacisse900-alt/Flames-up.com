@@ -55,6 +55,27 @@ final class CaptroScreenLoadingTests: XCTestCase {
     XCTAssertFalse(ids.first?.isEmpty ?? true)
     XCTAssertEqual(ids.first, ids.last, "Ambiguous delivery retries must keep their durable identity")
   }
+  func testPrivateProfileIsFreshWithoutFetchingRestrictedContent() async {
+    let client = api()
+    PolishLoadingProtocol.privateProfile = true
+    let model = client.presentations.profile("polish-visitor")
+    await model.revalidateIfStale(); await model.revalidateIfStale()
+    XCTAssertEqual(model.user?.privacyLocked, true)
+    XCTAssertTrue(model.posts.isEmpty)
+    XCTAssertEqual(PolishLoadingProtocol.count("/users/polish-visitor"), 1)
+    XCTAssertEqual(PolishLoadingProtocol.count("/users/polish-visitor/posts"), 0)
+  }
+  func testPaginationDenialClearsPreviouslyAuthorizedProfileContent() async {
+    let client = api()
+    PolishLoadingProtocol.fullProfilePage = true
+    let model = client.presentations.profile("polish-visitor")
+    await model.load()
+    XCTAssertNotNil(model.user); XCTAssertTrue(model.canLoadMore)
+    PolishLoadingProtocol.denyProfilePosts = true
+    await model.loadMore()
+    XCTAssertNil(model.user); XCTAssertTrue(model.posts.isEmpty)
+    XCTAssertFalse(model.canLoadMore); XCTAssertNotNil(model.errorMessage)
+  }
   func testEmptyInboxIsAValidFreshResponse() async {
     let model = ChatNativeModel(api: api())
     model.configure(currentUserId: "polish-\(UUID())")
@@ -190,6 +211,10 @@ private final class PolishLoadingProtocol: URLProtocol {
   private static let lock = NSLock()
   private static var counts: [String: Int] = [:]
   private static var failed = false
+  private static var lockedProfile = false, fullPage = false, deniedPosts = false
+  static var privateProfile: Bool { get { lock.withLock { lockedProfile } } set { lock.withLock { lockedProfile = newValue } } }
+  static var fullProfilePage: Bool { get { lock.withLock { fullPage } } set { lock.withLock { fullPage = newValue } } }
+  static var denyProfilePosts: Bool { get { lock.withLock { deniedPosts } } set { lock.withLock { deniedPosts = newValue } } }
   private static var cancelRead = false
   private static var sentIDs: [String] = []
   static var sendIDs: [String] { lock.withLock { sentIDs } }
@@ -200,7 +225,7 @@ private final class PolishLoadingProtocol: URLProtocol {
     get { lock.withLock { failed } }
     set { lock.withLock { failed = newValue } }
   }
-  static func reset() { lock.withLock { counts = [:]; failed = false; cancelRead = false; sentIDs = [] } }
+  static func reset() { lock.withLock { counts = [:]; failed = false; cancelRead = false; sentIDs = []; lockedProfile = false; fullPage = false; deniedPosts = false } }
   static func count(_ path: String) -> Int { lock.withLock { counts[path, default: 0] } }
   static func holdProfile(_ started: @escaping () -> Void) { lock.withLock { onProfileHeld = started } }
   static func releaseProfile() {
@@ -244,14 +269,19 @@ private final class PolishLoadingProtocol: URLProtocol {
   }
   private func respond() {
     let url = request.url!
-    let failed = Self.fail
+    let denied = Self.denyProfilePosts && url.path.hasSuffix("/posts")
+    let failed = Self.fail || denied
     let body: String
     if failed { body = #"{"detail":"Isolated failure"}"# }
     else if url.path == "/auth/me" { body = #"{"id":"polish-user","username":"fixture"}"# }
-    else if url.path == "/users/polish-visitor" { body = #"{"id":"polish-visitor","username":"visitor"}"# }
+    else if url.path == "/users/polish-visitor" { body = Self.privateProfile ? #"{"id":"polish-visitor","username":"visitor","privacyLocked":true}"# : #"{"id":"polish-visitor","username":"visitor"}"# }
+    else if url.path.hasSuffix("/posts"), Self.fullProfilePage {
+      let rows = (0..<60).map { ["id": "profile-fixture-\($0)", "images": ["https://example.invalid/image.jpg"]] as [String: Any] }
+      body = String(data: try! JSONSerialization.data(withJSONObject: rows), encoding: .utf8)!
+    }
     else if url.path.hasSuffix("/showcase") { body = #"{"pinned":null,"clubs":[]}"# }
     else { body = "[]" }
-    let response = HTTPURLResponse(url: url, statusCode: failed ? 503 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+    let response = HTTPURLResponse(url: url, statusCode: denied ? 403 : failed ? 503 : 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: Data(body.utf8)); client?.urlProtocolDidFinishLoading(self)
   }
