@@ -67,7 +67,8 @@ final class ConversationNativeModel: ObservableObject {
     scope = api.presentationScope
     cacheScope = MIRALocalJSONCache.currentScopeIdentifier
     self.uploadService = MIRAMediaUploadService(api: api)
-    viewport.select("chat"); viewport.updateOrder([])
+    // New chats retain the native bottom anchor; only a saved visit restores.
+    viewport.select("chat", restoreIfMissing: false); viewport.updateOrder([])
   }
 
   var valid: Bool { !invalidated && scope == api.presentationScope }

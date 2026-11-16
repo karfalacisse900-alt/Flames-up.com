@@ -191,14 +191,18 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     CaptroFeedDiagnostics.event("restore_request", feed: scope, reason: reason, post: anchor.id)
   }
 
-  func select(_ scope: String) {
+  func select(_ scope: String, restoreIfMissing: Bool = true) {
     guard self.scope != scope else { return }
     self.scope = scope
     pending = nil
     cells.removeAll()
     order = [] // Old feed markers cannot satisfy the new feed's restoration.
     orderIndex.removeAll()
-    requestRestoration(snapshots[scope] ?? Anchor(id: "", y: 0, offset: 0), reason: "feed_selection")
+    if let anchor = snapshots[scope] {
+      requestRestoration(anchor, reason: "feed_selection")
+    } else if restoreIfMissing {
+      requestRestoration(Anchor(id: "", y: 0, offset: 0), reason: "feed_selection")
+    }
     activeID = nil
     schedule()
   }

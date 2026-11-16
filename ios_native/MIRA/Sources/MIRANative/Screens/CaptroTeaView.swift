@@ -125,6 +125,8 @@ enum CaptroTeaPalette: String {
         ForEach(entries) { entry in
           listRow {
             Button { if path.isEmpty { path.append(entry) } } label: { CaptroTeaRow(entry: entry) }
+              .background(CaptroFeedViewportMarker(owner: api.teaDetails.listViewport,
+                postID: entry.id, feed: "tea-list:" + api.presentationScope).allowsHitTesting(false))
               .buttonStyle(.plain)
               .accessibilityHint("Opens \(entry.typeLabel.lowercased()) details")
               .accessibilityIdentifier("tea.row." + entry.id)
@@ -145,6 +147,13 @@ enum CaptroTeaPalette: String {
       .background(MIRATheme.Color.appBackground)
       .accessibilityIdentifier("tea.list")
       .refreshable { await load(reset: true) }
+      .onAppear {
+        api.teaDetails.listViewport.updateOrder(entries.map(\.id))
+        api.teaDetails.listViewport.setActive(section == "Clubs & Events")
+      }
+      .onDisappear { api.teaDetails.listViewport.setActive(false) }
+      .onChange(of: section) { _, section in api.teaDetails.listViewport.setActive(section == "Clubs & Events") }
+      .onChange(of: entries) { _, entries in api.teaDetails.listViewport.updateOrder(entries.map(\.id)) }
       .opacity(section == "Clubs & Events" ? 1 : 0)
       .allowsHitTesting(section == "Clubs & Events")
       .accessibilityHidden(section != "Clubs & Events")
@@ -251,7 +260,8 @@ enum CaptroTeaPalette: String {
       cursor = nil
       error = "Refresh Tea to start again."
     } catch {
-      self.error = "Could not load Tea. Try again."
+      guard owner == api.presentationScope, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
+      self.error = CaptroRefreshFailure.message(error, content: "activities", cached: !entries.isEmpty)
     }
   }
 }

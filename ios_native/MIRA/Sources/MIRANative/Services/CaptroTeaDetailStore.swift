@@ -21,6 +21,7 @@ final class CaptroTeaDetailStore {
   private var flights: [String: Flight] = [:]
   private var latest: [String: UUID] = [:]
   private var viewports: [String: CaptroFeedViewport] = [:]
+  let listViewport = CaptroFeedViewport()
   struct Listing { let entries: [CaptroTeaEntry]; let cursor: String?; let receivedAt: Date }
   private var listing: Listing?
   private let freshness: TimeInterval = 60
@@ -131,6 +132,8 @@ final class CaptroTeaDetailStore {
     let current = scope()
     guard current != activeScope else { return }
     for value in flights.values { value.task.cancel() }
-    flights.removeAll(); latest.removeAll(); snapshots.removeAll(); viewports.removeAll(); listing = nil; activeScope = current
+    flights.removeAll(); latest.removeAll(); snapshots.removeAll(); viewports.removeAll(); listing = nil
+    listViewport.select("tea-list:" + current); listViewport.updateOrder([]); listViewport.setActive(false)
+    activeScope = current
   }
 }

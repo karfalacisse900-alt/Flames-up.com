@@ -458,7 +458,7 @@ public struct ProfileNativeView: View {
           }
           CaptroProfileTabs(selection: $selectedSection)
           if !model.hasLoadedProfile && model.profileError == nil && model.posts.isEmpty {
-            ProgressView("Loading profile…").frame(minHeight: 100)
+            ProgressView("Loading profileâ€¦").frame(minHeight: 100)
           } else if model.profileError != nil && model.posts.isEmpty {
             EmptyView() // The retry/error below is not an empty-success state.
           } else if selectedSection == .clubs {
@@ -505,7 +505,7 @@ public struct ProfileNativeView: View {
             Button("Try again") { Task { await model.load() } }.frame(minHeight: 44)
           }
           if model.canLoadMore {
-            Button(model.isLoadingMore ? "Loading…" : "Load more") { Task { await model.loadMore() } }
+            Button(model.isLoadingMore ? "Loadingâ€¦" : "Load more") { Task { await model.loadMore() } }
               .disabled(model.isLoadingMore).frame(minHeight: 44)
           }
         }
@@ -814,7 +814,7 @@ struct ProfileActivityNativeView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 24) {
         if !hasVisibleActivity && model.isLoadingActivity {
-          ProgressView("Loading activity…")
+          ProgressView("Loading activityâ€¦")
             .frame(maxWidth: .infinity, minHeight: 120)
         } else if !hasVisibleActivity && model.hasLoadedActivity && model.activityError == nil {
           MIRAEmptyState(title: "No activity yet", message: "Your receipts and joins will appear here.", systemImage: "list.bullet")
@@ -912,7 +912,7 @@ struct ProfileActivityNativeView: View {
     let formatter = NumberFormatter()
     formatter.numberStyle = .currency
     formatter.currencyCode = "USD"
-    return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "—"
+    return formatter.string(from: NSNumber(value: Double(cents) / 100)) ?? "â€”"
   }
 
   private func submissionStatus(_ submission: CaptroReceiptSubmission) -> String {
@@ -1080,6 +1080,7 @@ final class UserProfileNativeModel: ObservableObject {
     viewport.setActive(false); isLoading = false; isLoadingMore = false
     isFollowing = false; followPending = false; followersCount = 0; canLoadMore = false
   }
+  @Published var selectedSection: CaptroProfileSection = .moments
   @Published var user: MIRAUser?
   @Published var posts: [MIRAPost] = []
   @Published var isFollowing = false
@@ -1266,7 +1267,7 @@ final class UserProfileNativeModel: ObservableObject {
 
 public struct UserProfileNativeView: View {
   @State private var professionalSelection = "creator"
-  @State private var selectedSection: CaptroProfileSection = .moments
+  private var selectedSection: CaptroProfileSection { model.selectedSection }
   @Environment(\.scenePhase) private var profileScenePhase
   @State private var queuedCommentReport: MIRAComment?
   @State private var queuedProfileReport = false
@@ -1291,15 +1292,15 @@ public struct UserProfileNativeView: View {
     ScrollView {
       VStack(spacing: MIRATheme.Space.lg) {
         profileHeader
-          .background(CaptroFeedViewportMarker(owner: model.viewport, postID: "profile", feed: "profile").allowsHitTesting(false))
+          .background(CaptroFeedViewportMarker(owner: model.viewport, postID: "profile", feed: "profile-" + selectedSection.rawValue).allowsHitTesting(false))
         if let pinned = model.showcase.pinned, model.user?.privacyLocked != true, !model.isBlocked, !model.isBlockedBy {
           NavigationLink(destination: DiscoverPostDetailNativeView(post: pinned, api: model.api)) {
             CaptroProfileItemRow(post: pinned, pinned: true)
           }.buttonStyle(.plain).padding(.horizontal, 20)
         }
-        CaptroProfileTabs(selection: $selectedSection)
+        CaptroProfileTabs(selection: $model.selectedSection)
         if model.user == nil && model.errorMessage == nil {
-          ProgressView("Loading profile…").frame(minHeight: 100)
+          ProgressView("Loading profileâ€¦").frame(minHeight: 100)
         } else if model.posts.isEmpty && model.isLoading {
           ProfileGridSkeleton()
         } else if let error = model.errorMessage, model.posts.isEmpty {
@@ -1334,7 +1335,7 @@ public struct UserProfileNativeView: View {
           CaptroLegacyPostArchive(posts: model.posts, api: model.api)
         }
         if model.canLoadMore {
-          Button(model.isLoadingMore ? "Loading…" : "Load more") { Task { await model.loadMore() } }
+          Button(model.isLoadingMore ? "Loadingâ€¦" : "Load more") { Task { await model.loadMore() } }
             .disabled(model.isLoadingMore).frame(minHeight: 44)
         }
         if !model.posts.isEmpty, let error = model.errorMessage {
@@ -1355,7 +1356,13 @@ public struct UserProfileNativeView: View {
     .toolbar { ToolbarItem(placement: .topBarTrailing) { profileSafetyMenu } }
     .refreshable { await model.load() }
     .task { await model.revalidateIfStale() }
-    .onAppear { model.viewport.setActive(true) }
+    .onAppear {
+      model.viewport.select("profile-" + selectedSection.rawValue)
+      model.viewport.updateOrder(["profile"]); model.viewport.setActive(true)
+    }
+    .onChange(of: selectedSection) { _, section in
+      model.viewport.select("profile-" + section.rawValue); model.viewport.updateOrder(["profile"])
+    }
     .onDisappear { model.viewport.setActive(false) }
     .onChange(of: profileScenePhase) { _, phase in
       if phase == .active { Task { await model.revalidateIfStale() } }
@@ -1549,7 +1556,7 @@ public struct UserProfileNativeView: View {
           Button {
             Task { await openMessageChat() }
           } label: {
-            Text(isOpeningMessage ? "Opening…" : "Message")
+            Text(isOpeningMessage ? "Openingâ€¦" : "Message")
           }
           .buttonStyle(CaptroProfileActionStyle())
           .disabled(isOpeningMessage || model.user == nil)
@@ -1973,7 +1980,7 @@ struct EditProfileNativeView: View {
             editField(title: "Username", text: $username, placeholder: "username")
             editField(title: "Bio", text: $bio, placeholder: "A little about you")
             editField(title: "City", text: $city, placeholder: "Optional city, not an exact address")
-            editField(title: "Open to", text: $openTo, placeholder: "Photo walks · Creative projects")
+            editField(title: "Open to", text: $openTo, placeholder: "Photo walks Â· Creative projects")
             Text("Use 3-20 lowercase letters, numbers, underscores, or periods. Do not include @.")
               .font(.system(size: 12, weight: .medium))
               .foregroundStyle(MIRATheme.Color.textMuted)

@@ -1,3 +1,4 @@
+import {homeMediaPresentation} from "./helpers/home-media-presentation.mjs";
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -45,7 +46,7 @@ test('Home post anatomy ends at the photograph and Captro stamp', () => {
 
 test('Home filters media presentation while retaining stored structured posts and raw pagination', () => {
   assert.doesNotMatch(mainFeed, /photoFeedPosts/);
-  assert.match(mainFeed, /model\.posts\.filter \{ \$0\.hasHomeMedia \}/);
+  homeMediaPresentation(mainFeed);
   assert.match(mainFeed, /startsNewOrder \? await sortedByNativeScore\(loaded\) : loaded/);
   assert.match(mainFeed, /CaptroFeedReconciliation\.background\(existing: posts, fresh: loaded\)/);
   assert.match(mainFeed, /CaptroFeedFormatMixer\.mix\(rankedPosts\)/);

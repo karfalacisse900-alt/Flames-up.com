@@ -103,9 +103,9 @@ struct CaptroTeaConversationsList: View {
       nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
       api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt!)
     } catch is CancellationError {} catch {
-      guard owner == api.presentationScope, revision == expectedRevision else { return }
+      guard owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }
-      self.error = "Couldn’t load conversations. Try again."
+      self.error = CaptroRefreshFailure.message(error, content: "conversations", cached: !items.isEmpty)
     }
   }
 }

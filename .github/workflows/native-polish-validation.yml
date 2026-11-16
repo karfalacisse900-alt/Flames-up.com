@@ -165,6 +165,21 @@ jobs:
             echo 'ERROR: cancellation regression was not caught'; exit 1
           fi
           cat "$RUNNER_TEMP/mutation-check.log"
+      - name: Execute real Tea model with isolated host adapters and baseline regression
+        if: ${{ inputs.compile_only }}
+        run: |
+          set -o pipefail
+          model=ios_native/MIRA/Sources/MIRANative/Services/CaptroTeaConversationStore.swift
+          types=ios_native/MIRA/Sources/MIRANative/Models/CaptroTeaConversation.swift
+          swiftc "$types" "$model" scripts/native/check-tea-model.swift -o "$RUNNER_TEMP/tea-model-checks"
+          "$RUNNER_TEMP/tea-model-checks" | tee "$RUNNER_TEMP/tea-model-checks.log"
+          git fetch --no-tags --depth=1 origin 264a8b6e2375ee61e4fb20bb636b821a9ee3a506
+          git show "264a8b6:$model" > "$RUNNER_TEMP/BaselineTeaStore.swift"
+          swiftc "$types" "$RUNNER_TEMP/BaselineTeaStore.swift" scripts/native/check-tea-model.swift -o "$RUNNER_TEMP/baseline-tea-checks"
+          if "$RUNNER_TEMP/baseline-tea-checks" > "$RUNNER_TEMP/tea-baseline-regression.log"; then
+            echo 'ERROR: baseline unexpectedly passed recovery regression'; exit 1
+          fi
+          grep 'FAIL: Fresh post retries missing replies on reopen' "$RUNNER_TEMP/tea-baseline-regression.log"
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
@@ -193,3 +208,5 @@ jobs:
             ${{ runner.temp }}/native-release-compile.log
             ${{ runner.temp }}/refresh-checks.log
             ${{ runner.temp }}/mutation-check.log
+            ${{ runner.temp }}/tea-model-checks.log
+            ${{ runner.temp }}/tea-baseline-regression.log

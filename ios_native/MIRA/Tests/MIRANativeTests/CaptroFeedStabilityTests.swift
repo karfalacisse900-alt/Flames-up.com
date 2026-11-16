@@ -7,6 +7,21 @@ import SwiftUI
 
 @MainActor
 final class CaptroFeedStabilityTests: XCTestCase {
+  func testDerivedHomePresentationTracksMutationsWithoutDeletingStoredRecords() throws {
+    let model = MainFeedModel(api: MIRAAPIClient())
+    let text = try JSONDecoder().decode(MIRAPost.self, from: Data(#"{"id":"text","caption":"A legacy record"}"#.utf8))
+    let first = try post("first"), second = try post("second")
+    model.posts = [text, first, second]
+    XCTAssertEqual(model.homePostIDs, ["first", "second"])
+    XCTAssertEqual(model.homePosts.map(\.id), model.homePostIDs)
+    XCTAssertEqual(model.posts.count, 3)
+    model.posts.removeAll { $0.id == "first" }
+    XCTAssertEqual(model.homePostIDs, ["second"])
+    model.posts[0] = try post("text")
+    XCTAssertEqual(model.homePostIDs, ["text", "second"], "Replacing a legacy record with real media updates presentation")
+    model.resetForAccountChange()
+    XCTAssertTrue(model.homePosts.isEmpty); XCTAssertTrue(model.homePostIDs.isEmpty)
+  }
   func testHomeRequiresMediaForEveryPostTypeWithoutHidingFailedAttachments() throws {
     for type in ["general", "text", "note", "club", "event", "meetup", "deal", "place", "document"] {
       func decode(_ media: [String]) throws -> MIRAPost {

@@ -167,6 +167,7 @@ extension Notification.Name {
       var cursors = Set<String>()
       while reset, refreshed.count < replies.count, let cursor = page.nextCursor,
             cursors.insert(cursor).inserted {
+        guard cursors.count <= 16 else { throw MIRAAPIError.decodingFailed }
         guard valid, accessRevision == expectedAccess, !Task.isCancelled else { return }
         page = try await api.getFresh("/tea/conversations/\(id)/replies?target=general&cursor=" + cursor)
         refreshed += page.items
@@ -246,10 +247,19 @@ extension Notification.Name {
     do {
       var path = "/tea/conversations/\(id)/replies?target=" + target.id
       if !reset, let cursor = threadCursors[target.id] { path += "&cursor=" + cursor }
-      let page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
-      guard valid, expected == accessRevision else { return }
+      var page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
+      var refreshed = page.items
+      var cursors = Set<String>()
+      while reset, refreshed.count < (threads[target.id]?.count ?? 0), let cursor = page.nextCursor,
+            cursors.insert(cursor).inserted {
+        guard cursors.count <= 16 else { throw MIRAAPIError.decodingFailed }
+        guard valid, expected == accessRevision, !Task.isCancelled else { return }
+        page = try await api.getFresh("/tea/conversations/\(id)/replies?target=" + target.id + "&cursor=" + cursor)
+        refreshed += page.items
+      }
+      guard valid, expected == accessRevision, !Task.isCancelled else { return }
       var seen = Set(reset ? [] : (threads[target.id] ?? []).map(\.id))
-      threads[target.id] = (reset ? [] : threads[target.id] ?? []) + page.items.filter { $0.target?.id == target.id && seen.insert($0.id).inserted }
+      threads[target.id] = (reset ? [] : threads[target.id] ?? []) + refreshed.filter { $0.target?.id == target.id && seen.insert($0.id).inserted }
       threadCursors[target.id] = page.nextCursor
       threadLoadedAt[target.id] = Date()
     } catch {
