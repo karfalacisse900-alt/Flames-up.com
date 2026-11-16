@@ -79,6 +79,7 @@ export async function api<T>(
   try {
     data = await transport(path, body, method, session());
   } catch (error) {
+    if (current !== epoch) throw new APIError("Account changed. Please sign in again.", 409);
     if (
       !(error instanceof APIError) ||
       error.status !== 401 ||
@@ -87,16 +88,18 @@ export async function api<T>(
       throw error;
     if (!refreshing) {
       const token = sessionStorage.getItem(REFRESH)!;
-      refreshing = transport("/auth/refresh", { refresh_token: token })
+      const attempt = transport("/auth/refresh", { refresh_token: token })
         .then((next) => {
           if (current !== epoch) throw new APIError("Account changed.", 409);
           storeSession(next);
         })
         .finally(() => {
-          refreshing = null;
+          if (refreshing === attempt) refreshing = null;
         });
+      refreshing = attempt;
     }
     await refreshing;
+    if (current !== epoch) throw new APIError("Account changed. Please sign in again.", 409);
     data = await transport(path, body, method, session());
   }
   if (current !== epoch)
