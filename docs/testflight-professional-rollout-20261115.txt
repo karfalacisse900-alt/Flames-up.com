@@ -78,13 +78,21 @@ IPA SHA256 7b04f0ed78e19138c5ebcc9e59f57701227fa7c16b41de5655f94180c6646a57.
 Artifact 14191476254, Captro-native-ios-ipa; ZIP SHA256
 26bb64d43838527f51fc619242816e7f8ffca5da8bb8c1e77f0d8c1f7c03d147.
 Archive, signing, Release authentication and export passed previously. Upload originally
-stopped at the missing backend schema gate. The same IPA is being retried after rollout:
+stopped at the missing backend schema gate. The same IPA was successfully retried after rollout:
 https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43790375925
 No rebuild or signing/bundle/entitlement change. All provenance and production gates retained.
 Apple upload SUCCEEDED with no errors at 2026-11-16 02:10:49 UTC.
 Delivery UUID f73a9d9a-5f07-4d2b-b30b-7f8538921983.
-Read-only Apple run 43790604018 at 02:11:29 UTC still listed 686.1 as newest;
-690.1 ingestion/processing/tester availability remains pending at this report update.
+FINAL APPLE VERIFICATION: 2026-11-16 02:15:44 UTC, run 43791061512.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43791061512
+Build upload COMPLETE; errors=[], warnings=[], infos=[].
+1.0.1 (690.1): processing VALID, internalBuildState IN_BETA_TESTING, not expired.
+Assigned to Captro private and Captro private2, both internal groups with automatic
+distribution enabled. Available to those internal testers. External state remains
+READY_FOR_BETA_SUBMISSION; no external review or public release was submitted.
+The initial 02:11/02:12 checks preceded Apple catalog availability; no duplicate upload
+or rebuild was performed. Read-only status tooling now also inspects buildUploads
+separately from builds to distinguish transport, processing and tester availability.
 
 NATIVE VERIFICATION ALREADY COLLECTED
 Run 43781933864: 30 combined professional/Support executions passed on iPhone 13 mini
@@ -127,3 +135,9 @@ EVIDENCE
 Local evidence folder: C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-professional-20261115
 review-gallery.html includes prior app/browser screenshots; production-schema-verified.json,
 production-worker-verification.txt and release-690-metadata.json retain redacted release evidence.
+
+FINAL WORKTREE
+Branch feature/professional-accounts-studio. Native sources unchanged by rollout.
+Only pre-existing untracked supabase/.temp/ remains; preserved.
+Production API/admin source is 164494c7c79300daea7459b49de460d3ce2a80a7.
+Later commits only improve read-only Apple status inspection and release documentation.
