@@ -1,0 +1,69 @@
+CAPTRO TESTFLIGHT - NATIVE LOADING / CONSISTENCY
+User authorized TestFlight upload after reviewing the implementation report.
+No backend deployment, financial activation or public App Store release is included.
+
+Candidate: Captro 1.0.1 (697.1), bundle com.captro.app.
+Branch: fix/native-loading-consistency-20261115
+Archive source: eb8349b577646b74dd58f11cc5705e81f92f865a
+Native source tree: 9e733bf44046612498d323afc7b997c7eb78ad13
+Upload workflow: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43806719549
+Dispatched 2026-11-16 04:52:58 UTC.
+
+Changes: Tea repeated-open/reply recovery, account-scoped profile/chat presentation
+reuse, bounded quiet Chat reconnection, fewer repeated Home presentation calculations,
+stable Home refresh recovery, white/adaptive welcome with immediately usable controls.
+Post geometry, native navigation, camera, auth permissions and payment rules unchanged.
+
+Preflight evidence:
+- 433 backend tests passed, 0 failed, 0 skipped.
+- 20 executable host Swift checks passed; baseline/mutation checks catch regressions.
+- Exact native source compiled for Debug/tests and optimized iPhone Release:
+  https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43804536544
+  Source 1119522af270ea57c82e5422d252d5e311bd0550; only the report changed afterward.
+- Per the user's instruction to stop simulator work, the existing manual-dispatch
+  runtime deferral is pinned to the exact native tree above. No runtime pass claimed.
+- Archive, signing, Release auth and live schema/API gates remain required.
+- No physical-iPhone execution, Instruments measurements or current UI screenshots.
+
+Previous Apple verification: 1.0.1 (695.1), VALID / IN_BETA_TESTING, assigned to
+Captro private and Captro private2 internal groups. External review not submitted.
+
+SIGNED RELEASE AND UPLOAD - SUCCEEDED
+Archive and export passed on Xcode 26.6 (17F113), deployment target iOS 17.0.
+The preserved IPA's Info.plist confirms com.captro.app, version 1.0.1, build 697.1.
+IPA SHA256: 51f693418f5a1fe18978f462bb9b8b3dc8ca4c22d26786f149a004e1a435f330
+GitHub artifact: 14198744046, Captro-native-ios-ipa (33,230,814 bytes).
+Artifact ZIP SHA256: 02380293688f36953d4a5888d13b2220e939056d8afcea56a420ce4f8a1f1e07
+Local evidence: %TEMP%/captro-testflight-697-evidence/Captro.ipa and upload.log.
+
+Before upload: signed bundle, Google callbacks and Apple sign-in entitlement passed.
+Live compatibility checks passed: 14 security checks; five reliability assertions;
+three protected earnings views; Tea RLS/function access; typed Tea API responses;
+anonymous conversation-write denial; all 32 native backend schema prerequisites.
+These checks did not deploy a Worker or change database/payment settings.
+
+Apple transport success: 2026-11-16 05:10:07 UTC, UPLOAD SUCCEEDED with no errors.
+Delivery UUID: 9567462a-5660-4938-9c8d-893db101b994.
+Upload workflow completed successfully.
+
+FINAL APPLE TESTER AVAILABILITY - VERIFIED
+Verified 2026-11-16 05:13:02 UTC (00:13:02 America/New_York).
+Status run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43808549695/attempts/2
+Build 1.0.1 (697.1): upload COMPLETE; errors=[], warnings=[], infos=[].
+Processing VALID, internalBuildState IN_BETA_TESTING, expired=false.
+Assigned to Captro private and Captro private2, both internal tester groups with
+automatic distribution enabled. Available to those existing internal testers.
+External state READY_FOR_BETA_SUBMISSION; external review/public release not submitted.
+The first check showed PROCESSING; the repeated read-only check above verified
+completion. No duplicate build/upload was performed.
+
+Commands:
+gh workflow run native-ios-testflight.yml --ref fix/native-loading-consistency-20261115
+  -f defer_runtime_for_native_tree=9e733bf44046612498d323afc7b997c7eb78ad13
+gh workflow run native-ios-testflight.yml --ref fix/native-loading-consistency-20261115
+  -f read_testflight_status=true
+gh run rerun 43808549695 --job 133104812482
+
+No backend/database deployment, signing configuration change, live-payment setting
+change or physical-device acceptance claim. This document is the only post-upload
+source change; the installed build is exactly the archived source recorded above.
