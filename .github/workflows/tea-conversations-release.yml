@@ -77,7 +77,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node backend-cf/scripts/verify-tea-release.mjs
+        run: node backend-cf/scripts/verify-tea-release.mjs --after
       - name: Verify public read and anonymous write denial
         if: ${{ inputs.deploy }}
-        run: node backend-cf/scripts/verify-tea-http.mjs
+        run: node backend-cf/scripts/verify-tea-http.mjs --require-author-photos

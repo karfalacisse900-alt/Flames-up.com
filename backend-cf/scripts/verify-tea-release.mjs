@@ -1,12 +1,26 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {fileURLToPath} from 'node:url';
-// Actual deployed Worker source; native release commits contain unreleased
-// business-ordering code and are not a safe API deployment baseline.
-const baseline='a8ac2a0fdad1d7c2afdb5f99bf8f9324fef62a6f';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+// Verified production rollout 43790044371. This repair changes only Tea author
+// photos; existing commerce, permissions, variables and secrets remain intact.
+export const baseline='164494c7c79300daea7459b49de460d3ce2a80a7';
+export const precedingVersion='c5294a13-8b86-4419-97a6-db5d453fe77f';
+export const teaRepairFiles=['backend-cf/src/index.ts','backend-cf/src/tea-authors.ts','backend-cf/src/tea-clubs.ts','backend-cf/src/tea-conversations.ts'];
+export function verifyTeaSource({changed,version,annotations,after=false,candidate,expectedVersion}) {
+  assert.deepEqual(changed,teaRepairFiles,'Tea deployment scope changed.');
+  if(after) {
+    assert.match(candidate??'',/^[a-f0-9]{40}$/,'Missing candidate source.');
+    assert.equal(annotations?.['workers/message'],'Tea Conversations '+candidate,'Deployed source does not match candidate.');
+  } else {
+    assert.equal(version,precedingVersion,'Production changed since inspection.');
+    assert.equal(annotations?.['workers/message'],'Professional accounts and Tea '+baseline,'Unexpected preceding source.');
+    if(expectedVersion) assert.equal(version,expectedVersion,'Production changed after inspection.');
+  }
+}
+async function main() {
 const changed=execFileSync('git',['diff','--name-only',baseline,'HEAD','--','backend-cf/src','backend-cf/wrangler.toml','backend-cf/package.json','backend-cf/package-lock.json'],{encoding:'utf8',cwd:fileURLToPath(new URL('../../',import.meta.url))}).trim().split('\n');
-assert.deepEqual(changed,['backend-cf/src/index.ts','backend-cf/src/tea-conversations.ts']);
+assert.deepEqual(changed,teaRepairFiles,'Tea deployment scope changed.');
 const {CLOUDFLARE_API_TOKEN:token,CLOUDFLARE_ACCOUNT_ID:account}=process.env;
 assert.equal(account,'2ca88b3551321681a5f9434814f38ec8');assert.ok(token);
 const base=`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/flames-up-api`;
@@ -24,8 +38,14 @@ assert.ok(Array.isArray(bindings));
 assert.ok(bindings.some(b=>b.name==='ENVIRONMENT'&&b.text==='production'));
 const configurationHash=createHash('sha256').update(JSON.stringify(bindings.slice().sort((a,b)=>a.name.localeCompare(b.name)))).digest('hex');
 assert.equal(configurationHash,'1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a','Production bindings changed after inspection');
-console.log(JSON.stringify({version,created:metadata.metadata?.created_on,annotations:metadata.annotations,configurationHash,changed}));
 if(process.env.DEPLOY==='true') {
   assert.match(process.env.EXPECTED_VERSION??'',/^[a-f0-9-]{36}$/);
   assert.equal(version,process.env.EXPECTED_VERSION,'Production changed after inspection.');
+}
+verifyTeaSource({changed,version,annotations:metadata.annotations,after:process.argv.includes('--after'),
+  candidate:process.env.GITHUB_SHA,expectedVersion:process.env.DEPLOY==='true'?process.env.EXPECTED_VERSION:undefined});
+console.log(JSON.stringify({version,created:metadata.metadata?.created_on,annotations:metadata.annotations,configurationHash,changed}));
+}
+if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
+  main().catch(error=>{console.error(error.message);process.exitCode=1;});
 }
