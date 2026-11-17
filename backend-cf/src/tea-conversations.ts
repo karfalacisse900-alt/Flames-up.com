@@ -60,6 +60,7 @@ export function discussionInput(action: string, value: any) {
 
 type Dependencies = {
   auth: any; optionalAuth: any;
+  authors?: (c: any, value: any) => Promise<any>;
   viewer: (c: any) => Promise<string>;
   limit: (c: any, write: boolean) => Promise<any>;
   restriction: (c: any, action: 'posting' | 'commenting') => Promise<any>;
@@ -69,6 +70,7 @@ type Dependencies = {
 export function mountTeaConversations(api: any, deps: Dependencies) {
   async function handle(c: any, action: string) {
     c.header('Cache-Control', 'private, no-store');
+    const authors = (value: any) => deps.authors ? deps.authors(c, value) : Promise.resolve(value);
     const write = ['create','edit','reply','follow'].includes(action);
     try {
       const limited = await deps.limit(c, write); if (limited) return limited;
@@ -91,9 +93,9 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
         const result = await deps.rpc(c, 'captro_tea_write', {
           p_actor: viewer, p_action: action, p_id: action === 'create' ? data.requestID : id, p_data: data,
         });
-        return c.json(action === 'reply' ? result : enrich(result));
+        return c.json(await authors(action === 'reply' ? result : enrich(result)));
       }
-      if (action === 'detail') return c.json(enrich(await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action, p_id: id })));
+      if (action === 'detail') return c.json(await authors(enrich(await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action, p_id: id }))));
       const target = action === 'replies' ? c.req.query('target') : undefined;
       if (target && (target.length>60 || (target !== 'general' && !/^[1-9][0-9]*:[0-9]+:[0-9]+$/.test(target)))) throw new DiscussionInputError('Invalid reply target.');
       const secret = c.env.JWT_SECRET;
@@ -105,7 +107,7 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
       const nextCursor = rows.length > 20 && last ? await writeFeedCursor(secret, {
         ...cursor, boundary: { id: last.id, createdAt: last.createdAt, legacyCreatedAt: null },
       }) : null;
-      return c.json({ items: action === 'list' ? items.map(enrich) : items, nextCursor });
+      return c.json({ items: await authors(action === 'list' ? items.map(enrich) : items), nextCursor });
     } catch (error) {
       if (error instanceof DiscussionInputError || error instanceof FeedCursorError) return c.json({ detail: error instanceof DiscussionInputError ? error.message : 'Refresh to start again.', code: 'TEA_DISCUSSION_INVALID' },400);
       const message = error instanceof Error ? error.message : '';

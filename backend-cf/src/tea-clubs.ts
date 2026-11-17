@@ -35,7 +35,7 @@ async function inviteToken(secret:string,creator:string,club:string,id:string) {
  const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']);
  return [...new Uint8Array(await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(JSON.stringify(['tea-invite',creator,club,id]))))].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
-type Deps={auth:any;viewer:(c:any)=>Promise<string>;rpc:(c:any,name:string,body:any)=>Promise<any>;limit:(c:any,write:boolean)=>Promise<any>;restriction:(c:any)=>Promise<any>;site:(path:string)=>string};
+type Deps={authors?:(c:any,value:any)=>Promise<any>;auth:any;viewer:(c:any)=>Promise<string>;rpc:(c:any,name:string,body:any)=>Promise<any>;limit:(c:any,write:boolean)=>Promise<any>;restriction:(c:any)=>Promise<any>;site:(path:string)=>string};
 export function mountTeaClubs(api:any,deps:Deps) {
  async function handle(c:any,action:string) {
   c.header('Cache-Control','private, no-store');
@@ -67,6 +67,7 @@ export function mountTeaClubs(api:any,deps:Deps) {
    }
    if(action==='createInvite'){token=await inviteToken(c.env.JWT_SECRET,viewer,id,data.id);data.hash=await digest(token);}
    let value=await deps.rpc(c,'captro_tea_club',{p_actor:viewer,p_club:id,p_action:action,p_data:data});
+   if (deps.authors && ['messages','message','send'].includes(action)) value=await deps.authors(c,value);
    if(action==='invites') value=await Promise.all(value.map(async(i:any)=>{
     const token=await inviteToken(c.env.JWT_SECRET,i.created_by,id,i.id);
     const {token_hash,...safe}=i;

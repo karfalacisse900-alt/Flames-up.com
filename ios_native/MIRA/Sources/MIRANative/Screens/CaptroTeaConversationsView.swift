@@ -12,8 +12,8 @@ enum CaptroTeaStyle {
 struct CaptroTeaHeading: View {
   var body: some View {
     VStack(spacing: 0) {
-      Text("Captro").font(.headline)
-      Label("Tea", systemImage: "cup.and.saucer.fill").labelStyle(.titleAndIcon).font(.caption.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
+      Text("Captro").font(.title3.weight(.semibold))
+      HStack(spacing: 4) { Text("Tea"); Image(systemName: "cup.and.saucer.fill") }.font(.caption.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
     }.accessibilityElement(children: .combine).accessibilityIdentifier("tea.heading")
   }
 }
@@ -58,6 +58,7 @@ struct CaptroTeaConversationsList: View {
   @State private var scope = ""
   @State private var receivedAt: Date?
   @State private var revision = 0
+  @State private var requestID: UUID?
   @Environment(\.scenePhase) private var scenePhase
 
   init(api: MIRAAPIClient, active: Bool, created: CaptroTeaConversation?, open: @escaping (CaptroTeaConversation) -> Void) {
@@ -73,7 +74,7 @@ struct CaptroTeaConversationsList: View {
   var body: some View {
     List {
       if items.isEmpty {
-        if loading { ProgressView("Loading Tea").listRowSeparator(.hidden) }
+        if loading && error == nil { ProgressView("Loading conversations…").listRowSeparator(.hidden).accessibilityIdentifier("tea.conversations.loading") }
         else if error == nil, loaded { Text("No conversations yet. Choose New Tea post from the menu to start one.").font(.subheadline).foregroundStyle(.secondary).listRowSeparator(.hidden) }
       }
       ForEach(items) { post in
@@ -98,7 +99,7 @@ struct CaptroTeaConversationsList: View {
     .listStyle(.plain).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
     .accessibilityIdentifier("tea.conversations.list")
     .refreshable { await load(reset: true, force: true) }
-    .task(id: active) { if active { await load(reset: true) } }
+    .task(id: "\(active)-\(revision)") { if active { await load(reset: true) } }
     .onAppear {
       api.teaConversations.listViewport.select("tea-list")
       api.teaConversations.listViewport.updateOrder(items.map(\.id))
@@ -124,9 +125,9 @@ struct CaptroTeaConversationsList: View {
       items[index] = post
     }
     .onReceive(NotificationCenter.default.publisher(for: .captroTeaAccessChanged)) { _ in
-      revision += 1
-      items = []; nextCursor = nil; receivedAt = nil
-      error = "Refresh to see available conversations."
+      requestID = nil; loading = false; loaded = false
+      items = []; nextCursor = nil; receivedAt = nil; error = nil
+      revision += 1 // The task restarts an authorized read; never leave an idle loading label.
     }
   }
 
@@ -136,18 +137,19 @@ struct CaptroTeaConversationsList: View {
     if reset, !force, let receivedAt, Date().timeIntervalSince(receivedAt) < 30 { return }
     let owner = scope
     let expectedRevision = revision
-    loading = true; error = nil; defer { loading = false }
+    let token = UUID(); requestID = token
+    loading = true; error = nil; defer { if requestID == token { loading = false; requestID = nil } }
     do {
       let path = "/tea/conversations" + (!reset && nextCursor != nil ? "?cursor=" + nextCursor! : "")
       let page: CaptroTeaConversationPage<CaptroTeaConversation> = try await api.getFresh(path)
-      guard owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled else { return }
+      guard requestID == token, owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled else { return }
       var seen = Set(reset ? [] : items.map(\.id))
       let unique = page.items.filter { seen.insert($0.id).inserted }
       items = reset ? unique : items + unique
       nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
       api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt!)
     } catch is CancellationError {} catch {
-      guard owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
+      guard requestID == token, owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }
       self.error = CaptroRefreshFailure.message(error, content: "conversations", cached: !items.isEmpty)
     }
@@ -158,26 +160,23 @@ private struct CaptroTeaConversationRow: View {
   let post: CaptroTeaConversation
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
-      CaptroTeaIdentity(name: post.author.name, size: 44)
-      VStack(alignment: .leading, spacing: 5) {
-        ViewThatFits(in: .horizontal) {
-          HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(post.title).font(.headline).fixedSize(horizontal: true, vertical: false)
-            Spacer(minLength: 0)
-            replyCount
-          }
-          VStack(alignment: .leading, spacing: 4) {
-            Text(post.title).font(.headline).fixedSize(horizontal: false, vertical: true)
-            replyCount
-          }
+      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 48)
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text(post.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          replyCount.fixedSize(horizontal: true, vertical: false)
+          Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
         }
-        Text(post.body).font(.body).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-        TeaLinkFlow(spacing: 8) {
-          Text(post.author.name).font(.subheadline).foregroundStyle(.secondary)
+        Text(post.body).font(.callout).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityIdentifier("tea.preview." + post.id)
+        TeaLinkFlow(spacing: 5) {
+          Text(post.author.name).font(.footnote).foregroundStyle(.secondary)
+          Text("·").font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
           TeaConversationTime(value: post.createdAt)
         }
-      }
-      Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).padding(.top, 4).accessibilityHidden(true)
+      }.frame(maxWidth: .infinity, alignment: .leading)
     }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 16)
       .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }.contentShape(Rectangle())
   }
@@ -390,7 +389,7 @@ struct TeaConversationTime: View {
   private func authorHeader(_ post: CaptroTeaConversation) -> some View {
     HStack(spacing: 10) {
       Button { profile = CaptroProfileLink(id: post.author.id) } label: {
-        CaptroTeaIdentity(name: post.author.name, photo: model.authorProfile?.profileImage, size: 44)
+        CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL ?? model.authorProfile?.profileImage, size: 44)
       }.buttonStyle(.plain).accessibilityLabel("Open profile photo for " + post.author.name)
         .accessibilityIdentifier("tea.author.avatar")
       Button { profile = CaptroProfileLink(id: post.author.id) } label: {
@@ -461,7 +460,7 @@ private struct TeaReplyGroups: View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(CaptroTeaReplyGroup.consecutive(replies)) { group in
         HStack(alignment: .top, spacing: 10) {
-          CaptroTeaIdentity(name: group.replies[0].author.name, size: 36)
+          CaptroTeaIdentity(name: group.replies[0].author.name, photo: group.replies[0].author.photoURL, size: 36)
           VStack(alignment: .leading, spacing: 8) {
             Text(group.replies[0].author.name).font(.subheadline.weight(.semibold))
             ForEach(group.replies) { reply in

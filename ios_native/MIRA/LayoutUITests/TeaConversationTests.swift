@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class TeaConversationTests: XCTestCase {
   private func launch(_ extra: [String] = []) -> XCUIApplication {
@@ -22,6 +23,42 @@ final class TeaConversationTests: XCTestCase {
     // A SwiftUI multiline TextField is exposed as UITextView on some iOS versions.
     XCTAssertTrue(app.descendants(matching: .any).matching(identifier: id).firstMatch.waitForExistence(timeout: 8))
     return app.textFields[id].exists ? app.textFields[id] : app.textViews[id]
+  }
+
+  func testAvatarPixelsPreviewWidthAndAutomaticAccessReload() {
+    let app = launch(["--tea-avatar-fixture", "--captro-image-recovery-review", "--review-server-fallback", "--tea-slow"])
+    let first = row(101, app)
+    let preview = app.staticTexts["tea.preview.00000000-0000-4000-8000-000000000101"]
+    XCTAssertTrue(preview.waitForExistence(timeout: 8))
+    XCTAssertGreaterThan(preview.frame.width, app.frame.width * 0.65, "Reply count must not constrain the preview column")
+    XCTAssertLessThanOrEqual(preview.frame.height, 48)
+    XCTAssertFalse(app.staticTexts["Conversations"].exists)
+    let rendered = NSPredicate { _, _ in
+      let image = app.screenshot().image
+      guard let cg = image.cgImage else { return false }
+      let scale = CGFloat(cg.width) / app.frame.width
+      let point = CGPoint(x: (first.frame.minX + 24) * scale, y: (first.frame.minY + 40) * scale)
+      guard let sample = cg.cropping(to: CGRect(x: point.x, y: point.y, width: 2, height: 2)) else { return false }
+      var rgba = [UInt8](repeating: 0, count: 4)
+      let context = CGContext(data: &rgba, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+        space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+      context.draw(sample, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+      return rgba[0] > 220 && rgba[1] < 30 && rgba[2] < 30
+    }
+    expectation(for: rendered, evaluatedWith: app)
+    waitForExpectations(timeout: 10)
+    shot("tea-avatar-pixels-and-compact-density", app)
+    XCTAssertTrue((app.staticTexts["tea.test.requests"].value as? String ?? "").contains("0=1"))
+    app.buttons["tea.test.invalidate"].tap()
+    let reloaded = NSPredicate { _, _ in (app.staticTexts["tea.test.requests"].value as? String ?? "").contains("0=2") }
+    expectation(for: reloaded, evaluatedWith: app); waitForExpectations(timeout: 10)
+    XCTAssertTrue(first.waitForExistence(timeout: 10), "Access invalidation must start a new authorized load")
+    XCTAssertFalse(app.staticTexts["Refresh to see available conversations."].exists)
+    XCTAssertFalse(app.staticTexts["Loading Tea"].exists)
+    first.tap()
+    XCTAssertTrue(app.buttons["tea.conversation.follow"].waitForExistence(timeout: 8))
+    back(app)
+    XCTAssertTrue(first.waitForExistence(timeout: 8))
   }
 
   func testQuietLinksFollowReplyAndFreshReturn() {

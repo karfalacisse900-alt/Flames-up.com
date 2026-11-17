@@ -177,7 +177,7 @@ import UIKit
   private func messageRow(_ message: CaptroClubMessage, showAuthor: Bool) -> some View {
     HStack(alignment: .top, spacing: 10) {
       if showAuthor {
-        Button { linkDestination = .profile(message.author.id) } label: { CaptroTeaIdentity(name: message.author.name, size: 36) }
+        Button { linkDestination = .profile(message.author.id) } label: { CaptroTeaIdentity(name: message.author.name, photo: message.author.photoURL, size: 36) }
           .buttonStyle(.plain).accessibilityLabel("Open profile photo for " + message.author.name)
       } else { Color.clear.frame(width: 36, height: 1).accessibilityHidden(true) }
       VStack(alignment: .leading, spacing: 5) {

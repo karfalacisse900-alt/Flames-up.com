@@ -4,6 +4,7 @@ struct CaptroTeaAuthor: Codable, Hashable {
   let id: String
   let name: String
   let username: String
+  var photoURL: String? = nil
 }
 
 struct CaptroTeaConversation: Codable, Identifiable, Hashable {

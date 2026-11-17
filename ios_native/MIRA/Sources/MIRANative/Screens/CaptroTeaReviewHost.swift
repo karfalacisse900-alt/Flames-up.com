@@ -7,6 +7,14 @@ struct CaptroTeaReviewHost: View {
 
   var body: some View {
     MIRANativeRootView(reviewSession: context.session, api: context.api)
+      .overlay(alignment: .bottomLeading) {
+        if ProcessInfo.processInfo.arguments.contains("--tea-avatar-fixture") {
+          VStack {
+            Button("Recheck access") { context.api.teaConversations.invalidate() }.accessibilityIdentifier("tea.test.invalidate")
+            TeaReviewRequestCounter()
+          }.padding()
+        }
+      }
       .environment(\.captroStartupReducedMotion, true)
       .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
   }
@@ -225,6 +233,16 @@ private final class TeaReviewProtocol: URLProtocol {
             "isAuthor": n == 104, "following": false]
         }
       }
+      if ProcessInfo.processInfo.arguments.contains("--tea-avatar-fixture") {
+        for n in 101...104 {
+          var author = Self.conversations[id(n)]?["author"] as? [String: Any] ?? [:]
+          author["photoURL"] = CaptroImageRecoveryFixtureProtocol.fallbackURL
+          Self.conversations[id(n)]?["author"] = author
+          Self.conversations[id(n)]?["replyCount"] = n == 101 ? 28 : 3
+        }
+        Self.conversations[id(101)]?["title"] = "Nightlife NYC"
+        Self.conversations[id(101)]?["body"] = "Where’s everyone going tonight? Looking for a good vibe, music, and a chill crowd."
+      }
       if ProcessInfo.processInfo.arguments.contains("--tea-sentence-fixture"), Self.discussionReplies[id(101)] == nil {
         let caption = "I shot it on my phone. The hardest part was finding a location."
         Self.conversations[id(101)]?["title"] = "My first music video"
@@ -247,6 +265,7 @@ private final class TeaReviewProtocol: URLProtocol {
         ]
       }
       if path == "/tea/conversations" {
+        Task { @MainActor in TeaReviewMetrics.shared.counts[0, default: 0] += 1 }
         if method == "POST", let key = body["request_id"] as? String {
           var post = Self.conversations[id(104)]!
           post["id"] = key; post["title"] = body["title"]; post["body"] = body["body"]; post["links"] = body["links"]

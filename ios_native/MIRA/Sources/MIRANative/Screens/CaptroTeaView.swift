@@ -93,6 +93,7 @@ enum CaptroTeaPalette: String {
   @State private var didLoad = false
   @State private var error: String?
   @State private var receivedAt: Date?
+  @ScaledMetric(relativeTo: .subheadline) private var filterSize: CGFloat = 14
   @State private var filter = "All"
   @State private var city = ""
   @State private var cityDraft = ""
@@ -132,12 +133,12 @@ enum CaptroTeaPalette: String {
     NavigationStack(path: $path) {
       VStack(spacing: 0) {
         ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 8) {
+          HStack(spacing: 6) {
             ForEach(["All", "Following", "Clubs", "Events", "Nearby"], id: \.self) { item in
               Button { selectFilter(item) } label: {
-                Text(item).font(.subheadline.weight(filter == item ? .semibold : .regular))
+                Text(item).font(.system(size: filterSize, weight: filter == item ? .semibold : .regular))
                   .foregroundStyle(filter == item ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary)
-                  .padding(.horizontal, 14).padding(.vertical, 8)
+                  .padding(.horizontal, 12).padding(.vertical, 7)
                   .background(filter == item ? CaptroTeaStyle.accent.opacity(0.13) : MIRATheme.Color.surfaceSoft, in: Capsule())
                   .frame(minHeight: 44)
               }.buttonStyle(.plain).accessibilityAddTraits(filter == item ? .isSelected : [])
@@ -145,12 +146,12 @@ enum CaptroTeaPalette: String {
             }
           }.padding(.horizontal, 16)
         }.padding(.vertical, 8)
-        HStack {
+        if section != "Conversations" { HStack {
           Text(section == "Conversations" ? "Conversations" : city.isEmpty ? "Clubs & Events" : "Activities in " + city)
             .font(.caption).foregroundStyle(.secondary)
           Spacer()
           if !city.isEmpty { Button("Change city") { cityDraft = city; choosingCity = true }.font(.caption).frame(minHeight: 44) }
-        }.padding(.horizontal, 16).padding(.bottom, 4)
+        }.padding(.horizontal, 16).padding(.bottom, 4) }
         Divider()
         ZStack {
       List {

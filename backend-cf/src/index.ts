@@ -1,3 +1,4 @@
+import { teaAuthorPhotos } from './tea-authors';
 import { makeBusinessOrdering } from './business-ordering';
 import { mountProfessionalAccounts, professionalHash, ProfessionalError, studioOrigin, studioPathAllowed } from './professional-accounts';
 import { teaPage, teaDetail, TeaInputError, TeaUnavailable } from './tea';
@@ -20344,7 +20345,19 @@ async function handleTea(c: any, request: (viewer: string, deps: ReturnType<type
 const teaAuth = async (c: any, next: () => Promise<void>) =>
   c.req.header('Authorization') === undefined ? next() : authMiddleware(c, next);
 
+// Public avatar fields only, for canonical authors of an authorized response.
+async function teaResponseAuthors(c: any, value: any) {
+  return teaAuthorPhotos(value, async ids => {
+    const rows = await supabaseAdminQueryRows(c, 'app_users', {
+      select: 'id,avatar_url,metadata', filters: { id: postgrestInFilter(ids) }, limit: ids.length,
+    });
+    return new Map(rows.filter(row => supabaseUserStatus(row) === 'active')
+      .map(row => [String(row.id), safeMediaReference(row.avatar_url)]));
+  });
+}
+
 mountTeaConversations(api, {
+  authors: teaResponseAuthors,
   auth: authMiddleware, optionalAuth: teaAuth,
   viewer: async c => {
     const id = getUserId(c);
@@ -20359,6 +20372,7 @@ mountTeaConversations(api, {
 });
 
 mountTeaClubs(api, {
+  authors: teaResponseAuthors,
   auth: authMiddleware,
   viewer: async c => {
     const row = await getSupabaseAppUserRowByAnyId(c, getUserId(c));
