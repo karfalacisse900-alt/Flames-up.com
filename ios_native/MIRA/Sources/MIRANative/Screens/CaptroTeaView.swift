@@ -155,7 +155,9 @@ enum CaptroTeaPalette: String {
         Divider()
         ZStack {
       List {
-        if discoveryEntries.isEmpty {
+        // Keep the inactive list mounted for scroll restoration, but do not
+        // expose its initial loading/error status while conversations are shown.
+        if section == "Clubs & Events", discoveryEntries.isEmpty {
           if loading || (!didLoad && error == nil) {
             listRow { ProgressView("Loading Tea").frame(maxWidth: .infinity).padding(.vertical, 16) }
           } else if let error {
