@@ -79,18 +79,24 @@ Apple Silicon run above supersedes that incomplete result.
 No physical-iPhone or live-payment verification is claimed. External signup
 opening/return was not newly exercised in UI; safe URLs have backend/model tests.
 
-TESTFLIGHT — STILL IN PROGRESS
-Release 44135175008 passed matching-source validation and signing/provisioning.
-Its archive began 2026-11-17 17:17:43 UTC; upload is not yet confirmed.
-https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44135175008
-The gate now recognizes successful serial dual-phone validation as well as the
-existing two-job matrix; exact branch, source tree and attestation checks remain.
-Nine native release-gate regression tests passed, including serial dual-phone evidence rejection cases.
-Apple status reads returned HTTP 500 UNEXPECTED_ERROR on both exact app lookup
-and the bounded fallback. This is not an agreement/signing HTTP 403. Four lookup
-regression tests passed: exact identity, server-error fallback, authorization
-rejection, and missing/ambiguous app rejection. Availability remains unverified.
-No validation gate was bypassed.
+TESTFLIGHT — AVAILABLE TO EXISTING PRIVATE TESTERS
+Captro 1.0.1 (710.1) uploaded successfully at 2026-11-17 17:57:40 UTC.
+Release: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44135175008
+IPA source: fdf16ec; matching native validation: 44122601490.
+Signing, archive, Release authentication validation, IPA export and live security,
+Tea/Notes and professional-schema compatibility checks all passed.
+Apple delivery UUID: 3533e0ad-7db8-4585-a423-30e22d475b21.
+At 18:06:24 UTC Apple confirmed processing VALID, expired false, internal state
+IN_BETA_TESTING, and assignment to Captro private and Captro private2. Both are
+existing internal automatic-distribution groups. Auto-notification is enabled.
+Verification: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44144187312
+External state is READY_FOR_BETA_SUBMISSION; no external review or public release
+was submitted. No new testers were invited.
+Earlier status requests intermittently returned HTTP 500 UNEXPECTED_ERROR or timed
+out. These did not prevent upload and the successful final read verifies distribution.
+Nine native release-gate regression tests passed, including rejection of incomplete
+serial phone evidence. Exact source, branch and attestation checks remain intact.
+Four app lookup regression tests passed. No validation gate was bypassed.
 LIMITS
 Borough is explicitly author-selected (five NYC boroughs), never inferred from a
 profile/GPS. This version does not auto-populate it from venue data. Existing
