@@ -1,0 +1,115 @@
+CAPTRO TEA HEADER, DIVIDERS AND CONTEXT
+
+Branch: fix/tea-header-context-20261116
+Implementation: 27fac50, ad1c062, a8432da and 1960e3a.
+Starting point: 0bbf2ca (TestFlight 1.0.1 / 702.1 native tree)
+Unrelated existing supabase/.temp/ files preserved.
+
+CHANGES
+- Tea list and conversation detail use CaptroBrandLogo, the existing supplied
+  symbol and outlined wordmark used by Capture, at 86 x 23 pt. Light/dark artwork
+  follows the current appearance. The separate Tea/cup heading is removed.
+- A visible Post button opens the existing authenticated Tea composer directly.
+  Its touch target is at least 44 pt. The three-dot list menu is removed.
+- The existing all-activities destination remains available from Clubs/Events
+  via All activities; offers, reservations and the existing actions remain.
+- Tea row separators are 1 pt with an opaque neutral adaptive color. Previously
+  they were 0.5 pt and only 5.5% black in light mode, making them almost invisible.
+- Activity rows put the real Club/Event/Meetup/Offer/Reservation type beside the
+  timestamp in violet. Nearby appears only for results from an explicitly chosen
+  city query. The original API filtering, permissions and pagination are reused.
+- Home's inbox shortcut is removed. Messaging services and profile access remain.
+
+CONTEXT DATA LIMITATION
+Existing general conversation records contain no city, club or event association.
+They remain untagged. Neither title keywords nor the author's profile city can
+truthfully establish those associations. No sample tags or fake associations were
+added to production posts. Adding associations to general conversations would
+require a persisted author-selected context and server authorization validation.
+No database or API change is needed for this presentation update.
+
+FILES
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift (DEBUG fixture)
+ios_native/MIRA/LayoutUITests/TeaConversationTests.swift
+ios_native/MIRA/LayoutUITests/TeaTests.swift
+docs/tea-header-context-20261116.txt
+
+VERIFICATION
+git diff --check: passed.
+node --test backend-cf/tests/native_release_gate.test.mjs: 8 passed.
+Native validation run 44007319817 caught a missing nearby argument in the
+linked-event row. Corrected with a false default in ad1c062; no runtime result
+is claimed for that build.
+Run 44010102694 built the app and passed activity context, filter switching,
+existing event checkout, Home entry and large-text checks on both phones. Real
+avatar pixels and separator pixels passed. It exposed a smaller native toolbar
+accessibility frame and a small-phone Add link tap failure. a8432da uses explicit
+plain button hit regions and removes the residual navigation title. 1960e3a
+checks real taps at both edges of a 44 pt Post target (native accessibility bounds
+alone are not a measurement of the expanded system hit region).
+Run 44012890109 was superseded before completion by 44013102233 with that final
+touch test.
+FINAL RESULT: 44013102233 succeeded. All seven selected app-hosted checks passed
+on iPhone 13 mini and iPhone 17 (14 executions, zero failures).
+Exact source: 1960e3ad36ffec95ba9d4ce7a879d25a68913616
+Exact native tree: b2f86f43fcf4d49160e66588e0ac1d82ad280a47
+Both exported source attestations match those values.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44013102233
+Selected app-hosted tests cover real avatar pixels, visible separator pixels,
+brand geometry, direct Post create/edit/cancel, large text, truthful type/city
+labels, filter switching, Home controls and the existing event checkout fixture.
+
+Payment flags, routing, pricing, accounts, entitlements and backend are unchanged.
+No production fixtures or transactions are created by these UI tests.
+Physical iPhone installation and behavior have not been verified in this session.
+TestFlight upload was dispatched after final visual review and successful native
+verification, using validation_run=44013102233. Apple availability is verified below.
+
+Exact native validation command:
+gh workflow run native-polish-validation.yml --ref fix/tea-header-context-20261116
+  -f conversations=true
+  -f test_filter=CaptroLayoutUITests/TeaConversationTests/testAvatarPixelsPreviewWidthAndAutomaticAccessReload,CaptroLayoutUITests/TeaConversationTests/testComposeEditCancelAndAuthorOnlyLinks,CaptroLayoutUITests/TeaConversationTests/testLargeTextWrapsLinksWithoutHidingReply,CaptroLayoutUITests/TeaTests/testFiltersKeepDistinctResultsAndUnavailableFollowingIsHonest,CaptroLayoutUITests/TeaTests/testContextLabelsUseActualTypeAndExplicitCityResults,CaptroLayoutUITests/TeaTests/testHomeTeaButtonOpensIndividualEventAndExistingCheckout,CaptroLayoutUITests/TeaTests/testProfileCityDoesNotHideClubsAndHomeEntryNeedsOneTap
+
+Release command:
+gh workflow run native-ios-testflight.yml --ref fix/tea-header-context-20261116
+  -f validation_run=44013102233
+Release run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44016752993
+Release archive, signing, authentication validation, IPA export, and read-only
+live schema/API compatibility checks passed. No backend rollout was performed.
+Downloaded IPA Info.plist confirms com.captro.app / 1.0.1 / 704.1.
+IPA SHA256: d3f9ede37837a7407cceb8c778562a923dac41fc5f8544753c3a4ee79e0157d2
+IPA: C:/Users/The-s/AppData/Local/Temp/captro-testflight-704-evidence/Captro.ipa
+
+TESTFLIGHT AVAILABLE
+Upload completed at 04:43:31 UTC on November 17 (11:43 PM New York, November 16),
+with no errors. Delivery UUID: 31bb8cb4-816c-46b3-8ad9-796311e1a869.
+At 04:47:25 UTC (11:47 PM New York), Apple's read-only status confirmed:
+- Build 704.1 / version 1.0.1: upload COMPLETE, processing VALID, expired=false.
+- No upload errors or warnings.
+- Internal state IN_BETA_TESTING.
+- Assigned to Captro private and Captro private2, both internal groups with
+  automatic distribution. Existing testers in those groups can install it.
+- External state READY_FOR_BETA_SUBMISSION. No public/external release submitted.
+Physical installation was not verified.
+Evidence: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44019312211/attempts/2
+Read-only verification commands:
+gh workflow run native-ios-testflight.yml --ref fix/tea-header-context-20261116
+  -f read_testflight_status=true
+gh run rerun 44019312211
+The second command reran status inspection only, not the upload.
+
+SCREENSHOTS
+Final raw simulator captures (small = iPhone 13 mini; large = iPhone 17):
+C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-tea-header-context-20261116/
+  tea-list-small.png / tea-list-large.png
+  tea-activity-labels-small.png / tea-activity-labels-large.png
+  tea-nearby-label-small.png / tea-nearby-label-large.png
+  tea-large-text-small.png / tea-large-text-large.png
+  home-header-small.png / home-header-large.png
+These are actual app screens using isolated fixtures. Solid red avatars are
+known-image pixel-test assets; DEBUG access probes are not in the Release UI.
+Home is intentionally empty in the fixture; these captures verify its header,
+not live feed content. No physical-device or live-payment test is claimed.
