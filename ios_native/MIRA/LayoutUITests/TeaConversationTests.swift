@@ -148,6 +148,9 @@ final class TeaConversationTests: XCTestCase {
     let app=launch(["--captro-quality-large-text"])
     row(101,app).tap()
     XCTAssertTrue(app.buttons["tea.conversation.follow"].waitForExistence(timeout: 8))
+    let heading = app.descendants(matching: .any).matching(identifier: "tea.heading").firstMatch
+    XCTAssertTrue(heading.exists)
+    XCTAssertLessThanOrEqual(heading.frame.height, 44, "Brand heading must stay inside the navigation bar at accessibility sizes")
     XCTAssertGreaterThan(app.staticTexts["Which music video intro works better?"].frame.height, 44,
       "The fixture must apply accessibility text size, not merely set a launch flag")
     for host in ["youtube.com","tiktok.com","example.com"] {

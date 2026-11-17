@@ -14,7 +14,11 @@ struct CaptroTeaHeading: View {
     VStack(spacing: 0) {
       Text("Captro").font(.title3.weight(.semibold))
       HStack(spacing: 4) { Text("Tea"); Image(systemName: "cup.and.saucer.fill") }.font(.caption.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
-    }.accessibilityElement(children: .combine).accessibilityIdentifier("tea.heading")
+    }
+    // The two-line brand sits in a fixed-height navigation bar. Keep it inside
+    // that bar while the actual conversation content follows the full text size.
+    .dynamicTypeSize(...DynamicTypeSize.xLarge)
+    .accessibilityElement(children: .combine).accessibilityIdentifier("tea.heading")
   }
 }
 
