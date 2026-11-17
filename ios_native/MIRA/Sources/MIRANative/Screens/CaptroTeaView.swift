@@ -229,7 +229,7 @@ enum CaptroTeaPalette: String {
         }
       }
       #endif
-      .navigationTitle("Tea")
+      .navigationTitle("")
       .miraNavigationSurface()
       .navigationBarTitleDisplayMode(.inline)
       .toolbar(.visible, for: .navigationBar)
@@ -292,7 +292,9 @@ enum CaptroTeaPalette: String {
     Button { if viewerID == nil { signIn() } else { composing = true } } label: {
       Text("Post").font(.subheadline.weight(.semibold))
         .padding(.horizontal, 8).frame(minWidth: 44, minHeight: 44)
-    }.accessibilityLabel("Post to Tea").accessibilityIdentifier("tea.compose")
+        .contentShape(Rectangle())
+    }.buttonStyle(.plain)
+      .accessibilityLabel("Post to Tea").accessibilityIdentifier("tea.compose")
       .foregroundStyle(CaptroTeaStyle.accent)
   }
   private func showAllActivities() {

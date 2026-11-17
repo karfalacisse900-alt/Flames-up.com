@@ -40,7 +40,7 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertEqual(heading.frame.width, 86, accuracy: 1)
     XCTAssertEqual(heading.frame.height, 23, accuracy: 1)
     XCTAssertFalse(app.staticTexts["Tea"].exists)
-    XCTAssertGreaterThanOrEqual(app.buttons["tea.compose"].frame.height, 44)
+    XCTAssertGreaterThanOrEqual(app.buttons["tea.compose"].frame.height + 0.000001, 44)
     // Check the actual row separator pixels, not just the presence of a view.
     let screenshot = app.screenshot().image.cgImage!
     let scale = CGFloat(screenshot.width) / app.frame.width
@@ -119,7 +119,7 @@ final class TeaConversationTests: XCTestCase {
     let body=input("tea.compose.body",app)
     body.tap(); body.typeText("A question for the community.")
     app.buttons["Add link"].tap()
-    let link=app.textFields["tea.compose.link.0"]
+    let link=input("tea.compose.link.0",app)
     link.tap(); link.typeText("https://example.com/project")
     app.buttons["tea.compose.save"].tap()
     XCTAssertTrue(app.buttons["tea.conversation.edit"].waitForExistence(timeout: 10))

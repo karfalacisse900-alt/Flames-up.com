@@ -544,7 +544,12 @@ struct CaptroTeaComposer: View {
                 .buttonStyle(.plain).accessibilityLabel("Remove link \(index + 1)")
             }
           }
-          if links.count < 3 { Button("Add link") { links.append("") }.frame(minHeight: 44) }
+          if links.count < 3 {
+            Button { links.append("") } label: {
+              Text("Add link").frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+            }.buttonStyle(.plain).foregroundStyle(CaptroTeaStyle.accent)
+          }
         } footer: { Text("Optional. Up to three HTTPS links. Only you can edit the links on your post.") }
         }.disabled(saving || submitted != nil)
         if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
