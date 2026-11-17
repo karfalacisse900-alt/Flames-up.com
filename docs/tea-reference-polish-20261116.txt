@@ -1,0 +1,142 @@
+Captro Tea reference implementation — 16 November 2026
+
+Branch: fix/tea-reference-polish-20261116
+Baseline: 81b63d7 (current-app cleanup). Existing supabase/.temp files left untouched.
+Scope: Tea native presentation, activity-filter navigation, and related UI tests only.
+No deployment, release, payment activation, migration, or financial changes.
+
+Changed native files:
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaView.swift
+  Compact Captro/Tea header and overflow composer; compact scoped violet filters.
+  All opens existing Conversations. Clubs and Events select existing eligible activity
+  records (Events includes meetups). The overflow preserves all activities, including
+  offers/reservations, without restoring the previously removed shopping directory.
+  Nearby explicitly asks for a city and uses /tea?city=...; no location permission.
+  City cursors/snapshots are separate, scope changes clear them, obsolete responses
+  cannot overwrite the current query, and unfiltered shared cache is not poisoned.
+  Following explains that the current conversation API lacks this filter; it does not
+  pretend to filter or change the current list.
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+  Tea-only adaptive violet treatments, reusable heading, initials/avatar and quote.
+  Divider-separated conversation rows with title, preview, author/time and real count.
+  Author/profile and separate account-follow control below compact detail navigation.
+  Stored sentence targets, orphaned original quotes, grouped replies, draft and
+  discussion-follow remain intact. Compact violet excerpt/connector and composer.
+  Native existing image loader for actual author photo; no fabricated badges/preview.
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
+  Compact club identity/accurate count/overflow; existing Chat/Links/Info preserved.
+  Grouped avatar/text messages, compact quoted references, explicit supported Reply,
+  quiet violet links/composer, existing inline authorized media renderer retained.
+  Rooms and management stay reachable; member/visitor/paid admission unchanged.
+
+Changed test files:
+ios_native/MIRA/LayoutUITests/TeaTests.swift
+  Update navigation selectors. Add Clubs/Events separation, honest Following state,
+  explicit city-empty result, return-to-unfiltered and Conversations checks.
+ios_native/MIRA/LayoutUITests/TeaConversationTests.swift
+  Update header/menu selectors, preserve real reply/follow/scroll assertions.
+ios_native/MIRA/LayoutUITests/TeaClubTests.swift
+  Update filter/menu selectors; preserve draft/quote/permission assertions.
+
+Known source limitations (not disguised by UI):
+- All currently means all conversations; all eligible activity kinds remain accessible
+  in the overflow. These are separate existing services, not a fabricated unified feed.
+- Following-by-author and geographically tagged conversations have no existing API.
+  Nearby is explicitly city-based activities, not nearby conversation posts.
+- List/reply/club-message author projections provide id/name/username only. Initials
+  are shown there instead of inventing photos or performing per-row profile requests.
+  Detail-author and club header use their existing real-image data.
+- No link-preview title/image metadata: links use real hostname/tiny icon fallback.
+- Conversation reactions and reply uploads are not supported by the current service.
+  No fake heart counts, reaction buttons, camera/upload controls, or verification badges.
+  Club mention, quote, links, and existing media display remain available.
+- Tea is already a full-screen cover, so it does not support keeping the Home tab bar
+  under its list. No duplicate/fake navigation bar was introduced.
+- Files/audio still use their existing Messages destination; supported photos/videos
+  remain in the club with the existing fit-aspect media player.
+
+Verification:
+Backend: npm test (backend-cf) — 433 passed, 0 failed, 0 skipped; 29.06 seconds.
+Output: %TEMP%/captro-tea-reference-tests.txt
+Diff: git diff --check — passed.
+Initial compile run (cancelled; superseded): https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43975188909
+Native fixture/screens run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43975215270
+Validation progression:
+776c90a: 43975215270 — 4 UI tests passed on iPhone 13 mini and iPhone 17 (8 passes).
+1312a90: 43976837764 — unsigned Debug build-for-testing and Release build passed;
+  10 host policy checks and 10 actual Tea model checks passed.
+1312a90: 43977162135 — small-phone extended tests: filters and large-text club draft
+  passed; paged-list return and large-text owner edit failed. Assertions retained.
+  Inspection showed stale refresh replaced later pages and edit scrolled under header.
+0e71877: visual review corrected vertical Divider inheritance, bottom-aligned short
+  club histories, hidden Tea toolbar label, and disabled-send visual state.
+  Run 43979379795 cancelled as superseded by final source compile.
+  Run 43979385047 PASSED: 6 UI tests on each phone (12 passes), including paged
+  return, filters, links, sentence replies, club quote/tab draft, and large text.
+  Final screenshots visually inspected; divider/short-history corrections confirmed.
+688dda0: refresh atomically reloads the previously loaded page range (bounded at 16
+  subsequent pages), preserving visible rows until success; existing owner Edit
+  moved to the fixed header. No timeout increase or skipped assertion.
+  FINAL compile: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43981012323
+  FINAL focused UI: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43981016529
+  Final compile PASSED: Debug build-for-testing, Release build, 10 refresh policy
+  and 10 actual Tea model checks (plus mutation/baseline regression proofs).
+  Final focused UI PASSED on both phones: 2 cases each (4 passes).
+  Paged return and edited-caption/large-text composer assertions passed unchanged.
+  Final source: 688dda0. Report-only commit follows; no further app source changes.
+Reviewed screenshot artifacts (0e71877 visual pass, isolated fixture data):
+C:/Users/The-s/AppData/Local/Temp/captro-tea-polished-large/screenshots
+C:/Users/The-s/AppData/Local/Temp/captro-tea-polished-small/screenshots
+Large phone (iPhone 17):
+- List: E7C76DFC-6B87-4426-AD4B-B2847343A352.png
+- Details: 33057810-97F8-40A2-B341-5942667EBA2B.png
+- Sentence replies: EA74B080-75D8-4696-B5C5-5DC37DB526FB.png
+- Club: 29AB209F-D863-4F73-B6A7-F2F8E56AEEC7.png
+Small phone (iPhone 13 mini):
+- List: 37BBF8F6-71A5-436E-9ECD-50A1E5C58AC2.png
+- Large-text club with keyboard: 6782083A-2C7B-47BA-80C0-CD4B7CC087D1.png
+Each manifest maps remaining filenames to screen names. The final 688dda0 changes
+paged refresh and owner-only Edit placement; these visitor/club layouts are unchanged.
+Earlier 776c90a screenshots remain in captro-tea-reference-large/small for comparison.
+The test-only request-count overlay in some images is absent in production.
+
+Apple toolbar API reference used for the scoped iOS 26 glass-background adjustment:
+https://developer.apple.com/documentation/swiftui/toolbarcontent/sharedbackgroundvisibility(_:)
+Physical iPhone and live payments: not tested. No real user records were modified.
+
+Exact verification entry points (repository root unless stated):
+- cd backend-cf; npm test
+- git diff --check
+- gh workflow run native-polish-validation.yml --ref fix/tea-reference-polish-20261116 -f compile_only=true
+- gh workflow run native-polish-validation.yml --ref fix/tea-reference-polish-20261116 -f conversations=true -f test_filter="CaptroLayoutUITests/TeaTests/testFiltersKeepDistinctResultsAndUnavailableFollowingIsHonest,CaptroLayoutUITests/TeaTests/testRetryPaginationAndReturnToSameScrollPosition,CaptroLayoutUITests/TeaConversationTests/testQuietLinksFollowReplyAndFreshReturn,CaptroLayoutUITests/TeaConversationTests/testSentenceRepliesCollapsedExpandedAndClearKeepsDraft,CaptroLayoutUITests/TeaClubTests/testMemberChatQuoteLinksInfoAndDraftSurviveTabs,CaptroLayoutUITests/TeaClubTests/testLargeTextAndReturningToSameClubPreserveDraft"
+- gh workflow run native-polish-validation.yml --ref fix/tea-reference-polish-20261116 -f conversations=true -f test_filter="CaptroLayoutUITests/TeaTests/testRetryPaginationAndReturnToSameScrollPosition,CaptroLayoutUITests/TeaConversationTests/testEditedCaptionKeepsOriginalQuoteAndLargeTextComposer"
+The existing workflow runs xcodegen and xcodebuild with CODE_SIGNING_ALLOWED=NO,
+Debug build-for-testing and Release build for generic/platform=iOS; UI test uses
+actual app host on generated iPhone 13 mini/17 simulators, parallel-testing-disabled.
+Exact generated commands, runtime versions and test timings are in artifact logs.
+
+Coverage boundaries:
+- Host model checks cover coalescing, cache reuse, uncertain-send idempotency, failure
+  recovery, account switching and confirmed-denial invalidation. They are not UI tests.
+- Backend suite covers conversation privacy/blocks/removal, reply ownership and stale
+  edits, duplicate response recovery, existing payment/Support restrictions and other
+  authorization tests. It is not evidence of live Stripe payments or physical pickup.
+- This pass did not run every existing UI test: organizer/invite, actual external-browser
+  round trip, full attachment viewer, all paid/free membership UI permutations, physical
+  network throttling, VoiceOver navigation and physical-device checks remain unverified.
+- No new nested reply-to-reply API, attachment upload or link-preview scraping was added.
+  The reference is adapted to existing stable sentence threads and supported controls.
+- Financial, approval, checkout, payout, membership authorization, Home, Capture,
+  profile and global navigation implementation were not edited.
+
+Additional final-source evidence:
+C:/Users/The-s/AppData/Local/Temp/captro-tea-final-compile
+C:/Users/The-s/AppData/Local/Temp/captro-tea-final-small
+Small-phone edited-source/large-text screenshot:
+C:/Users/The-s/AppData/Local/Temp/captro-tea-final-small/screenshots/B3FD7776-3A26-40EC-93BF-82D22C07EC4D.png
+The original sentence quote stays readable under Earlier text after caption editing;
+Edit remains in the fixed header and the bottom composer remains reachable.
+
+Final large-phone logs: C:/Users/The-s/AppData/Local/Temp/captro-tea-final-large
+Report file itself: docs/tea-reference-polish-20261116.txt
+All selected final validation jobs completed successfully; no pending runs.
