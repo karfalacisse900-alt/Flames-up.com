@@ -3,6 +3,11 @@ name: Native iOS TestFlight
 on:
   workflow_dispatch:
     inputs:
+      runner:
+        description: Standard Mac build runner (same signing and verification)
+        type: choice
+        options: [macos-26, macos-26-intel]
+        default: macos-26
       configure_support_links:
         description: Enable scoped Support return links using the existing bundle ID and certificate; no build or payments
         type: boolean
@@ -70,7 +75,7 @@ jobs:
   retry-upload:
     if: ${{ inputs.configure_support_links != true && inputs.read_testflight_status != true && inputs.configure_only != true && inputs.retry_upload_run != '' && inputs.retry_upload_run != null }}
     name: Retry preserved TestFlight IPA upload
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner == 'macos-26-intel' && 'macos-26-intel' || 'macos-26' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -132,7 +137,7 @@ jobs:
   build-testflight:
     if: ${{ inputs.configure_support_links != true && inputs.read_testflight_status != true && (inputs.retry_upload_run == '' || inputs.retry_upload_run == null) }}
     name: Build native SwiftUI iOS app and upload to TestFlight
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner == 'macos-26-intel' && 'macos-26-intel' || 'macos-26' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -156,7 +161,7 @@ jobs:
 
       - name: Install XcodeGen
         if: ${{ !inputs.configure_only }}
-        run: arch -arm64 brew install xcodegen
+        run: brew install xcodegen
 
       - name: Check Rust native core
         if: ${{ !inputs.configure_only }}
@@ -443,7 +448,7 @@ jobs:
         run: xcodebuild -version
 
       - name: Install XcodeGen
-        run: arch -arm64 brew install xcodegen
+        run: brew install xcodegen
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project.yml
