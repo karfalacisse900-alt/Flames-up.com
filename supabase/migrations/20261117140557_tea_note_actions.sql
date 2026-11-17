@@ -72,18 +72,19 @@ begin
  if action is not null then
    if jsonb_typeof(action)<>'object' or not (action ?& array['kind','label']) or
       jsonb_typeof(action->'kind') is distinct from 'string' or action->>'kind' not in ('external','application','listing') or
-      jsonb_typeof(action->'label')<>'string' or length(btrim(action->>'label')) not between 1 and 40 or
-      exists(select 1 from jsonb_object_keys(action) k where k not in ('kind','label','url','listingId','heightRequested','accepting'))
+      jsonb_typeof(action->'label') is distinct from 'string' or length(btrim(action->>'label')) not between 1 and 40 or
+      exists(select 1 from jsonb_object_keys(action) k where k not in ('kind','label','url','listingId','listingSource','heightRequested','accepting'))
      then raise exception 'TEA_NOTE_INVALID'; end if;
    if action->>'kind'='external' then
      if action->>'url' is null or length(action->>'url')>2048 or action->>'url' !~ '^https://[^[:space:]@]+\.[^[:space:]]+$'
-       or action ?| array['listingId','heightRequested','accepting'] then raise exception 'TEA_NOTE_INVALID'; end if;
+       or action ?| array['listingId','listingSource','heightRequested','accepting'] then raise exception 'TEA_NOTE_INVALID'; end if;
    elsif action->>'kind'='listing' then
      if action->>'listingId' is null or action->>'listingId' !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       or (action ? 'listingSource' and (jsonb_typeof(action->'listingSource') is distinct from 'string' or action->>'listingSource' not in ('activity','post')))
        or action ?| array['url','heightRequested','accepting'] then raise exception 'TEA_NOTE_INVALID'; end if;
    else
      if jsonb_typeof(action->'heightRequested') is distinct from 'boolean' or jsonb_typeof(action->'accepting') is distinct from 'boolean'
-       or action ?| array['url','listingId'] then raise exception 'TEA_NOTE_INVALID'; end if;
+       or action ?| array['url','listingId','listingSource'] then raise exception 'TEA_NOTE_INVALID'; end if;
      -- A role suspension closes new applications without destroying prior ones.
      if (prior.primary_action is distinct from action or prior.id is null)
        and not (public.captro_tea_note_capabilities(p_actor)->>'canCreateForms')::boolean

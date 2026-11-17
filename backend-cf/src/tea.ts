@@ -143,10 +143,10 @@ function eligibility(candidate: Candidate, access: Access, deps: Dependencies, s
   if (source === 'post') {
     const kind = postTypes[legacyType(row)];
     const end = row.activity_object?.public_data?.endsAt ?? post.metadata?.creator_event?.endsAt;
-    if (!kind || (end && Date.parse(end) <= now)
+    if (!kind || (!includeEnded && end && Date.parse(end) <= now)
       || (search.city && (post.metadata?.display_location_visibility !== 'public'
         || post.metadata?.display_city?.trim().normalize('NFC').toLowerCase() !== search.city))) return null;
-    return { kind, status: 'active', name: row.title };
+    return { kind, status: end && Date.parse(end) <= now ? 'ended' : 'active', name: row.title };
   }
   const kind = types[row.content_type];
   const status = commerceAvailability(row, now);
@@ -159,17 +159,21 @@ function eligibility(candidate: Candidate, access: Access, deps: Dependencies, s
 // One bounded lookup per Note page; never infer a borough from a profile/city.
 // Ended public listings may be described, but cannot be activated from a Note.
 export async function teaNoteListings(deps: Dependencies, ids: string[], now = Date.now()) {
-  const unique = [...new Set(ids)].filter(id => uuid.test(id));
+  const unique = [...new Set(ids)].filter(id => uuid.test(id.replace(/^post:/,'')));
   if (!unique.length) return new Map<string, {state: string; entry?: any}>();
   if (unique.length > 21) throw new TeaInputError();
-  const rows = await deps.query('app_purchasables', {select: listing,
-    filters: {id: 'in.(' + unique.join(',') + ')'}, limit: unique.length});
-  const candidates: Candidate[] = rows.map(row => ({source: 'activity', row, timestamp: row.created_at}));
+  const candidates: Candidate[] = (await Promise.all((['activity','post'] as const).map(async source => {
+    const selected = unique.filter(id => id.startsWith('post:') === (source === 'post')).map(id => id.replace(/^post:/,''));
+    if (!selected.length) return [];
+    const rows = await deps.query(tableBySource[source], {select: source === 'post' ? postListing : listing,
+      filters: {id: 'in.(' + selected.join(',') + ')'}, limit: selected.length});
+    return rows.map(row => ({source,row,timestamp:row.created_at}));
+  }))).flat();
   const access = await loadAccess(candidates, deps);
   const result = new Map<string, {state: string; entry?: any}>(unique.map(id => [id, {state: 'unavailable'}]));
   for (const candidate of candidates) {
     const visible = eligibility(candidate, access, deps, scope({}), now, true);
-    if (visible) result.set(candidate.row.id, {state: ['expired','ended'].includes(visible.status) ? 'ended' : 'active',
+    if (visible) result.set((candidate.source === 'post' ? 'post:' : '') + candidate.row.id, {state: ['expired','ended'].includes(visible.status) ? 'ended' : 'active',
       entry: item(candidate, visible)});
   }
   return result;

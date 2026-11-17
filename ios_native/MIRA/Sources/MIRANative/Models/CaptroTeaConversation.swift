@@ -31,6 +31,7 @@ struct CaptroTeaNoteAction: Codable, Hashable {
   var label: String
   var url: String? = nil
   var listingId: String? = nil
+  var listingSource: String? = nil
   var heightRequested: Bool? = nil
   var accepting: Bool? = nil
   var state: String? = nil
@@ -39,7 +40,7 @@ struct CaptroTeaNoteAction: Codable, Hashable {
     guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, label.count <= 40 else { return false }
     switch kind {
     case "external": return url.flatMap(CaptroTeaLink.init) != nil
-    case "listing": return listingId.flatMap(UUID.init(uuidString:)) != nil
+    case "listing": return listingId.flatMap(UUID.init(uuidString:)) != nil && (listingSource == nil || ["activity","post"].contains(listingSource!))
     case "application": return heightRequested != nil && accepting != nil
     default: return false
     }

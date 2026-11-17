@@ -72,13 +72,17 @@ export function noteOptions(value: any): Record<string, any> {
     !['external','listing','application'].includes(action.kind) || typeof action.label !== 'string' ||
     !action.label.trim() || [...action.label.trim()].length > 40 || /[\u0000-\u001f\u007f]/.test(action.label))
     throw new DiscussionInputError('Add one action with a short label.');
-  const keys = ['kind','label', ...(action.kind === 'external' ? ['url'] : action.kind === 'listing' ? ['listing_id'] : ['height_requested','accepting'])];
+  const keys = ['kind','label', ...(action.kind === 'external' ? ['url'] : action.kind === 'listing' ? ['listing_id','listing_source'] : ['height_requested','accepting'])];
   if (Object.keys(action).some(k => !keys.includes(k))) throw new DiscussionInputError('Unsupported action field.');
   const normalized: any = {kind: action.kind, label: action.label.trim()};
   if (action.kind === 'external') normalized.url = discussionLinks([action.url])[0];
   if (action.kind === 'listing') {
     if (typeof action.listing_id !== 'string' || !uuid.test(action.listing_id)) throw new DiscussionInputError('Choose an existing Captro listing.');
     normalized.listingId = action.listing_id;
+    if (action.listing_source !== undefined) {
+      if (!['activity','post'].includes(action.listing_source)) throw new DiscussionInputError('Choose an existing Captro listing.');
+      normalized.listingSource = action.listing_source;
+    }
   }
   if (action.kind === 'application') {
     if (typeof action.height_requested !== 'boolean' || typeof action.accepting !== 'boolean') throw new DiscussionInputError('Check the form options.');
@@ -115,14 +119,15 @@ type Dependencies = {
 };
 
 export function mountTeaConversations(api: any, deps: Dependencies) {
+  const listingKey = (action: any) => (action.listingSource === 'post' ? 'post:' : '') + action.listingId;
   async function handle(c: any, action: string) {
     c.header('Cache-Control', 'private, no-store');
     const authors = async (value: any) => {
       const rows = Array.isArray(value) ? value : [value];
-      const listingIDs = rows.flatMap(row => row.primaryAction?.kind === 'listing' ? [row.primaryAction.listingId] : []);
+      const listingIDs = rows.flatMap(row => row.primaryAction?.kind === 'listing' ? [listingKey(row.primaryAction)] : []);
       const listings = deps.listings ? await deps.listings(c, listingIDs) : new Map();
       const decorated = rows.map(row => row.primaryAction?.kind === 'listing'
-        ? {...row,primaryAction:{...row.primaryAction,state:listings.get(row.primaryAction.listingId)?.state ?? 'unavailable'}} : row);
+        ? {...row,primaryAction:{...row.primaryAction,state:listings.get(listingKey(row.primaryAction))?.state ?? 'unavailable'}} : row);
       const result = Array.isArray(value) ? decorated : decorated[0];
       return deps.authors ? deps.authors(c, result) : result;
     };
@@ -137,7 +142,7 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
       if (action === 'action') {
         const note = await authors(enrich(await deps.rpc(c,'captro_tea_read',{p_viewer:viewer,p_kind:'detail',p_id:id})));
         const linked = note.primaryAction?.kind === 'listing' && deps.listings
-          ? (await deps.listings(c,[note.primaryAction.listingId])).get(note.primaryAction.listingId) : null;
+          ? (await deps.listings(c,[listingKey(note.primaryAction)])).get(listingKey(note.primaryAction)) : null;
         return c.json({note,listing:linked?.state === 'active' ? linked.entry : null});
       }
       if (action === 'applications') {
@@ -158,6 +163,15 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
           return c.json(await deps.rpc(c,'captro_tea_note_apply',{p_actor:viewer,p_id:id,p_request:data.requestID,p_version:data.version,p_answers:data.answers}));
         }
         const data: any = discussionInput(action, raw);
+        if (data.primaryAction?.kind === 'listing') {
+          const key = listingKey(data.primaryAction);
+          const availability = deps.listings ? (await deps.listings(c,[key])).get(key) : null;
+          if (availability?.state !== 'active') {
+            const previous = action === 'edit' ? await deps.rpc(c,'captro_tea_read',{p_viewer:viewer,p_kind:'detail',p_id:id}) : null;
+            if (previous?.primaryAction?.kind !== 'listing' || listingKey(previous.primaryAction) !== key)
+              throw new DiscussionInputError('This listing is no longer available. Choose another listing.');
+          }
+        }
         if (action === 'reply' && data.target) {
           // Check against the persisted revision, including retries after edits.
           const revision = await deps.rpc(c, 'captro_tea_reply_revision', {

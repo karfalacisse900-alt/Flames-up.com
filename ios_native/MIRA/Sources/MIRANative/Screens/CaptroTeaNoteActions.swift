@@ -38,7 +38,8 @@ import UIKit
     .sheet(item: $form) { note in CaptroTeaApplicationView(note: note, api: api) }
     .sheet(isPresented: $applications) { CaptroTeaApplicationsView(note: note, api: api) }
     .navigationDestination(item: $listing) { entry in
-      if entry.kind == "club" { CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
+      if entry.destination.source == "post", let post = entry.post { DiscoverPostDetailNativeView(post: post, api: api) }
+      else if entry.kind == "club" { CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
       else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
     }
     .navigationDestination(isPresented: Binding(get: { profile != nil }, set: { if !$0 { profile = nil } })) {
@@ -108,7 +109,7 @@ import UIKit
               .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityIdentifier("tea.action.url")
           } else if action.kind == "listing" {
             NavigationLink(chosenListing ?? (action.listingId == nil ? "Choose existing listing" : "Change linked listing")) {
-              CaptroTeaNoteListingPicker(api: api) { entry in action.listingId = entry.destination.id; chosenListing = entry.name }
+              CaptroTeaNoteListingPicker(api: api) { entry in action.listingId = entry.destination.id; action.listingSource = entry.destination.source; chosenListing = entry.name }
             }.accessibilityIdentifier("tea.action.listing")
             Text("Links to the original listing and its existing access, claim, or checkout flow.").font(.footnote).foregroundStyle(.secondary)
           } else {
@@ -174,11 +175,12 @@ import UIKit
     let scope = api.presentationScope
     do {
       var path = URLComponents(string: "/tea")!
-      if let cursor { path.queryItems = [URLQueryItem(name: "cursor", value: cursor)] }
+      path.queryItems = [URLQueryItem(name: "include_posts", value: "1")]
+      if let cursor { path.queryItems?.append(URLQueryItem(name: "cursor", value: cursor)) }
       let page: CaptroTeaPage = try await api.getFresh(path.string!)
       guard scope == api.presentationScope, !Task.isCancelled else { return }
       var seen = Set(items.map(\.id))
-      items += page.items.filter { $0.destination.source == "activity" && seen.insert($0.id).inserted }
+      items += page.items.filter { ["activity","post"].contains($0.destination.source) && seen.insert($0.id).inserted }
       cursor = page.nextCursor; loaded = true
     } catch { if scope == api.presentationScope { self.error = "Couldn’t load listings. Try again." } }
   }
