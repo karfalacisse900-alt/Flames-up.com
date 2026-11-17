@@ -40,7 +40,6 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertEqual(heading.frame.width, 86, accuracy: 1)
     XCTAssertEqual(heading.frame.height, 23, accuracy: 1)
     XCTAssertFalse(app.staticTexts["Tea"].exists)
-    XCTAssertGreaterThanOrEqual(app.buttons["tea.compose"].frame.height + 0.000001, 44)
     // Check the actual row separator pixels, not just the presence of a view.
     let screenshot = app.screenshot().image.cgImage!
     let scale = CGFloat(screenshot.width) / app.frame.width
@@ -113,7 +112,16 @@ final class TeaConversationTests: XCTestCase {
 
   func testComposeEditCancelAndAuthorOnlyLinks() {
     let app=launch()
-    app.buttons["tea.compose"].tap()
+    let postButton = app.buttons["tea.compose"]
+    // Native toolbar accessibility bounds can be smaller than their hit area.
+    // Exercise both edges of the required 44 pt target with real coordinates.
+    postButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+      .withOffset(CGVector(dx: 0, dy: -21.5)).tap()
+    XCTAssertTrue(input("tea.compose.title", app).waitForExistence(timeout: 8))
+    app.buttons["Cancel"].tap()
+    XCTAssertTrue(postButton.waitForExistence(timeout: 8))
+    postButton.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+      .withOffset(CGVector(dx: 0, dy: 21.5)).tap()
     let title=input("tea.compose.title",app)
     XCTAssertTrue(title.waitForExistence(timeout: 8)); title.tap(); title.typeText("A new Tea discussion")
     let body=input("tea.compose.body",app)
