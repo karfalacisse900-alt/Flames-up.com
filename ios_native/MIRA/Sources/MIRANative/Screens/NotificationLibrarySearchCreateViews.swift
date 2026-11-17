@@ -1628,7 +1628,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var intentSelector: some View {
-    Button { openPresentation(.startWith) } label: {
+    Button { openPresentation(activityType == nil ? .startWith : .structured) } label: {
       HStack(spacing: 5) {
         Text(draft.structured ? selectedStampKind.displayName : draft.intent.byline)
         Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
@@ -1711,7 +1711,7 @@ public struct CreatePostNativeView: View {
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
       CaptroEditorialMenuRow(title: "Camera") { writingAfterMediaSelection = draft.isCover; transitionFromSelection(to: .camera) }
         .disabled(mediaItems.count >= 10 || isLoadingMedia)
-      if !draft.isCover {
+      if !draft.isCover && activityType == nil {
         CaptroEditorialMenuRow(title: "Cover", disclosure: true) {
           draft.intent = .cover
           writingMediaIndex = 0

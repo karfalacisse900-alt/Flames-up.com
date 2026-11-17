@@ -54,6 +54,12 @@ final class TeaTests: XCTestCase {
     let name = app.textFields["Club name"]
     XCTAssertTrue(name.waitForExistence(timeout: 10)); name.tap(); name.typeText("Isolated new club")
     app.navigationBars["Club"].buttons["Done"].tap()
+    XCTAssertTrue(app.buttons["composer.intent"].waitForExistence(timeout: 8))
+    app.buttons["composer.intent"].tap()
+    XCTAssertTrue(name.waitForExistence(timeout: 8))
+    XCTAssertEqual(name.value as? String, "Isolated new club")
+    XCTAssertFalse(app.buttons["Photo or video"].exists, "A listing cannot turn into a Home post")
+    app.navigationBars["Club"].buttons["Done"].tap()
     let publish = app.buttons["composer.create"]
     XCTAssertTrue(publish.waitForExistence(timeout: 8)); XCTAssertTrue(publish.isEnabled); publish.tap()
     XCTAssertTrue(app.staticTexts["Isolated new club"].firstMatch.waitForExistence(timeout: 15), app.debugDescription)

@@ -137,7 +137,94 @@ enum CaptroTeaPalette: String {
   }
 
   var body: some View {
-    NavigationStack(path: $path) {
+    NavigationStack(path: $path) { activityPresentation }
+    #if DEBUG
+    // Tea is a full-screen presentation: inject the isolated fixture size here,
+    // since the presenting Home host's override is not inherited on every OS.
+    .transformEnvironment(\.dynamicTypeSize) { size in
+      if ProcessInfo.processInfo.arguments.contains("--captro-tea-review"),
+         ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") { size = .accessibility2 }
+    }
+    #endif
+  }
+
+  private var activityPresentation: some View {
+    routedContent
+      .confirmationDialog("Create activity", isPresented: $choosingActivity, titleVisibility: .visible) {
+        ForEach(activityChoices) { kind in
+          Button(kind.displayName) { creatingActivity = kind }
+        }
+        Button("Cancel", role: .cancel) {}
+      }
+      .fullScreenCover(item: $creatingActivity, onDismiss: finishActivityCreation) { kind in
+        CreatePostNativeView(api: api, activityType: kind.rawValue,
+          onCreated: { createdActivity = $0 }, onClose: { creatingActivity = nil })
+      }
+      .alert("Create activity", isPresented: Binding(get: { creationError != nil }, set: { if !$0 { creationError = nil } })) {
+        Button("Retry") { Task { await chooseActivity() } }
+        Button("Cancel", role: .cancel) {}
+      } message: { Text(creationError ?? "") }
+      .task(id: section + queryKey) {
+        if section == "Clubs & Events", receivedAt.map({ Date().timeIntervalSince($0) >= 30 }) != false {
+          await load(reset: true)
+        }
+      }
+      .alert("Following", isPresented: $followingUnavailable) { Button("OK", role: .cancel) {} } message: {
+        Text("Tea does not yet support filtering conversations by followed accounts. Your current list has not changed.")
+      }
+      .alert("Nearby activities", isPresented: $choosingCity) {
+        TextField("City", text: $cityDraft)
+        Button("Cancel", role: .cancel) {}
+        Button("Show activities") {
+          let value = cityDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !value.isEmpty { switchCity(value); filter = "Nearby"; section = "Clubs & Events" }
+        }
+      } message: { Text("Choose a city for clubs, events and activities. This does not request your precise location or filter conversation posts.") }
+      .tint(CaptroTeaStyle.accent)
+      .onChange(of: viewerID) { _, _ in
+        requestID = nil; loading = false; citySnapshots = [:]; city = ""; filter = "All"; section = "Conversations"
+        path = NavigationPath(); entries = []; cursor = nil; didLoad = false; receivedAt = nil; created = nil; composing = false
+        creatingActivity = nil; createdActivity = nil; activityChoices = []; choosingActivity = false; creationError = nil
+        api.teaConversations.invalidate()
+      }
+  }
+
+  private var routedContent: some View {
+    listContent
+      .navigationTitle("")
+      .miraNavigationSurface()
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar(.visible, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .principal) { CaptroTeaHeading() }
+        if #available(iOS 26.0, *) {
+          ToolbarItem(placement: .topBarTrailing) { postButton }.sharedBackgroundVisibility(.hidden)
+          ToolbarItem(placement: .topBarLeading) { backButton }.sharedBackgroundVisibility(.hidden)
+        } else {
+          ToolbarItem(placement: .topBarTrailing) { postButton }
+          ToolbarItem(placement: .topBarLeading) { backButton }
+        }
+      }
+
+      .navigationDestination(for: CaptroTeaEntry.self) { entry in
+        if entry.destination.source == "post", let post = entry.post {
+          DiscoverPostDetailNativeView(post: post, api: api)
+        } else if entry.kind == "club", entry.destination.source == "activity" {
+          CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent)
+        } else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent) }
+      }
+      .navigationDestination(for: CaptroTeaConversation.self) { post in
+        CaptroTeaConversationDetail(post: post, api: api, viewerID: viewerID, signIn: signIn)
+      }
+      .sheet(isPresented: $composing) {
+        CaptroTeaComposer(api: api) { post in created = post; path.append(post) }
+      }
+      .navigationDestination(for: MIRAPost.self) { post in
+        DiscoverPostDetailNativeView(post: post, api: api)
+      }
+  }
+
+  private var listContent: some View {
       VStack(spacing: 0) {
         ScrollView(.horizontal, showsIndicators: false) {
           HStack(spacing: 6) {
@@ -165,6 +252,29 @@ enum CaptroTeaPalette: String {
         }.padding(.horizontal, 16).padding(.bottom, 4) }
         Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true)
         ZStack {
+          activityList
+      CaptroTeaConversationsList(api: api, active: section == "Conversations", created: created) { post in
+        if path.isEmpty { path.append(post) }
+      }
+        .id(api.presentationScope)
+        .opacity(section == "Conversations" ? 1 : 0)
+        .allowsHitTesting(section == "Conversations")
+        .accessibilityHidden(section != "Conversations")
+        }
+      }.background(MIRATheme.Color.appBackground)
+      #if DEBUG
+      .overlay(alignment: .bottomLeading) {
+        if ProcessInfo.processInfo.arguments.contains("--tea-avatar-fixture") {
+          VStack {
+            Button("Recheck access") { api.teaConversations.invalidate() }.accessibilityIdentifier("tea.test.invalidate")
+            TeaReviewRequestCounter()
+          }.padding()
+        }
+      }
+      #endif
+  }
+
+  private var activityList: some View {
       List {
         // Keep the inactive list mounted for scroll restoration, but do not
         // expose its initial loading/error status while conversations are shown.
@@ -217,102 +327,6 @@ enum CaptroTeaPalette: String {
       .opacity(section == "Clubs & Events" ? 1 : 0)
       .allowsHitTesting(section == "Clubs & Events")
       .accessibilityHidden(section != "Clubs & Events")
-      CaptroTeaConversationsList(api: api, active: section == "Conversations", created: created) { post in
-        if path.isEmpty { path.append(post) }
-      }
-        .id(api.presentationScope)
-        .opacity(section == "Conversations" ? 1 : 0)
-        .allowsHitTesting(section == "Conversations")
-        .accessibilityHidden(section != "Conversations")
-        }
-      }.background(MIRATheme.Color.appBackground)
-      #if DEBUG
-      .overlay(alignment: .bottomLeading) {
-        if ProcessInfo.processInfo.arguments.contains("--tea-avatar-fixture") {
-          VStack {
-            Button("Recheck access") { api.teaConversations.invalidate() }.accessibilityIdentifier("tea.test.invalidate")
-            TeaReviewRequestCounter()
-          }.padding()
-        }
-      }
-      #endif
-      .navigationTitle("")
-      .miraNavigationSurface()
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar(.visible, for: .navigationBar)
-      .toolbar {
-        ToolbarItem(placement: .principal) { CaptroTeaHeading() }
-        if #available(iOS 26.0, *) {
-          ToolbarItem(placement: .topBarTrailing) { postButton }.sharedBackgroundVisibility(.hidden)
-          ToolbarItem(placement: .topBarLeading) { backButton }.sharedBackgroundVisibility(.hidden)
-        } else {
-          ToolbarItem(placement: .topBarTrailing) { postButton }
-          ToolbarItem(placement: .topBarLeading) { backButton }
-        }
-      }
-
-      .navigationDestination(for: CaptroTeaEntry.self) { entry in
-        if entry.destination.source == "post", let post = entry.post {
-          DiscoverPostDetailNativeView(post: post, api: api)
-        } else if entry.kind == "club", entry.destination.source == "activity" {
-          CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent)
-        } else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent) }
-      }
-      .navigationDestination(for: CaptroTeaConversation.self) { post in
-        CaptroTeaConversationDetail(post: post, api: api, viewerID: viewerID, signIn: signIn)
-      }
-      .sheet(isPresented: $composing) {
-        CaptroTeaComposer(api: api) { post in created = post; path.append(post) }
-      }
-      .navigationDestination(for: MIRAPost.self) { post in
-        DiscoverPostDetailNativeView(post: post, api: api)
-      }
-      .confirmationDialog("Create activity", isPresented: $choosingActivity, titleVisibility: .visible) {
-        ForEach(activityChoices) { kind in
-          Button(kind.displayName) { creatingActivity = kind }
-        }
-        Button("Cancel", role: .cancel) {}
-      }
-      .fullScreenCover(item: $creatingActivity, onDismiss: finishActivityCreation) { kind in
-        CreatePostNativeView(api: api, activityType: kind.rawValue,
-          onCreated: { createdActivity = $0 }, onClose: { creatingActivity = nil })
-      }
-      .alert("Create activity", isPresented: Binding(get: { creationError != nil }, set: { if !$0 { creationError = nil } })) {
-        Button("Retry") { Task { await chooseActivity() } }
-        Button("Cancel", role: .cancel) {}
-      } message: { Text(creationError ?? "") }
-      .task(id: section + queryKey) {
-        if section == "Clubs & Events", receivedAt.map({ Date().timeIntervalSince($0) >= 30 }) != false {
-          await load(reset: true)
-        }
-      }
-      .alert("Following", isPresented: $followingUnavailable) { Button("OK", role: .cancel) {} } message: {
-        Text("Tea does not yet support filtering conversations by followed accounts. Your current list has not changed.")
-      }
-      .alert("Nearby activities", isPresented: $choosingCity) {
-        TextField("City", text: $cityDraft)
-        Button("Cancel", role: .cancel) {}
-        Button("Show activities") {
-          let value = cityDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-          if !value.isEmpty { switchCity(value); filter = "Nearby"; section = "Clubs & Events" }
-        }
-      } message: { Text("Choose a city for clubs, events and activities. This does not request your precise location or filter conversation posts.") }
-      .tint(CaptroTeaStyle.accent)
-      .onChange(of: viewerID) { _, _ in
-        requestID = nil; loading = false; citySnapshots = [:]; city = ""; filter = "All"; section = "Conversations"
-        path = NavigationPath(); entries = []; cursor = nil; didLoad = false; receivedAt = nil; created = nil; composing = false
-        creatingActivity = nil; createdActivity = nil; activityChoices = []; choosingActivity = false; creationError = nil
-        api.teaConversations.invalidate()
-      }
-    }
-    #if DEBUG
-    // Tea is a full-screen presentation: inject the isolated fixture size here,
-    // since the presenting Home host's override is not inherited on every OS.
-    .transformEnvironment(\.dynamicTypeSize) { size in
-      if ProcessInfo.processInfo.arguments.contains("--captro-tea-review"),
-         ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") { size = .accessibility2 }
-    }
-    #endif
   }
 
   private var postButton: some View {
