@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { verifyNativeValidation, verifyFromEnvironment, cameraValidationSource } from '../../scripts/app-store/verify-native-validation.mjs';
+import { verifyNativeValidation, verifyFromEnvironment, cameraValidationSource, verifyPolishEvidence } from '../../scripts/app-store/verify-native-validation.mjs';
 
 const sha = '1'.repeat(40), tree = '2'.repeat(40);
 const run = { path: '.github/workflows/native-stamps-validation.yml', head_branch: 'fix', status: 'completed', conclusion: 'success', head_sha: sha };
@@ -88,4 +88,24 @@ test('both TestFlight upload paths require the non-optional gate first', () => {
     assert.doesNotMatch(job, /inputs\.validation_run != ''/);
   }
   assert.match(retry, /IPA_SOURCE_SHA=\$SOURCE_SHA/);
+});
+
+
+test('polish release evidence requires both successful runtime jobs and identical source records', () => {
+  const jobs = ['small', 'large'].map(phone => ({ name: `simulator (${phone})`, status: 'completed', conclusion: 'success', steps: [{ name: 'Native screens and regression checks', conclusion: 'success' }] }));
+  const sources = { small: attestation, large: attestation };
+  const artifacts = ['small', 'large'].flatMap(phone => [{ name: `native-validation-source-${phone}`, expired: false }, { name: `native-polish-${phone}`, expired: false }]);
+  const evidence = { jobs, sources, artifacts, runID: '123', sourceSHA: sha, nativeTree: tree };
+  assert.deepEqual(verifyPolishEvidence(evidence), attestation);
+  assert.doesNotThrow(() => verifyNativeValidation({ ...valid, run: { ...run, path: '.github/workflows/native-polish-validation.yml' } }));
+  for (const badJobs of [[], jobs.slice(1), [...jobs, jobs[0]], jobs.map(j => ({ ...j, conclusion: 'failure' })), jobs.map(j => ({ ...j, status: 'in_progress' })), jobs.map(j => ({ ...j, steps: [] }))]) {
+    assert.throws(() => verifyPolishEvidence({ ...evidence, jobs: badJobs }));
+  }
+  for (const phone of ['small', 'large']) {
+    for (const patch of [{ validationRun: '456' }, { sourceSHA: '3'.repeat(40) }, { nativeTree: '4'.repeat(40) }, { version: 2 }]) {
+      assert.throws(() => verifyPolishEvidence({ ...evidence, sources: { ...sources, [phone]: { ...attestation, ...patch } } }));
+    }
+  }
+  assert.throws(() => verifyPolishEvidence({ ...evidence, artifacts: artifacts.slice(1) }));
+  assert.throws(() => verifyPolishEvidence({ ...evidence, artifacts: artifacts.map(a => ({ ...a, expired: true })) }));
 });

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 // incomplete, foreign, or different-source result rather than accepting a build
 // merely because it compiled. This is a release gate, not performance proof.
 export function verifyNativeValidation({ run, branch, targetTree, validatedTree, attestation, runID }) {
-  if (run.path !== '.github/workflows/native-stamps-validation.yml') throw new Error('Wrong validation workflow.');
+  if (!['.github/workflows/native-stamps-validation.yml', '.github/workflows/native-polish-validation.yml'].includes(run.path)) throw new Error('Wrong validation workflow.');
   if (run.head_branch !== branch) throw new Error('Validation belongs to a different branch.');
   if (run.status !== 'completed' || run.conclusion !== 'success') throw new Error('Native validation has not completed successfully.');
   if (!/^[a-f0-9]{40}$/.test(run.head_sha ?? '')) throw new Error('Validation source identity is invalid.');
@@ -38,12 +38,41 @@ export function cameraValidationSource({ source, interaction, regression, runID,
   return { version: 1, validationRun: runID, sourceSHA, nativeTree };
 }
 
+export function verifyPolishEvidence({ jobs, sources, artifacts, runID, sourceSHA, nativeTree }) {
+  for (const phone of ['small', 'large']) {
+    const matching = jobs.filter(job => job.name === `simulator (${phone})`);
+    if (matching.length !== 1 || matching[0].status !== 'completed' || matching[0].conclusion !== 'success' ||
+        !matching[0].steps?.some(step => step.name === 'Native screens and regression checks' && step.conclusion === 'success')) {
+      throw new Error('Both iPhone runtime jobs must pass; compile-only evidence is insufficient.');
+    }
+    for (const name of [`native-validation-source-${phone}`, `native-polish-${phone}`]) {
+      if (artifacts.filter(item => item.name === name && !item.expired).length !== 1) throw new Error('Missing unique phone validation evidence.');
+    }
+    const source = sources[phone];
+    if (source?.version !== 1 || source.validationRun !== runID || source.sourceSHA !== sourceSHA || source.nativeTree !== nativeTree) {
+      throw new Error('Phone validation source does not match the release.');
+    }
+  }
+  return sources.large;
+}
+
 function downloadSource(runID, repository, execute, context) {
   const directory = mkdtempSync(join(tmpdir(), 'captro-validation-'));
   try {
     const options = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
     const inventory = JSON.parse(execute('gh', ['api', `repos/${repository}/actions/runs/${runID}/artifacts?per_page=100`], options));
     const available = inventory.artifacts.filter(item => !item.expired);
+    if (context.workflow === '.github/workflows/native-polish-validation.yml') {
+      const jobs = JSON.parse(execute('gh', ['api', `repos/${repository}/actions/runs/${runID}/jobs?per_page=100`], options)).jobs;
+      const sources = {};
+      for (const phone of ['small', 'large']) {
+        const target = join(directory, phone);
+        execute('gh', ['run', 'download', runID, '--repo', repository, '--name', `native-validation-source-${phone}`, '--dir', target], options);
+        sources[phone] = JSON.parse(readFileSync(join(target, 'source.json'), 'utf8'));
+      }
+      return verifyPolishEvidence({ jobs, sources, artifacts: available, runID, ...context });
+    }
+
     const standard = available.some(item => item.name === 'native-validation-source');
     const name = standard ? 'native-validation-source' : 'camera-carousel-implementation';
     if (available.filter(item => item.name === name).length !== 1) throw new Error('Missing unique native validation evidence.');
@@ -93,7 +122,7 @@ export function verifyFromEnvironment(env = process.env, execute = execFileSync,
   read('git', ['fetch', '--no-tags', '--depth=1', 'origin', sourceSHA]);
   const validatedTree = read('git', ['rev-parse', `${run.head_sha}:ios_native/MIRA`]);
   const targetTree = read('git', ['rev-parse', `${sourceSHA}:ios_native/MIRA`]);
-  const attestation = loadSource(runID, repository, execute, { sourceSHA: run.head_sha, nativeTree: validatedTree });
+  const attestation = loadSource(runID, repository, execute, { sourceSHA: run.head_sha, nativeTree: validatedTree, workflow: run.path });
   verifyNativeValidation({ run, branch: env.GITHUB_REF_NAME, targetTree, validatedTree, attestation, runID });
   return { runID, sourceSHA, nativeTree: targetTree };
 }
