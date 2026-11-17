@@ -408,7 +408,7 @@ enum CaptroTeaPalette: String {
     let owner = api.presentationScope
     error = nil
     defer { if requestID == token { loading = false; requestID = nil } }
-    var params: [URLQueryItem] = []
+    var params: [URLQueryItem] = [URLQueryItem(name: "include_posts", value: "1")]
     if !reset, let cursor { params.append(URLQueryItem(name: "cursor", value: cursor)) }
     if !city.isEmpty { params.append(URLQueryItem(name: "city", value: city)) }
     var path = URLComponents()
@@ -425,7 +425,7 @@ enum CaptroTeaPalette: String {
         try Task.checkCancellation()
         guard visited.insert(next).inserted, visited.count <= 16 else { throw MIRAAPIError.decodingFailed }
         var nextPath = URLComponents(); nextPath.path = "/tea"
-        nextPath.queryItems = [URLQueryItem(name: "cursor", value: next)]
+        nextPath.queryItems = [URLQueryItem(name: "include_posts", value: "1"), URLQueryItem(name: "cursor", value: next)]
         if !city.isEmpty { nextPath.queryItems?.append(URLQueryItem(name: "city", value: city)) }
         result = try await api.getFresh(nextPath.string ?? "/tea")
         refreshed += result.items

@@ -4,7 +4,7 @@ import { FeedCursorError, readFeedCursor, writeFeedCursor, type FeedCursor } fro
 type Source = 'activity' | 'business' | 'post';
 type Kind = 'club' | 'event' | 'meetup' | 'offer' | 'reservation' | 'business';
 type Query = (table: string, input: { select: string; filters: Record<string, string>; order?: string; limit: number }) => Promise<any[]>;
-type Input = { cursor?: string; city?: string; lat?: string; lon?: string };
+type Input = { cursor?: string; city?: string; lat?: string; lon?: string; includePosts?: boolean };
 type Point = { latitude: number; longitude: number };
 type Candidate = { source: Source; row: any; timestamp: string };
 type Access = { posts: Map<string, any>; owners: Map<string, any>; blocked: Set<string> };
@@ -53,7 +53,7 @@ function scope(input: Input) {
     throw new TeaInputError();
   }
   const point = hasCoordinates ? { latitude, longitude } : null;
-  return { city, point, binding: JSON.stringify([city, point]) };
+  return { city, point, binding: JSON.stringify(input.includePosts ? [city, point, 'posts'] : [city, point]) };
 }
 
 function distance(from: Point, to: Point) {
@@ -194,7 +194,10 @@ export async function teaPage(deps: Dependencies, secret: string, viewer: string
         throw error;
       }
     };
-    const pages = await Promise.all([fetchRows('activity'), fetchRows('business'), fetchRows('post')]);
+    // Older native versions cannot navigate this source. Keep their existing
+    // response contract and bind the cursor to the client's selected sources.
+    const pages = await Promise.all([fetchRows('activity'), fetchRows('business'),
+      input.includePosts ? fetchRows('post') : Promise.resolve([])]);
     const merged = pages.flat().sort(compare);
     const window = merged.slice(0, maxBatch);
     if (!window.length) { more = false; break; }

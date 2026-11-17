@@ -314,12 +314,13 @@ test('Home carousel locks each touch to horizontal or vertical intent', () => {
   assert.doesNotMatch(mediaPager, /highPriorityGesture/);
 });
 
-test('composer persists one free-writing draft and keeps structured setup behind Add', () => {
+test('composer reuses structured forms while Tea owns the eligible activity choices', () => {
   assert.match(composer, /@State private var draft = CaptroCompositionDraft/);
   assert.match(composer, /creationIntent: draft\.submittedIntent/);
   assert.match(composer, /stampType: hasSelectedStamp \? selectedStampKind\.rawValue : nil/);
   assert.match(composer, /postType: selectedStampKind\.backendPostType/);
-  assert.match(composer, /private var stampPickerKinds:[\s\S]*?\[\.club, \.event, \.meetup, \.deal\]\.filter/);
+  assert.doesNotMatch(composer, /More ways to create|stampChoiceRows/);
+  assert.match(readIOS('Screens/CaptroTeaView.swift'), /activityChoices = \[\.club, \.event, \.meetup, \.deal\]\.filter/);
   assert.match(composer, /creationCapabilities\?\.structuredTypes\.contains/);
   assert.match(composer, /fullScreenCover\(isPresented: presentationBinding\(\.structured\)/);
 });
@@ -346,7 +347,7 @@ test('composer exposes quiet tools, native actions, and no Post category', () =>
   assert.doesNotMatch(canvas, /Record voice attachment|CaptroVoiceRecorderSheet/);
   assert.match(canvas, /composer.addRequiredMedia/);
   assert.match(composer, /ToolbarItem\(placement: \.confirmationAction\)/);
-  assert.match(composer, /navigationTitle\("Create"\)/);
+  assert.match(composer, /navigationTitle\(activityType == nil \? "Create post"/);
   assert.match(composer, /Text\("Done"\)/);
   assert.match(canvas, /CaptroEditorialMenuRow\(title: "Cover"/);
   assert.doesNotMatch(canvas, /ForEach\(CaptroWritingIntent\.allCases\)/);
@@ -372,7 +373,7 @@ test('composer selectors use one lifecycle owner and anchored editorial menus', 
   const audience = composer.slice(composer.indexOf('private var audiencePicker'), composer.indexOf('private var timePicker'));
   assert.doesNotMatch(intent, /Menu\s*\{/);
   assert.match(intent, /CaptroEditorialMenu\(title:/);
-  assert.match(intent, /More ways to create/);
+  assert.doesNotMatch(intent, /More ways to create/);
   assert.match(audience, /CaptroEditorialMenu\(title: "Audience"/);
   assert.match(composer, /popover\(isPresented: presentationBinding\(\.startWith\)/);
   assert.match(composer, /popover\(isPresented: presentationBinding\(\.audience\)/);

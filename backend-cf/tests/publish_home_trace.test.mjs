@@ -10,6 +10,9 @@ import { rankVisibleFeedWindow } from '../src/feed-relevance.ts';
 import { validatedStampVariant } from '../src/stamp-style.ts';
 import { creatorEventDetails, isEventPostType, validateCreatorEvent } from '../src/post-objects.ts';
 import * as pagination from '../src/feed-pagination.ts';
+import * as homePosts from '../src/home-posts.ts';
+import { validateCommerceInput, publicCommercePayload } from '../src/commerce.ts';
+import { teaPage } from '../src/tea.ts';
 
 // Run production handlers/mappers against isolated records. These are contract
 // tests, not a claim that a real upload, production database or iPhone was tested.
@@ -56,6 +59,8 @@ function matchesExpression(row, expression) {
   }
   const [, field, operator, expected] = expression.match(/^([^.]+)\.([^.]+)\.(.*)$/) || [];
   const value = field?.startsWith('metadata->>') ? row.metadata?.[field.slice(11)] : row[field];
+  if (operator === 'not') return value != null && !matchesExpression(row, field + '.' + expected);
+  if (operator === 'neq') return value != null && (Array.isArray(value) ? JSON.stringify(value) !== expected : value !== expected);
   if (operator === 'is') return expected === 'null' ? value == null : value != null;
   if (operator === 'eq') return value === expected;
   if (operator === 'lt') return value != null && value < expected;
@@ -67,6 +72,7 @@ function matchesExpression(row, expression) {
 
 function harness({ initial = [], following = [], blocked = [], insertFailure = false } = {}) {
   const posts = initial.map(row => ({ ...row }));
+  const purchasables = [], prices = [], memberships = [];
   const assets = new Map();
   const queries = [];
   const trace = [];
@@ -82,7 +88,7 @@ function harness({ initial = [], following = [], blocked = [], insertFailure = f
     + '\n' + handler('get', '/posts/world-board', 'world');
   const normalizeMedia = (images, image) => [...new Set([...array(images), image].map(clean).filter(Boolean))];
   const bindings = {
-    ...writing, ...pagination, retiredPostInputError, orderPostMediaAssets, rankVisibleFeedWindow,
+    ...writing, ...pagination, ...homePosts, retiredPostInputError, orderPostMediaAssets, rankVisibleFeedWindow,
     validatedStampVariant, creatorEventDetails, isEventPostType, validateCreatorEvent,
     URL, Headers, Response, console: { warn() {}, error() {} },
     cleanText: clean, cleanMultilineText: clean, publicId: clean,
@@ -122,7 +128,11 @@ function harness({ initial = [], following = [], blocked = [], insertFailure = f
     enforceRateLimit: async () => null, enforceUserRestriction: async () => null,
     getSupabaseAppUserRowByAnyId: async (_, id) => id === author.id ? author : viewer,
     supabaseAppUserToLegacyUser: value => value,
-    screenCaptroText: async () => 'approved', validateCommerceInput: () => null,
+    screenCaptroText: async () => 'approved', validateCommerceInput, publicCommercePayload,
+    commercePayloadWithPricing: (_, payload) => payload,
+    getMarketplaceFeeConfig: () => ({}), getStripeConfig: () => ({ configured: true }),
+    ensureStripeProductAndPrice: async () => {},
+    supabaseAdminUpsert: async (_, table, rows) => { memberships.push({ table, rows }); },
     getErrorCode: error => error.message, runBackgroundTask: () => {},
     writeSupabasePrimaryPostPlace: async () => {}, recordAbuseSignals: async () => {},
     supabaseIncrementAppUserPostCount: async () => {},
@@ -136,6 +146,11 @@ function harness({ initial = [], following = [], blocked = [], insertFailure = f
     overlaySupabaseViewerEngagement: async (_, rows) => rows,
     supabaseAdminPatchRows: async () => [],
     supabaseAdminInsertRows: async (_, table, rows) => {
+      if (['app_purchasables', 'app_prices'].includes(table)) {
+        const added = rows.map(row => ({ id: postId(sequence++), created_at: '2026-10-14T12:00:00.000Z', active: true, ...row }));
+        (table === 'app_purchasables' ? purchasables : prices).push(...added);
+        return added;
+      }
       assert.equal(table, 'app_posts');
       if (insertFailure) throw Error('TEST_DATABASE_UNAVAILABLE');
       posts.unshift(...rows);
@@ -149,8 +164,9 @@ function harness({ initial = [], following = [], blocked = [], insertFailure = f
       assert.equal(table, 'app_posts');
       const filters = query.filters || {};
       let rows = posts.filter(row => Object.entries(filters).every(([key, condition]) => {
-        if (query.order === pagination.feedKeysetOrder)
-          return matchesExpression(row, key === 'or' ? `or${condition}` : `${key}.${condition}`);
+        if (key === 'home_listing') return !purchasables.some(item => item.post_id === row.id);
+        if (query.order === pagination.feedKeysetOrder || key === 'and' || key.startsWith('home_'))
+          return matchesExpression(row, ['or','and'].includes(key) ? `${key}${condition}` : `${key}.${condition}`);
         if (key === 'or') return condition.includes(row.id) || condition.includes(row.legacy_post_id);
         const value = key.startsWith('metadata->>') ? row.metadata?.[key.slice(11)] : row[key];
         if (condition.startsWith('eq.')) return value === condition.slice(3);
@@ -181,10 +197,10 @@ function harness({ initial = [], following = [], blocked = [], insertFailure = f
     assets.set(id, { id, user_id: author.id, public_url: url, moderation_status: state, upload_status: 'uploaded', media_type: type });
     return { images: [url], media_types: [type], media_asset_ids: [id], media_dimensions: [{ media_id: id, width: 1080, height: 1350 }] };
   }
-  return { ...routes, context, media, posts, queries, trace };
+  return { ...routes, context, media, posts, queries, trace, purchasables, prices, memberships };
 }
 
-test('confirmed photo/video/carousel and stamp publication retains one canonical ID through insert, Home and Details', async () => {
+test('publication keeps canonical IDs while Home accepts only regular media and Details retains all listings', async () => {
   for (const post_type of ['general', 'club', 'event', 'meetup', 'deal', 'group', 'offer', 'local_offer', 'ticket', 'booking', 'party', 'place', 'guide', 'travel']) {
     for (const kind of ['photo', 'video', 'carousel']) {
       const h = harness();
@@ -207,15 +223,51 @@ test('confirmed photo/video/carousel and stamp publication retains one canonical
         const home = await h.feed(h.context({ viewerId }));
         const detail = await h.details(h.context({ viewerId, id }));
         assert.equal(home.status, 200);
-        assert.equal(home.value[0]?.id, id);
+        assert.equal(home.value[0]?.id, post_type === 'general' ? id : undefined);
         assert.equal(detail.value.id, id);
-        assert.equal(home.value[0].images.length, upload.images.length);
+        if (post_type === 'general') assert.equal(home.value[0].images.length, upload.images.length);
       }
       const replay = await h.publish(h.context({ body }));
       assert.equal(replay.value.id, id);
       assert.equal(replay.value.idempotent_replay, true);
       assert.equal(h.posts.length, 1);
     }
+  }
+});
+
+test('free and paid Club, Event, Meetup and Deal use existing creation records, appear in Tea, and never enter any Home mode', async () => {
+  for (const [type, paid] of [['club',false],['club',true],['event',false],['meetup',false],['deal',false]]) {
+    const h = harness({ following: [author.id] });
+    const body = { ...h.media(), post_type: type, title: 'Isolated ' + type, content: 'Existing activity form',
+      client_request_id: 'create-' + type, display_city: 'New York', display_location_visibility: 'public',
+      commerce: { contentType: type, paymentModel: paid ? 'paid' : 'free', commerceClass: 'outside_app',
+        prices: [{ label: 'General', unitAmount: paid ? 500 : 0 }], currency: 'USD', audience: 'anyone' } };
+    const published = await h.publish(h.context({ body }));
+    assert.equal(published.status, 200, JSON.stringify(published.value));
+    assert.equal(h.posts.length, 1); assert.equal(h.purchasables.length, 1); assert.equal(h.prices.length, 1);
+    assert.equal(h.purchasables[0].post_id, h.posts[0].id);
+    assert.equal(h.purchasables[0].payment_model, paid ? 'paid' : 'free');
+    assert.equal(h.prices[0].unit_amount, paid ? 500 : 0);
+    for (const scope of ['for_you','following','around']) for (const mode of [undefined,'v2']) {
+      const home = await h.feed(h.context({ viewerId: viewer.id, scope, pagination: mode }));
+      assert.equal(home.status, 200);
+      assert.equal((mode ? home.value.posts : home.value).length, 0);
+    }
+    const deps = {
+      query: async table => table === 'app_purchasables' ? h.purchasables : [],
+      access: async () => ({ posts: new Map(h.posts.map(post => [post.id,post])),
+        owners: new Map([[author.supabase_user_id, { ...author, is_private: false }]]), blocked: new Set() }),
+      isActiveUser: () => true, commerce: async row => publicCommercePayload(row, h.prices),
+    };
+    const tea = await teaPage(deps, 'isolated-feed-fixture-not-a-live-key', viewer.id, {});
+    assert.equal(tea.items.length, 1); assert.equal(tea.items[0].destination.id, h.purchasables[0].id);
+    assert.equal(tea.items[0].kind, type === 'deal' ? 'offer' : type);
+    const replay = await h.publish(h.context({ body }));
+    assert.equal(replay.value.id, published.value.id);
+    assert.equal(h.posts.length, 1); assert.equal(h.purchasables.length, 1);
+    h.posts[0].visibility = 'private';
+    assert.equal((await teaPage(deps, 'isolated-feed-fixture-not-a-live-key', viewer.id, {})).items.length, 0);
+    assert.equal(h.prices.length, 1, 'Hiding a listing never deletes prices or history');
   }
 });
 

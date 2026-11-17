@@ -1480,6 +1480,10 @@ public struct CreatePostNativeView: View {
 
         compositionCard
         composerToolBar
+        if activityType != nil, let capabilitiesError {
+          Text(capabilitiesError).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+          Button("Retry creation access") { Task { await loadCreationCapabilities() } }.frame(minHeight: 44)
+        }
         if !mediaItems.isEmpty || draft.structured || draft.hasWriting {
           Text("\(bodyText.count)/\(draft.bodyCharacterLimit)")
             .font(.caption).monospacedDigit()

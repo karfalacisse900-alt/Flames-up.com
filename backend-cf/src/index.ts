@@ -20401,7 +20401,7 @@ mountTeaClubs(api, {
 
 api.get('/tea', teaAuth, c => handleTea(c, (viewer, deps) =>
   teaPage(deps, c.env.JWT_SECRET, viewer, { cursor: c.req.query('cursor'), city: c.req.query('city'),
-    lat: c.req.query('lat'), lon: c.req.query('lon') })));
+    lat: c.req.query('lat'), lon: c.req.query('lon'), includePosts: c.req.query('include_posts') === '1' })));
 api.get('/tea/:source/:id', teaAuth, c => handleTea(c, (_, deps) =>
   teaDetail(deps, c.req.param('source'), c.req.param('id'))));
 
