@@ -40,8 +40,10 @@ function fixture() {
       calls.push([table, query]);
       const time = table === 'app_businesses' ? 'location_updated_at' : 'created_at';
       if (table === 'app_posts') {
-        const allowed = query.filters.post_type.slice(4, -1).split(',');
-        rows.app_posts = [...postRows.values()].filter(post => allowed.includes(post.post_type)
+        const allowed = query.filters.and.match(/post_type\.in\.\(([^)]+)\)/)[1].split(',');
+        assert.equal(query.filters['activity_object.kind'], 'eq.event');
+        assert.ok(query.select.includes('activity_object:app_post_objects(kind,public_data)'));
+        rows.app_posts = [...postRows.values()].filter(post => (allowed.includes(post.post_type) || post.activity_object?.kind === 'event')
           && !rows.app_purchasables.some(listing => listing.post_id === post.id));
       }
       if (query.filters.id?.startsWith('eq.')) return rows[table].filter(row => 'eq.' + row.id === query.filters.id);
@@ -114,15 +116,20 @@ test('legacy structured posts remain in Tea exactly once without creating commer
     [807, 'event', { metadata: { creator_event: { endsAt: old } } }],
     [808, 'club', { status: 'removed' }],
     [809, 'club', { user_id: null }],
+    [810, 'general', { activity_object: { kind: 'event', public_data: {} } }],
+    [811, 'general', { activity_object: { kind: 'event', public_data: { endsAt: old } } }],
+    [812, 'general', { activity_object: { kind: 'event', public_data: {} }, visibility: 'private' }],
+    [813, 'general', { activity_object: { kind: 'receipt', public_data: {} } }],
   ]) f.postRows.set(id(number), { id: id(number), legacy_post_id: 'legacy-' + number, user_id: owner.supabase_user_id,
     app_user_id: owner.id, status: 'active', visibility: 'public', metadata: {}, post_type: type,
     title: 'Existing ' + type, content: 'Original writing', created_at: at, ...patch });
   assert.equal((await teaPage(f.deps, key, viewer, {}, now)).items.length, 1, 'Older clients receive only navigable sources');
   const result = await teaPage(f.deps, key, viewer, { includePosts: true }, now);
-  assert.deepEqual(result.items.map(row => row.kind), ['club','offer','meetup','event','club']);
+  assert.deepEqual(result.items.map(row => row.kind), ['event','club','offer','meetup','event','club']);
   const legacy = result.items.filter(row => row.destination.source === 'post');
-  assert.equal(legacy.length, 4);
-  assert.deepEqual(legacy.map(row => row.post.id), ['legacy-809','legacy-803','legacy-802','legacy-801']);
+  assert.equal(legacy.length, 5);
+  assert.deepEqual(legacy.map(row => row.post.id), ['legacy-810','legacy-809','legacy-803','legacy-802','legacy-801']);
+  assert.equal(legacy[0].post.post_type, 'event', 'The trusted relationship supplies the listing identity');
   assert.ok(f.calls.some(([table, query]) => table === 'app_posts' && query.filters.listing === 'is.null'));
   f.blocked.add(owner.id);
   assert.equal((await teaPage(f.deps, key, viewer, { includePosts: true }, now)).items.length, 0);

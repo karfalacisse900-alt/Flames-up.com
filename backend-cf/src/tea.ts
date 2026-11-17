@@ -31,7 +31,8 @@ const listing = 'id,post_id,creator_id,creator_app_user_id,content_type,title,st
 const businessListing = 'id,owner_id,name,category,paused,published,latitude,longitude,location_updated_at';
 const businessDetails = businessListing + ',pickup_address,hours,avatar_url,photos';
 const activityTypes = Object.keys(types);
-const postListing = 'id,legacy_post_id,user_id,app_user_id,post_type,title,content,status,visibility,metadata,created_at,listing:app_purchasables()';
+const postListing = 'id,legacy_post_id,user_id,app_user_id,post_type,title,content,status,visibility,metadata,created_at,listing:app_purchasables(),activity_object:app_post_objects(kind,public_data)';
+const legacyType = (row: any): string => row.activity_object?.kind === 'event' ? 'event' : row.post_type;
 const tableBySource = { activity: 'app_purchasables', business: 'app_businesses', post: 'app_posts' };
 const timeBySource = { activity: 'created_at', business: 'location_updated_at', post: 'created_at' };
 const sourceRank = { activity: 2, business: 1, post: 0 };
@@ -90,7 +91,8 @@ function filtersFor(source: Source, cursor: FeedCursor, search: ReturnType<typeo
     // Legacy structured records stay discoverable without creating or migrating
     // purchases. The anti-join prevents duplicate rows for newer listings.
     Object.assign(filters, { status: 'eq.active', visibility: 'eq.public',
-      post_type: 'in.(' + Object.keys(postTypes).join(',') + ')', listing: 'is.null' });
+      'activity_object.kind': 'eq.event', listing: 'is.null' });
+    terms.push('or(post_type.in.(' + Object.keys(postTypes).join(',') + '),activity_object.not.is.null)');
     if (search.city) {
       filters['metadata->>display_city'] = 'ilike.' + search.city;
       filters['metadata->>display_location_visibility'] = 'eq.public';
@@ -139,8 +141,8 @@ function eligibility(candidate: Candidate, access: Access, deps: Dependencies, s
     || post.metadata?.removed_at || post.metadata?.discover_blocked_at
     || (post.metadata?.moderation_status && post.metadata.moderation_status !== 'approved')) return null;
   if (source === 'post') {
-    const kind = postTypes[row.post_type];
-    const end = post.metadata?.creator_event?.endsAt;
+    const kind = postTypes[legacyType(row)];
+    const end = row.activity_object?.public_data?.endsAt ?? post.metadata?.creator_event?.endsAt;
     if (!kind || (end && Date.parse(end) <= now)
       || (search.city && (post.metadata?.display_location_visibility !== 'public'
         || post.metadata?.display_city?.trim().normalize('NFC').toLowerCase() !== search.city))) return null;
@@ -161,7 +163,7 @@ function item(candidate: Candidate, visible: NonNullable<ReturnType<typeof eligi
     color: colors[visible.kind], icon: icons[visible.kind], timestamp,
     destination: { source, id: row.id },
     ...(source === 'post' ? { post: { id: row.legacy_post_id || row.id, title: row.title,
-      content: row.content, post_type: row.post_type, user_id: row.app_user_id } } : {}),
+      content: row.content, post_type: legacyType(row), user_id: row.app_user_id } } : {}),
   };
 }
 
