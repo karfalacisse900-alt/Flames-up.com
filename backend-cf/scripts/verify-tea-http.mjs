@@ -6,6 +6,8 @@ for(const path of ['/tea/conversations','/tea']) {
   if(path==='/tea/conversations' && process.argv.includes('--require-author-photos')) {
     for(const item of b.items) {
       assert.ok(Object.hasOwn(item.author??{},'photoURL'),'Tea response is missing the deployed photo field');
+      assert.ok(Object.hasOwn(item,'primaryAction') && Object.hasOwn(item,'borough'),'Notes response contract missing');
+      assert.ok(!Object.hasOwn(item,'answers') && !Object.hasOwn(item,'applications'),'Private application data in public Note');
       assert.ok(item.author.photoURL===null || typeof item.author.photoURL==='string','Invalid Tea photo reference');
     }
     console.log(JSON.stringify({authorPhotoContract:true,returnedAuthors:b.items.length,
@@ -17,3 +19,9 @@ for(const path of ['/tea/conversations','/tea']) {
 const r=await fetch(base+'/tea/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(20000)});
 assert.equal(r.status,401,'Anonymous writes must be denied');
 console.log('PASS: anonymous conversation creation denied.');
+
+for (const path of ['/tea/conversations/capabilities','/tea/conversations/00000000-0000-4000-8000-000000000001/applications']) {
+  const response=await fetch(base+path,{signal:AbortSignal.timeout(20000)});
+  assert.equal(response.status,401,'Private Notes endpoint must deny anonymous access');
+}
+console.log('PASS: private Notes endpoints deny anonymous access.');

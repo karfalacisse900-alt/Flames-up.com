@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-// Verified production rollout 43790044371. This repair changes only Tea author
-// photos; existing commerce, permissions, variables and secrets remain intact.
-export const baseline='164494c7c79300daea7459b49de460d3ce2a80a7';
-export const precedingVersion='c5294a13-8b86-4419-97a6-db5d453fe77f';
-export const teaRepairFiles=['backend-cf/src/index.ts','backend-cf/src/tea-authors.ts','backend-cf/src/tea-clubs.ts','backend-cf/src/tea-conversations.ts'];
+// Verified rollout 44000943388. This release adds Notes and the reviewed Home/Tea
+// content boundary. Existing commerce, permissions, variables and secrets stay intact.
+export const baseline='e6629e92bb18a31f164b6db1682ea037b46011be';
+export const precedingVersion='0cef467c-ce2b-4e08-9cac-54bf9132bf34';
+export const teaRepairFiles=['backend-cf/src/feed-pagination.ts','backend-cf/src/home-posts.ts','backend-cf/src/index.ts','backend-cf/src/tea-conversations.ts','backend-cf/src/tea.ts'];
 export function verifyTeaSource({changed,version,annotations,after=false,candidate,expectedVersion}) {
   assert.deepEqual(changed,teaRepairFiles,'Tea deployment scope changed.');
   if(after) {
@@ -14,7 +14,7 @@ export function verifyTeaSource({changed,version,annotations,after=false,candida
     assert.equal(annotations?.['workers/message'],'Tea Conversations '+candidate,'Deployed source does not match candidate.');
   } else {
     assert.equal(version,precedingVersion,'Production changed since inspection.');
-    assert.equal(annotations?.['workers/message'],'Professional accounts and Tea '+baseline,'Unexpected preceding source.');
+    assert.equal(annotations?.['workers/message'],'Tea Conversations '+baseline,'Unexpected preceding source.');
     if(expectedVersion) assert.equal(version,expectedVersion,'Production changed after inspection.');
   }
 }
