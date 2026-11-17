@@ -1,0 +1,125 @@
+CAPTRO TEA NOTES — implementation and update evidence
+Branch: feat/tea-notes-actions-20261117
+Base: 0d3bf82 (preserved Home-posts / Tea-activities work)
+
+IMPLEMENTED
+Visible Conversations section is now Notes. Conversation IDs, routes, links,
+sentence replies and existing stored content remain intact. Rows use the existing
+avatar loader, author-selected borough above the title, and a separate action tap
+target. Plain title/body posting still has no required extra steps.
+Optional Borough and Add action controls support one HTTPS link, approved-account
+application form, or existing Captro listing. Linked canonical and legacy activity
+records use their original details, join/claim and checkout flows. There is no
+new deal or checkout record. Action taps revalidate access and current state.
+Application forms show the actual recipient, optional height when configured,
+name, availability and optional HTTPS portfolio. The existing account-scoped Tea
+store retains private drafts and frozen retry payloads; logout/access invalidation
+clears them. Only server confirmation shows success. Recipients have a paginated
+private View applications screen, including history after removing an action.
+Approved active Creator OR Business roles may create native forms. General users
+may create plain Notes and link to external forms. Approval does not change any
+payment readiness rules. Forms can be closed through Edit action.
+
+SERVER AND DATA SAFETY
+Additive migration: 20261117143031_tea_note_actions.sql. Applied through the
+Supabase connector to Captro (cclgvxukwccvtgrbcwie), 2026-11-17 14:30:31 UTC.
+The CLI-generated file was renamed to match the timestamp recorded by Supabase.
+New app_tea_applications table has RLS, no anon/authenticated table access and
+service-role-only RPCs. The trusted recipient comes from the Note author, never
+the client. Unique note/applicant and request identities prevent duplicate
+submissions. SQL enforces creator approval, active accounts, Note visibility,
+current form version, bounded fields, and recipient-only reads. Existing clients
+that omit the new fields preserve them. Explicit null removes optional fields.
+No user content or financial records were deleted. No sample Notes or applications
+were inserted into production. No live charges or payment configuration changes.
+
+BACKEND VERIFICATION
+TypeScript passed. Final full backend suite: 449 tests passed, zero failures,
+skips or cancellations (captro-notes-final-backend.log). Six focused Notes
+HTTP/Postgres tests include stable recipient pagination. Coverage includes plain Notes; Brooklyn form approval;
+private submissions; duplicate retries; unrelated recipient denial; direct anon
+and authenticated SQL denial; closed/suspended/edited forms; legacy editing and
+replies; invalid URLs; Queens listing selection and changed availability; external
+signup links; and banned-recipient reads. Existing Tea tests also cover legacy
+listing access and expired/full deals. Fixtures use isolated PGlite databases.
+Release gate regression tests: 10 passed.
+
+PRODUCTION API — VERIFIED
+Read-only preflight: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44103005154
+Deployment: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44104006932
+Worker source: baa9dc80322a69b1ab06cae7a7a70419b2317379
+Previous version: 0cef467c-ce2b-4e08-9cac-54bf9132bf34
+New version: 0220628f-08be-4a65-ade0-1125604d4b12
+Deployment verified 2026-11-17 14:33 UTC.
+Before/after bindings fingerprint unchanged:
+1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a
+Verified 14 security checks, five reliability checks, three protected earnings
+views, and 14 Tea/Notes schema checks. Public Notes and activity reads passed;
+anonymous creation and private application endpoints return 401. Old Notes expose
+nullable new fields and no private application answers. Release used --keep-vars.
+The reviewed five runtime files include the previously completed Home/media-only
+filtering and Tea activity-discovery work. No financial routes were changed.
+
+NATIVE VALIDATION / TESTFLIGHT
+Pending. Do not interpret this intermediate report as a completed iOS release.
+First Intel build 44105396265 found a Swift type-check timeout in the action
+editor. The editor was split into smaller sections with capability loading outside
+the ViewBuilder (82a714a). Replacement validation: 44113358944, covering Notes,
+existing reply and club-chat checks on a large iPhone and iPhone 13 mini.
+Simulator results and screenshots will be recorded below.
+Intel validation 44113358944 compiled the app and tests successfully, then reached
+its 65-minute job limit after approximately 62 minutes of setup/build work. The
+club-chat quote/link/info/draft test passed; the other native tests were not
+completed. Apple Silicon fallback 44122601490 started 2026-11-17 16:20 UTC on
+the identical native source. TestFlight remains pending until a complete matching
+validation result is available. No gate was bypassed.
+No physical-iPhone or live-payment verification is claimed.
+
+LIMITS
+Borough is explicitly author-selected (five NYC boroughs), never inferred from a
+profile/GPS. This version does not auto-populate it from venue data. Existing
+Following-filter limitations and coarse-city activity filtering are unchanged.
+Only the fixed short application template is supported; external forms can be
+linked. No application messaging, hiring decision, or payment system was added.
+
+EXACT FILES CHANGED IN THIS TASK
+.github/workflows/native-ios-testflight.yml
+.github/workflows/native-polish-validation.yml
+backend-cf/scripts/verify-tea-http.mjs
+backend-cf/scripts/verify-tea-release.mjs
+backend-cf/scripts/verify-tea-schema.mjs
+backend-cf/src/index.ts
+backend-cf/src/tea-conversations.ts
+backend-cf/src/tea.ts
+backend-cf/tests/tea-notes.test.mjs
+backend-cf/tests/tea.test.mjs
+backend-cf/tests/tea_release_guard.test.mjs
+ios_native/MIRA/LayoutUITests/TeaNoteTests.swift
+ios_native/MIRA/Sources/MIRANative/Models/CaptroTeaConversation.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaNoteActions.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaView.swift
+ios_native/MIRA/Sources/MIRANative/Services/CaptroTeaConversationStore.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroTeaNoteTests.swift
+ios_native/MIRA/project.yml
+supabase/migrations/20261117143031_tea_note_actions.sql
+docs/tea-notes-20261117.txt
+LATEST VERIFIED RESULTS
+Apple Silicon run 44122601490 succeeded. iPhone 17 and iPhone 13 mini each passed
+12 model tests and 5 UI tests: 34 executions, zero failures. Screenshots exported
+under C:/Users/The-s/AppData/Local/Temp/captro-notes-final-44122601490/.
+Reviewed normal Notes list and small-phone accessibility text: titles and boroughs
+wrap, separate action controls remain usable. At accessibility sizes the fixed
+trailing reply count leaves a narrower title column; no text shrinking was added.
+No physical-device verification. External signup opening/return was not newly
+exercised in UI; safe URL behavior is covered by backend/model tests.
+TestFlight release run 44132583940 is queued, validated against 44122601490.
+Apple status reads failed with HTTP 500 UNEXPECTED_ERROR, including the bounded
+unfiltered lookup fallback. This is not a reported agreement/signing 403.
+Four additional release lookup tests passed (exact bundle identity, server-error
+fallback, authorization rejection, missing/ambiguous app). Additional files:
+scripts/app-store/find-app.mjs
+scripts/app-store/find-app.test.mjs
+scripts/app-store/testflight-status.mjs
+Do not interpret the queued release as an uploaded or available TestFlight build.
