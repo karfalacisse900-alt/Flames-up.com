@@ -12,6 +12,7 @@ extension Notification.Name {
   private var scope = ""
   private var models: [String: CaptroTeaConversationModel] = [:]
   private var order: [String] = []
+  private var applications: [String: CaptroTeaApplicationModel] = [:]
   struct Listing {
     let items: [CaptroTeaConversation]
     let cursor: String?
@@ -44,10 +45,76 @@ extension Notification.Name {
     return model
   }
   func invalidate() {
+    for model in applications.values { model.clear() }
+    applications.removeAll()
     for model in models.values { model.clear() }
     models.removeAll(); order.removeAll()
     listing = nil; listViewport.setActive(false)
     NotificationCenter.default.post(name: .captroTeaAccessChanged, object: nil)
+  }
+  func application(for note: CaptroTeaConversation) -> CaptroTeaApplicationModel {
+    synchronizeScope()
+    if let model = applications[note.id] { model.refresh(note); return model }
+    let model = CaptroTeaApplicationModel(note: note, api: api)
+    if applications.count >= 24, let key = applications.keys.first { applications.removeValue(forKey: key)?.clear() }
+    applications[note.id] = model
+    return model
+  }
+}
+
+/// Private, account-scoped form drafts use the existing Tea store. An uncertain
+/// write keeps its exact request identity and payload until reconciled.
+@MainActor final class CaptroTeaApplicationModel: ObservableObject {
+  @Published var note: CaptroTeaConversation
+  @Published var fullName = ""
+  @Published var availability = ""
+  @Published var height = ""
+  @Published var portfolio = ""
+  @Published var busy = false
+  @Published var confirmed = false
+  @Published var error: String?
+  @Published private(set) var pending: CaptroTeaApplicationPayload?
+  private unowned let api: MIRAAPIClient
+  private let scope: String
+  private var invalidated = false
+  private var requestID = UUID().uuidString
+  init(note: CaptroTeaConversation, api: MIRAAPIClient) {
+    self.note = note; self.api = api; scope = api.presentationScope; confirmed = note.applicationSubmitted == true
+  }
+  var validScope: Bool { !invalidated && api.presentationScope == scope }
+  var validFields: Bool {
+    !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && fullName.count <= 100 &&
+    !availability.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && availability.count <= 1000 && height.count <= 40 &&
+    (portfolio.isEmpty || CaptroTeaLink(portfolio) != nil)
+  }
+  func refresh(_ note: CaptroTeaConversation) {
+    guard validScope, note.id == self.note.id else { return }
+    self.note = note; confirmed = confirmed || note.applicationSubmitted == true
+  }
+  func clear() {
+    invalidated = true; fullName = ""; availability = ""; height = ""; portfolio = ""; pending = nil
+    confirmed = false; error = nil
+  }
+  func submit() async {
+    guard validScope, !busy, !confirmed, pending != nil || validFields else { return }
+    busy = true; error = nil; defer { busy = false }
+    let payload = pending ?? CaptroTeaApplicationPayload(requestID: requestID, version: note.version,
+      fullName: fullName.trimmingCharacters(in: .whitespacesAndNewlines), availability: availability.trimmingCharacters(in: .whitespacesAndNewlines),
+      height: note.primaryAction?.heightRequested == true && !height.isEmpty ? height : nil, portfolio: portfolio.isEmpty ? nil : portfolio)
+    pending = payload
+    do {
+      let receipt: CaptroTeaApplicationReceipt = try await api.post("/tea/conversations/" + note.id + "/applications", body: payload)
+      guard validScope else { return }
+      guard receipt.confirmed else { throw MIRAAPIError.decodingFailed }
+      confirmed = true; pending = nil; fullName = ""; availability = ""; height = ""; portfolio = ""
+      note.applicationSubmitted = true
+      api.teaConversations.model(for: note).updated(note)
+    } catch {
+      guard validScope else { return }
+      if case MIRAAPIError.server(let status, _, let message) = error, [400,401,403,404,409].contains(status) {
+        pending = nil; self.error = message ?? "This application could not be submitted. Close and reopen the form to check its current status."
+      } else { self.error = "Submission wasn’t confirmed. Retry checks the same application. Your draft is still here." }
+    }
   }
 }
 

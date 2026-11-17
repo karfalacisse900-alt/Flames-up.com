@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { teaPage, teaDetail, TeaUnavailable, TeaInputError } from '../src/tea.ts';
+import { teaPage, teaDetail, teaNoteListings, TeaUnavailable, TeaInputError } from '../src/tea.ts';
 import { readFeedCursor, FeedCursorError } from '../src/feed-pagination.ts';
 
 const key = 'a-test-key-that-is-not-a-production-secret';
@@ -9,6 +9,21 @@ const now = Date.parse('2026-11-11T22:00:00Z');
 const id = n => '00000000-0000-4000-8000-' + String(n).padStart(12, '0');
 const at = '2026-11-11T21:00:00.123456+00:00';
 const old = '2026-11-11T21:00:00.123455+00:00';
+
+test('Note listing actions recheck canonical deals, expiration and privacy without changing checkout',async()=>{
+  const f=fixture();
+  f.activity(1,'deal');f.activity(2,'deal',{row:{expires_at:old}});
+  f.activity(3,'deal',{post:{visibility:'private'}});
+  f.activity(4,'deal',{row:{status:'draft'}});
+  f.activity(5,'club',{row:{capacity:1,quantity_committed:1}});
+  const result=await teaNoteListings(f.deps,[id(1),id(2),id(3),id(4),id(5),id(1)],now);
+  assert.equal(result.get(id(1)).state,'active');assert.equal(result.get(id(1)).entry.destination.id,id(1));
+  assert.equal(result.get(id(2)).state,'ended');
+  for(const n of [3,4]) {assert.equal(result.get(id(n)).state,'unavailable');assert.equal(result.get(id(n)).entry,undefined);}
+  assert.equal(result.get(id(5)).entry.status,'sold_out');
+  assert.equal(f.calls.length,1,'Bounded, deduplicated page lookup');
+  f.blocked.add('user-1');assert.equal((await teaNoteListings(f.deps,[id(1)],now)).get(id(1)).state,'unavailable');
+});
 
 function fixture() {
   const calls = [];

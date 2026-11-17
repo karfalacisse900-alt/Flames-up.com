@@ -121,7 +121,7 @@ function businessTableAbsent(error: unknown) {
   return /"code"\s*:\s*"(?:PGRST205|42P01)"/.test(error.message.slice(prefix.length));
 }
 
-function eligibility(candidate: Candidate, access: Access, deps: Dependencies, search: ReturnType<typeof scope>, now: number) {
+function eligibility(candidate: Candidate, access: Access, deps: Dependencies, search: ReturnType<typeof scope>, now: number, includeEnded = false) {
   const { row, source } = candidate;
   if (!uuid.test(row.id)) return null;
   const owner = access.owners.get(source === 'activity' ? row.creator_id : source === 'post' ? row.user_id || row.app_user_id : row.owner_id);
@@ -151,9 +151,28 @@ function eligibility(candidate: Candidate, access: Access, deps: Dependencies, s
   const kind = types[row.content_type];
   const status = commerceAvailability(row, now);
   if (!kind || row.visibility !== 'public' || !['anyone', 'approval'].includes(row.audience)
-    || !['active', 'sold_out'].includes(status)
+    || !(includeEnded ? ['active', 'sold_out', 'expired', 'ended'] : ['active', 'sold_out']).includes(status)
     || (search.city && row.city?.trim().normalize('NFC').toLowerCase() !== search.city)) return null;
   return { kind, status: row.capacity != null && row.quantity_committed >= row.capacity ? 'sold_out' : status, name: row.title };
+}
+
+// One bounded lookup per Note page; never infer a borough from a profile/city.
+// Ended public listings may be described, but cannot be activated from a Note.
+export async function teaNoteListings(deps: Dependencies, ids: string[], now = Date.now()) {
+  const unique = [...new Set(ids)].filter(id => uuid.test(id));
+  if (!unique.length) return new Map<string, {state: string; entry?: any}>();
+  if (unique.length > 21) throw new TeaInputError();
+  const rows = await deps.query('app_purchasables', {select: listing,
+    filters: {id: 'in.(' + unique.join(',') + ')'}, limit: unique.length});
+  const candidates: Candidate[] = rows.map(row => ({source: 'activity', row, timestamp: row.created_at}));
+  const access = await loadAccess(candidates, deps);
+  const result = new Map<string, {state: string; entry?: any}>(unique.map(id => [id, {state: 'unavailable'}]));
+  for (const candidate of candidates) {
+    const visible = eligibility(candidate, access, deps, scope({}), now, true);
+    if (visible) result.set(candidate.row.id, {state: ['expired','ended'].includes(visible.status) ? 'ended' : 'active',
+      entry: item(candidate, visible)});
+  }
+  return result;
 }
 
 function item(candidate: Candidate, visible: NonNullable<ReturnType<typeof eligibility>>) {

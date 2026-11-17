@@ -1,7 +1,7 @@
 import { teaAuthorPhotos } from './tea-authors';
 import { makeBusinessOrdering } from './business-ordering';
 import { mountProfessionalAccounts, professionalHash, ProfessionalError, studioOrigin, studioPathAllowed } from './professional-accounts';
-import { teaPage, teaDetail, TeaInputError, TeaUnavailable } from './tea';
+import { teaPage, teaDetail, teaNoteListings, TeaInputError, TeaUnavailable } from './tea';
 import { mountTeaConversations } from './tea-conversations';
 import { mountTeaClubs } from './tea-clubs';
 import { runAccountCleanup } from './account-cleanup';
@@ -20367,6 +20367,7 @@ async function teaResponseAuthors(c: any, value: any) {
 
 mountTeaConversations(api, {
   authors: teaResponseAuthors,
+  listings: (c, ids) => teaNoteListings(teaDependencies(c, getUserId(c)), ids),
   auth: authMiddleware, optionalAuth: teaAuth,
   viewer: async c => {
     const id = getUserId(c);
@@ -20375,7 +20376,7 @@ mountTeaConversations(api, {
     if (!row || supabaseUserStatus(row) !== 'active') throw new Error('TEA_DISCUSSION_FORBIDDEN');
     return row.id;
   },
-  limit: (c, write) => enforceRateLimit(c, write ? 'tea_discussion_write' : 'tea_discussion_read', getUserId(c) || clientIp(c), write ? 20 : 120, 60),
+  limit: async (c, write) => (write && rejectLargeRequest(c, 64_000)) || await enforceRateLimit(c, write ? 'tea_discussion_write' : 'tea_discussion_read', getUserId(c) || clientIp(c), write ? 20 : 120, 60),
   restriction: (c, type) => enforceUserRestriction(c, getUserId(c), type),
   rpc: supabaseAdminRpc,
 });

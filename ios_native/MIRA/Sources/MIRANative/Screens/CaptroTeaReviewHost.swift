@@ -297,11 +297,26 @@ private final class TeaReviewProtocol: URLProtocol {
           ["id":"r5","body":"Love the light.","author":["id":"jules","name":"Jules","username":"jules"],"createdAt":now]
         ]
       }
+      if ProcessInfo.processInfo.arguments.contains("--tea-notes-fixture") {
+        for n in 101...104 { Self.conversations[id(n)]?["links"] = []; Self.conversations[id(n)]?["replyCount"] = 0 }
+        Self.conversations[id(101)]?["title"] = "Open casting for a Brooklyn studio project"
+        Self.conversations[id(101)]?["body"] = "Tell us about your availability for our next creative shoot."
+        Self.conversations[id(101)]?["borough"] = "Brooklyn"
+        Self.conversations[id(101)]?["primaryAction"] = ["kind":"application","label":"Apply","heightRequested":true,"accepting":true,"state":"active"]
+        Self.conversations[id(102)]?["title"] = "Our Queens opening weekend"
+        Self.conversations[id(102)]?["body"] = "Explore the opening offer at our neighborhood restaurant."
+        Self.conversations[id(102)]?["borough"] = "Queens"
+        Self.conversations[id(102)]?["primaryAction"] = ["kind":"listing","label":"View deal","listingId":id(5),"state":"active"]
+        Self.conversations[id(103)]?["title"] = "Help test our next idea"
+        Self.conversations[id(103)]?["primaryAction"] = ["kind":"external","label":"Join the test","url":"https://example.com/signup","state":"active"]
+      }
+      if path == "/tea/conversations/capabilities" { return (200,["canCreateForms":true]) }
       if path == "/tea/conversations" {
         Task { @MainActor in TeaReviewMetrics.shared.counts[0, default: 0] += 1 }
         if method == "POST", let key = body["request_id"] as? String {
           var post = Self.conversations[id(104)]!
           post["id"] = key; post["title"] = body["title"]; post["body"] = body["body"]; post["links"] = body["links"]
+          post["borough"] = body["borough"]; post["primaryAction"] = body["primary_action"]
           Self.conversations[key] = post; return (200, post)
         }
         return (200, ["items": Self.conversations.values.sorted { ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "") }])
@@ -309,6 +324,17 @@ private final class TeaReviewProtocol: URLProtocol {
       let parts = path.split(separator: "/")
       guard parts.count >= 3, var post = Self.conversations[String(parts[2])] else { return (404, ["detail":"Unavailable"]) }
       let key = String(parts[2])
+      if parts.last == "action" {
+        let item: [String:Any] = ["id":"activity:" + id(5),"kind":"offer","name":"Weekend Pastry Offer","status":"active","color":"sky","timestamp":ISO8601DateFormatter().string(from:Date()),"destination":["source":"activity","id":id(5)]]
+        return (200,["note":post,"listing":item])
+      }
+      if parts.last == "applications" {
+        if method == "POST" {
+          post["applicationSubmitted"] = true; Self.conversations[key] = post
+          return (200,["id":body["request_id"] ?? "receipt","confirmed":true,"submittedAt":ISO8601DateFormatter().string(from:Date())])
+        }
+        return (200,["items":[]])
+      }
       if parts.last == "replies" {
         if method == "POST", let replyID = body["request_id"] as? String {
           var reply: [String: Any] = ["id":replyID,"body":body["body"] ?? "", "createdAt":ISO8601DateFormatter().string(from: Date()),
@@ -329,6 +355,7 @@ private final class TeaReviewProtocol: URLProtocol {
       else if method == "PUT" {
         guard post["isAuthor"] as? Bool == true else { return (403,["detail":"Not your post"]) }
         post["title"] = body["title"]; post["body"] = body["body"]; post["links"] = body["links"]
+          post["borough"] = body["borough"]; post["primaryAction"] = body["primary_action"]
         post["version"] = (post["version"] as? Int ?? 1) + 1
       } else {
         let n = Int(key.suffix(12)) ?? 0

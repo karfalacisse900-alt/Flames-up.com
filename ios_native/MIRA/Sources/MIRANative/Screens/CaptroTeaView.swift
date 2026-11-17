@@ -261,20 +261,20 @@ enum CaptroTeaPalette: String {
             }
           }.padding(.horizontal, 16)
         }.padding(.vertical, 8)
-        if section != "Conversations" { HStack {
-          Text(section == "Conversations" ? "Conversations" : city.isEmpty ? "Clubs & Events" : "Activities in " + city)
+        HStack {
+          Text(section == "Conversations" ? "Notes" : city.isEmpty ? "Clubs & Events" : "Activities in " + city)
             .font(.caption).foregroundStyle(.secondary)
           Spacer()
-          if !city.isEmpty { Button("Change city") { cityDraft = city; choosingCity = true }.font(.caption).frame(minHeight: 44) }
-          else if filter != "Activities" {
+          if section != "Conversations", !city.isEmpty { Button("Change city") { cityDraft = city; choosingCity = true }.font(.caption).frame(minHeight: 44) }
+          else if section != "Conversations", filter != "Activities" {
             Button("All activities") { showAllActivities() }
               .font(.caption).frame(minHeight: 44).accessibilityIdentifier("tea.activities")
           }
-        }.padding(.horizontal, 16).padding(.bottom, 4) }
+        }.padding(.horizontal, 16).padding(.bottom, 4)
         Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true)
         ZStack {
           activityList
-      CaptroTeaConversationsList(api: api, active: section == "Conversations", created: created) { post in
+      CaptroTeaConversationsList(api: api, active: section == "Conversations", viewerID: viewerID, signIn: signIn, created: created) { post in
         if path.isEmpty { path.append(post) }
       }
         .id(api.presentationScope)

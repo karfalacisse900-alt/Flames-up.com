@@ -51,6 +51,8 @@ struct CaptroTeaQuote: View {
 struct CaptroTeaConversationsList: View {
   let api: MIRAAPIClient
   let active: Bool
+  let viewerID: String?
+  let signIn: () -> Void
   let created: CaptroTeaConversation?
   let open: (CaptroTeaConversation) -> Void
   @State private var items: [CaptroTeaConversation] = []
@@ -64,7 +66,8 @@ struct CaptroTeaConversationsList: View {
   @State private var requestID: UUID?
   @Environment(\.scenePhase) private var scenePhase
 
-  init(api: MIRAAPIClient, active: Bool, created: CaptroTeaConversation?, open: @escaping (CaptroTeaConversation) -> Void) {
+  init(api: MIRAAPIClient, active: Bool, viewerID: String?, signIn: @escaping () -> Void, created: CaptroTeaConversation?, open: @escaping (CaptroTeaConversation) -> Void) {
+    self.viewerID = viewerID; self.signIn = signIn
     self.api = api; self.active = active; self.created = created; self.open = open
     let cached = api.teaConversations.cachedListing()
     _items = State(initialValue: cached?.items ?? [])
@@ -77,17 +80,23 @@ struct CaptroTeaConversationsList: View {
   var body: some View {
     List {
       if items.isEmpty {
-        if loading && error == nil { ProgressView("Loading conversations…").listRowSeparator(.hidden).accessibilityIdentifier("tea.conversations.loading") }
-        else if error == nil, loaded { Text("No conversations yet. Tap Post to start one.").font(.subheadline).foregroundStyle(.secondary).listRowSeparator(.hidden) }
+        if loading && error == nil { ProgressView("Loading Notes…").listRowSeparator(.hidden).accessibilityIdentifier("tea.conversations.loading") }
+        else if error == nil, loaded { Text("No Notes yet. Tap Post to start one.").font(.subheadline).foregroundStyle(.secondary).listRowSeparator(.hidden) }
       }
       ForEach(items) { post in
-        Button { open(post) } label: { CaptroTeaConversationRow(post: post) }
+        VStack(alignment: .leading, spacing: 0) {
+          Button { open(post) } label: { CaptroTeaConversationRow(post: post) }
+            .buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
+          if post.primaryAction != nil {
+            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn)
+              .padding(.leading, 60).padding(.bottom, 8)
+          }
+        }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true) }
           .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
             postID: post.id, feed: "tea-list").allowsHitTesting(false))
           .buttonStyle(.plain)
           .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
           .listRowSeparator(.hidden).listRowBackground(Color.clear)
-          .accessibilityIdentifier("tea.conversation." + post.id)
       }
       if let error {
         VStack(alignment: .leading) {
@@ -154,7 +163,7 @@ struct CaptroTeaConversationsList: View {
     } catch is CancellationError {} catch {
       guard requestID == token, owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
       if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }
-      self.error = CaptroRefreshFailure.message(error, content: "conversations", cached: !items.isEmpty)
+      self.error = CaptroRefreshFailure.message(error, content: "Notes", cached: !items.isEmpty)
     }
   }
 }
@@ -165,6 +174,9 @@ private struct CaptroTeaConversationRow: View {
     HStack(alignment: .top, spacing: 12) {
       CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 48)
       VStack(alignment: .leading, spacing: 4) {
+        Text(post.author.name + (post.borough.map { " · " + $0 } ?? ""))
+          .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("tea.note.identity." + post.id)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           Text(post.title).font(.headline).fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -174,14 +186,10 @@ private struct CaptroTeaConversationRow: View {
         Text(post.body).font(.callout).lineLimit(2).fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityIdentifier("tea.preview." + post.id)
-        TeaLinkFlow(spacing: 5) {
-          Text(post.author.name).font(.footnote).foregroundStyle(.secondary)
-          Text("·").font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
-          TeaConversationTime(value: post.createdAt)
-        }
+        TeaConversationTime(value: post.createdAt)
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 16)
-      .overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true) }.contentShape(Rectangle())
+      .contentShape(Rectangle())
   }
   @ViewBuilder private var replyCount: some View {
     if let count = post.replyCount {
@@ -263,6 +271,10 @@ struct TeaConversationTime: View {
                 }
               }
             }
+          }
+          if let borough = post.borough { Text(borough).font(.footnote).foregroundStyle(.secondary) }
+          if post.primaryAction != nil || post.canManageApplications == true {
+            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn)
           }
           if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
         }.background(CaptroFeedViewportMarker(owner: model.viewport, postID: "caption", feed: "tea:" + model.id).allowsHitTesting(false))
@@ -515,26 +527,42 @@ struct CaptroTeaComposer: View {
   @State private var saving = false
   @State private var error: String?
   @State private var requestID = UUID().uuidString
-  @State private var submitted: Payload?
+  @State private var submitted: CaptroTeaNotePayload?
+  @State private var borough: String
+  @State private var action: CaptroTeaNoteAction?
+  @State private var editingAction = false
 
   init(api: MIRAAPIClient, editing: CaptroTeaConversation? = nil, saved: @escaping (CaptroTeaConversation) -> Void) {
     self.api = api; self.editing = editing; self.saved = saved
     _title = State(initialValue: editing?.title ?? "")
     _bodyText = State(initialValue: editing?.body ?? "")
     _links = State(initialValue: editing?.links ?? [])
+    _borough = State(initialValue: editing?.borough ?? "")
+    _action = State(initialValue: editing?.primaryAction?.input)
   }
-  private struct Payload: Encodable { let title, body: String; let links: [String]; let requestID: String?; let version: Int? }
   private var valid: Bool {
     !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= 160 &&
     !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && bodyText.count <= 8000 &&
-    links.allSatisfy { CaptroTeaLink($0) != nil }
+    links.allSatisfy { CaptroTeaLink($0) != nil } && (action?.valid ?? true)
   }
   var body: some View {
     NavigationStack {
       Form {
         Group {
         TextField("Title", text: $title, axis: .vertical).accessibilityIdentifier("tea.compose.title")
-        TextField("Start a discussion…", text: $bodyText, axis: .vertical).lineLimit(5...14).accessibilityIdentifier("tea.compose.body")
+        TextField("Write a Note…", text: $bodyText, axis: .vertical).lineLimit(5...14).accessibilityIdentifier("tea.compose.body")
+        Section {
+          Picker("Borough (optional)", selection: $borough) {
+            Text("Not specified").tag("")
+            ForEach(["Brooklyn", "Queens", "Manhattan", "Bronx", "Staten Island"], id: \.self) { Text($0).tag($0) }
+          }.accessibilityIdentifier("tea.compose.borough")
+          Button(action == nil ? "Add action" : "Edit action") { editingAction = true }
+            .accessibilityIdentifier("tea.compose.action")
+          if let action {
+            Text(action.label).font(.subheadline.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
+            if let link = action.url.flatMap(CaptroTeaLink.init) { Text(link.hostname).font(.caption).foregroundStyle(.secondary) }
+          }
+        } footer: { Text("Optional. A borough is shown only when you choose one. Add one next step if your Note needs it.") }
         Section {
           ForEach(links.indices, id: \.self) { index in
             HStack {
@@ -554,7 +582,7 @@ struct CaptroTeaComposer: View {
         }.disabled(saving || submitted != nil)
         if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
       }.disabled(saving).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
-        .navigationTitle(editing == nil ? "New Tea post" : "Edit post").navigationBarTitleDisplayMode(.inline).miraNavigationSurface()
+        .navigationTitle(editing == nil ? "New Note" : "Edit Note").navigationBarTitleDisplayMode(.inline).miraNavigationSurface()
         .toolbar {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
           ToolbarItem(placement: .confirmationAction) {
@@ -562,6 +590,7 @@ struct CaptroTeaComposer: View {
               .disabled(!valid || saving).accessibilityIdentifier("tea.compose.save")
           }
         }.interactiveDismissDisabled(saving)
+        .sheet(isPresented: $editingAction) { CaptroTeaNoteActionEditor(api: api, action: action) { action = $0 } }
     }
   }
   @MainActor private func save() async {
@@ -570,8 +599,8 @@ struct CaptroTeaComposer: View {
     let owner = api.presentationScope
     // Retain a request's exact payload after an ambiguous response; subsequent
     // retry resolves that operation instead of silently creating another post.
-    let payload = submitted ?? Payload(title: title.trimmingCharacters(in: .whitespacesAndNewlines), body: bodyText.trimmingCharacters(in: .whitespacesAndNewlines),
-      links: links.compactMap { CaptroTeaLink($0)?.url.absoluteString }, requestID: editing == nil ? requestID : nil, version: editing?.version)
+    let payload = submitted ?? CaptroTeaNotePayload(title: title.trimmingCharacters(in: .whitespacesAndNewlines), body: bodyText.trimmingCharacters(in: .whitespacesAndNewlines),
+      links: links.compactMap { CaptroTeaLink($0)?.url.absoluteString }, requestID: editing == nil ? requestID : nil, version: editing?.version, borough: borough.isEmpty ? nil : borough, primaryAction: action)
     submitted = payload
     do {
       let result: CaptroTeaConversation

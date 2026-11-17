@@ -20,6 +20,73 @@ struct CaptroTeaConversation: Codable, Identifiable, Hashable {
   var sentences: [CaptroTeaReplyTarget]? = nil
   var replyTargets: [CaptroTeaReplyCount]? = nil
   var replyCount: Int? = nil
+  var borough: String? = nil
+  var primaryAction: CaptroTeaNoteAction? = nil
+  var applicationSubmitted: Bool? = nil
+  var canManageApplications: Bool? = nil
+}
+
+struct CaptroTeaNoteAction: Codable, Hashable {
+  var kind: String
+  var label: String
+  var url: String? = nil
+  var listingId: String? = nil
+  var heightRequested: Bool? = nil
+  var accepting: Bool? = nil
+  var state: String? = nil
+  var input: Self { var copy = self; copy.state = nil; return copy }
+  var valid: Bool {
+    guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, label.count <= 40 else { return false }
+    switch kind {
+    case "external": return url.flatMap(CaptroTeaLink.init) != nil
+    case "listing": return listingId.flatMap(UUID.init(uuidString:)) != nil
+    case "application": return heightRequested != nil && accepting != nil
+    default: return false
+    }
+  }
+  var statusLabel: String {
+    switch state {
+    case "ended": return "Ended"
+    case "closed": return "Applications closed"
+    case "unavailable": return "Unavailable"
+    default: return label
+    }
+  }
+}
+
+struct CaptroTeaNoteActionResolution: Decodable {
+  let note: CaptroTeaConversation
+  let listing: CaptroTeaEntry?
+}
+
+struct CaptroTeaNotePayload: Encodable {
+  let title, body: String
+  let links: [String]
+  let requestID: String?
+  let version: Int?
+  let borough: String?
+  let primaryAction: CaptroTeaNoteAction?
+  enum CodingKeys: String, CodingKey { case title, body, links, requestID, version, borough, primaryAction }
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(title, forKey: .title); try c.encode(body, forKey: .body); try c.encode(links, forKey: .links)
+    try c.encodeIfPresent(requestID, forKey: .requestID); try c.encodeIfPresent(version, forKey: .version)
+    // Explicit null removes an optional field; absence belongs to legacy clients.
+    try c.encode(borough, forKey: .borough); try c.encode(primaryAction?.input, forKey: .primaryAction)
+  }
+}
+
+struct CaptroTeaApplicationPayload: Encodable {
+  let requestID: String
+  let version: Int
+  let fullName, availability: String
+  let height, portfolio: String?
+}
+struct CaptroTeaApplicationReceipt: Decodable { let id: String; let confirmed: Bool; let submittedAt: String }
+struct CaptroTeaApplication: Decodable, Identifiable {
+  let id, createdAt: String
+  let answers: Answers
+  struct Answers: Decodable { let fullName, availability: String; let height, portfolio: String? }
 }
 
 struct CaptroTeaReplyTarget: Codable, Identifiable, Hashable {
