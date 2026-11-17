@@ -66,6 +66,13 @@ private final class TeaReviewProtocol: URLProtocol {
   }
 
   private func entry(_ number: Int) -> [String: Any] {
+    if let post = Self.lock.withLock({ Self.createdActivities.first { $0["id"] as? String == id(number) } }) {
+      let kind = post["postType"] as? String ?? "club"
+      return ["id": "post:" + id(number), "name": post["title"] as? String ?? "",
+        "kind": kind == "deal" ? "offer" : kind, "color": "sage", "icon": "people",
+        "timestamp": ISO8601DateFormatter().string(from: Date()), "status": "active",
+        "destination": ["source": "post", "id": id(number)], "post": post]
+    }
     let fixtures = [
       ("Night Garden", "club", "sage", "people"),
       ("Photo Walk", "meetup", "navy", "people"),
@@ -87,11 +94,11 @@ private final class TeaReviewProtocol: URLProtocol {
     let isPaid = number == 3
     let kind = item["kind"] as? String ?? "event"
     let fulfillment: String
-    switch number {
-    case 1: fulfillment = "membership"
-    case 2: fulfillment = "attendance"
-    case 5: fulfillment = "redemption"
-    case 6: fulfillment = "reservation"
+    switch kind {
+    case "club": fulfillment = "membership"
+    case "meetup": fulfillment = "attendance"
+    case "offer": fulfillment = "redemption"
+    case "reservation": fulfillment = "reservation"
     default: fulfillment = "ticket"
     }
     let date = ISO8601DateFormatter().string(from: Date().addingTimeInterval(86_400))
