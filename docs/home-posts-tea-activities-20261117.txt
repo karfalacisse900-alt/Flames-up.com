@@ -1,0 +1,77 @@
+Captro — Home posts / Tea activities
+Branch: fix/home-posts-tea-activities-20261117
+Base: 03a9ff4 (previous released work preserved)
+Deployment: NONE. No migrations, production records, payment flags, websites or TestFlight builds changed.
+
+Implemented
+- Home server reads (For You, Following, Around, guest world board and nearby compatibility route) exclude structured types and records owning purchasables/post objects before the query limit/offset. Video and carousel posts remain eligible. Caption/title keywords are never used.
+- Native Home applies the same identity rule on every model mutation, including restored caches, refresh, pagination and older backend responses. Existing records remain in the data/cache layer; failed ordinary media keeps its retry frame.
+- Tea's existing activity area uses one Create button. It checks the existing creation-capabilities endpoint, offers the supported Club, Event, Meetup and Deal types, and opens the existing form directly. Conversations retain their separate Post composer.
+- The existing /posts activity creation pipeline still creates the canonical structured record and its existing commerce/membership relationships. A confirmed activity does not emit the Home publication receipt. The creator opens its existing authorized Details route within Tea and discovery refreshes with server visibility checks. Private listings are never optimistically inserted in public discovery.
+- Home's Add menu no longer contains activity type choices. Reopening an activity type selector stays in its existing form and cannot switch that draft into a Home post. Media capture/import, framing, captions, review and ordinary publishing are unchanged.
+- Separate account-scoped draft slots preserve ordinary posts and each activity type. Legacy structured drafts move to Tea without deleting their media. Cleanup retains media referenced by any remaining draft.
+- Tea can include legacy structured posts without purchase records, including general-typed records linked to a server-owned event object, using an anti-join to avoid duplicate entries. These rows reuse the original authorized post Details route. Opt-in include_posts=1 preserves the response contract for older clients; cursors are bound to the source selection.
+
+Preserved
+Free/paid clubs, events, meetups, deals, reservations, membership and purchase history, comments, media, existing deep links, Support, eligibility, privacy, moderation, checkout and payout rules. No new payment activation. No Home/Capture/tab-bar redesign.
+
+Verification
+- TypeScript: npx tsc --noEmit --pretty false — passed.
+- Backend full suite on 4c11cdb: 442 passed, 0 failed. Final TypeScript and 24 focused handler/query/Tea checks also passed.
+- Actual production handler functions run against isolated storage: photo/video/carousel publication and canonical IDs; free Club, paid Club, Event, Meetup and Deal creation; exclusion across all Home modes and both cursor/legacy routes; original Details access; idempotent resubmission; private listing exclusion. Provider products and network/storage are fixtures, not Stripe or hosted database tests.
+- PGlite PostgreSQL: executed generated filtering predicates with JSONB media, NULL legacy types, anti-join relations, 90 cover listings ahead of eligible media, limit/offset and unchanged record counts.
+- Tea tests: existing visibility/blocking/moderation, expiry/capacity, cursor privacy and continuation, legacy listings without duplicates, and older-client compatibility.
+- Native CI: 8c1967a compiled on iPhone 13 mini and iPhone 17. All 40 selected model/cache tests and all 3 Home composer UI tests passed on each. Existing Tea checkout, free join, restricted creation, and pagination/return tests passed on each. The activity-form UI test initially failed on mini during opening (passed on the larger phone); the free-club test incorrectly restored the previous paid draft on both. The type picker now waits for actual sheet dismissal, and the free fixture explicitly selects Free. Earlier SwiftUI type-check timeout was fixed by splitting the Tea body into small composed expressions.
+- Final app source 9269302, run 44082980725: iPhone 13 mini compiled and all six selected Tea UI tests passed (form routing for all four types, retained Paid Club choice, confirmed free Club publication returning to Tea and absent from Home, existing event checkout, free join, restricted creation, pagination and back restoration). iPhone 17 compiled; four existing route/access/pagination tests passed. The combined four-form test exceeded its 180-second lifetime while cycling through four launches; no form assertion failed, but termination then timed out. The publication test inspected the composer before its asynchronous dismissal; the subsequent Tea row and Home exclusion assertions passed. Neither failed test result is counted as a pass.
+- Final follow-up 564c5b3 changes only UI tests: each form journey has its own XCTest lifetime, and publication waits for the composer to disappear before checking the destination. All five affected checks passed on iPhone 17 (179.6 seconds total) AND iPhone 13 mini (326.2 seconds total), zero failures. Run 44090377879 concluded SUCCESS. App/backend code is unchanged from 9269302. These are automation-suite durations, not measured product performance.
+- Native source wiring checks: 22 passed, 0 failed. git diff --check passed.
+
+Acceptance evidence
+1. Regular photo, video and carousel: actual publish/feed handlers with isolated storage; native Home eligibility and pagination tests; Home composer UI has no activity choices. These were not physical camera captures.
+2. Free Club, paid Club, Event, Meetup and Deal: actual publish/feed handlers with isolated storage verify canonical relationships, discovery, unchanged details and absence from Home. Native UI opens all four current forms and completes the free Club journey. Paid providers are mocked; no charge was attempted.
+3. Existing cover listings: PostgreSQL fixture removes 90 listing covers before pagination, retains records and ordinary media. Separate production-handler fixtures retain Details access and reject private/unapproved/blocked discovery; no real-user data changes.
+4. Caption mentions: ordinary media mentioning clubs/events stays eligible by type and relationships. Tea text-conversation entry/composer and implementation were preserved; conversation-specific UI tests were not rerun in this focused pass.
+
+Evidence locations
+- Prior native model/cache/Home UI run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44023811801
+- Final native Tea run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44082980725
+- Focused timing regression follow-up: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44090377879
+- Simulator screenshots (isolated fixtures): C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-home-tea-activities-20261117/
+  home-media-only-composer-mini.png
+  tea-create-club-mini.png
+  tea-create-event-mini.png
+  tea-create-meetup-mini.png
+  tea-create-deal-mini.png
+  tea-created-club-details-mini.png
+  tea-created-listing-details-mini.png
+  tea-created-listing-details-large.png
+  tea-create-club-large.png
+  tea-create-event-large.png
+  tea-create-meetup-large.png
+  tea-create-deal-large.png
+
+Limits
+No physical iPhone capture, actual Stripe transaction, hosted PostgREST integration test, migration/deployment or live-user creation was performed. Existing provider/payment readiness restrictions remain unchanged. Reservations and other existing types remain discoverable; Create offers only the types already authorized and implemented by Captro's creation-capabilities API. A future rollout must coordinate the app and API changes for filtering before pagination; this branch has not been deployed.
+
+Changed files
+backend-cf/src/home-posts.ts
+backend-cf/src/index.ts
+backend-cf/src/feed-pagination.ts
+backend-cf/src/tea.ts
+backend-cf/tests/home-posts.test.mjs
+backend-cf/tests/publish_home_trace.test.mjs
+backend-cf/tests/tea.test.mjs
+backend-cf/tests/captro_stamp_feed_guard.test.mjs
+ios_native/MIRA/Sources/MIRANative/Models/MIRAModels.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift
+ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift
+ios_native/MIRA/Sources/MIRANative/Services/MIRAAppCacheStore.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroFeedStabilityTests.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroCacheIsolationTests.swift
+ios_native/MIRA/LayoutUITests/TeaTests.swift
+ios_native/MIRA/LayoutUITests/ComposerCreationTests.swift
+docs/home-posts-tea-activities-20261117.txt
+
+Query reference
+The existing FK/unique relationships use PostgREST embedded null filters, documented at https://docs.postgrest.org/en/v12/references/api/resource_embedding.html#null-filtering-on-embedded-resources . No new foreign keys or schema cache reload are required by this patch.
