@@ -25,7 +25,7 @@ async function setup() {
   const professional = migration('20261115224938_professional_accounts_studio.sql');
   await db.exec(professional.slice(professional.indexOf('create function public.captro_professional_active'),professional.indexOf('create function public.captro_professional_mutate')));
   await db.exec('revoke all on function captro_professional_active(text,text) from public; grant execute on function captro_professional_active(text,text) to service_role;');
-  for (const file of ['20261114230954_tea_conversations.sql','20261115014511_tea_sentence_replies.sql','20261117140557_tea_note_actions.sql']) await db.exec(migration(file));
+  for (const file of ['20261114230954_tea_conversations.sql','20261115014511_tea_sentence_replies.sql','20261117143031_tea_note_actions.sql']) await db.exec(migration(file));
   await db.exec('set role service_role');
   const rpc = async(name,body) => {
     assert.match(name,/^captro_tea_[a-z_]+$/);
