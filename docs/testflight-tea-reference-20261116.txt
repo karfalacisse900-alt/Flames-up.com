@@ -1,0 +1,62 @@
+CAPTRO TESTFLIGHT — TEA REFERENCE UPDATE
+User authorized TestFlight upload after the Tea implementation report.
+Candidate: 1.0.1 (699.1), bundle com.captro.app.
+Branch: fix/tea-reference-polish-20261116
+Archive source: 254e70c40f1759d921e9b9f153cef8fb775e69b0
+Native tree: 1e5c3cd7ff2048c805bc09029ac3d051e59b65a0
+Release: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43985396472
+Dispatched November 16, 2026, 7:10 PM America/New_York (00:10 UTC November 17).
+
+Tea source and test evidence are recorded in tea-reference-polish-20261116.txt.
+Final source Debug/tests and Release compile passed in run 43981012323.
+Final dual-phone runtime run 43981016529 passed and matches the exact native tree.
+The release verifier previously supported only the older stamps workflow. Added
+recognition of native-polish evidence: both successful phone jobs, successful actual
+runtime step, unexpired artifacts, matching source SHA/run ID/tree for BOTH phones.
+Compile-only, failed/missing phone jobs, mismatched sources and expired evidence fail.
+No runtime deferral used. All existing signing/auth/live schema checks remain required.
+8 release-gate regression tests passed. Real downloaded dual-phone evidence verified.
+Files changed for this release integration:
+- scripts/app-store/verify-native-validation.mjs
+- backend-cf/tests/native_release_gate.test.mjs
+- docs/testflight-tea-reference-20261116.txt (this record)
+No additional iOS code changed after the tested Tea source.
+
+Pre-upload Apple read-only run 43985402064:
+697.1 is VALID / IN_BETA_TESTING, assigned to Captro private and Captro private2.
+Both are internal groups with automatic distribution. No external release performed.
+Signing profile is ACTIVE; existing Associated Domains capability remains absent.
+This Tea-only release does not claim to configure Universal Links or enable payments.
+
+FINAL RELEASE — SUCCESS
+Archive, Release authentication validation and IPA export passed.
+14 security schema checks, five reliability assertions, three protected earnings
+views, Tea RLS/function protection, typed Tea API responses, anonymous write denial,
+and all 32 native backend schema prerequisites passed. No deployment/migration.
+Upload succeeded without errors at 2026-11-17 00:31:30 UTC (November 16, 7:31 PM NY).
+Delivery UUID: 184cb2c0-d010-4234-840c-8fb162c96dfb.
+IPA Info.plist verified: com.captro.app / 1.0.1 / 699.1.
+IPA SHA256: 70e688a83d4aaced5e68f97783554cbd00eabfa9396ffd867e24287e135d7fd4
+Artifact 14285848349: Captro-native-ios-ipa, 33,343,558 bytes.
+Artifact digest: c8606dfca23d5e3f204d6a23a40a2722d6a30a549b5a9969db6c4b19718124de
+Local IPA and logs: C:/Users/The-s/AppData/Local/Temp/captro-testflight-699-evidence
+
+TESTER AVAILABILITY VERIFIED
+At 2026-11-17 00:35:12 UTC (November 16, 7:35 PM America/New_York), Apple's
+build resource reports 699.1 processingState VALID, internalBuildState IN_BETA_TESTING,
+expired=false; assigned to Captro private and Captro private2. Both internal groups
+have automatic distribution enabled. These existing testers can install the update.
+Status: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43988489110/attempts/2
+The separate upload resource still said PROCESSING in that same read; tester
+availability is confirmed by the build's VALID/IN_BETA_TESTING state and assignments.
+External state READY_FOR_BETA_SUBMISSION; no external review or App Store release.
+
+Commands:
+node --test backend-cf/tests/native_release_gate.test.mjs
+node scripts/app-store/verify-native-validation.mjs (43981016529 and exact branch/tree)
+gh workflow run native-ios-testflight.yml --ref fix/tea-reference-polish-20261116 -f validation_run=43981016529
+gh workflow run native-ios-testflight.yml --ref fix/tea-reference-polish-20261116 -f read_testflight_status=true
+gh run rerun 43988489110
+
+No backend deployment, financial activation, signing-capability change or physical
+installation claim. This report-only commit does not change the archived native tree.
