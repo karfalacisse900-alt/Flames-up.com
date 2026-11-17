@@ -20287,6 +20287,10 @@ function teaDependencies(c: any, viewerId: string) {
   return {
     query: (table: string, input: Parameters<typeof supabaseAdminQueryRows>[2]) => supabaseAdminQueryRows(c, table, input),
     async access(postIds: string[], ownerIds: string[]) {
+      const ownerUUIDs = ownerIds.filter(id => isUuidText(id));
+      const ownerFilters: Record<string, string> = ownerUUIDs.length
+        ? { or: '(id.' + postgrestInFilter(ownerIds) + ',supabase_user_id.' + postgrestInFilter(ownerUUIDs) + ')' }
+        : { id: postgrestInFilter(ownerIds) };
       const [posts, owners, aliases] = await Promise.all([
         postIds.length ? supabaseAdminQueryRows(c, 'app_posts', {
           select: 'id,legacy_post_id,app_user_id,user_id,status,visibility,metadata',
@@ -20294,7 +20298,7 @@ function teaDependencies(c: any, viewerId: string) {
         }) : Promise.resolve([]),
         ownerIds.length ? supabaseAdminQueryRows(c, 'app_users', {
           select: 'id,supabase_user_id,is_private,metadata',
-          filters: { supabase_user_id: postgrestInFilter(ownerIds) }, limit: ownerIds.length,
+          filters: ownerFilters, limit: ownerIds.length,
         }) : Promise.resolve([]),
         viewerId ? supabaseRelatedInteractionUserIds(c, viewerId) : Promise.resolve([]),
       ]);
@@ -20321,7 +20325,7 @@ function teaDependencies(c: any, viewerId: string) {
         }
       }
       return { posts: new Map<string, any>(posts.map(row => [row.id, row])),
-        owners: new Map<string, any>(owners.map(row => [row.supabase_user_id, row])), blocked };
+        owners: new Map<string, any>(owners.flatMap(row => [[row.id, row], [row.supabase_user_id, row]])), blocked };
     },
     isActiveUser: (user: any) => supabaseUserStatus(user) === 'active',
     commerce: (purchasable: any) => commerceDetailsForPurchasable(c, purchasable, viewerId),

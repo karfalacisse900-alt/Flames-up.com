@@ -122,7 +122,7 @@ function businessTableAbsent(error: unknown) {
 function eligibility(candidate: Candidate, access: Access, deps: Dependencies, search: ReturnType<typeof scope>, now: number) {
   const { row, source } = candidate;
   if (!uuid.test(row.id)) return null;
-  const owner = access.owners.get(source === 'activity' ? row.creator_id : source === 'post' ? row.user_id : row.owner_id);
+  const owner = access.owners.get(source === 'activity' ? row.creator_id : source === 'post' ? row.user_id || row.app_user_id : row.owner_id);
   if (!owner || owner.is_private !== false || !deps.isActiveUser(owner)
     || access.blocked.has(owner.id) || access.blocked.has(owner.supabase_user_id)) return null;
   if (source === 'business') {
@@ -168,7 +168,7 @@ function item(candidate: Candidate, visible: NonNullable<ReturnType<typeof eligi
 function loadAccess(rows: Candidate[], deps: Dependencies) {
   return deps.access(
     [...new Set(rows.flatMap(candidate => candidate.source === 'activity' ? [candidate.row.post_id] : candidate.source === 'post' ? [candidate.row.id] : []))],
-    [...new Set(rows.map(candidate => candidate.source === 'activity' ? candidate.row.creator_id : candidate.source === 'post' ? candidate.row.user_id : candidate.row.owner_id).filter(Boolean))],
+    [...new Set(rows.map(candidate => candidate.source === 'activity' ? candidate.row.creator_id : candidate.source === 'post' ? candidate.row.user_id || candidate.row.app_user_id : candidate.row.owner_id).filter(Boolean))],
   );
 }
 

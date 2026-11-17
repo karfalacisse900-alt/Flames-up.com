@@ -106,21 +106,23 @@ test('legacy structured posts remain in Tea exactly once without creating commer
   const linked = f.activity(1, 'club');
   f.postRows.get(linked.post_id).post_type = 'club';
   const owner = f.owners.get(linked.creator_id);
+  f.owners.set(owner.id, owner);
   for (const [number, type, patch] of [
     [801, 'event', {}], [802, 'meetup', {}], [803, 'deal', {}],
     [804, 'general', { title: 'A normal photo mentions a club' }],
     [805, 'event', { visibility: 'private' }], [806, 'event', { metadata: { moderation_status: 'pending' } }],
     [807, 'event', { metadata: { creator_event: { endsAt: old } } }],
     [808, 'club', { status: 'removed' }],
+    [809, 'club', { user_id: null }],
   ]) f.postRows.set(id(number), { id: id(number), legacy_post_id: 'legacy-' + number, user_id: owner.supabase_user_id,
     app_user_id: owner.id, status: 'active', visibility: 'public', metadata: {}, post_type: type,
     title: 'Existing ' + type, content: 'Original writing', created_at: at, ...patch });
   assert.equal((await teaPage(f.deps, key, viewer, {}, now)).items.length, 1, 'Older clients receive only navigable sources');
   const result = await teaPage(f.deps, key, viewer, { includePosts: true }, now);
-  assert.deepEqual(result.items.map(row => row.kind), ['offer','meetup','event','club']);
+  assert.deepEqual(result.items.map(row => row.kind), ['club','offer','meetup','event','club']);
   const legacy = result.items.filter(row => row.destination.source === 'post');
-  assert.equal(legacy.length, 3);
-  assert.deepEqual(legacy.map(row => row.post.id), ['legacy-803','legacy-802','legacy-801']);
+  assert.equal(legacy.length, 4);
+  assert.deepEqual(legacy.map(row => row.post.id), ['legacy-809','legacy-803','legacy-802','legacy-801']);
   assert.ok(f.calls.some(([table, query]) => table === 'app_posts' && query.filters.listing === 'is.null'));
   f.blocked.add(owner.id);
   assert.equal((await teaPage(f.deps, key, viewer, { includePosts: true }, now)).items.length, 0);
