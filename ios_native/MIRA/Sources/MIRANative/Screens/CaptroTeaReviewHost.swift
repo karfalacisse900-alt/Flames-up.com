@@ -7,14 +7,6 @@ struct CaptroTeaReviewHost: View {
 
   var body: some View {
     MIRANativeRootView(reviewSession: context.session, api: context.api)
-      .overlay(alignment: .bottomLeading) {
-        if ProcessInfo.processInfo.arguments.contains("--tea-avatar-fixture") {
-          VStack {
-            Button("Recheck access") { context.api.teaConversations.invalidate() }.accessibilityIdentifier("tea.test.invalidate")
-            TeaReviewRequestCounter()
-          }.padding()
-        }
-      }
       .environment(\.captroStartupReducedMotion, true)
       .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
   }

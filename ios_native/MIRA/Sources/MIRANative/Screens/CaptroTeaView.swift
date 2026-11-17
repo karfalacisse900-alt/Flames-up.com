@@ -213,6 +213,16 @@ enum CaptroTeaPalette: String {
         .accessibilityHidden(section != "Conversations")
         }
       }.background(MIRATheme.Color.appBackground)
+      #if DEBUG
+      .overlay(alignment: .bottomLeading) {
+        if ProcessInfo.processInfo.arguments.contains("--tea-avatar-fixture") {
+          VStack {
+            Button("Recheck access") { api.teaConversations.invalidate() }.accessibilityIdentifier("tea.test.invalidate")
+            TeaReviewRequestCounter()
+          }.padding()
+        }
+      }
+      #endif
       .navigationTitle("Tea")
       .miraNavigationSurface()
       .navigationBarTitleDisplayMode(.inline)
