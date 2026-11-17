@@ -7,18 +7,17 @@ enum CaptroTeaStyle {
     traits.userInterfaceStyle == .dark ? UIColor(red: 0.73, green: 0.58, blue: 1, alpha: 1) : UIColor(red: 0.43, green: 0.16, blue: 0.78, alpha: 1)
   })
   static let tint = accent.opacity(0.08)
+  static let separator = Color(uiColor: UIColor { traits in
+    UIColor(white: traits.userInterfaceStyle == .dark ? 0.28 : 0.83, alpha: 1)
+  })
 }
 
 struct CaptroTeaHeading: View {
+  @Environment(\.colorScheme) private var colorScheme
   var body: some View {
-    VStack(spacing: 0) {
-      Text("Captro").font(.title3.weight(.semibold))
-      HStack(spacing: 4) { Text("Tea"); Image(systemName: "cup.and.saucer.fill") }.font(.caption.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
-    }
-    // The two-line brand sits in a fixed-height navigation bar. Keep it inside
-    // that bar while the actual conversation content follows the full text size.
-    .dynamicTypeSize(...DynamicTypeSize.xLarge)
-    .accessibilityElement(children: .combine).accessibilityIdentifier("tea.heading")
+    CaptroBrandLogo(onDark: colorScheme == .dark)
+      .frame(width: 86, height: 23)
+      .accessibilityIdentifier("tea.heading")
   }
 }
 
@@ -79,7 +78,7 @@ struct CaptroTeaConversationsList: View {
     List {
       if items.isEmpty {
         if loading && error == nil { ProgressView("Loading conversations…").listRowSeparator(.hidden).accessibilityIdentifier("tea.conversations.loading") }
-        else if error == nil, loaded { Text("No conversations yet. Choose New Tea post from the menu to start one.").font(.subheadline).foregroundStyle(.secondary).listRowSeparator(.hidden) }
+        else if error == nil, loaded { Text("No conversations yet. Tap Post to start one.").font(.subheadline).foregroundStyle(.secondary).listRowSeparator(.hidden) }
       }
       ForEach(items) { post in
         Button { open(post) } label: { CaptroTeaConversationRow(post: post) }
@@ -182,7 +181,7 @@ private struct CaptroTeaConversationRow: View {
         }
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 16)
-      .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }.contentShape(Rectangle())
+      .overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true) }.contentShape(Rectangle())
   }
   @ViewBuilder private var replyCount: some View {
     if let count = post.replyCount {

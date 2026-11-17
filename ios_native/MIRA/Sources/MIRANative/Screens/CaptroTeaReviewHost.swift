@@ -143,6 +143,9 @@ private final class TeaReviewProtocol: URLProtocol {
         }
       if shouldFail {
         status = 503
+      } else if ProcessInfo.processInfo.arguments.contains("--tea-nearby-fixture"),
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "city" && $0.value == "new york" }) == true {
+        payload = ["items": [entry(3)]]
       } else if URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "city" }) == true {
         // Reproduce live eligible clubs with no matching canonical city. A
         // profile location must not secretly become a discovery filter.

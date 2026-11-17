@@ -7,9 +7,11 @@ final class TeaConversationTests: XCTestCase {
     app.launchArguments = ["--captro-design-quality-test", "--captro-tea-review", "--tea-request-counts"] + extra
     app.launch()
     XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 20))
+    XCTAssertFalse(app.buttons["home.inbox"].exists)
     app.buttons["home.tea"].tap()
     XCTAssertTrue(row(101, app).waitForExistence(timeout: 10))
-    XCTAssertTrue(app.buttons["tea.menu"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["tea.compose"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["tea.menu"].exists)
     return app
   }
   private func row(_ n: Int, _ app: XCUIApplication) -> XCUIElement {
@@ -33,6 +35,22 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertGreaterThan(preview.frame.width, app.frame.width * 0.65, "Reply count must not constrain the preview column")
     XCTAssertLessThanOrEqual(preview.frame.height, 48)
     XCTAssertFalse(app.staticTexts["Conversations"].exists)
+    let heading = app.images["tea.heading"]
+    XCTAssertTrue(heading.exists, "Tea uses the bundled Captro symbol and outlined wordmark")
+    XCTAssertEqual(heading.frame.width, 86, accuracy: 1)
+    XCTAssertEqual(heading.frame.height, 23, accuracy: 1)
+    XCTAssertFalse(app.staticTexts["Tea"].exists)
+    XCTAssertGreaterThanOrEqual(app.buttons["tea.compose"].frame.height, 44)
+    // Check the actual row separator pixels, not just the presence of a view.
+    let screenshot = app.screenshot().image.cgImage!
+    let scale = CGFloat(screenshot.width) / app.frame.width
+    let strip = screenshot.cropping(to: CGRect(x: first.frame.midX * scale,
+      y: (first.frame.maxY - 0.5) * scale, width: 3, height: 1))!
+    var separator = [UInt8](repeating: 0, count: 4)
+    let separatorContext = CGContext(data: &separator, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    separatorContext.draw(strip, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+    XCTAssertTrue((195...225).contains(Int(separator[0])), "Tea rows need a visible fine divider; got \(separator)")
     let rendered = NSPredicate { _, _ in
       let image = app.screenshot().image
       guard let cg = image.cgImage else { return false }
@@ -95,7 +113,6 @@ final class TeaConversationTests: XCTestCase {
 
   func testComposeEditCancelAndAuthorOnlyLinks() {
     let app=launch()
-    app.buttons["tea.menu"].tap()
     app.buttons["tea.compose"].tap()
     let title=input("tea.compose.title",app)
     XCTAssertTrue(title.waitForExistence(timeout: 8)); title.tap(); title.typeText("A new Tea discussion")

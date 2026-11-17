@@ -151,8 +151,12 @@ enum CaptroTeaPalette: String {
             .font(.caption).foregroundStyle(.secondary)
           Spacer()
           if !city.isEmpty { Button("Change city") { cityDraft = city; choosingCity = true }.font(.caption).frame(minHeight: 44) }
+          else if filter != "Activities" {
+            Button("All activities") { showAllActivities() }
+              .font(.caption).frame(minHeight: 44).accessibilityIdentifier("tea.activities")
+          }
         }.padding(.horizontal, 16).padding(.bottom, 4) }
-        Divider()
+        Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true)
         ZStack {
       List {
         // Keep the inactive list mounted for scroll restoration, but do not
@@ -168,7 +172,7 @@ enum CaptroTeaPalette: String {
         }
         ForEach(discoveryEntries) { entry in
           listRow {
-            Button { if path.isEmpty { path.append(entry) } } label: { CaptroTeaRow(entry: entry) }
+            Button { if path.isEmpty { path.append(entry) } } label: { CaptroTeaRow(entry: entry, nearby: !city.isEmpty) }
               .background(CaptroFeedViewportMarker(owner: api.teaDetails.listViewport,
                 postID: entry.id, feed: activityViewportKey).allowsHitTesting(false))
               .buttonStyle(.plain)
@@ -232,10 +236,10 @@ enum CaptroTeaPalette: String {
       .toolbar {
         ToolbarItem(placement: .principal) { CaptroTeaHeading() }
         if #available(iOS 26.0, *) {
-          ToolbarItem(placement: .topBarTrailing) { teaMenu }.sharedBackgroundVisibility(.hidden)
+          ToolbarItem(placement: .topBarTrailing) { postButton }.sharedBackgroundVisibility(.hidden)
           ToolbarItem(placement: .topBarLeading) { backButton }.sharedBackgroundVisibility(.hidden)
         } else {
-          ToolbarItem(placement: .topBarTrailing) { teaMenu }
+          ToolbarItem(placement: .topBarTrailing) { postButton }
           ToolbarItem(placement: .topBarLeading) { backButton }
         }
       }
@@ -284,17 +288,15 @@ enum CaptroTeaPalette: String {
     #endif
   }
 
-  private var teaMenu: some View {
-    Menu {
-      Button { if viewerID == nil { signIn() } else { composing = true } } label: {
-        Label("New Tea post", systemImage: "square.and.pencil")
-      }.accessibilityIdentifier("tea.compose")
-      Button("Conversations") { selectFilter("All") }
-      Button("All clubs, events & activities") { switchCity(""); filter = "Activities"; section = "Clubs & Events" }
-        .accessibilityIdentifier("tea.activities")
-    } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-      .accessibilityLabel("Tea menu").accessibilityIdentifier("tea.menu")
-      .foregroundStyle(MIRATheme.Color.textPrimary)
+  private var postButton: some View {
+    Button { if viewerID == nil { signIn() } else { composing = true } } label: {
+      Text("Post").font(.subheadline.weight(.semibold))
+        .padding(.horizontal, 8).frame(minWidth: 44, minHeight: 44)
+    }.accessibilityLabel("Post to Tea").accessibilityIdentifier("tea.compose")
+      .foregroundStyle(CaptroTeaStyle.accent)
+  }
+  private func showAllActivities() {
+    switchCity(""); filter = "Activities"; section = "Clubs & Events"
   }
   private var backButton: some View {
     Button(action: close) {
@@ -390,27 +392,29 @@ enum CaptroTeaPalette: String {
 
 private struct CaptroTeaRow: View {
   let entry: CaptroTeaEntry
+  let nearby: Bool
 
   var body: some View {
     HStack(spacing: 10) {
       TeaIcon(symbol: entry.symbol, palette: entry.palette)
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 8) {
-          Text(entry.name).font(.subheadline.weight(.bold)).lineLimit(1).fixedSize(horizontal: true, vertical: false)
-          Spacer(minLength: 4)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(entry.name).font(.headline).fixedSize(horizontal: false, vertical: true)
+        TeaLinkFlow(spacing: 5) {
           TeaTimestamp(entry: entry)
+          Text("·").font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+          Text(entry.typeLabel).font(.footnote).foregroundStyle(CaptroTeaStyle.accent)
+          if nearby {
+            Text("·").font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            Text("Nearby").font(.footnote).foregroundStyle(CaptroTeaStyle.accent)
+          }
         }
-        VStack(alignment: .leading, spacing: 3) {
-          Text(entry.name).font(.subheadline.weight(.bold)).fixedSize(horizontal: false, vertical: true)
-          TeaTimestamp(entry: entry)
-        }.frame(maxWidth: .infinity, alignment: .leading)
-      }
+      }.frame(maxWidth: .infinity, alignment: .leading)
       Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).accessibilityHidden(true)
     }
     .foregroundStyle(MIRATheme.Color.textPrimary)
     .padding(.vertical, 16)
     .frame(minHeight: 64)
-    .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
+    .overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true) }
     .contentShape(Rectangle())
   }
 }

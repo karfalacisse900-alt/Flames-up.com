@@ -8,6 +8,7 @@ final class TeaTests: XCTestCase {
     let tea = app.buttons["home.tea"]
     XCTAssertTrue(tea.waitForExistence(timeout: 20), app.debugDescription)
     XCTAssertTrue(app.buttons["home.create.post"].exists)
+    XCTAssertFalse(app.buttons["home.inbox"].exists)
     XCTAssertFalse(app.tabBars.buttons["Tea"].exists)
     tea.tap()
     selectListings(app)
@@ -15,8 +16,8 @@ final class TeaTests: XCTestCase {
   }
 
   private func selectListings(_ app: XCUIApplication) {
-    XCTAssertTrue(app.buttons["tea.menu"].waitForExistence(timeout: 8), app.debugDescription)
-    app.buttons["tea.menu"].tap()
+    XCTAssertTrue(app.buttons["tea.compose"].waitForExistence(timeout: 8), app.debugDescription)
+    app.buttons["tea.filter.clubs"].tap()
     let activities = app.buttons["tea.activities"]
     XCTAssertTrue(activities.waitForExistence(timeout: 5)); activities.tap()
 
@@ -47,9 +48,11 @@ final class TeaTests: XCTestCase {
     let app = launch()
     app.buttons["tea.filter.clubs"].tap()
     XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 8))
+    XCTAssertTrue(row(1, in: app).staticTexts["Club"].exists)
     XCTAssertFalse(row(3, in: app).exists)
     app.buttons["tea.filter.events"].tap()
     XCTAssertTrue(row(3, in: app).waitForExistence(timeout: 8))
+    XCTAssertTrue(row(3, in: app).staticTexts["Event"].exists)
     XCTAssertFalse(row(1, in: app).exists)
     app.buttons["tea.filter.following"].tap()
     XCTAssertTrue(app.alerts["Following"].waitForExistence(timeout: 5))
@@ -67,6 +70,31 @@ final class TeaTests: XCTestCase {
     XCTAssertTrue(app.buttons["tea.conversation.00000000-0000-4000-8000-000000000101"].waitForExistence(timeout: 8))
     XCTAssertFalse(row(1, in: app).isHittable)
     attach("tea-reference-list", from: app)
+  }
+
+  func testContextLabelsUseActualTypeAndExplicitCityResults() {
+    let app = launch(["--tea-nearby-fixture"])
+    XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 8))
+    XCTAssertTrue(row(1, in: app).staticTexts["Club"].exists)
+    XCTAssertTrue(row(2, in: app).staticTexts["Meetup"].exists)
+    XCTAssertTrue(row(3, in: app).staticTexts["Event"].exists)
+    XCTAssertTrue(row(5, in: app).staticTexts["Offer"].exists)
+    XCTAssertFalse(row(1, in: app).staticTexts["Nearby"].exists)
+    attach("tea-real-activity-context", from: app)
+    app.buttons["tea.filter.nearby"].tap()
+    let city = app.alerts["Nearby activities"].textFields.firstMatch
+    XCTAssertTrue(city.waitForExistence(timeout: 5)); city.tap(); city.typeText("New York")
+    app.alerts["Nearby activities"].buttons["Show activities"].tap()
+    XCTAssertTrue(row(3, in: app).waitForExistence(timeout: 8))
+    XCTAssertTrue(row(3, in: app).staticTexts["Event"].exists)
+    XCTAssertTrue(row(3, in: app).staticTexts["Nearby"].exists)
+    XCTAssertFalse(row(1, in: app).exists, "An unrelated city result must not leak from the previous list")
+    attach("tea-explicit-city-context", from: app)
+    app.buttons["tea.filter.all"].tap()
+    let post = app.buttons["tea.conversation.00000000-0000-4000-8000-000000000101"]
+    XCTAssertTrue(post.waitForExistence(timeout: 8))
+    XCTAssertFalse(post.staticTexts["Nearby"].exists, "An ordinary conversation has no asserted city association")
+    XCTAssertFalse(post.staticTexts["Event"].exists)
   }
 
   private func tapRow(_ number: Int, source: String = "activity", in app: XCUIApplication) {

@@ -1521,14 +1521,6 @@ public struct MainFeedView: View {
         guard !Task.isCancelled else { return }
         updateHomeStories(homeStories)
       }
-      if inboxModel != nil {
-        Button {
-          if isGuest { signInForTea?() } else { showsInbox = true }
-        } label: {
-          Image(systemName: "tray").font(.system(size: 20, weight: .medium))
-            .frame(width: 44, height: 44)
-        }.buttonStyle(.plain).accessibilityLabel("Messages").accessibilityIdentifier("home.inbox")
-      }
     }
     .frame(height: 78)
     .background(MIRATheme.Color.surface)
