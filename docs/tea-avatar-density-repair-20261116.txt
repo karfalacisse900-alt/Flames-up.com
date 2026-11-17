@@ -1,0 +1,120 @@
+TEA AVATAR / DENSITY / INVALIDATION REPAIR
+Branch: fix/tea-avatars-density-20261116
+Baseline: TestFlight 699.1 native tree, after release report 3fb6441.
+Verified source: e47c1c202445f7b8bdfe18786696ca7a3aaa257e (implementation 7a11e9c; fixture host 6d6839d;
+inactive activity status 5d97b14; accessible navigation branding e47c1c2).
+Verified native tree: 4d6dfc6815d34dea757adbbad539e3ffaeab687a.
+
+Confirmed causes:
+- Tea RPC projections exposed author id/name/username, not the avatar URL. The
+  native author type also lacked that field, so list/reply/club avatars always
+  displayed initials even when the account had a photo.
+- The title/count ViewThatFits layout could retain an intrinsic-width title row
+  that constrained the entire body column. This wasted the space below counts.
+- Access invalidation cleared the conversation list and set a retry message but
+  neither reset the old loading flag nor initiated a replacement read. This could
+  display Loading Tea alongside Retry. The screenshot does not identify the exact
+  account/access event that triggered it on that physical phone.
+
+Changes:
+- One bounded, deduplicated lookup of id/avatar_url/metadata for authors ALREADY
+  authorized by the Tea RPC. Only photoURL is added to the author response. No
+  user-row exposure, per-row profile calls, migration, new downloader or public cache.
+- Optional photoURL decoded by native model and passed to existing RemoteAvatar
+  in conversation rows, details, replies and club messages. Initials only if absent.
+- Full-width preview beneath the title/reply count; 48pt avatars, 16pt preview,
+  compact metadata; Tea cue after the label; scaled compact filters; redundant
+  Conversations section label removed. Other screens/navigation unchanged.
+- Invalidation cancels the obsolete presentation request and starts a fresh read
+  while active; tokens prevent old responses/cleanup from overwriting the new load.
+  A loading indicator is never shown alongside a failure message.
+- The retained, inactive activity list no longer creates its initial loading/error
+  status while Conversations is selected. It stays mounted for scroll restoration.
+- Screenshot inspection caught the two-line brand exceeding the navigation bar
+  at accessibility text sizes. Only that brand is capped at xLarge; conversation
+  content retains full Dynamic Type. A new <=44pt header assertion prevents it.
+
+Files changed relative to 3fb6441:
+backend-cf/src/index.ts
+backend-cf/src/tea-authors.ts (new)
+backend-cf/src/tea-clubs.ts
+backend-cf/src/tea-conversations.ts
+backend-cf/tests/tea-authors.test.mjs (new)
+ios_native/MIRA/LayoutUITests/TeaConversationTests.swift
+ios_native/MIRA/Sources/MIRANative/Models/CaptroTeaConversation.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaView.swift
+docs/tea-avatar-density-repair-20261116.txt
+
+Checks:
+- npx tsc --noEmit: passed.
+- npm test: 436 passed, 0 failed, 0 skipped (28.01s).
+- Focused Tea backend suite: 13 passed, including author batch shape, signed URL
+  preservation, reply and club HTTP enrichment, denial before lookup, and existing
+  private/blocked/membership permissions.
+- git diff --check: passed.
+- Worker bundle: npx wrangler deploy --env production --dry-run --outdir <temp>
+  passed. This was a dry run, not a deployment.
+- Native unsigned compile: run 43990455345 passed on 7a11e9c: Debug app/tests
+  build-for-testing and optimized Release iPhone build. Ten actual Tea model
+  checks and ten refresh-policy host checks passed, with baseline/mutation proof.
+- Initial UI run 43990459948 cancelled: debug invalidation probe needed moving
+  inside Tea's full-screen presentation. Run 43991431581 small-phone result:
+  actual image pixels, geometry and reload count passed, but the global absence
+  of Loading Tea failed because the inactive activity list still created that
+  status. Large text and quiet return tests passed. Superseded large job cancelled.
+  Fixed the inactive status in 5d97b14; assertions were not weakened.
+- Run 43994942032 passed: three tests each on iPhone 17 (93.251 seconds) and
+  iPhone 13 mini (119.367 seconds), six executions / zero failures. Visual
+  inspection found the oversized accessibility brand. Added the fix and assertion.
+- Final dual-phone UI: run 43997340266 PASSED on e47c1c2. Three tests each on
+  iPhone 13 mini (120.949 seconds) and iPhone 17 (117.644 seconds): six executions,
+  zero failures. Final app and test target compiled successfully on both runners.
+  New test requires actual red fixture
+  pixels through the production image loader, full-width preview, and exactly one
+  new list request after invalidation; also runs fresh return and large-text links.
+  Red avatar images are isolated deterministic test pixels, not production avatars.
+
+Evidence:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43997340266
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/43990455345
+The final run records sourceSHA and nativeTree and contains the .xcresult bundles,
+raw screenshots and logs. Before reference: the user's supplied real-device
+Photo 2 / Photo 3 screenshots. Final raw screenshots were inspected and copied to:
+C:/Users/The-s/.codex/visualizations/2026/09/12/01a0964a-d268-7e10-88a3-98eecf854588/captro-tea-avatar-repair-20261116/
+  tea-list-mini-test-images.png
+  tea-list-large-test-images.png
+  tea-accessibility-mini.png
+  tea-accessibility-large.png
+The screenshots include explicitly gated debug request probes. The red circles
+are downloaded test-image pixels, not the final artwork or substitute portraits.
+The accessibility screenshots are scrolled to the inline links by the UI test.
+
+Native command used by the existing no-deployment workflow:
+xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug
+  -destination 'platform=iOS Simulator,id=<isolated device>'
+  -parallel-testing-enabled NO -test-timeouts-enabled YES
+  -maximum-test-execution-time-allowance 180 -derivedDataPath <temp>/PolishBuild
+  -resultBundlePath <temp>/Polish.xcresult
+  -only-testing:CaptroLayoutUITests/TeaConversationTests/testAvatarPixelsPreviewWidthAndAutomaticAccessReload
+  -only-testing:CaptroLayoutUITests/TeaConversationTests/testQuietLinksFollowReplyAndFreshReturn
+  -only-testing:CaptroLayoutUITests/TeaConversationTests/testLargeTextWrapsLinksWithoutHidingReply
+  CODE_SIGNING_ALLOWED=NO test
+
+Limits / preserved behavior:
+- No physical iPhone test or live account photo request was performed. The exact
+  access event/network failure in the supplied screenshot remains unconfirmed.
+- Accounts with no saved photo still show initials. No fabricated avatars, counts,
+  verification, categories or production posts were added.
+- Following filter still reports its pre-existing unsupported data source; Nearby
+  still uses the existing chosen-city activity flow. This repair adds no filters.
+- Existing Tea full-screen navigation remains; no duplicate bottom navigation.
+- Home, Capture, Profile layouts, Support/payment gates, memberships, ordering,
+  permissions, content and database schema are unchanged. No dependency added.
+
+No production deployment or new TestFlight upload performed for this repair.
+The previously released 699.1 does not contain it; the physical phone's installed
+version was not independently checked. App and matching Worker changes must both
+ship for real production photos; changing only Swift cannot supply absent API data.
