@@ -124,9 +124,12 @@ test('legacy edits/replies keep action and borough; stale action updates conflic
 test('real Notes HTTP routes enforce identity, approval, recipient reads and exact submission shape',async()=>{
   const {db,rpc}=await setup();try {
     const app=new Hono();
+    let listingState='active';
     const auth=async(c,next)=>c.req.header('x-test-actor') ? next() : c.json({},401);
     mountTeaConversations(app,{auth,optionalAuth:async(c,next)=>next(),viewer:async c=>c.req.header('x-test-actor')||'',
-      limit:async()=>null,restriction:async()=>null,rpc:async(c,name,body)=>rpc(name,body)});
+      limit:async()=>null,restriction:async()=>null,rpc:async(c,name,body)=>rpc(name,body),
+      listings:async(c,ids)=>new Map(ids.map(key=>[key,{state:key===id(88)?listingState:'unavailable',
+        ...(listingState==='active' && key===id(88)?{entry:{id:key,destination:{source:'activity',id:key}}}:{})}]))});
     const request=(path,actor='agency',method='GET',data)=>app.request(path,{method,headers:{...(actor?{'x-test-actor':actor}:{}),'Content-Type':'application/json'},...(data?{body:JSON.stringify(data)}:{})},{JWT_SECRET:'isolated-note-cursor-key-not-production'});
     assert.equal((await (await request('/tea/conversations/capabilities')).json()).canCreateForms,true);
     assert.equal((await (await request('/tea/conversations/capabilities','reader')).json()).canCreateForms,false);
@@ -141,5 +144,36 @@ test('real Notes HTTP routes enforce identity, approval, recipient reads and exa
     assert.equal((await request('/tea/conversations/'+id(1)+'/applications','reader','POST',{...answers,recipient_id:'other'})).status,400);
     const resolved=await (await request('/tea/conversations/'+id(1)+'/action','reader')).json();
     assert.equal(resolved.note.applicationSubmitted,true);assert.equal(resolved.note.author.id,'agency');
+    const deal={request_id:id(2),title:'Queens opening',body:'Visit our existing offer.',links:[],borough:'Queens',
+      primary_action:{kind:'listing',label:'View deal',listing_id:id(88)}};
+    assert.equal((await request('/tea/conversations','agency','POST',{...deal,primary_action:{...deal.primary_action,listing_id:id(89)}})).status,400);
+    assert.equal((await request('/tea/conversations','agency','POST',deal)).status,200);
+    const active=await (await request('/tea/conversations/'+id(2)+'/action','reader')).json();
+    assert.equal(active.listing.destination.id,id(88));
+    listingState='ended';
+    const expired=await (await request('/tea/conversations/'+id(2)+'/action','reader')).json();
+    assert.equal(expired.note.primaryAction.state,'ended');assert.equal(expired.listing,null);
+    listingState='unavailable';
+    const hidden=await (await request('/tea/conversations/'+id(2)+'/action','reader')).json();
+    assert.equal(hidden.note.primaryAction.state,'unavailable');assert.equal(hidden.listing,null);
+    const technology={request_id:id(3),title:'Test our idea',body:'A plain invitation.',links:[],primary_action:{kind:'external',label:'Join the test',url:'https://example.com/signup'}};
+    assert.equal((await request('/tea/conversations','reader','POST',technology)).status,200);
+    const external=await (await request('/tea/conversations/'+id(3)+'/action','other')).json();
+    assert.equal(external.note.primaryAction.url,'https://example.com/signup');assert.equal(external.note.borough,null);
+  }finally{await db.close();}
+});
+
+test('private recipient pages paginate stably and a banned recipient cannot read submissions',async()=>{
+  const {db,write,submit,list}=await setup();try {
+    await write('agency','create',id(1),note({primary_action:form}));
+    await db.exec('reset role');
+    for(let n=0;n<24;n++) await db.query('insert into app_users(id,full_name,username) values($1,$1,$1)',['fixture-'+n]);
+    await db.exec('set role service_role');
+    for(let n=0;n<24;n++) await submit('fixture-'+n,id(1),application({request_id:id(300+n)}));
+    const first=await list('agency',id(1));assert.equal(first.length,21);
+    const last=first[19];const next=await list('agency',id(1),{p_before:last.createdAt,p_boundary:last.id});
+    assert.equal(next.length,4);assert.equal(new Set([...first.slice(0,20),...next].map(r=>r.id)).size,24);
+    await db.exec("reset role;update app_users set metadata='{\"status\":\"suspended\"}' where id='agency';set role service_role;");
+    await assert.rejects(list('agency',id(1)),/FORBIDDEN/);
   }finally{await db.close();}
 });
