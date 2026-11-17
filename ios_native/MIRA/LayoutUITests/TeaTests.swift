@@ -35,7 +35,9 @@ final class TeaTests: XCTestCase {
       XCTAssertTrue(create.waitForExistence(timeout: 8)); create.tap()
       let choice = app.buttons[name]
       XCTAssertTrue(choice.waitForExistence(timeout: 8)); choice.tap()
-      XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 10), app.debugDescription)
+      guard app.textFields[field].waitForExistence(timeout: 20) else {
+        XCTFail("Existing \(name) form did not open: " + app.debugDescription); return
+      }
       XCTAssertFalse(app.buttons["Photos & videos"].exists, "No regular post prerequisite")
       if name == "Club" {
         XCTAssertTrue(app.buttons["Free"].exists)
@@ -53,6 +55,10 @@ final class TeaTests: XCTestCase {
     XCTAssertTrue(app.buttons["Club"].waitForExistence(timeout: 8)); app.buttons["Club"].tap()
     let name = app.textFields["Club name"]
     XCTAssertTrue(name.waitForExistence(timeout: 10)); name.tap(); name.typeText("Isolated new club")
+    // Restored drafts keep their real access settings. This journey creates a
+    // free club explicitly, independent of the paid-choice fixture above.
+    app.buttons["Free"].tap()
+    XCTAssertTrue(app.navigationBars["Club"].buttons["Done"].isEnabled)
     app.navigationBars["Club"].buttons["Done"].tap()
     XCTAssertTrue(app.buttons["composer.intent"].waitForExistence(timeout: 8))
     app.buttons["composer.intent"].tap()

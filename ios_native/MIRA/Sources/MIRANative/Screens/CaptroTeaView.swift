@@ -90,6 +90,7 @@ enum CaptroTeaPalette: String {
   @State private var composing = false
   @State private var created: CaptroTeaConversation?
   @State private var creatingActivity: CaptroStampKind?
+  @State private var pendingActivity: CaptroStampKind?
   @State private var createdActivity: MIRAPost?
   @State private var activityChoices: [CaptroStampKind] = []
   @State private var choosingActivity = false
@@ -150,12 +151,7 @@ enum CaptroTeaPalette: String {
 
   private var activityPresentation: some View {
     routedContent
-      .confirmationDialog("Create activity", isPresented: $choosingActivity, titleVisibility: .visible) {
-        ForEach(activityChoices) { kind in
-          Button(kind.displayName) { creatingActivity = kind }
-        }
-        Button("Cancel", role: .cancel) {}
-      }
+      .sheet(isPresented: $choosingActivity, onDismiss: openSelectedActivity) { activityTypePicker }
       .fullScreenCover(item: $creatingActivity, onDismiss: finishActivityCreation) { kind in
         CreatePostNativeView(api: api, activityType: kind.rawValue,
           onCreated: { createdActivity = $0 }, onClose: { creatingActivity = nil })
@@ -184,9 +180,34 @@ enum CaptroTeaPalette: String {
       .onChange(of: viewerID) { _, _ in
         requestID = nil; loading = false; citySnapshots = [:]; city = ""; filter = "All"; section = "Conversations"
         path = NavigationPath(); entries = []; cursor = nil; didLoad = false; receivedAt = nil; created = nil; composing = false
-        creatingActivity = nil; createdActivity = nil; activityChoices = []; choosingActivity = false; creationError = nil
+        creatingActivity = nil; pendingActivity = nil; createdActivity = nil; activityChoices = []; choosingActivity = false; creationError = nil
         api.teaConversations.invalidate()
       }
+  }
+
+  private var activityTypePicker: some View {
+    NavigationStack {
+      List(activityChoices) { kind in
+        Button(kind.displayName) {
+          pendingActivity = kind
+          choosingActivity = false
+        }.frame(minHeight: 44)
+      }
+      .navigationTitle("Create activity")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar { ToolbarItem(placement: .cancellationAction) {
+        Button("Cancel") { pendingActivity = nil; choosingActivity = false }
+      } }
+    }
+    .presentationDetents([.medium])
+    .tint(CaptroTeaStyle.accent)
+  }
+
+  private func openSelectedActivity() {
+    // Wait for the type sheet's actual dismissal, not a guessed animation delay.
+    guard viewerID != nil, let kind = pendingActivity else { return }
+    pendingActivity = nil
+    creatingActivity = kind
   }
 
   private var routedContent: some View {
