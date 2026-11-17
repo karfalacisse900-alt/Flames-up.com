@@ -109,7 +109,24 @@ struct CaptroTeaNoteDestinationView: View {
   var body: some View {
     NavigationStack {
       Form {
-        Section("Action") {
+        actionSection
+        if !allowedForms {
+          Section { Text(capabilityError ?? "Native application forms require an approved, active Creator or Business account. You can link to your own HTTPS form.").font(.footnote).foregroundStyle(.secondary) }
+        }
+        previewSection
+        Button("Remove action", role: .destructive) { save(nil); dismiss() }
+      }.scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
+        .navigationTitle("Note action").navigationBarTitleDisplayMode(.inline).miraNavigationSurface().tint(CaptroTeaStyle.accent)
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+          ToolbarItem(placement: .confirmationAction) { Button("Done") { save(action.input); dismiss() }.disabled(!action.valid).accessibilityIdentifier("tea.action.done") }
+        }
+        .onChange(of: action.kind) { _, kind in changeKind(kind) }
+        .task { await loadCapabilities() }
+    }
+  }
+  private var actionSection: some View {
+    Section("Action") {
           Picker("Type", selection: $action.kind) {
             Text("External link").tag("external")
             Text("Captro listing").tag("listing")
@@ -129,34 +146,37 @@ struct CaptroTeaNoteDestinationView: View {
             Toggle("Accepting applications", isOn: Binding(get: { action.accepting ?? true }, set: { action.accepting = $0 }))
             Text("Full name, availability, and optional portfolio link. Applications are private and only you can read them.").font(.footnote).foregroundStyle(.secondary)
           }
-        }
-        if !allowedForms {
-          Section { Text(capabilityError ?? "Native application forms require an approved, active Creator or Business account. You can link to your own HTTPS form.").font(.footnote).foregroundStyle(.secondary) }
-        }
-        Section("Preview") {
+    }
+  }
+  private var previewSection: some View {
+    Section("Preview") {
           Text(action.label.isEmpty ? "Add a short button label" : action.label).font(.subheadline.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
           if let link = action.url.flatMap(CaptroTeaLink.init), action.kind == "external" { Text(link.hostname).font(.caption).foregroundStyle(.secondary) }
           if let chosenListing, action.kind == "listing" { Text(chosenListing).font(.caption) }
-        }
-        Button("Remove action", role: .destructive) { save(nil); dismiss() }
-      }.scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
-        .navigationTitle("Note action").navigationBarTitleDisplayMode(.inline).miraNavigationSurface().tint(CaptroTeaStyle.accent)
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-          ToolbarItem(placement: .confirmationAction) { Button("Done") { save(action.input); dismiss() }.disabled(!action.valid).accessibilityIdentifier("tea.action.done") }
-        }
-        .onChange(of: action.kind) { _, kind in
-          action = CaptroTeaNoteAction(kind: kind, label: kind == "application" ? "Apply" : kind == "listing" ? "View listing" : "Open link",
-            url: kind == "external" ? "" : nil, heightRequested: kind == "application" ? false : nil, accepting: kind == "application" ? true : nil)
-        }
-        .task {
-          let scope = api.presentationScope
-          do {
-            struct Capabilities: Decodable { let canCreateForms: Bool }
-            let result: Capabilities = try await api.getFresh("/tea/conversations/capabilities")
-            guard scope == api.presentationScope, !Task.isCancelled else { return }; allowedForms = result.canCreateForms
-          } catch { if scope == api.presentationScope { capabilityError = "Couldn’t check form creation access. Reopen Add action to retry. External links and listings remain available." } }
-        }
+    }
+  }
+  private func changeKind(_ kind: String) {
+    let label: String
+    switch kind {
+    case "application": label = "Apply"
+    case "listing": label = "View listing"
+    default: label = "Open link"
+    }
+    action = CaptroTeaNoteAction(kind: kind, label: label,
+      url: kind == "external" ? "" : nil,
+      heightRequested: kind == "application" ? false : nil,
+      accepting: kind == "application" ? true : nil)
+  }
+  private func loadCapabilities() async {
+    struct Capabilities: Decodable { let canCreateForms: Bool }
+    let scope = api.presentationScope
+    do {
+      let result: Capabilities = try await api.getFresh("/tea/conversations/capabilities")
+      guard scope == api.presentationScope, !Task.isCancelled else { return }
+      allowedForms = result.canCreateForms
+    } catch {
+      guard scope == api.presentationScope, !Task.isCancelled else { return }
+      capabilityError = "Couldn’t check form creation access. Reopen Add action to retry. External links and listings remain available."
     }
   }
 }
