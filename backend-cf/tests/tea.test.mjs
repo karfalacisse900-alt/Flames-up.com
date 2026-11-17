@@ -38,7 +38,12 @@ function fixture() {
   const deps = {
     async query(table, query) {
       calls.push([table, query]);
-      const time = table === 'app_purchasables' ? 'created_at' : 'location_updated_at';
+      const time = table === 'app_businesses' ? 'location_updated_at' : 'created_at';
+      if (table === 'app_posts') {
+        const allowed = query.filters.post_type.slice(4, -1).split(',');
+        rows.app_posts = [...postRows.values()].filter(post => allowed.includes(post.post_type)
+          && !rows.app_purchasables.some(listing => listing.post_id === post.id));
+      }
       if (query.filters.id?.startsWith('eq.')) return rows[table].filter(row => 'eq.' + row.id === query.filters.id);
       if (query.filters.id?.startsWith('in.(')) return rows[table].filter(row => query.filters.id.includes(row.id));
       let results = rows[table];

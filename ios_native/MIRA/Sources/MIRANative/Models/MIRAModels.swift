@@ -214,9 +214,20 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     uniqueMediaURLs(from: images?.values ?? [], fallback: image)
   }
 
-  /// Home is media-only, including structured posts. This checks attachments,
-  /// never download success: failed images keep their existing frame and Retry.
-  public var hasHomeMedia: Bool { !feedMediaURLs.isEmpty }
+  /// Listing identity comes from the record, never words in a normal caption.
+  /// Also protects restored caches and responses from older servers.
+  public var isActivityListing: Bool {
+    let type = (postType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return ["club", "group", "event", "meetup", "party", "concert", "show", "ticket", "access_pass",
+      "deal", "offer", "local_offer", "booking", "reservation", "activity", "listing", "business",
+      "place", "guide", "travel", "receipt", "invoice", "document", "collection"].contains(type)
+      || detail?.commerce != nil || detail?.event != nil || detail?.travel != nil
+      || detail?.document != nil || detail?.collection != nil
+  }
+  /// Failed media retains its frame/Retry; download success is not eligibility.
+  public var hasHomeMedia: Bool {
+    !isActivityListing && !["note", "text"].contains((postType ?? "").lowercased()) && !feedMediaURLs.isEmpty
+  }
 
   public var feedMediaURLs: [String] {
     let optimized = feedMediaUrls?.values ?? []

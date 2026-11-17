@@ -4,7 +4,7 @@ export class FeedCursorError extends Error {
   constructor() { super('FEED_CURSOR_INVALID'); }
 }
 
-export type FeedBoundary = { legacyCreatedAt: string | null; createdAt: string; id: string; source?: 'activity' | 'business' };
+export type FeedBoundary = { legacyCreatedAt: string | null; createdAt: string; id: string; source?: 'activity' | 'business' | 'post' };
 export type FeedCursor = {
   version: 1; viewer: string; scope: string; city: string;
   snapshot: string; expires: number; boundary: FeedBoundary | null;
@@ -20,7 +20,7 @@ function validDate(value: unknown): value is string {
 function validBoundary(value: any, scope = ''): value is FeedBoundary {
   return value != null && (value.legacyCreatedAt === null || validDate(value.legacyCreatedAt))
     && validDate(value.createdAt) && typeof value.id === 'string'
-    && (value.source === undefined || value.source === 'activity' || value.source === 'business')
+    && (value.source === undefined || value.source === 'activity' || value.source === 'business' || value.source === 'post')
     && (['tea-club-messages','tea-club-inviteRequests'].includes(scope)
       ? /^[a-zA-Z0-9_:-]{1,180}$/.test(value.id)
       : /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value.id));

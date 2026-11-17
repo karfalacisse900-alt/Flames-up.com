@@ -141,10 +141,15 @@ actor MIRAAppCacheStore {
   }
 
   func purgeContentCaches() async {
-    let preservedDraft = await loadPostDraft()
+    let scope = MIRALocalJSONCache.currentScopeIdentifier
+    var drafts: [(String?, MIRAPostDraftSnapshot)] = []
+    for type in [nil, "club", "event", "meetup", "deal"] as [String?] {
+      if let draft = await loadPostDraft(activityType: type) { drafts.append((type, draft)) }
+    }
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
     await MIRALocalJSONCache.removeAll()
-    if let preservedDraft {
-      await savePostDraft(preservedDraft)
+    for (type, draft) in drafts {
+      await MIRALocalJSONCache.save(draft, key: compositionKey(type), expectedScopeIdentifier: scope)
     }
     await MIRAImageDiskCache.clear()
     MIRAAPIClient.productionSession.configuration.urlCache?.removeAllCachedResponses()
@@ -323,18 +328,50 @@ actor MIRAAppCacheStore {
     await MIRALocalJSONCache.save(snapshot, key: CacheKey.settings)
   }
 
-  func loadPostDraft() async -> MIRAPostDraftSnapshot? {
-    await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: CacheKey.postDraft, maxAge: profileCacheAge)
+  private func compositionKey(_ activityType: String?) -> String {
+    guard let activityType, ["club", "event", "meetup", "deal"].contains(activityType) else { return CacheKey.postDraft }
+    return CacheKey.postDraft + ".tea." + activityType
   }
 
-  func savePostDraft(_ draft: MIRAPostDraftSnapshot) async {
-    await MIRALocalJSONCache.save(draft, key: CacheKey.postDraft)
+  func loadPostDraft(activityType: String? = nil) async -> MIRAPostDraftSnapshot? {
+    // Move old structured drafts, not their content, into Tea's existing composer.
+    let scope = MIRALocalJSONCache.currentScopeIdentifier
+    if let old = await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: CacheKey.postDraft, maxAge: profileCacheAge),
+       let type = old.stampType, ["club", "event", "meetup", "deal"].contains(type) {
+      let key = compositionKey(type)
+      if await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: key, maxAge: profileCacheAge) == nil {
+        await MIRALocalJSONCache.save(old, key: key, expectedScopeIdentifier: scope)
+        if let copied = await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: key, maxAge: profileCacheAge), copied == old {
+          await MIRALocalJSONCache.remove(key: CacheKey.postDraft, expectedScopeIdentifier: scope)
+        }
+      }
+    }
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return nil }
+    let draft = await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: compositionKey(activityType), maxAge: profileCacheAge)
+    if activityType == nil, let type = draft?.stampType, ["club", "event", "meetup", "deal"].contains(type) { return nil }
+    return draft
+  }
+
+  func savePostDraft(_ draft: MIRAPostDraftSnapshot, activityType: String? = nil) async {
+    let scope = MIRALocalJSONCache.currentScopeIdentifier
+    await MIRALocalJSONCache.save(draft, key: compositionKey(activityType), expectedScopeIdentifier: scope)
     // Never delete the prior media until the new snapshot can be read back.
-    guard let verified = await loadPostDraft(), verified == draft,
+    guard let verified = await loadPostDraft(activityType: activityType), verified == draft,
           let directory = postDraftMediaDirectory() else { return }
-    let retained = Set((draft.media + (draft.originalMedia ?? [])).map(\.localFilePath)
-      + [draft.voiceDraft?.localFilePath].compactMap { $0 })
+    let retained = await retainedCompositionMedia()
+    guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
     pruneStoredPostDraftMedia(in: directory, keeping: retained)
+  }
+
+  private func retainedCompositionMedia() async -> Set<String> {
+    var retained = Set<String>()
+    for key in [CacheKey.postDraft] + ["club", "event", "meetup", "deal"].map({ compositionKey($0) }) {
+      if let draft = await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: key, maxAge: profileCacheAge) {
+        retained.formUnion((draft.media + (draft.originalMedia ?? [])).map(\.localFilePath))
+        if let voice = draft.voiceDraft { retained.insert(voice.localFilePath) }
+      }
+    }
+    return retained
   }
 
   func clearPostDraftFromPreviousProcessIfNeeded() async {
@@ -391,10 +428,10 @@ actor MIRAAppCacheStore {
     }
   }
 
-  func clearPostDraft(expectedScope: String? = nil) async {
+  func clearPostDraft(expectedScope: String? = nil, activityType: String? = nil) async {
     let scope = expectedScope ?? MIRALocalJSONCache.currentScopeIdentifier
     guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-    let draft = await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: CacheKey.postDraft,
+    let draft = await MIRALocalJSONCache.load(MIRAPostDraftSnapshot.self, key: compositionKey(activityType),
       maxAge: profileCacheAge, expectedScopeIdentifier: scope)
 #if DEBUG
     if let afterDraftCleanupReadForTesting { await afterDraftCleanupReadForTesting() }
@@ -406,10 +443,11 @@ actor MIRAAppCacheStore {
       await MIRALocalJSONCache.save(voice, key: CacheKey.retiredVoiceDraft, expectedScopeIdentifier: scope)
     }
     guard scope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-    await MIRALocalJSONCache.remove(key: CacheKey.postDraft, expectedScopeIdentifier: scope)
+    await MIRALocalJSONCache.remove(key: compositionKey(activityType), expectedScopeIdentifier: scope)
+    let retained = await retainedCompositionMedia()
     guard scope == MIRALocalJSONCache.currentScopeIdentifier,
           let directory = postDraftMediaDirectory(scopeIdentifier: scope) else { return }
-    pruneStoredPostDraftMedia(in: directory, keeping: Set([draft?.voiceDraft?.localFilePath].compactMap { $0 }))
+    pruneStoredPostDraftMedia(in: directory, keeping: retained.union([draft?.voiceDraft?.localFilePath].compactMap { $0 }))
   }
 
   func cleanup() async {

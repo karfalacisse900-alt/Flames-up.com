@@ -3,6 +3,38 @@ import UIKit
 @testable import MIRANative
 
 final class CaptroCacheIsolationTests: XCTestCase {
+  func testHomeAndTeaDraftsRemainSeparateAcrossSaveDiscardAndAccountSwitch() async throws {
+    let store = MIRAAppCacheStore()
+    let owner = UUID().uuidString
+    MIRALocalJSONCache.setAccountScope(userId: owner)
+    defer { MIRALocalJSONCache.setAccountScope(userId: nil) }
+    func draft(_ title: String, type: String? = nil) throws -> MIRAPostDraftSnapshot {
+      var data: [String: Any] = ["title": title, "bodyText": "Keep this draft", "hashtags": [], "media": [],
+        "uploadStatus": "draft", "showBroadLocation": false, "isEditingPostDetails": false,
+        "savedAt": ISO8601DateFormatter().string(from: Date())]
+      if let type { data["stampType"] = type }
+      return try JSONDecoder().decode(MIRAPostDraftSnapshot.self, from: JSONSerialization.data(withJSONObject: data))
+    }
+    let old = try draft("Legacy club", type: "club")
+    await MIRALocalJSONCache.save(old, key: "native.post_draft.v1.cache_first")
+    let homeBefore = await store.loadPostDraft()
+    let migrated = await store.loadPostDraft(activityType: "club")
+    XCTAssertNil(homeBefore); XCTAssertEqual(migrated, old)
+    let home = try draft("Home caption")
+    await store.savePostDraft(home)
+    await store.savePostDraft(try draft("Event", type: "event"), activityType: "event")
+    await store.clearPostDraft(activityType: "event")
+    let keptHome = await store.loadPostDraft(), keptClub = await store.loadPostDraft(activityType: "club")
+    XCTAssertEqual(keptHome, home); XCTAssertEqual(keptClub, old)
+    MIRALocalJSONCache.setAccountScope(userId: UUID().uuidString)
+    let otherHome = await store.loadPostDraft(), otherClub = await store.loadPostDraft(activityType: "club")
+    XCTAssertNil(otherHome); XCTAssertNil(otherClub)
+    MIRALocalJSONCache.setAccountScope(userId: owner)
+    await store.purgeContentCaches()
+    let afterPurgeHome = await store.loadPostDraft(), afterPurgeClub = await store.loadPostDraft(activityType: "club")
+    XCTAssertEqual(afterPurgeHome, home); XCTAssertEqual(afterPurgeClub, old)
+    await store.clearPostDraft(); await store.clearPostDraft(activityType: "club")
+  }
   func testSnapshotsAreIsolatedByAccount() async {
     let key = "cache-isolation-\(UUID().uuidString)"
     let firstId = UUID().uuidString

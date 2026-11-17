@@ -1024,6 +1024,9 @@ private final class MIRABroadLocationResolver: NSObject, ObservableObject, CLLoc
 public struct CreatePostNativeView: View {
   let api: MIRAAPIClient
   private let onClose: (() -> Void)?
+  private let activityType: String?
+  private let onCreated: ((MIRAPost) -> Void)?
+  @State private var openedActivityForm = false
   private let initialMedia: MIRAPickedMedia?
   private let initialAdditionalMedia: [MIRAPickedMedia]
   private let initialCaption: String?
@@ -1034,7 +1037,7 @@ public struct CreatePostNativeView: View {
   @ScaledMetric(relativeTo: .body) private var writingSize: CGFloat = 18
   @State private var writingFocused = false
   private enum Presentation: Equatable, Identifiable {
-    case startWith, audience, time, add, stampChoices, media, camera, structured, mediaWriting, writingSource, framing
+    case startWith, audience, time, add, media, camera, structured, mediaWriting, writingSource, framing
     case detail(PostDetailSheet)
     var id: String {
       switch self {
@@ -1048,7 +1051,6 @@ public struct CreatePostNativeView: View {
   @State private var writingAfterMediaSelection = false
   @State private var writingMediaIndex = 0
   @State private var compositionCardWidth: CGFloat = 320
-  @State private var showsMoreCreationWays = false
   @State private var pendingTime = Date()
   @State private var creationCapabilities: CaptroCreationCapabilities?
   @State private var initialAudience = CaptroCompositionAudience.everyone
@@ -1152,18 +1154,29 @@ public struct CreatePostNativeView: View {
   @StateObject private var sellerIdentity = CaptroSellerIdentityCoordinator()
   @FocusState private var focusedPostDetailsField: PostDetailsFocusField?
 
-  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialAdditionalMedia: [MIRAPickedMedia] = [], initialCaption: String? = nil, onClose: (() -> Void)? = nil) {
+  public init(api: MIRAAPIClient, initialMedia: MIRAPickedMedia? = nil, initialAdditionalMedia: [MIRAPickedMedia] = [], initialCaption: String? = nil, activityType: String? = nil, onCreated: ((MIRAPost) -> Void)? = nil, onClose: (() -> Void)? = nil) {
     self.api = api
     self.initialMedia = initialMedia
     self.initialAdditionalMedia = initialAdditionalMedia
     self.initialCaption = initialCaption
     self.onClose = onClose
+    self.activityType = activityType.flatMap { ["club", "event", "meetup", "deal"].contains($0) ? $0 : nil }
+    self.onCreated = onCreated
+    var composition = CaptroCompositionDraft()
+    if let type = self.activityType, let kind = CaptroStampKind(rawValue: type) {
+      composition.selectedStampKind = kind
+      composition.hasSelectedStamp = true
+      composition.commerceDraft.enabled = true
+      composition.commerceDraft.configureDefaults(for: kind)
+      composition.eventDraft.hasSchedule = [.event, .meetup].contains(kind)
+    }
+    _draft = State(initialValue: composition)
   }
 
   public var body: some View {
     NavigationStack {
       composerSheetPage
-        .navigationTitle("Create")
+        .navigationTitle(activityType == nil ? "Create post" : "Create " + selectedStampKind.displayName.lowercased())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { compositionNavigation }
         .miraNavigationSurface()
@@ -1409,16 +1422,15 @@ public struct CreatePostNativeView: View {
     })
   }
   private var addPopoverBinding: Binding<Bool> {
-    Binding(get: { presentation == .add || presentation == .writingSource || presentation == .stampChoices }, set: { shown in
+    Binding(get: { presentation == .add || presentation == .writingSource }, set: { shown in
       if shown { openPresentation(.add) }
-      else if presentation == .add || presentation == .writingSource || presentation == .stampChoices { presentation = nil }
+      else if presentation == .add || presentation == .writingSource { presentation = nil }
     })
   }
   private func openPresentation(_ target: Presentation) {
     writingFocused = false
     focusedPostDetailsField = nil
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-    if target == .startWith { showsMoreCreationWays = false }
     presentation = target
   }
   private func transitionFromSelection(to target: Presentation) {
@@ -1628,11 +1640,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var startWithPicker: some View {
-    CaptroEditorialMenu(title: showsMoreCreationWays ? "More ways to create" : "Start with") {
-      if showsMoreCreationWays {
-        CaptroEditorialMenuRow(title: "Back", disclosure: false) { showsMoreCreationWays = false }
-        stampChoiceRows
-      } else {
+    CaptroEditorialMenu(title: "Start with") {
         ForEach([CaptroWritingIntent.free, .cover]) { intent in
           CaptroEditorialMenuRow(title: intent.title, selected: draft.intent == intent && !draft.structured) {
             draft.intent = intent
@@ -1653,22 +1661,6 @@ public struct CreatePostNativeView: View {
           Text(capabilitiesError).font(.footnote)
           CaptroEditorialMenuRow(title: "Retry creation options") { Task { await loadCreationCapabilities() } }
         }
-        if creationCapabilities?.structuredTypes.isEmpty == false {
-          Rectangle().fill(MIRATheme.Color.editorialMenuText.opacity(0.28)).frame(height: 0.5).padding(.vertical, 3)
-          CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) { showsMoreCreationWays = true }
-        }
-      }
-    }
-  }
-
-  private var stampChoiceRows: some View {
-    ForEach(stampPickerKinds) { kind in
-      CaptroEditorialMenuRow(title: kind.displayName, disclosure: true) {
-        selectedStampKind = kind
-        hasSelectedStamp = true
-        if [.event, .meetup].contains(kind) { eventDraft.hasSchedule = true }
-        transitionFromSelection(to: .structured)
-      }
     }
   }
 
@@ -1701,11 +1693,6 @@ public struct CreatePostNativeView: View {
                 CaptroEditorialMenuRow(title: "Photos & videos") { transitionFromSelection(to: .media) }
                 CaptroEditorialMenuRow(title: "Camera") { transitionFromSelection(to: .camera) }
               }
-            } else if presentation == .stampChoices {
-              CaptroEditorialMenu(title: "More ways to create") {
-                CaptroEditorialMenuRow(title: "Back") { presentation = .add }
-                stampChoiceRows
-              }
             } else { addPicker }
           }.onDisappear(perform: resumeQueuedPresentation)
         }
@@ -1735,13 +1722,6 @@ public struct CreatePostNativeView: View {
           if mediaItems.isEmpty { presentation = .writingSource }
           else { transitionFromSelection(to: .mediaWriting) }
         }.disabled(isLoadingMedia)
-      }
-      if creationCapabilities?.structuredTypes.isEmpty == false {
-        CaptroEditorialMenuRow(title: "More ways to create", disclosure: true) {
-          // Ordinary posts have no intent-selector anchor. Keep this submenu
-          // inside the mounted Add popover rather than dismissing into nowhere.
-          presentation = .stampChoices
-        }
       }
     }
   }
@@ -1828,9 +1808,6 @@ public struct CreatePostNativeView: View {
 
   private var hasUnsavedPost: Bool {
     hasDraftContent || draft.intent != .free || draft.time != nil || draft.audience != initialAudience
-  }
-  private var stampPickerKinds: [CaptroStampKind] {
-    [.club, .event, .meetup, .deal].filter { creationCapabilities?.structuredTypes.contains($0.backendPostType) == true }
   }
   private func stampPickerDetails(for kind: CaptroStampKind) -> (title: String, subtitle: String, icon: String, tint: Color) {
     switch kind {
@@ -2155,6 +2132,7 @@ public struct CreatePostNativeView: View {
   }
 
   private var canPost: Bool {
+    guard draft.structured == (activityType != nil) else { return false }
     guard missingDraftMediaCount == 0 else { return false }
     guard pendingInitialCapture.isEmpty, mediaItems.count <= CaptroComposerMediaHandoff.maximumItems else { return false }
     guard mediaItems.allSatisfy({ $0.postFraming?.isValid == true }) else { return false }
@@ -2428,12 +2406,16 @@ public struct CreatePostNativeView: View {
       guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       let published: MIRAPost = try await api.post("/posts", body: body)
       guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
-      guard api.publications.record(published, expectedScope: submissionScope) else {
-        throw MIRAAPIError.emptyResponse
+      if activityType == nil {
+        guard api.publications.record(published, expectedScope: submissionScope) else { throw MIRAAPIError.emptyResponse }
+      } else {
+        // The same server record is the listing; never insert a second Home post.
+        api.teaDetails.invalidate()
+        onCreated?(published)
       }
       postStage = "Published"
       draftSaveTask?.cancel()
-      await MIRAAppCacheStore.shared.clearPostDraft(expectedScope: submissionScope)
+      await MIRAAppCacheStore.shared.clearPostDraft(expectedScope: submissionScope, activityType: activityType)
       guard submissionScope == MIRALocalJSONCache.currentScopeIdentifier else { return }
       MIRAPerformanceTimeline.mark("post_upload_complete", detail: "post")
       close(clearDraft: false)
@@ -2452,7 +2434,7 @@ public struct CreatePostNativeView: View {
     writingFocused = false
     if clearDraft {
       let scope = MIRALocalJSONCache.currentScopeIdentifier
-      Task { await MIRAAppCacheStore.shared.clearPostDraft(expectedScope: scope) }
+      Task { await MIRAAppCacheStore.shared.clearPostDraft(expectedScope: scope, activityType: activityType) }
     }
     if let onClose {
       onClose()
@@ -2494,6 +2476,10 @@ public struct CreatePostNativeView: View {
       openPresentation(.framing)
     } else if !mediaItems.isEmpty && !draft.hasWriting && !draft.isCover { writingFocused = true }
     await loadBroadLocationDefaultIfNeeded()
+    if activityType != nil, !openedActivityForm {
+      openedActivityForm = true
+      openPresentation(.structured)
+    }
   }
 
   private func retryInitialCapture() {
@@ -2578,7 +2564,7 @@ public struct CreatePostNativeView: View {
   private func restorePostDraftIfNeeded() async {
     guard !hasRestoredPostDraft else { return }
     hasRestoredPostDraft = true
-    guard let draft = await MIRAAppCacheStore.shared.loadPostDraft() else { return }
+    guard let draft = await MIRAAppCacheStore.shared.loadPostDraft(activityType: activityType) else { return }
     restoredComposition = true
     let restoredMedia = await MIRAAppCacheStore.shared.loadPostDraftMedia(draft)
     missingDraftMediaCount = max(0, draft.media.count - restoredMedia.count)
@@ -2647,7 +2633,7 @@ public struct CreatePostNativeView: View {
     guard missingDraftMediaCount == 0 else { return }
     guard hasRestoredPostDraft, !isClosing, !Task.isCancelled else { return }
     guard hasUnsavedPost else {
-      await MIRAAppCacheStore.shared.clearPostDraft()
+      await MIRAAppCacheStore.shared.clearPostDraft(activityType: activityType)
       draftMediaSnapshots = []
       return
     }
@@ -2693,7 +2679,7 @@ public struct CreatePostNativeView: View {
       savedAt: ISO8601DateFormatter.miraPostDraft.string(from: Date())
     )
     guard !Task.isCancelled, !isClosing else { return }
-    await MIRAAppCacheStore.shared.savePostDraft(snapshot)
+    await MIRAAppCacheStore.shared.savePostDraft(snapshot, activityType: activityType)
   }
 
   @MainActor

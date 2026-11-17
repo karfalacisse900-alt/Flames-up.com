@@ -15,6 +15,7 @@ struct CaptroTeaEntry: Decodable, Hashable, Identifiable {
   let id, kind, name, status, color, timestamp: String
   let icon: String?
   let destination: CaptroTeaDestination
+  var post: MIRAPost? = nil // Authorized legacy listing without a purchasable.
 
   var typeLabel: String {
     switch kind {
@@ -88,6 +89,12 @@ enum CaptroTeaPalette: String {
   @State private var section = "Conversations"
   @State private var composing = false
   @State private var created: CaptroTeaConversation?
+  @State private var creatingActivity: CaptroStampKind?
+  @State private var createdActivity: MIRAPost?
+  @State private var activityChoices: [CaptroStampKind] = []
+  @State private var choosingActivity = false
+  @State private var checkingCreation = false
+  @State private var creationError: String?
   @State private var cursor: String?
   @State private var loading = false
   @State private var didLoad = false
@@ -245,7 +252,9 @@ enum CaptroTeaPalette: String {
       }
 
       .navigationDestination(for: CaptroTeaEntry.self) { entry in
-        if entry.kind == "club", entry.destination.source == "activity" {
+        if entry.destination.source == "post", let post = entry.post {
+          DiscoverPostDetailNativeView(post: post, api: api)
+        } else if entry.kind == "club", entry.destination.source == "activity" {
           CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent)
         } else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn).tint(MIRATheme.Color.accent) }
       }
@@ -255,6 +264,23 @@ enum CaptroTeaPalette: String {
       .sheet(isPresented: $composing) {
         CaptroTeaComposer(api: api) { post in created = post; path.append(post) }
       }
+      .navigationDestination(for: MIRAPost.self) { post in
+        DiscoverPostDetailNativeView(post: post, api: api)
+      }
+      .confirmationDialog("Create activity", isPresented: $choosingActivity, titleVisibility: .visible) {
+        ForEach(activityChoices) { kind in
+          Button(kind.displayName) { creatingActivity = kind }
+        }
+        Button("Cancel", role: .cancel) {}
+      }
+      .fullScreenCover(item: $creatingActivity, onDismiss: finishActivityCreation) { kind in
+        CreatePostNativeView(api: api, activityType: kind.rawValue,
+          onCreated: { createdActivity = $0 }, onClose: { creatingActivity = nil })
+      }
+      .alert("Create activity", isPresented: Binding(get: { creationError != nil }, set: { if !$0 { creationError = nil } })) {
+        Button("Retry") { Task { await chooseActivity() } }
+        Button("Cancel", role: .cancel) {}
+      } message: { Text(creationError ?? "") }
       .task(id: section + queryKey) {
         if section == "Clubs & Events", receivedAt.map({ Date().timeIntervalSince($0) >= 30 }) != false {
           await load(reset: true)
@@ -275,6 +301,7 @@ enum CaptroTeaPalette: String {
       .onChange(of: viewerID) { _, _ in
         requestID = nil; loading = false; citySnapshots = [:]; city = ""; filter = "All"; section = "Conversations"
         path = NavigationPath(); entries = []; cursor = nil; didLoad = false; receivedAt = nil; created = nil; composing = false
+        creatingActivity = nil; createdActivity = nil; activityChoices = []; choosingActivity = false; creationError = nil
         api.teaConversations.invalidate()
       }
     }
@@ -289,16 +316,48 @@ enum CaptroTeaPalette: String {
   }
 
   private var postButton: some View {
-    Button { if viewerID == nil { signIn() } else { composing = true } } label: {
-      Text("Post").font(.subheadline.weight(.semibold))
+    Button {
+      if viewerID == nil { signIn() }
+      else if section == "Conversations" { composing = true }
+      else { Task { await chooseActivity() } }
+    } label: {
+      Text(checkingCreation ? "Checking…" : section == "Conversations" ? "Post" : "Create").font(.subheadline.weight(.semibold))
         .padding(.horizontal, 8).frame(minWidth: 44, minHeight: 44)
         .contentShape(Rectangle())
     }.buttonStyle(.plain)
-      .accessibilityLabel("Post to Tea").accessibilityIdentifier("tea.compose")
+      .disabled(checkingCreation)
+      .accessibilityLabel(section == "Conversations" ? "Post to Tea" : "Create activity")
+      .accessibilityIdentifier(section == "Conversations" ? "tea.compose" : "tea.createActivity")
       .foregroundStyle(CaptroTeaStyle.accent)
   }
   private func showAllActivities() {
     switchCity(""); filter = "Activities"; section = "Clubs & Events"
+  }
+  private func chooseActivity() async {
+    guard !checkingCreation, viewerID != nil else { return }
+    checkingCreation = true
+    let scope = api.presentationScope
+    defer { checkingCreation = false }
+    do {
+      let capabilities: CaptroCreationCapabilities = try await api.get("/posts/creation-capabilities")
+      guard scope == api.presentationScope else { return }
+      activityChoices = [.club, .event, .meetup, .deal].filter { capabilities.structuredTypes.contains($0.backendPostType) }
+      if activityChoices.isEmpty { creationError = "Activity creation is not available for this account." }
+      else { choosingActivity = true }
+    } catch {
+      guard scope == api.presentationScope else { return }
+      creationError = (error as? MIRAAPIError)?.errorDescription ?? "Couldn’t check creation access. Try again."
+    }
+  }
+  private func finishActivityCreation() {
+    guard let post = createdActivity else { return }
+    createdActivity = nil
+    // Open the owner's existing details route, including private listings.
+    // Refresh through discovery authorization; never insert a private listing.
+    requestID = nil; loading = false; receivedAt = nil; citySnapshots = [:]
+    api.teaDetails.invalidate()
+    path.append(post)
+    Task { await load(reset: true) }
   }
   private var backButton: some View {
     Button(action: close) {

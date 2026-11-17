@@ -28,6 +28,56 @@ final class TeaTests: XCTestCase {
     return app.buttons["tea.row.\(source):\(id)"]
   }
 
+  func testActivityCreationUsesExistingFormsAndPreservesPaidChoice() {
+    for (name, field) in [("Club", "Club name"), ("Event", "Event name"), ("Meetup", "Meetup name"), ("Deal", "Title")] {
+      let app = launch()
+      let create = app.buttons["tea.createActivity"]
+      XCTAssertTrue(create.waitForExistence(timeout: 8)); create.tap()
+      let choice = app.buttons[name]
+      XCTAssertTrue(choice.waitForExistence(timeout: 8)); choice.tap()
+      XCTAssertTrue(app.textFields[field].waitForExistence(timeout: 10), app.debugDescription)
+      XCTAssertFalse(app.buttons["Photos & videos"].exists, "No regular post prerequisite")
+      if name == "Club" {
+        XCTAssertTrue(app.buttons["Free"].exists)
+        app.buttons["Paid"].tap()
+        XCTAssertTrue(app.staticTexts["Currency"].exists || app.buttons["Currency"].exists)
+      }
+      attach("tea-create-" + name.lowercased(), from: app)
+      app.terminate()
+    }
+  }
+
+  func testFreeClubPublicationReturnsToTeaAndNotHome() {
+    let app = launch()
+    app.buttons["tea.createActivity"].tap()
+    XCTAssertTrue(app.buttons["Club"].waitForExistence(timeout: 8)); app.buttons["Club"].tap()
+    let name = app.textFields["Club name"]
+    XCTAssertTrue(name.waitForExistence(timeout: 10)); name.tap(); name.typeText("Isolated new club")
+    app.navigationBars["Club"].buttons["Done"].tap()
+    let publish = app.buttons["composer.create"]
+    XCTAssertTrue(publish.waitForExistence(timeout: 8)); XCTAssertTrue(publish.isEnabled); publish.tap()
+    XCTAssertTrue(app.staticTexts["Isolated new club"].firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+    XCTAssertFalse(app.buttons["composer.create"].exists)
+    attach("tea-created-listing-details", from: app)
+    // Existing Details back returns to Tea; the refreshed list owns this item.
+    let back = app.navigationBars.buttons.element(boundBy: 0)
+    XCTAssertTrue(back.exists); back.tap()
+    XCTAssertTrue(app.buttons["tea.createActivity"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["Isolated new club"].firstMatch.waitForExistence(timeout: 8))
+    app.buttons["tea.back.home"].tap()
+    XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 8))
+    XCTAssertFalse(app.staticTexts["Isolated new club"].exists)
+    XCTAssertFalse(app.staticTexts["New post"].exists)
+  }
+
+  func testRestrictedAccountCannotOpenActivityForm() {
+    let app = launch(["--tea-create-denied"])
+    app.buttons["tea.createActivity"].tap()
+    XCTAssertTrue(app.alerts["Create activity"].waitForExistence(timeout: 8))
+    XCTAssertFalse(app.textFields["Club name"].exists)
+    XCTAssertTrue(app.alerts.buttons["Retry"].exists)
+  }
+
   func testProfileCityDoesNotHideClubsAndHomeEntryNeedsOneTap() {
     let app = launch()
     XCTAssertTrue(row(1, in: app).waitForExistence(timeout: 10),

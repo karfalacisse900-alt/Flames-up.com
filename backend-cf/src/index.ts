@@ -48,6 +48,7 @@ import {
 import { bindVoiceAttachment, classifyOpenAIServiceFailure, createVoiceRoutes, inspectVoiceAudio, processVoiceJob, recoverVoiceJobs, validateVoiceAttachment, type VoiceJobMessage } from './voice';
 import { retiredPostInputError, retiredFeatureCode } from './retired-posting';
 import { rankVisibleFeedWindow } from './feed-relevance';
+import { homePostFilters, homePostRelations, isRegularHomePost } from './home-posts';
 import { uncroppedHostedImageVariant } from './image-delivery';
 import { FeedCursorError, readFeedCursor, writeFeedCursor, feedBoundary, feedKeysetFilters, feedKeysetOrder } from './feed-pagination';
 
@@ -5763,6 +5764,7 @@ type SupabasePostReadOptions = {
   ownerId?: string;
   category?: DiscoverCategory | 'all';
   photoOnly?: boolean;
+  homeOnly?: boolean;
   search?: string;
   feedAuthorIds?: string[];
   feedDisplayCity?: string;
@@ -7228,6 +7230,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const limit = clampNumber(options.limit || 20, 1, 100, 20);
   const offset = Math.max(0, Math.round(Number(options.offset || 0)));
   const filters: Record<string, string> = { status: postgrestEqFilter('active') };
+  if (options.homeOnly) Object.assign(filters, homePostFilters());
   const postId = publicId(options.postId, 120);
   const postIds = Array.from(new Set((options.postIds || []).map((value) => publicId(value, 120)).filter(Boolean)));
   const ownerId = publicId(options.ownerId, 120);
@@ -7267,7 +7270,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
       ? 1
     : Math.min(300, Math.max(limit + offset + 20, options.category && options.category !== 'all' ? (limit + offset) * 4 : limit + offset));
   const rows = options.prefetchedRows ?? await supabaseAdminQueryRows(c, 'app_posts', {
-    select: SUPABASE_APP_POST_SELECT,
+    select: SUPABASE_APP_POST_SELECT + (options.homeOnly ? homePostRelations : ''),
     filters,
     order: options.order === 'trending'
       ? 'likes_count.desc.nullslast,legacy_created_at.desc.nullslast,created_at.desc'
@@ -7279,6 +7282,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   const isDiscoverQuery = options.category !== undefined;
   const photoOnly = options.photoOnly === true || isDiscoverQuery;
   const candidateRows = rows.filter((row) => {
+    if (options.homeOnly && (!isRegularHomePost(row) || !supabaseAppPostMedia(row).mediaUrls.length)) return false;
     if ((photoOnly && !supabaseAppPostHasRenderablePhotoMedia(row)) || !supabaseAppPostMatchesCategory(row, options.category)) return false;
     if (!isDiscoverQuery) return true;
     const metadata = parseJsonObject(row?.metadata);
@@ -7324,7 +7328,7 @@ async function supabaseReadVisiblePosts(c: any, viewerId: string, options: Supab
   await supabaseHydratePostResponses(c, ordered, viewerId);
   await attachPublicPostObjects(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
   await attachPublicCommerce(ordered, (table, filters, select, limit) => supabaseAdminSelectRows(c, table, filters, select, limit));
-  return overlaySupabaseViewerEngagement(c, photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
+  return overlaySupabaseViewerEngagement(c, options.homeOnly ? ordered.filter(isRegularHomePost) : photoOnly ? feedPhotoPostsOnly(ordered) : ordered, viewerId);
 }
 
 async function supabaseReadFeedPageV2(c: any, viewerId: string, options: {
@@ -7340,16 +7344,17 @@ async function supabaseReadFeedPageV2(c: any, viewerId: string, options: {
   for (let batch = 0; batch < 4 && posts.length < options.limit && hasMore; batch += 1) {
     const batchSize = Math.min(100, Math.max(24, (options.limit - posts.length) * 2));
     const filters = feedKeysetFilters(cursor);
+    Object.assign(filters, homePostFilters());
     if (options.feedAuthorIds?.length) filters.app_user_id = postgrestInFilter(options.feedAuthorIds);
     if (options.feedDisplayCity) {
       filters['metadata->>display_city'] = `ilike.${options.feedDisplayCity}`;
       filters['metadata->>display_location_visibility'] = postgrestEqFilter('public');
     }
     const rows = await supabaseAdminQueryRows(c, 'app_posts', {
-      select: SUPABASE_APP_POST_SELECT, filters, order: feedKeysetOrder, limit: batchSize,
+      select: SUPABASE_APP_POST_SELECT + homePostRelations, filters, order: feedKeysetOrder, limit: batchSize,
     });
     if (!rows.length) { hasMore = false; break; }
-    const visible = await supabaseReadVisiblePosts(c, viewerId, { limit: rows.length, prefetchedRows: rows });
+    const visible = await supabaseReadVisiblePosts(c, viewerId, { limit: rows.length, prefetchedRows: rows, homeOnly: true });
     const visibleByID = new Map(visible.map(post => [publicId(post.id, 120), post]));
     let consumed = 0;
     for (const row of rows) {
@@ -17501,7 +17506,7 @@ api.get('/posts/feed', authMiddleware, async (c) => {
       return response;
     }
     const feedRows = await supabaseReadVisiblePosts(c, userId, {
-      limit, offset: skip, order: 'newest', feedAuthorIds, feedDisplayCity,
+      limit, offset: skip, order: 'newest', feedAuthorIds, feedDisplayCity, homeOnly: true,
     });
     // Visibility, blocking and moderation are resolved before this bounded
     // ordering pass. Later pages stay chronological, so pagination cannot
@@ -17543,7 +17548,7 @@ api.get('/posts/world-board', async (c) => {
       response.headers.set('cache-control', 'no-store');
       return response;
     }
-    const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest' });
+    const posts = await supabaseReadVisiblePosts(c, viewerId, { limit, offset: skip, order: 'newest', homeOnly: true });
     const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;
@@ -17563,7 +17568,7 @@ api.get('/posts/nearby-feed', authMiddleware, async (c) => {
   const skip = Math.max(0, parseInt(c.req.query('skip') || '0', 10) || 0);
   const limit = clampNumber(c.req.query('limit') || '24', 1, 50, 24);
   try {
-    const posts = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest' });
+    const posts = await supabaseReadVisiblePosts(c, userId, { limit, offset: skip, order: 'newest', homeOnly: true });
     const response = c.json(posts.map((p) => feedPostPayload(p, [], c.env)));
     response.headers.set('cache-control', 'no-store');
     return response;

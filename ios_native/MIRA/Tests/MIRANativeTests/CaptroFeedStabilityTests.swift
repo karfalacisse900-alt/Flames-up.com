@@ -39,8 +39,9 @@ final class CaptroFeedStabilityTests: XCTestCase {
     model.resetForAccountChange()
     XCTAssertTrue(model.homePosts.isEmpty); XCTAssertTrue(model.homePostIDs.isEmpty)
   }
-  func testHomeRequiresMediaForEveryPostTypeWithoutHidingFailedAttachments() throws {
-    for type in ["general", "text", "note", "club", "event", "meetup", "deal", "place", "document"] {
+  func testHomeExcludesListingsEvenWithCoverMediaWithoutHidingFailedOrdinaryAttachments() throws {
+    let ordinary = ["general", "photo", "video", "carousel", "check_in"]
+    for type in ordinary + ["text", "note", "club", "group", "event", "meetup", "deal", "offer", "local_offer", "booking", "reservation", "ticket", "place", "document"] {
       func decode(_ media: [String]) throws -> MIRAPost {
         try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
           ["id": type, "postType": type, "caption": "Keep this writing in Details", "images": media]))
@@ -49,13 +50,19 @@ final class CaptroFeedStabilityTests: XCTestCase {
       XCTAssertFalse(text.hasHomeMedia, type)
       XCTAssertFalse(try decode(["  "]).hasHomeMedia, type)
       let photo = try decode(["https://example.invalid/unavailable.jpg"])
-      XCTAssertTrue(photo.hasHomeMedia, "A failed image remains eligible for the existing Retry UI")
+      XCTAssertEqual(photo.hasHomeMedia, ordinary.contains(type), type)
       XCTAssertEqual(photo.caption, text.caption)
-      XCTAssertTrue(try decode(["https://example.invalid/movie.mp4"]).hasHomeMedia)
+      XCTAssertEqual(try decode(["https://example.invalid/movie.mp4"]).hasHomeMedia, ordinary.contains(type), type)
     }
     let optimizedOnly = try JSONDecoder().decode(MIRAPost.self, from: Data(
       #"{"id":"optimized","postType":"club","feedMediaUrls":["https://example.invalid/feed.jpg"]}"#.utf8))
-    XCTAssertTrue(optimizedOnly.hasHomeMedia)
+    XCTAssertFalse(optimizedOnly.hasHomeMedia)
+    let mention = try JSONDecoder().decode(MIRAPost.self, from: Data(
+      #"{"id":"moment","postType":"general","caption":"Our club event has a deal tonight","images":["https://example.invalid/a.jpg","https://example.invalid/b.jpg"]}"#.utf8))
+    XCTAssertTrue(mention.hasHomeMedia)
+    var linked = mention
+    linked.detail = CaptroPostDetails(event: CaptroEventDetails())
+    XCTAssertFalse(linked.hasHomeMedia, "An authoritative event relationship wins over a legacy general type")
   }
 
   func testStructuredTextPageAdvancesToMediaWithoutChangingStoredRecords() async throws {
@@ -65,7 +72,7 @@ final class CaptroFeedStabilityTests: XCTestCase {
     let types = ["club", "event", "meetup", "deal"]
     let text = try (0..<12).map { index in
       try JSONDecoder().decode(MIRAPost.self, from: JSONSerialization.data(withJSONObject:
-        ["id": "listing-\(index)", "postType": types[index % types.count], "title": "Text listing"]))
+        ["id": "listing-\(index)", "postType": types[index % types.count], "title": "Listing with a cover", "images": ["https://example.invalid/cover.jpg"]]))
     }
     let media = try [post("media-after-listings")]
     var offsets: [Int] = []

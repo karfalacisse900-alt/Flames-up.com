@@ -55,6 +55,7 @@ private final class TeaReviewProtocol: URLProtocol {
   private static var conversations: [String: [String: Any]] = [:]
   private static var discussionReplies: [String: [[String: Any]]] = [:]
   private static var followsAuthor = false
+  private static var createdActivities: [[String: Any]] = []
   private var delivery: DispatchWorkItem?
 
   override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "localhost" }
@@ -122,6 +123,28 @@ private final class TeaReviewProtocol: URLProtocol {
     }
     if path.hasPrefix("/tea/conversations") { discussion(path); return }
     if path == "/users/artist/posts" { reply(200, []); return }
+    if path == "/posts/creation-capabilities" {
+      if ProcessInfo.processInfo.arguments.contains("--tea-create-denied") {
+        reply(403, ["detail": "Posting is restricted for this isolated account."]); return
+      }
+      reply(200, ["structured_types": ["club", "event", "meetup", "deal"], "media_writing_version": 2]); return
+    }
+    if path == "/posts", request.httpMethod == "POST" {
+      let body = readBody().flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+      guard let type = body["post_type"] as? String, ["club", "event", "meetup", "deal"].contains(type),
+            let title = body["title"] as? String, !title.isEmpty, body["commerce"] != nil else {
+        reply(400, ["detail": "Fixture requires the existing activity payload."]); return
+      }
+      let postID = id(1000 + Self.lock.withLock { Self.createdActivities.count })
+      let post: [String: Any] = ["id": postID, "title": title, "postType": type,
+        "userId": "tea-viewer", "visibility": body["visibility"] ?? "public",
+        "content": body["content"] ?? "", "images": body["images"] ?? []]
+      Self.lock.withLock { Self.createdActivities.append(post) }
+      reply(200, post); return
+    }
+    if path.hasPrefix("/posts/"), let post = Self.lock.withLock({ Self.createdActivities.first { $0["id"] as? String == url.lastPathComponent } }) {
+      reply(200, post); return
+    }
     if path == "/users/artist/showcase" { reply(200, ["clubs":[],"plans":[]]); return }
 
     if path == "/users/artist/follow" {
@@ -153,7 +176,15 @@ private final class TeaReviewProtocol: URLProtocol {
       } else if URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "cursor" }) == true {
         payload = ["items": (21...26).map(entry)]
       } else {
-        payload = ["items": (1...20).map(entry), "nextCursor": "tea-fixture-second-page"]
+        let newEntries: [[String: Any]] = Self.lock.withLock {
+          Self.createdActivities.filter { $0["visibility"] as? String == "public" }.map { post in
+            let postID = post["id"] as! String
+            return ["id": "post:" + postID, "kind": post["postType"] as! String, "name": post["title"] as! String,
+              "status": "active", "color": "sage", "timestamp": "2026-11-17T00:00:00Z",
+              "destination": ["source": "post", "id": postID], "post": post]
+          }
+        }
+        payload = ["items": newEntries + (1...20).map(entry), "nextCursor": "tea-fixture-second-page"]
       }
     } else if path.hasPrefix("/tea/"), let number = Int(url.lastPathComponent.suffix(12)) {
       let count = Self.lock.withLock {

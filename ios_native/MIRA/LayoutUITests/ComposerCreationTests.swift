@@ -42,45 +42,18 @@ final class ComposerCreationTests: XCTestCase {
     XCTAssertTrue((editor.value as? String ?? "").contains("Updated."))
   }
 
-  func testAudienceAndAuthorizedStampChoicesRemainAvailable() {
+  func testHomeComposerKeepsAudienceButNeverOffersActivityTypes() {
     let app = launch(["--captro-composer-authorized"])
     app.buttons["composer.audience"].tap()
     let onlyMe = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Only me")).firstMatch
-    XCTAssertTrue(onlyMe.waitForExistence(timeout: 5))
-    onlyMe.tap()
+    XCTAssertTrue(onlyMe.waitForExistence(timeout: 5)); onlyMe.tap()
     XCTAssertTrue(app.buttons["composer.audience"].label.contains("Only me"))
     app.buttons["composer.add"].tap()
-    app.buttons["More ways to create"].tap()
-    for name in ["Club", "Event", "Meetup", "Deal"] {
-      XCTAssertTrue(app.buttons[name].waitForExistence(timeout: 5))
-      XCTAssertTrue(app.buttons[name].isHittable)
+    XCTAssertTrue(app.buttons["Photos & videos"].waitForExistence(timeout: 5))
+    for name in ["More ways to create", "Club", "Event", "Meetup", "Deal"] {
+      XCTAssertFalse(app.buttons[name].exists)
     }
-    capture(app, "authorized-stamp-choices-native-fixture")
-    // The submenu must be mounted on Add even before an intent selector exists.
-    // Verify each authorized destination, then return without publishing.
-    let destinations = [("Club", "Club name"), ("Event", "Event name"),
-      ("Meetup", "Meetup name"), ("Deal", "Title")]
-    for (index, destination) in destinations.enumerated() {
-      if index > 0 {
-        app.buttons["composer.add"].tap()
-        let more = app.buttons["More ways to create"]
-        XCTAssertTrue(more.waitForExistence(timeout: 5))
-        XCTAssertTrue(more.isHittable, "The last Add row must remain reachable after the composition grows")
-        XCTAssertLessThanOrEqual(more.frame.maxY, app.frame.maxY)
-        capture(app, "reopened-attachments-before-\(destination.0.lowercased())-native-fixture")
-        more.tap()
-      }
-      let choice = app.buttons[destination.0]
-      XCTAssertTrue(choice.waitForExistence(timeout: 5))
-      XCTAssertTrue(choice.isHittable)
-      choice.tap()
-      XCTAssertTrue(app.navigationBars[destination.0].waitForExistence(timeout: 5))
-      XCTAssertTrue(app.textFields[destination.1].exists)
-      capture(app, "authorized-\(destination.0.lowercased())-editor-native-fixture")
-      app.buttons["Back to composition"].tap()
-      XCTAssertTrue(app.buttons["composer.add"].waitForExistence(timeout: 5))
-      XCTAssertTrue(app.buttons["composer.audience"].label.contains("Only me"))
-    }
+    capture(app, "home-media-only-composer")
   }
 
   private func capture(_ app: XCUIApplication, _ name: String) {

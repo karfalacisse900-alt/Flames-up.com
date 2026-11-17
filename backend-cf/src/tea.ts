@@ -1,7 +1,7 @@
 import { commerceAvailability } from './commerce.ts';
 import { FeedCursorError, readFeedCursor, writeFeedCursor, type FeedCursor } from './feed-pagination.ts';
 
-type Source = 'activity' | 'business';
+type Source = 'activity' | 'business' | 'post';
 type Kind = 'club' | 'event' | 'meetup' | 'offer' | 'reservation' | 'business';
 type Query = (table: string, input: { select: string; filters: Record<string, string>; order?: string; limit: number }) => Promise<any[]>;
 type Input = { cursor?: string; city?: string; lat?: string; lon?: string };
@@ -19,6 +19,7 @@ const types: Record<string, Kind> = {
   club: 'club', group: 'club', event: 'event', party: 'event', ticket: 'event', access_pass: 'event',
   meetup: 'meetup', offer: 'offer', deal: 'offer', booking: 'reservation', reservation: 'reservation',
 };
+const postTypes: Record<string, Kind> = { ...types, local_offer: 'offer', concert: 'event', show: 'event' };
 const colors: Record<Kind, string> = {
   club: 'sage', event: 'lilac', meetup: 'navy', offer: 'sky', reservation: 'lilac', business: 'sand',
 };
@@ -30,9 +31,10 @@ const listing = 'id,post_id,creator_id,creator_app_user_id,content_type,title,st
 const businessListing = 'id,owner_id,name,category,paused,published,latitude,longitude,location_updated_at';
 const businessDetails = businessListing + ',pickup_address,hours,avatar_url,photos';
 const activityTypes = Object.keys(types);
-const tableBySource = { activity: 'app_purchasables', business: 'app_businesses' };
-const timeBySource = { activity: 'created_at', business: 'location_updated_at' };
-const sourceRank = { activity: 1, business: 0 };
+const postListing = 'id,legacy_post_id,user_id,app_user_id,post_type,title,content,status,visibility,metadata,created_at,listing:app_purchasables()';
+const tableBySource = { activity: 'app_purchasables', business: 'app_businesses', post: 'app_posts' };
+const timeBySource = { activity: 'created_at', business: 'location_updated_at', post: 'created_at' };
+const sourceRank = { activity: 2, business: 1, post: 0 };
 const maxBatch = 32;
 const pageSize = 20;
 const nearbyMiles = 25;
@@ -84,6 +86,15 @@ function filtersFor(source: Source, cursor: FeedCursor, search: ReturnType<typeo
     if (search.city) filters.city = 'ilike.' + search.city;
     terms.push('or(expires_at.is.null,expires_at.gt.' + now + ')',
       'or(content_type.not.in.(event,meetup,party),ends_at.is.null,ends_at.gt.' + now + ')');
+  } else if (source === 'post') {
+    // Legacy structured records stay discoverable without creating or migrating
+    // purchases. The anti-join prevents duplicate rows for newer listings.
+    Object.assign(filters, { status: 'eq.active', visibility: 'eq.public',
+      post_type: 'in.(' + Object.keys(postTypes).join(',') + ')', listing: 'is.null' });
+    if (search.city) {
+      filters['metadata->>display_city'] = 'ilike.' + search.city;
+      filters['metadata->>display_location_visibility'] = 'eq.public';
+    }
   } else {
     filters.published = 'eq.true';
     if (search.point) {
@@ -111,7 +122,7 @@ function businessTableAbsent(error: unknown) {
 function eligibility(candidate: Candidate, access: Access, deps: Dependencies, search: ReturnType<typeof scope>, now: number) {
   const { row, source } = candidate;
   if (!uuid.test(row.id)) return null;
-  const owner = access.owners.get(source === 'activity' ? row.creator_id : row.owner_id);
+  const owner = access.owners.get(source === 'activity' ? row.creator_id : source === 'post' ? row.user_id : row.owner_id);
   if (!owner || owner.is_private !== false || !deps.isActiveUser(owner)
     || access.blocked.has(owner.id) || access.blocked.has(owner.supabase_user_id)) return null;
   if (source === 'business') {
@@ -120,13 +131,21 @@ function eligibility(candidate: Candidate, access: Access, deps: Dependencies, s
       || distance(search.point, row) > nearbyMiles)) return null;
     return { kind: 'business' as const, status: row.paused ? 'paused' : 'listed', name: row.name };
   }
-  const post = access.posts.get(row.post_id);
+  const post = access.posts.get(source === 'post' ? row.id : row.post_id);
   if (!post || post.status !== 'active' || post.visibility !== 'public'
     || (post.user_id !== owner.supabase_user_id && post.app_user_id !== owner.id)
     || (post.app_user_id && post.app_user_id !== owner.id)
     || (post.user_id && post.user_id !== owner.supabase_user_id)
     || post.metadata?.removed_at || post.metadata?.discover_blocked_at
     || (post.metadata?.moderation_status && post.metadata.moderation_status !== 'approved')) return null;
+  if (source === 'post') {
+    const kind = postTypes[row.post_type];
+    const end = post.metadata?.creator_event?.endsAt;
+    if (!kind || (end && Date.parse(end) <= now)
+      || (search.city && (post.metadata?.display_location_visibility !== 'public'
+        || post.metadata?.display_city?.trim().normalize('NFC').toLowerCase() !== search.city))) return null;
+    return { kind, status: 'active', name: row.title };
+  }
   const kind = types[row.content_type];
   const status = commerceAvailability(row, now);
   if (!kind || row.visibility !== 'public' || !['anyone', 'approval'].includes(row.audience)
@@ -141,13 +160,15 @@ function item(candidate: Candidate, visible: NonNullable<ReturnType<typeof eligi
     id: source + ':' + row.id, kind: visible.kind, name: visible.name, status: visible.status,
     color: colors[visible.kind], icon: icons[visible.kind], timestamp,
     destination: { source, id: row.id },
+    ...(source === 'post' ? { post: { id: row.legacy_post_id || row.id, title: row.title,
+      content: row.content, post_type: row.post_type, user_id: row.app_user_id } } : {}),
   };
 }
 
 function loadAccess(rows: Candidate[], deps: Dependencies) {
   return deps.access(
-    [...new Set(rows.flatMap(candidate => candidate.source === 'activity' ? [candidate.row.post_id] : []))],
-    [...new Set(rows.map(candidate => candidate.source === 'activity' ? candidate.row.creator_id : candidate.row.owner_id))],
+    [...new Set(rows.flatMap(candidate => candidate.source === 'activity' ? [candidate.row.post_id] : candidate.source === 'post' ? [candidate.row.id] : []))],
+    [...new Set(rows.map(candidate => candidate.source === 'activity' ? candidate.row.creator_id : candidate.source === 'post' ? candidate.row.user_id : candidate.row.owner_id).filter(Boolean))],
   );
 }
 
@@ -163,7 +184,7 @@ export async function teaPage(deps: Dependencies, secret: string, viewer: string
       if (source === 'business' && !businessAvailable) return [];
       try {
         const rows = await deps.query(tableBySource[source], {
-          select: source === 'activity' ? listing : businessListing,
+          select: source === 'activity' ? listing : source === 'post' ? postListing : businessListing,
           filters: filtersFor(source, cursor, search, timestamp),
           order: timeBySource[source] + '.desc,id.desc', limit: maxBatch,
         });
@@ -173,7 +194,7 @@ export async function teaPage(deps: Dependencies, secret: string, viewer: string
         throw error;
       }
     };
-    const pages = await Promise.all([fetchRows('activity'), fetchRows('business')]);
+    const pages = await Promise.all([fetchRows('activity'), fetchRows('business'), fetchRows('post')]);
     const merged = pages.flat().sort(compare);
     const window = merged.slice(0, maxBatch);
     if (!window.length) { more = false; break; }
