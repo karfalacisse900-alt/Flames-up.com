@@ -2,6 +2,9 @@ name: Validate native polish (no deployment)
 on:
   workflow_call:
     inputs:
+      runner:
+        type: string
+        default: macos-26
       compile_only:
         type: boolean
         default: false
@@ -22,6 +25,11 @@ on:
         default: ''
   workflow_dispatch:
     inputs:
+      runner:
+        description: Standard Mac runner fallback when one architecture is queued
+        type: choice
+        options: [macos-26, macos-26-intel]
+        default: macos-26
       compile_only:
         type: boolean
         default: false
@@ -46,7 +54,7 @@ jobs:
   simulator:
     if: ${{ !inputs.compile_only }}
     name: simulator (${{ matrix.phone }})
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner == 'macos-26-intel' && 'macos-26-intel' || 'macos-26' }}
     timeout-minutes: 65
     strategy:
       fail-fast: false
