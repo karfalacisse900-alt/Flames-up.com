@@ -1,5 +1,6 @@
 import { createPrivateKey, sign } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { findApp } from './find-app.mjs';
 // Read-only: no tester invitations, agreements, public releases, or billing changes.
 const env = name => { const value = process.env[name]; if (!value) throw Error(name + ' is required'); return value; };
 const key = createPrivateKey(Buffer.from(env('APP_STORE_CONNECT_API_KEY_BASE64'), 'base64'));
@@ -9,12 +10,11 @@ const input = encode({alg:'ES256',kid:env('APP_STORE_CONNECT_API_KEY_ID'),typ:'J
 const token = input + '.' + sign('sha256',Buffer.from(input),{key,dsaEncoding:'ieee-p1363'}).toString('base64url');
 async function get(path) {
   const response = await fetch('https://api.appstoreconnect.apple.com/v1/' + path,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(30000)});
-  const result = await response.json();
-  if (!response.ok) throw Error('App Store Connect HTTP '+response.status+': '+(result.errors?.[0]?.code ?? 'unknown'));
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(Error('App Store Connect HTTP '+response.status+': '+(result.errors?.[0]?.code ?? 'unknown')), {status:response.status});
   return result;
 }
-const apps = await get('apps?' + new URLSearchParams({'filter[bundleId]':'com.captro.app',limit:'1'}));
-const app = apps.data?.[0]; if (!app) throw Error('Captro app not found');
+const app = await findApp(get,'com.captro.app');
 // A transported IPA can still be processing before it appears in /builds.
 // Read the upload resource too; do not mistake transport success for availability.
 // https://developer.apple.com/documentation/appstoreconnectapi/get-v1-apps-_id_-builduploads
