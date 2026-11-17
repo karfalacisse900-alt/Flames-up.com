@@ -153,7 +153,7 @@ function eligibility(candidate: Candidate, access: Access, deps: Dependencies, s
   if (!kind || row.visibility !== 'public' || !['anyone', 'approval'].includes(row.audience)
     || !(includeEnded ? ['active', 'sold_out', 'expired', 'ended'] : ['active', 'sold_out']).includes(status)
     || (search.city && row.city?.trim().normalize('NFC').toLowerCase() !== search.city)) return null;
-  return { kind, status: row.capacity != null && row.quantity_committed >= row.capacity ? 'sold_out' : status, name: row.title };
+  return { kind, status: status === 'active' && row.capacity != null && row.quantity_committed >= row.capacity ? 'sold_out' : status, name: row.title };
 }
 
 // One bounded lookup per Note page; never infer a borough from a profile/city.

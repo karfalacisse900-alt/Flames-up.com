@@ -1,17 +1,37 @@
 import SwiftUI
 import UIKit
 
+enum CaptroTeaNoteDestination: Hashable {
+  case listing(CaptroTeaEntry)
+  case profile(String)
+}
+
+struct CaptroTeaNoteDestinationView: View {
+  let destination: CaptroTeaNoteDestination
+  let api: MIRAAPIClient
+  let viewerID: String?
+  let signIn: () -> Void
+  var body: some View {
+    switch destination {
+    case .profile(let id): UserProfileNativeView(userId: id, api: api).toolbar(.visible, for: .navigationBar)
+    case .listing(let entry):
+      if entry.destination.source == "post", let post = entry.post { DiscoverPostDetailNativeView(post: post, api: api) }
+      else if entry.kind == "club" { CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
+      else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
+    }
+  }
+}
+
 /// Shared by a Note row and its details. A button never opens the enclosing row.
 @MainActor struct CaptroTeaNoteActionView: View {
   let note: CaptroTeaConversation
   let api: MIRAAPIClient
   let viewerID: String?
   let signIn: () -> Void
+  let navigate: (CaptroTeaNoteDestination) -> Void
   @State private var busy = false
   @State private var error: String?
   @State private var form: CaptroTeaConversation?
-  @State private var listing: CaptroTeaEntry?
-  @State private var profile: CaptroProfileLink?
   @State private var applications = false
   @State private var checkedState: String?
   var body: some View {
@@ -37,14 +57,6 @@ import UIKit
     }
     .sheet(item: $form) { note in CaptroTeaApplicationView(note: note, api: api) }
     .sheet(isPresented: $applications) { CaptroTeaApplicationsView(note: note, api: api) }
-    .navigationDestination(item: $listing) { entry in
-      if entry.destination.source == "post", let post = entry.post { DiscoverPostDetailNativeView(post: post, api: api) }
-      else if entry.kind == "club" { CaptroTeaClubDestination(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
-      else { CaptroTeaDetailView(entry: entry, api: api, viewerID: viewerID, signIn: signIn) }
-    }
-    .navigationDestination(isPresented: Binding(get: { profile != nil }, set: { if !$0 { profile = nil } })) {
-      if let profile { UserProfileNativeView(userId: profile.id, api: api).toolbar(.visible, for: .navigationBar) }
-    }
     .onChange(of: note.primaryAction) { _, _ in checkedState = nil }
   }
   private func open() async {
@@ -65,10 +77,10 @@ import UIKit
         if result.note.isAuthor { applications = true } else { form = result.note }
       case "listing":
         guard let entry = result.listing else { checkedState = "Unavailable"; return }
-        listing = entry
+        navigate(.listing(entry))
       case "external":
         guard let link = action.url.flatMap(CaptroTeaLink.init) else { checkedState = "Unavailable"; return }
-        if let destination = link.profile { profile = destination }
+        if let destination = link.profile { navigate(.profile(destination.id)) }
         else { UIApplication.shared.open(link.url, options: [:]) { success in
           if !success { Task { @MainActor in if scope == api.presentationScope { error = "Couldn’t open this website. Try again." } } }
         } }

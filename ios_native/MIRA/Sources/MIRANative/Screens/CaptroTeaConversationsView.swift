@@ -56,6 +56,7 @@ struct CaptroTeaConversationsList: View {
   let created: CaptroTeaConversation?
   let open: (CaptroTeaConversation) -> Void
   @State private var items: [CaptroTeaConversation] = []
+  @State private var actionDestination: CaptroTeaNoteDestination?
   @State private var nextCursor: String?
   @State private var loading = false
   @State private var loaded = false
@@ -88,7 +89,7 @@ struct CaptroTeaConversationsList: View {
           Button { open(post) } label: { CaptroTeaConversationRow(post: post) }
             .buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
           if post.primaryAction != nil {
-            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn)
+            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
               .padding(.leading, 60).padding(.bottom, 8)
           }
         }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true) }
@@ -110,6 +111,9 @@ struct CaptroTeaConversationsList: View {
     }
     .listStyle(.plain).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
     .accessibilityIdentifier("tea.conversations.list")
+    .navigationDestination(item: $actionDestination) { destination in
+      CaptroTeaNoteDestinationView(destination: destination, api: api, viewerID: viewerID, signIn: signIn)
+    }
     .refreshable { await load(reset: true, force: true) }
     .task(id: "\(active)-\(revision)") { if active { await load(reset: true) } }
     .onAppear {
@@ -214,6 +218,7 @@ struct TeaConversationTime: View {
   let signIn: () -> Void
   @StateObject private var model: CaptroTeaConversationModel
   @State private var editing = false
+  @State private var actionDestination: CaptroTeaNoteDestination?
   @State private var profile: CaptroProfileLink?
   @State private var linkError: String?
   @Environment(\.dismiss) private var dismiss
@@ -274,7 +279,7 @@ struct TeaConversationTime: View {
           }
           if let borough = post.borough { Text(borough).font(.footnote).foregroundStyle(.secondary) }
           if post.primaryAction != nil || post.canManageApplications == true {
-            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn)
+            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
           }
           if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
         }.background(CaptroFeedViewportMarker(owner: model.viewport, postID: "caption", feed: "tea:" + model.id).allowsHitTesting(false))
@@ -328,6 +333,9 @@ struct TeaConversationTime: View {
     }.listStyle(.plain).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
       .navigationTitle("").navigationBarTitleDisplayMode(.inline).miraNavigationSurface()
       .accessibilityIdentifier("tea.conversation.detail")
+      .navigationDestination(item: $actionDestination) { destination in
+        CaptroTeaNoteDestinationView(destination: destination, api: api, viewerID: viewerID, signIn: signIn)
+      }
       #if DEBUG
       .overlay(alignment: .bottomTrailing) { TeaReviewRequestCounter().allowsHitTesting(false) }
       #endif

@@ -47,8 +47,8 @@ final class TeaNoteTests: XCTestCase {
   func testPlainNoteAndOptionalActionComposer() {
     let app = launch()
     app.buttons["tea.compose"].tap()
-    XCTAssertTrue(app.textFields["tea.compose.title"].waitForExistence(timeout:8))
-    app.textFields["tea.compose.title"].tap(); app.textFields["tea.compose.title"].typeText("A plain Note")
+    XCTAssertTrue(app.descendants(matching:.any).matching(identifier:"tea.compose.title").firstMatch.waitForExistence(timeout:8))
+    let title = field("tea.compose.title",app); title.tap(); title.typeText("A plain Note")
     let body = field("tea.compose.body",app); body.tap(); body.typeText("A question for everyone.")
     XCTAssertTrue(app.buttons["tea.compose.save"].isEnabled)
     app.buttons["tea.compose.save"].tap()

@@ -12,7 +12,7 @@ const old = '2026-11-11T21:00:00.123455+00:00';
 
 test('Note listing actions recheck canonical deals, expiration and privacy without changing checkout',async()=>{
   const f=fixture();
-  f.activity(1,'deal');f.activity(2,'deal',{row:{expires_at:old}});
+  f.activity(1,'deal');f.activity(2,'deal',{row:{expires_at:old,capacity:1,quantity_committed:1}});
   f.activity(3,'deal',{post:{visibility:'private'}});
   f.activity(4,'deal',{row:{status:'draft'}});
   f.activity(5,'club',{row:{capacity:1,quantity_committed:1}});
@@ -55,6 +55,7 @@ function fixture() {
       calls.push([table, query]);
       const time = table === 'app_businesses' ? 'location_updated_at' : 'created_at';
       if (table === 'app_posts') {
+        if (query.filters.id) return [...postRows.values()].filter(row => query.filters.id.includes(row.id));
         const allowed = query.filters.and.match(/post_type\.in\.\(([^)]+)\)/)[1].split(',');
         assert.equal(query.filters['activity_object.kind'], 'eq.event');
         assert.ok(query.select.includes('activity_object:app_post_objects(kind,public_data)'));
@@ -146,6 +147,10 @@ test('legacy structured posts remain in Tea exactly once without creating commer
   assert.deepEqual(legacy.map(row => row.post.id), ['legacy-810','legacy-809','legacy-803','legacy-802','legacy-801']);
   assert.equal(legacy[0].post.post_type, 'event', 'The trusted relationship supplies the listing identity');
   assert.ok(f.calls.some(([table, query]) => table === 'app_posts' && query.filters.listing === 'is.null'));
+  const noteLinks = await teaNoteListings(f.deps, [803,804,805,807,811].map(n => 'post:' + id(n)), now);
+  assert.equal(noteLinks.get('post:' + id(803)).entry.post.id, 'legacy-803');
+  for (const n of [804,805]) assert.equal(noteLinks.get('post:' + id(n)).state, 'unavailable');
+  for (const n of [807,811]) assert.equal(noteLinks.get('post:' + id(n)).state, 'ended');
   f.blocked.add(owner.id);
   assert.equal((await teaPage(f.deps, key, viewer, { includePosts: true }, now)).items.length, 0);
 });
