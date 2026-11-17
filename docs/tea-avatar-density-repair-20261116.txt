@@ -118,3 +118,9 @@ No production deployment or new TestFlight upload performed for this repair.
 The previously released 699.1 does not contain it; the physical phone's installed
 version was not independently checked. App and matching Worker changes must both
 ship for real production photos; changing only Swift cannot supply absent API data.
+
+SUBSEQUENT AUTHORIZED RELEASE
+The later user-authorized production API rollout and TestFlight 702.1 release are
+complete. See testflight-tea-avatar-repair-20261116.txt for live image decoding,
+unchanged production configuration, signed IPA and verified tester availability.
+The no-deployment paragraph above records the original implementation handoff.

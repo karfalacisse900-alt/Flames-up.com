@@ -1,0 +1,93 @@
+CAPTRO TEA REPAIR — PRODUCTION API AND TESTFLIGHT RELEASE
+User explicitly authorized the API repair and TestFlight update after the repair
+report. No additional approval requested. Payment activation remains unchanged.
+
+Candidate: 1.0.1 (702.1), com.captro.app.
+Branch: fix/tea-avatars-density-20261116
+Release source: e6629e92bb18a31f164b6db1682ea037b46011be
+Native tree: 4d6dfc6815d34dea757adbbad539e3ffaeab687a
+Runtime verification: 43997340266, successful matching native tree on both phones.
+No runtime deferral, simulator rerun or native code change for this release.
+Archive/upload: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44000947252
+
+PRODUCTION API — DEPLOYED AND VERIFIED
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44000943388
+Previous version: c5294a13-8b86-4419-97a6-db5d453fe77f
+Previous deployed source: 164494c7c79300daea7459b49de460d3ce2a80a7
+New version: 0cef467c-ce2b-4e08-9cac-54bf9132bf34
+Deployed November 16, 2026, 9:11 PM America/New_York (02:11 UTC November 17).
+The exact candidate annotation was verified after deployment.
+Production bindings fingerprint unchanged before/after:
+1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a
+
+Runtime Worker changes are restricted to:
+- backend-cf/src/index.ts
+- backend-cf/src/tea-authors.ts
+- backend-cf/src/tea-clubs.ts
+- backend-cf/src/tea-conversations.ts
+No changes to production schema, payment settings, prices, routing or secrets.
+The release used --keep-vars and the existing reliability build configuration.
+
+Release preparation updated the old Tea deployment baseline and exact file-scope
+check to the already deployed professional/Tea source. The check rejects unrelated
+source, changed live version, changed bindings and mismatched deployed candidate.
+It was not disabled or bypassed. Files changed for release preparation:
+- .github/workflows/tea-conversations-release.yml
+- backend-cf/scripts/verify-tea-release.mjs
+- backend-cf/scripts/verify-tea-http.mjs
+- backend-cf/tests/tea_release_guard.test.mjs
+- docs/testflight-tea-avatar-repair-20261116.txt (this report)
+
+Production verification:
+- TypeScript and all 438 backend tests passed.
+- 14 security schema checks, five reliability checks, three protected earnings
+  views and Tea RLS/service-role-only checks passed.
+- Public Tea responses passed; anonymous conversation creation remains denied.
+- The real conversation page returned two authors, both with photoURL values.
+- Both returned real avatar URLs returned HTTP 200 JPEG and decoded successfully
+  using Windows System.Drawing: 768x768 and 96x96. No URLs, tokens, identities or
+  private content were logged. This is live API/image verification, not an iPhone
+  screenshot or proof of a physical installation.
+
+Commands:
+node --test backend-cf/tests/tea_release_guard.test.mjs backend-cf/tests/native_release_gate.test.mjs
+  Result: 10 passed.
+gh workflow run deploy-worker.yml --ref fix/tea-avatars-density-20261116
+  -f tea_release=true -f tea_expected_version=c5294a13-8b86-4419-97a6-db5d453fe77f
+  -f reliability_dry_run=false
+gh workflow run native-ios-testflight.yml --ref fix/tea-avatars-density-20261116
+  -f validation_run=43997340266
+
+TESTFLIGHT
+Signed Release archive, authentication/signing validation, export and upload passed.
+The pre-upload live schema/API checks passed, including 32 native prerequisites.
+Upload completed November 16, 2026, 9:29 PM America/New_York (02:29:39 UTC November 17).
+Delivery UUID: a4f327ca-6f70-4770-90b1-2f1066ee2b05
+Downloaded IPA Info.plist confirms com.captro.app / 1.0.1 / 702.1.
+IPA SHA256: 69f8af755fa6b70bbd72e516df9e2413e688407e5b9ea928294b61d4ddb064f3
+Artifact ID: 14292384812; size: 33,351,196 bytes.
+Artifact digest: 3fd462010c0161beb8cbba2d772ec7e82b400f5bee5d0c26c7c39d06bed7a277
+IPA location: C:/Users/The-s/AppData/Local/Temp/captro-testflight-702-evidence/Captro.ipa
+
+Apple read-only status run:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44003418977
+At 02:30 UTC: upload PROCESSING with zero errors/warnings; build resource not yet
+available. At 02:32 UTC it was still processing.
+
+TESTER AVAILABILITY — VERIFIED
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44003418977/attempts/3
+November 16, 2026, 9:34 PM America/New_York (02:34:32 UTC November 17):
+- Upload resource: COMPLETE, no errors or warnings.
+- Build 702.1, version 1.0.1: VALID, expired=false.
+- internalBuildState: IN_BETA_TESTING.
+- Assigned to Captro private and Captro private2.
+- Both existing groups are internal with automatic distribution enabled.
+Existing testers in those groups can install 702.1. No new testers were invited.
+External state remains READY_FOR_BETA_SUBMISSION. No external review submission,
+public App Store release, signing-capability change or physical installation claim.
+
+Availability commands:
+gh workflow run native-ios-testflight.yml --ref fix/tea-avatars-density-20261116
+  -f read_testflight_status=true
+gh run rerun 44003418977 (read-only attempts 2 and 3; no repeated upload)
+This report-only commit preserves the verified archived native tree.
