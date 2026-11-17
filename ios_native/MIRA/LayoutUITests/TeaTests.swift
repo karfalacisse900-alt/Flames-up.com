@@ -28,25 +28,40 @@ final class TeaTests: XCTestCase {
     return app.buttons["tea.row.\(source):\(id)"]
   }
 
-  func testActivityCreationUsesExistingFormsAndPreservesPaidChoice() {
-    for (name, field) in [("Club", "Club name"), ("Event", "Event name"), ("Meetup", "Meetup name"), ("Deal", "Title")] {
-      let app = launch()
-      let create = app.buttons["tea.createActivity"]
-      XCTAssertTrue(create.waitForExistence(timeout: 8)); create.tap()
-      let choice = app.buttons[name]
-      XCTAssertTrue(choice.waitForExistence(timeout: 8)); choice.tap()
-      guard app.textFields[field].waitForExistence(timeout: 20) else {
-        XCTFail("Existing \(name) form did not open: " + app.debugDescription); return
-      }
-      XCTAssertFalse(app.buttons["Photos & videos"].exists, "No regular post prerequisite")
-      if name == "Club" {
-        XCTAssertTrue(app.buttons["Free"].exists)
-        app.buttons["Paid"].tap()
-        XCTAssertTrue(app.staticTexts["Currency"].exists || app.buttons["Currency"].exists)
-      }
-      attach("tea-create-" + name.lowercased(), from: app)
-      app.terminate()
+  func testClubCreationUsesExistingFormAndPreservesPaidChoice() {
+    assertActivityForm("Club", field: "Club name")
+  }
+
+  func testEventCreationUsesExistingForm() {
+    assertActivityForm("Event", field: "Event name")
+  }
+
+  func testMeetupCreationUsesExistingForm() {
+    assertActivityForm("Meetup", field: "Meetup name")
+  }
+
+  func testDealCreationUsesExistingForm() {
+    assertActivityForm("Deal", field: "Title")
+  }
+
+  private func assertActivityForm(_ name: String, field: String) {
+    // Each independent journey has its own XCTest lifetime. Four cold launches
+    // in one test can exhaust the runner's timeout while all forms work.
+    let app = launch()
+    let create = app.buttons["tea.createActivity"]
+    XCTAssertTrue(create.waitForExistence(timeout: 8)); create.tap()
+    let choice = app.buttons[name]
+    XCTAssertTrue(choice.waitForExistence(timeout: 8)); choice.tap()
+    guard app.textFields[field].waitForExistence(timeout: 20) else {
+      XCTFail("Existing \(name) form did not open: " + app.debugDescription); return
     }
+    XCTAssertFalse(app.buttons["Photos & videos"].exists, "No regular post prerequisite")
+    if name == "Club" {
+      XCTAssertTrue(app.buttons["Free"].exists)
+      app.buttons["Paid"].tap()
+      XCTAssertTrue(app.staticTexts["Currency"].exists || app.buttons["Currency"].exists)
+    }
+    attach("tea-create-" + name.lowercased(), from: app)
   }
 
   func testFreeClubPublicationReturnsToTeaAndNotHome() {
@@ -68,8 +83,13 @@ final class TeaTests: XCTestCase {
     app.navigationBars["Club"].buttons["Done"].tap()
     let publish = app.buttons["composer.create"]
     XCTAssertTrue(publish.waitForExistence(timeout: 8)); XCTAssertTrue(publish.isEnabled); publish.tap()
+    // The title also exists in the composer. Wait for confirmed publication
+    // to dismiss it before inspecting the destination, not just that title.
+    let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: publish)
+    guard XCTWaiter.wait(for: [dismissed], timeout: 15) == .completed else {
+      XCTFail("Confirmed publication did not leave the composer: " + app.debugDescription); return
+    }
     XCTAssertTrue(app.staticTexts["Isolated new club"].firstMatch.waitForExistence(timeout: 15), app.debugDescription)
-    XCTAssertFalse(app.buttons["composer.create"].exists)
     attach("tea-created-listing-details", from: app)
     // Existing Details back returns to Tea; the refreshed list owns this item.
     let back = app.navigationBars.buttons.element(boundBy: 0)
