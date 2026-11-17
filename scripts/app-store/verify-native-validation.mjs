@@ -64,6 +64,17 @@ function downloadSource(runID, repository, execute, context) {
     const available = inventory.artifacts.filter(item => !item.expired);
     if (context.workflow === '.github/workflows/native-polish-validation.yml') {
       const jobs = JSON.parse(execute('gh', ['api', `repos/${repository}/actions/runs/${runID}/jobs?per_page=100`], options)).jobs;
+      if (available.some(item => item.name === 'native-validation-source')) {
+        const serial = jobs.filter(job => job.name === 'simulator (large)');
+        if (serial.length !== 1 || serial[0].conclusion !== 'success' || serial[0].status !== 'completed' ||
+            !['Native screens and regression checks', 'Smaller iPhone screens and interactions'].every(name =>
+              serial[0].steps?.some(step => step.name === name && step.conclusion === 'success')) ||
+            !['native-validation-source', 'native-polish'].every(name => available.filter(item => item.name === name).length === 1)) {
+          throw new Error('Both serial iPhone runtime stages and their evidence must pass.');
+        }
+        execute('gh', ['run', 'download', runID, '--repo', repository, '--name', 'native-validation-source', '--dir', directory], options);
+        return JSON.parse(readFileSync(join(directory, 'source.json'), 'utf8'));
+      }
       const sources = {};
       for (const phone of ['small', 'large']) {
         const target = join(directory, phone);
