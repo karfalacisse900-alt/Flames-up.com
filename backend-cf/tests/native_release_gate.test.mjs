@@ -1,12 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { verifyNativeValidation, verifyFromEnvironment, cameraValidationSource, verifyPolishEvidence } from '../../scripts/app-store/verify-native-validation.mjs';
 
 const sha = '1'.repeat(40), tree = '2'.repeat(40);
 const run = { path: '.github/workflows/native-stamps-validation.yml', head_branch: 'fix', status: 'completed', conclusion: 'success', head_sha: sha };
 const attestation = { version: 1, validationRun: '123', sourceSHA: sha, nativeTree: tree };
 const valid = { run, branch: 'fix', targetTree: tree, validatedTree: tree, attestation, runID: '123' };
+
+test('serial phone evidence requires both runtime stages and matching downloaded attestation', () => {
+  const job = { name: 'simulator (large)', status: 'completed', conclusion: 'success', steps:
+    ['Native screens and regression checks', 'Smaller iPhone screens and interactions'].map(name => ({ name, conclusion: 'success' })) };
+  const artifacts = ['native-validation-source', 'native-polish'].map(name => ({ name, expired: false }));
+  const verify = (jobs = [job], inventory = artifacts, source = attestation) => verifyFromEnvironment({
+    VALIDATION_RUN: '123', GITHUB_REPOSITORY: 'owner/repo', GITHUB_REF_NAME: 'fix', GITHUB_SHA: sha,
+  }, (command, args) => {
+    if (command === 'git') return args[0] === 'rev-parse' ? tree : '';
+    if (args[0] === 'run' && args[1] === 'download') {
+      fs.writeFileSync(path.join(args[args.indexOf('--dir') + 1], 'source.json'), JSON.stringify(source));
+      return '';
+    }
+    if (args[1].includes('/artifacts?')) return JSON.stringify({ artifacts: inventory });
+    if (args[1].includes('/jobs?')) return JSON.stringify({ jobs });
+    return JSON.stringify({ ...run, path: '.github/workflows/native-polish-validation.yml' });
+  });
+  assert.equal(verify().nativeTree, tree);
+  for (const jobs of [[], [job, job], [{ ...job, status: 'in_progress' }],
+    [{ ...job, conclusion: 'failure' }], [{ ...job, steps: job.steps.slice(0, 1) }],
+    [{ ...job, steps: job.steps.map(s => ({ ...s, conclusion: 'skipped' })) }]]) {
+    assert.throws(() => verify(jobs));
+  }
+  for (const inventory of [artifacts.slice(0, 1), [...artifacts, artifacts[0]], artifacts.map(a => ({ ...a, expired: true }))]) {
+    assert.throws(() => verify([job], inventory));
+  }
+  assert.throws(() => verify([job], artifacts, { ...attestation, nativeTree: '3'.repeat(40) }));
+});
 
 test('camera evidence requires an exact clean non-baseline checkout and both passed suites', () => {
   const summary = count => ({ result: 'Passed', totalTestCount: count, passedTests: count, failedTests: 0, skippedTests: 0, expectedFailures: 0 });

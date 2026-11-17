@@ -60,21 +60,37 @@ nullable new fields and no private application answers. Release used --keep-vars
 The reviewed five runtime files include the previously completed Home/media-only
 filtering and Tea activity-discovery work. No financial routes were changed.
 
-NATIVE VALIDATION / TESTFLIGHT
-Pending. Do not interpret this intermediate report as a completed iOS release.
-First Intel build 44105396265 found a Swift type-check timeout in the action
-editor. The editor was split into smaller sections with capability loading outside
-the ViewBuilder (82a714a). Replacement validation: 44113358944, covering Notes,
-existing reply and club-chat checks on a large iPhone and iPhone 13 mini.
-Simulator results and screenshots will be recorded below.
-Intel validation 44113358944 compiled the app and tests successfully, then reached
-its 65-minute job limit after approximately 62 minutes of setup/build work. The
-club-chat quote/link/info/draft test passed; the other native tests were not
-completed. Apple Silicon fallback 44122601490 started 2026-11-17 16:20 UTC on
-the identical native source. TestFlight remains pending until a complete matching
-validation result is available. No gate was bypassed.
-No physical-iPhone or live-payment verification is claimed.
+NATIVE VALIDATION
+Apple Silicon run 44122601490 passed on iPhone 17 and iPhone 13 mini.
+Each phone passed 12 model tests and five UI tests: 34 executions, zero failures.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44122601490
+Validated native tree: 363b72cd757e98e576d2f19a28c3fccba54faf20.
+Coverage includes plain creation/editing, invalid links, private application submit
+and confirmed reopen, existing Deal navigation, larger text, existing replies,
+club chat quotes/links/info and draft preservation.
+Screenshots: C:/Users/The-s/AppData/Local/Temp/captro-notes-final-44122601490/
+Reviewed normal Notes list, small-phone accessibility text and application form.
+Titles and boroughs wrap; action controls remain distinct. At accessibility sizes,
+the trailing reply count leaves a narrower title column; no text shrinking added.
+The application form scrolls above the keyboard and exposes Submit.
+An initial Swift type-check timeout was fixed by splitting the action editor into
+smaller sections. The Intel validation compiled but timed out; the complete
+Apple Silicon run above supersedes that incomplete result.
+No physical-iPhone or live-payment verification is claimed. External signup
+opening/return was not newly exercised in UI; safe URLs have backend/model tests.
 
+TESTFLIGHT — STILL IN PROGRESS
+Release 44135175008 passed matching-source validation and signing/provisioning.
+Its archive began 2026-11-17 17:17:43 UTC; upload is not yet confirmed.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44135175008
+The gate now recognizes successful serial dual-phone validation as well as the
+existing two-job matrix; exact branch, source tree and attestation checks remain.
+Nine native release-gate regression tests passed, including serial dual-phone evidence rejection cases.
+Apple status reads returned HTTP 500 UNEXPECTED_ERROR on both exact app lookup
+and the bounded fallback. This is not an agreement/signing HTTP 403. Four lookup
+regression tests passed: exact identity, server-error fallback, authorization
+rejection, and missing/ambiguous app rejection. Availability remains unverified.
+No validation gate was bypassed.
 LIMITS
 Borough is explicitly author-selected (five NYC boroughs), never inferred from a
 profile/GPS. This version does not auto-populate it from venue data. Existing
@@ -91,6 +107,7 @@ backend-cf/scripts/verify-tea-schema.mjs
 backend-cf/src/index.ts
 backend-cf/src/tea-conversations.ts
 backend-cf/src/tea.ts
+backend-cf/tests/native_release_gate.test.mjs
 backend-cf/tests/tea-notes.test.mjs
 backend-cf/tests/tea.test.mjs
 backend-cf/tests/tea_release_guard.test.mjs
@@ -105,21 +122,7 @@ ios_native/MIRA/Tests/MIRANativeTests/CaptroTeaNoteTests.swift
 ios_native/MIRA/project.yml
 supabase/migrations/20261117143031_tea_note_actions.sql
 docs/tea-notes-20261117.txt
-LATEST VERIFIED RESULTS
-Apple Silicon run 44122601490 succeeded. iPhone 17 and iPhone 13 mini each passed
-12 model tests and 5 UI tests: 34 executions, zero failures. Screenshots exported
-under C:/Users/The-s/AppData/Local/Temp/captro-notes-final-44122601490/.
-Reviewed normal Notes list and small-phone accessibility text: titles and boroughs
-wrap, separate action controls remain usable. At accessibility sizes the fixed
-trailing reply count leaves a narrower title column; no text shrinking was added.
-No physical-device verification. External signup opening/return was not newly
-exercised in UI; safe URL behavior is covered by backend/model tests.
-TestFlight release run 44132583940 is queued, validated against 44122601490.
-Apple status reads failed with HTTP 500 UNEXPECTED_ERROR, including the bounded
-unfiltered lookup fallback. This is not a reported agreement/signing 403.
-Four additional release lookup tests passed (exact bundle identity, server-error
-fallback, authorization rejection, missing/ambiguous app). Additional files:
 scripts/app-store/find-app.mjs
 scripts/app-store/find-app.test.mjs
 scripts/app-store/testflight-status.mjs
-Do not interpret the queued release as an uploaded or available TestFlight build.
+scripts/app-store/verify-native-validation.mjs
