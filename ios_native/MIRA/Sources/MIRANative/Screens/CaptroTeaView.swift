@@ -392,7 +392,7 @@ enum CaptroTeaPalette: String {
 
 private struct CaptroTeaRow: View {
   let entry: CaptroTeaEntry
-  let nearby: Bool
+  var nearby = false
 
   var body: some View {
     HStack(spacing: 10) {
