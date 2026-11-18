@@ -55,7 +55,7 @@ jobs:
     if: ${{ !inputs.compile_only }}
     name: simulator (${{ matrix.phone }})
     runs-on: ${{ inputs.runner == 'macos-26-intel' && 'macos-26-intel' || 'macos-26' }}
-    timeout-minutes: 65
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -81,8 +81,6 @@ jobs:
           device_type=com.apple.CoreSimulator.SimDeviceType.iPhone-17
           if [ "$SMALL" = true ]; then device_type=com.apple.CoreSimulator.SimDeviceType.iPhone-13-mini; fi
           device=$(xcrun simctl create 'Captro polish ${{ matrix.phone }}' "$device_type" "$runtime")
-          xcrun simctl boot "$device"
-          xcrun simctl bootstatus "$device" -b
           destination="platform=iOS Simulator,id=$device"
           xcodebuild -version
           xcrun simctl list runtimes
@@ -101,12 +99,20 @@ jobs:
             IFS=',' read -ra filters <<< "$TEST_FILTER"
             for filter in "${filters[@]}"; do tests+=("-only-testing:$filter"); done
           fi
+          # Compile before booting Simulator: keep the build service and asset
+          # compiler from competing with a running simulator for runner memory.
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "$destination" -jobs 2 \
+            -derivedDataPath "$RUNNER_TEMP/PolishBuild" \
+            CODE_SIGNING_ALLOWED=NO build-for-testing 2>&1 | tee "$RUNNER_TEMP/polish-build.log"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "$destination" -parallel-testing-enabled NO \
             -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 \
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" \
             -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" "${tests[@]}" \
-            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log"
+            CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/polish.log"
       - name: Smaller iPhone screens and interactions
         env:
           CONVERSATIONS: ${{ inputs.conversations }}
@@ -150,6 +156,7 @@ jobs:
           path: |
             ${{ runner.temp }}/Polish.xcresult
             ${{ runner.temp }}/polish.log
+            ${{ runner.temp }}/polish-build.log
             ${{ runner.temp }}/screenshots
             ${{ runner.temp }}/SmallPolish.xcresult
             ${{ runner.temp }}/small-polish.log
