@@ -1,0 +1,36 @@
+Tea reference density update — 2026-11-18
+Branch: fix/tea-reference-density-20261118
+Implementation commit: efa7396
+
+Changed files:
+- ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+- ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
+- ios_native/MIRA/LayoutUITests/TeaNoteTests.swift
+
+Changes:
+- Notes: title and preview first, quiet author/time/selected borough beneath;
+  preserved separate primary-action target and real avatar loader.
+- Accessibility text: reply count below title instead of squeezing title column.
+- Detail: reduced title/caption spacing; 16-point Dynamic Type callout body;
+  compact author handle/time line; neutral composer with violet send control.
+- Replies and club messages: 40-point avatars, semibold names, wrapping inline
+  handle/time metadata, fine dividers and consistent body sizing.
+- Sentence quotes: compact italic violet excerpts with existing stored targets
+  and expansion behavior unchanged.
+- Adjusted Notes UI tests to locate the combined accessible metadata element.
+
+Verification:
+- git diff --check passed.
+- Native validation run 44416287265, attempts 1 and 2, both failed before tests:
+  'unexpected service error: The Xcode build system has crashed. Build again to continue.'
+- No Swift source error was reported, but this is NOT a successful compile.
+- No new rendered screenshots or physical-device verification available.
+- No production deployment or TestFlight upload for these changes.
+
+Limits:
+This is a presentation pass, not a claim of pixel-exact parity. Existing models
+lack the mockup's per-message like counts and verified badges; none were invented.
+Existing general replies, stable sentence targets, links, drafts, moderation,
+profile navigation, Notes actions, applications and payments were preserved.
+The existing text-only reply composer was not given nonfunctional photo buttons.
+No fake Nearby/Event/Club labels were attached to unrelated Notes.
