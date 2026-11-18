@@ -16,7 +16,7 @@ final class TeaNoteTests: XCTestCase {
   func testCastingApplicationFromRowKeepsRowClosedAndConfirmsOnlyAfterSubmit() {
     let app = launch()
     XCTAssertTrue(app.staticTexts["Notes"].exists)
-    XCTAssertTrue(app.staticTexts[id("tea.note.identity.",101)].label.contains("Brooklyn"))
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: id("tea.note.identity.",101)).firstMatch.label.contains("Brooklyn"))
     shot("notes-list",app)
     app.buttons[id("tea.note.action.",101)].tap()
     XCTAssertTrue(app.textFields["tea.application.name"].waitForExistence(timeout:10))
@@ -35,7 +35,7 @@ final class TeaNoteTests: XCTestCase {
   }
   func testLargeTextNotesAndExistingDealDestination() {
     let app = launch(largeText:true)
-    let identity = app.staticTexts[id("tea.note.identity.",101)]
+    let identity = app.descendants(matching: .any).matching(identifier: id("tea.note.identity.",101)).firstMatch
     XCTAssertTrue(identity.label.contains("Brooklyn")); XCTAssertLessThanOrEqual(identity.frame.maxX,app.frame.width)
     shot("notes-large-text",app)
     let deal = app.buttons[id("tea.note.action.",102)]

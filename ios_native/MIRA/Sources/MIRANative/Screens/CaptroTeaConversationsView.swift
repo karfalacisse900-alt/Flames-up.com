@@ -7,6 +7,11 @@ enum CaptroTeaStyle {
     traits.userInterfaceStyle == .dark ? UIColor(red: 0.73, green: 0.58, blue: 1, alpha: 1) : UIColor(red: 0.43, green: 0.16, blue: 0.78, alpha: 1)
   })
   static let tint = accent.opacity(0.08)
+  static let body: Font = .callout
+  static let metadata: Font = .footnote
+  static let composerFill = Color(uiColor: UIColor { traits in
+    traits.userInterfaceStyle == .dark ? UIColor(white: 0.13, alpha: 1) : UIColor(red: 0.95, green: 0.945, blue: 0.96, alpha: 1)
+  })
   static let separator = Color(uiColor: UIColor { traits in
     UIColor(white: traits.userInterfaceStyle == .dark ? 0.28 : 0.83, alpha: 1)
   })
@@ -42,9 +47,9 @@ struct CaptroTeaQuote: View {
   var body: some View {
     HStack(alignment: .top, spacing: 6) {
       Image(systemName: "quote.opening").font(.caption).foregroundStyle(CaptroTeaStyle.accent).accessibilityHidden(true)
-      Text(text).font(.subheadline).lineLimit(3).fixedSize(horizontal: false, vertical: true)
-    }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
-      .background(CaptroTeaStyle.tint, in: RoundedRectangle(cornerRadius: 8))
+      Text(text).font(.subheadline).italic().lineLimit(3).fixedSize(horizontal: false, vertical: true)
+    }.padding(.horizontal, 10).padding(.vertical, 5)
+      .background(CaptroTeaStyle.tint, in: RoundedRectangle(cornerRadius: 12))
   }
 }
 
@@ -92,7 +97,7 @@ struct CaptroTeaConversationsList: View {
             CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
               .padding(.leading, 60).padding(.bottom, 8)
           }
-        }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true) }
+        }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 0.5).accessibilityHidden(true) }
           .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
             postID: post.id, feed: "tea-list").allowsHitTesting(false))
           .buttonStyle(.plain)
@@ -173,24 +178,35 @@ struct CaptroTeaConversationsList: View {
 }
 
 private struct CaptroTeaConversationRow: View {
+  @Environment(\.dynamicTypeSize) private var typeSize
   let post: CaptroTeaConversation
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
       CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 48)
       VStack(alignment: .leading, spacing: 4) {
-        Text(post.author.name + (post.borough.map { " Â· " + $0 } ?? ""))
-          .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("tea.note.identity." + post.id)
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        if typeSize.isAccessibilitySize {
           Text(post.title).font(.headline).fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          replyCount.fixedSize(horizontal: true, vertical: false)
-          Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+          replyCount
+        } else {
+          HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(post.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+            replyCount.fixedSize(horizontal: true, vertical: false)
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+          }
         }
         Text(post.body).font(.callout).lineLimit(2).fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityIdentifier("tea.preview." + post.id)
-        TeaConversationTime(value: post.createdAt)
+        TeaLinkFlow(spacing: 5) {
+          Text(post.author.name).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
+          Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+          TeaConversationTime(value: post.createdAt)
+          if let borough = post.borough {
+            Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+            Text(borough).font(CaptroTeaStyle.metadata).foregroundStyle(CaptroTeaStyle.accent)
+          }
+        }.padding(.top, 3).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 16)
       .contentShape(Rectangle())
@@ -207,7 +223,7 @@ struct TeaConversationTime: View {
   var body: some View {
     if let date = captroTeaDate(value) {
       Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
-        .font(.caption).foregroundStyle(.secondary)
+        .font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
     }
   }
 }
@@ -232,13 +248,13 @@ struct TeaConversationTime: View {
   var body: some View {
     List {
       if let post = model.post, model.valid {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
           authorHeader(post)
-          Text(post.title).font(.title3.weight(.bold)).accessibilityAddTraits(.isHeader)
+          Text(post.title).font(.headline).accessibilityAddTraits(.isHeader)
           if let sentences = post.sentences, !sentences.isEmpty {
             ForEach(sentences) { sentence in
               VStack(alignment: .leading, spacing: 6) {
-                Text(sentence.quote).font(.body).fixedSize(horizontal: false, vertical: true)
+                Text(sentence.quote).font(CaptroTeaStyle.body).fixedSize(horizontal: false, vertical: true)
                   .textSelection(.enabled)
                   .contextMenu { Button("Reply to this part") { target(sentence) } }
                   .accessibilityAction(named: "Reply to this part") { target(sentence) }
@@ -254,7 +270,7 @@ struct TeaConversationTime: View {
               }
             }
           } else {
-            Text(post.body).font(.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(post.body).font(CaptroTeaStyle.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
           }
           let links = post.links.compactMap(CaptroTeaLink.init)
           if !links.isEmpty {
@@ -379,7 +395,7 @@ struct TeaConversationTime: View {
             else {
               TextField("Write a replyâ€¦", text: $model.draft, axis: .vertical).lineLimit(1...5)
                 .disabled(model.busy || model.replyPending)
-                .font(.body).padding(12).background(CaptroTeaStyle.tint, in: RoundedRectangle(cornerRadius: 22))
+                .font(CaptroTeaStyle.body).padding(.horizontal, 14).padding(.vertical, 11).background(CaptroTeaStyle.composerFill, in: RoundedRectangle(cornerRadius: 22))
                 .accessibilityIdentifier("tea.reply.input")
               Button { Task { await model.sendReply() } } label: {
                 if model.busy { ProgressView().frame(width: 44, height: 44) }
@@ -418,8 +434,11 @@ struct TeaConversationTime: View {
       Button { profile = CaptroProfileLink(id: post.author.id) } label: {
         VStack(alignment: .leading, spacing: 3) {
           Text(post.author.name).font(.headline)
-          Text("@" + post.author.username).font(.subheadline).foregroundStyle(.secondary)
-          TeaConversationTime(value: post.createdAt)
+          TeaLinkFlow(spacing: 5) {
+            Text("@" + post.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
+            Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+            TeaConversationTime(value: post.createdAt)
+          }
         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
       }.buttonStyle(.plain).accessibilityLabel("Open profile for " + post.author.name)
         .accessibilityIdentifier("tea.author.profile")
@@ -483,18 +502,24 @@ private struct TeaReplyGroups: View {
     VStack(alignment: .leading, spacing: 0) {
       ForEach(CaptroTeaReplyGroup.consecutive(replies)) { group in
         HStack(alignment: .top, spacing: 10) {
-          CaptroTeaIdentity(name: group.replies[0].author.name, photo: group.replies[0].author.photoURL, size: 36)
-          VStack(alignment: .leading, spacing: 8) {
-            Text(group.replies[0].author.name).font(.subheadline.weight(.semibold))
-            ForEach(group.replies) { reply in
+          CaptroTeaIdentity(name: group.replies[0].author.name, photo: group.replies[0].author.photoURL, size: 40)
+          VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(group.replies.enumerated()), id: \.element.id) { index, reply in
               VStack(alignment: .leading, spacing: 4) {
-                Text(reply.body).font(.body).fixedSize(horizontal: false, vertical: true)
-                TeaConversationTime(value: reply.createdAt)
+                TeaLinkFlow(spacing: 5) {
+                  if index == 0 {
+                    Text(reply.author.name).font(.callout.weight(.semibold))
+                    Text("@" + reply.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
+                    Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+                  }
+                  TeaConversationTime(value: reply.createdAt)
+                }
+                Text(reply.body).font(CaptroTeaStyle.body).fixedSize(horizontal: false, vertical: true)
               }.frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("tea.reply." + reply.id)
             }
           }
         }.padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-          .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
+          .overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 0.5).accessibilityHidden(true) }
       }
     }
   }

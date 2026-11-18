@@ -177,20 +177,25 @@ import UIKit
   private func messageRow(_ message: CaptroClubMessage, showAuthor: Bool) -> some View {
     HStack(alignment: .top, spacing: 10) {
       if showAuthor {
-        Button { linkDestination = .profile(message.author.id) } label: { CaptroTeaIdentity(name: message.author.name, photo: message.author.photoURL, size: 36) }
+        Button { linkDestination = .profile(message.author.id) } label: { CaptroTeaIdentity(name: message.author.name, photo: message.author.photoURL, size: 40) }
           .buttonStyle(.plain).accessibilityLabel("Open profile photo for " + message.author.name)
-      } else { Color.clear.frame(width: 36, height: 1).accessibilityHidden(true) }
+      } else { Color.clear.frame(width: 40, height: 1).accessibilityHidden(true) }
       VStack(alignment: .leading, spacing: 5) {
       if showAuthor {
-        Button { linkDestination = .profile(message.author.id) } label: { Text(message.author.name).font(.subheadline.weight(.semibold)) }
-          .buttonStyle(.plain).accessibilityLabel("Open profile for " + message.author.name)
+        TeaLinkFlow(spacing: 5) {
+          Button { linkDestination = .profile(message.author.id) } label: { Text(message.author.name).font(.callout.weight(.semibold)) }
+            .buttonStyle(.plain).accessibilityLabel("Open profile for " + message.author.name)
+          Text("@" + message.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
+          Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+          TeaConversationTime(value: message.createdAt)
+        }
       }
       if let quote = message.quote {
         Button { jump(quote) } label: { CaptroTeaQuote(text: quote.body).frame(minHeight: 44, alignment: .leading) }
           .buttonStyle(.plain).accessibilityLabel("Open quoted message: " + quote.body).accessibilityIdentifier("tea.club.quote." + message.id)
       }
       if !message.textWithoutLinks.isEmpty {
-        Text(message.textWithoutLinks).font(.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        Text(message.textWithoutLinks).font(CaptroTeaStyle.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
           .accessibilityIdentifier("tea.club.message." + message.id)
       }
       if let media = message.mediaURL, !media.isEmpty {
@@ -206,12 +211,12 @@ import UIKit
         TeaLinkFlow(spacing: 8) { ForEach(message.links) { link in quietLink(link).contextMenu { Button("Save to Links") { linkToSave = .init(url: link.url.absoluteString, message: message.id) } } } }
       }
       HStack(spacing: 12) {
-        TeaConversationTime(value: message.createdAt)
-        Spacer(minLength: 12)
+        if !showAuthor { TeaConversationTime(value: message.createdAt) }
         if !model.readOnly {
           Button("Reply") { model.quotes[model.key] = message.reference; composing = true }
-            .font(.caption).frame(minHeight: 44).accessibilityLabel("Reply to " + message.author.name)
+            .font(.subheadline).foregroundStyle(MIRATheme.Color.textPrimary).frame(minHeight: 44).accessibilityLabel("Reply to " + message.author.name)
         }
+        Spacer(minLength: 0)
       }
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.padding(.top, showAuthor ? 12 : 4).padding(.bottom, 8)
@@ -239,7 +244,7 @@ import UIKit
         HStack(alignment: .bottom, spacing: 6) {
           Button { sheet = .mention } label: { Image(systemName: "at").frame(width: 44, height: 44) }.accessibilityLabel("Mention a member")
           TextField("Message the clubâ€¦", text: Binding(get: { model.drafts[model.key, default: ""] }, set: { model.drafts[model.key] = $0 }), axis: .vertical)
-            .lineLimit(1...5).padding(12).background(CaptroTeaStyle.tint, in: RoundedRectangle(cornerRadius: 22))
+            .font(CaptroTeaStyle.body).lineLimit(1...5).padding(.horizontal, 14).padding(.vertical, 11).background(CaptroTeaStyle.composerFill, in: RoundedRectangle(cornerRadius: 22))
             .focused($composing).disabled(model.busy || model.pending[model.key] != nil).accessibilityIdentifier("tea.club.input")
           Button { Task { await model.send() } } label: {
             if model.busy { ProgressView().frame(width: 44, height: 44) } else { Image(systemName: "paperplane").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(CaptroTeaStyle.accent, in: Circle()) }
