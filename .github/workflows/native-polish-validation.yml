@@ -66,6 +66,9 @@ jobs:
       - uses: actions/checkout@v6
       - name: Record actual source for release validation
         run: node scripts/app-store/native-validation-source.mjs
+      - name: Parse changed Tea sources before building
+        run: |
+          xcrun swiftc -frontend -parse ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
@@ -137,6 +140,14 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" -resultBundlePath "$RUNNER_TEMP/SmallPolish.xcresult" \
             "${small_tests[@]}" \
             CODE_SIGNING_ALLOWED=NO test-without-building 2>&1 | tee "$RUNNER_TEMP/small-polish.log"
+      - name: Capture native build crash diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-diagnostics"
+          find "$HOME/Library/Logs/DiagnosticReports" -type f -mmin -100 -maxdepth 2 -exec cp {} "$RUNNER_TEMP/native-diagnostics/" \; 2>/dev/null || true
+          vm_stat > "$RUNNER_TEMP/native-diagnostics/memory.txt"
+          df -h > "$RUNNER_TEMP/native-diagnostics/disk.txt"
+          /usr/bin/log show --last 20m --style compact --predicate 'process == "XCBBuildService" OR process == "SWBBuildService"' > "$RUNNER_TEMP/native-diagnostics/build-service.log" 2>&1 || true
       - name: Export screenshots
         if: always()
         run: |
@@ -159,6 +170,7 @@ jobs:
             ${{ runner.temp }}/Polish.xcresult
             ${{ runner.temp }}/polish.log
             ${{ runner.temp }}/polish-build.log
+            ${{ runner.temp }}/native-diagnostics/
             ${{ runner.temp }}/screenshots
             ${{ runner.temp }}/SmallPolish.xcresult
             ${{ runner.temp }}/small-polish.log
