@@ -39,6 +39,7 @@ on:
       - ".github/workflows/native-ios-testflight.yml"
 
 env:
+  DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
   IOS_NATIVE_DIR: ios_native/MIRA
   BUNDLE_ID: com.captro.app
   SCHEME: Captro
