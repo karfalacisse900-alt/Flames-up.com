@@ -110,4 +110,18 @@ Physical-device testing: not performed for this presentation-only change.
 TestFlight
 Signed build 1.0.1 (726.1) started from final app source dc15447.
 Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44459945233
-Pending upload and Apple processing/availability confirmation.
+Native-source/runtime verification, signed archive, Release authentication
+configuration, IPA export, and live schema/API compatibility checks passed.
+Upload succeeded at 2026-11-19 04:59:52 UTC.
+Nonblocking uploader warning 90725: Apple's April 2027 SDK deadline will require
+iOS 27 SDK/Xcode 27. This build was accepted with iOS 26.5 SDK/Xcode 26.6.
+Initial Apple read at 05:00:36 UTC: PROCESSING, no upload-state errors.
+Latest Apple read at 05:27:05 UTC: still PROCESSING, no upload-state errors.
+Read-only status run:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44465222042
+Apple has not yet created a ready build record for 726.1. Tester availability
+is therefore NOT confirmed. The existing internal groups use automatic
+distribution; no groups, testers, or distribution settings were changed.
+The source changes, screenshots, tests, signed archive, and upload are complete.
+Apple processing is the remaining external release step; no duplicate upload
+was created and no claim of tester availability is made.
