@@ -19,7 +19,7 @@ test('private application lifecycle, separate authority, audit, idempotency and 
     create table app_admin_roles(user_id text,role text);
     insert into app_users(id) values('owner'),('applicant'),('other');insert into app_admin_roles values('owner','owner');
     grant select,update on app_users to service_role;grant select on app_admin_roles to service_role;`);
-  await db.exec(readFileSync(new URL('../../supabase/migrations/20261119023323_account_badge_verification.sql',import.meta.url),'utf8'));
+  await db.exec(readFileSync(new URL('../../supabase/migrations/20261119024323_account_badge_verification.sql',import.meta.url),'utf8'));
   const call=async(actor,target,action,data,id=randomUUID())=>(await db.query('select captro_badge_mutate($1,$2,$3,$4,$5) r',[actor,target,action,id,JSON.stringify(data)])).rows[0].r;
   const input=badgeInput('submit',{...form,id:randomUUID()});const {id,...data}=input;
   await db.exec('set role service_role');
@@ -64,3 +64,4 @@ test('public badges are server-authoritative, including missing and revoked iden
   const out=await teaAuthorPhotos(rows,async()=>new Map([['approved',{photoURL:'https://example.com/a.jpg',isVerified:true}]]));
   assert.equal(out[0].author.isVerified,true);assert.equal(out[1].author.isVerified,false);
 });
+
