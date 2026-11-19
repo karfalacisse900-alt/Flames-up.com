@@ -1,0 +1,113 @@
+Captro Tea Notes row comparison - 2026-11-19
+
+Branch: fix/tea-notes-row-density-20261119
+Final app source: dc15447bc198cf5761bea1e91a1c7c949720371b
+Native tree: eb36938bfb45fef5004d238c975c95696cc3d2ea
+Before UI source: cc04f84 (the preceding released implementation)
+
+Shipping scope
+Only CaptroTeaConversationsList / CaptroTeaConversationRow presentation changed.
+Title: 16 pt bold, existing near-black primary ink.
+Preview: 14 pt regular, native tight line height, two lines at default text size.
+Metadata: 12 pt, existing readable secondary ink (#616161 in light mode).
+Metadata separators now use the metadata font instead of inheriting body height.
+Avatar: 50 pt, 12 pt gap, 14 pt list insets, text starts at x=76 pt.
+Title/preview/metadata spacing: 3 pt with 2 pt extra before metadata.
+Row vertical inset: 20 pt, balanced with the shorter text lines.
+Keep the existing half-point divider and purple data-backed accents.
+Notes cells, loading/error rows, and the list use the shared app background
+(white in light mode, the existing dark surface in dark mode), without cards.
+Text remains Dynamic Type scaled. Accessibility sizes allow full previews and
+move reply counts below the title. Long titles can wrap rather than shrink.
+
+Unchanged
+Header, filters, navigation, actual content, data/cache layer, publishing,
+Note actions, replies, Support, memberships, payments, and other app screens.
+No backend deployment, migration, live-setting change, or production fixture data.
+
+Exact implementation and verification files
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaRowReviewPhotos.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroImageRecoveryFixture.swift
+ios_native/MIRA/LayoutUITests/TeaConversationTests.swift
+.github/workflows/native-polish-validation.yml
+docs/tea-notes-row-density-20261119.txt
+docs/evidence/tea-notes-row-20261119/large-before-after.png
+docs/evidence/tea-notes-row-20261119/large-after-vs-reference.png
+docs/evidence/tea-notes-row-20261119/small-before-after.png
+docs/evidence/tea-notes-row-20261119/small-large-text.png
+docs/evidence/tea-notes-row-20261119/large-large-text.png
+docs/evidence/tea-notes-row-20261119/visual-measurements.json
+
+Capture method
+The real native root opens Tea with isolated transport fixtures. Avatar crops
+come from the supplied reference and pass through the real image loader.
+Fixtures require explicit review launch arguments and are compiled under DEBUG;
+they are not published, production records, or release assets.
+Each comparison job renders the previous row source, then restores the final
+source and renders again on the same simulator UUID and default (.large) text
+setting. App foreground screenshots are exported directly from XCTest.
+Separate accessibility2 captures exercise larger text on both phone sizes.
+The before/after compositor asserts matching simulator IDs. Screenshots are
+only uniformly resized for side-by-side viewing, with labels outside the UI.
+
+Reference provenance
+Latest crop: codex-clipboard-76ac3cdf-ffd3-498b-9723-3b8f923ebb98.png.
+The latest target is partly covered/cropped by the app switcher. For a fair
+same-width comparison, use the earlier supplied full-width copy of that same
+target: 34CDF68C-9ADB-49DE-B6C4-20F2E7EB9674/1-Photo-1.jpg.
+Only its phone frame/header/navigation are cropped; the Note row pixels are
+preserved. Native before/after captures show the full foreground app.
+Reference verification marks and category labels are not fabricated in fixtures;
+the current Notes model shows a selected borough only when it exists.
+
+Review iterations
+First comparison: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44450857037
+Both iPhone jobs passed (one baseline + two after tests per phone, six runs).
+The first pass reduced standard rows from 124 to 108.67 pt, but its 17/15/12.5 pt
+type and 52 pt avatars still looked too large relative to the normalized target
+on the mini. The final source above corrects that visual mismatch. First-pass
+captures are retained separately and are not the final screenshots.
+
+Final validation
+Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44454101885
+Attempt 1: iPhone 17 baseline and both after tests passed. The final five rows
+measure 115.33 pt each, close to the normalized reference's 114.9-119.0 pt.
+Visual inspection passed for density, avatar/text alignment, readable metadata,
+flat white background, and accessibility-size wrapping.
+Measured preview height: 40.33 -> 33.67 pt. Measured metadata solid pixels:
+#8B8B8B -> #616161, improving contrast against white from 3.41:1 to 6.19:1.
+Both foreground captures have white (#FFFFFF) list margins. The new explicit
+cell backgrounds make that surface intentional; no claim is made that the
+previous foreground surface was gray merely because the app-switcher image was.
+The iPhone 13 mini baseline screenshot sampler crashed while unwrapping a crop
+after an accessibility frame disappeared. This was in the old before version,
+not a failure of the updated row rendering. That job is NOT counted as passed.
+Its full failed evidence is preserved under raw/small-failed-attempt1. Only the
+failed job was rerun; successful iPhone 17 results were retained.
+Attempt 2: mini baseline and both updated-source tests passed, no failures.
+Status: PASSED; final native build, runtime captures, and visual review complete
+on iPhone 17 and iPhone 13 mini (iOS 26.5, Xcode 26.6).
+Four updated-source UI executions passed, plus two successful baseline captures.
+The prior baseline sampler crash is recorded above, not hidden or counted as a pass.
+Both sizes verify image loading, default two-line previews, opening a Note,
+returning to the list, opening/cancelling the existing Post composer, and
+accessibility2 preview expansion without horizontal overflow.
+Same-device before/after IDs:
+  iPhone 17: 61956191-8A1F-4FAE-87C4-EA1AD33ABFAB
+  iPhone 13 mini: 74D1E795-99D0-4447-8243-F01A77DB6D88
+Default rows on both sizes: 124 -> 115.33 pt. The longer title on the mini
+wraps naturally: 146 -> 134.33 pt, rather than shrinking to force one line.
+No layout overflow was seen in either accessibility2 capture.
+Remaining visual difference: mockup badges/context labels are absent where the
+fixture account has no authoritative verification or category; native Notes
+show selected boroughs. Long titles wrap on the mini; the reference is a static
+larger-phone illustration. Existing header, filters, and presentation are intact.
+Evidence destination: C:/Users/The-s/AppData/Local/Temp/captro-notes-row-final
+Physical-device testing: not performed for this presentation-only change.
+
+TestFlight
+Signed build 1.0.1 (726.1) started from final app source dc15447.
+Run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44459945233
+Pending upload and Apple processing/availability confirmation.
