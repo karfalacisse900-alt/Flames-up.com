@@ -1,0 +1,34 @@
+Captro native polish TestFlight release
+
+Authorized by the user's follow-up: "update testflight".
+Version/build: 1.0.1 (740.1)
+Source: ebc1ec2ab9e637cbfcef9c0bd469d5110a222596
+Native tree: f18bf745c5685a747def5b9526cc748e033ee582
+Branch: polish/native-consistency-review-20261119
+Release: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44635769361
+
+Existing runtime evidence:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44629999299
+283 unit tests, two updated-source UI executions (default and accessibility2),
+and one same-device baseline capture passed. The paired review uses real public
+content snapshots; its DEBUG transport and generated payload are excluded from
+Release. No new simulator run was required for this unchanged native source.
+The release used the existing exact-native-tree runtime deferral input because
+the paired review does not export the older release gate's source manifest.
+This is not a claimed pass of that separate legacy validation route.
+
+Signed archive, Release authentication/entitlement verification, IPA export,
+and read-only live schema/API compatibility checks all passed.
+Apple upload succeeded without errors on November 19, 2026 at 6:32:34 PM EST
+(23:32:34 UTC). IPA artifact ID: 14584109803.
+Apple's nonblocking warning 90725 concerns the April 2027 SDK deadline; the
+current SDK was accepted for this upload.
+
+Apple status confirmed at 6:36:57 PM EST (23:36:57 UTC): upload COMPLETE,
+build processing VALID, internalBuildState IN_BETA_TESTING, expired false.
+Assigned groups: Captro private and Captro private2 (both existing internal
+groups, automatic distribution enabled). Build 740.1 is available to them.
+External state remains READY_FOR_BETA_SUBMISSION; no external beta submission
+or public App Store release was made.
+Status read: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44639105962
+No group, tester, payment, or backend setting was changed.
