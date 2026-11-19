@@ -1,36 +1,80 @@
-Tea reference density update — 2026-11-18
+CAPTRO TEA PRESENTATION / TESTFLIGHT UPDATE
 Branch: fix/tea-reference-density-20261118
-Implementation commit: efa7396
 
-Changed files:
-- ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
-- ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
-- ios_native/MIRA/LayoutUITests/TeaNoteTests.swift
+Changes in the existing native app:
+- Notes: title and preview first; author, time and explicitly selected borough below.
+- Existing real-avatar loader retained. Replies and club messages use 40-point avatars.
+- Compact 16-point Dynamic Type caption/body text and 17-point detail titles.
+- Reply and club author metadata uses aligned, wrapping name/handle/time rows.
+- Fine dividers, compact italic violet quotes and neutral reply fields with violet send.
+- Accessibility-size reply counts move below titles instead of narrowing the title.
+- Existing actions, drafts, stable sentence targets, account follow, discussion follow,
+  club access and moderation are unchanged. No backend/payment changes.
 
-Changes:
-- Notes: title and preview first, quiet author/time/selected borough beneath;
-  preserved separate primary-action target and real avatar loader.
-- Accessibility text: reply count below title instead of squeezing title column.
-- Detail: reduced title/caption spacing; 16-point Dynamic Type callout body;
-  compact author handle/time line; neutral composer with violet send control.
-- Replies and club messages: 40-point avatars, semibold names, wrapping inline
-  handle/time metadata, fine dividers and consistent body sizing.
-- Sentence quotes: compact italic violet excerpts with existing stored targets
-  and expansion behavior unchanged.
-- Adjusted Notes UI tests to locate the combined accessible metadata element.
+Files changed from the previously released source:
+.github/workflows/native-polish-validation.yml
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
+ios_native/MIRA/LayoutUITests/TeaNoteTests.swift
+ios_native/MIRA/LayoutUITests/TeaConversationTests.swift
+docs/tea-reference-density-20261118.txt
+
+Build issue resolved:
+Five separator characters introduced by the edit had invalid UTF-8 bytes. Xcode
+reported a build-service crash rather than the underlying parse error. Fixed in
+125c6fe with ASCII Swift Unicode escapes. All native Swift files decode strictly
+as UTF-8. A fast Swift parser preflight now catches this before the full build.
+Temporary runner/toolchain changes were reverted after the actual cause was found.
 
 Verification:
-- git diff --check passed.
-- Native validation run 44416287265, attempts 1 and 2, both failed before tests:
-  'unexpected service error: The Xcode build system has crashed. Build again to continue.'
-- No Swift source error was reported, but this is NOT a successful compile.
-- No new rendered screenshots or physical-device verification available.
-- No production deployment or TestFlight upload for these changes.
+Both iPhone 17 and iPhone 13 mini compiled and ran the seven selected UI tests.
+The original screenshot assertion sampled a white/antialiased boundary pixel for
+the half-point divider. The updated assertion checks a narrow boundary band and
+allows the observed visible gray raster (195-242), while rejecting a white gap.
+It still requires equal RGB channels and a visible divider near the row boundary.
+Final run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44433321813
+Attempt 1: large phone 7/7 passed; small phone 6/7 passed. The club test had two
+assertion failures after Apple's first-use slide-to-type tutorial intercepted the
+Links tab tap. The saved accessibility hierarchy contains the tutorial text and
+Continue button, with Saved draft still present and Chat selected. Only the
+failed small-phone job was rerun, without changing the app or skipping a test.
+Attempt 1 failure evidence is retained locally in captro-tea-verified-small-44433321813;
+its two temporary CI artifacts were removed after download so the retry can write
+fresh, uniquely named small-phone evidence. CI failure logs remain available.
+Attempt 2 passed: small phone 7/7, with the large phone's 7/7 pass retained.
+Final result: 14 selected UI executions passed across iPhone 13 mini and iPhone 17.
+Passing artifacts are saved locally in captro-tea-verified-large-44433321813 and
+captro-tea-verified-small-retry-44433321813. No test was disabled or skipped.
+Nine release-gate regression tests passed. git diff --check passed.
+
+Screenshots reviewed (isolated fixtures, not production records):
+C:/Users/The-s/AppData/Local/Temp/captro-corrected-small/screenshots/
+- 9B2679CB-D191-498C-8993-AED3152DE9A9.png: Notes/avatar loading and dividers.
+- 517F7F93-9180-4372-8EC0-43262B811D21.png: club chat and composer.
+- AD27F623-2F10-4B7E-B916-90BF05CF0352.png: expanded sentence replies.
+- 61711E8B-5C7F-44C9-BFDF-AF0E92BFAA6D.png: accessibility-size Notes layout.
+Red fixture avatars intentionally verify the image pipeline; they are not app assets.
+Fixture-only diagnostic labels are excluded from Release.
 
 Limits:
-This is a presentation pass, not a claim of pixel-exact parity. Existing models
-lack the mockup's per-message like counts and verified badges; none were invented.
-Existing general replies, stable sentence targets, links, drafts, moderation,
-profile navigation, Notes actions, applications and payments were preserved.
-The existing text-only reply composer was not given nonfunctional photo buttons.
-No fake Nearby/Event/Club labels were attached to unrelated Notes.
+No physical-iPhone or live-payment testing. This is not a claim of pixel-exact
+parity or of implementing unsupported mockup features. No invented per-message
+like counts, verified badges, or nonfunctional photo buttons were added. Existing
+text-only replies, real links and actual selected boroughs are preserved.
+
+Release:
+User requested TestFlight updates after changes as the standing preference.
+Signed release workflow started after successful native verification:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44440180957
+Captro 1.0.1 (718.1) uploaded successfully at 2026-11-19 02:12:29 UTC.
+Delivery UUID: ceea5d0f-ecb0-4f78-9515-6f39cadd8f8f.
+Archive, Release authentication validation, security/schema compatibility, IPA
+export and upload all passed. Apple returned no errors and one nonblocking SDK
+notice: iOS 27 SDK will be required starting April 2027; this build uses iOS 26.5.
+Apple availability verified at 2026-11-19 02:15:33 UTC:
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44442963697
+Upload COMPLETE; build VALID, not expired; internal state IN_BETA_TESTING.
+Assigned to Captro private and Captro private2, both existing internal groups
+with automatic distribution. autoNotifyEnabled is true. External state remains
+READY_FOR_BETA_SUBMISSION; no external/public release was submitted.
+No production schema, payment setting, website, or public App Store release changed.
