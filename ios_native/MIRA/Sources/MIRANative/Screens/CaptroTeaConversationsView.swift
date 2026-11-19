@@ -95,13 +95,13 @@ struct CaptroTeaConversationsList: View {
             .buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
           if post.primaryAction != nil {
             CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
-              .padding(.leading, 64).padding(.bottom, 8)
+              .padding(.leading, 62).padding(.bottom, 8)
           }
         }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 0.5).accessibilityHidden(true) }
           .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
             postID: post.id, feed: "tea-list").allowsHitTesting(false))
           .buttonStyle(.plain)
-          .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+          .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14))
           .listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       }
       if let error {
@@ -180,13 +180,13 @@ struct CaptroTeaConversationsList: View {
 private struct CaptroTeaConversationRow: View {
   @Environment(\.dynamicTypeSize) private var typeSize
   let post: CaptroTeaConversation
-  @ScaledMetric(relativeTo: .headline) private var titleSize = 17.0
-  @ScaledMetric(relativeTo: .subheadline) private var previewSize = 15.0
-  @ScaledMetric(relativeTo: .footnote) private var metadataSize = 12.5
+  @ScaledMetric(relativeTo: .headline) private var titleSize = 16.0
+  @ScaledMetric(relativeTo: .subheadline) private var previewSize = 14.0
+  @ScaledMetric(relativeTo: .footnote) private var metadataSize = 12.0
   private var metadataInk: Color { MIRATheme.Color.textSecondary }
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
-      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 52)
+      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 50)
       VStack(alignment: .leading, spacing: 3) {
         if typeSize.isAccessibilitySize {
           Text(post.title).font(.system(size: titleSize, weight: .bold)).fixedSize(horizontal: false, vertical: true)
@@ -204,18 +204,18 @@ private struct CaptroTeaConversationRow: View {
           .accessibilityIdentifier("tea.preview." + post.id)
         TeaLinkFlow(spacing: 5) {
           HStack(spacing: 4) { Text(post.author.name).font(.system(size: metadataSize)).foregroundStyle(metadataInk); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
-          Text("\u{00B7}").foregroundStyle(metadataInk).accessibilityHidden(true)
+          Text("\u{00B7}").font(.system(size: metadataSize)).foregroundStyle(metadataInk).accessibilityHidden(true)
           if let date = captroTeaDate(post.createdAt) {
             Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
               .font(.system(size: metadataSize)).foregroundStyle(metadataInk)
           }
           if let borough = post.borough {
-            Text("\u{00B7}").foregroundStyle(metadataInk).accessibilityHidden(true)
+            Text("\u{00B7}").font(.system(size: metadataSize)).foregroundStyle(metadataInk).accessibilityHidden(true)
             Text(borough).font(.system(size: metadataSize)).foregroundStyle(CaptroTeaStyle.accent)
           }
         }.padding(.top, 2).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
       }.frame(maxWidth: .infinity, alignment: .leading)
-    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 12)
+    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 20)
       .contentShape(Rectangle())
   }
   @ViewBuilder private var replyCount: some View {
