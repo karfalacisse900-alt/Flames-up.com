@@ -320,6 +320,7 @@ private final class TeaReviewProtocol: URLProtocol {
         ]
         for (index, e) in examples.enumerated() {
           Self.conversations[id(101 + index)] = ["id":id(101 + index),"title":e.0,"body":e.1,"links":[],"createdAt":ISO8601DateFormatter().string(from: Date().addingTimeInterval(-Double((index + 2) * 3600))),"version":1,"isAuthor":false,"following":false,"borough":e.3,"replyCount":[28,17,34,22,19][index],"author":["id":"artist", "name":e.2,"username":"fixture", "photoURL":"https://image-fixture.invalid/notes-\(index).jpg"]]
+          if e.3.isEmpty { Self.conversations[id(101 + index)]?.removeValue(forKey: "borough") }
         }
       }
       if path == "/tea/conversations/capabilities" { return (200,["canCreateForms":true]) }
