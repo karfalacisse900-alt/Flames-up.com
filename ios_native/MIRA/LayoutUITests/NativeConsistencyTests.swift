@@ -12,6 +12,8 @@ final class NativeConsistencyTests: XCTestCase {
     return field.exists ? field : app.textViews[id]
   }
   private func tab(_ name: String, _ app: XCUIApplication) {
+    let studio = app.buttons["capture.navigation." + name.lowercased()]
+    if studio.exists && studio.isHittable { studio.tap(); return }
     let native = app.tabBars.buttons[name]
     let button = native.exists ? native : app.buttons[name].firstMatch
     XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()
@@ -72,6 +74,10 @@ final class NativeConsistencyTests: XCTestCase {
     app.buttons["tea.back.home"].tap()
     tab("Capture", app)
     XCTAssertTrue(app.buttons["capture.mode.photo"].waitForExistence(timeout: 10))
+    let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    let deny = springboard.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Don’t Allow", "Don't Allow")).firstMatch
+    if deny.waitForExistence(timeout: 3) { deny.tap() }
+    XCTAssertTrue(app.staticTexts["capture.unavailable"].firstMatch.waitForExistence(timeout: 8))
     capture("capture-" + suffix, app)
     tab("Me", app)
     XCTAssertTrue(app.buttons["profile.edit"].waitForExistence(timeout: 15))

@@ -36,7 +36,7 @@ jobs:
           printf '%s\n' "$device" "$runtime" > "$RUNNER_TEMP/review-device.txt"
           # Only presentation sources are swapped. The identical offline transport,
           # captured public records, image bytes and tests are used for both builds.
-          sources=(Design/MIRATheme.swift Components/CaptroFeedMediaStamp.swift Components/CaptroProfilePresentation.swift
+          sources=(Design/MIRATheme.swift Components/CaptroFeedMediaStamp.swift Components/CaptroProfilePresentation.swift Components/CaptroStudioLayout.swift
             Screens/CaptroCameraNativeView.swift Screens/CaptroFeedPostView.swift Screens/CaptroTeaClubView.swift
             Screens/CaptroTeaConversationsView.swift Screens/CaptroTeaSelectableText.swift Screens/CaptroTeaView.swift
             Screens/ConversationNativeView.swift Screens/MainFeedView.swift Screens/ProfileChatVerificationStudio.swift)
@@ -44,14 +44,18 @@ jobs:
             git show "16ff660:ios_native/MIRA/Sources/MIRANative/$source" > "Sources/MIRANative/$source"
           done
           before_result=0
+          echo 'Building baseline and recording before screens'
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -test-timeouts-enabled YES -maximum-test-execution-time-allowance 240 \
             -derivedDataPath "$RUNNER_TEMP/ConsistencyBuild" -resultBundlePath "$RUNNER_TEMP/Before.xcresult" \
             -only-testing:CaptroLayoutUITests/NativeConsistencyTests/testDefaultScreensAndRestoration \
             CODE_SIGNING_ALLOWED=NO test > "$RUNNER_TEMP/before.log" 2>&1 || before_result=$?
+          echo "Baseline finished with status $before_result"
+          grep -E 'error:|Test Case.*(passed|failed)|Executed' "$RUNNER_TEMP/before.log" | tail -10 || true
           for source in "${sources[@]}"; do git restore --source=HEAD -- "Sources/MIRANative/$source"; done
           after_result=0
+          echo 'Building updated app and recording after screens'
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             -test-timeouts-enabled YES -maximum-test-execution-time-allowance 240 \

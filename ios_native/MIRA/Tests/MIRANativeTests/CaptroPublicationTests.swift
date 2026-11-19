@@ -23,9 +23,11 @@ import Combine
     var fresh = old
     model.testPageLoader = { _, _ in fresh }
     await model.load()
-    for (index, type) in ["general", "cover", "club", "event", "meetup", "deal", "group", "offer", "ticket"].enumerated() {
-      let published = try post("published-\(index)", type: type,
-        media: index % 2 == 0 ? ["https://example.invalid/photo.jpg"] : ["https://example.invalid/clip.mp4", "https://example.invalid/photo.jpg"])
+    // Home admits ordinary media posts. Structured listings belong to Tea.
+    let media = [["https://example.invalid/photo.jpg"], ["https://example.invalid/clip.mp4"],
+      ["https://example.invalid/photo.jpg", "https://example.invalid/second.jpg"]]
+    for (index, type) in ["general", "general", "cover"].enumerated() {
+      let published = try post("published-\(index)", type: type, media: media[index])
       fresh = [published] + old
       let before = model.posts.map(\.id)
       await model.reconcilePublication(receipt(published), canInsertNow: { true })
@@ -34,6 +36,16 @@ import Combine
       XCTAssertEqual(model.paginationOffsetForTesting(.forYou), 12, "Local insertion isn't a consumed server row")
       await model.reconcilePublication(receipt(published), canInsertNow: { true })
       XCTAssertEqual(model.posts.filter { $0.id == published.id }.count, 1)
+    }
+  }
+
+  func testStructuredPublicationsPreserveExistingHomeOrder() async throws {
+    for type in ["club", "event", "meetup", "deal", "group", "offer", "ticket"] {
+      let model = model(), old = try post("existing"), listing = try post("listing-" + type, type: type)
+      model.posts = [old]
+      model.testPageLoader = { _, _ in [listing, old] }
+      await model.reconcilePublication(receipt(listing), canInsertNow: { true })
+      XCTAssertEqual(model.posts.map(\.id), [old.id])
     }
   }
 

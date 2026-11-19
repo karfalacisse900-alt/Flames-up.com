@@ -47,9 +47,10 @@ struct CaptroStudioNavigation: View {
         Image(systemName: symbol).font(.system(size: 20, weight: .regular))
         Text(title).font(.caption2)
       }.frame(maxWidth: .infinity, minHeight: 44)
+        .contentShape(Rectangle())
         .foregroundStyle(selected ? Color.white : .white.opacity(0.7))
         .background(selected ? Color.white.opacity(0.10) : .clear, in: Capsule())
-    }.buttonStyle(.plain).accessibilityLabel(title)
+    }.buttonStyle(.plain).accessibilityElement(children: .ignore).accessibilityLabel(title)
       .accessibilityAddTraits(selected ? .isSelected : [])
       .accessibilityIdentifier("capture.navigation." + title.lowercased())
   }
