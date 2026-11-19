@@ -1,0 +1,47 @@
+Captro exact Tea selection and account verification
+Branch: fix/tea-selection-verification-20261118
+Release source: af82a556432e1413a1dac4a1fec2fe44c2a0468c
+
+Changes
+- Native UITextView selection supplies the actual selected UTF-16 range, converted
+  to Unicode code-point offsets in the immutable caption revision. The previous
+  SwiftUI context menu knew only its containing sentence/caption.
+- Server accepts the exact matching excerpt; it still validates post access,
+  revision, target identity and quote. General replies and stored quotes remain.
+- Settings has Account verification: private application, optional supporting
+  HTTPS links, review status/message, resubmission and safe uncertain retries.
+- Existing private admin console has Account verification review, changes,
+  approval, decline and revocation, with concurrency checks and an audit record.
+- Trusted app_users.is_verified feeds badges on profiles, post authors, Notes,
+  Note replies, club chat authors and ordinary post comments. This grants no
+  professional role, payment capability, club membership or other entitlement.
+- No payment configuration, pricing, routing or existing access rules changed.
+
+Validation
+- All 454 backend tests passed locally and in release CI. Includes exact partial
+  selection, stale captions, tampered quotes, private content, safe retries,
+  private applications, admin authority, approval/revocation and forged badges.
+- Backend TypeScript and admin production TypeScript/Vite builds passed.
+- Isolated admin browser test passed: review queue/detail, approval, failed
+  response/retry with identical operation ID, approved queue, revoke action,
+  mobile-width layout. No real application was approved during testing.
+- Native exact-selection unit regression added. Simulator/unit runtime not run
+  per user's instruction. Native signed archive/build result recorded below.
+- Live migration RLS and service-only RPC checks passed; unauthenticated private
+  application/review requests return 401. Public Notes return authoritative
+  boolean verification flags. No real users or financial records changed.
+
+Deployment evidence
+- Migration: 20261119024323_account_badge_verification.sql, applied successfully.
+- Worker release: 44446670848, successful. Worker version
+  57f6e193-5f4d-4b3b-a3c6-937b63e65cd5. Existing configuration hash preserved.
+- Private admin: 44446673858, successful, deployment
+  https://4f057ffd.captro-admin.pages.dev
+- TestFlight archive/upload: 44446677586, version 1.0.1 (722.1).
+  Availability will be recorded after Apple processing.
+
+Limits
+- No simulator or physical iPhone interaction test this pass. Native text
+  selection, VoiceOver selection and live-device layout still need device QA.
+- Existing badges may remain in short-lived cached UI until its usual refresh.
+- Admin identity review is manual; this is not government ID verification.
