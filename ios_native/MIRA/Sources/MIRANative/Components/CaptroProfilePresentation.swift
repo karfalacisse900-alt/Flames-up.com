@@ -102,16 +102,16 @@ struct CaptroProfileItemRow: View {
         contentMode: .fill, maxPixelSize: 240)
         .frame(width: 70, height: 70).clipped().clipShape(RoundedRectangle(cornerRadius: 5))
       VStack(alignment: .leading, spacing: 4) {
-        if pinned { Text("PINNED").font(.caption).foregroundStyle(.secondary) }
-        Text(card.title.isEmpty ? "View moment" : card.title).font(.subheadline.weight(.semibold))
-        if !card.homeStampDetails.isEmpty { Text(card.homeStampDetails).font(.caption).foregroundStyle(.secondary) }
+        if pinned { Text("PINNED").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary) }
+        Text(card.title.isEmpty ? "View moment" : card.title).miraText(.rowTitle)
+        if !card.homeStampDetails.isEmpty { Text(card.homeStampDetails).miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary) }
         if let status = card.availabilityText, !status.isEmpty { Text(status).font(.caption.weight(.semibold)) }
         if let zone = post.detail?.commerce?.timeZone ?? post.detail?.event?.timeZone {
-          Text(zone).font(.caption2).foregroundStyle(.secondary)
+          Text(zone).font(.caption2).foregroundStyle(MIRATheme.Color.textSecondary)
         }
       }.fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: 0)
-      Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+      Image(systemName: "chevron.right").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
     }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12).contentShape(Rectangle())
   }
 }
@@ -128,7 +128,7 @@ struct CaptroProfilePlans: View {
     let plans = posts.filter(\.isProfilePlan)
     let now = Date()
     VStack(alignment: .leading, spacing: 10) {
-      if plans.isEmpty { Text("No hosted plans loaded").foregroundStyle(.secondary) }
+      if plans.isEmpty { Text("No hosted plans loaded").foregroundStyle(MIRATheme.Color.textSecondary) }
       ForEach(["Upcoming", "Past", "Date unavailable"], id: \.self) { category in
         let rows = plans.filter { group($0, now: now) == category }
         if !rows.isEmpty {
@@ -150,35 +150,35 @@ struct CaptroProfileIntroduction: View {
   let user: MIRAUser?
   var professionalRole: CaptroProfessionalPublicRole? = nil
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.sm) {
       HStack(spacing: 18) {
         RemoteAvatar(url: user?.profileImage, size: 84)
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.xxs) {
           HStack(spacing: 5) {
             Text(professionalRole?.displayName ?? user?.fullName?.nonemptyProfileText ?? user?.displayName ?? "Profile")
-            .font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
+            .miraText(.screenTitle).fixedSize(horizontal: false, vertical: true)
             CaptroVerifiedBadge(verified: user?.isVerified == true)
           }
           if let username = user?.username {
-            Text("@\(MIRAUsernameRules.normalized(username))").foregroundStyle(.secondary)
+            Text("@\(MIRAUsernameRules.normalized(username))").foregroundStyle(MIRATheme.Color.textSecondary)
           }
           if let city = user?.city?.nonemptyProfileText {
-            Label(city, systemImage: "mappin.and.ellipse").foregroundStyle(.secondary)
+            Label(city, systemImage: "mappin.and.ellipse").foregroundStyle(MIRATheme.Color.textSecondary)
           }
-        }.font(.subheadline)
+        }.miraText(.preview)
         Spacer(minLength: 0)
       }
       if let bio = user?.bio?.nonemptyProfileText {
-        Text(bio).font(.body).fixedSize(horizontal: false, vertical: true)
+        Text(bio).miraText(.body).fixedSize(horizontal: false, vertical: true)
       }
       if user?.privacyLocked != true, user?.viewerHasBlocked != true, user?.viewerBlockedBy != true,
          let followers = user?.followersCount, let following = user?.followingCount {
         Text("\(followers) followers · \(following) following")
-          .font(.subheadline).foregroundStyle(.secondary)
+          .miraText(.preview).foregroundStyle(MIRATheme.Color.textSecondary)
       }
       if let openTo = user?.openTo?.nonemptyProfileText {
-        (Text("Open to  ").foregroundColor(.secondary) + Text(openTo))
-          .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+        (Text("Open to  ").foregroundColor(MIRATheme.Color.textSecondary) + Text(openTo))
+          .miraText(.preview).fixedSize(horizontal: false, vertical: true)
       }
     }.frame(maxWidth: .infinity, alignment: .leading)
   }

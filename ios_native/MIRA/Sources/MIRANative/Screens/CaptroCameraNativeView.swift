@@ -202,7 +202,7 @@ struct CaptroCameraNativeView: View {
   private var header: some View {
     HStack {
       if reviewMedia != nil {
-        Text("Review").font(.headline).accessibilityIdentifier("capture.review.title")
+        Text("Review").miraText(.rowTitle).accessibilityIdentifier("capture.review.title")
       } else {
         Menu {
           Picker(camera.mode == .photo ? "Flash" : "Torch", selection: $flash) {
@@ -212,7 +212,7 @@ struct CaptroCameraNativeView: View {
           }
         } label: {
           Image(systemName: flash == .off ? "bolt.slash" : flash == .auto ? "bolt.badge.a" : "bolt.fill")
-            .font(.title3).frame(width: 44, height: 44)
+            .font(.system(size: MIRATheme.Layout.toolbarIcon)).frame(width: MIRATheme.Layout.minimumTarget, height: MIRATheme.Layout.minimumTarget)
         }.disabled(camera.state != .ready || countdown > 0 || !(camera.mode == .photo ? camera.hasFlash : camera.hasTorch))
           .opacity((camera.mode == .photo ? camera.hasFlash : camera.hasTorch) ? 1 : 0.4)
           .accessibilityLabel(camera.mode == .photo ? "Photo flash" : "Video torch")
@@ -231,7 +231,7 @@ struct CaptroCameraNativeView: View {
       Spacer()
       if reviewMedia == nil {
         Button { showSettings = true } label: {
-          Image(systemName: "slider.horizontal.3").font(.title3).frame(width: 44, height: 44)
+          Image(systemName: "slider.horizontal.3").font(.system(size: MIRATheme.Layout.toolbarIcon)).frame(width: MIRATheme.Layout.minimumTarget, height: MIRATheme.Layout.minimumTarget)
         }.disabled(busy || recording || countdown > 0)
           .accessibilityLabel("Camera options").accessibilityIdentifier("capture.options")
       } else {
@@ -248,7 +248,7 @@ struct CaptroCameraNativeView: View {
       UISelectionFeedbackGenerator().selectionChanged()
       focused = false; flash = .off; camera.setMode(mode)
     } label: {
-      Text(title.uppercased()).font(.subheadline.weight(camera.mode == mode ? .semibold : .regular)).tracking(1)
+      Text(title.uppercased()).miraText(.label).tracking(1)
         .padding(.horizontal, 14).frame(minHeight: 44)
         .foregroundStyle(camera.mode == mode ? accent : .white.opacity(0.8))
         .overlay(alignment: .bottom) {
@@ -270,7 +270,7 @@ struct CaptroCameraNativeView: View {
         Text(camera.errorMessage ?? (camera.state == .interrupted
           ? (camera.notice ?? "Camera interrupted. Try again when it is available.")
           : "Camera access is needed to take photos and videos."))
-          .font(.body).multilineTextAlignment(.center)
+          .miraText(.body).multilineTextAlignment(.center)
         if AVCaptureDevice.authorizationStatus(for: .video) == .denied || AVCaptureDevice.authorizationStatus(for: .video) == .restricted {
           Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } }
             .frame(minHeight: 44)

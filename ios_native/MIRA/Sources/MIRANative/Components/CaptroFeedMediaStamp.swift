@@ -35,7 +35,7 @@ struct CaptroFeedMediaStamp: View {
   let maxCaptionLines: Int
   let onOpen: () -> Void
   @ScaledMetric(relativeTo: .title3) private var titleSize: CGFloat = 21
-  @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 14
+  @ScaledMetric(relativeTo: .subheadline) private var bodySize: CGFloat = MIRATheme.TextStyle.preview.pointSize
   @ScaledMetric(relativeTo: .caption) private var metadataSize: CGFloat = 11.5
   @ScaledMetric(relativeTo: .caption) private var creatorSize: CGFloat = 12.5
 
@@ -84,7 +84,7 @@ struct CaptroFeedMediaStamp: View {
           .accessibilityIdentifier("home.post.stamp.availability")
       }
       if let caption {
-        Text(caption).font(.system(size: bodySize)).lineSpacing(2)
+        Text(caption).font(.system(size: bodySize)).lineSpacing(0)
           .lineLimit(captionLines)
           .truncationMode(.tail)
           .fixedSize(horizontal: false, vertical: true)
@@ -142,8 +142,8 @@ enum CaptroHomeStampTextBudget {
     if title != nil || !metadata.isEmpty { used += 9 }
     if creator { used += 11 + max(24, UIFont.systemFont(ofSize: creatorSize, weight: .semibold).lineHeight) }
     let available = max(bodyFont.lineHeight, height - used)
-    if textHeight(caption, width: width, font: bodyFont, spacing: 2) <= available { return nil }
-    return max(1, Int(floor((available + 2) / (bodyFont.lineHeight + 2))))
+    if textHeight(caption, width: width, font: bodyFont) <= available { return nil }
+    return max(1, Int(floor(available / bodyFont.lineHeight)))
   }
 }
 

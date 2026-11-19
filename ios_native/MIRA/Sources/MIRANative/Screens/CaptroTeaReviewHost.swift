@@ -121,6 +121,9 @@ private final class TeaReviewProtocol: URLProtocol {
   override func startLoading() {
     guard let url = request.url else { return }
     let path = String(url.path.dropFirst(4))
+    if let result = CaptroPolishReviewSnapshot.response(path, request: request) {
+      reply(result.0, result.1); return
+    }
     var status = 200
     var payload: Any = [String: Any]()
     if path.hasPrefix("/tea/clubs/") {

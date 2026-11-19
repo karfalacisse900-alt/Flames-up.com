@@ -494,13 +494,13 @@ private struct CaptroTeaRow: View {
     HStack(spacing: 10) {
       TeaIcon(symbol: entry.symbol, palette: entry.palette)
       VStack(alignment: .leading, spacing: 4) {
-        Text(entry.name).font(.headline).fixedSize(horizontal: false, vertical: true)
+        Text(entry.name).miraText(.rowTitle).fixedSize(horizontal: false, vertical: true)
         TeaLinkFlow(spacing: 5) {
           TeaTimestamp(entry: entry)
-          Text("·").font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+          Text("·").font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary).accessibilityHidden(true)
           Text(entry.typeLabel).font(.footnote).foregroundStyle(CaptroTeaStyle.accent)
           if nearby {
-            Text("·").font(.footnote).foregroundStyle(.secondary).accessibilityHidden(true)
+            Text("·").font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary).accessibilityHidden(true)
             Text("Nearby").font(.footnote).foregroundStyle(CaptroTeaStyle.accent)
           }
         }
@@ -574,7 +574,7 @@ struct CaptroTeaDetailView: View {
     List {
       VStack(alignment: .leading, spacing: 12) {
         if unavailable {
-          Text("This activity is no longer available.").foregroundStyle(.secondary).padding(.top, 12)
+          Text("This activity is no longer available.").foregroundStyle(MIRATheme.Color.textSecondary).padding(.top, 12)
         } else if let business = detail?.business {
           TeaEntityCard(entry: detail?.item ?? entry, location: nil, typeLabel: business.categoryName)
           VStack(spacing: 0) {
@@ -734,8 +734,8 @@ private struct TeaActivityContent: View {
       }
       if !commerce.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         Divider().padding(.top, 6)
-        Text("Details").font(.headline).accessibilityAddTraits(.isHeader)
-        Text(commerce.description).font(.subheadline)
+        Text("Details").miraText(.rowTitle).accessibilityAddTraits(.isHeader)
+        Text(commerce.description).miraText(.body)
       }
     }
   }
@@ -767,7 +767,7 @@ private struct TeaEntityCard: View {
 
   private var title: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Text(entry.name).font(.title2.bold()).accessibilityAddTraits(.isHeader)
+      Text(entry.name).miraText(.screenTitle).accessibilityAddTraits(.isHeader)
       Text([typeLabel ?? entry.typeLabel, location].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
         .font(.subheadline)
         .foregroundStyle(MIRATheme.Color.textSecondary)

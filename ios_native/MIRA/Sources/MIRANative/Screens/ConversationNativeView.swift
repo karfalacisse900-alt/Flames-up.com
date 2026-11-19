@@ -840,17 +840,17 @@ public struct ConversationNativeView: View {
     .padding(.vertical, 10)
     .background(ChatRoomPalette.composer)
     .overlay(alignment: .bottom) {
-      Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
+      MIRAHairline(color: ChatRoomPalette.hairline)
     }
   }
 
   private var chatHeading: some View {
     VStack(alignment: .leading, spacing: 2) {
-      Text(title).font(.headline).foregroundStyle(MIRATheme.Color.textPrimary)
+      Text(title).miraText(.rowTitle).foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(2).truncationMode(.tail)
       // Keep one subtitle line reserved: connection updates never insert a row
       // above the messages or move the keyboard/composer.
-      Text(statusText ?? " ").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+      Text(statusText ?? " ").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
         .lineLimit(1).truncationMode(.tail).accessibilityHidden(statusText == nil)
     }
     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
@@ -1190,7 +1190,7 @@ public struct ConversationNativeView: View {
                     prompt: Text(model.isGroup ? "Message the clubâ€¦" : "Message")
                       .foregroundColor(MIRATheme.Color.textSecondary), axis: .vertical)
             .lineLimit(1...4)
-            .font(.body)
+            .miraText(.body)
             .foregroundStyle(MIRATheme.Color.textPrimary)
             .padding(.vertical, 8)
             .onChange(of: model.draft) { value in
@@ -1228,7 +1228,7 @@ public struct ConversationNativeView: View {
     }
     .background(ChatRoomPalette.composer)
     .overlay(alignment: .top) {
-      Rectangle().fill(ChatRoomPalette.hairline).frame(height: 0.5)
+      MIRAHairline(color: ChatRoomPalette.hairline)
     }
     .animation(CaptroMotion.bottomSheetAnimation(reduceMotion: reduceMotion), value: showAttachmentTray)
   }
@@ -1379,7 +1379,7 @@ private struct MessageBubbleContent: View {
       }
       if let timestamp, !timestamp.isEmpty {
         Text(timestamp)
-          .font(.caption2.weight(.medium))
+          .miraText(.metadata)
           .foregroundStyle(outgoing ? ChatRoomPalette.outgoingTimestamp : ChatRoomPalette.incomingTimestamp)
           .lineLimit(1)
           .padding(.top, hasLargeMedia ? 0 : 1)
@@ -1430,7 +1430,7 @@ private struct MessageBubbleContent: View {
   }
 
   private var bubbleVerticalPadding: CGFloat {
-    return hasLargeMedia ? 6 : 12
+    return hasLargeMedia ? 6 : 10
   }
 
   private var textMaxWidth: CGFloat {
@@ -1470,14 +1470,14 @@ private struct MessageBubbleContent: View {
   private func bubbleText(_ content: String) -> some View {
     if shouldUseCompactTextLayout(content) {
       Text(content)
-        .font(.body)
+        .miraText(.body)
         .foregroundStyle(bubbleTextColor)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: textMaxWidth, alignment: .leading)
         .multilineTextAlignment(.leading)
     } else {
       Text(content)
-        .font(.body)
+        .miraText(.body)
         .foregroundStyle(bubbleTextColor)
         .fixedSize(horizontal: false, vertical: true)
         .multilineTextAlignment(.leading)

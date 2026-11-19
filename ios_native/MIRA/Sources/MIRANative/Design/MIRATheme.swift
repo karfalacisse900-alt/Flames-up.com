@@ -104,6 +104,8 @@ public enum MIRATheme {
   }
 
   public enum Space {
+    public static let textGap: CGFloat = 3
+    public static let metadataGap: CGFloat = 2
     public static let xxs: CGFloat = 4
     public static let xs: CGFloat = 8
     public static let sm: CGFloat = 12
@@ -111,6 +113,66 @@ public enum MIRATheme {
     public static let lg: CGFloat = 20
     public static let xl: CGFloat = 24
     public static let xxl: CGFloat = 32
+  }
+
+  /// Semantic type shared by social content. Media writing, branding and the
+  /// camera's recording geometry are deliberately not tied to these styles.
+  public enum TextStyle: Equatable {
+    case rowTitle, sectionTitle, screenTitle, body, preview, metadata, label
+
+    public var pointSize: CGFloat {
+      switch self {
+      case .rowTitle, .body: return 16
+      case .sectionTitle: return 18
+      case .screenTitle: return 22
+      case .preview, .label: return 14
+      case .metadata: return 12
+      }
+    }
+    var relativeTo: Font.TextStyle {
+      switch self {
+      case .rowTitle: return .headline
+      case .sectionTitle: return .title3
+      case .screenTitle: return .title2
+      case .body: return .callout
+      case .preview, .label: return .subheadline
+      case .metadata: return .footnote
+      }
+    }
+    var weight: Font.Weight {
+      switch self {
+      case .rowTitle, .sectionTitle, .screenTitle: return .bold
+      case .label: return .semibold
+      default: return .regular
+      }
+    }
+    /// Native selectable text must use the same metrics as SwiftUI prose.
+    func uiFont(compatibleWith traits: UITraitCollection? = nil) -> UIFont {
+      let textStyle: UIFont.TextStyle
+      switch self {
+      case .rowTitle: textStyle = .headline
+      case .sectionTitle: textStyle = .title3
+      case .screenTitle: textStyle = .title2
+      case .body: textStyle = .callout
+      case .preview, .label: textStyle = .subheadline
+      case .metadata: textStyle = .footnote
+      }
+      let weight: UIFont.Weight = self == .label ? .semibold
+        : [.rowTitle, .sectionTitle, .screenTitle].contains(self) ? .bold : .regular
+      return UIFontMetrics(forTextStyle: textStyle).scaledFont(
+        for: .systemFont(ofSize: pointSize, weight: weight), compatibleWith: traits)
+    }
+  }
+
+  public enum Layout {
+    public static let listInset: CGFloat = 14
+    public static let contentInset: CGFloat = 16
+    public static let avatarGap: CGFloat = 12
+    public static let rowAvatar: CGFloat = 50
+    public static let inlineAvatar: CGFloat = 40
+    public static let minimumTarget: CGFloat = 44
+    public static let toolbarIcon: CGFloat = 20
+    public static let divider: CGFloat = 0.5
   }
 
   public static func softShadow() -> some ViewModifier {
@@ -133,6 +195,9 @@ public struct SurfaceShadow: ViewModifier {
 }
 
 public extension View {
+  func miraText(_ style: MIRATheme.TextStyle) -> some View {
+    modifier(MIRATextStyle(style))
+  }
   func miraNavigationSurface() -> some View {
     modifier(MIRANavigationSurface())
   }
@@ -146,6 +211,26 @@ public extension View {
           .strokeBorder(MIRATheme.Color.hairline, lineWidth: 0.5)
           .allowsHitTesting(false)
       }
+  }
+}
+
+private struct MIRATextStyle: ViewModifier {
+  let style: MIRATheme.TextStyle
+  @ScaledMetric private var size: CGFloat
+  init(_ style: MIRATheme.TextStyle) {
+    self.style = style
+    _size = ScaledMetric(wrappedValue: style.pointSize, relativeTo: style.relativeTo)
+  }
+  func body(content: Content) -> some View {
+    content.font(.system(size: size, weight: style.weight)).lineSpacing(0)
+  }
+}
+
+struct MIRAHairline: View {
+  var color: SwiftUI.Color = MIRATheme.Color.divider
+  var body: some View {
+    Rectangle().fill(color).frame(height: MIRATheme.Layout.divider)
+      .accessibilityHidden(true).allowsHitTesting(false)
   }
 }
 

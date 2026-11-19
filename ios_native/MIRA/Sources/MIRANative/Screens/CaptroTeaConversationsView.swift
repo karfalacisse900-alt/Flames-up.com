@@ -7,8 +7,6 @@ enum CaptroTeaStyle {
     traits.userInterfaceStyle == .dark ? UIColor(red: 0.73, green: 0.58, blue: 1, alpha: 1) : UIColor(red: 0.43, green: 0.16, blue: 0.78, alpha: 1)
   })
   static let tint = accent.opacity(0.08)
-  static let body: Font = .callout
-  static let metadata: Font = .footnote
   static let composerFill = Color(uiColor: UIColor { traits in
     traits.userInterfaceStyle == .dark ? UIColor(white: 0.13, alpha: 1) : UIColor(red: 0.95, green: 0.945, blue: 0.96, alpha: 1)
   })
@@ -87,7 +85,7 @@ struct CaptroTeaConversationsList: View {
     List {
       if items.isEmpty {
         if loading && error == nil { ProgressView("Loading Notes…").listRowSeparator(.hidden).accessibilityIdentifier("tea.conversations.loading") }
-        else if error == nil, loaded { Text("No Notes yet. Tap Post to start one.").font(.subheadline).foregroundStyle(.secondary).listRowSeparator(.hidden) }
+        else if error == nil, loaded { Text("No Notes yet. Tap Post to start one.").font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary).listRowSeparator(.hidden) }
       }
       ForEach(items) { post in
         VStack(alignment: .leading, spacing: 0) {
@@ -95,18 +93,18 @@ struct CaptroTeaConversationsList: View {
             .buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
           if post.primaryAction != nil {
             CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
-              .padding(.leading, 62).padding(.bottom, 8)
+              .padding(.leading, MIRATheme.Layout.rowAvatar + MIRATheme.Layout.avatarGap).padding(.bottom, 8)
           }
-        }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 0.5).accessibilityHidden(true) }
+        }.overlay(alignment: .bottom) { MIRAHairline(color: CaptroTeaStyle.separator) }
           .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
             postID: post.id, feed: "tea-list").allowsHitTesting(false))
           .buttonStyle(.plain)
-          .listRowInsets(EdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 14))
+          .listRowInsets(EdgeInsets(top: 0, leading: MIRATheme.Layout.listInset, bottom: 0, trailing: MIRATheme.Layout.listInset))
           .listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       }
       if let error {
         VStack(alignment: .leading) {
-          Text(error).font(.subheadline).foregroundStyle(.secondary)
+          Text(error).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
           Button("Retry") { Task { await load(reset: nextCursor == nil, force: true) } }.frame(minHeight: 44)
         }.listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       } else if nextCursor != nil {
@@ -180,47 +178,44 @@ struct CaptroTeaConversationsList: View {
 private struct CaptroTeaConversationRow: View {
   @Environment(\.dynamicTypeSize) private var typeSize
   let post: CaptroTeaConversation
-  @ScaledMetric(relativeTo: .headline) private var titleSize = 16.0
-  @ScaledMetric(relativeTo: .subheadline) private var previewSize = 14.0
-  @ScaledMetric(relativeTo: .footnote) private var metadataSize = 12.0
   private var metadataInk: Color { MIRATheme.Color.textSecondary }
   var body: some View {
-    HStack(alignment: .top, spacing: 12) {
-      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 50)
-      VStack(alignment: .leading, spacing: 3) {
+    HStack(alignment: .top, spacing: MIRATheme.Layout.avatarGap) {
+      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: MIRATheme.Layout.rowAvatar)
+      VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
         if typeSize.isAccessibilitySize {
-          Text(post.title).font(.system(size: titleSize, weight: .bold)).fixedSize(horizontal: false, vertical: true)
+          Text(post.title).miraText(.rowTitle).fixedSize(horizontal: false, vertical: true)
           replyCount
         } else {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(post.title).font(.system(size: titleSize, weight: .bold)).fixedSize(horizontal: false, vertical: true)
+            Text(post.title).miraText(.rowTitle).fixedSize(horizontal: false, vertical: true)
               .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
             replyCount.fixedSize(horizontal: true, vertical: false)
-            Image(systemName: "chevron.right").font(.system(size: metadataSize)).foregroundStyle(metadataInk).accessibilityHidden(true)
+            Image(systemName: "chevron.right").miraText(.metadata).foregroundStyle(metadataInk).accessibilityHidden(true)
           }
         }
-        Text(post.body).font(.system(size: previewSize)).lineSpacing(0).lineLimit(typeSize.isAccessibilitySize ? nil : 2).fixedSize(horizontal: false, vertical: true)
+        Text(post.body).miraText(.preview).lineSpacing(0).lineLimit(typeSize.isAccessibilitySize ? nil : 2).fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityIdentifier("tea.preview." + post.id)
         TeaLinkFlow(spacing: 5) {
-          HStack(spacing: 4) { Text(post.author.name).font(.system(size: metadataSize)).foregroundStyle(metadataInk); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
-          Text("\u{00B7}").font(.system(size: metadataSize)).foregroundStyle(metadataInk).accessibilityHidden(true)
+          HStack(spacing: 4) { Text(post.author.name).miraText(.metadata).foregroundStyle(metadataInk); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
+          Text("\u{00B7}").miraText(.metadata).foregroundStyle(metadataInk).accessibilityHidden(true)
           if let date = captroTeaDate(post.createdAt) {
             Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
-              .font(.system(size: metadataSize)).foregroundStyle(metadataInk)
+              .miraText(.metadata).foregroundStyle(metadataInk)
           }
           if let borough = post.borough {
-            Text("\u{00B7}").font(.system(size: metadataSize)).foregroundStyle(metadataInk).accessibilityHidden(true)
-            Text(borough).font(.system(size: metadataSize)).foregroundStyle(CaptroTeaStyle.accent)
+            Text("\u{00B7}").miraText(.metadata).foregroundStyle(metadataInk).accessibilityHidden(true)
+            Text(borough).miraText(.metadata).foregroundStyle(CaptroTeaStyle.accent)
           }
         }.padding(.top, 2).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
       }.frame(maxWidth: .infinity, alignment: .leading)
-    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 20)
+    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 18)
       .contentShape(Rectangle())
   }
   @ViewBuilder private var replyCount: some View {
     if let count = post.replyCount {
-      Text("\(count) \(count == 1 ? "reply" : "replies")").font(.system(size: metadataSize)).foregroundStyle(metadataInk)
+      Text("\(count) \(count == 1 ? "reply" : "replies")").miraText(.metadata).foregroundStyle(metadataInk)
     }
   }
 }
@@ -230,7 +225,7 @@ struct TeaConversationTime: View {
   var body: some View {
     if let date = captroTeaDate(value) {
       Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
-        .font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
+        .miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
     }
   }
 }
@@ -257,7 +252,7 @@ struct TeaConversationTime: View {
       if let post = model.post, model.valid {
         VStack(alignment: .leading, spacing: 8) {
           authorHeader(post)
-          Text(post.title).font(.headline).accessibilityAddTraits(.isHeader)
+          Text(post.title).miraText(.sectionTitle).accessibilityAddTraits(.isHeader)
           if let sentences = post.sentences, !sentences.isEmpty {
             ForEach(sentences) { sentence in
               VStack(alignment: .leading, spacing: 6) {
@@ -270,27 +265,27 @@ struct TeaConversationTime: View {
             }
             ForEach((post.replyTargets ?? []).filter { count in !sentences.contains { $0.contains(count.target) } }, id: \.target.id) { count in
               VStack(alignment: .leading, spacing: 4) {
-                Text("Earlier text").font(.caption).foregroundStyle(.secondary)
-                Text(count.target.quote).font(.subheadline).foregroundStyle(.secondary)
+                Text("Earlier text").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+                Text(count.target.quote).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
                 sentenceThread(count.target, post: post)
               }
             }
           } else {
-            Text(post.body).font(CaptroTeaStyle.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(post.body).miraText(.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
           }
           let links = post.links.compactMap(CaptroTeaLink.init)
           if !links.isEmpty {
             TeaLinkFlow(spacing: 8) {
               ForEach(Array(links.enumerated()), id: \.element.id) { index, link in
                 HStack(spacing: 7) {
-                  if index > 0 { Text("·").foregroundStyle(.secondary).accessibilityHidden(true) }
+                  if index > 0 { Text("·").foregroundStyle(MIRATheme.Color.textSecondary).accessibilityHidden(true) }
                   Button { open(link) } label: {
                     HStack(spacing: 4) {
                       if let platform = link.platform {
                         Image("Tea" + platform, bundle: .module).renderingMode(.template).resizable().scaledToFit()
                           .frame(width: 11, height: 11).accessibilityHidden(true)
                       } else { Image(systemName: "link").font(.system(size: 11)).accessibilityHidden(true) }
-                      Text(link.hostname).font(.subheadline).underline().fixedSize(horizontal: false, vertical: true)
+                      Text(link.hostname).miraText(.preview).underline().fixedSize(horizontal: false, vertical: true)
                     }.frame(minHeight: 44).contentShape(Rectangle())
                   }.buttonStyle(.plain).foregroundStyle(CaptroTeaStyle.accent)
                     .accessibilityLabel("Open \(link.hostname)\(link.profile == nil ? " in browser" : " in Captro")")
@@ -299,24 +294,24 @@ struct TeaConversationTime: View {
               }
             }
           }
-          if let borough = post.borough { Text(borough).font(.footnote).foregroundStyle(.secondary) }
+          if let borough = post.borough { Text(borough).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
           if post.primaryAction != nil || post.canManageApplications == true {
             CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
           }
-          if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
+          if let linkError { Text(linkError).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
         }.background(CaptroFeedViewportMarker(owner: model.viewport, postID: "caption", feed: "tea:" + model.id).allowsHitTesting(false))
           .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 12, trailing: 16))
-          .listRowSeparator(.hidden).listRowBackground(Color.clear)
+          .listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
         if let error = model.authorError {
-          HStack { Text(error).font(.footnote).foregroundStyle(.secondary); Button("Retry profile") { Task { await model.loadAuthor() } }.frame(minHeight: 44) }
-            .listRowSeparator(.hidden).listRowBackground(Color.clear)
+          HStack { Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary); Button("Retry profile") { Task { await model.loadAuthor() } }.frame(minHeight: 44) }
+            .listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
         }
         HStack {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(post.replyCount.map { "Replies (\($0))" } ?? "Replies").font(.headline)
-            if !(post.replyTargets ?? []).isEmpty { Text("General replies").font(.caption).foregroundStyle(.secondary) }
+          VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
+            Text(post.replyCount.map { "Replies (\($0))" } ?? "Replies").miraText(.rowTitle)
+            if !(post.replyTargets ?? []).isEmpty { Text("General replies").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary) }
             if model.nextCursor != nil {
-              Text("\(model.replies.filter { $0.target == nil }.count) general replies loaded").font(.caption).foregroundStyle(.secondary)
+              Text("\(model.replies.filter { $0.target == nil }.count) general replies loaded").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
             }
           }
           Spacer()
@@ -326,17 +321,17 @@ struct TeaConversationTime: View {
             .buttonStyle(.plain).disabled(model.busy)
             .accessibilityLabel(post.following ? "Unfollow discussion" : "Follow discussion")
             .accessibilityIdentifier("tea.conversation.follow")
-        }.listRowSeparator(.hidden).listRowBackground(Color.clear)
+        }.listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
         TeaReplyGroups(replies: model.replies.filter { $0.target == nil })
           .background(CaptroFeedViewportMarker(owner: model.viewport, postID: "general", feed: "tea:" + model.id).allowsHitTesting(false))
-          .listRowSeparator(.hidden).listRowBackground(Color.clear)
+          .listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
         if model.loadingReplies { ProgressView("Loading replies").listRowSeparator(.hidden) }
         if model.nextCursor != nil {
           Button("More replies") { Task { await model.loadReplies(reset: false) } }.frame(minHeight: 44).disabled(model.loadingReplies)
         }
         if let error = model.replyError {
           VStack(alignment: .leading) {
-            Text(error).font(.footnote).foregroundStyle(.secondary)
+            Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
             Button("Retry") { Task {
               if model.replySubmissionFailed { await model.sendReply() } else { await model.loadReplies(reset: model.nextCursor == nil, force: true) }
             } }.frame(minHeight: 44).disabled(model.busy)
@@ -345,12 +340,12 @@ struct TeaConversationTime: View {
       }
       if let error = model.error {
         VStack(alignment: .leading) {
-          Text(error).font(.subheadline).foregroundStyle(.secondary)
+          Text(error).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
           Button("Retry") { Task { await model.load(force: true) } }.frame(minHeight: 44)
-        }.listRowSeparator(.hidden).listRowBackground(Color.clear)
+        }.listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       }
       if model.loading, model.post == nil {
-        ProgressView("Loading post").listRowSeparator(.hidden).listRowBackground(Color.clear)
+        ProgressView("Loading post").listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       }
     }.listStyle(.plain).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
       .navigationTitle("").navigationBarTitleDisplayMode(.inline).miraNavigationSurface()
@@ -386,8 +381,8 @@ struct TeaConversationTime: View {
           if let target = model.replyTarget {
             HStack(alignment: .top) {
               Rectangle().fill(CaptroTeaStyle.accent.opacity(0.25)).frame(width: 2)
-              VStack(alignment: .leading, spacing: 3) {
-                Text("Replying to this line").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("tea.reply.target")
+              VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
+                Text("Replying to this line").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary).accessibilityIdentifier("tea.reply.target")
                 Text(target.quote).font(.subheadline).lineLimit(2)
               }
               Spacer(minLength: 0)
@@ -401,7 +396,7 @@ struct TeaConversationTime: View {
             else {
               TextField("Write a reply…", text: $model.draft, axis: .vertical).lineLimit(1...5)
                 .disabled(model.busy || model.replyPending)
-                .font(CaptroTeaStyle.body).padding(.horizontal, 14).padding(.vertical, 11).background(CaptroTeaStyle.composerFill, in: RoundedRectangle(cornerRadius: 22))
+                .miraText(.body).padding(.horizontal, 14).padding(.vertical, 11).background(CaptroTeaStyle.composerFill, in: RoundedRectangle(cornerRadius: 22))
                 .accessibilityIdentifier("tea.reply.input")
               Button { Task { await model.sendReply() } } label: {
                 if model.busy { ProgressView().frame(width: 44, height: 44) }
@@ -438,11 +433,11 @@ struct TeaConversationTime: View {
       }.buttonStyle(.plain).accessibilityLabel("Open profile photo for " + post.author.name)
         .accessibilityIdentifier("tea.author.avatar")
       Button { profile = CaptroProfileLink(id: post.author.id) } label: {
-        VStack(alignment: .leading, spacing: 3) {
-          HStack(spacing: 4) { Text(post.author.name).font(.headline); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
+        VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
+          HStack(spacing: 4) { Text(post.author.name).miraText(.rowTitle); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
           TeaLinkFlow(spacing: 5) {
-            Text("@" + post.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
-            Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
+            Text("@" + post.author.username).miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
+            Text("\u{00B7}").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary).accessibilityHidden(true)
             TeaConversationTime(value: post.createdAt)
           }
         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
@@ -514,18 +509,18 @@ private struct TeaReplyGroups: View {
               VStack(alignment: .leading, spacing: 4) {
                 TeaLinkFlow(spacing: 5) {
                   if index == 0 {
-                    HStack(spacing: 4) { Text(reply.author.name).font(.callout.weight(.semibold)); CaptroVerifiedBadge(verified: reply.author.isVerified == true) }
-                    Text("@" + reply.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
-                    Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
+                    HStack(spacing: 4) { Text(reply.author.name).miraText(.rowTitle); CaptroVerifiedBadge(verified: reply.author.isVerified == true) }
+                    Text("@" + reply.author.username).miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
+                    Text("\u{00B7}").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary).accessibilityHidden(true)
                   }
                   TeaConversationTime(value: reply.createdAt)
                 }
-                Text(reply.body).font(CaptroTeaStyle.body).fixedSize(horizontal: false, vertical: true)
+                Text(reply.body).miraText(.body).fixedSize(horizontal: false, vertical: true)
               }.frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier("tea.reply." + reply.id)
             }
           }
         }.padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-          .overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 0.5).accessibilityHidden(true) }
+          .overlay(alignment: .bottom) { MIRAHairline(color: CaptroTeaStyle.separator) }
       }
     }
   }
@@ -599,7 +594,7 @@ struct CaptroTeaComposer: View {
             .accessibilityIdentifier("tea.compose.action")
           if let action {
             Text(action.label).font(.subheadline.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
-            if let link = action.url.flatMap(CaptroTeaLink.init) { Text(link.hostname).font(.caption).foregroundStyle(.secondary) }
+            if let link = action.url.flatMap(CaptroTeaLink.init) { Text(link.hostname).font(.caption).foregroundStyle(MIRATheme.Color.textSecondary) }
           }
         } footer: { Text("Optional. A borough is shown only when you choose one. Add one next step if your Note needs it.") }
         Section {
@@ -619,7 +614,7 @@ struct CaptroTeaComposer: View {
           }
         } footer: { Text("Optional. Up to three HTTPS links. Only you can edit the links on your post.") }
         }.disabled(saving || submitted != nil)
-        if let error { Text(error).font(.footnote).foregroundStyle(.secondary) }
+        if let error { Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
       }.disabled(saving).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
         .navigationTitle(editing == nil ? "New Note" : "Edit Note").navigationBarTitleDisplayMode(.inline).miraNavigationSurface()
         .toolbar {

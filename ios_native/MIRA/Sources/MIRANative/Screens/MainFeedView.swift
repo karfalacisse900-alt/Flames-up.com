@@ -2194,10 +2194,10 @@ private struct MainNativePostCard: View {
   }
 
   private var captionBlock: some View {
-    VStack(alignment: .leading, spacing: 3) {
+    VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
       if let headlineText {
         Text(headlineText)
-          .font(.system(size: 18, weight: .semibold))
+          .miraText(.sectionTitle)
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(isShowingCaption ? nil : 1)
           .truncationMode(.tail)
@@ -2206,8 +2206,7 @@ private struct MainNativePostCard: View {
 
       if let captionBodyText {
         Text(captionBodyText)
-          .font(.system(size: 14, weight: .regular))
-          .lineSpacing(2)
+          .miraText(.preview)
           .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(isShowingCaption ? nil : 2)
           .truncationMode(.tail)

@@ -2593,17 +2593,17 @@ private struct ChatConversationRow: View {
   @Environment(\.dynamicTypeSize) private var textSize
 
   var body: some View {
-    HStack(spacing: 14) {
+    HStack(spacing: MIRATheme.Layout.avatarGap) {
       avatar
-      VStack(alignment: .leading, spacing: 6) {
+      VStack(alignment: .leading, spacing: MIRATheme.Space.xxs) {
         Text(conversation.displayName)
-          .font(.body.weight(.semibold))
+          .miraText(.rowTitle)
           .foregroundStyle(MIRATheme.Color.textPrimary)
           .lineLimit(textSize.isAccessibilitySize ? 2 : 1)
           .truncationMode(.tail)
         Text(rowPreview)
-          .font(.subheadline)
-          .foregroundStyle(MIRATheme.Color.textMuted)
+          .miraText(.preview)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(textSize.isAccessibilitySize ? 2 : 1)
           .truncationMode(.tail)
       }
@@ -2612,8 +2612,8 @@ private struct ChatConversationRow: View {
 
       VStack(alignment: .trailing, spacing: 8) {
         Text(chatTime(conversation.lastMessageTime ?? conversation.updatedAt))
-          .font(.caption)
-          .foregroundStyle(MIRATheme.Color.textMuted)
+          .miraText(.metadata)
+          .foregroundStyle(MIRATheme.Color.textSecondary)
           .lineLimit(1)
         if let unread = conversation.unreadCount, unread > 0 {
           Text("\(min(unread, 99))")

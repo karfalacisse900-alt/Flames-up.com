@@ -109,10 +109,10 @@ import UIKit
         .accessibilityLabel("Back").accessibilityIdentifier("tea.club.back")
       CaptroTeaIdentity(name: model.club?.name ?? "", photo: model.club?.image, size: 36)
       VStack(alignment: .leading, spacing: 3) {
-        Text(model.club?.name ?? "Club").font(.headline).fixedSize(horizontal: false, vertical: true)
+        Text(model.club?.name ?? "Club").miraText(.rowTitle).fixedSize(horizontal: false, vertical: true)
         if let club = model.club {
           Text("\(club.memberCount) members" + (model.room.flatMap { selected in club.rooms.first { $0.id == selected }?.name }.map { " · " + $0 } ?? ""))
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
         }
       }.frame(maxWidth: .infinity, alignment: .leading)
       Menu {
@@ -152,7 +152,7 @@ import UIKit
             if model.pages[model.key]?.cursor != nil { Button("Earlier messages") { Task { await model.loadMessages(older: true) } }.frame(minHeight: 44) }
             if model.messages.isEmpty {
               if model.pages[model.key] == nil, model.error == nil { ProgressView("Loading messages") }
-              else if model.error == nil { Text("No messages yet. Start the conversation.").font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 16) }
+              else if model.error == nil { Text("No messages yet. Start the conversation.").font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary).padding(.vertical, 16) }
             }
             ForEach(Array(model.messages.enumerated()), id: \.element.id) { index, message in
               messageRow(message, showAuthor: index == 0 || model.messages[index - 1].author.id != message.author.id)
@@ -160,10 +160,10 @@ import UIKit
                 .onAppear { if scenePhase == .active, model.tab == "Chat" { Task { await model.markRead(message) } } }
             }
             if let error = model.error {
-              Text(error).font(.footnote).foregroundStyle(.secondary)
+              Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
               Button("Retry") { Task { await model.load(force: true); await model.loadMessages(force: true) } }.frame(minHeight: 44)
             }
-            if let linkError { Text(linkError).font(.footnote).foregroundStyle(.secondary) }
+            if let linkError { Text(linkError).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
           }.padding(16).frame(maxWidth: .infinity, alignment: .leading).scrollTargetLayout()
         }.scrollPosition(id: $scrollID).defaultScrollAnchor(.top).scrollDismissesKeyboard(.interactively)
           .refreshable { await model.load(force: true); await model.loadMessages(force: true) }
@@ -175,7 +175,7 @@ import UIKit
     }
   }
   private func messageRow(_ message: CaptroClubMessage, showAuthor: Bool) -> some View {
-    HStack(alignment: .top, spacing: 10) {
+    HStack(alignment: .top, spacing: MIRATheme.Layout.avatarGap) {
       if showAuthor {
         Button { linkDestination = .profile(message.author.id) } label: { CaptroTeaIdentity(name: message.author.name, photo: message.author.photoURL, size: 40) }
           .buttonStyle(.plain).accessibilityLabel("Open profile photo for " + message.author.name)
@@ -183,10 +183,10 @@ import UIKit
       VStack(alignment: .leading, spacing: 5) {
       if showAuthor {
         TeaLinkFlow(spacing: 5) {
-          Button { linkDestination = .profile(message.author.id) } label: { HStack(spacing: 4) { Text(message.author.name).font(.callout.weight(.semibold)); CaptroVerifiedBadge(verified: message.author.isVerified == true) } }
+          Button { linkDestination = .profile(message.author.id) } label: { HStack(spacing: 4) { Text(message.author.name).miraText(.rowTitle); CaptroVerifiedBadge(verified: message.author.isVerified == true) } }
             .buttonStyle(.plain).accessibilityLabel("Open profile for " + message.author.name)
-          Text("@" + message.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
-          Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
+          Text("@" + message.author.username).miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
+          Text("\u{00B7}").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary).accessibilityHidden(true)
           TeaConversationTime(value: message.createdAt)
         }
       }
@@ -195,7 +195,7 @@ import UIKit
           .buttonStyle(.plain).accessibilityLabel("Open quoted message: " + quote.body).accessibilityIdentifier("tea.club.quote." + message.id)
       }
       if !message.textWithoutLinks.isEmpty {
-        Text(message.textWithoutLinks).font(CaptroTeaStyle.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        Text(message.textWithoutLinks).miraText(.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
           .accessibilityIdentifier("tea.club.message." + message.id)
       }
       if let media = message.mediaURL, !media.isEmpty {
@@ -220,7 +220,7 @@ import UIKit
       }
       }.frame(maxWidth: .infinity, alignment: .leading)
     }.padding(.top, showAuthor ? 12 : 4).padding(.bottom, 8)
-      .overlay(alignment: .bottom) { Rectangle().fill(MIRATheme.Color.divider).frame(height: 0.5).accessibilityHidden(true) }
+      .overlay(alignment: .bottom) { MIRAHairline() }
       .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
       .contextMenu {
         if !model.readOnly { Button("Reply") { model.quotes[model.key] = message.reference } }
@@ -235,8 +235,8 @@ import UIKit
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 6) {
-      if let error = model.actionError { Text(error).font(.footnote).foregroundStyle(.secondary) }
-      if model.readOnly { Text("Only organizers can post in this announcement room.").font(.footnote).foregroundStyle(.secondary).padding(.vertical, 8) }
+      if let error = model.actionError { Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
+      if model.readOnly { Text("Only organizers can post in this announcement room.").font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary).padding(.vertical, 8) }
       else {
         if let quote = model.quotes[model.key] {
           HStack { Text(quote.body).font(.footnote).lineLimit(2); Spacer(); Button { model.quotes[model.key] = nil } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }.disabled(model.pending[model.key] != nil).accessibilityLabel("Clear quoted message") }
@@ -244,7 +244,7 @@ import UIKit
         HStack(alignment: .bottom, spacing: 6) {
           Button { sheet = .mention } label: { Image(systemName: "at").frame(width: 44, height: 44) }.accessibilityLabel("Mention a member")
           TextField("Message the club…", text: Binding(get: { model.drafts[model.key, default: ""] }, set: { model.drafts[model.key] = $0 }), axis: .vertical)
-            .font(CaptroTeaStyle.body).lineLimit(1...5).padding(.horizontal, 14).padding(.vertical, 11).background(CaptroTeaStyle.composerFill, in: RoundedRectangle(cornerRadius: 22))
+            .miraText(.body).lineLimit(1...5).padding(.horizontal, 14).padding(.vertical, 11).background(CaptroTeaStyle.composerFill, in: RoundedRectangle(cornerRadius: 22))
             .focused($composing).disabled(model.busy || model.pending[model.key] != nil).accessibilityIdentifier("tea.club.input")
           Button { Task { await model.send() } } label: {
             if model.busy { ProgressView().frame(width: 44, height: 44) } else { Image(systemName: "paperplane").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(CaptroTeaStyle.accent, in: Circle()) }
@@ -259,7 +259,7 @@ import UIKit
     List {
       Button { linkToSave = .init() } label: { Label("Add link", systemImage: "plus").frame(minHeight: 44) }.accessibilityIdentifier("tea.club.add-link")
       if !model.linksLoaded && model.linksError == nil { ProgressView("Loading links") }
-      if model.linksLoaded && model.links.isEmpty { Text("Save useful links here so members can find them again.").font(.subheadline).foregroundStyle(.secondary) }
+      if model.linksLoaded && model.links.isEmpty { Text("Save useful links here so members can find them again.").font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary) }
       ForEach(model.links) { saved in
         VStack(alignment: .leading, spacing: 4) {
           Text(saved.title).font(.headline)

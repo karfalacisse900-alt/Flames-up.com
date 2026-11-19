@@ -1,0 +1,82 @@
+name: Captro paired native review (no release)
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  review:
+    runs-on: macos-26
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Capture public content once (read only)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node scripts/native/prepare-polish-snapshot.mjs
+      - run: brew install xcodegen
+      - run: xcodegen generate --spec project.yml
+        working-directory: ios_native/MIRA
+      - name: Same phone, content, text size, and foreground captures
+        working-directory: ios_native/MIRA
+        run: |
+          set -o pipefail
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]]; print(max(rs,key=lambda r:tuple(map(int,r["version"].split("."))))["identifier"])')
+          device=$(xcrun simctl create 'Captro consistency review' com.apple.CoreSimulator.SimDeviceType.iPhone-17 "$runtime")
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl status_bar "$device" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
+          xcrun simctl ui "$device" appearance light
+          printf '%s\n' "$device" "$runtime" > "$RUNNER_TEMP/review-device.txt"
+          # Only presentation sources are swapped. The identical offline transport,
+          # captured public records, image bytes and tests are used for both builds.
+          sources=(Design/MIRATheme.swift Components/CaptroFeedMediaStamp.swift Components/CaptroProfilePresentation.swift
+            Screens/CaptroCameraNativeView.swift Screens/CaptroFeedPostView.swift Screens/CaptroTeaClubView.swift
+            Screens/CaptroTeaConversationsView.swift Screens/CaptroTeaSelectableText.swift Screens/CaptroTeaView.swift
+            Screens/ConversationNativeView.swift Screens/MainFeedView.swift Screens/ProfileChatVerificationStudio.swift)
+          for source in "${sources[@]}"; do
+            git show "16ff660:ios_native/MIRA/Sources/MIRANative/$source" > "Sources/MIRANative/$source"
+          done
+          before_result=0
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES -maximum-test-execution-time-allowance 240 \
+            -derivedDataPath "$RUNNER_TEMP/ConsistencyBuild" -resultBundlePath "$RUNNER_TEMP/Before.xcresult" \
+            -only-testing:CaptroLayoutUITests/NativeConsistencyTests/testDefaultScreensAndRestoration \
+            CODE_SIGNING_ALLOWED=NO test > "$RUNNER_TEMP/before.log" 2>&1 || before_result=$?
+          for source in "${sources[@]}"; do git restore --source=HEAD -- "Sources/MIRANative/$source"; done
+          after_result=0
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+            -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES -maximum-test-execution-time-allowance 240 \
+            -derivedDataPath "$RUNNER_TEMP/ConsistencyBuild" -resultBundlePath "$RUNNER_TEMP/After.xcresult" \
+            -only-testing:CaptroLayoutUITests/NativeConsistencyTests -only-testing:CaptroStampTests \
+            CODE_SIGNING_ALLOWED=NO test > "$RUNNER_TEMP/after.log" 2>&1 || after_result=$?
+          grep -E 'error:|failed|Executed|TEST (SUCCEEDED|FAILED)' "$RUNNER_TEMP/before.log" "$RUNNER_TEMP/after.log" | tail -60 || true
+          test "$before_result" = 0 && test "$after_result" = 0
+      - name: Export foreground screenshots
+        if: always()
+        run: |
+          for phase in Before After; do
+            if [ -d "$RUNNER_TEMP/$phase.xcresult" ]; then
+              xcrun xcresulttool export attachments --path "$RUNNER_TEMP/$phase.xcresult" --output-path "$RUNNER_TEMP/$phase-screenshots"
+            fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: captro-native-consistency-review
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/Before-screenshots
+            ${{ runner.temp }}/After-screenshots
+            ${{ runner.temp }}/before.log
+            ${{ runner.temp }}/after.log
+            ${{ runner.temp }}/polish-snapshot-proof.json
+            ${{ runner.temp }}/review-device.txt

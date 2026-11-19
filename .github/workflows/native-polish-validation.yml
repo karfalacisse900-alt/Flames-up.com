@@ -2,6 +2,9 @@ name: Validate native polish (no deployment)
 on:
   workflow_call:
     inputs:
+      consistency:
+        type: boolean
+        default: false
       runner:
         type: string
         default: macos-26
@@ -28,6 +31,9 @@ on:
         default: ''
   workflow_dispatch:
     inputs:
+      consistency:
+        type: boolean
+        default: false
       runner:
         description: Standard Mac runner fallback when one architecture is queued
         type: choice
@@ -57,8 +63,12 @@ on:
 permissions:
   contents: read
 jobs:
+  consistency:
+    if: ${{ inputs.consistency }}
+    uses: ./.github/workflows/native-consistency-review.yml
+    secrets: inherit
   simulator:
-    if: ${{ !inputs.compile_only }}
+    if: ${{ !inputs.compile_only && !inputs.consistency }}
     name: simulator (${{ matrix.phone }})
     runs-on: ${{ inputs.runner == 'macos-26-intel' && 'macos-26-intel' || 'macos-26' }}
     timeout-minutes: 65
@@ -186,7 +196,7 @@ jobs:
             ${{ runner.temp }}/small-screenshots
 
   device-compile:
-    if: ${{ inputs.compile_only }}
+    if: ${{ inputs.compile_only && !inputs.consistency }}
     runs-on: macos-26
     timeout-minutes: 45
     steps:

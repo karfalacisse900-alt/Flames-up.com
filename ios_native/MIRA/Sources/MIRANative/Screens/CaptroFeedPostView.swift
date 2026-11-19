@@ -79,7 +79,7 @@ struct CaptroFeedPostView: View {
         structuredStamp(maxBodyLines: 3)
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: max(0, feedWidth - 32), alignment: .leading)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, MIRATheme.Layout.contentInset)
         .padding(.vertical, 12)
       }
 
@@ -244,7 +244,7 @@ private struct CaptroAuthorHeader: View {
       .buttonStyle(.miraPress)
       .accessibilityLabel("Post options")
     }
-    .padding(.horizontal, 16)
+    .padding(.horizontal, MIRATheme.Layout.contentInset)
     .padding(.vertical, 10)
     .overlay(alignment: .bottomLeading) {
       if isFollowConfirmationVisible {
@@ -313,7 +313,7 @@ private struct CaptroAuthorHeader: View {
     VStack(alignment: .leading, spacing: 2) {
       HStack(spacing: 4) {
       Text(post.authorDisplayName)
-        .font(.system(size: 17, weight: .semibold))
+        .miraText(.rowTitle)
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
         .truncationMode(.tail)

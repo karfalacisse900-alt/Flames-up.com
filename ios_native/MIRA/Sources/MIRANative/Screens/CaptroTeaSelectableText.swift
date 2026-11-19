@@ -40,7 +40,7 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
   func updateUIView(_ view: UITextView, context: Context) {
     context.coordinator.parent = self
     if view.text != sentence.quote { view.text = sentence.quote }
-    view.font = UIFont.preferredFont(forTextStyle: .callout)
+    view.font = MIRATheme.TextStyle.body.uiFont(compatibleWith: view.traitCollection)
     view.accessibilityIdentifier = "tea.sentence." + sentence.id
     view.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Reply to this part") { _ in
       reply(sentence); return true
