@@ -1186,8 +1186,8 @@ public struct ConversationNativeView: View {
         .accessibilityLabel(showAttachmentTray ? "Close attachments" : "Add attachment")
 
         HStack(spacing: 4) {
-          TextField(model.isGroup ? "Message the clubâ€¦" : "Message", text: $model.draft,
-                    prompt: Text(model.isGroup ? "Message the clubâ€¦" : "Message")
+          TextField(model.isGroup ? "Message the club…" : "Message", text: $model.draft,
+                    prompt: Text(model.isGroup ? "Message the club…" : "Message")
                       .foregroundColor(MIRATheme.Color.textSecondary), axis: .vertical)
             .lineLimit(1...4)
             .miraText(.body)

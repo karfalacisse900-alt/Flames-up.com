@@ -5,7 +5,8 @@ import {createHash} from 'node:crypto';
 import {discussionSentences} from '../../backend-cf/src/tea-conversations.ts';
 
 const query = `select jsonb_build_object('capturedAt',now(),'notes',jsonb_agg(
- public.captro_tea_post_json(c,null)||jsonb_build_object('isAuthor',false,'canManageApplications',false,
+ jsonb_build_object('id',c.id,'title',c.title,'body',c.body,'links',c.links,'version',c.version,
+ 'createdAt',c.created_at,'borough',c.borough,'following',false,'isAuthor',false,'canManageApplications',false,
  'author',jsonb_build_object('id',u.id,'name',coalesce(nullif(u.full_name,''),u.username),
  'username',u.username,'photoURL',u.avatar_url,'isVerified',u.is_verified)) order by c.created_at desc),
  'replies',(select coalesce(jsonb_agg(jsonb_build_object('id',r.id,'conversationID',r.conversation_id,
@@ -13,11 +14,12 @@ const query = `select jsonb_build_object('capturedAt',now(),'notes',jsonb_agg(
  'name',coalesce(nullif(a.full_name,''),a.username),'username',a.username,'photoURL',a.avatar_url,
  'isVerified',a.is_verified)) order by r.created_at),'[]') from public.app_tea_replies r
  join public.app_users a on a.id=r.author_id join public.app_tea_conversations p on p.id=r.conversation_id
- where r.status='active' and p.status='active' and public.captro_tea_author_visible(null,a.id)
- and public.captro_tea_author_visible(null,p.author_id) and not coalesce(a.is_private,false))) snapshot
+ join public.app_users pa on pa.id=p.author_id
+ where r.status='active' and p.status='active' and coalesce(a.metadata->>'status','active')='active'
+ and coalesce(pa.metadata->>'status','active')='active' and pa.is_private=false and a.is_private=false)) snapshot
  from (select * from public.app_tea_conversations where status='active' order by created_at desc limit 4) c
  join public.app_users u on u.id=c.author_id where not coalesce(u.is_private,false)
- and public.captro_tea_author_visible(null,u.id)`;
+ and u.is_private=false and coalesce(u.metadata->>'status','active')='active' and c.primary_action is null`;
 let snapshot;
 async function read(query) {
  const {SUPABASE_PROJECT_REF:ref,SUPABASE_ACCESS_TOKEN:token}=process.env;
@@ -44,7 +46,8 @@ else {
  join public.app_users u on u.id=p.app_user_id where p.visibility='public' and not coalesce(u.is_private,false)
  and p.post_type='general' and p.status='active' and p.editor_data->'moderation'->>'status'='approved'
  and jsonb_array_length(p.media)>0 and p.media->0->>'type'='image'
- and public.captro_tea_author_visible(null,u.id) order by (length(coalesce(p.content,''))>0) desc,p.created_at desc limit 3`);
+ and u.is_private=false and coalesce(u.metadata->>'status','active')='active'
+ order by (length(coalesce(p.content,''))>0) desc,p.created_at desc limit 3`);
  const owner=snapshot.home[0]?.userId;
  if(!owner||!/^[a-zA-Z0-9_-]+$/.test(owner)) throw Error('Public profile unavailable');
  snapshot.profile=(await read(`select id,username,full_name "fullName",avatar_url "profileImage",bio,city,
@@ -53,7 +56,17 @@ else {
 }
 if(!snapshot.notes?.length) throw Error('No public Notes available for comparison');
 snapshot.replies=snapshot.replies.filter(r=>snapshot.notes.some(n=>n.id===r.conversationID));
-for(const note of snapshot.notes) note.sentences=discussionSentences(note.body,note.version);
+for(const note of snapshot.notes) {
+ note.sentences=discussionSentences(note.body,note.version);
+ const replies=snapshot.replies.filter(r=>r.conversationID===note.id);
+ note.replyCount=replies.length;
+ const targets=new Map();
+ for(const reply of replies) if(reply.target){
+   const key=JSON.stringify(reply.target);
+   const group=targets.get(key)??{target:reply.target,count:0}; group.count++;targets.set(key,group);
+ }
+ note.replyTargets=[...targets.values()];
+}
 snapshot.images={};
 const urls=[...new Set([...snapshot.notes,...snapshot.replies].map(p=>p.author.photoURL)
  .concat((snapshot.home??[]).flatMap(p=>[p.userProfileImage,...(p.images??[])]),snapshot.profile?.profileImage).filter(Boolean))];
