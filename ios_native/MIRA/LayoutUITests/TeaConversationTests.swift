@@ -43,13 +43,19 @@ final class TeaConversationTests: XCTestCase {
     // Check the actual row separator pixels, not just the presence of a view.
     let screenshot = app.screenshot().image.cgImage!
     let scale = CGFloat(screenshot.width) / app.frame.width
+    // AX rounds the button bounds independently of the half-point overlay.
+    // Inspect its narrow boundary band, not one potentially adjacent white pixel.
+    let bandHeight = Int(4 * scale)
     let strip = screenshot.cropping(to: CGRect(x: first.frame.midX * scale,
-      y: (first.frame.maxY - 0.5) * scale, width: 3, height: 1))!
-    var separator = [UInt8](repeating: 0, count: 4)
-    let separatorContext = CGContext(data: &separator, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+      y: (first.frame.maxY - 2) * scale, width: 1, height: CGFloat(bandHeight)))!
+    var separator = [UInt8](repeating: 0, count: 4 * bandHeight)
+    let separatorContext = CGContext(data: &separator, width: 1, height: bandHeight, bitsPerComponent: 8, bytesPerRow: 4,
       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    separatorContext.draw(strip, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-    XCTAssertTrue((195...225).contains(Int(separator[0])), "Tea rows need a visible fine divider; got \(separator)")
+    separatorContext.draw(strip, in: CGRect(x: 0, y: 0, width: 1, height: CGFloat(bandHeight)))
+    let hasDivider = stride(from: 0, to: separator.count, by: 4).contains { i in
+      (195...225).contains(Int(separator[i])) && separator[i] == separator[i + 1] && separator[i + 1] == separator[i + 2]
+    }
+    XCTAssertTrue(hasDivider, "Tea rows need a visible fine divider; got \(separator)")
     let rendered = NSPredicate { _, _ in
       let image = app.screenshot().image
       guard let cg = image.cgImage else { return false }
