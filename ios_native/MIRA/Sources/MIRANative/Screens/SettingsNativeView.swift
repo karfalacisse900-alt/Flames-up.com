@@ -274,6 +274,9 @@ public struct SettingsNativeView: View {
         }
 
         SettingsCard(title: localization.string("settings.account")) {
+          SettingsNavigationRow(title: "Account verification", subtitle: "Apply for a verified badge", systemImage: "checkmark.seal",
+            destination: CaptroVerificationView(api: model.api))
+            .accessibilityIdentifier("verification.settings")
           SettingsNavigationRow(
             title: "Apply for a professional account", subtitle: "Creator / Gig or Business", systemImage: "person.crop.rectangle",
             destination: CaptroProfessionalAccountsView(api: model.api)

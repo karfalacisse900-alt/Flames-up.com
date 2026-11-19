@@ -12,6 +12,14 @@ export function discussionSentences(body: string, version: number) {
   }).filter(s => s.quote.trim().length > 0);
 }
 
+// A selection is anchored to code-point offsets in the persisted revision.
+// Do not replace a selected excerpt with the whole caption or match by text alone.
+export function discussionTargetMatches(body: string, target: any) {
+  const points = [...body];
+  return target.end <= points.length && target.quote.trim().length > 0 &&
+    points.slice(target.start, target.end).join('') === target.quote;
+}
+
 export function discussionLinks(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 3) throw new DiscussionInputError('Add up to three HTTPS links.');
   return [...new Set(value.map(raw => {
@@ -177,8 +185,7 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
           const revision = await deps.rpc(c, 'captro_tea_reply_revision', {
             p_viewer: viewer, p_id: id, p_version: data.target.version,
           });
-          if (!discussionSentences(revision, data.target.version).some(s =>
-            s.id === data.target.id && s.quote === data.target.quote)) throw new DiscussionInputError('Select a sentence from this post.');
+          if (!discussionTargetMatches(revision, data.target)) throw new DiscussionInputError('Select text from this post.');
         }
         const result = await deps.rpc(c, ('borough' in data || 'primaryAction' in data) ? 'captro_tea_note_write' : 'captro_tea_write', {
           p_actor: viewer, p_action: action, p_id: action === 'create' ? data.requestID : id, p_data: data,

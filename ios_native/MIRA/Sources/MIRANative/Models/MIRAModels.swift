@@ -58,6 +58,7 @@ public enum MIRAUsernameRules {
 }
 
 public struct MIRAUser: Codable, Identifiable, Hashable {
+  public var isVerified: Bool? = nil
   public var professional: [CaptroProfessionalPublicRole]? = nil
   public var openTo: String? = nil
   public var followPending: Bool? = nil
@@ -112,6 +113,7 @@ public struct MIRAUser: Codable, Identifiable, Hashable {
 }
 
 public struct MIRAPost: Codable, Identifiable, Hashable {
+  public var userIsVerified: Bool? = nil
   public var editorOverlays: [CaptroMediaWritingEnvelope]? = nil
   public var creationIntent: String? = nil
   public let id: String
@@ -395,6 +397,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
     author: MIRAUser? = nil
   ) -> MIRAPost {
     MIRAPost(
+      userIsVerified: author == nil ? userIsVerified : author?.isVerified,
       editorOverlays: editorOverlays,
       creationIntent: creationIntent,
       id: id,
@@ -479,6 +482,7 @@ public struct MIRAPost: Codable, Identifiable, Hashable {
 
   public func updatingPinned(at value: String?) -> MIRAPost {
     MIRAPost(
+      userIsVerified: userIsVerified,
       editorOverlays: editorOverlays,
       creationIntent: creationIntent,
       id: id,

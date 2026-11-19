@@ -1,6 +1,7 @@
 import Foundation
 
 struct CaptroTeaAuthor: Codable, Hashable {
+  var isVerified: Bool? = nil
   let id: String
   let name: String
   let username: String

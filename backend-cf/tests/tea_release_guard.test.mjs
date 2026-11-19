@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { baseline, precedingVersion, teaRepairFiles, verifyTeaSource } from '../scripts/verify-tea-release.mjs';
 const before={changed:teaRepairFiles,version:precedingVersion,annotations:{'workers/message':'Tea Conversations '+baseline}};
-test('Tea repair release binds the reviewed production version, source and five-file scope',()=>{
+test('Tea repair release binds the reviewed production version, source and four-file scope',()=>{
   assert.doesNotThrow(()=>verifyTeaSource(before));
   assert.throws(()=>verifyTeaSource({...before,changed:[...teaRepairFiles,'backend-cf/src/creator-support.ts']}));
   assert.throws(()=>verifyTeaSource({...before,version:'unexpected'}));

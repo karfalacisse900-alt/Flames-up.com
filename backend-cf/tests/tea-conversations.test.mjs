@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import { Hono } from 'hono';
-import { discussionLinks, discussionInput, discussionSentences, mountTeaConversations } from '../src/tea-conversations.ts';
+import { discussionLinks, discussionInput, discussionSentences, discussionTargetMatches, mountTeaConversations } from '../src/tea-conversations.ts';
 
 const id = n => '00000000-0000-4000-8000-' + String(n).padStart(12,'0');
 const draft = (extra={}) => ({request_id:id(1),title:'Which intro works?',body:'Tell me what you think.',links:[],...extra});
@@ -15,7 +15,10 @@ test('sentence references survive reflow and preserve edited quotes without atta
     assert.equal(sentences.length,2);assert.equal(sentences[1].quote,'The hardest part was finding a location.');
     assert.equal(discussionSentences('Dr. Chen arrived. Then we filmed.',1).at(-1).quote,'Then we filmed.');
     await write('a','create',id(1),draft({body}));
-    const target=sentences[1];
+    const start=sentences[1].start+4,end=start+12;
+    const target={version:1,start,end,id:`1:${start}:${end}`,quote:[...body].slice(start,end).join('')};
+    assert.equal(discussionTargetMatches(body,target),true);
+    assert.equal(discussionTargetMatches(body,{...target,quote:body}),false);
     const payload=discussionInput('reply',{request_id:id(40),body:'Where?',target});
     await write('b','reply',id(1),payload);await write('b','reply',id(1),payload);
     await write('b','reply',id(1),{requestID:id(41),body:'General reply'});
@@ -172,9 +175,11 @@ test('real HTTP routes enforce auth, restrictions, canonical actor, HTTPS valida
     assert.equal((await (await request('/tea/conversations/'+id(1))).json()).author.id,'a');
     const target=discussionSentences(draft().body,1)[0];
     assert.equal((await request(replyPath,'POST',{request_id:id(1001),body:'Target reply',target})).status,200);
+    const part={...target,id:'1:0:4',end:4,quote:'Tell'};
+    assert.equal((await request(replyPath,'POST',{request_id:id(1003),body:'Selected part only',target:part})).status,200);
     assert.equal((await (await request(replyPath+'?target=general')).json()).items.length,1);
     const thread=await (await request(replyPath+'?target='+target.id)).json();assert.equal(thread.items.length,1);assert.deepEqual(thread.items[0].target,target);
-    assert.equal((await request(replyPath,'POST',{request_id:id(1002),body:'Forged',target:{...target,id:'1:0:4',end:4,quote:'Tell'}})).status,400);
+    assert.equal((await request(replyPath,'POST',{request_id:id(1002),body:'Forged',target:{...target,id:'1:0:4',end:4,quote:'Fake'}})).status,400);
   } finally {await db.close();}
 });
 

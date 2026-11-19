@@ -19,6 +19,7 @@ import {
   safePreviewURL,
   type ConsoleSection,
 } from "./console-state";
+import { VerificationPage } from "./VerificationPage";
 import { ProfessionalPage } from "./ProfessionalPage";
 import { FinancePage } from "./FinancePage";
 import "./console.css";
@@ -1481,6 +1482,7 @@ export function Console({
   const title = sections.find((x) => x.key === url.section)?.label || "Reports";
   const subtitles: Partial<Record<ConsoleSection, string>> = {
     reports: "Review reports and manage community safety.",
+    verification: "Review account verification and manage public badges.",
     professional: "Review Creator / Gig and Business applications independently.",
     finance: "Review creator earnings, Support releases and payout accounting.",
     dashboard: "A clear view of community safety and operational health.",
@@ -1514,7 +1516,7 @@ export function Console({
           </div>
         </a>
         <nav aria-label="Admin navigation">
-          {sections.filter((s) => (s.key !== "finance" || can(session, "payments:read")) && (s.key !== "professional" || can(session, "professional:read"))).map((s) => (
+          {sections.filter((s) => (s.key !== "finance" || can(session, "payments:read")) && (!["professional","verification"].includes(s.key) || can(session, "professional:read"))).map((s) => (
             <a
               key={s.key}
               href={`?section=${s.key}`}
@@ -1598,7 +1600,9 @@ export function Console({
               {sessionError}
             </p>
           ) : null}
-          {url.section === "professional" ? (
+          {url.section === "verification" ? (
+            can(session, "professional:read") ? <VerificationPage token={token} canWrite={can(session,"professional:write")} /> : <p role="alert">Verification review access is required.</p>
+          ) : url.section === "professional" ? (
             can(session, "professional:read") ? <ProfessionalPage token={token} canWrite={can(session,"professional:write")} /> : <p role="alert">Professional review access is required.</p>
           ) : url.section === "finance" ? (
             can(session, "payments:read") ? <FinancePage token={token} canResolve={can(session, "payments:refund")} canRelease={can(session, "payments:release")} canManageSupport={can(session, "payments:support:manage")} /> : <div className="console-error" role="alert"><strong>Access restricted</strong><p>Finance access is required.</p></div>

@@ -2460,11 +2460,14 @@ private struct MainNativePostCard: View {
   }
 
   private var authorNameLabel: some View {
+    HStack(spacing: 4) {
     Text(post.authorDisplayName)
       .font(.system(size: 15, weight: .semibold))
       .foregroundStyle(MIRATheme.Color.textPrimary)
       .lineLimit(1)
       .truncationMode(.tail)
+      CaptroVerifiedBadge(verified: post.userIsVerified == true)
+    }
   }
 
   private var authorSubtitle: String? {
@@ -2826,6 +2829,7 @@ private struct MainFeedCommentRow: View {
               .lineLimit(1)
               .truncationMode(.tail)
               .layoutPriority(1)
+            CaptroVerifiedBadge(verified: comment.user?.isVerified == true)
             if let createdAt = comment.createdAt {
               Text(mainFeedCommentAge(createdAt))
                 .font(.system(size: 12, weight: .medium))

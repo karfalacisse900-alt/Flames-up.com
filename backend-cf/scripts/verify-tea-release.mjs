@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-// Verified rollout 44000943388. This release adds Notes and the reviewed Home/Tea
-// content boundary. Existing commerce, permissions, variables and secrets stay intact.
-export const baseline='e6629e92bb18a31f164b6db1682ea037b46011be';
-export const precedingVersion='0cef467c-ce2b-4e08-9cac-54bf9132bf34';
-export const teaRepairFiles=['backend-cf/src/feed-pagination.ts','backend-cf/src/home-posts.ts','backend-cf/src/index.ts','backend-cf/src/tea-conversations.ts','backend-cf/src/tea.ts'];
+// Verified rollout 44104006932. Exact-selection replies and account badge review only.
+// Commerce, professional roles, variables and secrets stay intact.
+export const baseline='baa9dc80322a69b1ab06cae7a7a70419b2317379';
+export const precedingVersion='0220628f-08be-4a65-ade0-1125604d4b12';
+export const teaRepairFiles=['backend-cf/src/account-badges.ts','backend-cf/src/index.ts','backend-cf/src/tea-authors.ts','backend-cf/src/tea-conversations.ts'];
 export function verifyTeaSource({changed,version,annotations,after=false,candidate,expectedVersion}) {
   assert.deepEqual(changed,teaRepairFiles,'Tea deployment scope changed.');
   if(after) {

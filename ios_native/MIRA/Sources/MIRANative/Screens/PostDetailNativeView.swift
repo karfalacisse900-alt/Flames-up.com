@@ -1338,6 +1338,7 @@ private struct CommentRow: View {
               .lineLimit(2)
               .truncationMode(.tail)
               .layoutPriority(1)
+            CaptroVerifiedBadge(verified: comment.user?.isVerified == true)
             if let createdAt = comment.createdAt {
               Text(relativeAge(createdAt))
                 .font(.caption.weight(.medium))

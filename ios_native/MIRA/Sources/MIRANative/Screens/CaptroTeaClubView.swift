@@ -183,7 +183,7 @@ import UIKit
       VStack(alignment: .leading, spacing: 5) {
       if showAuthor {
         TeaLinkFlow(spacing: 5) {
-          Button { linkDestination = .profile(message.author.id) } label: { Text(message.author.name).font(.callout.weight(.semibold)) }
+          Button { linkDestination = .profile(message.author.id) } label: { HStack(spacing: 4) { Text(message.author.name).font(.callout.weight(.semibold)); CaptroVerifiedBadge(verified: message.author.isVerified == true) } }
             .buttonStyle(.plain).accessibilityLabel("Open profile for " + message.author.name)
           Text("@" + message.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
           Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)

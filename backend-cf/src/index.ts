@@ -1,4 +1,5 @@
 import { teaAuthorPhotos } from './tea-authors';
+import { mountAccountBadges } from './account-badges';
 import { makeBusinessOrdering } from './business-ordering';
 import { mountProfessionalAccounts, professionalHash, ProfessionalError, studioOrigin, studioPathAllowed } from './professional-accounts';
 import { teaPage, teaDetail, teaNoteListings, TeaInputError, TeaUnavailable } from './tea';
@@ -6100,6 +6101,7 @@ function supabaseCommentPayload(row: any, author: any, fallbackPostId: string, l
     user_username: publicUsernameFor(author),
     user_full_name: author?.full_name,
     user_profile_image: safeMediaReference(author?.avatar_url),
+    user: { id: appUserId, username: publicUsernameFor(author), full_name: author?.full_name, profile_image: safeMediaReference(author?.avatar_url), is_verified: author?.is_verified === true },
     created_at: row?.legacy_created_at || row?.created_at,
     updated_at: row?.updated_at || row?.created_at,
   };
@@ -7154,6 +7156,7 @@ function supabaseAppPostToLegacy(row: any, author: any, isFollowing: boolean, co
     user_username: author?.username,
     user_full_name: author?.full_name,
     user_profile_image: author?.avatar_url,
+    user_is_verified: author?.is_verified === true,
     title: cleanText(row?.title, 180),
     creation_intent: normalizeCreationIntent((metadata as any).creation_intent),
     content: normalizeCreationIntent((metadata as any).creation_intent)
@@ -20201,6 +20204,11 @@ async function requireProfessionalRole(c: any, identity: string, role: 'creator'
   const active = await supabaseAdminRpc(c, 'captro_professional_active', { p_user: identity, p_role: role });
   if (active !== true) throw new ProfessionalError('PROFESSIONAL_FORBIDDEN', 403);
 }
+mountAccountBadges(api, {
+  auth: authMiddleware, actor: getUserId, rpc: supabaseAdminRpc, query: supabaseAdminQueryRows, eq: postgrestEqFilter,
+  limit: async c => rejectLargeRequest(c, 16_000) || await enforceRateLimit(c, 'account_badges', getUserId(c) || clientIp(c), 30, 60),
+  admin: async (c, write) => { await requireAdminRole(c, write ? 'professional:write' : 'professional:read'); },
+});
 mountProfessionalAccounts(api, {
   auth: authMiddleware, actor: getUserId, rpc: supabaseAdminRpc, query: supabaseAdminQueryRows, eq: postgrestEqFilter,
   limit: async c => rejectLargeRequest(c, 16_000) || await enforceRateLimit(c, 'professional_accounts', getUserId(c) || c.req.header('CF-Connecting-IP') || 'anonymous', 60, 60),
@@ -20358,10 +20366,10 @@ const teaAuth = async (c: any, next: () => Promise<void>) =>
 async function teaResponseAuthors(c: any, value: any) {
   return teaAuthorPhotos(value, async ids => {
     const rows = await supabaseAdminQueryRows(c, 'app_users', {
-      select: 'id,avatar_url,metadata', filters: { id: postgrestInFilter(ids) }, limit: ids.length,
+      select: 'id,avatar_url,is_verified,metadata', filters: { id: postgrestInFilter(ids) }, limit: ids.length,
     });
     return new Map(rows.filter(row => supabaseUserStatus(row) === 'active')
-      .map(row => [String(row.id), safeMediaReference(row.avatar_url)]));
+      .map(row => [String(row.id), { photoURL: safeMediaReference(row.avatar_url), isVerified: row.is_verified === true }]));
   });
 }
 

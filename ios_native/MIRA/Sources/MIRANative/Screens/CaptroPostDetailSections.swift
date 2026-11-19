@@ -296,10 +296,13 @@ struct CaptroDetailCreatorRow: View {
     HStack(spacing: 9) {
       RemoteAvatar(url: post.userProfileImage, size: 34)
       VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 4) {
         Text(showsTime ? post.detailCreatorHandle : [context, post.detailCreatorHandle].compactMap { $0 }.joined(separator: " "))
           .font(.subheadline.weight(.semibold))
           .foregroundStyle(CaptroDetailStyle.ink)
           .lineLimit(2)
+          CaptroVerifiedBadge(verified: post.userIsVerified == true)
+        }
         if showsTime {
           Text([context, post.displayLocationText == nil ? nil : post.displayCity, relativeAge(post.createdAt)]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))

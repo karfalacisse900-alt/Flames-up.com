@@ -115,6 +115,7 @@ jobs:
           node scripts/app-store/verify-security-schema.mjs
           node backend-cf/scripts/verify-reliability-schema.mjs
           node backend-cf/scripts/verify-creator-earnings-schema.mjs
+          node backend-cf/scripts/verify-badge-schema.mjs
           node backend-cf/scripts/verify-tea-schema.mjs
           node backend-cf/scripts/verify-tea-http.mjs
           node scripts/app-store/verify-professional-release-schema.mjs
@@ -413,6 +414,7 @@ jobs:
           node scripts/app-store/verify-security-schema.mjs
           node backend-cf/scripts/verify-reliability-schema.mjs
           node backend-cf/scripts/verify-creator-earnings-schema.mjs
+          node backend-cf/scripts/verify-badge-schema.mjs
           node backend-cf/scripts/verify-tea-schema.mjs
           node backend-cf/scripts/verify-tea-http.mjs
           node scripts/app-store/verify-professional-release-schema.mjs

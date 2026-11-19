@@ -3,6 +3,20 @@ import Foundation
 @testable import MIRANative
 
 final class CaptroTeaConversationTests: XCTestCase {
+  func testNativeSelectionUsesExactExcerptAndCodePointOffsets() throws {
+    let body = "I filmed \u{1F3AC} on my phone. Finding a location was hard."
+    let whole = CaptroTeaReplyTarget(id: "2:10:99", version: 2, start: 10, end: 99, quote: body)
+    let range = (body as NSString).range(of: "Finding a location")
+    let selected = try XCTUnwrap(whole.selection(range))
+    XCTAssertEqual(selected.quote, "Finding a location")
+    XCTAssertEqual(selected.start, 34)
+    XCTAssertEqual(selected.end, 52)
+    XCTAssertEqual(selected.id, "2:34:52")
+    XCTAssertTrue(whole.contains(selected))
+    XCTAssertNil(whole.selection(NSRange(location: 0, length: 0)))
+    XCTAssertNil(whole.selection(NSRange(location: 1000, length: 2)))
+  }
+
   @MainActor func testFreshPostReopenRetriesFailedRepliesAndKeepsDraft() async throws {
     TeaConversationProtocol.reset()
     TeaConversationProtocol.failNextReplyRead()

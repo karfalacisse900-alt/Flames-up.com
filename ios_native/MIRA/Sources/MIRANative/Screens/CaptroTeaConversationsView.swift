@@ -199,7 +199,7 @@ private struct CaptroTeaConversationRow: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityIdentifier("tea.preview." + post.id)
         TeaLinkFlow(spacing: 5) {
-          Text(post.author.name).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
+          HStack(spacing: 4) { Text(post.author.name).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
           Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
           TeaConversationTime(value: post.createdAt)
           if let borough = post.borough {
@@ -254,15 +254,14 @@ struct TeaConversationTime: View {
           if let sentences = post.sentences, !sentences.isEmpty {
             ForEach(sentences) { sentence in
               VStack(alignment: .leading, spacing: 6) {
-                Text(sentence.quote).font(CaptroTeaStyle.body).fixedSize(horizontal: false, vertical: true)
-                  .textSelection(.enabled)
-                  .contextMenu { Button("Reply to this part") { target(sentence) } }
-                  .accessibilityAction(named: "Reply to this part") { target(sentence) }
-                  .accessibilityIdentifier("tea.sentence." + sentence.id)
+                CaptroTeaSelectableText(sentence: sentence, reply: target)
                 sentenceThread(sentence, post: post)
+                ForEach((post.replyTargets ?? []).filter { sentence.contains($0.target) && $0.target.id != sentence.id }, id: \.target.id) { count in
+                  sentenceThread(count.target, post: post)
+                }
               }
             }
-            ForEach((post.replyTargets ?? []).filter { count in !sentences.contains { $0.id == count.target.id } }, id: \.target.id) { count in
+            ForEach((post.replyTargets ?? []).filter { count in !sentences.contains { $0.contains(count.target) } }, id: \.target.id) { count in
               VStack(alignment: .leading, spacing: 4) {
                 Text("Earlier text").font(.caption).foregroundStyle(.secondary)
                 Text(count.target.quote).font(.subheadline).foregroundStyle(.secondary)
@@ -433,7 +432,7 @@ struct TeaConversationTime: View {
         .accessibilityIdentifier("tea.author.avatar")
       Button { profile = CaptroProfileLink(id: post.author.id) } label: {
         VStack(alignment: .leading, spacing: 3) {
-          Text(post.author.name).font(.headline)
+          HStack(spacing: 4) { Text(post.author.name).font(.headline); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
           TeaLinkFlow(spacing: 5) {
             Text("@" + post.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
             Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
@@ -508,7 +507,7 @@ private struct TeaReplyGroups: View {
               VStack(alignment: .leading, spacing: 4) {
                 TeaLinkFlow(spacing: 5) {
                   if index == 0 {
-                    Text(reply.author.name).font(.callout.weight(.semibold))
+                    HStack(spacing: 4) { Text(reply.author.name).font(.callout.weight(.semibold)); CaptroVerifiedBadge(verified: reply.author.isVerified == true) }
                     Text("@" + reply.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
                     Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
                   }

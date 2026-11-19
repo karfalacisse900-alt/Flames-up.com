@@ -154,8 +154,11 @@ struct CaptroProfileIntroduction: View {
       HStack(spacing: 18) {
         RemoteAvatar(url: user?.profileImage, size: 84)
         VStack(alignment: .leading, spacing: 5) {
+          HStack(spacing: 5) {
             Text(professionalRole?.displayName ?? user?.fullName?.nonemptyProfileText ?? user?.displayName ?? "Profile")
             .font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
+            CaptroVerifiedBadge(verified: user?.isVerified == true)
+          }
           if let username = user?.username {
             Text("@\(MIRAUsernameRules.normalized(username))").foregroundStyle(.secondary)
           }

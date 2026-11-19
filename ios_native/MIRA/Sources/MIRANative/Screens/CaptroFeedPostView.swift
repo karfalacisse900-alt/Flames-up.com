@@ -311,11 +311,14 @@ private struct CaptroAuthorHeader: View {
 
   private var authorIdentityLabel: some View {
     VStack(alignment: .leading, spacing: 2) {
+      HStack(spacing: 4) {
       Text(post.authorDisplayName)
         .font(.system(size: 17, weight: .semibold))
         .foregroundStyle(MIRATheme.Color.textPrimary)
         .lineLimit(1)
         .truncationMode(.tail)
+        CaptroVerifiedBadge(verified: post.userIsVerified == true)
+      }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
