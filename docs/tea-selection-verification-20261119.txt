@@ -40,10 +40,47 @@ Deployment evidence
 - Private admin: 44446673858, successful, deployment
   https://4f057ffd.captro-admin.pages.dev
 - TestFlight archive/upload: 44446677586, version 1.0.1 (722.1).
-  Availability will be recorded after Apple processing.
+  Signed archive, release authentication checks and export passed. Apple upload
+  succeeded at 2026-11-19 03:09:35 UTC. Status run 44449892894 confirmed at
+  03:13:29 UTC: COMPLETE, VALID, IN_BETA_TESTING; automatic internal distribution
+  to Captro private and Captro private2. External beta submission not performed.
 
 Limits
 - No simulator or physical iPhone interaction test this pass. Native text
   selection, VoiceOver selection and live-device layout still need device QA.
 - Existing badges may remain in short-lived cached UI until its usual refresh.
 - Admin identity review is manual; this is not government ID verification.
+
+Changed files (relative to repository root)
+.github/workflows/native-ios-testflight.yml
+.github/workflows/tea-conversations-release.yml
+admin-web/src/Console.tsx
+admin-web/src/VerificationPage.tsx
+admin-web/src/console-state.ts
+admin-web/tests/verification.browser.mjs
+backend-cf/scripts/verify-badge-schema.mjs
+backend-cf/scripts/verify-tea-release.mjs
+backend-cf/src/account-badges.ts
+backend-cf/src/index.ts
+backend-cf/src/tea-authors.ts
+backend-cf/src/tea-conversations.ts
+backend-cf/tests/account-badges.test.mjs
+backend-cf/tests/tea-conversations.test.mjs
+backend-cf/tests/tea_release_guard.test.mjs
+docs/tea-selection-verification-20261119.txt
+ios_native/MIRA/Sources/MIRANative/Components/CaptroProfilePresentation.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroVerifiedBadge.swift
+ios_native/MIRA/Sources/MIRANative/Models/CaptroTeaConversation.swift
+ios_native/MIRA/Sources/MIRANative/Models/MIRAModels.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroFeedPostView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroPostDetailSections.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaSelectableText.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroVerificationView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/PostDetailNativeView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/SettingsNativeView.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroTeaConversationTests.swift
+supabase/migrations/20261119024323_account_badge_verification.sql
+supabase/migrations/20261119025243_badge_audit_append_only.sql
