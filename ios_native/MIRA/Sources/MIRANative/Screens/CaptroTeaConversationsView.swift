@@ -200,10 +200,10 @@ private struct CaptroTeaConversationRow: View {
           .accessibilityIdentifier("tea.preview." + post.id)
         TeaLinkFlow(spacing: 5) {
           Text(post.author.name).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
-          Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+          Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
           TeaConversationTime(value: post.createdAt)
           if let borough = post.borough {
-            Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+            Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
             Text(borough).font(CaptroTeaStyle.metadata).foregroundStyle(CaptroTeaStyle.accent)
           }
         }.padding(.top, 3).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
@@ -436,7 +436,7 @@ struct TeaConversationTime: View {
           Text(post.author.name).font(.headline)
           TeaLinkFlow(spacing: 5) {
             Text("@" + post.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
-            Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+            Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
             TeaConversationTime(value: post.createdAt)
           }
         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
@@ -510,7 +510,7 @@ private struct TeaReplyGroups: View {
                   if index == 0 {
                     Text(reply.author.name).font(.callout.weight(.semibold))
                     Text("@" + reply.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
-                    Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+                    Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
                   }
                   TeaConversationTime(value: reply.createdAt)
                 }

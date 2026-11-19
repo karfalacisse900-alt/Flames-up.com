@@ -186,7 +186,7 @@ import UIKit
           Button { linkDestination = .profile(message.author.id) } label: { Text(message.author.name).font(.callout.weight(.semibold)) }
             .buttonStyle(.plain).accessibilityLabel("Open profile for " + message.author.name)
           Text("@" + message.author.username).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary)
-          Text("·").foregroundStyle(.secondary).accessibilityHidden(true)
+          Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
           TeaConversationTime(value: message.createdAt)
         }
       }
