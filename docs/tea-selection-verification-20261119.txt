@@ -33,6 +33,8 @@ Validation
 
 Deployment evidence
 - Migration: 20261119024323_account_badge_verification.sql, applied successfully.
+- Follow-up 20261119025243_badge_audit_append_only.sql removes inherited
+  service-role update/delete/truncate rights from audit history; tested and live.
 - Worker release: 44446670848, successful. Worker version
   57f6e193-5f4d-4b3b-a3c6-937b63e65cd5. Existing configuration hash preserved.
 - Private admin: 44446673858, successful, deployment

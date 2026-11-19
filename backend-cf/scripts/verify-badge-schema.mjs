@@ -4,7 +4,8 @@ assert.equal(ref,'cclgvxukwccvtgrbcwie');assert.ok(token);
 const query=`select c.relname check_id,c.relrowsecurity
  and not has_table_privilege('anon',c.oid,'SELECT,INSERT,UPDATE,DELETE')
  and not has_table_privilege('authenticated',c.oid,'SELECT,INSERT,UPDATE,DELETE')
- and has_table_privilege('service_role',c.oid,'SELECT,INSERT') passed
+ and has_table_privilege('service_role',c.oid,'SELECT,INSERT')
+ and (c.relname<>'app_badge_audit' or not has_table_privilege('service_role',c.oid,'UPDATE,DELETE,TRUNCATE')) passed
  from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
  and c.relname in ('app_badge_applications','app_badge_audit')
  union all select p.proname,not p.prosecdef and has_function_privilege('service_role',p.oid,'EXECUTE')

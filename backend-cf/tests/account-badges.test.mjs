@@ -20,12 +20,16 @@ test('private application lifecycle, separate authority, audit, idempotency and 
     insert into app_users(id) values('owner'),('applicant'),('other');insert into app_admin_roles values('owner','owner');
     grant select,update on app_users to service_role;grant select on app_admin_roles to service_role;`);
   await db.exec(readFileSync(new URL('../../supabase/migrations/20261119024323_account_badge_verification.sql',import.meta.url),'utf8'));
+  await db.exec('grant all on app_badge_audit to service_role'); // Supabase defaults
+  await db.exec(readFileSync(new URL('../../supabase/migrations/20261119025243_badge_audit_append_only.sql',import.meta.url),'utf8'));
   const call=async(actor,target,action,data,id=randomUUID())=>(await db.query('select captro_badge_mutate($1,$2,$3,$4,$5) r',[actor,target,action,id,JSON.stringify(data)])).rows[0].r;
   const input=badgeInput('submit',{...form,id:randomUUID()});const {id,...data}=input;
   await db.exec('set role service_role');
   assert.equal((await call('applicant','applicant','submit',data,id)).ok,true);
   await call('applicant','applicant','submit',data,id);
   assert.equal((await db.query('select count(*)::int n from app_badge_audit')).rows[0].n,1);
+  await assert.rejects(db.query('delete from app_badge_audit'),/permission denied/);
+  await assert.rejects(db.query("update app_badge_audit set action='approve'"),/permission denied/);
   assert.equal((await db.query("select is_verified from app_users where id='applicant'")).rows[0].is_verified,false);
   await assert.rejects(call('applicant','other','submit',data),/FORBIDDEN/);
   await assert.rejects(call('applicant','applicant','approve',{version:1,message:'Approved',note:''}),/FORBIDDEN/);
