@@ -95,26 +95,26 @@ struct CaptroTeaConversationsList: View {
             .buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
           if post.primaryAction != nil {
             CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
-              .padding(.leading, 60).padding(.bottom, 8)
+              .padding(.leading, 58).padding(.bottom, 8)
           }
         }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 0.5).accessibilityHidden(true) }
           .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
             postID: post.id, feed: "tea-list").allowsHitTesting(false))
           .buttonStyle(.plain)
           .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-          .listRowSeparator(.hidden).listRowBackground(Color.clear)
+          .listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       }
       if let error {
         VStack(alignment: .leading) {
           Text(error).font(.subheadline).foregroundStyle(.secondary)
           Button("Retry") { Task { await load(reset: nextCursor == nil, force: true) } }.frame(minHeight: 44)
-        }.listRowSeparator(.hidden).listRowBackground(Color.clear)
+        }.listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       } else if nextCursor != nil {
-        ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden).listRowBackground(Color.clear)
+        ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
           .task { await load(reset: false) }
       }
     }
-    .listStyle(.plain).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
+    .listStyle(.plain).listRowSpacing(0).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
     .accessibilityIdentifier("tea.conversations.list")
     .navigationDestination(item: $actionDestination) { destination in
       CaptroTeaNoteDestinationView(destination: destination, api: api, viewerID: viewerID, signIn: signIn)
@@ -180,40 +180,47 @@ struct CaptroTeaConversationsList: View {
 private struct CaptroTeaConversationRow: View {
   @Environment(\.dynamicTypeSize) private var typeSize
   let post: CaptroTeaConversation
+  @ScaledMetric(relativeTo: .headline) private var titleSize = 17.0
+  @ScaledMetric(relativeTo: .subheadline) private var previewSize = 15.0
+  @ScaledMetric(relativeTo: .footnote) private var metadataSize = 12.5
+  private var metadataInk: Color { MIRATheme.Color.textSecondary }
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
-      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 48)
-      VStack(alignment: .leading, spacing: 4) {
+      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 46)
+      VStack(alignment: .leading, spacing: 3) {
         if typeSize.isAccessibilitySize {
-          Text(post.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+          Text(post.title).font(.system(size: titleSize, weight: .bold)).fixedSize(horizontal: false, vertical: true)
           replyCount
         } else {
           HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(post.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+            Text(post.title).font(.system(size: titleSize, weight: .bold)).fixedSize(horizontal: false, vertical: true)
               .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
             replyCount.fixedSize(horizontal: true, vertical: false)
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+            Image(systemName: "chevron.right").font(.system(size: metadataSize)).foregroundStyle(metadataInk).accessibilityHidden(true)
           }
         }
-        Text(post.body).font(.callout).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        Text(post.body).font(.system(size: previewSize)).lineSpacing(0).lineLimit(typeSize.isAccessibilitySize ? nil : 2).fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityIdentifier("tea.preview." + post.id)
         TeaLinkFlow(spacing: 5) {
-          HStack(spacing: 4) { Text(post.author.name).font(CaptroTeaStyle.metadata).foregroundStyle(.secondary); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
-          Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
-          TeaConversationTime(value: post.createdAt)
-          if let borough = post.borough {
-            Text("\u{00B7}").foregroundStyle(.secondary).accessibilityHidden(true)
-            Text(borough).font(CaptroTeaStyle.metadata).foregroundStyle(CaptroTeaStyle.accent)
+          HStack(spacing: 4) { Text(post.author.name).font(.system(size: metadataSize)).foregroundStyle(metadataInk); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
+          Text("\u{00B7}").foregroundStyle(metadataInk).accessibilityHidden(true)
+          if let date = captroTeaDate(post.createdAt) {
+            Text(date.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated)))
+              .font(.system(size: metadataSize)).foregroundStyle(metadataInk)
           }
-        }.padding(.top, 3).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
+          if let borough = post.borough {
+            Text("\u{00B7}").foregroundStyle(metadataInk).accessibilityHidden(true)
+            Text(borough).font(.system(size: metadataSize)).foregroundStyle(CaptroTeaStyle.accent)
+          }
+        }.padding(.top, 2).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
       }.frame(maxWidth: .infinity, alignment: .leading)
-    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 16)
+    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 12)
       .contentShape(Rectangle())
   }
   @ViewBuilder private var replyCount: some View {
     if let count = post.replyCount {
-      Text("\(count) \(count == 1 ? "reply" : "replies")").font(.caption).foregroundStyle(.secondary)
+      Text("\(count) \(count == 1 ? "reply" : "replies")").font(.system(size: metadataSize)).foregroundStyle(metadataInk)
     }
   }
 }

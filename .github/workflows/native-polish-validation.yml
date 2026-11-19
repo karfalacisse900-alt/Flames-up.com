@@ -5,6 +5,9 @@ on:
       runner:
         type: string
         default: macos-26
+      notes_comparison:
+        type: boolean
+        default: false
       compile_only:
         type: boolean
         default: false
@@ -30,6 +33,9 @@ on:
         type: choice
         options: [macos-26, macos-26-intel]
         default: macos-26
+      notes_comparison:
+        type: boolean
+        default: false
       compile_only:
         type: boolean
         default: false
@@ -62,6 +68,8 @@ jobs:
         phone: ${{ fromJSON(inputs.conversations && !inputs.small && '["large","small"]' || '["large"]') }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Record actual source for release validation
         run: node scripts/app-store/native-validation-source.mjs
       - name: Parse changed Tea sources before building
@@ -78,6 +86,7 @@ jobs:
           CONVERSATIONS: ${{ inputs.conversations }}
           BROWSER_ONLY: ${{ inputs.browser_only }}
           TEST_FILTER: ${{ inputs.test_filter }}
+          NOTES_COMPARISON: ${{ inputs.notes_comparison }}
         run: |
           set -o pipefail
           runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and "iOS" in r["name"]]; print(max(rs,key=lambda r:tuple(map(int,r["version"].split("."))))["identifier"])')
@@ -103,6 +112,18 @@ jobs:
             tests=()
             IFS=',' read -ra filters <<< "$TEST_FILTER"
             for filter in "${filters[@]}"; do tests+=("-only-testing:$filter"); done
+          fi
+          if [ "$NOTES_COMPARISON" = true ]; then
+            source=Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+            git show cc04f84:ios_native/MIRA/$source > "$source"
+            xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+              -destination "$destination" -parallel-testing-enabled NO \
+              -derivedDataPath "$RUNNER_TEMP/PolishBuild" -resultBundlePath "$RUNNER_TEMP/NotesBefore.xcresult" \
+              -only-testing:CaptroLayoutUITests/TeaConversationTests/testNotesRowReferenceCapture \
+              CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/notes-before.log"
+            git restore --source=HEAD -- "$source"
+            git diff --exit-code HEAD -- Sources
+            xcrun simctl terminate "$device" com.captro.app || true
           fi
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
             -destination "$destination" -parallel-testing-enabled NO \
@@ -135,6 +156,9 @@ jobs:
       - name: Export screenshots
         if: always()
         run: |
+          if [ -d "$RUNNER_TEMP/NotesBefore.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/NotesBefore.xcresult" --output-path "$RUNNER_TEMP/before-screenshots"
+          fi
           if [ -d "$RUNNER_TEMP/Polish.xcresult" ]; then
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/Polish.xcresult" --output-path "$RUNNER_TEMP/screenshots"
           fi
@@ -154,6 +178,9 @@ jobs:
             ${{ runner.temp }}/Polish.xcresult
             ${{ runner.temp }}/polish.log
             ${{ runner.temp }}/screenshots
+            ${{ runner.temp }}/before-screenshots
+            ${{ runner.temp }}/NotesBefore.xcresult
+            ${{ runner.temp }}/notes-before.log
             ${{ runner.temp }}/SmallPolish.xcresult
             ${{ runner.temp }}/small-polish.log
             ${{ runner.temp }}/small-screenshots
@@ -164,6 +191,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Host Swift policy checks (no simulator)
         run: |
           set -o pipefail

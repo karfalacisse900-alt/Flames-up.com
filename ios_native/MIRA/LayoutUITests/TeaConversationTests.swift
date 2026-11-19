@@ -2,6 +2,45 @@ import XCTest
 import UIKit
 
 final class TeaConversationTests: XCTestCase {
+  func testNotesRowReferenceCapture() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--captro-design-quality-test", "--captro-tea-review", "--tea-density-fixture", "--captro-image-recovery-review"]
+    app.launch()
+    XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 20)); app.buttons["home.tea"].tap()
+    XCTAssertTrue(row(101, app).waitForExistence(timeout: 10))
+    // Wait for the same real image-loader decode in both renders, not arbitrary UI delays.
+    let loaded = NSPredicate { _, _ in
+      let cg = app.screenshot().image.cgImage!
+      let scale = CGFloat(cg.width) / app.frame.width, first = self.row(101, app).frame
+      let crop = cg.cropping(to: CGRect(x: (first.minX + 23) * scale, y: (first.minY + 35) * scale, width: 1, height: 1))!
+      var p = [UInt8](repeating: 0, count: 4)
+      let c = CGContext(data: &p, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+      c.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+      return p[0] < 200 && p[1] < 170 && p[2] < 170
+    }
+    expectation(for: loaded, evaluatedWith: app); waitForExpectations(timeout: 10)
+    shot("notes-default-open-app", app)
+    let metrics = (101...105).map { n -> [String: Any] in
+      let r = row(n, app).frame
+      let preview = app.staticTexts["tea.preview.00000000-0000-4000-8000-" + String(format:"%012d",n)].frame
+      return ["row":n,"x":r.minX,"y":r.minY,"width":r.width,"height":r.height,"previewHeight":preview.height,"previewX":preview.minX]
+    }
+    let a = XCTAttachment(data: try JSONSerialization.data(withJSONObject: metrics, options: [.prettyPrinted]), uniformTypeIdentifier: "public.json")
+    a.name = "notes-row-measurements"; a.lifetime = .keepAlways; add(a)
+    row(101, app).tap(); XCTAssertTrue(app.buttons["tea.conversation.follow"].waitForExistence(timeout: 8)); back(app)
+    XCTAssertTrue(row(101, app).waitForExistence(timeout: 8))
+    app.buttons["tea.compose"].tap(); XCTAssertTrue(input("tea.compose.title", app).waitForExistence(timeout: 8)); app.buttons["Cancel"].tap()
+  }
+
+  func testNotesRowAccessibilityCapture() {
+    let app = launch(["--tea-density-fixture", "--captro-image-recovery-review", "--captro-quality-large-text"])
+    let preview = app.staticTexts["tea.preview.00000000-0000-4000-8000-000000000101"]
+    XCTAssertGreaterThan(preview.frame.height, 40)
+    XCTAssertLessThanOrEqual(preview.frame.maxX, app.frame.width - 10)
+    XCTAssertTrue(app.staticTexts["Nightlife NYC"].exists)
+    shot("notes-accessibility-open-app", app)
+  }
+
   private func launch(_ extra: [String] = []) -> XCUIApplication {
     let app = XCUIApplication()
     app.launchArguments = ["--captro-design-quality-test", "--captro-tea-review", "--tea-request-counts"] + extra

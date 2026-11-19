@@ -310,6 +310,18 @@ private final class TeaReviewProtocol: URLProtocol {
         Self.conversations[id(103)]?["title"] = "Help test our next idea"
         Self.conversations[id(103)]?["primaryAction"] = ["kind":"external","label":"Join the test","url":"https://example.com/signup","state":"active"]
       }
+      if ProcessInfo.processInfo.arguments.contains("--tea-density-fixture") {
+        let examples = [
+          ("Nightlife NYC", "Where's everyone going tonight? Looking for a good vibe, music, and a chill crowd.", "Jalen Moore", "Brooklyn"),
+          ("Photo Walk Sunday", "Anyone down for a photo walk this Sunday? Thinking 10 AM at Riverside Park.", "Mia Carter", "Manhattan"),
+          ("Best late coffee in Queens?", "Looking for a solid coffee spot in Queens that's open late and good for working.", "Tia Lane", "Queens"),
+          ("Mirage Nightclub", "What kind of nights should we host next? More house, hip-hop, or open format?", "@mirage", ""),
+          ("Street Vendor Finds", "What's the best street food you've had around the city lately? Drop your spots.", "City Creators Club", "")
+        ]
+        for (index, e) in examples.enumerated() {
+          Self.conversations[id(101 + index)] = ["id":id(101 + index),"title":e.0,"body":e.1,"links":[],"createdAt":ISO8601DateFormatter().string(from: Date().addingTimeInterval(-Double((index + 2) * 3600))),"version":1,"isAuthor":false,"following":false,"borough":e.3,"replyCount":[28,17,34,22,19][index],"author":["id":"artist", "name":e.2,"username":"fixture", "photoURL":"https://image-fixture.invalid/notes-\(index).jpg"]]
+        }
+      }
       if path == "/tea/conversations/capabilities" { return (200,["canCreateForms":true]) }
       if path == "/tea/conversations" {
         Task { @MainActor in TeaReviewMetrics.shared.counts[0, default: 0] += 1 }

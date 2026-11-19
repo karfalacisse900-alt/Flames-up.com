@@ -20,7 +20,10 @@ final class CaptroImageRecoveryFixtureProtocol: URLProtocol {
       guard !lock.withLock({stopped}) else { return }
       let data:Data
       let fallbackScenario = ProcessInfo.processInfo.arguments.contains("--review-server-fallback")
-      if fallbackScenario ? key != Self.fallbackURL : attempt == 1 { data=Data("corrupt fixture".utf8) }
+      if ProcessInfo.processInfo.arguments.contains("--tea-density-fixture") {
+        let n = Int(request.url?.lastPathComponent.replacingOccurrences(of: "notes-", with: "").replacingOccurrences(of: ".jpg", with: "") ?? "") ?? 0
+        data = Data(base64Encoded: CaptroTeaRowReviewPhotos.values[min(max(n, 0), 4)])!
+      } else if fallbackScenario ? key != Self.fallbackURL : attempt == 1 { data=Data("corrupt fixture".utf8) }
       else {
         let context=CGContext(data:nil,width:16,height:20,bitsPerComponent:8,bytesPerRow:64,
           space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
