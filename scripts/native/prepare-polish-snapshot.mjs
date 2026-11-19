@@ -22,10 +22,15 @@ let snapshot;
 async function read(query) {
  const {SUPABASE_PROJECT_REF:ref,SUPABASE_ACCESS_TOKEN:token}=process.env;
  if(!/^[a-z]{20}$/.test(ref??'')||!token) throw Error('Review read credentials missing');
+ if(ref!=='cclgvxukwccvtgrbcwie') throw Error('Review project does not match Captro');
  const r=await fetch(`https://api.supabase.com/v1/projects/${ref}/database/query`,{
   method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},
   body:JSON.stringify({query,read_only:true}),redirect:'error',signal:AbortSignal.timeout(25000)});
- if(!r.ok) throw Error(`Public review read failed: HTTP ${r.status}`);
+ if(!r.ok) {
+   const failure=await r.json().catch(()=>({}));
+   const message=String(failure.message??failure.error??'').replace(/https?:\S+|Bearer\s+\S+|sbp_\S+/g,'[redacted]').slice(0,250);
+   throw Error(`Public review read failed: HTTP ${r.status}: ${message}`);
+ }
  return r.json();
 }
 if(process.argv[2]) snapshot=JSON.parse(readFileSync(process.argv[2],'utf8'));
