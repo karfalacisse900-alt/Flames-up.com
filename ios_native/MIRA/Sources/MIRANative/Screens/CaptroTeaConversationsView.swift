@@ -95,7 +95,7 @@ struct CaptroTeaConversationsList: View {
             .buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
           if post.primaryAction != nil {
             CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
-              .padding(.leading, 58).padding(.bottom, 8)
+              .padding(.leading, 64).padding(.bottom, 8)
           }
         }.overlay(alignment: .bottom) { Rectangle().fill(CaptroTeaStyle.separator).frame(height: 0.5).accessibilityHidden(true) }
           .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
@@ -186,7 +186,7 @@ private struct CaptroTeaConversationRow: View {
   private var metadataInk: Color { MIRATheme.Color.textSecondary }
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
-      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 46)
+      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: 52)
       VStack(alignment: .leading, spacing: 3) {
         if typeSize.isAccessibilitySize {
           Text(post.title).font(.system(size: titleSize, weight: .bold)).fixedSize(horizontal: false, vertical: true)
