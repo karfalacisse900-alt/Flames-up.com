@@ -2,18 +2,20 @@
 begin;
 create table public.app_tea_interest (
   conversation_id uuid not null references public.app_tea_conversations(id) on delete cascade,
-  user_id text not null references public.app_users(id),
+  user_id text not null references public.app_users(id) on delete cascade,
   choice text not null check (choice in ('interested','pass')),
   updated_at timestamptz not null default now(),
   primary key (conversation_id,user_id)
 );
 create index app_tea_interest_author_totals on public.app_tea_interest(conversation_id) where choice='interested';
+create index app_tea_interest_user on public.app_tea_interest(user_id);
 create table public.app_tea_opens (
   conversation_id uuid not null references public.app_tea_conversations(id) on delete cascade,
-  user_id text not null references public.app_users(id),
+  user_id text not null references public.app_users(id) on delete cascade,
   opened_at timestamptz not null default now(),
   primary key (conversation_id,user_id)
 );
+create index app_tea_opens_user on public.app_tea_opens(user_id);
 alter table public.app_tea_interest enable row level security;
 alter table public.app_tea_opens enable row level security;
 revoke all on public.app_tea_interest,public.app_tea_opens from public,anon,authenticated;

@@ -231,6 +231,11 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     sample()
     if let anchor = snapshots[scope] { requestRestoration(anchor, reason: "notes_refresh") }
   }
+  func clearSavedPositions() {
+    setActive(false)
+    snapshots.removeAll(); pending = nil; cells.removeAll()
+    order.removeAll(); orderIndex.removeAll(); activeID = nil
+  }
 
   func register(_ view: UIView, id: String, feed: String? = nil) {
     guard feed == nil || feed == scope else { return }

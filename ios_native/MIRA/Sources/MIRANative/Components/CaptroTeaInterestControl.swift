@@ -10,7 +10,7 @@ struct CaptroTeaInterestControl: View {
       choice("pass", symbol: "minus", label: "Pass")
     }
     .background {
-      Capsule().strokeBorder(MIRATheme.Color.textSecondary.opacity(0.7), lineWidth: 0.6).frame(height: 24)
+      Capsule().strokeBorder(MIRATheme.Color.textSecondary.opacity(0.7), lineWidth: 0.6).frame(width: 64, height: 24)
     }
     .overlay { Rectangle().fill(MIRATheme.Color.textSecondary.opacity(0.6)).frame(width: 0.5, height: 14).allowsHitTesting(false) }
     .fixedSize()
@@ -23,8 +23,9 @@ struct CaptroTeaInterestControl: View {
     } label: {
       Image(systemName: symbol).font(.system(size: 14, weight: model.interest == value ? .bold : .regular))
         .foregroundStyle(model.interest == value ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary)
+        .offset(x: value == "interested" ? 6 : -6)
         .frame(width: 44, height: 44)
-        .background { if model.interest == value { Capsule().fill(CaptroTeaStyle.tint).frame(width: 36, height: 20) } }
+        .background { if model.interest == value { Capsule().fill(CaptroTeaStyle.tint).frame(width: 28, height: 20).offset(x: value == "interested" ? 6 : -6) } }
         .contentShape(Rectangle())
     }.buttonStyle(.plain).disabled(model.busy || !model.valid)
       .accessibilityLabel(label)

@@ -79,4 +79,20 @@ final class NotesRootTests: XCTestCase {
     XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout:8))
     shot("notes-detail-large-text",app)
   }
+  func testSecondPagePositionSurvivesTabsAndBackground() {
+    let app = launch(["--tea-pages-fixture"])
+    let target = app.buttons["tea.conversation.00000000-0000-4000-8000-000000000125"]
+    let list = app.collectionViews["tea.conversations.list"].exists ? app.collectionViews["tea.conversations.list"] : app.tables.firstMatch
+    for _ in 0..<30 where !target.isHittable { list.swipeUp() }
+    XCTAssertTrue(target.isHittable)
+    let before = target.frame.minY
+    app.tabBars.buttons["Home"].tap(); app.tabBars.buttons["Notes"].tap()
+    XCTAssertTrue(target.isHittable)
+    XCTAssertEqual(target.frame.minY,before,accuracy:4)
+    XCUIDevice.shared.press(.home); app.activate()
+    XCTAssertTrue(target.waitForExistence(timeout:8)); XCTAssertTrue(target.isHittable)
+    XCTAssertEqual(target.frame.minY,before,accuracy:4)
+    XCTAssertFalse(app.staticTexts["Loading Notes…"].exists)
+    shot("notes-second-page-preserved",app)
+  }
 }

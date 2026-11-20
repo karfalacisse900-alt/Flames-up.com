@@ -56,7 +56,7 @@ final class MIRAStartupCoordinator: ObservableObject {
   let profileModel: ProfileNativeModel
   let paymentsModel: CaptroPaymentsModel
 
-  private let api: MIRAAPIClient
+  fileprivate let api: MIRAAPIClient
   private var didStart = false
   private let splashDismissDuration: TimeInterval = 0.18
   private var brandingDeadline: Task<Void, Never>?
@@ -171,7 +171,9 @@ public struct MIRANativeRootView: View {
   @StateObject private var authSession: MIRAAuthSession
   @StateObject private var startup: MIRAStartupCoordinator
   @StateObject private var localization: MIRALocalization
-  private let api: MIRAAPIClient
+  // A SwiftUI value reconstruction must not pair retained startup models with
+  // a newly initialized client and empty Tea caches.
+  private var api: MIRAAPIClient { startup.api }
 
   public init() {
     // Keep the selected symbol readable independently of the photograph beneath
@@ -187,7 +189,6 @@ public struct MIRANativeRootView: View {
     _authSession = StateObject(wrappedValue: session)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: client))
     _localization = StateObject(wrappedValue: MIRALocalization.shared)
-    self.api = client
     MIRAPerformanceTimeline.mark("native_root_init")
   }
 
@@ -196,7 +197,6 @@ public struct MIRANativeRootView: View {
     _authSession = StateObject(wrappedValue: reviewSession)
     _startup = StateObject(wrappedValue: MIRAStartupCoordinator(api: api))
     _localization = StateObject(wrappedValue: MIRALocalization.shared)
-    self.api = api
   }
 #endif
 

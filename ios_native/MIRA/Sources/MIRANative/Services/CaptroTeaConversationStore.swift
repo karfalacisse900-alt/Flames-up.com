@@ -65,7 +65,7 @@ extension Notification.Name {
     notes?.clear()
     for signal in signals.values { signal.clear() }
     signals.removeAll()
-    listing = nil; listViewport.setActive(false)
+    listing = nil; listViewport.clearSavedPositions()
     NotificationCenter.default.post(name: .captroTeaAccessChanged, object: nil)
   }
   func application(for note: CaptroTeaConversation) -> CaptroTeaApplicationModel {

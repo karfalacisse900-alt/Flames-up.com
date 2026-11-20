@@ -91,6 +91,14 @@ test('real PostgreSQL: anon/authenticated cannot bypass Worker identity with dir
   }finally{await db.close();}
 });
 
+test('account removal can erase private signals without obstructing existing deletion',async()=>{
+  const {db,signal}=await setup();try {
+    await signal('reader','interest','interested'); await signal('reader','open');
+    await db.exec("reset role; delete from app_users where id='reader'; set role service_role;");
+    assert.deepEqual(await signal('author','insights'),{uniqueOpens:0,interested:0,replies:0});
+  }finally{await db.close();}
+});
+
 test('HTTP + PostgreSQL: actor spoofing rejected; insights enforced server-side; duplicate requests safe',async()=>{
   const {db,rpc}=await setup();try {
     const app=new Hono();

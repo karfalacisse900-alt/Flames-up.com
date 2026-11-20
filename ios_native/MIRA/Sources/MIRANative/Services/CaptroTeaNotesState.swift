@@ -58,6 +58,7 @@ import Foundation
           refreshed.count < count || (tail != nil && !refreshed.contains { $0.id == tail } && cursors.count < (count + 19) / 20) {
           guard flightID == token, owner == api.presentationScope, revision == expectedRevision else { return }
           try Task.checkCancellation()
+          guard Date().timeIntervalSince(started) < 30 else { throw URLError(.timedOut) }
           guard cursors.insert(cursor).inserted, cursors.count <= 64 else { throw MIRAAPIError.decodingFailed }
           page = try await api.getFresh("/tea/conversations?cursor=" + cursor)
           refreshed += page.items
@@ -133,6 +134,7 @@ struct CaptroTeaInterestPayload: Codable {
       let response: CaptroTeaInterestPayload = try await api.put("/tea/conversations/" + id + "/interest", body: payload)
       guard valid else { return }
       interest = response.interest; pending = nil; mutationStarted = Date(); insightsAt = nil
+      if insights != nil { await loadInsights(force: true) }
     } catch {
       guard valid else { return }
       if case MIRAAPIError.server(let status, _, _) = error, [400,401,403,404].contains(status) { pending = nil }

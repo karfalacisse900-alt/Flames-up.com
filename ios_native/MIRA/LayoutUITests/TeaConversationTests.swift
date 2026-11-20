@@ -263,12 +263,10 @@ final class TeaConversationTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["A great location."].exists)
   }
 
-  func testTargetedSendAndAuthorFollowAreSeparateFromDiscussionFollow() {
+  func testTargetedSendAndProfileFollowRemainSeparateFromDiscussionFollow() {
     let app=launch(["--tea-sentence-fixture"])
     row(101,app).tap()
-    let author=app.buttons["tea.author.follow"]
-    XCTAssertTrue(author.waitForExistence(timeout:8)); author.tap()
-    XCTAssertTrue(app.buttons["Unfollow author"].waitForExistence(timeout:8))
+    XCTAssertFalse(app.buttons["tea.author.follow"].exists)
     XCTAssertTrue(app.buttons["Follow discussion"].exists)
     app.buttons["tea.author.profile"].tap()
     XCTAssertTrue(app.buttons["profile.follow"].waitForExistence(timeout:8))
@@ -277,7 +275,7 @@ final class TeaConversationTests: XCTestCase {
     app.buttons["tea.author.avatar"].tap()
     XCTAssertTrue(app.buttons["profile.follow"].waitForExistence(timeout:8))
     app.navigationBars.firstMatch.buttons.firstMatch.tap()
-    XCTAssertTrue(app.buttons["Unfollow author"].waitForExistence(timeout:8),"Opening the avatar must not toggle the separate follow control")
+    XCTAssertFalse(app.buttons["tea.author.follow"].exists,"Account follow remains on the existing profile")
     let first=app.staticTexts["tea.sentence.1:0:22"]
     first.press(forDuration:1); app.buttons["Reply to this part"].tap()
     let field=input("tea.reply.input",app); field.tap(); field.typeText("Which phone did you use?")

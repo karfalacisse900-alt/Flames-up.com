@@ -96,7 +96,7 @@ final class TeaTests: XCTestCase {
     XCTAssertTrue(back.exists); back.tap()
     XCTAssertTrue(app.buttons["tea.createActivity"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.staticTexts["Isolated new club"].firstMatch.waitForExistence(timeout: 8))
-    app.buttons["tea.back.home"].tap()
+    app.tabBars.buttons["Home"].tap()
     XCTAssertTrue(app.buttons["home.tea"].waitForExistence(timeout: 8))
     XCTAssertFalse(app.staticTexts["Isolated new club"].exists)
     XCTAssertFalse(app.staticTexts["New post"].exists)
@@ -118,7 +118,7 @@ final class TeaTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Clubs & Events"].exists)
     XCTAssertFalse(app.buttons["home.menu.tea"].exists)
     attach("tea-clubs-with-profile-city", from: app)
-    app.buttons["tea.back.home"].tap()
+    app.tabBars.buttons["Home"].tap()
     let tea = app.buttons["home.tea"]
     XCTAssertTrue(tea.waitForExistence(timeout: 8))
     XCTAssertEqual(tea.frame.width, 44, accuracy: 1)
@@ -208,7 +208,7 @@ final class TeaTests: XCTestCase {
     app.buttons["Close"].tap()
     back(app)
     XCTAssertTrue(row(3, in: app).waitForExistence(timeout: 8))
-    app.buttons["tea.back.home"].tap()
+    app.tabBars.buttons["Home"].tap()
     XCTAssertTrue(app.buttons["home.create.post"].waitForExistence(timeout: 8))
   }
 
@@ -293,7 +293,7 @@ final class TeaTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["$20 Entry"].waitForExistence(timeout: 3))
     XCTAssertFalse(app.staticTexts["Photo Walk"].exists)
     XCTAssertEqual(app.buttons["tea.primary-action"].label, "Buy Ticket")
-    back(app); app.buttons["tea.back.home"].tap()
+    back(app); app.tabBars.buttons["Home"].tap()
     app.buttons["home.tea"].tap()
     selectListings(app)
     tapRow(3, in: app)

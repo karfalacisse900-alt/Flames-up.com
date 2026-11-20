@@ -105,7 +105,10 @@ struct CaptroTeaConversationsList: View {
       CaptroTeaNoteDestinationView(destination: destination, api: api, viewerID: viewerID, signIn: signIn)
     }
     .refreshable { await model.load(reset: true, force: true) }
-    .task(id: "\(active)-\(model.revision)") { if active { await model.load(reset: true) } }
+    .task(id: "\(active)-\(model.revision)") {
+      api.teaConversations.listViewport.setActive(active)
+      if active { await model.load(reset: true) }
+    }
     .onAppear {
       api.teaConversations.listViewport.select("tea-list")
       api.teaConversations.listViewport.updateOrder(model.items.map(\.id))
@@ -178,7 +181,8 @@ private struct CaptroTeaConversationRow: View {
   }
   private var interest: some View { CaptroTeaInterestControl(model: signal, signedIn: signedIn, signIn: signIn) }
   private var metadata: some View {
-    TeaLinkFlow(spacing: 5) {
+    Button(action: open) {
+    TeaLinkFlow(spacing: 5, intrinsicWidth: true) {
           HStack(spacing: 4) { Text(post.author.name).miraText(.metadata).foregroundStyle(metadataInk); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
           Text("\u{00B7}").miraText(.metadata).foregroundStyle(metadataInk).accessibilityHidden(true)
           if let date = captroTeaDate(post.createdAt) {
@@ -190,6 +194,7 @@ private struct CaptroTeaConversationRow: View {
             Text(borough).miraText(.metadata).foregroundStyle(CaptroTeaStyle.accent)
           }
         }.padding(.top, 2).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
+    }.buttonStyle(.plain)
   }
   @ViewBuilder private var replyCount: some View {
     if let count = post.replyCount {
@@ -384,7 +389,10 @@ struct TeaConversationTime: View {
                 .disabled(model.busy || model.replyPending)
                 .miraText(.body).padding(.horizontal, 14).padding(.vertical, 11).background(CaptroTeaStyle.composerFill, in: RoundedRectangle(cornerRadius: 22))
                 .accessibilityIdentifier("tea.reply.input")
-              Button { Task { await model.sendReply() } } label: {
+              Button { Task {
+                await model.sendReply()
+                if model.post?.isAuthor == true, model.replyError == nil { await signal.loadInsights(force: true) }
+              } } label: {
                 if model.busy { ProgressView().frame(width: 44, height: 44) }
                 else { Image(systemName: "paperplane").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44).background(CaptroTeaStyle.accent, in: Circle()) }
               }.disabled(model.busy || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.draft.count > 4000)
@@ -407,7 +415,10 @@ struct TeaConversationTime: View {
       .toolbar(.hidden, for: .tabBar)
       .onAppear { model.viewport.setActive(true) }
       .onDisappear { model.viewport.setActive(false) }
-      .refreshable { await model.load(force: true) }
+      .refreshable {
+        await model.load(force: true)
+        if model.post?.isAuthor == true { await signal.loadInsights(force: true) }
+      }
       .onChange(of: scenePhase) { _, phase in
         model.viewport.setActive(phase == .active)
         if phase == .active { Task { await model.load() } }
@@ -507,8 +518,10 @@ private struct TeaReplyGroups: View {
 /// Wrap whole link controls instead of squeezing them into one horizontal line.
 struct TeaLinkFlow: Layout {
   let spacing: CGFloat
+  var intrinsicWidth = false
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-    arrange(width: proposal.width ?? 320, subviews: subviews).size
+    let ideal = subviews.reduce(CGFloat(0)) { $0 + $1.sizeThatFits(.unspecified).width } + CGFloat(max(0, subviews.count - 1)) * spacing
+    return arrange(width: proposal.width ?? (intrinsicWidth ? ideal : 320), subviews: subviews).size
   }
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     let result = arrange(width: bounds.width, subviews: subviews)

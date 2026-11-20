@@ -333,6 +333,13 @@ private final class TeaReviewProtocol: URLProtocol {
         Self.conversations[id(101)]?["isAuthor"] = true
         Self.conversations[id(101)]?["author"] = ["id":"tea-viewer","name":"Tea Fixture","username":"tea_fixture","photoURL":CaptroImageRecoveryFixtureProtocol.fallbackURL]
       }
+      if ProcessInfo.processInfo.arguments.contains("--tea-pages-fixture"), Self.conversations[id(150)] == nil {
+        for number in 106...150 {
+          var post = Self.conversations[id(105)]!
+          post["id"] = id(number); post["title"] = "Neighborhood Note \(number)"
+          Self.conversations[id(number)] = post
+        }
+      }
       if path == "/tea/conversations/capabilities" { return (200,["canCreateForms":true]) }
       if path == "/tea/conversations" {
         Task { @MainActor in TeaReviewMetrics.shared.counts[0, default: 0] += 1 }
@@ -342,7 +349,13 @@ private final class TeaReviewProtocol: URLProtocol {
           post["borough"] = body["borough"]; post["primaryAction"] = body["primary_action"]
           Self.conversations[key] = post; return (200, post)
         }
-        return (200, ["items": Self.conversations.values.sorted { ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "") }])
+        let sorted = Self.conversations.values.sorted { ($0["id"] as? String ?? "") < ($1["id"] as? String ?? "") }
+        if ProcessInfo.processInfo.arguments.contains("--tea-pages-fixture") {
+          let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+          let offset = Int(query?.first { $0.name == "cursor" }?.value ?? "0") ?? 0
+          return (200,["items": Array(sorted.dropFirst(offset).prefix(20)),"nextCursor":offset + 20 < sorted.count ? String(offset + 20) as Any : NSNull()])
+        }
+        return (200, ["items": sorted])
       }
       let parts = path.split(separator: "/")
       guard parts.count >= 3, var post = Self.conversations[String(parts[2])] else { return (404, ["detail":"Unavailable"]) }
