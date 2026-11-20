@@ -210,8 +210,14 @@ extension Notification.Name {
         let result: CaptroTeaConversation = try await api.getFresh("/tea/conversations/" + id)
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
         guard result.id == id else { throw MIRAAPIError.decodingFailed }
+        let previousTargets = post?.replyTargets ?? []
         post = result; loadedAt = Date()
         api.teaConversations.signal(for: result).hydrate(result.interest, readStartedAt: readStarted)
+        for count in result.replyTargets ?? [] where expandedTargets.contains(count.target.id) {
+          if previousTargets.first(where: { $0.target.id == count.target.id })?.count != count.count {
+            await loadThread(count.target, reset: true)
+          }
+        }
       } catch {
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
         if Self.denied(error) { clear(); self.error = "This post is no longer available." }
@@ -230,9 +236,7 @@ extension Notification.Name {
       // needed by the existing profile route, not on every brief app resume.
       await replies
       for count in post?.replyTargets ?? [] where force && expandedTargets.contains(count.target.id) {
-        if force {
-          await loadThread(count.target, reset: true)
-        }
+        await loadThread(count.target, reset: true)
       }
     }
   }
@@ -353,6 +357,10 @@ extension Notification.Name {
       if Self.denied(error) { clear() }
       else { threadErrors[target.id] = "Couldn’t load these replies. Try again." }
     }
+  }
+  func openThread(_ target: CaptroTeaReplyTarget) async {
+    if let date = threadLoadedAt[target.id], Date().timeIntervalSince(date) < 120 { return }
+    await loadThread(target, reset: true)
   }
   func loadAuthor(force: Bool = false) async {
     guard valid, !loadingAuthor, let author = post?.author.id else { return }

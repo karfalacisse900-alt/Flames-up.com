@@ -96,7 +96,7 @@ struct CaptroTeaConversationsList: View {
         }.listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       } else if model.nextCursor != nil {
         ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
-          .task(id: model.nextCursor) { if active { await model.load(reset: false) } }
+          .task(id: "\(model.nextCursor ?? "")-\(active)") { if active { await model.load(reset: false) } }
       }
     }
     .listStyle(.plain).listRowSpacing(0).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
@@ -455,7 +455,7 @@ struct TeaConversationTime: View {
       Button {
         if expanded { model.expandedTargets.remove(target.id) } else {
           model.expandedTargets.insert(target.id)
-          Task { await model.loadThread(target) }
+          Task { await model.openThread(target) }
         }
       } label: { Text(expanded ? "Hide replies" : "\(count) \(count == 1 ? "reply" : "replies") to this line").font(.subheadline).underline().frame(minHeight: 44) }
         .buttonStyle(.plain).accessibilityIdentifier("tea.thread." + target.id)
