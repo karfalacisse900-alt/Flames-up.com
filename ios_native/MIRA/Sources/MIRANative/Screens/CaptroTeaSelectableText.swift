@@ -39,16 +39,13 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     view.adjustsFontForContentSizeCategory = true
     view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     view.delegate = context.coordinator
-    let selectionMenu = UIEditMenuInteraction(delegate: context.coordinator)
-    view.addInteraction(selectionMenu)
-    context.coordinator.selectionMenu = selectionMenu
     let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
     tap.cancelsTouchesInView = false
     tap.delegate = context.coordinator
     view.addGestureRecognizer(tap)
     // A short marker tap and native text selection are separate gestures.
-    // Use the native edit-menu API after a completed hold, without depending
-    // on a private interaction hidden inside UITextView’s selection container.
+    // In a SwiftUI List, UIKit can finish selection without presenting its menu;
+    // explicitly present that same edit interaction after a completed hold.
     let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.selectExcerpt(_:)))
     hold.cancelsTouchesInView = false
     hold.delegate = context.coordinator
@@ -95,9 +92,8 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     guard let width = proposal.width, width > 0 else { return nil }
     return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
   }
-  final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate, UIEditMenuInteractionDelegate {
+  final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
     var parent: CaptroTeaSelectableText
-    var selectionMenu: UIEditMenuInteraction?
     init(_ parent: CaptroTeaSelectableText) { self.parent = parent }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     @objc func selectExcerpt(_ gesture: UILongPressGestureRecognizer) {
@@ -113,7 +109,7 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
         view.selectedTextRange = word
       }
       guard view.selectedRange.length > 0,
-        let interaction = selectionMenu else { return }
+        let interaction = view.interactions.compactMap({ $0 as? UIEditMenuInteraction }).first else { return }
       interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil,
         sourcePoint: gesture.location(in: view)))
     }
@@ -128,11 +124,6 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
       let index = manager.characterIndexForGlyph(at:glyph)
       guard index < view.attributedText.length, view.attributedText.attribute(CaptroTeaSelectableText.marker,at:index,effectiveRange:nil) != nil else { return }
       parent.toggle?()
-    }
-    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
-      suggestedActions: [UIMenuElement]) -> UIMenu? {
-      guard let view = interaction.view as? UITextView else { return nil }
-      return textView(view, editMenuForTextIn: view.selectedRange, suggestedActions: suggestedActions)
     }
     func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
       let captionRange = NSIntersectionRange(range, NSRange(location: 0, length: (parent.sentence.quote as NSString).length))

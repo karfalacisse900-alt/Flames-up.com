@@ -253,8 +253,8 @@ final class TeaConversationTests: XCTestCase {
     thread.tap()
     let sentence=app.textViews["tea.sentence.1:23:63"]
     sentence.press(forDuration:1)
-    XCTAssertTrue(app.buttons["Reply to this part"].waitForExistence(timeout:5))
-    app.buttons["Reply to this part"].tap()
+    XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "Reply to this part").firstMatch.waitForExistence(timeout:5))
+    app.descendants(matching: .any).matching(identifier: "Reply to this part").firstMatch.tap()
     XCTAssertTrue(app.staticTexts["tea.reply.target"].exists)
     let field=input("tea.reply.input",app); field.tap(); field.typeText("A great location.")
     shot("sentence-reply-composer",app)
@@ -281,7 +281,7 @@ final class TeaConversationTests: XCTestCase {
     app.navigationBars.firstMatch.buttons.firstMatch.tap()
     XCTAssertFalse(app.buttons["tea.author.follow"].exists,"Account follow remains on the existing profile")
     let first=app.textViews["tea.sentence.1:0:22"]
-    first.press(forDuration:1); app.buttons["Reply to this part"].tap()
+    first.press(forDuration:1); app.descendants(matching: .any).matching(identifier: "Reply to this part").firstMatch.tap()
     let field=input("tea.reply.input",app); field.tap(); field.typeText("Which phone did you use?")
     app.buttons["tea.reply.send"].tap()
     XCTAssertTrue(app.textViews["tea.sentence.1:0:22"].waitForExistence(timeout:8))

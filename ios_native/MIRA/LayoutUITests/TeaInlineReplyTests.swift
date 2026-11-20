@@ -38,7 +38,7 @@ final class TeaInlineReplyTests: XCTestCase {
     XCTAssertEqual(text.value as? String,"2 replies, collapsed")
     // Native selection remains available on the same underlined caption.
     text.coordinate(withNormalizedOffset:CGVector(dx:0.65,dy:0.25)).press(forDuration:1.2)
-    let replyAction = app.buttons["Reply to this part"]
+    let replyAction = app.descendants(matching: .any).matching(identifier: "Reply to this part").firstMatch
     XCTAssertTrue(replyAction.waitForExistence(timeout:5)); replyAction.tap()
     XCTAssertTrue(app.staticTexts["tea.reply.target"].waitForExistence(timeout:5))
     let quote = app.staticTexts["tea.reply.target-quote"].label
