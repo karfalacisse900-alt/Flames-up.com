@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-// Verified rollout 44446670848. Private Note signals and qualified engagement only.
+// Verified rollout 44669070758. Bounded inline sentence reply reads only.
 // Commerce, professional roles, variables and secrets stay intact.
-export const baseline='af82a556432e1413a1dac4a1fec2fe44c2a0468c';
-export const precedingVersion='57f6e193-5f4d-4b3b-a3c6-937b63e65cd5';
+export const baseline='634bacd703683b46b6cf1c9934b92ccc6a836b87';
+export const precedingVersion='c073d728-b967-4c82-83d5-1ae5aa858cac';
 export const teaRepairFiles=['backend-cf/src/tea-conversations.ts'];
 export function verifyTeaSource({changed,version,annotations,after=false,candidate,expectedVersion}) {
   assert.deepEqual(changed,teaRepairFiles,'Tea deployment scope changed.');
