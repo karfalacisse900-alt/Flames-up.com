@@ -84,7 +84,7 @@ jobs:
         run: node scripts/app-store/native-validation-source.mjs
       - name: Parse changed Tea sources before building
         run: |
-          xcrun swiftc -frontend -parse ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift
+          xcrun swiftc -frontend -parse ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaNoteActions.swift ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaClubView.swift ios_native/MIRA/LayoutUITests/TeaNoteTests.swift
       - run: brew install xcodegen
       - run: xcodegen generate --spec project.yml
         working-directory: ios_native/MIRA
