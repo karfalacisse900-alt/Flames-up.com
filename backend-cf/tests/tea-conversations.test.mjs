@@ -80,6 +80,7 @@ async function database() {
     grant select,update on app_users to service_role; grant select on app_blocks,app_follows to service_role;`);
   await db.exec(readFileSync(new URL('../../supabase/migrations/20261114230954_tea_conversations.sql',import.meta.url),'utf8'));
   await db.exec(readFileSync(new URL('../../supabase/migrations/20261115014511_tea_sentence_replies.sql',import.meta.url),'utf8'));
+  await db.exec(readFileSync(new URL('../../supabase/migrations/20261120164319_tea_inline_sentence_threads.sql',import.meta.url),'utf8'));
   const write=async(actor,action,post,data)=>(await db.query('select captro_tea_write($1,$2,$3,$4) value',[actor,action,post,JSON.stringify(data)])).rows[0].value;
   const read=async(actor,kind,post=null,before=null,boundary=null,snapshot=new Date(Date.now()+60000).toISOString())=>(await db.query('select captro_tea_read($1,$2,$3,$4,$5,$6) value',[actor,kind,post,before,boundary,snapshot])).rows[0].value;
   return {db,write,read};
@@ -179,7 +180,39 @@ test('real HTTP routes enforce auth, restrictions, canonical actor, HTTPS valida
     assert.equal((await request(replyPath,'POST',{request_id:id(1003),body:'Selected part only',target:part})).status,200);
     assert.equal((await (await request(replyPath+'?target=general')).json()).items.length,1);
     const thread=await (await request(replyPath+'?target='+target.id)).json();assert.equal(thread.items.length,1);assert.deepEqual(thread.items[0].target,target);
+    const combined=await (await request(replyPath+'?target=sentence:'+target.id)).json();assert.equal(combined.items.length,2);
+    for(let n=0;n<8;n++) await request(replyPath,'POST',{request_id:id(1100+n),body:'Additional reply',target:part});
+    const combinedPage=await (await request(replyPath+'?target=sentence:'+target.id)).json();
+    assert.equal(combinedPage.items.length,5);assert.ok(combinedPage.nextCursor);
+    assert.equal((await request(replyPath+'?target='+target.id+'&cursor='+combinedPage.nextCursor)).status,400);
+    for(const invalid of ['sentence:1:20:2','sentence:1:0:999999999999','sentence:1:0:x'])
+      assert.equal((await request(replyPath+'?target='+invalid)).status,400);
     assert.equal((await request(replyPath,'POST',{request_id:id(1002),body:'Forged',target:{...target,id:'1:0:4',end:4,quote:'Fake'}})).status,400);
   } finally {await db.close();}
+});
+
+test('inline sentence query deduplicates overlapping excerpts and preserves historical quotes',async()=>{
+  const {db,write}=await database();try {
+    const body='Where now? Looking for a good vibe and a chill crowd.';
+    await write('a','create',id(1),draft({body}));
+    const sentence=discussionSentences(body,1)[1];
+    const excerpt=quote=>{const start=body.indexOf(quote),end=start+quote.length;return {id:`1:${start}:${end}`,version:1,start,end,quote};};
+    const targets=[excerpt('a good vibe and a chill crowd.'),excerpt('chill crowd.')];
+    for(let n=0;n<12;n++) await write('b','reply',id(1),{requestID:id(800+n),body:'Reply '+n,target:targets[n%2]});
+    await write('b','reply',id(1),{requestID:id(900),body:'General'});
+    const query=async(target,before=null,boundary=null)=>(await db.query('select captro_tea_target_replies($1,$2,$3,$4,$5) r',['b',id(1),target,before,boundary])).rows[0].r;
+    let rows=await query('sentence:'+sentence.id);assert.equal(rows.length,6);
+    const all=[];
+    while(rows.length){all.push(...rows.slice(0,5));if(rows.length<=5)break;const last=rows[4];rows=await query('sentence:'+sentence.id,last.createdAt,last.id);}
+    assert.equal(all.length,12);assert.equal(new Set(all.map(r=>r.id)).size,12);
+    assert.deepEqual(new Set(all.map(r=>r.target.quote)),new Set(targets.map(t=>t.quote)));
+    assert.equal((await query(targets[0].id)).length,6,'Legacy exact-target reads stay compatible');
+    await write('a','edit',id(1),draft({body:'Where now? Entirely replaced.',version:1}));
+    assert.equal((await query('sentence:2:'+sentence.start+':'+sentence.end)).length,0);
+    assert.equal((await query(targets[0].id)).length,6,'Historical quote remains readable');
+    await db.exec("insert into app_blocks values('b','a')");
+    await assert.rejects(query('sentence:'+sentence.id),/UNAVAILABLE/);
+    await db.exec('set role authenticated');await assert.rejects(query('sentence:'+sentence.id),/permission denied/);
+  }finally{await db.close();}
 });
 

@@ -144,7 +144,9 @@ extension Notification.Name {
   @Published var busy = false
   @Published var draft = ""
   @Published var replyTarget: CaptroTeaReplyTarget?
-  @Published var expandedTargets: Set<String> = []
+  @Published private(set) var expandedTargets: Set<String> = []
+  private var threadTask: Task<Void, Never>?
+  private var threadEpoch = 0
   @Published var threads: [String: [CaptroTeaReply]] = [:]
   @Published var threadCursors: [String: String] = [:]
   @Published var threadErrors: [String: String] = [:]
@@ -184,7 +186,7 @@ extension Notification.Name {
     viewport.setActive(false)
     flight?.cancel(); flight = nil; flightID = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
     pendingReply = nil; replyPending = false; requestID = UUID().uuidString; nextCursor = nil
-    replyTarget = nil; pendingTarget = nil; expandedTargets = []; authorProfile = nil
+    replyTarget = nil; pendingTarget = nil; collapseThreads(); authorProfile = nil
     threads = [:]; threadCursors = [:]; threadErrors = [:]; loadingThreads = []
     authorLoadedAt = nil; threadLoadedAt = [:]
     error = "Refresh this post to check access."
@@ -214,10 +216,8 @@ extension Notification.Name {
         let previousTargets = post?.replyTargets ?? []
         post = result; loadedAt = Date(); contentReady = true
         api.teaConversations.signal(for: result).hydrate(result, readStartedAt: readStarted)
-        for count in result.replyTargets ?? [] where expandedTargets.contains(count.target.id) {
-          if previousTargets.first(where: { $0.target.id == count.target.id })?.count != count.count {
-            await loadThread(count.target, reset: true)
-          }
+        for group in result.inlineThreads where expandedTargets.contains(group.id) {
+          if previousTargets != (result.replyTargets ?? []) { await loadThread(group, reset: true) }
         }
       } catch {
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
@@ -236,8 +236,8 @@ extension Notification.Name {
       // Author identity is in the post payload. Profile details load only when
       // needed by the existing profile route, not on every brief app resume.
       await replies
-      for count in post?.replyTargets ?? [] where force && expandedTargets.contains(count.target.id) {
-        await loadThread(count.target, reset: true)
+      for group in post?.inlineThreads ?? [] where force && expandedTargets.contains(group.id) {
+        await loadThread(group, reset: true)
       }
     }
   }
@@ -308,7 +308,7 @@ extension Notification.Name {
         if threads[target.id] != nil, threadCursors[target.id] == nil, !wasKnown { threads[target.id, default: []].append(reply) }
       } else if nextCursor == nil, !wasKnown { replies.append(reply) }
       draft = ""; pendingReply = nil; replyPending = false; replyLoadedAt = nil
-      if let target = pendingTarget { expandedTargets.insert(target.id); await loadThread(target, reset: true) }
+
       if !wasKnown {
         post?.replyCount = (post?.replyCount ?? max(0, replies.count - 1)) + 1
         if let target = reply.target {
@@ -317,6 +317,9 @@ extension Notification.Name {
           counts.removeAll { $0.target.id == target.id }
           counts.append(CaptroTeaReplyCount(target: target, count: old + 1)); post?.replyTargets = counts
         }
+      }
+      if let target = pendingTarget, let group = post?.inlineThreads.first(where: { $0.contains(target) }) {
+        collapseThreads(); expandedTargets = [group.id]; await loadThread(group, reset: true)
       }
       replyTarget = nil; pendingTarget = nil; loadedAt = nil
     } catch {
@@ -332,39 +335,44 @@ extension Notification.Name {
     guard !busy, !replyPending else { return }
     replyTarget = target
   }
-  func loadThread(_ target: CaptroTeaReplyTarget, reset: Bool = false) async {
-    guard valid, !loadingThreads.contains(target.id) else { return }
-    if !reset, threads[target.id] != nil, threadCursors[target.id] == nil { return }
-    let expected = accessRevision
-    loadingThreads.insert(target.id); threadErrors[target.id] = nil
-    defer { loadingThreads.remove(target.id) }
-    do {
-      var path = "/tea/conversations/\(id)/replies?target=" + target.id
-      if !reset, let cursor = threadCursors[target.id] { path += "&cursor=" + cursor }
-      var page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
-      var refreshed = page.items
-      var cursors = Set<String>()
-      while reset, refreshed.count < (threads[target.id]?.count ?? 0), let cursor = page.nextCursor,
-            cursors.insert(cursor).inserted {
-        guard cursors.count <= 16 else { throw MIRAAPIError.decodingFailed }
-        guard valid, expected == accessRevision, !Task.isCancelled else { return }
-        page = try await api.getFresh("/tea/conversations/\(id)/replies?target=" + target.id + "&cursor=" + cursor)
-        refreshed += page.items
-      }
-      guard valid, expected == accessRevision, !Task.isCancelled else { return }
-      var seen = Set(reset ? [] : (threads[target.id] ?? []).map(\.id))
-      threads[target.id] = (reset ? [] : threads[target.id] ?? []) + refreshed.filter { $0.target?.id == target.id && seen.insert($0.id).inserted }
-      threadCursors[target.id] = page.nextCursor
-      threadLoadedAt[target.id] = Date()
-    } catch {
-      guard valid, expected == accessRevision else { return }
-      if Self.denied(error) { clear() }
-      else { threadErrors[target.id] = "Couldn’t load these replies. Try again." }
+  func collapseThreads() {
+    threadTask?.cancel(); threadTask = nil; threadEpoch += 1
+    expandedTargets = []; loadingThreads = []
+  }
+  func toggleThread(_ group: CaptroTeaInlineThread) {
+    let closing = expandedTargets.contains(group.id)
+    collapseThreads()
+    guard !closing, valid else { return }
+    expandedTargets = [group.id]
+    threadTask = Task { [weak self] in
+      guard let self else { return }
+      if let date = threadLoadedAt[group.id], Date().timeIntervalSince(date) < 120 { return }
+      await loadThread(group, reset: true)
     }
   }
-  func openThread(_ target: CaptroTeaReplyTarget) async {
-    if let date = threadLoadedAt[target.id], Date().timeIntervalSince(date) < 120 { return }
-    await loadThread(target, reset: true)
+  func loadThread(_ group: CaptroTeaInlineThread, reset: Bool = false) async {
+    let key = group.id
+    guard valid, expandedTargets.contains(key), !loadingThreads.contains(key) else { return }
+    if !reset, threads[key] != nil, threadCursors[key] == nil { return }
+    let expected = accessRevision, epoch = threadEpoch
+    loadingThreads.insert(key); threadErrors[key] = nil
+    defer { if epoch == threadEpoch { loadingThreads.remove(key) } }
+    do {
+      var path = "/tea/conversations/\(id)/replies?target=" + key
+      if !reset, let cursor = threadCursors[key] { path += "&cursor=" + cursor }
+      let page: CaptroTeaConversationPage<CaptroTeaReply> = try await api.getFresh(path)
+      guard valid, expected == accessRevision, epoch == threadEpoch, !Task.isCancelled else { return }
+      var seen = Set(reset ? [] : (threads[key] ?? []).map(\.id))
+      threads[key] = (reset ? [] : threads[key] ?? []) + page.items.filter {
+        guard let target = $0.target else { return false }
+        return group.contains(target) && seen.insert($0.id).inserted
+      }
+      threadCursors[key] = page.nextCursor; threadLoadedAt[key] = Date()
+    } catch {
+      guard valid, expected == accessRevision, epoch == threadEpoch, !Task.isCancelled else { return }
+      if Self.denied(error) { clear() }
+      else { threadErrors[key] = "Couldn’t load these replies. Try again." }
+    }
   }
   func loadAuthor(force: Bool = false) async {
     guard valid, !loadingAuthor, let author = post?.author.id else { return }

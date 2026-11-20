@@ -106,6 +106,39 @@ struct CaptroTeaReplyCount: Codable, Hashable {
   let count: Int
 }
 
+/// One marker per stored sentence, never per visual wrapped line.
+struct CaptroTeaInlineThread: Identifiable, Hashable {
+  let sentence: CaptroTeaReplyTarget
+  let targets: [CaptroTeaReplyCount]
+  var earlier = false
+  var id: String { earlier ? sentence.id : "sentence:" + sentence.id }
+  var count: Int { targets.reduce(0) { $0 + $1.count } }
+  func contains(_ target: CaptroTeaReplyTarget) -> Bool {
+    earlier ? sentence.id == target.id : sentence.contains(target)
+  }
+}
+
+extension CaptroTeaConversation {
+  var inlineThreads: [CaptroTeaInlineThread] {
+    var counts: [String: CaptroTeaReplyCount] = [:]
+    for count in replyTargets ?? [] where count.count > 0 {
+      // A repeated payload entry is not a second set of replies.
+      if count.count > (counts[count.target.id]?.count ?? 0) { counts[count.target.id] = count }
+    }
+    var result: [CaptroTeaInlineThread] = []
+    for sentence in sentences ?? [] {
+      let matching = counts.values.filter { sentence.contains($0.target) }.sorted { $0.target.start < $1.target.start }
+      result.append(.init(sentence: sentence, targets: matching))
+      for count in matching { counts.removeValue(forKey: count.target.id) }
+    }
+    // Edited/deleted caption versions retain their original excerpts separately.
+    result += counts.values.sorted { $0.target.id < $1.target.id }.map {
+      .init(sentence: $0.target, targets: [$0], earlier: true)
+    }
+    return result
+  }
+}
+
 struct CaptroTeaReply: Codable, Identifiable {
   let id: String
   let body: String

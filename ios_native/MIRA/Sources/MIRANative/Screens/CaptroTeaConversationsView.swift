@@ -246,20 +246,12 @@ struct TeaConversationTime: View {
           authorHeader(post)
           Text(post.title).miraText(.sectionTitle).accessibilityAddTraits(.isHeader)
           if let sentences = post.sentences, !sentences.isEmpty {
-            ForEach(sentences) { sentence in
-              VStack(alignment: .leading, spacing: 6) {
-                CaptroTeaSelectableText(sentence: sentence, reply: target)
-                sentenceThread(sentence, post: post)
-                ForEach((post.replyTargets ?? []).filter { sentence.contains($0.target) && $0.target.id != sentence.id }, id: \.target.id) { count in
-                  sentenceThread(count.target, post: post)
-                }
-              }
-            }
-            ForEach((post.replyTargets ?? []).filter { count in !sentences.contains { $0.contains(count.target) } }, id: \.target.id) { count in
-              VStack(alignment: .leading, spacing: 4) {
-                Text("Earlier text").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
-                Text(count.target.quote).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
-                sentenceThread(count.target, post: post)
+            ForEach(post.inlineThreads) { group in
+              VStack(alignment: .leading, spacing: 8) {
+                if group.earlier { Text("Earlier text").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary) }
+                CaptroTeaSelectableText(sentence: group.sentence, reply: target, thread: group,
+                  expanded: model.expandedTargets.contains(group.id), toggle: { model.toggleThread(group) })
+                if model.expandedTargets.contains(group.id) { sentenceThread(group) }
               }
             }
           } else {
@@ -426,8 +418,8 @@ struct TeaConversationTime: View {
         await signal.qualifyRead(isAuthor: post.isAuthor, authenticated: viewerID != nil)
       }
       .toolbar(.hidden, for: .tabBar)
-      .onAppear { visible = true; model.viewport.setActive(true) }
-      .onDisappear { visible = false; model.viewport.setActive(false) }
+      .onAppear { visible = true; model.collapseThreads(); model.viewport.setActive(true) }
+      .onDisappear { visible = false; model.collapseThreads(); model.viewport.setActive(false) }
       .refreshable {
         await model.load(force: true)
         if model.post?.isAuthor == true { await signal.loadInsights(force: true) }
@@ -461,32 +453,26 @@ struct TeaConversationTime: View {
   private func target(_ sentence: CaptroTeaReplyTarget) {
     if viewerID == nil { signIn() } else { model.selectTarget(sentence) }
   }
-  @ViewBuilder private func sentenceThread(_ target: CaptroTeaReplyTarget, post: CaptroTeaConversation) -> some View {
-    let count = post.replyTargets?.first { $0.target.id == target.id }?.count ?? 0
-    if count > 0 {
-      let expanded = model.expandedTargets.contains(target.id)
-      Button {
-        if expanded { model.expandedTargets.remove(target.id) } else {
-          model.expandedTargets.insert(target.id)
-          Task { await model.openThread(target) }
+  private func sentenceThread(_ group: CaptroTeaInlineThread) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      ForEach(model.threads[group.id] ?? []) { reply in
+        VStack(alignment: .leading, spacing: 4) {
+          if let quote = reply.target?.quote { CaptroTeaQuote(text: quote) }
+          TeaReplyGroups(replies: [reply])
         }
-      } label: { Text(expanded ? "Hide replies" : "\(count) \(count == 1 ? "reply" : "replies") to this line").font(.subheadline).underline().frame(minHeight: 44) }
-        .buttonStyle(.plain).accessibilityIdentifier("tea.thread." + target.id)
-      if expanded {
-        VStack(alignment: .leading, spacing: 8) {
-          CaptroTeaQuote(text: target.quote)
-          TeaReplyGroups(replies: model.threads[target.id] ?? [])
-          if model.loadingThreads.contains(target.id) { ProgressView("Loading replies") }
-          if let error = model.threadErrors[target.id] {
-            Text(error).font(.footnote)
-            Button("Retry replies") { Task { await model.loadThread(target, reset: true) } }.frame(minHeight: 44)
-          }
-          if model.threadCursors[target.id] != nil {
-            Button("Load more replies") { Task { await model.loadThread(target) } }.frame(minHeight: 44).disabled(model.loadingThreads.contains(target.id))
-          }
-        }.padding(.leading, 14).overlay(alignment: .leading) { Rectangle().fill(CaptroTeaStyle.accent.opacity(0.25)).frame(width: 2) }
       }
-    }
+      if model.loadingThreads.contains(group.id) { ProgressView("Loading replies") }
+      if let error = model.threadErrors[group.id] {
+        Text(error).miraText(.metadata)
+        Button("Retry replies") { Task { await model.loadThread(group, reset: true) } }.frame(minHeight: 44)
+      }
+      if model.threadCursors[group.id] != nil {
+        Button("Load more") { Task { await model.loadThread(group) } }.frame(minHeight: 44)
+          .disabled(model.loadingThreads.contains(group.id)).accessibilityIdentifier("tea.thread.more." + group.id)
+      }
+    }.padding(.leading, 12)
+      .overlay(alignment: .leading) { Rectangle().fill(CaptroTeaStyle.accent.opacity(0.25)).frame(width: 1) }
+      .accessibilityIdentifier("tea.thread.expanded." + group.id)
   }
 
   private func open(_ link: CaptroTeaLink) {

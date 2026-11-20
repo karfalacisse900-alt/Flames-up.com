@@ -56,6 +56,7 @@ private final class TeaReviewProtocol: URLProtocol {
   private static var discussionReplies: [String: [[String: Any]]] = [:]
   private static var followsAuthor = false
   private static var densityInstalled = false
+  private static var inlineInstalled = false
   private static var noteOpens: Set<String> = []
   private static var readLeases: [String:(String,Date)] = [:]
   private static var createdActivities: [[String: Any]] = []
@@ -330,6 +331,26 @@ private final class TeaReviewProtocol: URLProtocol {
           if e.3.isEmpty { Self.conversations[id(101 + index)]?.removeValue(forKey: "borough") }
         }
       }
+      if ProcessInfo.processInfo.arguments.contains("--tea-inline-fixture"), !Self.inlineInstalled {
+        Self.inlineInstalled = true
+        let long = ProcessInfo.processInfo.arguments.contains("--tea-inline-long")
+        let caption = long ? (1...100).map { "Sentence \($0) has a quoted part." }.joined(separator: "\n") :
+          "Where’s everyone going tonight? Looking for a good vibe, music, and a chill crowd."
+        let author: [String:Any] = ["id":"artist","name":"karfala cisse","username":"karfala92","photoURL":"https://image-fixture.invalid/notes-0.jpg"]
+        Self.conversations[id(101)]?["body"] = caption
+        Self.conversations[id(101)]?["author"] = author
+        Self.conversations[id(101)]?.removeValue(forKey: "borough")
+        Self.noteOpens.insert(id(101))
+        Self.conversations[id(101)]?["interest"] = "pass"
+        let quotes = long ? (1...100).map { "Sentence \($0) has a quoted part." } : ["a good vibe, music, and a chill crowd.","chill crowd."]
+        Self.discussionReplies[id(101)] = quotes.enumerated().map { index, quote in
+          let range = caption.range(of: quote)!
+          let start = caption[..<range.lowerBound].unicodeScalars.count, end = start + quote.unicodeScalars.count
+          return ["id":id(700 + index),"body":long ? "Reply \(index + 1)" : (index == 0 ? "That is a lie there is no single clubber in there" : "Don’t ever"),
+            "author":author,"createdAt":"2026-11-18T12:00:00Z",
+            "target":["id":"1:\(start):\(end)","version":1,"start":start,"end":end,"quote":quote]]
+        }
+      }
       if ProcessInfo.processInfo.arguments.contains("--tea-interest-owner") {
         Self.conversations[id(101)]?["isAuthor"] = true
         Self.conversations[id(101)]?["author"] = ["id":"tea-viewer","name":"Tea Fixture","username":"tea_fixture","photoURL":CaptroImageRecoveryFixtureProtocol.fallbackURL]
@@ -416,8 +437,19 @@ private final class TeaReviewProtocol: URLProtocol {
         let target = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "target" }?.value
         let replies = (Self.discussionReplies[key] ?? []).filter {
           if target == "general" { return $0["target"] == nil }
+          if let target, target.hasPrefix("sentence:") {
+            let parts = target.split(separator: ":").dropFirst().compactMap { Int($0) }
+            guard parts.count == 3, let anchor = $0["target"] as? [String:Any] else { return false }
+            return anchor["version"] as? Int == parts[0] && (anchor["start"] as? Int ?? -1) >= parts[1] && (anchor["end"] as? Int ?? Int.max) <= parts[2]
+          }
           if let target { return ($0["target"] as? [String:Any])?["id"] as? String == target }
           return true
+        }
+        if target?.hasPrefix("sentence:") == true {
+          let offset = Int(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "cursor" }?.value ?? "0") ?? 0
+          var result: [String:Any] = ["items":Array(replies.dropFirst(offset).prefix(5))]
+          if offset + 5 < replies.count { result["nextCursor"] = String(offset + 5) }
+          return (200,result)
         }
         return (200,["items":replies])
       }

@@ -217,14 +217,21 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
       }
       if (action === 'detail') return c.json(await authors(enrich(await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action, p_id: id }))));
       const target = action === 'replies' ? c.req.query('target') : undefined;
-      if (target && (target.length>60 || (target !== 'general' && !/^[1-9][0-9]*:[0-9]+:[0-9]+$/.test(target)))) throw new DiscussionInputError('Invalid reply target.');
+      if (target && (target.length>60 || (target !== 'general' && !/^(sentence:)?[1-9][0-9]*:[0-9]+:[0-9]+$/.test(target)))) throw new DiscussionInputError('Invalid reply target.');
+      const sentenceThread = target?.startsWith('sentence:') === true;
+      if (sentenceThread) {
+        const [version,start,end] = target!.slice(9).split(':').map(Number);
+        if (![version,start,end].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 2147483647) || end <= start)
+          throw new DiscussionInputError('Invalid sentence range.');
+      }
       const secret = c.env.JWT_SECRET;
       const cursor = await readFeedCursor(secret, c.req.query('cursor'), { viewer, scope: 'tea-discussions-' + action, city: (id ?? '') + (target ? ':' + target : '') });
       const rows = await deps.rpc(c, target ? 'captro_tea_target_replies' : 'captro_tea_read', { p_viewer: viewer, ...(target ? {p_target: target} : {p_kind: action}),
         p_id: id ?? null, p_before: cursor.boundary?.createdAt ?? null, p_boundary: cursor.boundary?.id ?? null, p_snapshot: cursor.snapshot });
       if (!Array.isArray(rows)) throw new Error('TEA_INVALID_RESPONSE');
-      const items = rows.slice(0,20), last = items.at(-1);
-      const nextCursor = rows.length > 20 && last ? await writeFeedCursor(secret, {
+      const pageSize = sentenceThread ? 5 : 20;
+      const items = rows.slice(0,pageSize), last = items.at(-1);
+      const nextCursor = rows.length > pageSize && last ? await writeFeedCursor(secret, {
         ...cursor, boundary: { id: last.id, createdAt: last.createdAt, legacyCreatedAt: null },
       }) : null;
       return c.json({ items: await authors(action === 'list' ? items.map(enrich) : items), nextCursor });
