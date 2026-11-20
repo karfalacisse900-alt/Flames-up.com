@@ -193,6 +193,7 @@ private struct CaptroTeaConversationRow: View {
             Text("\u{00B7}").miraText(.metadata).foregroundStyle(metadataInk).accessibilityHidden(true)
             Text(borough).miraText(.metadata).foregroundStyle(CaptroTeaStyle.accent)
           }
+          CaptroTeaEngagementLabel(model: signal)
         }.padding(.top, 2).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
     }.buttonStyle(.plain)
   }
@@ -223,8 +224,14 @@ struct TeaConversationTime: View {
   @State private var actionDestination: CaptroTeaNoteDestination?
   @State private var profile: CaptroProfileLink?
   @State private var linkError: String?
+  @State private var visible = false
+  @State private var actionCovered = false
   @Environment(\.dismiss) private var dismiss
   @Environment(\.scenePhase) private var scenePhase
+  private var readEligible: Bool {
+    visible && scenePhase == .active && model.valid && model.contentReady &&
+      !editing && profile == nil && actionDestination == nil && !actionCovered
+  }
 
   init(post: CaptroTeaConversation, api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void) {
     self.api = api; self.viewerID = viewerID; self.signIn = signIn
@@ -259,6 +266,7 @@ struct TeaConversationTime: View {
             Text(post.body).miraText(.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
           }
           HStack {
+            CaptroTeaEngagementLabel(model: signal)
             Spacer(minLength: 0)
             CaptroTeaInterestControl(model: signal, signedIn: viewerID != nil, signIn: signIn)
           }
@@ -287,7 +295,7 @@ struct TeaConversationTime: View {
           }
           if let borough = post.borough { Text(borough).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
           if post.primaryAction != nil || post.canManageApplications == true {
-            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
+            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn, coverChanged: { actionCovered = $0 }) { actionDestination = $0 }
           }
           if let linkError { Text(linkError).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
         }.background(CaptroFeedViewportMarker(owner: model.viewport, postID: "caption", feed: "tea:" + model.id).allowsHitTesting(false))
@@ -411,10 +419,15 @@ struct TeaConversationTime: View {
         if let profile { UserProfileNativeView(userId: profile.id, api: api).tint(MIRATheme.Color.accent).toolbar(.visible, for: .navigationBar) }
       }
       .task { await model.load() }
-      .task { if let post = model.post { await signal.opened(isAuthor: post.isAuthor, authenticated: viewerID != nil) } }
+      .task(id: readEligible) {
+        guard readEligible, let post = model.post else { return }
+        await Task.yield() // Start after the loaded content's render, never its loader.
+        guard !Task.isCancelled else { return }
+        await signal.qualifyRead(isAuthor: post.isAuthor, authenticated: viewerID != nil)
+      }
       .toolbar(.hidden, for: .tabBar)
-      .onAppear { model.viewport.setActive(true) }
-      .onDisappear { model.viewport.setActive(false) }
+      .onAppear { visible = true; model.viewport.setActive(true) }
+      .onDisappear { visible = false; model.viewport.setActive(false) }
       .refreshable {
         await model.load(force: true)
         if model.post?.isAuthor == true { await signal.loadInsights(force: true) }

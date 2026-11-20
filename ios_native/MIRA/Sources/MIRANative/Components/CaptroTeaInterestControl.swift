@@ -44,9 +44,9 @@ struct CaptroTeaInsightsView: View {
       Text("Only you can see these totals.").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
       if let insights = model.insights {
         TeaLinkFlow(spacing: 12) {
-          Text("\(insights.uniqueOpens) unique opens")
-          Text("\(insights.interested) interested")
-          Text("\(insights.replies) replies")
+          Text("\(insights.qualifiedReads) qualified reads")
+          Text("\(insights.activePlus) active + selections")
+          Text("\(insights.uniqueRepliers) unique repliers")
         }.miraText(.metadata)
       } else if model.insightsError == nil { ProgressView("Loading Insights").font(.caption) }
       if let error = model.insightsError {
@@ -54,5 +54,17 @@ struct CaptroTeaInsightsView: View {
         Button("Retry Insights") { Task { await model.loadInsights(force: true) } }.frame(minHeight: 44)
       }
     }.padding(.vertical, 8).accessibilityIdentifier("tea.insights")
+  }
+}
+
+struct CaptroTeaEngagementLabel: View {
+  @ObservedObject var model: CaptroTeaNoteSignal
+  var body: some View {
+    if let count = model.engagementCount, count > 0 {
+      Text("\(count) engaged").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityLabel("\(count) people engaged")
+        .accessibilityIdentifier("tea.engagement." + model.id)
+    }
   }
 }

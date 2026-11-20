@@ -57,7 +57,7 @@ final class NotesRootTests: XCTestCase {
     let app = launch(["--tea-interest-owner"])
     app.buttons["tea.conversation." + note].tap()
     XCTAssertTrue(app.staticTexts["Your Note Insights"].waitForExistence(timeout:8))
-    XCTAssertTrue(app.staticTexts["0 unique opens"].waitForExistence(timeout:8))
+    XCTAssertTrue(app.staticTexts["0 qualified reads"].waitForExistence(timeout:8))
     shot("notes-author-private-insights",app)
     app.buttons["tea.detail.back"].tap()
     app.buttons["tea.filter.Clubs".lowercased()].tap()
@@ -67,7 +67,7 @@ final class NotesRootTests: XCTestCase {
     XCTAssertTrue(app.buttons["tea.createActivity"].exists, "Keep selected activity filter across tabs")
   }
   func testLargeTextKeepsTitleAndInterestSeparate() {
-    let app = launch(["--captro-quality-large-text"])
+    let app = launch(["--captro-quality-large-text","--tea-engagement-fixture"])
     let row = app.buttons["tea.conversation." + note]
     let plus = app.buttons["tea.interest.interested." + note]
     XCTAssertGreaterThanOrEqual(plus.frame.width,44)
@@ -78,6 +78,44 @@ final class NotesRootTests: XCTestCase {
     row.tap()
     XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout:8))
     shot("notes-detail-large-text",app)
+  }
+  func testEngagementFeedDetailSyncUndoAndQualifiedRead() {
+    let app=launch(["--tea-engagement-fixture"])
+    let plus=app.buttons["tea.interest.interested."+note]
+    plus.tap(); selected(plus,"Selected")
+    let feedCount=app.buttons.matching(NSPredicate(format:"label CONTAINS %@","12 people engaged")).firstMatch
+    XCTAssertTrue(feedCount.waitForExistence(timeout:8))
+    shot("engagement-feed-plus-union",app)
+    plus.tap(); selected(plus,"Not selected")
+    XCTAssertTrue(app.buttons.matching(NSPredicate(format:"label CONTAINS %@","11 people engaged")).firstMatch.waitForExistence(timeout:8))
+    plus.tap(); selected(plus,"Selected")
+    app.buttons["tea.conversation."+note].tap()
+    XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout:8))
+    let count=app.staticTexts["tea.engagement."+note]
+    XCTAssertTrue(count.waitForExistence(timeout:8))
+    XCTAssertEqual(count.label,"12 people engaged")
+    XCTAssertFalse(app.staticTexts["Your Note Insights"].exists)
+    shot("engagement-reader-detail-union",app)
+    // Wait for a complete qualified read, then remove plus: read still counts.
+    Thread.sleep(forTimeInterval:6)
+    app.buttons["tea.interest.pass."+note].tap()
+    selected(app.buttons["tea.interest.pass."+note],"Selected")
+    XCTAssertEqual(count.label,"12 people engaged")
+    app.buttons["tea.detail.back"].tap()
+    XCTAssertTrue(feedCount.waitForExistence(timeout:8))
+    XCTAssertFalse(app.staticTexts["Loading Notes…"].exists)
+  }
+  func testBackgroundBeforeQualificationRestartsContinuousRead() {
+    let app=launch()
+    app.buttons["tea.conversation."+note].tap()
+    XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout:8))
+    Thread.sleep(forTimeInterval:1)
+    XCUIDevice.shared.press(.home)
+    Thread.sleep(forTimeInterval:1)
+    app.activate()
+    XCTAssertFalse(app.staticTexts["tea.engagement."+note].exists)
+    XCTAssertTrue(app.staticTexts["tea.engagement."+note].waitForExistence(timeout:9))
+    XCTAssertEqual(app.staticTexts["tea.engagement."+note].label,"1 people engaged")
   }
   func testSecondPagePositionSurvivesTabsAndBackground() {
     let app = launch(["--tea-pages-fixture"])

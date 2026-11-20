@@ -57,6 +57,7 @@ private final class TeaReviewProtocol: URLProtocol {
   private static var followsAuthor = false
   private static var densityInstalled = false
   private static var noteOpens: Set<String> = []
+  private static var readLeases: [String:(String,Date)] = [:]
   private static var createdActivities: [[String: Any]] = []
   private var delivery: DispatchWorkItem?
 
@@ -340,6 +341,17 @@ private final class TeaReviewProtocol: URLProtocol {
           Self.conversations[id(number)] = post
         }
       }
+      // Isolated native UI fixtures only; production counts always come from SQL.
+      func engagement(_ key: String) -> [String:Any] {
+        let post = Self.conversations[key] ?? [:]
+        let owns = post["isAuthor"] as? Bool == true
+        let replied = (Self.discussionReplies[key] ?? []).contains { ($0["author"] as? [String:Any])?["id"] as? String == "tea-viewer" }
+        let qualifies = !owns && (Self.noteOpens.contains(key) || post["interest"] as? String == "interested" || replied)
+        let seeded = ProcessInfo.processInfo.arguments.contains("--tea-engagement-fixture") && key == id(101) ? 11 : 0
+        let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
+        return ["engagementCount":seeded + (qualifies ? 1 : 0),"engagementUpdatedAt":formatter.string(from:Date())]
+      }
+      for key in Array(Self.conversations.keys) { Self.conversations[key]?.merge(engagement(key)) { _,new in new } }
       if path == "/tea/conversations/capabilities" { return (200,["canCreateForms":true]) }
       if path == "/tea/conversations" {
         Task { @MainActor in TeaReviewMetrics.shared.counts[0, default: 0] += 1 }
@@ -362,12 +374,22 @@ private final class TeaReviewProtocol: URLProtocol {
       let key = String(parts[2])
       if parts.last == "interest" {
         post["interest"] = body["interest"] ?? NSNull(); Self.conversations[key] = post
-        return (200,["interest":post["interest"]!])
+        return (200,["interest":post["interest"]!].merging(engagement(key)) { _,new in new })
       }
-      if parts.last == "open" { if post["isAuthor"] as? Bool != true { Self.noteOpens.insert(key) }; return (200,["confirmed":true]) }
+      if parts.last == "open" { return (200,["confirmed":true]) }
+      if parts.last == "read-start" {
+        if Self.noteOpens.contains(key) { return (200,(["qualified":true] as [String:Any]).merging(engagement(key)) { _,new in new }) }
+        let token=UUID().uuidString; Self.readLeases[key]=(token,Date())
+        return (200,(["qualified":false,"token":token] as [String:Any]).merging(engagement(key)) { _,new in new })
+      }
+      if parts.last == "read-qualify" {
+        guard let lease=Self.readLeases[key], body["token"] as? String == lease.0, Date().timeIntervalSince(lease.1)>=5 else { return (400,["detail":"Read not qualified"]) }
+        if post["isAuthor"] as? Bool != true { Self.noteOpens.insert(key) }
+        return (200,(["qualified":true] as [String:Any]).merging(engagement(key)) { _,new in new })
+      }
       if parts.last == "insights" {
         guard post["isAuthor"] as? Bool == true else { return (403,["detail":"Private Insights"]) }
-        return (200,["uniqueOpens":Self.noteOpens.contains(key) ? 1 : 0,"interested":post["interest"] as? String == "interested" ? 1 : 0,"replies":Self.discussionReplies[key]?.count ?? 0])
+        return (200,["qualifiedReads":0,"activePlus":0,"uniqueRepliers":0])
       }
       if parts.last == "action" {
         let item: [String:Any] = ["id":"activity:" + id(5),"kind":"offer","name":"Weekend Pastry Offer","status":"active","color":"sky","timestamp":ISO8601DateFormatter().string(from:Date()),"destination":["source":"activity","id":id(5)]]
@@ -386,7 +408,7 @@ private final class TeaReviewProtocol: URLProtocol {
             "author":["id":"tea-viewer","name":"Tea Fixture","username":"tea_fixture"]]
           reply["target"] = body["target"]
           if !(Self.discussionReplies[key] ?? []).contains(where: { $0["id"] as? String == replyID }) { Self.discussionReplies[key, default: []].append(reply) }
-          return (200, reply)
+          return (200, reply.merging(engagement(key)) { _,new in new })
         }
         let target = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "target" }?.value
         let replies = (Self.discussionReplies[key] ?? []).filter {

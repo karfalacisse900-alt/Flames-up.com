@@ -26,6 +26,8 @@ struct CaptroTeaConversation: Codable, Identifiable, Hashable {
   var applicationSubmitted: Bool? = nil
   var canManageApplications: Bool? = nil
   var interest: String? = nil
+  var engagementCount: Int? = nil
+  var engagementUpdatedAt: String? = nil
 }
 
 struct CaptroTeaNoteAction: Codable, Hashable {
@@ -110,6 +112,8 @@ struct CaptroTeaReply: Codable, Identifiable {
   let author: CaptroTeaAuthor
   let createdAt: String
   var target: CaptroTeaReplyTarget? = nil
+  var engagementCount: Int? = nil
+  var engagementUpdatedAt: String? = nil
 }
 
 struct CaptroTeaReplyGroup: Identifiable {

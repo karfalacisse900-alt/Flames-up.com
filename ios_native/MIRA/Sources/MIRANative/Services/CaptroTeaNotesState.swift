@@ -75,7 +75,7 @@ import Foundation
         if reset { api.teaConversations.listViewport.preserveForContentRefresh(survivingIDs: Set(unique.map(\.id))) }
         items = reset ? unique : items + unique
         nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
-        for post in unique { api.teaConversations.signal(for: post).hydrate(post.interest, readStartedAt: started) }
+        for post in unique { api.teaConversations.signal(for: post).hydrate(post, readStartedAt: started) }
         save()
       } catch {
         guard flightID == token, owner == api.presentationScope, revision == expectedRevision,
@@ -95,22 +95,25 @@ import Foundation
 }
 
 struct CaptroTeaInsights: Decodable {
-  let uniqueOpens: Int
-  let interested: Int
-  let replies: Int
+  let qualifiedReads: Int
+  let activePlus: Int
+  let uniqueRepliers: Int
 }
 struct CaptroTeaInterestPayload: Codable {
   let interest: String?
-  enum CodingKeys: String, CodingKey { case interest }
+  var engagementCount: Int? = nil
+  var engagementUpdatedAt: String? = nil
+  enum CodingKeys: String, CodingKey { case interest, engagementCount, engagementUpdatedAt }
   func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     try container.encode(interest, forKey: .interest) // Explicit null means undo.
   }
 }
 
-/// Feed and detail observe the same private selection; no public score exists.
+/// Feed and detail observe one server-owned union count and private selection.
 @MainActor final class CaptroTeaNoteSignal: ObservableObject {
   @Published private(set) var interest: String?
+  @Published private(set) var engagementCount: Int?
   @Published private(set) var busy = false
   @Published private(set) var error: String?
   @Published private(set) var insights: CaptroTeaInsights?
@@ -122,14 +125,27 @@ struct CaptroTeaInterestPayload: Codable {
   private var invalidated = false
   private var mutationStarted = Date.distantPast
   private var pending: CaptroTeaInterestPayload?
-  private var didOpen = false
-  private var opening = false
+  private var didQualify = false
+  private var engagementAt: Date?
   private var insightsAt: Date?
   init(post: CaptroTeaConversation, api: MIRAAPIClient) {
     id = post.id; interest = post.interest; self.api = api; scope = api.presentationScope
+    engagementCount = post.engagementCount
+    engagementAt = post.engagementUpdatedAt.flatMap(captroTeaDate)
   }
   var valid: Bool { !invalidated && scope == api.presentationScope }
-  func clear() { invalidated = true; interest = nil; insights = nil; pending = nil; error = nil; insightsError = nil }
+  func clear() { invalidated = true; interest = nil; engagementCount = nil; insights = nil; pending = nil; error = nil; insightsError = nil }
+  func hydrate(_ post: CaptroTeaConversation, readStartedAt: Date) {
+    hydrate(post.interest, readStartedAt: readStartedAt)
+    guard readStartedAt >= mutationStarted else { return }
+    acceptEngagement(post.engagementCount, at: post.engagementUpdatedAt)
+  }
+  func acceptEngagement(_ count: Int?, at timestamp: String?) {
+    guard valid, let count, count >= 0 else { return }
+    let date = timestamp.flatMap(captroTeaDate)
+    if let engagementAt, date == nil || date! < engagementAt { return }
+    engagementAt = date; engagementCount = count
+  }
   func hydrate(_ value: String?, readStartedAt: Date) {
     guard valid, !busy, pending == nil, readStartedAt >= mutationStarted else { return }
     interest = value
@@ -145,6 +161,7 @@ struct CaptroTeaInterestPayload: Codable {
       let response: CaptroTeaInterestPayload = try await api.put("/tea/conversations/" + id + "/interest", body: payload)
       guard valid else { return }
       interest = response.interest; pending = nil; mutationStarted = Date(); insightsAt = nil
+      acceptEngagement(response.engagementCount, at: response.engagementUpdatedAt)
       if insights != nil { await loadInsights(force: true) }
     } catch {
       guard valid else { return }
@@ -152,16 +169,34 @@ struct CaptroTeaInterestPayload: Codable {
       self.error = "Couldn’t save your choice. Tap again to retry."
     }
   }
-  func opened(isAuthor: Bool, authenticated: Bool) async {
+  // Called only by the rendered detail's visibility task. SwiftUI cancels it on
+  // navigation, covers, foreground loss or account invalidation. Cancellation
+  // before five continuous seconds discards the lease, never accumulating time.
+  func qualifyRead(isAuthor: Bool, authenticated: Bool,
+    wait: (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) async {
     guard valid, authenticated else { return }
     if isAuthor { await loadInsights(); return }
-    guard !didOpen, !opening else { return }
-    opening = true; defer { opening = false }
-    struct Receipt: Decodable { let confirmed: Bool }
+    guard !didQualify, !Task.isCancelled else { return }
+    struct Receipt: Decodable {
+      let qualified: Bool
+      let token: String?
+      let engagementCount: Int?
+      let engagementUpdatedAt: String?
+    }
     do {
-      let result: Receipt = try await api.post("/tea/conversations/" + id + "/open", body: [String: String]())
-      if valid { didOpen = result.confirmed }
-    } catch { /* Retry only on another actual detail opening. Never from a row. */ }
+      let lease: Receipt = try await api.post("/tea/conversations/" + id + "/read-start", body: [String: String]())
+      guard valid, !Task.isCancelled else { return }
+      acceptEngagement(lease.engagementCount, at: lease.engagementUpdatedAt)
+      if lease.qualified { didQualify = true; return }
+      guard let token = lease.token else { return }
+      try await wait(5_000_000_000)
+      try Task.checkCancellation()
+      guard valid else { return }
+      let receipt: Receipt = try await api.post("/tea/conversations/" + id + "/read-qualify", body: ["token":token])
+      guard valid else { return }
+      didQualify = receipt.qualified
+      acceptEngagement(receipt.engagementCount, at: receipt.engagementUpdatedAt)
+    } catch { /* No invented count. A subsequent visible visit can retry. */ }
   }
   func loadInsights(force: Bool = false) async {
     guard valid, !loadingInsights else { return }

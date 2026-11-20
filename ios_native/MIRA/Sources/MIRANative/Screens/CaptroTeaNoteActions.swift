@@ -28,6 +28,7 @@ struct CaptroTeaNoteDestinationView: View {
   let api: MIRAAPIClient
   let viewerID: String?
   let signIn: () -> Void
+  var coverChanged: (Bool) -> Void = { _ in }
   let navigate: (CaptroTeaNoteDestination) -> Void
   @State private var busy = false
   @State private var error: String?
@@ -57,6 +58,7 @@ struct CaptroTeaNoteDestinationView: View {
     }
     .sheet(item: $form) { note in CaptroTeaApplicationView(note: note, api: api) }
     .sheet(isPresented: $applications) { CaptroTeaApplicationsView(note: note, api: api) }
+    .onChange(of: form != nil || applications) { _, covered in coverChanged(covered) }
     .onChange(of: note.primaryAction) { _, _ in checkedState = nil }
   }
   private func open() async {

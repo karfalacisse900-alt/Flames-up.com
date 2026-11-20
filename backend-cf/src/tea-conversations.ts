@@ -139,14 +139,14 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
       const result = Array.isArray(value) ? decorated : decorated[0];
       return deps.authors ? deps.authors(c, result) : result;
     };
-    const write = ['create','edit','reply','follow','apply','interest','open'].includes(action);
+    const write = ['create','edit','reply','follow','apply','interest','open','read-start','read-qualify'].includes(action);
     try {
       const limited = await deps.limit(c, write); if (limited) return limited;
       const viewer = await deps.viewer(c);
       if (write && !viewer) return c.json({ detail: 'Sign in to participate.', code: 'TEA_SIGN_IN' }, 401);
       const id = c.req.param('id');
       if (!['list','create','capabilities'].includes(action) && !uuid.test(id ?? '')) throw new DiscussionInputError('Invalid post.');
-      if (['interest','open','insights'].includes(action)) {
+      if (['interest','open','insights','read-start','read-qualify'].includes(action)) {
         if (!viewer) return c.json({detail:'Sign in to participate.',code:'TEA_SIGN_IN'},401);
         let choice = null;
         if (action === 'interest') {
@@ -154,6 +154,14 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
           if (!raw || Array.isArray(raw) || Object.keys(raw).length !== 1 || !('interest' in raw) ||
               ![null,'interested','pass'].includes(raw.interest)) throw new DiscussionInputError('Choose interested, pass, or undo.');
           choice = raw.interest;
+        }
+        if (action === 'read-start' || action === 'read-qualify') {
+          const raw = await c.req.json().catch(() => null);
+          if (!raw || Array.isArray(raw) || typeof raw !== 'object' ||
+            (action === 'read-start' ? Object.keys(raw).length !== 0 :
+              Object.keys(raw).length !== 1 || typeof raw.token !== 'string' || !uuid.test(raw.token)))
+            throw new DiscussionInputError('Invalid read session.');
+          if (action === 'read-qualify') choice = raw.token;
         }
         return c.json(await deps.rpc(c,'captro_tea_private_signal',{p_actor:viewer,p_id:id,p_action:action,p_choice:choice}));
       }
@@ -201,7 +209,11 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
         const result = await deps.rpc(c, ('borough' in data || 'primaryAction' in data) ? 'captro_tea_note_write' : 'captro_tea_write', {
           p_actor: viewer, p_action: action, p_id: action === 'create' ? data.requestID : id, p_data: data,
         });
-        return c.json(await authors(action === 'reply' ? result : enrich(result)));
+        // Return the authoritative union after the idempotent reply write.
+        // A lost acknowledgment retries that same reply, never inserts another.
+        const engagement = action === 'reply' ? await deps.rpc(c,'captro_tea_private_signal',
+          {p_actor:viewer,p_id:id,p_action:'summary'}) : {};
+        return c.json(await authors(action === 'reply' ? {...result,...engagement} : enrich(result)));
       }
       if (action === 'detail') return c.json(await authors(enrich(await deps.rpc(c, 'captro_tea_read', { p_viewer: viewer, p_kind: action, p_id: id }))));
       const target = action === 'replies' ? c.req.query('target') : undefined;
@@ -236,6 +248,8 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
   api.get('/tea/conversations/:id/action', deps.optionalAuth, (c: any) => handle(c,'action'));
   api.put('/tea/conversations/:id/interest', deps.auth, (c: any) => handle(c,'interest'));
   api.post('/tea/conversations/:id/open', deps.auth, (c: any) => handle(c,'open'));
+  api.post('/tea/conversations/:id/read-start', deps.auth, (c: any) => handle(c,'read-start'));
+  api.post('/tea/conversations/:id/read-qualify', deps.auth, (c: any) => handle(c,'read-qualify'));
   api.get('/tea/conversations/:id/insights', deps.auth, (c: any) => handle(c,'insights'));
   api.post('/tea/conversations/:id/applications', deps.auth, (c: any) => handle(c,'apply'));
   api.get('/tea/conversations/:id/applications', deps.auth, (c: any) => handle(c,'applications'));

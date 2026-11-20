@@ -160,6 +160,7 @@ extension Notification.Name {
   let id: String
   let viewport = CaptroFeedViewport()
   private var loadedAt: Date?
+  @Published private(set) var contentReady = false
   private var replyLoadedAt: Date?
   private var authorLoadedAt: Date?
   private var loadingAuthor = false
@@ -179,7 +180,7 @@ extension Notification.Name {
   }
   var valid: Bool { !invalidated && scope == api.presentationScope }
   func clear() {
-    invalidated = true; revision += 1; accessRevision += 1
+    invalidated = true; contentReady = false; revision += 1; accessRevision += 1
     viewport.setActive(false)
     flight?.cancel(); flight = nil; flightID = nil; post = nil; replies = []; draft = ""; loadedAt = nil; replyLoadedAt = nil
     pendingReply = nil; replyPending = false; requestID = UUID().uuidString; nextCursor = nil
@@ -211,8 +212,8 @@ extension Notification.Name {
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
         guard result.id == id else { throw MIRAAPIError.decodingFailed }
         let previousTargets = post?.replyTargets ?? []
-        post = result; loadedAt = Date()
-        api.teaConversations.signal(for: result).hydrate(result.interest, readStartedAt: readStarted)
+        post = result; loadedAt = Date(); contentReady = true
+        api.teaConversations.signal(for: result).hydrate(result, readStartedAt: readStarted)
         for count in result.replyTargets ?? [] where expandedTargets.contains(count.target.id) {
           if previousTargets.first(where: { $0.target.id == count.target.id })?.count != count.count {
             await loadThread(count.target, reset: true)
@@ -298,6 +299,9 @@ extension Notification.Name {
     do {
       let reply: CaptroTeaReply = try await api.post("/tea/conversations/\(id)/replies", body: Body(requestID: requestID, body: body, target: pendingTarget))
       guard valid, accessRevision == expectedAccess else { return }
+      if let post {
+        api.teaConversations.signal(for: post).acceptEngagement(reply.engagementCount, at: reply.engagementUpdatedAt)
+      }
       let wasKnown = replies.contains { $0.id == reply.id } || threads.values.contains { $0.contains { $0.id == reply.id } }
       // When older replies are paged, do not insert out of chronological order.
       if let target = reply.target {
@@ -388,7 +392,8 @@ extension Notification.Name {
   }
   func updated(_ result: CaptroTeaConversation) {
     guard valid, result.id == id else { return }
-    revision += 1; post = result; loadedAt = Date()
+    revision += 1; post = result; loadedAt = Date(); contentReady = true
+    api.teaConversations.signal(for: result).hydrate(result, readStartedAt: Date())
     NotificationCenter.default.post(name: .captroTeaConversationChanged, object: result, userInfo: ["scope": scope])
   }
   private static func denied(_ error: Error) -> Bool {

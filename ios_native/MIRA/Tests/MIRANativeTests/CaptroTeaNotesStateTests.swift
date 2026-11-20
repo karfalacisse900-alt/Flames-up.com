@@ -48,8 +48,10 @@ import XCTest
     async let b: Void = first.choose("interested")
     _ = await (a,b)
     XCTAssertEqual(first.interest,"interested"); XCTAssertEqual(NotesStateProtocol.counts().writes,1)
+    XCTAssertEqual(first.engagementCount,1)
     first.hydrate(nil,readStartedAt: started); XCTAssertEqual(first.interest,"interested")
     await first.choose("pass"); XCTAssertEqual(first.interest,"pass")
+    XCTAssertEqual(first.engagementCount,0)
     await first.choose("pass"); XCTAssertNil(first.interest)
     XCTAssertEqual(NotesStateProtocol.counts().choices,["interested","pass","null"])
   }
@@ -62,8 +64,8 @@ import XCTest
     let list = api.teaConversations.notesList()
     await list.load(reset:true)
     XCTAssertEqual(NotesStateProtocol.counts().opens,0)
-    await signal.opened(isAuthor:false,authenticated:true)
-    await signal.opened(isAuthor:false,authenticated:true)
+    await signal.qualifyRead(isAuthor:false,authenticated:true,wait: { _ in })
+    await signal.qualifyRead(isAuthor:false,authenticated:true,wait: { _ in })
     XCTAssertEqual(NotesStateProtocol.counts().opens,1)
     await signal.choose("interested")
     let detail = api.teaConversations.model(for:note); detail.draft="Half written reply"
@@ -83,10 +85,42 @@ import XCTest
     XCTAssertEqual(NotesStateProtocol.counts().choices,["interested","interested"])
     await signal.choose("interested"); XCTAssertNil(signal.interest)
   }
+  func testFourSecondsAndBackgroundResetDoNotAccumulateButFiveContinuousSecondsQualify() async throws {
+    let (api,session)=client(); defer { session.invalidateAndCancel() }
+    let signal=api.teaConversations.signal(for:NotesStateProtocol.note(1))
+    let quick=Task { await signal.qualifyRead(isAuthor:false,authenticated:true) }
+    try await Task.sleep(nanoseconds:4_000_000_000)
+    XCTAssertEqual(NotesStateProtocol.counts().opens,0)
+    quick.cancel(); await quick.value
+    // The detail's scenePhase task is cancelled on inactive/background and a
+    // fresh task begins on return. Four seconds cannot carry into that task.
+    let resumed=Task { await signal.qualifyRead(isAuthor:false,authenticated:true) }
+    try await Task.sleep(nanoseconds:4_000_000_000)
+    XCTAssertEqual(NotesStateProtocol.counts().opens,0)
+    await resumed.value
+    XCTAssertEqual(NotesStateProtocol.counts().starts,2)
+    XCTAssertEqual(NotesStateProtocol.counts().opens,1)
+    XCTAssertEqual(signal.engagementCount,1)
+    await signal.qualifyRead(isAuthor:false,authenticated:true)
+    XCTAssertEqual(NotesStateProtocol.counts().starts,2,"Qualified revisit needs no new read request")
+    await signal.choose("interested"); await signal.choose("pass")
+    XCTAssertEqual(signal.engagementCount,1,"The server's qualified-read union survives removing plus")
+  }
+  func testGuestDoesNotStartReadAndOldCountResponseCannotOverwriteNewerOne() async throws {
+    let (api,session)=client(); defer { session.invalidateAndCancel() }
+    let signal=api.teaConversations.signal(for:NotesStateProtocol.note(1))
+    await signal.qualifyRead(isAuthor:false,authenticated:false)
+    XCTAssertEqual(NotesStateProtocol.counts().starts,0)
+    signal.acceptEngagement(12,at:"2026-11-20T10:00:01.000Z")
+    signal.acceptEngagement(9,at:"2026-11-20T10:00:00.000Z")
+    XCTAssertEqual(signal.engagementCount,12)
+    signal.acceptEngagement(10,at:"2026-11-20T10:00:02.000Z")
+    XCTAssertEqual(signal.engagementCount,10,"A newer removal must be allowed to lower the count")
+  }
 }
 
 private final class NotesStateProtocol: URLProtocol, @unchecked Sendable {
-  struct Counts { var list=0; var writes=0; var opens=0; var choices:[String]=[] }
+  struct Counts { var list=0; var writes=0; var opens=0; var starts=0; var choices:[String]=[] }
   private static let lock=NSLock()
   private static var state=Counts()
   private static var fail=false
@@ -114,12 +148,14 @@ private final class NotesStateProtocol: URLProtocol, @unchecked Sendable {
       let value=(try? JSONSerialization.jsonObject(with:bytes)) as? [String:Any] ?? [:]
       let choice=value["interest"] as? String
       Self.lock.withLock { Self.state.writes+=1; Self.state.choices.append(choice ?? "null") }
-      data=try! JSONSerialization.data(withJSONObject:["interest":choice as Any? ?? NSNull()])
+      data=try! JSONSerialization.data(withJSONObject:["interest":choice as Any? ?? NSNull(),"engagementCount":choice == "interested" || Self.counts().opens > 0 ? 1 : 0])
       if Self.lock.withLock({ let lose=Self.loseAcknowledgment; Self.loseAcknowledgment=false; return lose }) {
         status=503; data=Data(#"{"detail":"Lost acknowledgment"}"#.utf8)
       }
-    } else if path.hasSuffix("/open") {
-      Self.lock.withLock { Self.state.opens+=1 }; data=Data(#"{"confirmed":true}"#.utf8)
+    } else if path.hasSuffix("/read-start") {
+      Self.lock.withLock { Self.state.starts+=1 }; data=Data(#"{"qualified":false,"token":"read-token","engagementCount":0}"#.utf8)
+    } else if path.hasSuffix("/read-qualify") {
+      Self.lock.withLock { Self.state.opens+=1 }; data=Data(#"{"qualified":true,"engagementCount":1}"#.utf8)
     } else {
       Self.lock.withLock { Self.state.list+=1 }
       let cursor=URLComponents(url:url,resolvingAgainstBaseURL:false)?.queryItems?.first?.value
