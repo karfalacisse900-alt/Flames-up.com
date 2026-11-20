@@ -136,7 +136,7 @@ jobs:
             xcrun simctl terminate "$device" com.captro.app || true
           fi
           # Keep Swift frontend processes bounded on hosted Macs. Two separate
-          # runners exhausted the Xcode build service during concurrent compilation.
+          # runners lost the Xcode build service during concurrent compilation.
           # Retry only that infrastructure error once, reusing completed compilation.
           result=0
           xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug -jobs 2 \
