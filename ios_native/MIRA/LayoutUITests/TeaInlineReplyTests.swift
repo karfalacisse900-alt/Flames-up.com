@@ -41,6 +41,11 @@ final class TeaInlineReplyTests: XCTestCase {
     let replyAction = app.buttons["Reply to this part"]
     XCTAssertTrue(replyAction.waitForExistence(timeout:5)); replyAction.tap()
     XCTAssertTrue(app.staticTexts["tea.reply.target"].waitForExistence(timeout:5))
+    let quote = app.staticTexts["tea.reply.target"].label
+    XCTAssertFalse(quote.isEmpty)
+    XCTAssertLessThan(quote.count, "Looking for a good vibe, music, and a chill crowd.".count,
+      "Native selection must target an excerpt, never substitute the entire caption")
+    shot("nightlife-inline-selected-excerpt",app)
     app.buttons["tea.reply.clear-target"].tap()
   }
   func testLargeTextAndHundredAnchors() {

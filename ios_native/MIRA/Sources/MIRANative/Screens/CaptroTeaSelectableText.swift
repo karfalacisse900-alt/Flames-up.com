@@ -43,6 +43,14 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     tap.cancelsTouchesInView = false
     tap.delegate = context.coordinator
     view.addGestureRecognizer(tap)
+    // A short marker tap and native text selection are separate gestures.
+    // In a SwiftUI List, UIKit can finish selection without presenting its menu;
+    // explicitly present that same edit interaction after a completed hold.
+    let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.selectExcerpt(_:)))
+    hold.cancelsTouchesInView = false
+    hold.delegate = context.coordinator
+    view.addGestureRecognizer(hold)
+    tap.require(toFail: hold)
     return view
   }
   func updateUIView(_ view: UITextView, context: Context) {
@@ -88,6 +96,23 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     var parent: CaptroTeaSelectableText
     init(_ parent: CaptroTeaSelectableText) { self.parent = parent }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
+    @objc func selectExcerpt(_ gesture: UILongPressGestureRecognizer) {
+      guard gesture.state == .ended, let view = gesture.view as? UITextView,
+        let position = view.closestPosition(to: gesture.location(in: view)) else { return }
+      if view.selectedRange.length == 0 {
+        guard let word = view.tokenizer.rangeEnclosingPosition(position, with: .word,
+          inDirection: UITextDirection(rawValue: UITextStorageDirection.forward.rawValue)) else { return }
+        let range = NSRange(location: view.offset(from: view.beginningOfDocument, to: word.start),
+          length: view.offset(from: word.start, to: word.end))
+        guard parent.sentence.selection(range) != nil else { return }
+        view.becomeFirstResponder()
+        view.selectedTextRange = word
+      }
+      guard view.selectedRange.length > 0,
+        let interaction = view.interactions.compactMap({ $0 as? UIEditMenuInteraction }).first else { return }
+      interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil,
+        sourcePoint: gesture.location(in: view)))
+    }
     @objc func tap(_ gesture: UITapGestureRecognizer) {
       guard let view = gesture.view as? UITextView, view.selectedRange.length == 0 else { return }
       let point = gesture.location(in: view)
