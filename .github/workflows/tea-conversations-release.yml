@@ -5,6 +5,9 @@ on:
       deploy:
         type: boolean
         default: false
+      verify_source:
+        type: string
+        default: ''
       expected_version:
         type: string
         default: ''
@@ -13,6 +16,9 @@ on:
       deploy:
         type: boolean
         default: false
+      verify_source:
+        type: string
+        default: ''
       expected_version:
         type: string
         default: ''
@@ -22,7 +28,29 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  verify:
+    if: ${{ inputs.verify_source != '' }}
+    runs-on: ubuntu-latest
+    environment: captro-payments-live
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Verify exact uploaded source and preserved configuration without deployment
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TEA_CANDIDATE_SHA: ${{ inputs.verify_source }}
+          VERIFY_VERSION: ${{ inputs.expected_version }}
+        run: node backend-cf/scripts/verify-tea-release.mjs --after
+      - name: Verify public read and anonymous write denial
+        run: node backend-cf/scripts/verify-tea-http.mjs --require-author-photos
   release:
+    if: ${{ inputs.verify_source == '' }}
     runs-on: ubuntu-latest
     environment: captro-payments-live
     timeout-minutes: 20

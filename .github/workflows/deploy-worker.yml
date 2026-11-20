@@ -15,6 +15,10 @@ on:
         description: Release only the tested Tea Conversations code; respects reliability_dry_run
         type: boolean
         default: false
+      tea_verify_source:
+        description: Read-only verification of an already uploaded Tea source SHA; never deploys
+        type: string
+        default: ''
       tea_expected_version:
         description: Inspected Cloudflare version required before Tea deployment
         type: string
@@ -77,6 +81,7 @@ jobs:
     with:
       deploy: ${{ inputs.reliability_dry_run == false }}
       expected_version: ${{ inputs.tea_expected_version }}
+      verify_source: ${{ inputs.tea_verify_source }}
     secrets: inherit
   branding-support:
     if: ${{ (inputs.professional_release_stage == '' || inputs.professional_release_stage == 'none') && (inputs.branding_support_code_only == true) }}
