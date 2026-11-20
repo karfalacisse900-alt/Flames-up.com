@@ -83,8 +83,19 @@ final class NotesRootTests: XCTestCase {
     let app = launch(["--tea-pages-fixture"])
     let target = app.buttons["tea.conversation.00000000-0000-4000-8000-000000000125"]
     let list = app.collectionViews["tea.conversations.list"].exists ? app.collectionViews["tea.conversations.list"] : app.tables.firstMatch
-    for _ in 0..<30 where !target.isHittable { list.swipeUp() }
+    for _ in 0..<60 {
+      if target.exists && target.isHittable { break }
+      // A full fling can skip this row on a small phone. Use bounded drags,
+      // and correct direction if inertia has carried us past the target.
+      let visible = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tea.conversation.")).allElementsBoundByIndex
+        .filter { $0.isHittable }.compactMap { Int($0.identifier.suffix(12)) }
+      let reverse = (visible.min() ?? 0) > 125
+      let start = list.coordinate(withNormalizedOffset: CGVector(dx:0.7,dy:reverse ? 0.4 : 0.7))
+      let end = list.coordinate(withNormalizedOffset: CGVector(dx:0.7,dy:reverse ? 0.7 : 0.4))
+      start.press(forDuration:0.05,thenDragTo:end)
+    }
     XCTAssertTrue(target.isHittable)
+    guard target.exists && target.isHittable else { return }
     let before = target.frame.minY
     app.tabBars.buttons["Home"].tap(); app.tabBars.buttons["Notes"].tap()
     XCTAssertTrue(target.isHittable)

@@ -37,6 +37,7 @@ import XCTest
     NotesStateProtocol.setFailure(false)
     await model.retry()
     XCTAssertNil(model.error); XCTAssertTrue(model.items.contains { $0.id == "40" })
+    XCTAssertEqual(model.items.first?.id,"0", "Retry must refresh the head, not append the next page")
   }
   func testInterestUndoSharedStateNoDuplicateTapsAndStaleReadCannotOverwriteWrite() async throws {
     let (api, session) = client(); defer { session.invalidateAndCancel() }
