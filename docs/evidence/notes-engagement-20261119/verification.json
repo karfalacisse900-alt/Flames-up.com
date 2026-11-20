@@ -1,0 +1,62 @@
+{
+  "nativeSource": "f70ae6a",
+  "backendSource": "29b4a59",
+  "validationRun": "https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44662815072",
+  "fixtureData": true,
+  "imageEdits": false,
+  "backendTests": 40,
+  "native": {
+    "iPhone 17": {
+      "unitPassed": 288,
+      "uiPassed": 6,
+      "failed": 0
+    },
+    "iPhone 13 mini": {
+      "unitPassed": 288,
+      "uiPassed": 6,
+      "failed": 0
+    }
+  },
+  "screenshots": [
+    {
+      "file": "engagement-feed-plus-union-iphone13mini.png",
+      "sha256": "4e950c425e4c6f7c55a8a385e576982e1056da02439a31d4d8187a9c56ba9ef0"
+    },
+    {
+      "file": "engagement-feed-plus-union-iphone17.png",
+      "sha256": "2b2475cb4f01f975cbdc01271196d9a7012a4bf6f9146cc020a3681e84d95999"
+    },
+    {
+      "file": "engagement-reader-detail-union-iphone13mini.png",
+      "sha256": "e0d1a1be1f77f81e9b7976efe2d585a3267f134e819cf7ee8b4d07848d23c7e9"
+    },
+    {
+      "file": "engagement-reader-detail-union-iphone17.png",
+      "sha256": "1cd538719ec4c8c5706b9028e8eabd18b70963b3dd685fddec53039705faa836"
+    },
+    {
+      "file": "notes-author-private-insights-iphone13mini.png",
+      "sha256": "bbd7ff1514349dcfa2b99c1b87b24c4e01edd530a20196700a543d3f101aa65e"
+    },
+    {
+      "file": "notes-author-private-insights-iphone17.png",
+      "sha256": "0c0b11e61907ca6fca9a2f5d9358c5aff245b01f55c092e7735b594f7cc1e999"
+    },
+    {
+      "file": "notes-detail-large-text-iphone13mini.png",
+      "sha256": "6c7a954bce14e06267d2863b5ab4e15583c535054785626112c008d4ff25a46d"
+    },
+    {
+      "file": "notes-detail-large-text-iphone17.png",
+      "sha256": "efa721f8db6829d1b040754c0558629f88403c9afb2a24a9127c2b1a4414fdaf"
+    },
+    {
+      "file": "notes-root-large-text-iphone13mini.png",
+      "sha256": "d3ddf8026e3831ffa518e164ed7d2df8469385152543ddbbbf7d41cfbea817fd"
+    },
+    {
+      "file": "notes-root-large-text-iphone17.png",
+      "sha256": "f54d49184cf41245c08ae236b626558b8392355513bf8c5b3b95a8e84a938fa6"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+CAPTRO NOTES — UNIQUE ENGAGEMENT REVIEW
+Branch: feature/notes-engagement-20261119
+Native source: f70ae6a
+Backend source: 29b4a59 (only SQL/tests changed after the native source)
+
+Definition
+Public engaged = DISTINCT non-author active accounts with at least one qualified read, active + selection, or visible active reply. General and sentence replies use the same existing reply table. Multiple reasons and multiple replies contribute one person. Pass is private and never contributes. Removing + or the last visible reply lowers the total only when no other reason remains. A qualified read remains qualified on later visits.
+
+Qualified reads
+The existing detail model publishes contentReady after successful detail data loading. Its SwiftUI task runs only while the detail is visible and the app is active, with no profile/listing destination or covering edit/application sheet. The timer is cancelled on visibility loss. A server-issued read session must be at least five seconds old to qualify; the client waits five continuous foreground seconds after receiving it. Network latency can make this conservatively longer than five seconds from render. New sessions invalidate old tokens. Expired/foreign tokens, unavailable Notes and unauthenticated/banned actors are rejected. Neither feed rendering nor legacy /open calls qualify. Legacy instantaneous-open rows are preserved but not backfilled into qualified reads.
+
+Data/privacy
+Additive migration 20261120022807_tea_qualified_engagement.sql depends on the previous reviewed 20261120005350_tea_private_interest_insights.sql. New qualified-read/session tables use RLS and are inaccessible to anon/authenticated roles. Only the authenticated Worker supplies the canonical actor to the service-only RPC. Public payloads expose only engagementCount and a response-order timestamp, never participant identities, pass totals or component counts. Author-only Insights exposes qualifiedReads, activePlus and uniqueRepliers; compatibility aliases preserve old-client decoding.
+
+Delivery/update behavior
+The existing feed SQL adds engagementCount to each post in the same response. No per-row count HTTP calls. Interest and acknowledged reply mutations return the authoritative count; the existing account-scoped shared signal model updates feed and detail without reloading the list. Older timestamped responses cannot overwrite newer counts. Cached counters never authorize payments, membership or pickup. Sorting/ranking, Home, Support and checkout are unchanged.
+
+Backend verification
+40 targeted tests passed using isolated PGlite/PostgreSQL and real Hono routes. Coverage includes 4-second rejection, 5-second qualification, restart/expired/foreign tokens, union deduplication, plus from feed, general and line replies, duplicate reply delivery, author exclusion, undo/pass, last-reply removal, legacy opens, direct table/RPC denial, ownership/privacy/blocking/bans, existing Notes actions, Tea listings and club access. No production data or real payments used.
+Logs: artifacts/notes-engagement/backend-tests.txt; artifacts/notes-engagement/engagement-tests-final.txt (10 engagement cases rerun after the final SQL change)
+
+Native verification
+iPhone 17 passed: 288 unit tests and 6 UI tests, zero failures. Xcode 26.6 / iOS Simulator 26.5, Debug native app, no signing/upload. iPhone 13 mini also passed the same 288 unit tests and 6 UI tests, zero failures.
+Workflow: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44662815072
+Tests cover real four-second cancellation, a fresh continuous five-second timer after cancellation, UI background/resume before qualification, feed plus/undo, feed/detail shared count, read-plus overlap, author-only Insights, larger text, draft retention and second-page position across tabs/background.
+The screenshot fixture uses existing sample list reply totals and an empty detail-reply stub; those unrelated example reply totals are not production evidence. Engagement itself is consistent (12 engaged on feed and detail). SQL tests verify the actual visible-reply contribution independently. Screenshots use isolated DEBUG-only sample accounts and aggregates, never production inserts. Physical-device and production-endpoint testing have not been performed.
+Screenshots inspected: default and accessibility text on iPhone 17 and iPhone 13 mini. Count and pill remain separate; count hides at zero; titles/captions retain their existing layout and metadata wraps. Very long title extremes beyond these fixtures were not separately rendered. The original white surfaces/header/filters/navigation/reply composer remain unchanged.
+Files: docs/evidence/notes-engagement-20261119/
+
+Release
+No production migration, Worker deployment, TestFlight upload or payment setting change. Running screenshots must be reviewed before any upload.
+
+Exact implementation files changed from 1591de8:
+backend-cf/src/tea-conversations.ts
+backend-cf/tests/tea-private-signals.test.mjs
+ios_native/MIRA/LayoutUITests/NotesRootTests.swift
+ios_native/MIRA/Sources/MIRANative/Components/CaptroTeaInterestControl.swift
+ios_native/MIRA/Sources/MIRANative/Models/CaptroTeaConversation.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaNoteActions.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift
+ios_native/MIRA/Sources/MIRANative/Services/CaptroTeaConversationStore.swift
+ios_native/MIRA/Sources/MIRANative/Services/CaptroTeaNotesState.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroTeaNotesStateTests.swift
+supabase/migrations/20261120022807_tea_qualified_engagement.sql
