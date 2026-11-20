@@ -1,0 +1,40 @@
+Captro Notes engagement release
+
+Authorization: user requested "updates testflight" after the reviewed native screenshots and test report.
+
+Backend
+Applied exactly the two reviewed additive migrations:
+20261120005350_tea_private_interest_insights
+20261120022807_tea_qualified_engagement
+The migration history identifiers match the committed filenames. No other pending migrations were applied.
+Confirmed all four signal tables have RLS enabled, service-role access and no authenticated-client SELECT access.
+
+Worker release: 634bacd703683b46b6cf1c9934b92ccc6a836b87
+Cloudflare version: c073d728-b967-4c82-83d5-1ae5aa858cac
+Workflow: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44669070758
+464 backend tests passed; TypeScript check and Worker compilation passed.
+The first attempt stopped before deployment because an old source-contract test still expected the removed Capture tab. Updated that assertion to the approved shared Home/Notes/Me surface; no app implementation changed during release.
+Only backend-cf/src/tea-conversations.ts differs from the prior deployed API source.
+The production configuration hash remained 1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a.
+No payment activation, routing, secrets, or pricing changes.
+
+Live HTTP checks passed: typed Tea feeds, author-photo contract, nonnegative public engagement counts, no private component totals in the feed, anonymous creation denial and protected private engagement/Insights routes.
+The release probe was corrected to use the actual PUT interest route.
+
+Native
+Source archive: c8f803590c9fd11410f0ea1d5dc350f60d0cbe99
+Native tree: 7a59a90e238873dc5dbfaece0c73daae9e5335e7
+Matches successful two-phone native validation 44662815072 exactly.
+No simulator rerun or native source change was required during release.
+Archive workflow: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44668731712
+Build: 1.0.1 (744.1)
+Archive, Release authentication checks, code signing and IPA export succeeded.
+The pre-upload probe in the archive checkout used POST for the PUT interest route and stopped on 404. Corrected the probe, retained every release/security check and reused the exact signed IPA without recompiling.
+Upload retry: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44670602913
+Upload succeeded at 2026-11-20 03:54:05 UTC. Delivery UUID: fa2b18d3-ab32-4ca8-a6c5-5474f98afa53.
+Apple confirmed COMPLETE / VALID / IN_BETA_TESTING at 2026-11-20 03:57:18 UTC.
+Available to the existing internal groups Captro private and Captro private2, both with automatic distribution enabled. Auto-notify is enabled.
+External state is READY_FOR_BETA_SUBMISSION; external/public beta review was not submitted or claimed available.
+Status evidence: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44671124084
+Apple's nonblocking warning 90725 notes the future April 2027 iOS 27 SDK requirement; this build was accepted using the current Xcode/iOS 26.5 SDK.
+Physical-device acceptance was not performed during release.
