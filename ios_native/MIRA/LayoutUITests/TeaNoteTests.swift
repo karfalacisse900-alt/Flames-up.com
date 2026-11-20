@@ -99,7 +99,7 @@ final class TeaNoteTests: XCTestCase {
     app.buttons["tea.compose.save"].tap()
     XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.staticTexts["Nightlife NYC"].exists)
-    XCTAssertTrue(app.staticTexts["Where’s everyone going tonight?"].exists)
+    XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Where’s everyone going tonight?")).firstMatch.exists)
     XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Join the test")).firstMatch.exists)
   }
   func testInlineComposerLargeText() {

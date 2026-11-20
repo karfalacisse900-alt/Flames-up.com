@@ -577,36 +577,10 @@ struct CaptroTeaComposer: View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
-          TextField("Title", text: $title, axis: .vertical)
-            .font(.body).padding(.top, 20).accessibilityIdentifier("tea.compose.title")
-          MIRAHairline(color: CaptroTeaStyle.separator)
-          TextField("Write a Noteâ€¦", text: $bodyText, axis: .vertical)
-            .font(.body).lineLimit(1...14).accessibilityIdentifier("tea.compose.body")
-          TeaLinkFlow(spacing: 8, rowSpacing: 8) {
-            panelButton("Borough", icon: "mappin.and.ellipse", value: .borough)
-            panelButton("Link", icon: "link", value: .link)
-            panelButton("Action", icon: "arrow.right", value: .action)
-          }.padding(.top, 8)
-          if panel == .borough { boroughPanel }
-          if panel == .link { linkPanel }
-          if panel == .action {
-            CaptroTeaNoteActionEditor(api: api, action: action, embedded: true,
-              draftChanged: { action = $0 }) { value in action = value; panel = nil }
-          } else if let action {
-            VStack(alignment: .leading, spacing: 4) {
-              Text(action.label).font(.subheadline.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
-              if let link = action.url.flatMap(CaptroTeaLink.init) {
-                Text(link.hostname).font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
-              }
-            }.accessibilityElement(children: .combine)
-          }
-          if panel != .borough, !borough.isEmpty {
-            Text(borough).font(.footnote).foregroundStyle(CaptroTeaStyle.accent)
-          }
-          if panel != .link, !links.isEmpty {
-            Text(links.compactMap { CaptroTeaLink($0)?.hostname }.joined(separator: " Â· "))
-              .font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
-          }
+          draftFields
+          optionControls
+          selectedPanel
+          configuredSummary
           if let error { Text(error).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 18).padding(.bottom, 24)
@@ -625,34 +599,60 @@ struct CaptroTeaComposer: View {
       }.interactiveDismissDisabled(saving)
     }.tint(CaptroTeaStyle.accent)
   }
+  private var draftFields: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      TextField("Title", text: $title, axis: .vertical)
+        .font(.body).padding(.top, 20).accessibilityIdentifier("tea.compose.title")
+      MIRAHairline(color: CaptroTeaStyle.separator)
+      TextField("Write a Note…", text: $bodyText, axis: .vertical)
+        .font(.body).lineLimit(1...14).accessibilityIdentifier("tea.compose.body")
+    }
+  }
+  private var optionControls: some View {
+    TeaLinkFlow(spacing: 8, rowSpacing: 8) {
+      panelButton("Borough", icon: "mappin.and.ellipse", value: .borough)
+      panelButton("Link", icon: "link", value: .link)
+      panelButton("Action", icon: "arrow.right", value: .action)
+    }.padding(.top, 8)
+  }
+  @ViewBuilder private var selectedPanel: some View {
+    switch panel {
+    case .borough: boroughPanel
+    case .link: linkPanel
+    case .action:
+      CaptroTeaNoteActionEditor(api: api, action: action, embedded: true,
+        draftChanged: { action = $0 }) { value in action = value; panel = nil }
+    case nil: EmptyView()
+    }
+  }
+  @ViewBuilder private var configuredSummary: some View {
+    if panel != .action, let action {
+      VStack(alignment: .leading, spacing: 4) {
+        Text(action.label).font(.subheadline.weight(.semibold)).foregroundStyle(CaptroTeaStyle.accent)
+        if let link = action.url.flatMap(CaptroTeaLink.init) {
+          Text(link.hostname).font(.caption).foregroundStyle(MIRATheme.Color.textSecondary)
+        }
+      }.accessibilityElement(children: .combine)
+    }
+    if panel != .borough, !borough.isEmpty {
+      Text(borough).font(.footnote).foregroundStyle(CaptroTeaStyle.accent)
+    }
+    if panel != .link, !links.isEmpty {
+      Text(links.compactMap { CaptroTeaLink($0)?.hostname }.joined(separator: " · "))
+        .font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+    }
+  }
   private func panelButton(_ title: String, icon: String, value: Panel) -> some View {
-    Button {
+    CaptroTeaComposerChip(title: title, icon: icon, selected: panel == value, outlinedSelection: true) {
       panel = panel == value ? nil : value
       if panel == .action, action == nil { action = CaptroTeaNoteAction(kind: "external", label: "", url: "") }
-    } label: {
-      Label(title, systemImage: icon).font(.subheadline)
-        .padding(.horizontal, 10).frame(minHeight: 36)
-        .background(panel == value ? CaptroTeaStyle.accent.opacity(0.07) : .clear)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(panel == value ? CaptroTeaStyle.accent : CaptroTeaStyle.separator, lineWidth: 1))
-        .frame(minHeight: 44).contentShape(Rectangle())
-    }.buttonStyle(.plain)
-      .foregroundStyle(panel == value ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary)
-      .accessibilityIdentifier("tea.compose." + title.lowercased())
-      .accessibilityAddTraits(panel == value ? .isSelected : [])
+    }.accessibilityIdentifier("tea.compose." + title.lowercased())
   }
   private var boroughPanel: some View {
     TeaLinkFlow(spacing: 8, rowSpacing: 8) {
       ForEach(["Bronx", "Brooklyn", "Manhattan", "Queens", "Staten Island"], id: \.self) { value in
-        Button { borough = borough == value ? "" : value } label: {
-          Text(value).font(.subheadline).padding(.horizontal, 14).frame(minHeight: 36)
-            .background(borough == value ? CaptroTeaStyle.accent.opacity(0.12) : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(borough == value ? CaptroTeaStyle.accent.opacity(0.2) : CaptroTeaStyle.separator, lineWidth: 1))
-            .frame(minHeight: 44).contentShape(Rectangle())
-        }.buttonStyle(.plain).foregroundStyle(borough == value ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary)
+        CaptroTeaComposerChip(title: value, selected: borough == value) { borough = borough == value ? "" : value }
           .accessibilityIdentifier("tea.compose.borough." + value)
-          .accessibilityAddTraits(borough == value ? .isSelected : [])
       }
     }
   }
@@ -712,5 +712,29 @@ struct CaptroTeaComposer: View {
         self.error = "Post wasnâ€™t confirmed. Retry checks the same post before making changes. Your draft is still here."
       }
     }
+  }
+}
+
+private struct CaptroTeaComposerChip: View {
+  let title: String
+  var icon: String? = nil
+  let selected: Bool
+  var outlinedSelection = false
+  let action: () -> Void
+  private var tint: Color { selected ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary }
+  private var fill: Color { selected ? CaptroTeaStyle.accent.opacity(outlinedSelection ? 0.07 : 0.12) : Color.clear }
+  private var border: Color { selected ? CaptroTeaStyle.accent.opacity(outlinedSelection ? 1 : 0.2) : CaptroTeaStyle.separator }
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 6) {
+        if let icon { Image(systemName: icon) }
+        Text(title)
+      }
+      .font(.subheadline).foregroundStyle(tint)
+      .padding(.horizontal, icon == nil ? 14 : 10).frame(minHeight: 36)
+      .background(fill, in: RoundedRectangle(cornerRadius: 8))
+      .overlay(RoundedRectangle(cornerRadius: 8).stroke(border, lineWidth: 1))
+      .frame(minHeight: 44).contentShape(Rectangle())
+    }.buttonStyle(.plain).accessibilityAddTraits(selected ? .isSelected : [])
   }
 }

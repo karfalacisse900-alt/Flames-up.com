@@ -121,6 +121,17 @@ struct CaptroTeaNoteDestinationView: View {
   }
   private var inlineFields: some View {
     VStack(alignment: .leading, spacing: 12) {
+      inlineKindPicker
+      inlineActionFields
+      if let capabilityError { Text(capabilityError).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
+      HStack {
+        Button("Done") { save(action.input) }.disabled(!action.valid).frame(minHeight: 44).accessibilityIdentifier("tea.action.done")
+        Spacer()
+        Button("Remove action", role: .destructive) { save(nil) }.font(.footnote).frame(minHeight: 44)
+      }
+    }
+  }
+  private var inlineKindPicker: some View {
       Menu {
         Button("External link") { action.kind = "external" }
         Button("Captro listing") { action.kind = "listing" }
@@ -134,6 +145,8 @@ struct CaptroTeaNoteDestinationView: View {
           .padding(.horizontal, 12).frame(minHeight: 40)
           .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroTeaStyle.separator, lineWidth: 1))
       }.accessibilityIdentifier("tea.action.kind")
+  }
+  @ViewBuilder private var inlineActionFields: some View {
       TextField("Button label", text: $action.label).teaComposerField(url: false).accessibilityIdentifier("tea.action.label")
       if action.kind == "external" {
         TextField("https://", text: Binding(get: { action.url ?? "" }, set: { action.url = $0 }))
@@ -148,13 +161,6 @@ struct CaptroTeaNoteDestinationView: View {
         Text("Full name, availability, and optional portfolio link. Applications are private and only you can read them.")
           .font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
       }
-      if let capabilityError { Text(capabilityError).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
-      HStack {
-        Button("Done") { save(action.input) }.disabled(!action.valid).frame(minHeight: 44).accessibilityIdentifier("tea.action.done")
-        Spacer()
-        Button("Remove action", role: .destructive) { save(nil) }.font(.footnote).frame(minHeight: 44)
-      }
-    }
   }
   private var standaloneEditor: some View {
     NavigationStack {
