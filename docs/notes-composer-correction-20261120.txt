@@ -1,0 +1,42 @@
+Captro New Note composer correction — 2026-11-20
+
+Scope
+The prior 749.1 release changed inline sentence replies but left the New Note composer on its old grouped Form. This correction addresses the omitted composer reference. It does not claim that 749.1 already matched both supplied screens.
+
+Implementation
+- Flat white native scrollable editor, compact title/body, thin divider.
+- Borough, Link, and Action controls open optional panels in the same composer.
+- Borough chips toggle a real selected borough; no location inference or permission request.
+- HTTPS link entry and Add control; existing links remain editable/removable, maximum three.
+- Existing action editor reused inline for external links, Captro listings, and eligible private application forms. No replacement API or duplicate record system.
+- Switching panels keeps the title, body, borough, links, and action draft.
+- Existing POST/PUT, request idempotency, author checks, capability checks, and ambiguous-response retry behavior retained.
+
+Native source: bf72eb9
+First validation run: 44815600780. Both Xcode build services crashed before tests; no runtime pass claimed. Logs retained in artifacts/composer-small.log and artifacts/composer-large.log.
+Bounded retry 44818840353 also failed with build-service crashes before tests.
+A subsequent fast parse identified invalid UTF-8 introduced by Windows edits. Source bytes and line endings were corrected, view expressions split into smaller components, and the early parser now covers the action editor and UI tests.
+Current validation: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44824151893 (Intel Mac runners).
+The intermediate parse-failure run was 44823826039; 44824050890 was cancelled before completion to normalize line endings.
+Compiler concurrency is bounded; the workflow retries only the exact build-service crash once using existing compiled output. No application/test failures are retried or ignored.
+Validation result: iPhone 13 mini job 136592330687 passed the native build and all five selected UI tests (zero failures). The larger-phone job was cancelled without runtime results; the combined workflow is therefore cancelled, not successful.
+Passed: composer panel switching/draft preservation/posting, composer large text, plain Note and invalid-link validation, Nightlife inline collapse/expand/selection, and large text with 100 reply anchors.
+Exact passing tests:
+- TeaInlineReplyTests/testLargeTextAndHundredAnchors
+- TeaInlineReplyTests/testNightlifeCollapsedExpandedAndSelectionRetained
+- TeaNoteTests/testInlineComposerLargeText
+- TeaNoteTests/testInlineComposerPanelsPreserveDraftAndSave
+- TeaNoteTests/testPlainNoteAndOptionalActionComposer
+Original foreground simulator screenshots: artifacts/composer-review/review/. These use isolated DEBUG fixtures, not production posts. Physical-device and VoiceOver testing remain unverified.
+Visual review: Borough/Link/Action panels and inline purple sentence replies are visible in the running native app. iOS 26 renders its native rounded toolbar buttons; the source mockup has flatter toolbar controls. No exact pixel match or live-data screenshot is claimed.
+Release: 752.1 archive/upload started at https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44837272073. Availability not yet confirmed.
+The existing exact-native-tree runtime deferral is used for missing larger-phone verification, under the user's standing instruction to finish TestFlight without more simulator cycles. Native tree: 8b079ca9fa67b7842197038717ce33209868bbb0. Archive, signing, authentication, and live-schema security checks remain required.
+
+Files changed
+- ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+- ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaNoteActions.swift
+- ios_native/MIRA/LayoutUITests/TeaNoteTests.swift
+- .github/workflows/native-polish-validation.yml
+
+Unchanged
+Home, navigation, Note list, inline reply backend, accounts, payment behavior, and production settings. Physical-device acceptance is not claimed.
