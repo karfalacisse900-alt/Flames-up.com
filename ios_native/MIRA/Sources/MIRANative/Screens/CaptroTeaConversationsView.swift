@@ -374,7 +374,7 @@ struct TeaConversationTime: View {
               Rectangle().fill(CaptroTeaStyle.accent.opacity(0.25)).frame(width: 2)
               VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
                 Text("Replying to this line").font(.caption).foregroundStyle(MIRATheme.Color.textSecondary).accessibilityIdentifier("tea.reply.target")
-                Text(target.quote).font(.subheadline).lineLimit(2)
+                Text(target.quote).font(.subheadline).lineLimit(2).accessibilityIdentifier("tea.reply.target-quote")
               }
               Spacer(minLength: 0)
               Button { model.selectTarget(nil) } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
