@@ -37,7 +37,7 @@ import Foundation
     guard scope == api.presentationScope, let receivedAt else { return }
     api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt)
   }
-  func retry() async { await load(reset: failedReset, force: true) }
+  func retry() async { await load(reset: failedReset || nextCursor == nil, force: true) }
   func load(reset: Bool, force: Bool = false) async {
     if scope != api.presentationScope { clear() }
     if let flight { await flight.value; return }
