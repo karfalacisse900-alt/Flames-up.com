@@ -19,6 +19,7 @@ extension CaptroTeaReplyTarget {
 // UITextView provides the actual native selection range. A SwiftUI contextMenu
 // on a List row only knows the containing Text, not the user's selected excerpt.
 struct CaptroTeaSelectableText: UIViewRepresentable {
+  private static let marker = NSAttributedString.Key("CaptroInlineThread")
   let sentence: CaptroTeaReplyTarget
   let reply: (CaptroTeaReplyTarget) -> Void
   var thread: CaptroTeaInlineThread? = nil
@@ -27,7 +28,7 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
 
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   func makeUIView(context: Context) -> UITextView {
-    let view = UITextView()
+    let view = CaptroTeaCaptionTextView(usingTextLayoutManager: false)
     view.isEditable = false
     view.isScrollEnabled = false
     view.isSelectable = true
@@ -38,6 +39,9 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     view.adjustsFontForContentSizeCategory = true
     view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     view.delegate = context.coordinator
+    let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
+    tap.cancelsTouchesInView = false
+    view.addGestureRecognizer(tap)
     return view
   }
   func updateUIView(_ view: UITextView, context: Context) {
@@ -46,7 +50,6 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     let text = NSMutableAttributedString(string: sentence.quote, attributes: [.font: font, .foregroundColor: UIColor.label])
     if let thread, thread.count > 0 {
       let purple = UIColor(CaptroTeaStyle.accent)
-      let link = URL(string: "captro-thread://toggle")!
       for item in thread.targets {
         let scalars = sentence.quote.unicodeScalars
         let lower = item.target.start - sentence.start, upper = item.target.end - sentence.start
@@ -54,17 +57,19 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
         let a = scalars.index(scalars.startIndex, offsetBy: lower)
         let b = scalars.index(scalars.startIndex, offsetBy: upper)
         text.addAttributes([.underlineStyle: NSUnderlineStyle.single.rawValue,
-          .underlineColor: purple.withAlphaComponent(0.4), .link: link], range: NSRange(a..<b, in: sentence.quote))
+          .underlineColor: purple.withAlphaComponent(0.4), Self.marker: true], range: NSRange(a..<b, in: sentence.quote))
       }
       text.append(NSAttributedString(string: "\u{202F}\(thread.count)", attributes: [
         .font: UIFont.systemFont(ofSize: font.pointSize * 0.65, weight: .semibold),
-        .baselineOffset: font.pointSize * 0.34, .foregroundColor: purple, .link: link]))
+        .baselineOffset: font.pointSize * 0.34, .foregroundColor: purple, Self.marker: true]))
     }
     view.linkTextAttributes = [:]
     if !view.attributedText.isEqual(to: text) { view.attributedText = text }
     view.accessibilityIdentifier = "tea.sentence." + sentence.id
     view.accessibilityLabel = sentence.quote
     view.accessibilityValue = thread.map { $0.count > 0 ? "\($0.count) replies, \(expanded ? "expanded" : "collapsed")" : "" }
+    (view as? CaptroTeaCaptionTextView)?.activateThread = (thread?.count ?? 0) > 0 ? toggle : nil
+    view.accessibilityHint = (thread?.count ?? 0) > 0 ? "Double-tap to \(expanded ? "collapse" : "expand") replies. Actions include Reply to this part." : nil
     view.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Reply to this part") { _ in
       reply(sentence); return true
     }]
@@ -81,9 +86,17 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
   final class Coordinator: NSObject, UITextViewDelegate {
     var parent: CaptroTeaSelectableText
     init(_ parent: CaptroTeaSelectableText) { self.parent = parent }
-    func textView(_ textView: UITextView, shouldInteractWith URL: URL, in characterRange: NSRange, interaction: UITextItemInteraction) -> Bool {
-      if URL.scheme == "captro-thread" { parent.toggle?(); return false }
-      return false
+    @objc func tap(_ gesture: UITapGestureRecognizer) {
+      guard let view = gesture.view as? UITextView, view.selectedRange.length == 0 else { return }
+      let point = gesture.location(in: view)
+      let location = CGPoint(x: point.x - view.textContainerInset.left, y: point.y - view.textContainerInset.top)
+      let manager = view.layoutManager
+      let glyph = manager.glyphIndex(for: location, in: view.textContainer)
+      guard glyph < manager.numberOfGlyphs,
+        manager.boundingRect(forGlyphRange: NSRange(location:glyph,length:1),in:view.textContainer).insetBy(dx:-4,dy:-8).contains(location) else { return }
+      let index = manager.characterIndexForGlyph(at:glyph)
+      guard index < view.attributedText.length, view.attributedText.attribute(CaptroTeaSelectableText.marker,at:index,effectiveRange:nil) != nil else { return }
+      parent.toggle?()
     }
     func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
       let captionRange = NSIntersectionRange(range, NSRange(location: 0, length: (parent.sentence.quote as NSString).length))
@@ -95,5 +108,13 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
       }
       return UIMenu(children: [action] + suggestedActions)
     }
+  }
+}
+
+private final class CaptroTeaCaptionTextView: UITextView {
+  var activateThread: (() -> Void)?
+  override func accessibilityActivate() -> Bool {
+    guard let activateThread else { return super.accessibilityActivate() }
+    activateThread(); return true
   }
 }

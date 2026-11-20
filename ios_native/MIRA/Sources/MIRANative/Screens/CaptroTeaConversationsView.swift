@@ -248,7 +248,7 @@ struct TeaConversationTime: View {
           if let sentences = post.sentences, !sentences.isEmpty {
             ForEach(post.inlineThreads) { group in
               VStack(alignment: .leading, spacing: 8) {
-                if group.earlier { Text("Earlier text").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary) }
+                if group.earlier { Text(group.sentence.version == post.version ? "Quoted text" : "Earlier text").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary) }
                 CaptroTeaSelectableText(sentence: group.sentence, reply: target, thread: group,
                   expanded: model.expandedTargets.contains(group.id), toggle: { model.toggleThread(group) })
                 if model.expandedTargets.contains(group.id) { sentenceThread(group) }
