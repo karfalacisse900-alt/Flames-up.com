@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath, pathToFileURL} from 'node:url';
-// Verified rollout 44104006932. Exact-selection replies and account badge review only.
+// Verified rollout 44446670848. Private Note signals and qualified engagement only.
 // Commerce, professional roles, variables and secrets stay intact.
-export const baseline='baa9dc80322a69b1ab06cae7a7a70419b2317379';
-export const precedingVersion='0220628f-08be-4a65-ade0-1125604d4b12';
-export const teaRepairFiles=['backend-cf/src/account-badges.ts','backend-cf/src/index.ts','backend-cf/src/tea-authors.ts','backend-cf/src/tea-conversations.ts'];
+export const baseline='af82a556432e1413a1dac4a1fec2fe44c2a0468c';
+export const precedingVersion='57f6e193-5f4d-4b3b-a3c6-937b63e65cd5';
+export const teaRepairFiles=['backend-cf/src/tea-conversations.ts'];
 export function verifyTeaSource({changed,version,annotations,after=false,candidate,expectedVersion}) {
   assert.deepEqual(changed,teaRepairFiles,'Tea deployment scope changed.');
   if(after) {

@@ -9,6 +9,8 @@ for(const path of ['/tea/conversations','/tea']) {
       assert.ok(Object.hasOwn(item,'primaryAction') && Object.hasOwn(item,'borough'),'Notes response contract missing');
       assert.ok(!Object.hasOwn(item,'answers') && !Object.hasOwn(item,'applications'),'Private application data in public Note');
       assert.ok(item.author.photoURL===null || typeof item.author.photoURL==='string','Invalid Tea photo reference');
+      assert.ok(Number.isSafeInteger(item.engagementCount) && item.engagementCount>=0,'Missing qualified engagement count');
+      assert.ok(!Object.hasOwn(item,'qualifiedReads') && !Object.hasOwn(item,'activePlus') && !Object.hasOwn(item,'uniqueRepliers'),'Private Insights exposed in feed');
     }
     console.log(JSON.stringify({authorPhotoContract:true,returnedAuthors:b.items.length,
       withPhoto:b.items.filter(item=>!!item.author.photoURL).length}));
@@ -25,3 +27,12 @@ for (const path of ['/tea/conversations/capabilities','/tea/conversations/000000
   assert.equal(response.status,401,'Private Notes endpoint must deny anonymous access');
 }
 console.log('PASS: private Notes endpoints deny anonymous access.');
+
+for (const action of ['interest','read-start','read-qualify']) {
+  const response=await fetch(base+'/tea/conversations/00000000-0000-4000-8000-000000000001/'+action,
+    {method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(20000)});
+  assert.equal(response.status,401,'Private engagement mutation must deny anonymous access');
+}
+const insights=await fetch(base+'/tea/conversations/00000000-0000-4000-8000-000000000001/insights',{signal:AbortSignal.timeout(20000)});
+assert.equal(insights.status,401,'Insights must deny anonymous access');
+console.log('PASS: private engagement endpoints deny anonymous access.');
