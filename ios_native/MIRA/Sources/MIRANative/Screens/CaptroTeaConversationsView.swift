@@ -684,6 +684,11 @@ struct CaptroTeaComposer: View {
   }
   @MainActor private func save() async {
     guard valid, !saving else { return }
+    if submitted == nil, !linkDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      error = "Tap Add to include your link, or clear it before posting."
+      panel = .link
+      return
+    }
     saving = true; error = nil; defer { saving = false }
     let owner = api.presentationScope
     // Retain a request's exact payload after an ambiguous response; subsequent

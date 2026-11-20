@@ -135,12 +135,28 @@ jobs:
             git diff --exit-code HEAD -- Sources
             xcrun simctl terminate "$device" com.captro.app || true
           fi
-          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug \
+          # Keep Swift frontend processes bounded on hosted Macs. Two separate
+          # runners exhausted the Xcode build service during concurrent compilation.
+          # Retry only that infrastructure error once, reusing completed compilation.
+          result=0
+          xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug -jobs 2 \
             -destination "$destination" -parallel-testing-enabled NO \
             -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 \
             -derivedDataPath "$RUNNER_TEMP/PolishBuild" \
             -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" "${tests[@]}" \
-            CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log"
+            'OTHER_SWIFT_FLAGS=$(inherited) -j1' CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log" || result=$?
+          if [ "$result" != 0 ] && grep -q 'The Xcode build system has crashed' "$RUNNER_TEMP/polish.log"; then
+            cp "$RUNNER_TEMP/polish.log" "$RUNNER_TEMP/build-service-crash.log"
+            if [ -d "$RUNNER_TEMP/Polish.xcresult" ]; then mv "$RUNNER_TEMP/Polish.xcresult" "$RUNNER_TEMP/BuildServiceCrash.xcresult"; fi
+            result=0
+            xcodebuild -project Captro.xcodeproj -scheme Captro -configuration Debug -jobs 2 \
+              -destination "$destination" -parallel-testing-enabled NO \
+              -test-timeouts-enabled YES -maximum-test-execution-time-allowance 180 \
+              -derivedDataPath "$RUNNER_TEMP/PolishBuild" \
+              -resultBundlePath "$RUNNER_TEMP/Polish.xcresult" "${tests[@]}" \
+              'OTHER_SWIFT_FLAGS=$(inherited) -j1' CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$RUNNER_TEMP/polish.log" || result=$?
+          fi
+          exit "$result"
       - name: Smaller iPhone screens and interactions
         env:
           CONVERSATIONS: ${{ inputs.conversations }}
@@ -187,6 +203,8 @@ jobs:
           path: |
             ${{ runner.temp }}/Polish.xcresult
             ${{ runner.temp }}/polish.log
+            ${{ runner.temp }}/build-service-crash.log
+            ${{ runner.temp }}/BuildServiceCrash.xcresult
             ${{ runner.temp }}/screenshots
             ${{ runner.temp }}/before-screenshots
             ${{ runner.temp }}/NotesBefore.xcresult
