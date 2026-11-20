@@ -30,7 +30,7 @@ console.log('PASS: private Notes endpoints deny anonymous access.');
 
 for (const action of ['interest','read-start','read-qualify']) {
   const response=await fetch(base+'/tea/conversations/00000000-0000-4000-8000-000000000001/'+action,
-    {method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(20000)});
+    {method:action==='interest'?'PUT':'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(20000)});
   assert.equal(response.status,401,'Private engagement mutation must deny anonymous access');
 }
 const insights=await fetch(base+'/tea/conversations/00000000-0000-4000-8000-000000000001/insights',{signal:AbortSignal.timeout(20000)});
