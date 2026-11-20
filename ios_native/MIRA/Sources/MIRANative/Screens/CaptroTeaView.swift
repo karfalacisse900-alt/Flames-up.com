@@ -83,6 +83,8 @@ enum CaptroTeaPalette: String {
   let viewerID: String?
   let signIn: () -> Void
   let close: () -> Void
+  let rootTab: Bool
+  let isActive: Bool
 
   @State private var entries: [CaptroTeaEntry] = []
   @State private var path = NavigationPath()
@@ -119,8 +121,9 @@ enum CaptroTeaPalette: String {
   private var activityViewportKey: String { "tea-list:" + queryKey + ":" + filter }
 
 
-  init(api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void, close: @escaping () -> Void) {
+  init(api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void, close: @escaping () -> Void, rootTab: Bool = false, isActive: Bool = true) {
     self.api = api; self.viewerID = viewerID; self.signIn = signIn; self.close = close
+    self.rootTab = rootTab; self.isActive = isActive
     let cached = api.teaDetails.cachedListing()
     _entries = State(initialValue: cached?.entries ?? [])
     _cursor = State(initialValue: cached?.cursor)
@@ -160,7 +163,7 @@ enum CaptroTeaPalette: String {
         Button("Retry") { Task { await chooseActivity() } }
         Button("Cancel", role: .cancel) {}
       } message: { Text(creationError ?? "") }
-      .task(id: section + queryKey) {
+      .task(id: section + queryKey + String(isActive)) {
         if section == "Clubs & Events", receivedAt.map({ Date().timeIntervalSince($0) >= 30 }) != false {
           await load(reset: true)
         }
@@ -220,10 +223,10 @@ enum CaptroTeaPalette: String {
         ToolbarItem(placement: .principal) { CaptroTeaHeading() }
         if #available(iOS 26.0, *) {
           ToolbarItem(placement: .topBarTrailing) { postButton }.sharedBackgroundVisibility(.hidden)
-          ToolbarItem(placement: .topBarLeading) { backButton }.sharedBackgroundVisibility(.hidden)
+          if !rootTab { ToolbarItem(placement: .topBarLeading) { backButton }.sharedBackgroundVisibility(.hidden) }
         } else {
           ToolbarItem(placement: .topBarTrailing) { postButton }
-          ToolbarItem(placement: .topBarLeading) { backButton }
+          if !rootTab { ToolbarItem(placement: .topBarLeading) { backButton } }
         }
       }
 
@@ -274,7 +277,7 @@ enum CaptroTeaPalette: String {
         Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true)
         ZStack {
           activityList
-      CaptroTeaConversationsList(api: api, active: section == "Conversations", viewerID: viewerID, signIn: signIn, created: created) { post in
+      CaptroTeaConversationsList(api: api, active: isActive && path.isEmpty && section == "Conversations", viewerID: viewerID, signIn: signIn, created: created) { post in
         if path.isEmpty { path.append(post) }
       }
         .id(api.presentationScope)

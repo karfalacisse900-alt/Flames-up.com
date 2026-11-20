@@ -6,7 +6,6 @@ import test from 'node:test';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (file) => readFileSync(path.join(root, file), 'utf8');
-const capture = read('ios_native/MIRA/Sources/MIRANative/Screens/CaptroCameraNativeView.swift');
 const captureService = read('ios_native/MIRA/Sources/MIRANative/Services/CaptroCameraCaptureService.swift');
 const rootView = read('ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift');
 const camera = read('ios_native/MIRA/Sources/MIRANative/Components/MIRACameraCaptureView.swift');
@@ -16,18 +15,14 @@ const editorial = read('ios_native/MIRA/Sources/MIRANative/Components/CaptroEdit
 const viewer = read('ios_native/MIRA/Sources/MIRANative/Screens/DiscoverNativeView.swift');
 const editor = read('ios_native/MIRA/Sources/MIRANative/Screens/MIRANativeMediaEditorView.swift');
 
-test('Capture opens the live native camera and does not reintroduce receipt or voice entry points', () => {
-  assert.match(rootView, /CaptroCameraNativeView\(api: api, isActive: selectedTab == \.scan\)/);
-  assert.match(capture, /@StateObject private var camera = CaptroCameraCaptureService\(\)/);
-  assert.match(capture, /CaptroLiveCameraPreview\(session: camera.session/);
+test('Notes replaces the standalone Capture tab while Home and Story keep their shared camera', () => {
+  assert.match(rootView, /lazyTab\(\.notes\)/);
+  assert.match(rootView, /Label\("Notes", systemImage: "note.text"\)/);
+  assert.doesNotMatch(rootView, /CaptroCameraNativeView|lazyTab\(\.scan\)/);
+  assert.match(camera, /captureService = CaptroCameraCaptureService\(\)/);
   assert.match(captureService, /AVCapturePhotoOutput\(\)/);
   assert.match(captureService, /AVCaptureMovieFileOutput\(\)/);
-  assert.doesNotMatch(capture, /CaptroScanView|CaptroReceiptCameraView|CaptroCaptureAssistantView|fileImporter|hubMode\(/);
-  // Approved live-only Capture removes the action, not just its visible icon.
-  assert.doesNotMatch(capture, /photosPicker|PhotosPicker|showLibrary|galleryItem|CaptroPostMediaPicker\.load|capture\.library/);
   assert.match(read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift'), /\.photosPicker\(/);
-  assert.doesNotMatch(capture, /PHPhotoLibrary.requestAuthorization|requestAuthorization\(for:/);
-  assert.doesNotMatch(capture, /Looking for documents|Choose photo|Import document|Upload receipt/);
 });
 
 test('Post Assist uses the same server-side OpenAI key and does not return fake suggestions on failure', () => {
@@ -55,12 +50,10 @@ test('Story viewer and default editor preserve the entire original frame', () =>
   assert.match(editor, /return \[\.original, \.story9x16/);
 });
 
-test('Capture hands reviewed media to existing composers and voice recording remains retired', () => {
-  assert.doesNotMatch(capture, /MIRACameraCaptureView|CaptroVoiceRecorderSheet/);
-  assert.match(capture, /CreatePostNativeView\(api: api, initialMedia: media/);
-  assert.match(capture, /CreateStoryNativeView\(api: api, initialMedia: media/);
-  assert.match(capture, /Button\("Retake"\)/);
-  assert.match(capture, /Button\(media.kind == \.image \? "Use photo" : "Use video"\)/);
+test('Home and Story keep shared live capture and voice recording remains retired', () => {
+  const composers = read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift');
+  assert.match(composers, /MIRAStoryLiveCameraView\(captureMode: \.photoAndVideo/);
+  assert.match(composers, /struct CreateStoryNativeView/);
   assert.match(camera, /galleryButton\.isHidden = simpleCaptureUI/);
   assert.match(camera, /guard !simpleCaptureUI else \{ return \}/);
   assert.doesNotMatch(read('ios_native/MIRA/Sources/MIRANative/Screens/NotificationLibrarySearchCreateViews.swift'), /CaptroVoiceRecorderSheet|Record voice attachment|CaptroVoiceUploadService/);

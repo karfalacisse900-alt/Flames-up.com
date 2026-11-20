@@ -224,6 +224,14 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
     schedule()
   }
 
+  /// Notes refreshes replace a complete loaded range atomically. Preserve the
+  /// visible row when newer rows were inserted above it; never fight a gesture.
+  func preserveForContentRefresh() {
+    guard !isAtTopAndIdle else { return }
+    sample()
+    if let anchor = snapshots[scope] { requestRestoration(anchor, reason: "notes_refresh") }
+  }
+
   func register(_ view: UIView, id: String, feed: String? = nil) {
     guard feed == nil || feed == scope else { return }
     if cells[id]?.value !== view { cells[id] = WeakView(view) }

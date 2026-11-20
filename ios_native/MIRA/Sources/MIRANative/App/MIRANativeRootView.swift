@@ -6,7 +6,7 @@ import GoogleSignIn
 
 public enum MIRATab: Hashable {
   case main
-  case scan
+  case notes
   case chat
   case profile
 }
@@ -163,7 +163,6 @@ public struct MIRANativeRootView: View {
   @State private var loadedTabs: Set<MIRATab> = [.main]
   @State private var isPrivacyShieldVisible = false
   @State private var featureStatusBarHidden = false
-  @State private var cameraDarkChrome = false
   @State private var profileLink: CaptroProfileLink?
   @State private var teaInvite: CaptroTeaInviteRoute?
   @State private var hasMountedDestination = false
@@ -257,8 +256,7 @@ public struct MIRANativeRootView: View {
     // The system launch screen uses the device appearance. Apply the user's
     // in-app preference only after its matching first-frame overlay has left.
     .preferredColorScheme(startup.isSplashMounted ? nil :
-      selectedTab == .scan && cameraDarkChrome ? .dark : MIRAAppearanceResolver.colorScheme(for: appearancePreference))
-    .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }
+      MIRAAppearanceResolver.colorScheme(for: appearancePreference))
     .statusBarHidden(shouldHideStatusBar)
     .onPreferenceChange(MIRAStatusBarHiddenPreferenceKey.self) { hidden in
       featureStatusBarHidden = hidden
@@ -423,27 +421,19 @@ public struct MIRANativeRootView: View {
           isGuest: authSession.isGuest,
           teaViewerID: authSession.user?.id,
           signInForTea: leaveGuestModeForSignIn,
-          inboxModel: startup.chatModel
+          inboxModel: startup.chatModel, openTea: { selectedTab = .notes }
         )
       }
         .tag(MIRATab.main)
         .tabItem { Label("Home", systemImage: "house.fill") }
 
-      lazyTab(.scan) {
-        if authSession.isGuest {
-          GuestSignInRequiredView(
-            title: "Sign in to use Capture",
-            message: "Create an account or sign in to capture photos and videos.",
-            systemImage: "camera",
-            onSignIn: leaveGuestModeForSignIn
-          )
-        } else {
-          CaptroCameraNativeView(api: api, isActive: selectedTab == .scan)
-            .id("capture-account-\(authSession.user?.id ?? "")")
-        }
+      lazyTab(.notes) {
+        CaptroTeaView(api: api, viewerID: authSession.user?.id,
+          signIn: leaveGuestModeForSignIn, close: {}, rootTab: true, isActive: selectedTab == .notes)
+          .id("notes-account-\(authSession.user?.id ?? "guest")")
       }
-        .tag(MIRATab.scan)
-        .tabItem { Label("Capture", systemImage: "viewfinder") }
+        .tag(MIRATab.notes)
+        .tabItem { Label("Notes", systemImage: "note.text") }
 
       lazyTab(.profile) {
         if authSession.isGuest {
@@ -466,11 +456,9 @@ public struct MIRANativeRootView: View {
         .tag(MIRATab.profile)
         .tabItem { Label("Me", systemImage: "person.fill") }
     }
-    .tint(selectedTab == .scan && cameraDarkChrome ? Color.white : MIRATheme.Color.textPrimary)
-    .toolbarBackground(selectedTab == .scan && cameraDarkChrome ? Color.black : MIRATheme.Color.surface, for: .tabBar)
+    .tint(MIRATheme.Color.textPrimary)
+    .toolbarBackground(MIRATheme.Color.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
-    .modifier(CaptroStudioTabChrome(active: selectedTab == .scan && cameraDarkChrome,
-      home: { selectedTab = .main }, capture: { selectedTab = .scan }, profile: { selectedTab = .profile }))
     .background(MIRATheme.Color.appBackground)
     .onChange(of: selectedTab) { _, tab in
       MIRAPerformanceTimeline.mark("tab_switch", detail: "\(tab)")

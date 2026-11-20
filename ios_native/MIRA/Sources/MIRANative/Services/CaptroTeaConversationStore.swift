@@ -13,6 +13,8 @@ extension Notification.Name {
   private var models: [String: CaptroTeaConversationModel] = [:]
   private var order: [String] = []
   private var applications: [String: CaptroTeaApplicationModel] = [:]
+  private var notes: CaptroTeaNotesListModel?
+  private var signals: [String: CaptroTeaNoteSignal] = [:]
   struct Listing {
     let items: [CaptroTeaConversation]
     let cursor: String?
@@ -23,8 +25,19 @@ extension Notification.Name {
   init(api: MIRAAPIClient) { self.api = api }
   func cachedListing() -> Listing? {
     synchronizeScope()
-    guard let listing, Date().timeIntervalSince(listing.receivedAt) < 600 else { return nil }
     return listing
+  }
+  func notesList() -> CaptroTeaNotesListModel {
+    synchronizeScope()
+    if let notes { return notes }
+    let model = CaptroTeaNotesListModel(api: api, cached: listing)
+    notes = model; return model
+  }
+  func signal(for post: CaptroTeaConversation) -> CaptroTeaNoteSignal {
+    synchronizeScope()
+    if let signal = signals[post.id] { return signal }
+    let signal = CaptroTeaNoteSignal(post: post, api: api)
+    signals[post.id] = signal; return signal
   }
   func saveListing(_ items: [CaptroTeaConversation], cursor: String?, receivedAt: Date) {
     synchronizeScope()
@@ -49,6 +62,9 @@ extension Notification.Name {
     applications.removeAll()
     for model in models.values { model.clear() }
     models.removeAll(); order.removeAll()
+    notes?.clear()
+    for signal in signals.values { signal.clear() }
+    signals.removeAll()
     listing = nil; listViewport.setActive(false)
     NotificationCenter.default.post(name: .captroTeaAccessChanged, object: nil)
   }
@@ -176,12 +192,13 @@ extension Notification.Name {
     guard scope == api.presentationScope else { clear(); return }
     invalidated = false
     if let flight { await flight.value; return }
-    if !force, let loadedAt, Date().timeIntervalSince(loadedAt) < 30 {
+    if !force, let loadedAt, Date().timeIntervalSince(loadedAt) < 120 {
       // Post freshness is not evidence that replies or author metadata loaded.
       await loadSupplementary(force: false)
       return
     }
     let expectedRevision = revision
+    let readStarted = Date()
     let task = Task { [weak self] in
       guard let self else { return }
       loading = true; error = nil
@@ -194,6 +211,7 @@ extension Notification.Name {
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
         guard result.id == id else { throw MIRAAPIError.decodingFailed }
         post = result; loadedAt = Date()
+        api.teaConversations.signal(for: result).hydrate(result.interest, readStartedAt: readStarted)
       } catch {
         guard valid, revision == expectedRevision, !Task.isCancelled else { return }
         if Self.denied(error) { clear(); self.error = "This post is no longer available." }
@@ -208,10 +226,11 @@ extension Notification.Name {
   private func loadSupplementary(force: Bool) async {
     if valid, post != nil {
       async let replies: Void = loadReplies(reset: true, force: force)
-      async let author: Void = loadAuthor(force: force)
-      _ = await (replies, author)
-      for count in post?.replyTargets ?? [] where expandedTargets.contains(count.target.id) {
-        if force || threadLoadedAt[count.target.id].map({ Date().timeIntervalSince($0) >= 30 }) != false {
+      // Author identity is in the post payload. Profile details load only when
+      // needed by the existing profile route, not on every brief app resume.
+      await replies
+      for count in post?.replyTargets ?? [] where force && expandedTargets.contains(count.target.id) {
+        if force {
           await loadThread(count.target, reset: true)
         }
       }
@@ -219,7 +238,7 @@ extension Notification.Name {
   }
   func loadReplies(reset: Bool, force: Bool = false) async {
     guard valid, post != nil, !loadingReplies, reset || nextCursor != nil else { return }
-    if reset, !force, let replyLoadedAt, Date().timeIntervalSince(replyLoadedAt) < 30 { return }
+    if reset, !force, let replyLoadedAt, Date().timeIntervalSince(replyLoadedAt) < 120 { return }
     loadingReplies = true
     if !replySubmissionFailed { replyError = nil }
     let expectedAccess = accessRevision

@@ -1139,6 +1139,7 @@ public struct MainFeedView: View {
   @State private var isFeedSelectorPresented = false
   private var inboxModel: ChatNativeModel? = nil
   @State private var showsInbox = false
+  private var openTea: (() -> Void)? = nil
   @State private var showsTea = false
   @State private var isShowingCreatePost = false
   @State private var detailPost: MIRAPost?
@@ -1166,7 +1167,8 @@ public struct MainFeedView: View {
     isGuest: Bool = false,
     teaViewerID: String? = nil,
     signInForTea: (() -> Void)? = nil,
-    inboxModel: ChatNativeModel? = nil
+    inboxModel: ChatNativeModel? = nil,
+    openTea: (() -> Void)? = nil
   ) {
     _model = StateObject(wrappedValue: model)
     self.isTabActive = isTabActive
@@ -1174,6 +1176,7 @@ public struct MainFeedView: View {
     self.teaViewerID = teaViewerID
     self.signInForTea = signInForTea
     self.inboxModel = inboxModel
+    self.openTea = openTea
   }
 
   private var presentedFeed: some View {
@@ -1441,7 +1444,7 @@ public struct MainFeedView: View {
   private var homeTopBar: some View {
     HStack(spacing: 0) {
       HStack(spacing: 8) {
-        Button { showsTea = true } label: {
+        Button { if let openTea { openTea() } else { showsTea = true } } label: {
           Image(systemName: "cup.and.saucer")
           .font(.system(size: 20, weight: .medium))
           .foregroundStyle(MIRATheme.Color.textPrimary)

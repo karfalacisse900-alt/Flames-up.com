@@ -58,39 +58,26 @@ struct CaptroTeaConversationsList: View {
   let signIn: () -> Void
   let created: CaptroTeaConversation?
   let open: (CaptroTeaConversation) -> Void
-  @State private var items: [CaptroTeaConversation] = []
+  @StateObject private var model: CaptroTeaNotesListModel
   @State private var actionDestination: CaptroTeaNoteDestination?
-  @State private var nextCursor: String?
-  @State private var loading = false
-  @State private var loaded = false
-  @State private var error: String?
-  @State private var scope = ""
-  @State private var receivedAt: Date?
-  @State private var revision = 0
-  @State private var requestID: UUID?
   @Environment(\.scenePhase) private var scenePhase
 
   init(api: MIRAAPIClient, active: Bool, viewerID: String?, signIn: @escaping () -> Void, created: CaptroTeaConversation?, open: @escaping (CaptroTeaConversation) -> Void) {
     self.viewerID = viewerID; self.signIn = signIn
     self.api = api; self.active = active; self.created = created; self.open = open
-    let cached = api.teaConversations.cachedListing()
-    _items = State(initialValue: cached?.items ?? [])
-    _nextCursor = State(initialValue: cached?.cursor)
-    _receivedAt = State(initialValue: cached?.receivedAt)
-    _loaded = State(initialValue: cached != nil)
-    _scope = State(initialValue: api.presentationScope)
+    _model = StateObject(wrappedValue: api.teaConversations.notesList())
   }
 
   var body: some View {
     List {
-      if items.isEmpty {
-        if loading && error == nil { ProgressView("Loading Notes…").listRowSeparator(.hidden).accessibilityIdentifier("tea.conversations.loading") }
-        else if error == nil, loaded { Text("No Notes yet. Tap Post to start one.").font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary).listRowSeparator(.hidden) }
+      if model.items.isEmpty {
+        if model.loading && model.error == nil { ProgressView("Loading Notes…").listRowSeparator(.hidden).accessibilityIdentifier("tea.conversations.loading") }
+        else if model.error == nil, model.loaded { Text("No Notes yet. Tap Post to start one.").font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary).listRowSeparator(.hidden) }
       }
-      ForEach(items) { post in
+      ForEach(model.items) { post in
         VStack(alignment: .leading, spacing: 0) {
-          Button { open(post) } label: { CaptroTeaConversationRow(post: post) }
-            .buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
+          CaptroTeaConversationRow(post: post, signal: api.teaConversations.signal(for: post),
+            signedIn: viewerID != nil, signIn: signIn, open: { open(post) })
           if post.primaryAction != nil {
             CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
               .padding(.leading, MIRATheme.Layout.rowAvatar + MIRATheme.Layout.avatarGap).padding(.bottom, 8)
@@ -102,14 +89,14 @@ struct CaptroTeaConversationsList: View {
           .listRowInsets(EdgeInsets(top: 0, leading: MIRATheme.Layout.listInset, bottom: 0, trailing: MIRATheme.Layout.listInset))
           .listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       }
-      if let error {
+      if let error = model.error {
         VStack(alignment: .leading) {
           Text(error).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
-          Button("Retry") { Task { await load(reset: nextCursor == nil, force: true) } }.frame(minHeight: 44)
+          Button("Retry") { Task { await model.load(reset: model.nextCursor == nil, force: true) } }.frame(minHeight: 44)
         }.listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
-      } else if nextCursor != nil {
+      } else if model.nextCursor != nil {
         ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
-          .task { await load(reset: false) }
+          .task(id: model.nextCursor) { if active { await model.load(reset: false) } }
       }
     }
     .listStyle(.plain).listRowSpacing(0).scrollContentBackground(.hidden).background(MIRATheme.Color.appBackground)
@@ -117,60 +104,25 @@ struct CaptroTeaConversationsList: View {
     .navigationDestination(item: $actionDestination) { destination in
       CaptroTeaNoteDestinationView(destination: destination, api: api, viewerID: viewerID, signIn: signIn)
     }
-    .refreshable { await load(reset: true, force: true) }
-    .task(id: "\(active)-\(revision)") { if active { await load(reset: true) } }
+    .refreshable { await model.load(reset: true, force: true) }
+    .task(id: "\(active)-\(model.revision)") { if active { await model.load(reset: true) } }
     .onAppear {
       api.teaConversations.listViewport.select("tea-list")
-      api.teaConversations.listViewport.updateOrder(items.map(\.id))
+      api.teaConversations.listViewport.updateOrder(model.items.map(\.id))
       api.teaConversations.listViewport.setActive(active)
     }
     .onDisappear { api.teaConversations.listViewport.setActive(false) }
     .onChange(of: active) { _, active in api.teaConversations.listViewport.setActive(active) }
-    .onChange(of: items) { _, items in
-      api.teaConversations.listViewport.updateOrder(items.map(\.id))
-      if scope == api.presentationScope, let receivedAt {
-        api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt)
-      }
+    .onChange(of: model.items) { _, items in api.teaConversations.listViewport.updateOrder(items.map(\.id)) }
+    .onChange(of: scenePhase) { _, phase in
+      api.teaConversations.listViewport.setActive(phase == .active && active)
+      if phase == .active, active { Task { await model.load(reset: true) } }
     }
-    .onChange(of: scenePhase) { _, phase in if phase == .active, active { Task { await load(reset: true) } } }
-    .onChange(of: created) { _, post in
-      guard let post, scope == api.presentationScope else { return }
-      items.removeAll { $0.id == post.id }; items.insert(post, at: 0)
-    }
+    .onChange(of: created) { _, post in if let post { model.update(post, insert: true) } }
     .onReceive(NotificationCenter.default.publisher(for: .captroTeaConversationChanged)) { notification in
-      guard notification.userInfo?["scope"] as? String == scope, scope == api.presentationScope,
-            let post = notification.object as? CaptroTeaConversation,
-            let index = items.firstIndex(where: { $0.id == post.id }) else { return }
-      items[index] = post
-    }
-    .onReceive(NotificationCenter.default.publisher(for: .captroTeaAccessChanged)) { _ in
-      requestID = nil; loading = false; loaded = false
-      items = []; nextCursor = nil; receivedAt = nil; error = nil
-      revision += 1 // The task restarts an authorized read; never leave an idle loading label.
-    }
-  }
-
-  @MainActor private func load(reset: Bool, force: Bool = false) async {
-    guard !loading, reset || nextCursor != nil else { return }
-    if scope != api.presentationScope { items = []; nextCursor = nil; receivedAt = nil; loaded = false; scope = api.presentationScope }
-    if reset, !force, let receivedAt, Date().timeIntervalSince(receivedAt) < 30 { return }
-    let owner = scope
-    let expectedRevision = revision
-    let token = UUID(); requestID = token
-    loading = true; error = nil; defer { if requestID == token { loading = false; requestID = nil } }
-    do {
-      let path = "/tea/conversations" + (!reset && nextCursor != nil ? "?cursor=" + nextCursor! : "")
-      let page: CaptroTeaConversationPage<CaptroTeaConversation> = try await api.getFresh(path)
-      guard requestID == token, owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled else { return }
-      var seen = Set(reset ? [] : items.map(\.id))
-      let unique = page.items.filter { seen.insert($0.id).inserted }
-      items = reset ? unique : items + unique
-      nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
-      api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt!)
-    } catch is CancellationError {} catch {
-      guard requestID == token, owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
-      if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }
-      self.error = CaptroRefreshFailure.message(error, content: "Notes", cached: !items.isEmpty)
+      guard notification.userInfo?["scope"] as? String == api.presentationScope,
+            let post = notification.object as? CaptroTeaConversation else { return }
+      model.update(post)
     }
   }
 }
@@ -178,11 +130,19 @@ struct CaptroTeaConversationsList: View {
 private struct CaptroTeaConversationRow: View {
   @Environment(\.dynamicTypeSize) private var typeSize
   let post: CaptroTeaConversation
+  @ObservedObject var signal: CaptroTeaNoteSignal
+  let signedIn: Bool
+  let signIn: () -> Void
+  let open: () -> Void
   private var metadataInk: Color { MIRATheme.Color.textSecondary }
   var body: some View {
     HStack(alignment: .top, spacing: MIRATheme.Layout.avatarGap) {
-      CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: MIRATheme.Layout.rowAvatar)
+      Button(action: open) {
+        CaptroTeaIdentity(name: post.author.name, photo: post.author.photoURL, size: MIRATheme.Layout.rowAvatar)
+      }.buttonStyle(.plain).accessibilityLabel("Open " + post.title)
       VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
+        Button(action: open) {
+        VStack(alignment: .leading, spacing: MIRATheme.Space.textGap) {
         if typeSize.isAccessibilitySize {
           Text(post.title).miraText(.rowTitle).fixedSize(horizontal: false, vertical: true)
           replyCount
@@ -197,7 +157,28 @@ private struct CaptroTeaConversationRow: View {
         Text(post.body).miraText(.preview).lineSpacing(0).lineLimit(typeSize.isAccessibilitySize ? nil : 2).fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityIdentifier("tea.preview." + post.id)
-        TeaLinkFlow(spacing: 5) {
+        }
+        }.buttonStyle(.plain).accessibilityIdentifier("tea.conversation." + post.id)
+        ViewThatFits(in: .horizontal) {
+          HStack(alignment: .center, spacing: 8) {
+            metadata.fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 0)
+            interest
+          }
+          VStack(alignment: .leading, spacing: 0) {
+            metadata
+            HStack { Spacer(minLength: 0); interest }
+          }
+        }
+        if let error = signal.error { Text(error).miraText(.metadata).foregroundStyle(metadataInk) }
+
+      }.frame(maxWidth: .infinity, alignment: .leading)
+    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 18)
+      .contentShape(Rectangle())
+  }
+  private var interest: some View { CaptroTeaInterestControl(model: signal, signedIn: signedIn, signIn: signIn) }
+  private var metadata: some View {
+    TeaLinkFlow(spacing: 5) {
           HStack(spacing: 4) { Text(post.author.name).miraText(.metadata).foregroundStyle(metadataInk); CaptroVerifiedBadge(verified: post.author.isVerified == true) }
           Text("\u{00B7}").miraText(.metadata).foregroundStyle(metadataInk).accessibilityHidden(true)
           if let date = captroTeaDate(post.createdAt) {
@@ -209,9 +190,6 @@ private struct CaptroTeaConversationRow: View {
             Text(borough).miraText(.metadata).foregroundStyle(CaptroTeaStyle.accent)
           }
         }.padding(.top, 2).accessibilityElement(children: .combine).accessibilityIdentifier("tea.note.identity." + post.id)
-      }.frame(maxWidth: .infinity, alignment: .leading)
-    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 18)
-      .contentShape(Rectangle())
   }
   @ViewBuilder private var replyCount: some View {
     if let count = post.replyCount {
@@ -235,6 +213,7 @@ struct TeaConversationTime: View {
   let viewerID: String?
   let signIn: () -> Void
   @StateObject private var model: CaptroTeaConversationModel
+  @StateObject private var signal: CaptroTeaNoteSignal
   @State private var editing = false
   @State private var actionDestination: CaptroTeaNoteDestination?
   @State private var profile: CaptroProfileLink?
@@ -245,6 +224,7 @@ struct TeaConversationTime: View {
   init(post: CaptroTeaConversation, api: MIRAAPIClient, viewerID: String?, signIn: @escaping () -> Void) {
     self.api = api; self.viewerID = viewerID; self.signIn = signIn
     _model = StateObject(wrappedValue: api.teaConversations.model(for: post))
+    _signal = StateObject(wrappedValue: api.teaConversations.signal(for: post))
   }
 
   var body: some View {
@@ -273,6 +253,12 @@ struct TeaConversationTime: View {
           } else {
             Text(post.body).miraText(.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
           }
+          HStack {
+            Spacer(minLength: 0)
+            CaptroTeaInterestControl(model: signal, signedIn: viewerID != nil, signIn: signIn)
+          }
+          if let error = signal.error { Text(error).miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary) }
+          if post.isAuthor { CaptroTeaInsightsView(model: signal) }
           let links = post.links.compactMap(CaptroTeaLink.init)
           if !links.isEmpty {
             TeaLinkFlow(spacing: 8) {
@@ -417,6 +403,8 @@ struct TeaConversationTime: View {
         if let profile { UserProfileNativeView(userId: profile.id, api: api).tint(MIRATheme.Color.accent).toolbar(.visible, for: .navigationBar) }
       }
       .task { await model.load() }
+      .task { if let post = model.post { await signal.opened(isAuthor: post.isAuthor, authenticated: viewerID != nil) } }
+      .toolbar(.hidden, for: .tabBar)
       .onAppear { model.viewport.setActive(true) }
       .onDisappear { model.viewport.setActive(false) }
       .refreshable { await model.load(force: true) }
@@ -443,17 +431,7 @@ struct TeaConversationTime: View {
         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
       }.buttonStyle(.plain).accessibilityLabel("Open profile for " + post.author.name)
         .accessibilityIdentifier("tea.author.profile")
-      if !post.isAuthor {
-        Button {
-          if viewerID == nil { signIn() } else { Task { await model.followAuthor() } }
-        } label: {
-          Image(systemName: model.authorProfile?.viewerFollowing == true ? "checkmark" : model.authorProfile?.followPending == true ? "clock" : "plus")
-            .font(.headline).frame(width: 40, height: 28)
-            .overlay(Capsule().strokeBorder(CaptroTeaStyle.accent)).frame(width: 44, height: 44).contentShape(Rectangle())
-        }.buttonStyle(.plain).foregroundStyle(CaptroTeaStyle.accent).disabled(model.followingAuthor)
-          .accessibilityLabel(model.authorProfile?.viewerFollowing == true ? "Unfollow author" : model.authorProfile?.followPending == true ? "Cancel follow request" : "Follow author")
-          .accessibilityIdentifier("tea.author.follow")
-      }
+
     }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.bottom, 4)
   }
   private func target(_ sentence: CaptroTeaReplyTarget) {

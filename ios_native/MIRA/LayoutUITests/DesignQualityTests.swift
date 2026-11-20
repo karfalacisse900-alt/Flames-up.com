@@ -36,15 +36,6 @@ final class DesignQualityTests: XCTestCase {
     app.buttons["Cancel"].tap()
   }
 
-  func testCaptureOpensReceiptCameraWithoutRetiredModes() {
-    let app = launch(["--captro-quality-capture"])
-    XCTAssertTrue(app.buttons["Close Scan"].waitForExistence(timeout: 10))
-    XCTAssertFalse(app.buttons["Voice, Talk to Captro"].exists)
-    XCTAssertFalse(app.buttons["Record, New camera video"].exists)
-    XCTAssertFalse(app.buttons["Upload"].exists)
-    capture(app, "capture-receipt-only")
-  }
-
   func testWelcomeAndFormsAtLargeText() {
     let app = launch(["--captro-quality-auth", "--captro-quality-large-text"])
     XCTAssertTrue(app.buttons["Continue as Guest"].waitForExistence(timeout: 10))

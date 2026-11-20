@@ -7,7 +7,6 @@ public struct CaptroDesignQualityTestView: View {
   @State private var showSheet = false
   @State private var showActions = false
   @State private var text = ""
-  @State private var cameraDarkChrome = false
   private let api = MIRAAPIClient()
   private static let fixtureScope = "polish-screen-\(UUID())"
 
@@ -51,8 +50,6 @@ public struct CaptroDesignQualityTestView: View {
         NavigationStack { ChatNativeView(api: CaptroComposerTestAPI.make(), currentUserId: "composer-ui-test") }
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-story") {
         CaptroStoryPresentationTestHost()
-      } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-capture") {
-        CaptroCameraTabReviewHost(media: cameraReviewFixture)
       } else if ProcessInfo.processInfo.arguments.contains("--captro-quality-legal") {
         NavigationStack { PrivacyPolicyView() }
       } else {
@@ -97,44 +94,10 @@ public struct CaptroDesignQualityTestView: View {
       }
     }
     .environmentObject(MIRALocalization.shared)
-    .preferredColorScheme(cameraDarkChrome || ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
-    .onPreferenceChange(CaptroCameraDarkChromePreferenceKey.self) { cameraDarkChrome = $0 }
+    .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("--captro-quality-dark") ? .dark : .light)
     .dynamicTypeSize(ProcessInfo.processInfo.arguments.contains("--captro-quality-large-text") ? .accessibility2 : .large)
   }
 
-  private var cameraReviewFixture: MIRAPickedMedia? {
-    guard ProcessInfo.processInfo.arguments.contains("--captro-camera-review-fixture") else { return nil }
-    // Clearly identified diagnostic chart, not a simulated camera capture or quality claim.
-    let format = UIGraphicsImageRendererFormat(); format.scale = 1
-    let image = UIGraphicsImageRenderer(size: CGSize(width: 900, height: 1200), format: format).image { context in
-      UIColor(red: 0.82, green: 0.77, blue: 0.66, alpha: 1).setFill(); context.fill(CGRect(x: 0, y: 0, width: 900, height: 1200))
-      UIColor.darkGray.setStroke(); context.cgContext.setLineWidth(8)
-      context.cgContext.stroke(CGRect(x: 8, y: 8, width: 884, height: 1184))
-      ("REVIEW TEST CHART\n900 × 1200\nNot a camera capture" as NSString).draw(in: CGRect(x: 70, y: 470, width: 760, height: 260),
-        withAttributes: [.font: UIFont.systemFont(ofSize: 42), .foregroundColor: UIColor.black])
-    }
-    return MIRAPickedMedia(data: image.jpegData(compressionQuality: 0.95)!, kind: .image, fileName: "review-test-chart.jpg", mimeType: "image/jpeg")
-  }
-}
-
-/// Exercises the production camera inside the same native tab container/safe
-/// areas as the app, without authenticating or publishing production content.
-private struct CaptroCameraTabReviewHost: View {
-  let media: MIRAPickedMedia?
-  @State private var selection = 1
-  var body: some View {
-    TabView(selection: $selection) {
-      Text("Home test destination").tag(0).tabItem { Label("Home", systemImage: "house.fill") }
-      CaptroCameraNativeView(api: CaptroComposerTestAPI.make(), isActive: selection == 1, initialReviewMedia: media)
-        .tag(1).tabItem { Label("Capture", systemImage: "viewfinder") }
-      Text("Profile test destination").tag(2).tabItem { Label("Me", systemImage: "person.fill") }
-    }
-    .tint(selection == 1 ? Color.white : MIRATheme.Color.textPrimary)
-    .toolbarBackground(selection == 1 ? Color.black : MIRATheme.Color.surface, for: .tabBar)
-    .toolbarBackground(.visible, for: .tabBar)
-    .modifier(CaptroStudioTabChrome(active: selection == 1,
-      home: { selection = 0 }, capture: { selection = 1 }, profile: { selection = 2 }))
-  }
 }
 
 private struct CaptroStoryPresentationTestHost: View {

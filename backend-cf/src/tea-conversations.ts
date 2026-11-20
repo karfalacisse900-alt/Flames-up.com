@@ -139,13 +139,24 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
       const result = Array.isArray(value) ? decorated : decorated[0];
       return deps.authors ? deps.authors(c, result) : result;
     };
-    const write = ['create','edit','reply','follow','apply'].includes(action);
+    const write = ['create','edit','reply','follow','apply','interest','open'].includes(action);
     try {
       const limited = await deps.limit(c, write); if (limited) return limited;
       const viewer = await deps.viewer(c);
       if (write && !viewer) return c.json({ detail: 'Sign in to participate.', code: 'TEA_SIGN_IN' }, 401);
       const id = c.req.param('id');
       if (!['list','create','capabilities'].includes(action) && !uuid.test(id ?? '')) throw new DiscussionInputError('Invalid post.');
+      if (['interest','open','insights'].includes(action)) {
+        if (!viewer) return c.json({detail:'Sign in to participate.',code:'TEA_SIGN_IN'},401);
+        let choice = null;
+        if (action === 'interest') {
+          const raw = await c.req.json().catch(() => null);
+          if (!raw || Array.isArray(raw) || Object.keys(raw).length !== 1 || !('interest' in raw) ||
+              ![null,'interested','pass'].includes(raw.interest)) throw new DiscussionInputError('Choose interested, pass, or undo.');
+          choice = raw.interest;
+        }
+        return c.json(await deps.rpc(c,'captro_tea_private_signal',{p_actor:viewer,p_id:id,p_action:action,p_choice:choice}));
+      }
       if (action === 'capabilities') return c.json(await deps.rpc(c,'captro_tea_note_capabilities',{p_actor:viewer}));
       if (action === 'action') {
         const note = await authors(enrich(await deps.rpc(c,'captro_tea_read',{p_viewer:viewer,p_kind:'detail',p_id:id})));
@@ -223,6 +234,9 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
   }
   api.get('/tea/conversations/capabilities', deps.auth, (c: any) => handle(c,'capabilities'));
   api.get('/tea/conversations/:id/action', deps.optionalAuth, (c: any) => handle(c,'action'));
+  api.put('/tea/conversations/:id/interest', deps.auth, (c: any) => handle(c,'interest'));
+  api.post('/tea/conversations/:id/open', deps.auth, (c: any) => handle(c,'open'));
+  api.get('/tea/conversations/:id/insights', deps.auth, (c: any) => handle(c,'insights'));
   api.post('/tea/conversations/:id/applications', deps.auth, (c: any) => handle(c,'apply'));
   api.get('/tea/conversations/:id/applications', deps.auth, (c: any) => handle(c,'applications'));
   api.get('/tea/conversations', deps.optionalAuth, (c: any) => handle(c,'list'));

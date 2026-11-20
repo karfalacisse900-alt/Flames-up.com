@@ -55,6 +55,8 @@ private final class TeaReviewProtocol: URLProtocol {
   private static var conversations: [String: [String: Any]] = [:]
   private static var discussionReplies: [String: [[String: Any]]] = [:]
   private static var followsAuthor = false
+  private static var densityInstalled = false
+  private static var noteOpens: Set<String> = []
   private static var createdActivities: [[String: Any]] = []
   private var delivery: DispatchWorkItem?
 
@@ -313,7 +315,8 @@ private final class TeaReviewProtocol: URLProtocol {
         Self.conversations[id(103)]?["title"] = "Help test our next idea"
         Self.conversations[id(103)]?["primaryAction"] = ["kind":"external","label":"Join the test","url":"https://example.com/signup","state":"active"]
       }
-      if ProcessInfo.processInfo.arguments.contains("--tea-density-fixture") {
+      if ProcessInfo.processInfo.arguments.contains("--tea-density-fixture"), !Self.densityInstalled {
+        Self.densityInstalled = true
         let examples = [
           ("Nightlife NYC", "Where's everyone going tonight? Looking for a good vibe, music, and a chill crowd.", "Jalen Moore", "Brooklyn"),
           ("Photo Walk Sunday", "Anyone down for a photo walk this Sunday? Thinking 10 AM at Riverside Park.", "Mia Carter", "Manhattan"),
@@ -325,6 +328,10 @@ private final class TeaReviewProtocol: URLProtocol {
           Self.conversations[id(101 + index)] = ["id":id(101 + index),"title":e.0,"body":e.1,"links":[],"createdAt":ISO8601DateFormatter().string(from: Date().addingTimeInterval(-Double((index + 2) * 3600))),"version":1,"isAuthor":false,"following":false,"borough":e.3,"replyCount":[28,17,34,22,19][index],"author":["id":"artist", "name":e.2,"username":"fixture", "photoURL":"https://image-fixture.invalid/notes-\(index).jpg"]]
           if e.3.isEmpty { Self.conversations[id(101 + index)]?.removeValue(forKey: "borough") }
         }
+      }
+      if ProcessInfo.processInfo.arguments.contains("--tea-interest-owner") {
+        Self.conversations[id(101)]?["isAuthor"] = true
+        Self.conversations[id(101)]?["author"] = ["id":"tea-viewer","name":"Tea Fixture","username":"tea_fixture","photoURL":CaptroImageRecoveryFixtureProtocol.fallbackURL]
       }
       if path == "/tea/conversations/capabilities" { return (200,["canCreateForms":true]) }
       if path == "/tea/conversations" {
@@ -340,6 +347,15 @@ private final class TeaReviewProtocol: URLProtocol {
       let parts = path.split(separator: "/")
       guard parts.count >= 3, var post = Self.conversations[String(parts[2])] else { return (404, ["detail":"Unavailable"]) }
       let key = String(parts[2])
+      if parts.last == "interest" {
+        post["interest"] = body["interest"] ?? NSNull(); Self.conversations[key] = post
+        return (200,["interest":post["interest"]!])
+      }
+      if parts.last == "open" { if post["isAuthor"] as? Bool != true { Self.noteOpens.insert(key) }; return (200,["confirmed":true]) }
+      if parts.last == "insights" {
+        guard post["isAuthor"] as? Bool == true else { return (403,["detail":"Private Insights"]) }
+        return (200,["uniqueOpens":Self.noteOpens.contains(key) ? 1 : 0,"interested":post["interest"] as? String == "interested" ? 1 : 0,"replies":Self.discussionReplies[key]?.count ?? 0])
+      }
       if parts.last == "action" {
         let item: [String:Any] = ["id":"activity:" + id(5),"kind":"offer","name":"Weekend Pastry Offer","status":"active","color":"sky","timestamp":ISO8601DateFormatter().string(from:Date()),"destination":["source":"activity","id":id(5)]]
         return (200,["note":post,"listing":item])

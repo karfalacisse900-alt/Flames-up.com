@@ -25,6 +25,7 @@ struct CaptroTeaConversation: Codable, Identifiable, Hashable {
   var primaryAction: CaptroTeaNoteAction? = nil
   var applicationSubmitted: Bool? = nil
   var canManageApplications: Bool? = nil
+  var interest: String? = nil
 }
 
 struct CaptroTeaNoteAction: Codable, Hashable {
