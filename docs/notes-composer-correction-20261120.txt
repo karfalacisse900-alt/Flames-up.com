@@ -29,7 +29,9 @@ Exact passing tests:
 - TeaNoteTests/testPlainNoteAndOptionalActionComposer
 Original foreground simulator screenshots: artifacts/composer-review/review/. These use isolated DEBUG fixtures, not production posts. Physical-device and VoiceOver testing remain unverified.
 Visual review: Borough/Link/Action panels and inline purple sentence replies are visible in the running native app. iOS 26 renders its native rounded toolbar buttons; the source mockup has flatter toolbar controls. No exact pixel match or live-data screenshot is claimed.
-Release: 752.1 archive/upload started at https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44837272073. Availability not yet confirmed.
+Release: 1.0.1 (752.1) archive, authentication validation, IPA export, security compatibility, and upload passed: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44837272073.
+Apple availability confirmed at 6:54 PM America/New_York on November 20, 2026: VALID / IN_BETA_TESTING for internal groups Captro private and Captro private2. External state remains READY_FOR_BETA_SUBMISSION; external beta approval is not claimed. Evidence: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44840165216.
+Apple accepted the upload with the existing advisory that iOS 27 SDK will be required starting April 2027. This did not prevent processing or internal distribution.
 The existing exact-native-tree runtime deferral is used for missing larger-phone verification, under the user's standing instruction to finish TestFlight without more simulator cycles. Native tree: 8b079ca9fa67b7842197038717ce33209868bbb0. Archive, signing, authentication, and live-schema security checks remain required.
 
 Files changed
