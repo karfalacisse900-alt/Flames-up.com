@@ -1,0 +1,60 @@
+Captro Note inline replies — verification report
+Branch: feature/notes-inline-threads-20261120
+Native validated source: 9daa95c94f0a6fbe2b272280d9580a24bdb26dbe
+
+Implemented
+Existing Note details now mark replied-to excerpts with a thin purple underline and one superscript reply count per stored sentence. Repeated “replies to this line” and “Hide replies” links are removed. Tapping the marked text/count expands replies directly below the sentence; tapping again collapses it, and opening another sentence closes the first. All threads begin collapsed.
+
+Overlapping excerpts share a marker without duplicating replies. Each reply retains its original quote. Original Unicode-scalar anchors and caption versions are used; edited/removed source text remains identifiable as Earlier text. No matching by wrapped screen line or fuzzy quote matching.
+
+Reply bodies load only on expansion, five at a time with Load more. Existing caches, account scoping, access checks, request cancellation and stale-response guards are retained. General replies, drafts, native excerpt selection, bookmark, interest pill, engagement, profiles and link opening remain. The separate Note composer design was not changed.
+
+Validation
+Final native run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44802025700
+PASS on iPhone 17 and iPhone 13 mini: three unit tests and two UI tests on each phone, zero failures.
+Covered: overlapping and duplicate quote summaries; edited-caption isolation; 100 anchors initially collapsed with bounded requests; only one expanded thread; collapse/reopen; larger text; native selection of a shorter excerpt rather than the entire caption; clearing the reply target; retained bookmark/interest controls and draft state.
+An earlier UI assertion incorrectly searched only Button elements. The actual native edit action was visible as MenuItem; the corrected cross-version query passed on both phones.
+
+Backend: TypeScript and all 465 tests passed. Seven focused SQL/Hono tests cover grouped/overlapping replies, five-item pagination, cursor scoping, invalid bounds, historical and legacy targets, visibility, blocking and direct-RPC denial. An initial unbounded Windows run exhausted memory in three test processes; the bounded run and Linux release suite completed successfully.
+No new production test records or live charges were created.
+
+Screenshots
+Original, unmodified simulator captures, using isolated DEBUG Nightlife NYC fixtures:
+artifacts/inline-threads/review/nightlife-inline-collapsed.png
+artifacts/inline-threads/review/nightlife-inline-expanded.png
+artifacts/inline-threads/review/nightlife-inline-selected-excerpt.png
+artifacts/inline-threads/review/nightlife-inline-large-text.png
+artifacts/inline-threads/review/hundred-anchors-one-inline-thread.png
+The matching iPhone 13 mini files have a small- prefix in the same folder.
+
+Production and release
+Applied migration 20261120164319_tea_inline_sentence_threads. This replaces only the existing reply-read RPC; legacy exact-target/general queries remain compatible. Security invoker, service-role-only execution, visibility and moderation checks are preserved.
+Worker version: 9c0b1317-8863-4a9b-8bb6-ec0d6e3ac022, source 9daa95c94f0a6fbe2b272280d9580a24bdb26dbe.
+Deployment run 44806923932 uploaded the Worker, but its immediate metadata read returned the preceding source. Follow-up read-only run 44807447033 verified the exact new version/source at 100%, unchanged production bindings, typed public feeds and denial of unauthorized writes/private endpoints. No second deployment was performed.
+Configuration hash unchanged: 1301827a84a80cfca3d2dca6ee31e08e346a1d2a4125da2e603c849f2a21f33a.
+TestFlight archive/upload run: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44807565800
+TestFlight release: Captro 1.0.1 (749.1), uploaded successfully from source f56605cb3c71df9343e2a10b83c9daf92c493024 (native tree identical to the validated 9daa95c source).
+Availability confirmed 2026-11-20 20:25 UTC by status run 44811229458: upload COMPLETE, processing VALID, internal IN_BETA_TESTING, not expired. Assigned to Captro private and Captro private2, both internal groups with automatic distribution. External state is READY_FOR_BETA_SUBMISSION; no external-review approval is claimed.
+https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44811229458
+
+Limits and unchanged areas
+Physical-iPhone touch and VoiceOver acceptance remain untested. Accessibility count/expanded-state labels were checked through simulator UI automation. Load-more pagination was verified in backend tests; the visual fixture contains two replies. Home, root navigation, posting, payments, pricing, Support eligibility, ticketing, pickup and professional permissions were not changed.
+
+Exact changed files
+.github/workflows/deploy-worker.yml
+.github/workflows/tea-conversations-release.yml
+backend-cf/scripts/verify-tea-release.mjs
+backend-cf/scripts/verify-tea-schema.mjs
+backend-cf/src/tea-conversations.ts
+backend-cf/tests/tea-conversations.test.mjs
+ios_native/MIRA/LayoutUITests/TeaConversationTests.swift
+ios_native/MIRA/LayoutUITests/TeaInlineReplyTests.swift
+ios_native/MIRA/Sources/MIRANative/Models/CaptroTeaConversation.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift
+ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaSelectableText.swift
+ios_native/MIRA/Sources/MIRANative/Services/CaptroTeaConversationStore.swift
+ios_native/MIRA/Tests/MIRANativeTests/CaptroTeaInlineThreadTests.swift
+ios_native/MIRA/project.yml
+supabase/migrations/20261120164319_tea_inline_sentence_threads.sql
+docs/notes-inline-replies-review-20261120.txt
