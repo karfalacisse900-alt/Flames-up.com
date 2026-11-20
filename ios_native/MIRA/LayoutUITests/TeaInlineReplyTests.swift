@@ -19,7 +19,7 @@ final class TeaInlineReplyTests: XCTestCase {
     app.textViews.matching(NSPredicate(format:"identifier BEGINSWITH 'tea.sentence.' AND label BEGINSWITH %@",prefix)).firstMatch
   }
   private func tapExcerpt(_ element: XCUIElement) {
-    element.coordinate(withNormalizedOffset:CGVector(dx:0.55,dy:0.75)).tap()
+    element.coordinate(withNormalizedOffset:CGVector(dx:0.65,dy:0.25)).tap()
   }
   func testNightlifeCollapsedExpandedAndSelectionRetained() {
     let app = launch()
@@ -37,7 +37,7 @@ final class TeaInlineReplyTests: XCTestCase {
     XCTAssertFalse(app.staticTexts["Don’t ever"].exists)
     XCTAssertEqual(text.value as? String,"2 replies, collapsed")
     // Native selection remains available on the same underlined caption.
-    text.coordinate(withNormalizedOffset:CGVector(dx:0.55,dy:0.75)).press(forDuration:1.2)
+    text.coordinate(withNormalizedOffset:CGVector(dx:0.65,dy:0.25)).press(forDuration:1.2)
     let replyAction = app.buttons["Reply to this part"]
     XCTAssertTrue(replyAction.waitForExistence(timeout:5)); replyAction.tap()
     XCTAssertTrue(app.staticTexts["tea.reply.target"].waitForExistence(timeout:5))
