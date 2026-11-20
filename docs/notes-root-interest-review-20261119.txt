@@ -1,0 +1,99 @@
+Captro Notes root, private interest and Insights — review branch
+
+Branch: feature/notes-root-interest-20261119
+Status: implemented and native verification completed. Ready for screen review. No production deployment or TestFlight upload.
+Tested implementation: 0d58c4381f105811d97f67134566b33b66d85079.
+
+Implemented
+- Home / Notes / Me in the existing native tab container. Home remains the default.
+- Notes uses the existing Tea screen, data, filters, composer and activity routes. No root back arrow; detail back remains.
+- The Home Tea shortcut selects that same Notes tab instead of creating another cover/feed instance.
+- Removed the standalone Capture screen, its preview/chrome, exclusive geometry and obsolete tab tests. The shared capture service and camera permissions remain because Home post and Story creation use them.
+- Existing startup coordinator now owns the root API client throughout SwiftUI reconstruction.
+- Account-owned Notes list retains all successfully loaded pages; freshness (120 seconds) no longer expires displayable data after ten minutes.
+- Refresh revalidates the loaded range atomically, retains content on a failed refresh, deduplicates in-flight reads, and preserves the visible row. Account/access invalidation clears private presentation state and saved positions.
+- Retry repeats the failed operation: a failed refresh is retried as a refresh, rather than mistakenly loading the next page.
+- Author/profile reads no longer run automatically for every detail reopen. Replies use a freshness window; sentence threads refresh on demand, explicit refresh, or a changed count.
+- The split interest control has two independent 44-point targets, a small outline, no public counts, and a stacked fallback when metadata needs more width.
+- Feed and detail share the same private selection, with server-acknowledged changes, undo, serialized taps and retries of the original absolute intent.
+- Removed the author-header Follow plus. Profile following and discussion following remain separate working flows.
+- Author-only Insights report unique authenticated opens, current interested accounts and visible active replies. Row rendering never records an open. Author opens are excluded; repeated opens are unique by account.
+
+Backend changes, not deployed
+- Additive migration: supabase/migrations/20261120005350_tea_private_interest_insights.sql
+- Private app_tea_interest and app_tea_opens tables, RLS enabled, no direct anon/authenticated grants, indexed per Note and user, account-deletion cascade.
+- captro_tea_private_signal verifies canonical actor, active account, Note visibility, blocking and author ownership for Insights.
+- PUT /tea/conversations/:id/interest, POST /:id/open and GET /:id/insights reuse the existing authenticated Worker and rate limits.
+- Existing Note JSON adds only the current viewer's selection; no public aggregate opens or interest counts.
+- No changes to ranking, DMs, account follows, RSVPs, payment flags, fund routing or financial records.
+
+Verification results
+- 72 distinct relevant Tea, camera compatibility and historical receipt checks passed (71 in the first sweep plus the added account-removal case).
+- This includes all six new PostgreSQL/PGlite and HTTP private-signal tests. These six are a subset, not an additional six on top of 72.
+- Native validation run 44651816475 (source 352c896) passed on iPhone 13 mini and iPhone 17: 281 existing unit tests and five UI tests per device. The four Notes UI cases cover root navigation/interest undo/shared selection/draft preservation, author-only Insights and activity access, accessibility-size text, and a second-page row retaining its position across tab changes and background/foreground. The fifth case checks the ordinary media composer.
+- Expanded run 44652622310 (a87f829) passed 281 unit tests and all nine UI tests on iPhone 17. On iPhone 13 mini, 281 unit tests and eight UI cases passed; the pagination test flung past its target to rows 147–150 before it could perform the return-position assertions. The test now uses bounded drags and reverses direction after overshooting.
+- FINAL run 44658239783 on exact implementation 0d58c43 passed the corrected iPhone 13 mini pagination/tab/background UI test and all five new Notes state tests, with zero failures. Those five cover atomic paged refresh and request deduplication, later-page failure and Retry recovery, shared selection/undo/duplicate taps/stale reads, actual opens plus account-switch clearing, and uncertain-write retries. They are explicitly registered in project.yml and actually executed; they are additional to the 281 existing unit tests.
+- The nine UI cases cover the four Notes cases above, three existing Home composer cases, club creation preserving the paid choice, and an event opening the existing checkout. Isolated fixtures were used throughout. No live checkout was completed.
+- An intermediate Intel-runner build hit Swift's type-check time limit in the pre-existing divider assertion at LayoutUITests/TeaConversationTests.swift:96. The app and tests compile on the ARM runners used for the successful runs. This Intel test-harness limitation was not changed as part of the product work.
+- Screenshots under docs/evidence/notes-root-interest-20261119 are unmodified native simulator captures with isolated fixtures, not production posts. Both phone sizes include feed, reader details, author Insights, accessibility text, Clubs filter and second-page position.
+- Offline recovery is exercised with a controlled transport fixture, not a claim about measured real slow Wi-Fi or physical-device behavior. No real payments were made.
+
+Screenshot review
+Directory: docs/evidence/notes-root-interest-20261119.
+The feed screenshots show Interested selected on the first Note; the reader-detail screenshots were taken after undo. This is an intentional state difference in the test sequence, not a synchronization failure.
+The small-phone feed/details captures come from passing run 44651816475; larger-phone captures come from passing run 44652622310. Rendering is unchanged by the final Retry corrections. The small-phone preserved-page screenshot is from final run 44658239783.
+At ordinary text size the control sits beside metadata when it fits. On the small phone with longer metadata, and at accessibility text sizes, it moves to the next line. Each icon retains a separate 44-point target; the visible pill is 64 by 24 points. Titles and captions are not reduced to accommodate it.
+
+Remaining rollout work
+Review the running native screens first. Deploy the matching additive migration and Worker before distributing an app that uses the new private endpoints. Neither rollout nor upload has occurred in this task. Physical camera quality and real-device interruption behavior have not been tested here. The cache is account-owned memory: an actual OS process termination starts a genuinely uncached cold open. Shared camera services, camera/microphone permissions, Home/Story creation, Tea activity flows, profile following, discussion bookmarks and all payment rules remain intact.
+
+Changed files (A added, M modified, D removed)
+M	ios_native/MIRA/project.yml
+M	backend-cf/src/tea-conversations.ts
+M	backend-cf/tests/capture_assistant_guard.test.mjs
+M	backend-cf/tests/scan_verification.test.mjs
+A	backend-cf/tests/tea-private-signals.test.mjs
+D	ios_native/MIRA/LayoutUITests/CaptureCameraTests.swift
+M	ios_native/MIRA/LayoutUITests/DesignQualityTests.swift
+M	ios_native/MIRA/LayoutUITests/NativeConsistencyTests.swift
+A	ios_native/MIRA/LayoutUITests/NotesRootTests.swift
+M	ios_native/MIRA/LayoutUITests/TeaConversationTests.swift
+M	ios_native/MIRA/LayoutUITests/TeaTests.swift
+M	ios_native/MIRA/LayoutUITests/VoiceEntryTests.swift
+M	ios_native/MIRA/Sources/MIRANative/App/MIRANativeRootView.swift
+M	ios_native/MIRA/Sources/MIRANative/Components/CaptroFeedViewport.swift
+D	ios_native/MIRA/Sources/MIRANative/Components/CaptroStudioLayout.swift
+A	ios_native/MIRA/Sources/MIRANative/Components/CaptroTeaInterestControl.swift
+M	ios_native/MIRA/Sources/MIRANative/Models/CaptroTeaConversation.swift
+D	ios_native/MIRA/Sources/MIRANative/Screens/CaptroCameraNativeView.swift
+M	ios_native/MIRA/Sources/MIRANative/Screens/CaptroDesignQualityTestView.swift
+M	ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaConversationsView.swift
+M	ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaReviewHost.swift
+M	ios_native/MIRA/Sources/MIRANative/Screens/CaptroTeaView.swift
+M	ios_native/MIRA/Sources/MIRANative/Screens/MainFeedView.swift
+M	ios_native/MIRA/Sources/MIRANative/Services/CaptroTeaConversationStore.swift
+A	ios_native/MIRA/Sources/MIRANative/Services/CaptroTeaNotesState.swift
+M	ios_native/MIRA/Tests/MIRANativeTests/CaptroCameraCaptureTests.swift
+A	ios_native/MIRA/Tests/MIRANativeTests/CaptroTeaNotesStateTests.swift
+A	supabase/migrations/20261120005350_tea_private_interest_insights.sql
+
+Review artifacts added
+A	docs/notes-root-interest-review-20261119.txt
+A	docs/evidence/notes-root-interest-20261119/home-media-only-composer-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-author-private-insights-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-author-private-insights-small.png
+A	docs/evidence/notes-root-interest-20261119/notes-detail-large-text-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-detail-large-text-small.png
+A	docs/evidence/notes-root-interest-20261119/notes-existing-clubs-filter-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-existing-clubs-filter-small.png
+A	docs/evidence/notes-root-interest-20261119/notes-reader-detail-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-reader-detail-small.png
+A	docs/evidence/notes-root-interest-20261119/notes-root-feed-interest-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-root-feed-interest-small.png
+A	docs/evidence/notes-root-interest-20261119/notes-root-large-text-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-root-large-text-small.png
+A	docs/evidence/notes-root-interest-20261119/notes-second-page-preserved-large.png
+A	docs/evidence/notes-root-interest-20261119/notes-second-page-preserved-small.png
+A	docs/evidence/notes-root-interest-20261119/tea-create-club-large.png
+A	docs/evidence/notes-root-interest-20261119/tea-event-detail-large.png
+A	docs/evidence/notes-root-interest-20261119/tea-list-large.png
