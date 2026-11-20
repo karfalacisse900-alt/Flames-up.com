@@ -199,3 +199,26 @@ test('read endpoints: canonical actor, server timer, visibility rechecked at qua
     assert.equal((await req('other','read-qualify',{token:lease.token})).status,400,'cannot qualify another account lease');
   }finally{await db.close();}
 });
+
+test('counts are scoped per Note and batched without exposing private components or helper access',async()=>{
+  const {db,rpc,signal}=await setup();try {
+    await db.exec(`reset role; insert into app_tea_conversations(id,author_id,title,body) values
+      ('${id(2)}','author','Second Note','Second caption.'),('${id(3)}','reader','Reader owns this','Third caption.'); set role service_role;`);
+    await signal('reader','interest','interested',id(1)); await signal('reader','interest','interested',id(2));
+    await signal('reader','interest','interested',id(3));
+    const readPage=()=>rpc('captro_tea_read',{p_viewer:'other',p_kind:'list'});
+    const page=await readPage();
+    const counts=Object.fromEntries(page.map(p=>[p.id,p.engagementCount]));
+    assert.deepEqual(counts,{[id(1)]:1,[id(2)]:1,[id(3)]:0});
+    await signal('reader','interest',null,id(2));
+    assert.equal((await readPage()).find(p=>p.id===id(1)).engagementCount,1);
+    assert.equal((await readPage()).find(p=>p.id===id(2)).engagementCount,0);
+    const permissions=await db.query(`select proname,has_function_privilege('anon',oid,'execute') a,
+      has_function_privilege('authenticated',oid,'execute') u from pg_proc
+      where proname in ('captro_tea_engagement','captro_tea_engaged_people','captro_tea_private_signal')`);
+    assert.equal(permissions.rows.length,3);
+    assert.ok(permissions.rows.every(r=>!r.a&&!r.u));
+    const tables=await db.query("select relrowsecurity from pg_class where relname in ('app_tea_qualified_reads','app_tea_read_sessions')");
+    assert.ok(tables.rows.every(r=>r.relrowsecurity));
+  }finally{await db.close();}
+});

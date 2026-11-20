@@ -115,7 +115,7 @@ final class NotesRootTests: XCTestCase {
     app.activate()
     XCTAssertFalse(app.staticTexts["tea.engagement."+note].exists)
     XCTAssertTrue(app.staticTexts["tea.engagement."+note].waitForExistence(timeout:9))
-    XCTAssertEqual(app.staticTexts["tea.engagement."+note].label,"1 people engaged")
+    XCTAssertEqual(app.staticTexts["tea.engagement."+note].label,"1 person engaged")
   }
   func testSecondPagePositionSurvivesTabsAndBackground() {
     let app = launch(["--tea-pages-fixture"])

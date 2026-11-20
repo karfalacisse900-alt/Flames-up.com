@@ -63,7 +63,7 @@ struct CaptroTeaEngagementLabel: View {
     if let count = model.engagementCount, count > 0 {
       Text("\(count) engaged").miraText(.metadata).foregroundStyle(MIRATheme.Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
-        .accessibilityLabel("\(count) people engaged")
+        .accessibilityLabel("\(count) \(count == 1 ? "person" : "people") engaged")
         .accessibilityIdentifier("tea.engagement." + model.id)
     }
   }

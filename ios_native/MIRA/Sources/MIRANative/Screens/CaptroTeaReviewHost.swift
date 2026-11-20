@@ -351,7 +351,10 @@ private final class TeaReviewProtocol: URLProtocol {
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
         return ["engagementCount":seeded + (qualifies ? 1 : 0),"engagementUpdatedAt":formatter.string(from:Date())]
       }
-      for key in Array(Self.conversations.keys) { Self.conversations[key]?.merge(engagement(key)) { _,new in new } }
+      for key in Array(Self.conversations.keys) {
+        let fields = engagement(key)
+        Self.conversations[key]?.merge(fields) { _,new in new }
+      }
       if path == "/tea/conversations/capabilities" { return (200,["canCreateForms":true]) }
       if path == "/tea/conversations" {
         Task { @MainActor in TeaReviewMetrics.shared.counts[0, default: 0] += 1 }
