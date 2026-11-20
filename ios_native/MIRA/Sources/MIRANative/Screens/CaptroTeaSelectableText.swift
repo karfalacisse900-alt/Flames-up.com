@@ -41,6 +41,7 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     view.delegate = context.coordinator
     let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
     tap.cancelsTouchesInView = false
+    tap.delegate = context.coordinator
     view.addGestureRecognizer(tap)
     return view
   }
@@ -83,9 +84,10 @@ struct CaptroTeaSelectableText: UIViewRepresentable {
     guard let width = proposal.width, width > 0 else { return nil }
     return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
   }
-  final class Coordinator: NSObject, UITextViewDelegate {
+  final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
     var parent: CaptroTeaSelectableText
     init(_ parent: CaptroTeaSelectableText) { self.parent = parent }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool { true }
     @objc func tap(_ gesture: UITapGestureRecognizer) {
       guard let view = gesture.view as? UITextView, view.selectedRange.length == 0 else { return }
       let point = gesture.location(in: view)
