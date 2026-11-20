@@ -64,4 +64,62 @@ final class TeaNoteTests: XCTestCase {
     XCTAssertFalse(app.buttons["tea.action.done"].isEnabled)
     shot("notes-invalid-link",app)
   }
+  func testInlineComposerPanelsPreserveDraftAndSave() {
+    let app = launch()
+    app.buttons["tea.compose"].tap()
+    let title = field("tea.compose.title", app)
+    XCTAssertTrue(title.waitForExistence(timeout: 8)); title.tap(); title.typeText("Nightlife NYC")
+    let body = field("tea.compose.body", app)
+    body.tap(); body.typeText("Where’s everyone going tonight?")
+    app.buttons["tea.compose.borough"].tap()
+    app.buttons["tea.compose.borough.Bronx"].tap()
+    shot("new-note-inline-borough", app)
+    app.buttons["tea.compose.link"].tap()
+    let link = app.textFields["tea.compose.link.new"]
+    XCTAssertTrue(link.waitForExistence(timeout: 5))
+    shot("new-note-inline-link", app)
+    link.tap(); link.typeText("https://example.com/signup")
+    app.buttons["tea.compose.link.add"].tap()
+    app.buttons["tea.compose.action"].tap()
+    XCTAssertFalse(app.navigationBars["Note action"].exists, "Action stays inside New Note")
+    let label = app.textFields["tea.action.label"]
+    XCTAssertTrue(label.waitForExistence(timeout: 5))
+    shot("new-note-inline-action", app)
+    label.tap(); label.typeText("Join the test")
+    let url = app.textFields["tea.action.url"]
+    url.tap(); url.typeText("https://example.com/apply")
+    app.buttons["tea.compose.borough"].tap()
+    XCTAssertTrue(app.buttons["tea.compose.borough.Bronx"].isSelected)
+    app.buttons["tea.compose.action"].tap()
+    XCTAssertEqual(app.textFields["tea.action.label"].value as? String, "Join the test")
+    XCTAssertEqual(app.textFields["tea.action.url"].value as? String, "https://example.com/apply")
+    let done = app.buttons["tea.action.done"]
+    for _ in 0..<3 { if done.isHittable { break }; app.swipeUp() }
+    done.tap()
+    app.buttons["tea.compose.save"].tap()
+    XCTAssertTrue(app.buttons["tea.detail.back"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["Nightlife NYC"].exists)
+    XCTAssertTrue(app.staticTexts["Where’s everyone going tonight?"].exists)
+    XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Join the test")).firstMatch.exists)
+  }
+  func testInlineComposerLargeText() {
+    let app = launch(largeText: true)
+    app.buttons["tea.compose"].tap()
+    let title = field("tea.compose.title", app)
+    XCTAssertTrue(title.waitForExistence(timeout: 8))
+    title.tap(); title.typeText("A longer neighborhood Note title")
+    let body = field("tea.compose.body", app)
+    body.tap(); body.typeText("Where should we meet this weekend?")
+    let borough = app.buttons["tea.compose.borough"]
+    for _ in 0..<3 { if borough.isHittable { break }; app.swipeUp() }
+    borough.tap()
+    let staten = app.buttons["tea.compose.borough.Staten Island"]
+    for _ in 0..<3 { if staten.isHittable { break }; app.swipeUp() }
+    XCTAssertTrue(staten.isHittable)
+    XCTAssertLessThanOrEqual(staten.frame.maxX, app.frame.maxX)
+    staten.tap()
+    shot("new-note-inline-large-text", app)
+    XCTAssertTrue(app.buttons["tea.compose.save"].isEnabled)
+  }
+
 }

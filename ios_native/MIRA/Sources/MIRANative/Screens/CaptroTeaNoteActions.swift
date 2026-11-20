@@ -104,11 +104,59 @@ struct CaptroTeaNoteDestinationView: View {
   @State private var capabilityError: String?
   @State private var chosenListing: String?
   private let existingForm: Bool
-  init(api: MIRAAPIClient, action: CaptroTeaNoteAction?, save: @escaping (CaptroTeaNoteAction?) -> Void) {
-    self.api = api; self.save = save; existingForm = action?.kind == "application"
+  private let embedded: Bool
+  private let draftChanged: ((CaptroTeaNoteAction) -> Void)?
+  init(api: MIRAAPIClient, action: CaptroTeaNoteAction?, embedded: Bool = false, draftChanged: ((CaptroTeaNoteAction) -> Void)? = nil, save: @escaping (CaptroTeaNoteAction?) -> Void) {
+    self.api = api; self.save = save; self.embedded = embedded; self.draftChanged = draftChanged; existingForm = action?.kind == "application"
     _action = State(initialValue: action?.input ?? CaptroTeaNoteAction(kind: "external", label: "Open link", url: ""))
   }
   var body: some View {
+    Group {
+      if embedded { inlineFields }
+      else { standaloneEditor }
+    }
+    .onChange(of: action.kind) { _, kind in changeKind(kind) }
+    .onChange(of: action) { _, value in draftChanged?(value.input) }
+    .task { await loadCapabilities() }
+  }
+  private var inlineFields: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Menu {
+        Button("External link") { action.kind = "external" }
+        Button("Captro listing") { action.kind = "listing" }
+        if allowedForms || existingForm { Button("Application form") { action.kind = "application" } }
+      } label: {
+        HStack {
+          Text(action.kind == "application" ? "Application form" : action.kind == "listing" ? "Captro listing" : "External link")
+          Spacer(minLength: 8)
+          Image(systemName: "chevron.down")
+        }.font(.subheadline).foregroundStyle(MIRATheme.Color.textPrimary)
+          .padding(.horizontal, 12).frame(minHeight: 40)
+          .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroTeaStyle.separator, lineWidth: 1))
+      }.accessibilityIdentifier("tea.action.kind")
+      TextField("Button label", text: $action.label).teaComposerField(url: false).accessibilityIdentifier("tea.action.label")
+      if action.kind == "external" {
+        TextField("https://", text: Binding(get: { action.url ?? "" }, set: { action.url = $0 }))
+          .teaComposerField().accessibilityIdentifier("tea.action.url")
+      } else if action.kind == "listing" {
+        NavigationLink(chosenListing ?? (action.listingId == nil ? "Choose existing listing" : "Change linked listing")) {
+          CaptroTeaNoteListingPicker(api: api) { entry in action.listingId = entry.destination.id; action.listingSource = entry.destination.source; chosenListing = entry.name }
+        }.frame(minHeight: 44).accessibilityIdentifier("tea.action.listing")
+      } else {
+        Toggle("Ask for height (optional)", isOn: Binding(get: { action.heightRequested ?? false }, set: { action.heightRequested = $0 })).disabled(!allowedForms)
+        Toggle("Accepting applications", isOn: Binding(get: { action.accepting ?? true }, set: { action.accepting = $0 }))
+        Text("Full name, availability, and optional portfolio link. Applications are private and only you can read them.")
+          .font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary)
+      }
+      if let capabilityError { Text(capabilityError).font(.footnote).foregroundStyle(MIRATheme.Color.textSecondary) }
+      HStack {
+        Button("Done") { save(action.input) }.disabled(!action.valid).frame(minHeight: 44).accessibilityIdentifier("tea.action.done")
+        Spacer()
+        Button("Remove action", role: .destructive) { save(nil) }.font(.footnote).frame(minHeight: 44)
+      }
+    }
+  }
+  private var standaloneEditor: some View {
     NavigationStack {
       Form {
         actionSection
@@ -123,8 +171,6 @@ struct CaptroTeaNoteDestinationView: View {
           ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
           ToolbarItem(placement: .confirmationAction) { Button("Done") { save(action.input); dismiss() }.disabled(!action.valid).accessibilityIdentifier("tea.action.done") }
         }
-        .onChange(of: action.kind) { _, kind in changeKind(kind) }
-        .task { await loadCapabilities() }
     }
   }
   private var actionSection: some View {
@@ -305,4 +351,18 @@ struct CaptroTeaNoteDestinationView: View {
       self.error = CaptroRefreshFailure.message(error, content: "applications", cached: !rows.isEmpty)
     }
   }
+}
+
+/// Compact, flat fields shared by the existing Note composer and its inline action editor.
+private struct TeaComposerField: ViewModifier {
+  let url: Bool
+  func body(content: Content) -> some View {
+    content.font(.subheadline).keyboardType(url ? .URL : .default)
+      .textInputAutocapitalization(url ? .never : .sentences).autocorrectionDisabled(url)
+      .padding(.horizontal, 12).frame(minHeight: 40)
+      .overlay(RoundedRectangle(cornerRadius: 8).stroke(CaptroTeaStyle.separator, lineWidth: 1))
+  }
+}
+extension View {
+  func teaComposerField(url: Bool = true) -> some View { modifier(TeaComposerField(url: url)) }
 }
