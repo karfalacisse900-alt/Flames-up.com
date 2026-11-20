@@ -35,7 +35,7 @@ import XCTest
     XCTAssertEqual(model.items.map(\.id), (1...40).map(String.init)); XCTAssertEqual(model.nextCursor, "old40")
     XCTAssertNotNil(model.error)
     NotesStateProtocol.setFailure(false)
-    await model.load(reset: true, force: true)
+    await model.retry()
     XCTAssertNil(model.error); XCTAssertTrue(model.items.contains { $0.id == "40" })
   }
   func testInterestUndoSharedStateNoDuplicateTapsAndStaleReadCannotOverwriteWrite() async throws {

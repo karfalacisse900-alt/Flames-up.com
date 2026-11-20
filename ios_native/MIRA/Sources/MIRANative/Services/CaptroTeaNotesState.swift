@@ -14,6 +14,7 @@ import Foundation
   private var scope: String
   private var flight: Task<Void, Never>?
   private var flightID: UUID?
+  private var failedReset = true
   static let freshness: TimeInterval = 120
 
   init(api: MIRAAPIClient, cached: CaptroTeaConversationStore.Listing?) {
@@ -36,6 +37,7 @@ import Foundation
     guard scope == api.presentationScope, let receivedAt else { return }
     api.teaConversations.saveListing(items, cursor: nextCursor, receivedAt: receivedAt)
   }
+  func retry() async { await load(reset: failedReset, force: true) }
   func load(reset: Bool, force: Bool = false) async {
     if scope != api.presentationScope { clear() }
     if let flight { await flight.value; return }
@@ -78,6 +80,7 @@ import Foundation
       } catch {
         guard flightID == token, owner == api.presentationScope, revision == expectedRevision,
               !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
+        failedReset = reset
         if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }
         if case MIRAAPIError.server(let status, _, _) = error, [401,403,410].contains(status) {
           items = []; nextCursor = nil; receivedAt = Date(); loaded = false

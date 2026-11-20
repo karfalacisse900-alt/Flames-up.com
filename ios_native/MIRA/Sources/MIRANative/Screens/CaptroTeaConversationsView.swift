@@ -92,7 +92,7 @@ struct CaptroTeaConversationsList: View {
       if let error = model.error {
         VStack(alignment: .leading) {
           Text(error).font(.subheadline).foregroundStyle(MIRATheme.Color.textSecondary)
-          Button("Retry") { Task { await model.load(reset: model.nextCursor == nil, force: true) } }.frame(minHeight: 44)
+          Button("Retry") { Task { await model.retry() } }.frame(minHeight: 44)
         }.listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
       } else if model.nextCursor != nil {
         ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden).listRowBackground(MIRATheme.Color.appBackground)
