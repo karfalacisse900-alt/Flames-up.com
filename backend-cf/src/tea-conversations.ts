@@ -223,7 +223,7 @@ export function mountTeaConversations(api: any, deps: Dependencies) {
         ['TEA_NOTE_FORM_APPROVAL_REQUIRED',403,'An approved, active Creator or Business account is required to create a form. You can add an external form link instead.'],
         ['TEA_NOTE_FORM_CLOSED',409,'This form is no longer accepting applications.'],
         ['TEA_NOTE_INVALID',400,'Check the Note or application fields.'],
-        ['TEA_DISCUSSION_FORBIDDEN',403,'You cannot change this post.'],
+        ['TEA_DISCUSSION_FORBIDDEN',403,action === 'insights' ? 'Only the author can view Note Insights.' : 'You cannot change this post.'],
         ['TEA_DISCUSSION_UNAVAILABLE',404,'This post is no longer available.'],
         ['TEA_DISCUSSION_CONFLICT',409,'This post changed. Refresh before trying again.'],
       ] as const) if (message.includes(code)) return c.json({ code, detail },status);

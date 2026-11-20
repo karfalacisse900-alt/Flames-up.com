@@ -71,6 +71,17 @@ import XCTest
     XCTAssertTrue(list.items.isEmpty); XCTAssertNil(signal.interest); XCTAssertFalse(signal.valid)
     XCTAssertEqual(detail.draft,""); XCTAssertNil(detail.post)
   }
+  func testUncertainInterestRetryRepeatsAbsoluteIntentInsteadOfTogglingTwice() async throws {
+    let (api,session) = client(); defer { session.invalidateAndCancel() }
+    let signal = api.teaConversations.signal(for:NotesStateProtocol.note(1))
+    NotesStateProtocol.loseNextAcknowledgment()
+    await signal.choose("interested")
+    XCTAssertNil(signal.interest); XCTAssertNotNil(signal.error)
+    await signal.choose("interested")
+    XCTAssertEqual(signal.interest,"interested"); XCTAssertNil(signal.error)
+    XCTAssertEqual(NotesStateProtocol.counts().choices,["interested","interested"])
+    await signal.choose("interested"); XCTAssertNil(signal.interest)
+  }
 }
 
 private final class NotesStateProtocol: URLProtocol, @unchecked Sendable {
@@ -78,8 +89,10 @@ private final class NotesStateProtocol: URLProtocol, @unchecked Sendable {
   private static let lock=NSLock()
   private static var state=Counts()
   private static var fail=false
+  private static var loseAcknowledgment=false
   private var delivery: DispatchWorkItem?
-  static func reset() { lock.withLock { state=Counts(); fail=false } }
+  static func reset() { lock.withLock { state=Counts(); fail=false; loseAcknowledgment=false } }
+  static func loseNextAcknowledgment() { lock.withLock { loseAcknowledgment=true } }
   static func counts() -> Counts { lock.withLock { state } }
   static func setFailure(_ value:Bool) { lock.withLock { fail=value } }
   static func note(_ number:Int) -> CaptroTeaConversation {
@@ -101,6 +114,9 @@ private final class NotesStateProtocol: URLProtocol, @unchecked Sendable {
       let choice=value["interest"] as? String
       Self.lock.withLock { Self.state.writes+=1; Self.state.choices.append(choice ?? "null") }
       data=try! JSONSerialization.data(withJSONObject:["interest":choice as Any? ?? NSNull()])
+      if Self.lock.withLock({ let lose=Self.loseAcknowledgment; Self.loseAcknowledgment=false; return lose }) {
+        status=503; data=Data(#"{"detail":"Lost acknowledgment"}"#.utf8)
+      }
     } else if path.hasSuffix("/open") {
       Self.lock.withLock { Self.state.opens+=1 }; data=Data(#"{"confirmed":true}"#.utf8)
     } else {

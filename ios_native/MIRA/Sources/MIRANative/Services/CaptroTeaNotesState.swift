@@ -65,8 +65,12 @@ import Foundation
         }
         guard flightID == token, owner == api.presentationScope, revision == expectedRevision, !Task.isCancelled else { return }
         var seen = Set(reset ? [] : items.map(\.id))
-        let unique = refreshed.filter { seen.insert($0.id).inserted }
-        if reset { api.teaConversations.listViewport.preserveForContentRefresh() }
+        let existing = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let unique = refreshed.filter { seen.insert($0.id).inserted }.map { incoming in
+          if let current = existing[incoming.id], current.version > incoming.version { return current }
+          return incoming
+        }
+        if reset { api.teaConversations.listViewport.preserveForContentRefresh(survivingIDs: Set(unique.map(\.id))) }
         items = reset ? unique : items + unique
         nextCursor = page.nextCursor; receivedAt = Date(); loaded = true
         for post in unique { api.teaConversations.signal(for: post).hydrate(post.interest, readStartedAt: started) }
@@ -75,6 +79,10 @@ import Foundation
         guard flightID == token, owner == api.presentationScope, revision == expectedRevision,
               !Task.isCancelled, !CaptroRefreshFailure.isCancellation(error) else { return }
         if case MIRAAPIError.server(400, "TEA_DISCUSSION_INVALID", _) = error { nextCursor = nil; receivedAt = nil }
+        if case MIRAAPIError.server(let status, _, _) = error, [401,403,410].contains(status) {
+          items = []; nextCursor = nil; receivedAt = Date(); loaded = false
+          save()
+        }
         self.error = CaptroRefreshFailure.message(error, content: "Notes", cached: !items.isEmpty)
       }
     }

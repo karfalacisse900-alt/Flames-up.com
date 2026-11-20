@@ -226,10 +226,12 @@ final class CaptroFeedViewport: NSObject, ObservableObject {
 
   /// Notes refreshes replace a complete loaded range atomically. Preserve the
   /// visible row when newer rows were inserted above it; never fight a gesture.
-  func preserveForContentRefresh() {
+  func preserveForContentRefresh(survivingIDs: Set<String>) {
     guard !isAtTopAndIdle else { return }
     sample()
-    if let anchor = snapshots[scope] { requestRestoration(anchor, reason: "notes_refresh") }
+    if let anchor = snapshots[scope], survivingIDs.contains(anchor.id) {
+      requestRestoration(anchor, reason: "notes_refresh")
+    }
   }
   func clearSavedPositions() {
     setActive(false)
