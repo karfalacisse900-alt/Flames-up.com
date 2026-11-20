@@ -154,6 +154,8 @@ test('unique union: feed plus, line replies, overlapping actions, undo, moderati
     await reply('reader',20,target); await reply('reader',20,target); await reply('reader',21);
     assert.equal((await read('other')).engagementCount,1);
     assert.equal((await signal('author','insights')).uniqueRepliers,1);
+    await db.exec("reset role; update app_users set is_private=true where id='reader'; set role service_role;");
+    assert.equal((await read('other')).engagementCount,1,'an active reply from a private account still qualifies without revealing identity');
     assert.equal((await signal('reader','interest','pass')).engagementCount,1);
     await db.exec(`update app_tea_replies set status='removed' where id='${id(20)}'`);
     assert.equal((await read('reader')).engagementCount,1);

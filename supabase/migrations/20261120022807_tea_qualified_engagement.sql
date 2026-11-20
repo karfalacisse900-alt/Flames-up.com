@@ -34,7 +34,8 @@ language sql stable security invoker set search_path='' as $$
     select i.user_id,'plus' from public.app_tea_interest i where i.conversation_id=p.id and i.choice='interested'
     union all
     select r.author_id,'reply' from public.app_tea_replies r where r.conversation_id=p.id and r.status='active'
-      and public.captro_tea_author_visible(p.author_id,r.author_id)
+    -- Visibility here is the reply's moderation status, not the viewer's
+    -- follow graph. Private accounts can engage too; no identity is exposed.
   ) a join public.app_users u on u.id=a.user_id
   where a.user_id<>p.author_id and coalesce(u.metadata->>'status','active')='active'
   group by a.user_id
