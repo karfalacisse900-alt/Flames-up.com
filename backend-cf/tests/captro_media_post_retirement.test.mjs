@@ -53,8 +53,10 @@ test('media-first composer, Details chrome, and lower Favorites placement do not
   favoritePlacement(read('Screens/CaptroFeedMediaPager.swift'));
   const root = read('App/MIRANativeRootView.swift');
   assert.match(root, /configureWithOpaqueBackground/);
-  assert.match(root, /tint\(selectedTab == \.scan && cameraDarkChrome \? Color.white : MIRATheme.Color.textPrimary\)/);
-  assert.match(root, /toolbarBackground\(selectedTab == \.scan && cameraDarkChrome \? Color.black : MIRATheme.Color.surface, for: \.tabBar\)/);
+  // Home / Notes / Me use the shared surface; Capture is no longer a root tab.
+  assert.match(root, /tint\(MIRATheme.Color.textPrimary\)/);
+  assert.match(root, /toolbarBackground\(MIRATheme.Color.surface, for: \.tabBar\)/);
+  assert.doesNotMatch(root, /cameraDarkChrome/);
 });
 test('Story asynchronous results and playback are owned by the selected stable identity', () => {
   const story = read('Screens/DiscoverNativeView.swift');
