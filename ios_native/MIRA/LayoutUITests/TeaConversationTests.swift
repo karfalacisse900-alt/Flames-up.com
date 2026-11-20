@@ -93,8 +93,12 @@ final class TeaConversationTests: XCTestCase {
     separatorContext.draw(strip, in: CGRect(x: 0, y: 0, width: 1, height: CGFloat(bandHeight)))
     // Half-point lines are antialiased differently on the two display scales.
     // Accept the visible gray raster while rejecting an absent (white) divider.
-    let hasDivider = stride(from: 0, to: separator.count, by: 4).contains { i in
-      (195...242).contains(Int(separator[i])) && separator[i] == separator[i + 1] && separator[i + 1] == separator[i + 2]
+    var hasDivider = false
+    for i in stride(from: 0, to: separator.count, by: 4) {
+      let red = Int(separator[i])
+      let green = Int(separator[i + 1])
+      let blue = Int(separator[i + 2])
+      if red >= 195 && red <= 242 && red == green && green == blue { hasDivider = true; break }
     }
     XCTAssertTrue(hasDivider, "Tea rows need a visible fine divider; got \(separator)")
     let rendered = NSPredicate { _, _ in
