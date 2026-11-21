@@ -14,5 +14,6 @@ Validation
 git diff --check passed. No simulator run or screenshots were produced, per the user's final instruction. Small-phone, large-text, and same-real-Notes visual verification are therefore not claimed. Native Release compilation, signing, authentication and schema compatibility are checked by the TestFlight workflow.
 
 Release
-756.1 pending: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44846497078
+1.0.1 (756.1): native Release archive, signing, authentication, export, live security compatibility and upload passed: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44846497078
+Apple confirmed VALID / IN_BETA_TESTING for Captro private and Captro private2 at 8:15 PM America/New_York, November 20, 2026. External beta submission remains separate. Evidence: https://github.com/karfalacisse900-alt/Flames-up.com/actions/runs/44849012888
 The existing exact-tree runtime deferral is used under the user's explicit instruction to skip simulators and update TestFlight. Native tree: 2c1bcfc09bd310b7af5ee672d0943727dada7b2f.
