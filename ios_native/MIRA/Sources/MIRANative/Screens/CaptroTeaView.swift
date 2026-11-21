@@ -250,22 +250,14 @@ enum CaptroTeaPalette: String {
 
   private var listContent: some View {
       VStack(spacing: 0) {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 6) {
-            ForEach(["All", "Following", "Clubs", "Events", "Nearby"], id: \.self) { item in
-              Button { selectFilter(item) } label: {
-                Text(item).font(.system(size: filterSize, weight: filter == item ? .semibold : .regular))
-                  .foregroundStyle(filter == item ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary)
-                  .padding(.horizontal, 12).padding(.vertical, 7)
-                  .background(filter == item ? CaptroTeaStyle.accent.opacity(0.13) : MIRATheme.Color.surfaceSoft, in: Capsule())
-                  .frame(minHeight: 44)
-              }.buttonStyle(.plain).accessibilityAddTraits(filter == item ? .isSelected : [])
-                .accessibilityIdentifier("tea.filter." + item.lowercased())
-            }
-          }.padding(.horizontal, 16)
-        }.padding(.vertical, 8)
+        ViewThatFits(in: .horizontal) {
+          filterTabs(expanded: true)
+          ScrollView(.horizontal, showsIndicators: false) { filterTabs(expanded: false) }
+        }
+        MIRAHairline(color: CaptroTeaStyle.separator)
+        if section != "Conversations" {
         HStack {
-          Text(section == "Conversations" ? "Notes" : city.isEmpty ? "Clubs & Events" : "Activities in " + city)
+          Text(city.isEmpty ? "Clubs & Events" : "Activities in " + city)
             .font(.caption).foregroundStyle(.secondary)
           Spacer()
           if section != "Conversations", !city.isEmpty { Button("Change city") { cityDraft = city; choosingCity = true }.font(.caption).frame(minHeight: 44) }
@@ -274,7 +266,7 @@ enum CaptroTeaPalette: String {
               .font(.caption).frame(minHeight: 44).accessibilityIdentifier("tea.activities")
           }
         }.padding(.horizontal, 16).padding(.bottom, 4)
-        Rectangle().fill(CaptroTeaStyle.separator).frame(height: 1).accessibilityHidden(true)
+        }
         ZStack {
           activityList
       CaptroTeaConversationsList(api: api, active: isActive && path.isEmpty && section == "Conversations", viewerID: viewerID, signIn: signIn, created: created) { post in
@@ -296,6 +288,25 @@ enum CaptroTeaPalette: String {
         }
       }
       #endif
+  }
+
+  private func filterTabs(expanded: Bool) -> some View {
+    HStack(spacing: 0) {
+      ForEach(["All", "Following", "Clubs", "Events", "Nearby"], id: \.self) { item in
+        Button { selectFilter(item) } label: {
+          Text(item).font(.system(size: filterSize, weight: filter == item ? .semibold : .regular))
+            .foregroundStyle(filter == item ? CaptroTeaStyle.accent : MIRATheme.Color.textPrimary)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 8).padding(.vertical, 10)
+            .frame(maxWidth: expanded ? .infinity : nil, minHeight: 44)
+            .overlay(alignment: .bottom) {
+              if filter == item { Rectangle().fill(CaptroTeaStyle.accent).frame(width: 24, height: 2).accessibilityHidden(true) }
+            }
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityAddTraits(filter == item ? .isSelected : [])
+          .accessibilityIdentifier("tea.filter." + item.lowercased())
+      }
+    }.padding(.horizontal, 12)
   }
 
   private var activityList: some View {

@@ -29,6 +29,7 @@ struct CaptroTeaNoteDestinationView: View {
   let viewerID: String?
   let signIn: () -> Void
   var coverChanged: (Bool) -> Void = { _ in }
+  var compactFeed = false
   let navigate: (CaptroTeaNoteDestination) -> Void
   @State private var busy = false
   @State private var error: String?
@@ -40,15 +41,15 @@ struct CaptroTeaNoteDestinationView: View {
       if let action = note.primaryAction {
         Button { Task { await open() } } label: {
           HStack(spacing: 6) {
-            Text(note.applicationSubmitted == true && action.kind == "application" ? "Application submitted" : checkedState ?? action.statusLabel)
+            Text(note.applicationSubmitted == true && action.kind == "application" ? "Application submitted" : checkedState ?? feedLabel(action))
               .font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
             if busy { ProgressView().controlSize(.small) }
             else { Image(systemName: action.kind == "external" ? "arrow.up.right" : "chevron.right").font(.caption) }
-          }.frame(minHeight: 44).contentShape(Rectangle())
+          }.frame(minHeight: compactFeed ? 32 : 44).contentShape(Rectangle())
         }.buttonStyle(.plain).foregroundStyle(CaptroTeaStyle.accent).disabled(busy)
           .accessibilityIdentifier("tea.note.action." + note.id)
           .accessibilityLabel((note.applicationSubmitted == true ? "Application submitted" : action.statusLabel) + (action.url.flatMap(CaptroTeaLink.init).map { ", " + $0.hostname } ?? ""))
-        if let link = action.url.flatMap(CaptroTeaLink.init) { Text(link.hostname).font(.caption).foregroundStyle(.secondary) }
+        if !compactFeed, let link = action.url.flatMap(CaptroTeaLink.init) { Text(link.hostname).font(.caption).foregroundStyle(.secondary) }
       }
       if note.canManageApplications == true {
         Button("View applications") { applications = true }.font(.subheadline).frame(minHeight: 44)
@@ -60,6 +61,12 @@ struct CaptroTeaNoteDestinationView: View {
     .sheet(isPresented: $applications) { CaptroTeaApplicationsView(note: note, api: api) }
     .onChange(of: form != nil || applications) { _, covered in coverChanged(covered) }
     .onChange(of: note.primaryAction) { _, _ in checkedState = nil }
+  }
+  private func feedLabel(_ action: CaptroTeaNoteAction) -> String {
+    if compactFeed, action.kind == "external", action.state == nil || action.state == "active",
+       action.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "open link",
+       let link = action.url.flatMap(CaptroTeaLink.init) { return link.hostname }
+    return action.statusLabel
   }
   private func open() async {
     guard !busy else { return }

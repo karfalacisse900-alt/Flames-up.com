@@ -79,10 +79,11 @@ struct CaptroTeaConversationsList: View {
           CaptroTeaConversationRow(post: post, signal: api.teaConversations.signal(for: post),
             signedIn: viewerID != nil, signIn: signIn, open: { open(post) })
           if post.primaryAction != nil {
-            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn) { actionDestination = $0 }
-              .padding(.leading, MIRATheme.Layout.rowAvatar + MIRATheme.Layout.avatarGap).padding(.bottom, 8)
+            CaptroTeaNoteActionView(note: post, api: api, viewerID: viewerID, signIn: signIn, compactFeed: true) { actionDestination = $0 }
+              .padding(.leading, MIRATheme.Layout.rowAvatar + MIRATheme.Layout.avatarGap)
           }
-        }.overlay(alignment: .bottom) { MIRAHairline(color: CaptroTeaStyle.separator) }
+        }.padding(.top, 12).padding(.bottom, post.primaryAction == nil ? 10 : 6)
+          .overlay(alignment: .bottom) { MIRAHairline(color: CaptroTeaStyle.separator) }
           .background(CaptroFeedViewportMarker(owner: api.teaConversations.listViewport,
             postID: post.id, feed: "tea-list").allowsHitTesting(false))
           .buttonStyle(.plain)
@@ -168,7 +169,7 @@ private struct CaptroTeaConversationRow: View {
             Spacer(minLength: 0)
             interest
           }
-          VStack(alignment: .leading, spacing: 0) {
+          VStack(alignment: .leading, spacing: 2) {
             metadata
             HStack { Spacer(minLength: 0); interest }
           }
@@ -176,7 +177,7 @@ private struct CaptroTeaConversationRow: View {
         if let error = signal.error { Text(error).miraText(.metadata).foregroundStyle(metadataInk) }
 
       }.frame(maxWidth: .infinity, alignment: .leading)
-    }.foregroundStyle(MIRATheme.Color.textPrimary).padding(.vertical, 18)
+    }.foregroundStyle(MIRATheme.Color.textPrimary)
       .contentShape(Rectangle())
   }
   private var interest: some View { CaptroTeaInterestControl(model: signal, signedIn: signedIn, signIn: signIn) }
